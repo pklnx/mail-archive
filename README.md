@@ -172,6 +172,22 @@ migration that has already been released; add a new one instead. The store
 tests roll every migration down and up again, so a broken `Down` section fails
 CI.
 
+### Pull requests and labels
+
+`main` is protected: changes go through pull requests, which can only be merged
+(squash) when all CI checks pass. To accept a pull request, review it and
+enable **auto-merge**; GitHub merges it as soon as CI is green.
+
+| Label | Meaning |
+|---|---|
+| `feature`, `bug`, `chore`, `docs` | Kind of change (set manually). |
+| `dependencies` | Dependency update (set by Dependabot). |
+| `db-migration` | Changes the database schema. Set automatically. Back up the database before deploying. |
+| `breaking` | Requires manual steps when updating (set manually). |
+
+Labels are defined in `.github/labels.json` and synced to GitHub when that file
+changes on `main`.
+
 ### Layout
 
 ```

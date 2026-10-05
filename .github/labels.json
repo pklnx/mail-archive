@@ -1,0 +1,9 @@
+[
+  { "name": "feature",      "color": "1d76db", "description": "New functionality" },
+  { "name": "bug",          "color": "d73a4a", "description": "Something is not working" },
+  { "name": "chore",        "color": "c5def5", "description": "Maintenance, refactoring, CI or tooling" },
+  { "name": "docs",         "color": "0075ca", "description": "Documentation only" },
+  { "name": "dependencies", "color": "0366d6", "description": "Dependency updates (set by Dependabot)" },
+  { "name": "db-migration", "color": "fbca04", "description": "Changes the database schema; back up before deploying" },
+  { "name": "breaking",     "color": "b60205", "description": "Requires manual steps when updating" }
+]
