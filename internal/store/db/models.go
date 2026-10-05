@@ -41,6 +41,9 @@ type Message struct {
 	SentAt     *time.Time
 	StoredPath string
 	CreatedAt  time.Time
+	BodyText   *string
+	SortAt     *time.Time
+	Search     interface{}
 }
 
 type MessageLocation struct {

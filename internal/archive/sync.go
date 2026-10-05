@@ -12,6 +12,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/pklnx/mail-archive/internal/mime"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -242,7 +243,52 @@ func (s *Syncer) metaFor(ctx context.Context, b storedBody) (store.MessageMeta, 
 	defer func() { _ = f.Close() }()
 	h := ParseHeaders(f)
 	meta.MessageID, meta.Subject, meta.From, meta.SentAt = h.MessageID, h.Subject, h.From, h.Date
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return meta, err
+	}
+	meta.BodyText = mime.IndexText(f)
 	return meta, nil
+}
+
+// Reindex extracts body text for messages archived before full-text search
+// existed. It processes batches until none are left and returns how many
+// messages it indexed. It is safe to interrupt and rerun.
+func Reindex(ctx context.Context, st *store.Store, blobs *blobstore.Store, log *slog.Logger) (int, error) {
+	total := 0
+	for {
+		batch, err := st.ListUnindexed(ctx, 200)
+		if err != nil {
+			return total, err
+		}
+		if len(batch) == 0 {
+			return total, nil
+		}
+		for _, m := range batch {
+			if err := ctx.Err(); err != nil {
+				return total, err
+			}
+			text, err := indexBlob(blobs, m.StoredPath)
+			if err != nil {
+				// Keep going: mark it as indexed with empty text so a missing
+				// or unreadable file does not block the rest forever.
+				log.Warn("cannot read message for indexing", "sha256", m.SHA256, "err", err)
+			}
+			if err := st.SetBodyText(ctx, m.SHA256, text); err != nil {
+				return total, err
+			}
+			total++
+		}
+		log.Info("reindex progress", "indexed", total)
+	}
+}
+
+func indexBlob(blobs *blobstore.Store, path string) (string, error) {
+	f, err := blobs.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	return mime.IndexText(f), nil
 }
 
 func (s *Syncer) logger() *slog.Logger {

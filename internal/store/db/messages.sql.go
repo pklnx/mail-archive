@@ -52,9 +52,9 @@ func (q *Queries) GetMessage(ctx context.Context, sha256 string) (GetMessageRow,
 }
 
 const insertMessage = `-- name: InsertMessage :execrows
-INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path)
+INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text)
 VALUES ($1, $2, NULLIF($3::text, ''), NULLIF($4::text, ''),
-        NULLIF($5::text, ''), $6, $7)
+        NULLIF($5::text, ''), $6, $7, $8::text)
 ON CONFLICT (sha256) DO NOTHING
 `
 
@@ -66,6 +66,7 @@ type InsertMessageParams struct {
 	FromAddr   string
 	SentAt     *time.Time
 	StoredPath string
+	BodyText   string
 }
 
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (int64, error) {
@@ -77,11 +78,45 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 		arg.FromAddr,
 		arg.SentAt,
 		arg.StoredPath,
+		arg.BodyText,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listUnindexed = `-- name: ListUnindexed :many
+SELECT sha256, stored_path FROM messages
+WHERE body_text IS NULL
+ORDER BY sha256
+LIMIT $1
+`
+
+type ListUnindexedRow struct {
+	Sha256     string
+	StoredPath string
+}
+
+// Messages archived before full-text search existed.
+func (q *Queries) ListUnindexed(ctx context.Context, limit int32) ([]ListUnindexedRow, error) {
+	rows, err := q.db.Query(ctx, listUnindexed, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnindexedRow
+	for rows.Next() {
+		var i ListUnindexedRow
+		if err := rows.Scan(&i.Sha256, &i.StoredPath); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const messageExists = `-- name: MessageExists :one
@@ -93,6 +128,20 @@ func (q *Queries) MessageExists(ctx context.Context, sha256 string) (bool, error
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const setBodyText = `-- name: SetBodyText :exec
+UPDATE messages SET body_text = $2 WHERE sha256 = $1
+`
+
+type SetBodyTextParams struct {
+	Sha256   string
+	BodyText *string
+}
+
+func (q *Queries) SetBodyText(ctx context.Context, arg SetBodyTextParams) error {
+	_, err := q.db.Exec(ctx, setBodyText, arg.Sha256, arg.BodyText)
+	return err
 }
 
 const upsertLocation = `-- name: UpsertLocation :exec
