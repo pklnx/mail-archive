@@ -98,6 +98,10 @@ if [ "$(grep -o '"id":' "$work/out" | wc -l | tr -d ' ')" -ne 3 ]; then
 	cat "$work/out" >&2
 	exit 1
 fi
+api "/" > "$work/out"
+expect "$work/out" '<div id="root">'
+asset=$(grep -o '/assets/[^"]*\.js' "$work/out" | head -1)
+api "$asset" > /dev/null
 status=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "http://localhost:$WEB_PORT/api/status")
 if [ "$status" != 403 ]; then
 	echo "expected 403 for a foreign Host header, got $status" >&2

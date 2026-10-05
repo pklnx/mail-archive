@@ -195,6 +195,10 @@ func addresses(h mail.Header, key string) string {
 	}
 	out := make([]string, 0, len(list))
 	for _, a := range list {
+		if a.Name == "" {
+			out = append(out, a.Address) // no "<...>" around a bare address
+			continue
+		}
 		out = append(out, a.String())
 	}
 	// Address.String quotes and encodes names; decode them for display.

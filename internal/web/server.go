@@ -16,6 +16,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/web/ui"
 )
 
 // DefaultAllowedHosts are the host names accepted without configuration.
@@ -57,6 +58,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/messages/{sha}/html", s.handleMessageHTML)
 	mux.HandleFunc("GET /api/messages/{sha}/raw", s.handleMessageRaw)
 	mux.HandleFunc("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart)
+	app := ui.Handler()
+	mux.Handle("GET /{$}", app)
+	mux.Handle("GET /assets/", app)
 	return s.protect(mux)
 }
 

@@ -4,3 +4,6 @@ data
 .env
 *.test
 *.out
+web/node_modules
+internal/web/ui/dist
+tmp-e2e

@@ -36,7 +36,7 @@ func TestParseAlternative(t *testing.T) {
 	if !strings.Contains(m.From, "Jürgen") || !strings.Contains(m.From, "j@example.com") {
 		t.Errorf("From = %q", m.From)
 	}
-	if !strings.Contains(m.To, "b@example.com") {
+	if !strings.HasPrefix(m.To, "a@example.com, ") || !strings.Contains(m.To, "b@example.com") {
 		t.Errorf("To = %q", m.To)
 	}
 	if m.Text != "Hallo, anbei die Rechnung für Oktober." {

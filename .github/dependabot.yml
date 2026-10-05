@@ -8,6 +8,14 @@ updates:
     groups:
       go-dependencies:
         patterns: ["*"]
+  - package-ecosystem: npm # pnpm lockfile in web/
+    directory: /web
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      web-dependencies:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
