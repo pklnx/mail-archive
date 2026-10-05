@@ -1,0 +1,167 @@
+// Package web serves the JSON API (and later the UI) over HTTP.
+package web
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/store"
+)
+
+// DefaultAllowedHosts are the host names accepted without configuration.
+var DefaultAllowedHosts = []string{"localhost", "127.0.0.1", "::1"}
+
+// Server holds the dependencies of the HTTP handlers.
+type Server struct {
+	store        *store.Store
+	blobs        *blobstore.Store
+	log          *slog.Logger
+	allowedHosts []string
+}
+
+// New creates a Server. allowedHosts are host names (without port) accepted
+// in the Host header; nil means DefaultAllowedHosts.
+func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, allowedHosts []string) *Server {
+	if len(allowedHosts) == 0 {
+		allowedHosts = DefaultAllowedHosts
+	}
+	hosts := make([]string, 0, len(allowedHosts))
+	for _, h := range allowedHosts {
+		if h = strings.Trim(strings.ToLower(strings.TrimSpace(h)), "[]"); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return &Server{store: st, blobs: blobs, log: log, allowedHosts: hosts}
+}
+
+// Handler returns the HTTP handler with all routes and protections.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
+	mux.HandleFunc("GET /api/messages", s.handleListMessages)
+	mux.HandleFunc("GET /api/messages/{sha}", s.handleMessage)
+	mux.HandleFunc("GET /api/messages/{sha}/html", s.handleMessageHTML)
+	mux.HandleFunc("GET /api/messages/{sha}/raw", s.handleMessageRaw)
+	mux.HandleFunc("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart)
+	return s.protect(mux)
+}
+
+// ListenAndServe serves until ctx is cancelled, then shuts down gracefully.
+func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute, // large .eml and attachment downloads
+		IdleTimeout:       2 * time.Minute,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		return srv.Shutdown(shutdownCtx)
+	}
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		s.log.Debug("write response", "err", err)
+	}
+}
+
+type apiError struct {
+	Error string `json:"error"`
+}
+
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg string, err error) {
+	if status >= 500 {
+		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+	}
+	s.writeJSON(w, status, apiError{Error: msg})
+}
+
+func (s *Server) failStore(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		s.fail(w, r, http.StatusNotFound, "not found", err)
+		return
+	}
+	s.fail(w, r, http.StatusInternalServerError, "internal error", err)
+}
+
+var shaPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// pathSHA validates the {sha} path parameter. Only valid hashes reach the
+// blob store, so user input never forms a file path.
+func (s *Server) pathSHA(w http.ResponseWriter, r *http.Request) (string, bool) {
+	sha := r.PathValue("sha")
+	if !shaPattern.MatchString(sha) {
+		s.fail(w, r, http.StatusBadRequest, "invalid message id", nil)
+		return "", false
+	}
+	return sha, true
+}
+
+// Cursors encode the last row of a page as "<RFC 3339 nano>|<sha256>".
+func encodeCursor(at time.Time, sha string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(at.UTC().Format(time.RFC3339Nano) + "|" + sha))
+}
+
+func decodeCursor(c string) (time.Time, string, error) {
+	b, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	ts, sha, ok := strings.Cut(string(b), "|")
+	if !ok || !shaPattern.MatchString(sha) {
+		return time.Time{}, "", errors.New("malformed cursor")
+	}
+	at, err := time.Parse(time.RFC3339Nano, ts)
+	return at, sha, err
+}
+
+// parseDate accepts YYYY-MM-DD (UTC midnight) or RFC 3339.
+func parseDate(v string) (*time.Time, error) {
+	if v == "" {
+		return nil, nil
+	}
+	for _, layout := range []string{time.DateOnly, time.RFC3339} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return &t, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid date %q (use YYYY-MM-DD)", v)
+}
+
+func parseLimit(v string, def, maxLimit int) (int, error) {
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > maxLimit {
+		return 0, fmt.Errorf("limit must be between 1 and %d", maxLimit)
+	}
+	return n, nil
+}

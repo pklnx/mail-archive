@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/web"
 )
 
 type app struct {
@@ -58,6 +60,9 @@ func newMigrateCmd() *cobra.Command {
 		}
 		for _, m := range applied {
 			fmt.Println("applied", m)
+		}
+		if pending, err := a.store.ListUnindexed(cmd.Context(), 1); err == nil && len(pending) > 0 {
+			fmt.Println("some messages are not in the full-text index yet: run `reindex` once")
 		}
 		return nil
 	}
@@ -588,6 +593,64 @@ the archive. Run this periodically (cron, systemd timer).`,
 	}
 	cmd.Flags().StringArrayVar(&only, "account", nil, "only sync these accounts (repeatable; also syncs disabled ones)")
 	return cmd
+}
+
+func newServeCmd() *cobra.Command {
+	var listen string
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the web server (JSON API)",
+		Long: `Run the web server. There is no login yet, so it listens on localhost by
+default. Requests are only accepted with a Host header listed in
+` + config.EnvAllowedHosts + ` (default: localhost, 127.0.0.1, ::1), which blocks DNS
+rebinding; state-changing requests must come from the same origin.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := openApp(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			blobs, err := blobstore.New(a.cfg.DataDir)
+			if err != nil {
+				return err
+			}
+			log := newLogger(a.cfg.LogLevel)
+			srv := web.New(a.store, blobs, log, a.cfg.AllowedHosts)
+			log.Info("listening", "addr", listen)
+			if err := srv.ListenAndServe(cmd.Context(), listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
+	return cmd
+}
+
+func newReindexCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reindex",
+		Short: "Extract text for full-text search from messages archived earlier",
+		Long: `Extract the body text of messages that have none yet, so full-text search
+finds them. Needed once after upgrading to a version with search; new
+messages are indexed during sync. Safe to interrupt and rerun.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			a, err := openApp(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			blobs, err := blobstore.New(a.cfg.DataDir)
+			if err != nil {
+				return err
+			}
+			n, err := archive.Reindex(cmd.Context(), a.store, blobs, newLogger(a.cfg.LogLevel))
+			fmt.Printf("indexed %d message(s)\n", n)
+			return err
+		},
+	}
 }
 
 func newStatusCmd() *cobra.Command {

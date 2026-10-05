@@ -26,7 +26,10 @@ deduplicated archive. It is a **read-only copy**: the servers are never modified
 - **Encrypted credentials.** IMAP passwords are stored in the database,
   encrypted with AES-256-GCM using a key that you provide.
 
-A web UI with search is planned (see [Roadmap](#roadmap)).
+- **Full-text search** in PostgreSQL over subject, sender and body, with
+  German and English word stemming ("Rechnungen" finds "Rechnung").
+- **JSON API** (`serve`) for browsing, searching and reading archived mail.
+  A web UI on top of it is in progress (see [Roadmap](#roadmap)).
 
 ## Quick start (Docker Compose)
 
@@ -67,6 +70,33 @@ Archived files appear in `./data` (configurable with `ARCHIVE_DIR`).
 > On Linux hosts, the container runs as UID 65532. Make the archive
 > directory writable for it: `sudo chown 65532:65532 data`.
 > Docker Desktop on macOS handles this automatically.
+
+### Web API
+
+```sh
+docker compose up -d --build web   # http://localhost:8080
+curl 'http://localhost:8080/api/messages?q=invoice'
+```
+
+There is no login yet, so the server is only reachable from this machine
+(Compose publishes it on `127.0.0.1`). It also rejects requests whose `Host`
+header is not `localhost` or `127.0.0.1`, which stops other websites from
+reading your mail through DNS rebinding, and it only accepts state-changing
+requests from its own origin. Do not expose it to a network until login is
+available.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/messages?q=&account=&folder=&after=&before=&limit=&cursor=` | List or search, newest first. `q` supports quotes, `OR` and `-word`; dates are `YYYY-MM-DD`; follow `nextCursor` for more. Snippets mark matches with U+E000/U+E001. |
+| `GET /api/messages/{id}` | Headers, text, attachment list and where the message was found. |
+| `GET /api/messages/{id}/html[?images=1]` | HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
+| `GET /api/messages/{id}/raw` | The original `.eml`. |
+| `GET /api/messages/{id}/parts/{n}` | One attachment. Only common image types are shown inline; everything else is a download. |
+| `GET /api/accounts` | Accounts with folders and message counts. |
+| `GET /api/status` | Same as `./ma status`. |
+
+After upgrading from a version without search, run `./ma reindex` once so
+that older messages become searchable.
 
 ### Run it regularly
 
@@ -124,6 +154,8 @@ supported yet.
 | `account remove NAME` | Delete an account that has no archived messages yet. |
 | `sync [--account NAME]` | Copy new messages. Exits non-zero if any account failed. |
 | `status` | Per-account statistics and the last sync result. |
+| `serve [--listen ADDR]` | Run the web server (JSON API). Default `127.0.0.1:8080`. |
+| `reindex` | Extract text for full-text search from messages archived before search existed. |
 
 ## Configuration
 
@@ -135,6 +167,7 @@ All configuration comes from environment variables:
 | `MAIL_ARCHIVE_SECRET_KEY` | (required to add accounts and sync) | Base64 key, 32 bytes. Encrypts IMAP passwords. |
 | `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for `.eml` files. |
 | `MAIL_ARCHIVE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+| `MAIL_ARCHIVE_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host names the web server accepts (comma-separated). |
 | `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. Set to `./ma` by the wrapper. |
 
 ## Backups
@@ -222,6 +255,8 @@ make sqlc-check    # what CI runs: vet queries and fail on stale code
 cmd/mail-archive     CLI
 internal/archive     sync orchestration, deduplication, header parsing
 internal/imapsync    read-only IMAP client
+internal/mime        MIME parsing: text for search, parts for display
+internal/web         HTTP server, JSON API, request protection
 internal/blobstore   content-addressed .eml storage
 internal/store       PostgreSQL access, migrations and SQL queries (sqlc)
 internal/crypto      AES-256-GCM for stored credentials
@@ -241,12 +276,11 @@ internal/config      environment configuration
 
 ## Roadmap
 
-- JSON API and a single-page web UI (account management, browsing, full-text
-  search with PostgreSQL).
-- Login for the UI through any OpenID Connect provider.
+- Web UI (React) for browsing, searching and reading, served by `serve`.
+- Account management and sync from the UI.
+- Login through any OpenID Connect provider, so the UI can be reachable from
+  other devices.
 - Optional daemon mode with a built-in schedule.
-- Type-safe database queries generated with [sqlc](https://sqlc.dev/) from
-  plain SQL (reads the goose migrations as its schema).
 
 ## License
 

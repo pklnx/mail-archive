@@ -33,6 +33,8 @@ func main() {
 		newAccountCmd(),
 		newSyncCmd(),
 		newStatusCmd(),
+		newReindexCmd(),
+		newServeCmd(),
 	)
 	if err := root.ExecuteContext(ctx); err != nil {
 		var exitErr *exitError

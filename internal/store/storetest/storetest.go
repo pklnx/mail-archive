@@ -21,6 +21,14 @@ const EnvURL = "TEST_DATABASE_URL"
 // The test is skipped if TEST_DATABASE_URL is not set.
 func New(t *testing.T) *store.Store {
 	t.Helper()
+	st, _ := NewWithURL(t)
+	return st
+}
+
+// NewWithURL is like New and also returns the database URL, for tests that
+// need to set up state the store API cannot create.
+func NewWithURL(t *testing.T) (*store.Store, string) {
+	t.Helper()
 	base := os.Getenv(EnvURL)
 	if base == "" {
 		t.Skip(EnvURL + " not set; skipping database test")
@@ -56,5 +64,5 @@ func New(t *testing.T) *store.Store {
 	if _, err := st.Migrate(ctx); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return st
+	return st, u.String()
 }

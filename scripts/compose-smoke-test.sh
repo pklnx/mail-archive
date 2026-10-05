@@ -29,6 +29,7 @@ cleanup() {
 		echo "--- smoke test failed, logs follow ---" >&2
 		docker compose logs postgres >&2 || true
 		docker logs imap-test >&2 || true
+		docker compose logs web >&2 || true
 	fi
 	docker rm -f imap-test >/dev/null 2>&1 || true
 	in_data 'rm -rf /data/* /data/.[!.]*' >/dev/null 2>&1 || true
@@ -50,7 +51,9 @@ POSTGRES_PASSWORD=smoke-test
 MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
 ARCHIVE_DIR=$work/data
 POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-55432}
+WEB_PORT=${SMOKE_WEB_PORT:-58080}
 ENV
+WEB_PORT=${SMOKE_WEB_PORT:-58080}
 
 expect() { # expect <file> <extended regex>
 	if ! grep -Eq "$2" "$1"; then
@@ -84,6 +87,22 @@ expect "$work/out" "test +fetched=0 +new=0 +ok"
 echo "== status"
 ./ma status | tee "$work/out"
 expect "$work/out" "unique messages in archive: 3"
+
+echo "== web API"
+docker compose --progress quiet up -d --wait web
+api() { curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "http://localhost:$WEB_PORT$1"; }
+api "/api/messages?q=Smoke" > "$work/out"
+expect "$work/out" '"subject":"Smoke test 1"'
+if [ "$(grep -o '"id":' "$work/out" | wc -l | tr -d ' ')" -ne 3 ]; then
+	echo "expected 3 search results" >&2
+	cat "$work/out" >&2
+	exit 1
+fi
+status=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "http://localhost:$WEB_PORT/api/status")
+if [ "$status" != 403 ]; then
+	echo "expected 403 for a foreign Host header, got $status" >&2
+	exit 1
+fi
 
 count=$(in_data "find /data/messages -name '*.eml' | wc -l" | tr -d ' \r')
 if [ "$count" -ne 3 ]; then

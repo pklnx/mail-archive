@@ -3,6 +3,7 @@
 #   ./ma migrate                      # wrapper around `docker compose run`
 #   ./ma account add ...
 #   ./ma sync
+#   docker compose up -d --build web  # web API on http://localhost:8080
 #
 # Both images are multi-arch (amd64 and arm64, e.g. Apple Silicon).
 
@@ -29,6 +30,27 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Web server (JSON API). No login yet: reachable from this machine only.
+  # Start or update with: docker compose up -d --build web
+  web:
+    build:
+      context: .
+    image: mail-archive:local
+    restart: unless-stopped
+    command: ["serve", "--listen", ":8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
+      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      MAIL_ARCHIVE_ALLOWED_HOSTS: localhost,127.0.0.1
+    volumes:
+      - ${ARCHIVE_DIR:-./data}:/data
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
 
   mail-archive:
     build:

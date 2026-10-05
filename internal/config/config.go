@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strings"
 
 	"github.com/pklnx/mail-archive/internal/crypto"
 )
@@ -14,6 +15,9 @@ const (
 	EnvDataDir     = "MAIL_ARCHIVE_DATA_DIR"
 	EnvSecretKey   = "MAIL_ARCHIVE_SECRET_KEY" //nolint:gosec // variable name, not a credential
 	EnvLogLevel    = "MAIL_ARCHIVE_LOG_LEVEL"
+	// EnvAllowedHosts is a comma-separated list of host names the web server
+	// accepts in the Host header (protection against DNS rebinding).
+	EnvAllowedHosts = "MAIL_ARCHIVE_ALLOWED_HOSTS"
 )
 
 // Config holds the application configuration.
@@ -22,6 +26,8 @@ type Config struct {
 	DataDir     string
 	SecretKey   []byte // nil if not configured
 	LogLevel    string
+	// AllowedHosts for the web server; empty means the server's defaults.
+	AllowedHosts []string
 }
 
 // Load reads the configuration from the environment.
@@ -36,6 +42,11 @@ func Load() (*Config, error) {
 	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "./data"
+	}
+	for _, h := range strings.Split(os.Getenv(EnvAllowedHosts), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			cfg.AllowedHosts = append(cfg.AllowedHosts, h)
+		}
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
