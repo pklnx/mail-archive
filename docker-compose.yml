@@ -17,7 +17,10 @@ services:
       POSTGRES_USER: mailarchive
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PostgreSQL 18+ images keep data in a versioned subdirectory
+      # (/var/lib/postgresql/<major>/docker), so the volume is mounted one
+      # level up. Major upgrades need pg_upgrade or dump/restore.
+      - pgdata:/var/lib/postgresql
     ports:
       # Only reachable from this machine; remove if not needed.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
