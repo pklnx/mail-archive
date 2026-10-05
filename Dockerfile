@@ -4,7 +4,7 @@
 # so arm64 images (Apple Silicon) build quickly without emulation.
 
 # Web UI (React). Its output is embedded into the Go binary.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine AS web
 WORKDIR /src/web
 RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./
