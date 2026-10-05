@@ -15,6 +15,9 @@ linters:
       rules:
         - name: exported
   exclusions:
+    generated: strict
+    paths:
+      - internal/store/db
     presets:
       - std-error-handling
     rules:

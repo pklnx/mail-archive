@@ -67,3 +67,44 @@ func TestMigrateDownAndUp(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStatsWithAndWithoutSyncRuns(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	for _, name := range []string{"fresh", "synced"} {
+		if err := st.CreateAccount(ctx, &store.Account{
+			Name: name, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	synced, err := st.GetAccountByName(ctx, "synced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"failed", "ok"} { // the latest run must win
+		run, err := st.StartSyncRun(ctx, synced.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run.Status = status
+		if err := st.FinishSyncRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats, unique, err := st.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unique != 0 || len(stats) != 2 {
+		t.Fatalf("unique=%d stats=%+v", unique, stats)
+	}
+	fresh, done := stats[0], stats[1]
+	if fresh.Account != "fresh" || fresh.LastRunAt != nil || fresh.LastStatus != nil {
+		t.Errorf("fresh account: %+v", fresh)
+	}
+	if done.Account != "synced" || done.LastRunAt == nil || done.LastStatus == nil || *done.LastStatus != "ok" {
+		t.Errorf("synced account: %+v", done)
+	}
+}

@@ -201,6 +201,18 @@ enable **auto-merge**; GitHub merges it as soon as CI is green.
 Labels are defined in `.github/labels.json` and synced to GitHub when that file
 changes on `main`.
 
+### Database queries
+
+Queries live as plain SQL in `internal/store/queries/*.sql`.
+[sqlc](https://sqlc.dev/) checks them against the schema (the migrations) and
+generates type-safe Go code in `internal/store/db`, which `internal/store`
+wraps. After changing a query or adding a migration:
+
+```sh
+make generate      # regenerate internal/store/db (commit the result)
+make sqlc-check    # what CI runs: vet queries and fail on stale code
+```
+
 ### Layout
 
 ```
@@ -208,7 +220,7 @@ cmd/mail-archive     CLI
 internal/archive     sync orchestration, deduplication, header parsing
 internal/imapsync    read-only IMAP client
 internal/blobstore   content-addressed .eml storage
-internal/store       PostgreSQL access and migrations
+internal/store       PostgreSQL access, migrations and SQL queries (sqlc)
 internal/crypto      AES-256-GCM for stored credentials
 internal/config      environment configuration
 ```

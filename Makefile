@@ -1,9 +1,12 @@
 GO        ?= go
 BIN       := bin/mail-archive
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# sqlc version for code generation. Dependabot cannot update `go run pkg@version`,
+# so bump it here by hand.
+SQLC      := GOTOOLCHAIN=$$($(GO) env GOVERSION) $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 TEST_DATABASE_URL ?= postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable
 
-.PHONY: build test test-unit lint vuln tidy docker docker-multiarch clean
+.PHONY: build test test-unit lint vuln generate sqlc-check tidy docker docker-multiarch clean
 
 build:
 	$(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o $(BIN) ./cmd/mail-archive
@@ -23,6 +26,16 @@ lint:
 # packages that require it.
 vuln:
 	GOTOOLCHAIN=$$($(GO) env GOVERSION) $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+## generate: regenerate database code from internal/store/queries
+generate:
+	$(SQLC) generate
+
+## sqlc-check: fail if generated database code is stale or queries are invalid
+sqlc-check: generate
+	$(SQLC) vet
+	git diff --exit-code -- internal/store/db
+	@test -z "$$(git ls-files --others --exclude-standard -- internal/store/db)" || { echo "untracked generated files in internal/store/db"; exit 1; }
 
 tidy:
 	$(GO) mod tidy
