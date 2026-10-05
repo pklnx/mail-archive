@@ -166,6 +166,9 @@ scripts/compose-smoke-test.sh   # end-to-end test of Compose and ./ma (also in C
 Integration tests start an in-process IMAP server and create a throwaway
 database for each test (the user in `TEST_DATABASE_URL` needs `CREATEDB`).
 
+CI runs on a self-hosted runner; pull requests from forks run on
+GitHub-hosted runners. See [docs/self-hosted-runner.md](docs/self-hosted-runner.md).
+
 ### Database migrations
 
 Migrations are SQL files in `internal/store/migrations`, managed with

@@ -12,9 +12,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Runners: jobs run on the self-hosted runner (label mail-archive-ci, see
+# docs/self-hosted-runner.md). Pull requests from forks always use
+# GitHub-hosted runners, so code from outside the repository never runs on
+# our server. Emergency switch: set the repository variable CI_RUNNER to
+# "github" to run everything on GitHub-hosted runners again.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
     services:
       postgres:
         image: postgres:18-alpine
@@ -22,7 +27,8 @@ jobs:
           POSTGRES_USER: mailarchive
           POSTGRES_PASSWORD: mailarchive
           POSTGRES_DB: mailarchive
-        ports: ["5432:5432"]
+        # Docker bypasses the host firewall: publish on loopback only.
+        ports: ["127.0.0.1:5432:5432"]
         options: >-
           --health-cmd "pg_isready -U mailarchive"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -40,7 +46,7 @@ jobs:
           TEST_DATABASE_URL: postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,7 +61,7 @@ jobs:
       - run: make sqlc-check
 
   vulncheck:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,7 +74,7 @@ jobs:
       - run: make vuln
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,7 +89,7 @@ jobs:
 
   compose:
     # End-to-end test of docker-compose.yml, the image and the ./ma wrapper.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
