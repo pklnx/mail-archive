@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -119,9 +120,38 @@ type Folder struct {
 	Attrs []string
 }
 
+// Special-use roles (RFC 6154) as returned by Folder.SpecialUse.
+const (
+	RoleAll     = "all"
+	RoleArchive = "archive"
+	RoleDrafts  = "drafts"
+	RoleFlagged = "flagged"
+	RoleJunk    = "junk"
+	RoleSent    = "sent"
+	RoleTrash   = "trash"
+)
+
+// SpecialUse returns the folder's special-use role, such as "trash" or
+// "junk", or "" if the server did not mark it.
+func (f Folder) SpecialUse() string {
+	for _, a := range f.Attrs {
+		switch role := strings.ToLower(strings.TrimPrefix(a, `\`)); role {
+		case RoleAll, RoleArchive, RoleDrafts, RoleFlagged, RoleJunk, RoleSent, RoleTrash:
+			return role
+		}
+	}
+	return ""
+}
+
 // ListFolders returns all selectable folders.
 func (conn *Conn) ListFolders() ([]Folder, error) {
-	list, err := conn.c.List("", "*", nil).Collect()
+	// Servers usually include special-use attributes (\Trash, \Junk, ...)
+	// unasked; with LIST-EXTENDED we request them explicitly (RFC 6154).
+	var opts *imap.ListOptions
+	if caps := conn.c.Caps(); caps.Has(imap.CapListExtended) && caps.Has(imap.CapSpecialUse) {
+		opts = &imap.ListOptions{ReturnSpecialUse: true}
+	}
+	list, err := conn.c.List("", "*", opts).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("list folders: %w", err)
 	}

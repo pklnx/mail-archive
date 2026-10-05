@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -218,13 +220,14 @@ The login is verified before the account is saved unless --skip-check is set.`,
 			if err != nil {
 				return err
 			}
+			var folders []imapsync.Folder
 			if !skipCheck {
 				fmt.Fprintf(os.Stderr, "checking login at %s:%d ...\n", acc.Host, acc.Port)
-				n, err := checkLogin(cmd.Context(), &acc, password)
+				folders, err = checkLogin(cmd.Context(), &acc, password)
 				if err != nil {
 					return fmt.Errorf("login check failed (use --skip-check to save anyway): %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "login ok, %d folders found\n", n)
+				fmt.Fprintf(os.Stderr, "login ok, %d folders found\n", len(folders))
 			}
 			acc.PasswordEnc, err = sealer.Seal([]byte(password), archive.PasswordContext(acc.Name))
 			if err != nil {
@@ -234,6 +237,7 @@ The login is verified before the account is saved unless --skip-check is set.`,
 				return err
 			}
 			fmt.Printf("account %q added\n", acc.Name)
+			printExclusionHint(&acc, folders)
 			return nil
 		},
 	}
@@ -251,16 +255,55 @@ The login is verified before the account is saved unless --skip-check is set.`,
 	return cmd
 }
 
-func checkLogin(ctx context.Context, acc *store.Account, password string) (int, error) {
+func checkLogin(ctx context.Context, acc *store.Account, password string) ([]imapsync.Folder, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	conn, err := imapsync.Dial(ctx, imapConfig(acc, password))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	folders, err := conn.ListFolders()
-	return len(folders), err
+	return conn.ListFolders()
+}
+
+// printExclusionHint suggests excluding junk and trash folders that the
+// account's filters would still archive.
+func printExclusionHint(acc *store.Account, folders []imapsync.Folder) {
+	fmt.Print(exclusionHint(acc, folders))
+}
+
+func exclusionHint(acc *store.Account, folders []imapsync.Folder) string {
+	suggest := archive.SuggestExclusions(folders, acc.IncludedFolders, acc.ExcludedFolders)
+	if len(suggest) == 0 {
+		return ""
+	}
+	args := []string{commandName(), "account", "set-folders", shellQuote(acc.Name)}
+	for _, f := range acc.IncludedFolders {
+		args = append(args, "--include", shellQuote(f))
+	}
+	for _, f := range append(slices.Clone(acc.ExcludedFolders), suggest...) {
+		args = append(args, "--exclude", shellQuote(f))
+	}
+	return fmt.Sprintf("\nhint: %s marked as junk/trash by the server and will be archived.\n"+
+		"      To skip them: %s\n", strings.Join(suggest, ", "), strings.Join(args, " "))
+}
+
+// commandName is how the user invokes this tool, for copy-paste hints.
+// The ./ma wrapper sets MAIL_ARCHIVE_COMMAND.
+func commandName() string {
+	if c := os.Getenv("MAIL_ARCHIVE_COMMAND"); c != "" {
+		return c
+	}
+	return "mail-archive"
+}
+
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9._/@+-]+$`)
+
+func shellQuote(s string) string {
+	if shellSafe.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func imapConfig(acc *store.Account, password string) imapsync.Config {
@@ -372,15 +415,23 @@ func newAccountFoldersCmd() *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ARCHIVE\tFOLDER\tATTRIBUTES")
+			fmt.Fprintln(w, "ARCHIVE\tFOLDER\tROLE\tATTRIBUTES")
 			for _, f := range folders {
 				mark := "no"
 				if archive.FolderSelected(f.Name, acc.IncludedFolders, acc.ExcludedFolders) {
 					mark = "yes"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\n", mark, f.Name, strings.Join(f.Attrs, " "))
+				role := f.SpecialUse()
+				if role == "" {
+					role = "-"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", mark, f.Name, role, strings.Join(f.Attrs, " "))
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			printExclusionHint(acc, folders)
+			return nil
 		},
 	}
 }

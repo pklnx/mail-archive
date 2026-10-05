@@ -269,3 +269,16 @@ func containsFold(list []string, s string) bool {
 	}
 	return false
 }
+
+// SuggestExclusions returns the junk and trash folders (by special-use
+// attribute) that the current filters would still archive.
+func SuggestExclusions(folders []imapsync.Folder, included, excluded []string) []string {
+	var out []string
+	for _, f := range folders {
+		role := f.SpecialUse()
+		if (role == imapsync.RoleJunk || role == imapsync.RoleTrash) && FolderSelected(f.Name, included, excluded) {
+			out = append(out, f.Name)
+		}
+	}
+	return out
+}

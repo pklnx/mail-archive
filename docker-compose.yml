@@ -1,11 +1,12 @@
-# Usage:
+# Usage (see README):
 #   cp .env.example .env              # then set passwords and the secret key
-#   docker compose up -d postgres
-#   docker compose run --rm mail-archive migrate
-#   docker compose run --rm mail-archive account add ...
-#   docker compose run --rm mail-archive sync
+#   ./ma migrate                      # wrapper around `docker compose run`
+#   ./ma account add ...
+#   ./ma sync
 #
 # Both images are multi-arch (amd64 and arm64, e.g. Apple Silicon).
+
+name: mail-archive
 
 services:
   postgres:
