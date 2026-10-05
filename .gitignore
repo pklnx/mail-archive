@@ -35,3 +35,8 @@ go.work.sum
 # mail-archive
 /data/
 /bin/
+
+# Web UI build output (embedded into the binary; only the placeholder is tracked)
+/internal/web/ui/dist/*
+!/internal/web/ui/dist/.keep
+/web/node_modules/

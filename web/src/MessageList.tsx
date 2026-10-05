@@ -1,0 +1,117 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listMessages, type Filter, type MessageSummary } from "./api";
+import { senderName, shortDate } from "./format";
+import { Highlight } from "./Highlight";
+
+interface Props {
+  filter: Filter;
+  selected: string;
+  open: (id: string) => void;
+}
+
+interface ListState {
+  items: MessageSummary[];
+  cursor: string | null;
+  loading: boolean;
+  error: string;
+  done: boolean;
+}
+
+const initial: ListState = { items: [], cursor: null, loading: true, error: "", done: false };
+
+export function MessageList({ filter, selected, open }: Props) {
+  const [list, setList] = useState<ListState>(initial);
+  const key = `${filter.q}\u0000${filter.account}\u0000${filter.folder}`;
+  const generation = useRef(0);
+
+  const load = useCallback(
+    (cursor: string | null, gen: number, signal?: AbortSignal) => {
+      setList((s) => ({ ...s, loading: true, error: "" }));
+      listMessages(filter, cursor, signal).then(
+        (page) => {
+          if (gen !== generation.current) return;
+          setList((s) => ({
+            items: cursor ? [...s.items, ...page.messages] : page.messages,
+            cursor: page.nextCursor,
+            loading: false,
+            error: "",
+            done: page.nextCursor === null,
+          }));
+        },
+        (err: unknown) => {
+          if (gen !== generation.current || signal?.aborted) return;
+          setList((s) => ({ ...s, loading: false, error: err instanceof Error ? err.message : String(err) }));
+        },
+      );
+    },
+    // The filter is captured through `key`.
+    [key],
+  );
+
+  // New filter: start from the first page.
+  useEffect(() => {
+    const gen = ++generation.current;
+    const ctrl = new AbortController();
+    setList(initial);
+    load(null, gen, ctrl.signal);
+    return () => ctrl.abort();
+  }, [load]);
+
+  // Load the next page when the sentinel at the end of the list scrolls into view.
+  const sentinel = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || list.done || list.loading || list.error) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) load(list.cursor, generation.current);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [list.cursor, list.done, list.loading, list.error, load]);
+
+  return (
+    <ul aria-label="Messages" className="h-full overflow-y-auto">
+      {list.items.map((m) => {
+        const on = m.id === selected;
+        return (
+          <li key={m.id}>
+            <button
+              type="button"
+              onClick={() => open(m.id)}
+              aria-current={on ? "true" : undefined}
+              className={`block w-full border-b border-zinc-200 px-4 py-3 text-left dark:border-zinc-800 ${
+                on ? "bg-blue-50 dark:bg-blue-950/50" : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-sm font-semibold">{senderName(m.from)}</span>
+                <time className="shrink-0 text-xs text-zinc-500" dateTime={m.sortAt}>
+                  {shortDate(m.sentAt ?? m.sortAt)}
+                </time>
+              </div>
+              <div className="truncate text-sm">{m.subject || "(no subject)"}</div>
+              {m.snippet && (
+                <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  <Highlight text={m.snippet} />
+                </p>
+              )}
+            </button>
+          </li>
+        );
+      })}
+      {list.error && (
+        <li className="p-4 text-sm text-red-600">
+          Could not load messages: {list.error}{" "}
+          <button type="button" className="underline" onClick={() => load(list.cursor, generation.current)}>
+            Retry
+          </button>
+        </li>
+      )}
+      {!list.loading && !list.error && list.items.length === 0 && (
+        <li className="p-4 text-sm text-zinc-500">{filter.q ? "No messages match your search." : "No messages."}</li>
+      )}
+      {list.loading && <li className="p-4 text-sm text-zinc-500">Loading…</li>}
+      {!list.done && <li ref={sentinel} aria-hidden className="h-px" />}
+    </ul>
+  );
+}

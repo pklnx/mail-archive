@@ -28,8 +28,8 @@ deduplicated archive. It is a **read-only copy**: the servers are never modified
 
 - **Full-text search** in PostgreSQL over subject, sender and body, with
   German and English word stemming ("Rechnungen" finds "Rechnung").
-- **JSON API** (`serve`) for browsing, searching and reading archived mail.
-  A web UI on top of it is in progress (see [Roadmap](#roadmap)).
+- **Web UI** (`serve`) for browsing, searching and reading archived mail,
+  with a JSON API underneath. Light and dark mode, works on phones.
 
 ## Quick start (Docker Compose)
 
@@ -71,12 +71,17 @@ Archived files appear in `./data` (configurable with `ARCHIVE_DIR`).
 > directory writable for it: `sudo chown 65532:65532 data`.
 > Docker Desktop on macOS handles this automatically.
 
-### Web API
+### Web UI and API
 
 ```sh
-docker compose up -d --build web   # http://localhost:8080
-curl 'http://localhost:8080/api/messages?q=invoice'
+docker compose up -d --build web   # open http://localhost:8080
 ```
+
+The UI has three columns: accounts and folders, the message list with search,
+and the open message. Everything you select is part of the URL, so the back
+button and bookmarks work. HTML mail is shown in a sandboxed frame without
+scripts; remote images (tracking pixels) are only loaded when you click
+"Load remote images".
 
 There is no login yet, so the server is only reachable from this machine
 (Compose publishes it on `127.0.0.1`). It also rejects requests whose `Host`
@@ -84,6 +89,8 @@ header is not `localhost` or `127.0.0.1`, which stops other websites from
 reading your mail through DNS rebinding, and it only accepts state-changing
 requests from its own origin. Do not expose it to a network until login is
 available.
+
+The JSON API behind the UI:
 
 | Endpoint | Description |
 |---|---|
@@ -193,6 +200,7 @@ make test TEST_DATABASE_URL='postgres://mailarchive:<password>@localhost:5432/ma
 make lint
 make vuln               # govulncheck
 make docker-multiarch   # build amd64 + arm64 images
+make web                # build the web UI (needs Node.js 24 with corepack)
 scripts/compose-smoke-test.sh   # end-to-end test of Compose and ./ma (also in CI)
 ```
 
@@ -249,6 +257,23 @@ make generate      # regenerate internal/store/db (commit the result)
 make sqlc-check    # what CI runs: vet queries and fail on stale code
 ```
 
+### Web UI development
+
+The UI lives in `web/` (React, TypeScript, Vite, Tailwind CSS; pnpm via
+corepack). `make web` builds it into `internal/web/ui/dist`, which is embedded
+into the binary; a plain `go build` without it serves a hint page instead.
+
+```sh
+cd web
+corepack enable
+pnpm install
+pnpm dev        # http://localhost:5173, proxies /api to `serve` on :8080
+pnpm test       # unit tests
+```
+
+pnpm refuses packages released less than a day ago (supply-chain
+protection); keep it that way instead of adding exceptions.
+
 ### Layout
 
 ```
@@ -257,6 +282,8 @@ internal/archive     sync orchestration, deduplication, header parsing
 internal/imapsync    read-only IMAP client
 internal/mime        MIME parsing: text for search, parts for display
 internal/web         HTTP server, JSON API, request protection
+internal/web/ui      embedded web UI build
+web/                 web UI source (React)
 internal/blobstore   content-addressed .eml storage
 internal/store       PostgreSQL access, migrations and SQL queries (sqlc)
 internal/crypto      AES-256-GCM for stored credentials
@@ -276,7 +303,6 @@ internal/config      environment configuration
 
 ## Roadmap
 
-- Web UI (React) for browsing, searching and reading, served by `serve`.
 - Account management and sync from the UI.
 - Login through any OpenID Connect provider, so the UI can be reachable from
   other devices.

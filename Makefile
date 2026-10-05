@@ -6,7 +6,15 @@ VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo de
 SQLC      := GOTOOLCHAIN=$$($(GO) env GOVERSION) $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 TEST_DATABASE_URL ?= postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable
 
-.PHONY: build test test-unit lint vuln generate sqlc-check tidy docker docker-multiarch clean
+.PHONY: web web-test build test test-unit lint vuln generate sqlc-check tidy docker docker-multiarch clean
+
+## web: build the web UI (embedded by `build`)
+web:
+	cd web && corepack enable && pnpm install --frozen-lockfile && pnpm build
+
+## web-test: typecheck and unit-test the web UI
+web-test:
+	cd web && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
 
 build:
 	$(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o $(BIN) ./cmd/mail-archive
