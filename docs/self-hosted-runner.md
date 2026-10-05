@@ -1,7 +1,8 @@
 # Self-hosted CI runner
 
-CI jobs run on a self-hosted GitHub Actions runner (name `vps-ci`, label
-`mail-archive-ci`) on a dedicated Debian/Ubuntu x86_64 server.
+CI jobs run on a self-hosted GitHub Actions runner on a dedicated
+Debian/Ubuntu x86_64 server. Jobs select it by the label `mail-archive-ci`;
+the runner's name does not matter.
 
 ## Which runner runs a job
 
@@ -31,7 +32,9 @@ jobs. Delete the variable to switch back.
 5. Create the user `runner` and add it to the `docker` group.
 6. As `runner`: download the runner from Settings → Actions → Runners → New
    self-hosted runner (verify the SHA-256 checksum shown there), then
-   `./config.sh --url https://github.com/pklnx/mail-archive --token TOKEN --name vps-ci --labels mail-archive-ci --unattended`.
+   `./config.sh --url https://github.com/pklnx/mail-archive --token TOKEN --name NAME --labels mail-archive-ci --unattended`.
+   If the label was forgotten, add it on the runner's page in Settings →
+   Actions → Runners; otherwise jobs wait for a runner forever.
 7. As root in `/home/runner/actions-runner`: `./svc.sh install runner && ./svc.sh start`.
 8. A weekly systemd timer runs `docker system prune -af --filter until=168h`.
 
