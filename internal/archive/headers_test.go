@@ -1,8 +1,11 @@
 package archive
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pklnx/mail-archive/internal/imapsync"
 )
 
 func TestParseHeaders(t *testing.T) {
@@ -59,5 +62,23 @@ func TestFolderSelected(t *testing.T) {
 		if got := FolderSelected(c.name, c.included, c.excluded); got != c.want {
 			t.Errorf("FolderSelected(%q, %v, %v) = %v, want %v", c.name, c.included, c.excluded, got, c.want)
 		}
+	}
+}
+
+func TestSuggestExclusions(t *testing.T) {
+	folders := []imapsync.Folder{
+		{Name: "INBOX"},
+		{Name: "Junk", Attrs: []string{`\Junk`}},
+		{Name: "Papierkorb", Attrs: []string{`\HasNoChildren`, `\Trash`}},
+		{Name: "Sent", Attrs: []string{`\Sent`}},
+	}
+	if got := SuggestExclusions(folders, nil, nil); !slices.Equal(got, []string{"Junk", "Papierkorb"}) {
+		t.Errorf("no filters: got %v", got)
+	}
+	if got := SuggestExclusions(folders, nil, []string{"junk"}); !slices.Equal(got, []string{"Papierkorb"}) {
+		t.Errorf("junk excluded: got %v", got)
+	}
+	if got := SuggestExclusions(folders, []string{"INBOX"}, nil); len(got) != 0 {
+		t.Errorf("include list without junk/trash: got %v", got)
 	}
 }

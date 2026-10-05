@@ -30,28 +30,37 @@ A web UI with search is planned (see [Roadmap](#roadmap)).
 
 ## Quick start (Docker Compose)
 
-Requirements: Docker with Compose v2. Images are built for `linux/amd64` and
-`linux/arm64`, so this also runs natively on Apple Silicon Macs.
+Requirements: Docker with a current Docker Compose. Images are built for
+`linux/amd64` and `linux/arm64`, so this also runs natively on Apple Silicon
+Macs.
 
 ```sh
 cp .env.example .env
 # Edit .env: set POSTGRES_PASSWORD and a secret key from:
 openssl rand -base64 32
 
-docker compose up -d postgres
-docker compose run --rm mail-archive migrate
+./ma migrate
 ```
+
+`./ma` is a small wrapper around `docker compose run --rm mail-archive …`. It
+starts PostgreSQL when needed, rebuilds the image after code changes (about a
+second when nothing changed) and hides Docker Compose's progress messages.
+Every command below also works as `docker compose run --rm mail-archive …`.
 
 Add accounts. The password is prompted and the login is checked before saving:
 
 ```sh
-docker compose run --rm mail-archive account add private \
-  --host imap.mail.de --username me@mail.de
+./ma account add private --host imap.mail.de --username me@mail.de
 
-docker compose run --rm mail-archive account folders private   # what will be archived
-docker compose run --rm mail-archive sync
-docker compose run --rm mail-archive status
+./ma account folders private   # which folders will be archived
+./ma sync
+./ma status
 ```
+
+`account add` and `account folders` show each folder's role (`trash`, `junk`,
+`sent`, …) as reported by the server. Spam and trash folders are archived like
+any other folder; the output suggests a ready-to-run `set-folders` command if
+you want to skip them.
 
 Archived files appear in `./data` (configurable with `ARCHIVE_DIR`).
 
@@ -65,8 +74,11 @@ Archived files appear in `./data` (configurable with `ARCHIVE_DIR`).
 example every hour:
 
 ```cron
-0 * * * * cd /path/to/mail-archive && /usr/local/bin/docker compose run --rm -T mail-archive sync >> sync.log 2>&1
+0 * * * * /path/to/mail-archive/ma sync >> /path/to/mail-archive/sync.log 2>&1
 ```
+
+cron runs with a minimal `PATH`. If `docker` is not found, add a line such as
+`PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab.
 
 ## Provider notes
 
@@ -85,8 +97,7 @@ folders. Deduplication keeps storage at one copy, but every label is still
 downloaded. Archive only the folders that contain everything:
 
 ```sh
-docker compose run --rm mail-archive account add gmail \
-  --host imap.gmail.com --username me@gmail.com \
+./ma account add gmail --host imap.gmail.com --username me@gmail.com \
   --include "[Gmail]/All Mail" --include "[Gmail]/Sent Mail"
 ```
 
@@ -106,7 +117,7 @@ supported yet.
 | `keygen` | Print a random secret key. |
 | `account add NAME` | Add an account (`--host`, `--username`, `--port`, `--tls tls\|starttls\|none`, `--include`, `--exclude`, `--password-stdin`). |
 | `account list` | List accounts. |
-| `account folders NAME` | Connect and show which server folders will be archived. |
+| `account folders NAME` | Connect and show which server folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the include and exclude lists. |
 | `account set-password NAME` | Replace the stored password. |
 | `account enable\|disable NAME` | Include or exclude an account from `sync`. Archived data is kept. |
@@ -124,6 +135,7 @@ All configuration comes from environment variables:
 | `MAIL_ARCHIVE_SECRET_KEY` | (required to add accounts and sync) | Base64 key, 32 bytes. Encrypts IMAP passwords. |
 | `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for `.eml` files. |
 | `MAIL_ARCHIVE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+| `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. Set to `./ma` by the wrapper. |
 
 ## Backups
 
