@@ -41,9 +41,79 @@ func openApp(ctx context.Context) (*app, error) {
 func (a *app) close() { a.store.Close() }
 
 func newMigrateCmd() *cobra.Command {
-	return &cobra.Command{
+	runUp := func(cmd *cobra.Command, _ []string) error {
+		a, err := openApp(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer a.close()
+		applied, err := a.store.Migrate(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if len(applied) == 0 {
+			fmt.Println("database schema is up to date")
+		}
+		for _, m := range applied {
+			fmt.Println("applied", m)
+		}
+		return nil
+	}
+	cmd := &cobra.Command{
 		Use:   "migrate",
-		Short: "Apply database schema migrations",
+		Short: "Manage database schema migrations (default: apply all pending)",
+		Args:  cobra.NoArgs,
+		RunE:  runUp,
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "up",
+			Short: "Apply all pending migrations",
+			Args:  cobra.NoArgs,
+			RunE:  runUp,
+		},
+		newMigrateDownCmd(),
+		newMigrateStatusCmd(),
+	)
+	return cmd
+}
+
+func newMigrateDownCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "down",
+		Short: "Roll back the most recent migration (may delete data)",
+		Long: `Roll back the most recently applied migration.
+
+Rolling back usually drops tables or columns and the data in them. Archived
+.eml files on disk are not touched. Back up the database first. Intended for
+development; in production, prefer restoring a backup.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !yes {
+				return errors.New("refusing to roll back without --yes (this may delete data)")
+			}
+			a, err := openApp(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			rolledBack, err := a.store.MigrateDown(cmd.Context())
+			if err != nil {
+				return err
+			}
+			fmt.Println("rolled back", rolledBack)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm that data may be deleted")
+	return cmd
+}
+
+func newMigrateStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show applied and pending migrations",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -51,17 +121,20 @@ func newMigrateCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			applied, err := a.store.Migrate(cmd.Context())
+			statuses, err := a.store.MigrationStatus(cmd.Context())
 			if err != nil {
 				return err
 			}
-			if len(applied) == 0 {
-				fmt.Println("database schema is up to date")
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "MIGRATION\tSTATE\tAPPLIED AT")
+			for _, st := range statuses {
+				state, at := "pending", "-"
+				if st.Applied {
+					state, at = "applied", st.AppliedAt.Local().Format(time.DateTime)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\n", st.Path, state, at)
 			}
-			for _, m := range applied {
-				fmt.Println("applied", m)
-			}
-			return nil
+			return w.Flush()
 		},
 	}
 }

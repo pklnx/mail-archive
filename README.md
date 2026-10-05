@@ -100,7 +100,9 @@ supported yet.
 
 | Command | Purpose |
 |---|---|
-| `migrate` | Create or upgrade the database schema. |
+| `migrate` (or `migrate up`) | Create or upgrade the database schema. |
+| `migrate status` | Show applied and pending migrations. |
+| `migrate down --yes` | Roll back the latest migration. Usually deletes data; intended for development. |
 | `keygen` | Print a random secret key. |
 | `account add NAME` | Add an account (`--host`, `--username`, `--port`, `--tls tls\|starttls\|none`, `--include`, `--exclude`, `--password-stdin`). |
 | `account list` | List accounts. |
@@ -151,6 +153,25 @@ make docker-multiarch   # build amd64 + arm64 images
 Integration tests start an in-process IMAP server and create a throwaway
 database for each test (the user in `TEST_DATABASE_URL` needs `CREATEDB`).
 
+### Database migrations
+
+Migrations are SQL files in `internal/store/migrations`, managed with
+[goose](https://github.com/pressly/goose) and embedded in the binary. Each file
+has an `Up` and a `Down` section:
+
+```sql
+-- +goose Up
+ALTER TABLE messages ADD COLUMN thread_id TEXT;
+
+-- +goose Down
+ALTER TABLE messages DROP COLUMN thread_id;
+```
+
+Name new files with the next number (`00002_add_thread_id.sql`). Never edit a
+migration that has already been released; add a new one instead. The store
+tests roll every migration down and up again, so a broken `Down` section fails
+CI.
+
 ### Layout
 
 ```
@@ -180,6 +201,8 @@ internal/config      environment configuration
   search with PostgreSQL).
 - Login for the UI through any OpenID Connect provider.
 - Optional daemon mode with a built-in schedule.
+- Type-safe database queries generated with [sqlc](https://sqlc.dev/) from
+  plain SQL (reads the goose migrations as its schema).
 
 ## License
 

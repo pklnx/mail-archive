@@ -50,25 +50,74 @@ func (s *Store) Close() { s.pool.Close() }
 
 // Migrate applies all pending schema migrations.
 func (s *Store) Migrate(ctx context.Context) ([]string, error) {
+	var applied []string
+	err := s.withMigrations(func(p *goose.Provider) error {
+		results, err := p.Up(ctx)
+		for _, r := range results {
+			applied = append(applied, r.Source.Path)
+		}
+		return err
+	})
+	return applied, err
+}
+
+// MigrateDown rolls back the most recently applied migration. This usually
+// drops data. It returns the migration that was rolled back.
+func (s *Store) MigrateDown(ctx context.Context) (string, error) {
+	var rolledBack string
+	err := s.withMigrations(func(p *goose.Provider) error {
+		r, err := p.Down(ctx)
+		if errors.Is(err, goose.ErrNoNextVersion) {
+			return errors.New("no migration to roll back")
+		}
+		if err != nil {
+			return err
+		}
+		rolledBack = r.Source.Path
+		return nil
+	})
+	return rolledBack, err
+}
+
+// MigrationStatus describes one known migration.
+type MigrationStatus struct {
+	Path      string
+	Applied   bool
+	AppliedAt time.Time
+}
+
+// MigrationStatus lists all migrations and whether they are applied.
+func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) {
+	var out []MigrationStatus
+	err := s.withMigrations(func(p *goose.Provider) error {
+		statuses, err := p.Status(ctx)
+		if err != nil {
+			return err
+		}
+		for _, st := range statuses {
+			out = append(out, MigrationStatus{
+				Path:      st.Source.Path,
+				Applied:   st.State == goose.StateApplied,
+				AppliedAt: st.AppliedAt,
+			})
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (s *Store) withMigrations(fn func(*goose.Provider) error) error {
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	db := stdlib.OpenDBFromPool(s.pool)
 	defer func(db *sql.DB) { _ = db.Close() }(db)
 	provider, err := goose.NewProvider(goose.DialectPostgres, db, sub)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	results, err := provider.Up(ctx)
-	if err != nil {
-		return nil, err
-	}
-	applied := make([]string, 0, len(results))
-	for _, r := range results {
-		applied = append(applied, r.Source.Path)
-	}
-	return applied, nil
+	return fn(provider)
 }
 
 // TLSMode describes how to secure the IMAP connection.
