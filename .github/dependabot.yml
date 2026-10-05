@@ -23,3 +23,8 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    ignore:
+      # A PostgreSQL major upgrade needs pg_upgrade or dump/restore of the
+      # data volume, so it is done deliberately, not through Dependabot.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]

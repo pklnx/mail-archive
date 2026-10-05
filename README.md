@@ -160,6 +160,7 @@ make test TEST_DATABASE_URL='postgres://mailarchive:<password>@localhost:5432/ma
 make lint
 make vuln               # govulncheck
 make docker-multiarch   # build amd64 + arm64 images
+scripts/compose-smoke-test.sh   # end-to-end test of Compose and ./ma (also in CI)
 ```
 
 Integration tests start an in-process IMAP server and create a throwaway
