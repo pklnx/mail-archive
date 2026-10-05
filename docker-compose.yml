@@ -1,0 +1,47 @@
+# Usage:
+#   cp .env.example .env              # then set passwords and the secret key
+#   docker compose up -d postgres
+#   docker compose run --rm mail-archive migrate
+#   docker compose run --rm mail-archive account add ...
+#   docker compose run --rm mail-archive sync
+#
+# Both images are multi-arch (amd64 and arm64, e.g. Apple Silicon).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mailarchive
+      POSTGRES_USER: mailarchive
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Only reachable from this machine; remove if not needed.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailarchive -d mailarchive"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mail-archive:
+    build:
+      context: .
+    image: mail-archive:local
+    # One-shot CLI: not started by `docker compose up`, use `docker compose run`.
+    profiles: ["cli"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
+      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+    volumes:
+      # Raw .eml files. A bind mount keeps them visible on the host for backups.
+      - ${ARCHIVE_DIR:-./data}:/data
+
+volumes:
+  pgdata:
