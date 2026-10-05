@@ -14,6 +14,15 @@ if [ -e .env ]; then
 fi
 
 work=$(mktemp -d)
+
+# Archive files belong to the container user (UID 65532, mode 0600/0700), so
+# on Linux the host user cannot read or delete them. Inspect and remove them
+# from a container instead, reusing the PostgreSQL image (it has a shell).
+in_data() {
+	docker compose --progress quiet run --rm --no-deps -T --entrypoint sh \
+		-v "$work/data:/data" postgres -c "$1"
+}
+
 cleanup() {
 	status=$?
 	if [ "$status" -ne 0 ]; then
@@ -22,6 +31,7 @@ cleanup() {
 		docker logs imap-test >&2 || true
 	fi
 	docker rm -f imap-test >/dev/null 2>&1 || true
+	in_data 'rm -rf /data/* /data/.[!.]*' >/dev/null 2>&1 || true
 	docker compose --progress quiet down -v >/dev/null 2>&1 || true
 	rm -f .env
 	rm -rf "$work"
@@ -75,7 +85,7 @@ echo "== status"
 ./ma status | tee "$work/out"
 expect "$work/out" "unique messages in archive: 3"
 
-count=$(find "$work/data/messages" -name '*.eml' | wc -l | tr -d ' ')
+count=$(in_data "find /data/messages -name '*.eml' | wc -l" | tr -d ' \r')
 if [ "$count" -ne 3 ]; then
 	echo "expected 3 .eml files, found $count" >&2
 	exit 1
