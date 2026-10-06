@@ -183,7 +183,7 @@ func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string
 			return err
 		}
 		if u.LockedAt != nil || len(u.TwoFactorPending) == 0 {
-			return ErrTwoFactorInvalid
+			return 0, ErrTwoFactorInvalid
 		}
 		secret, err := sealer.Open(u.TwoFactorPending, []byte("totp-secret:user:"+itoa(id)+":pending"))
 		if err != nil {
@@ -212,7 +212,7 @@ func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string
 	})
 }
 
-func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, key []byte) error {
+func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, key []byte) (int64, error) {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
 		if err != nil {
@@ -223,29 +223,29 @@ func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, 
 		}
 		secret, err := sealer.Open(u.TwoFactorSecret, []byte("totp-secret:user:"+itoa(id)))
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if counter, ok := auth.ValidateTOTP(string(secret), now); ok {
 			if u.TwoFactorLastCount != nil && counter <= *u.TwoFactorLastCount {
-				return ErrTwoFactorReplay
+				return 0, ErrTwoFactorReplay
 			}
 			n, err := q.AcceptTwoFactorCounter(ctx, id, counter)
 			if err != nil {
-				return err
+				return 0, err
 			}
 			if n != 1 {
-				return ErrTwoFactorReplay
+				return 0, ErrTwoFactorReplay
 			}
-			return nil
+			return u.TwoFactorVersion, nil
 		}
 		ok, err := consumeRecoveryCodeTx(ctx, q, id, auth.RecoveryCodeHash(key, code))
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if ok {
-			return nil
+			return u.TwoFactorVersion, nil
 		}
-		return ErrTwoFactorInvalid
+		return 0, ErrTwoFactorInvalid
 	})
 }
 
@@ -328,4 +328,31 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		return "", nil, err
 	}
 	return string(rawToken), outUser, nil
+}
+
+
+func (s *Store) DisableTwoFactorIfVersion(ctx context.Context, id, version int64, keepSession []byte) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		u, err := q.LockTwoFactorUser(ctx, id)
+		if err != nil { return err }
+		if u.TwoFactorVersion != version || u.IsAdmin { return ErrConflict }
+		if err := q.DisableTwoFactor(ctx, id); err != nil { return err }
+		if err := q.DeleteRecoveryCodes(ctx, id); err != nil { return err }
+		if err := q.DeleteUserTwoFactorChallenges(ctx, id); err != nil { return err }
+		return q.DeleteOtherSessions(ctx, db.DeleteOtherSessionsParams{UserID: id, ID: keepSession})
+	})
+}
+
+func (s *Store) ReplaceRecoveryCodesIfVersion(ctx context.Context, id, version int64, codes []string, key []byte) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		u, err := q.LockTwoFactorUser(ctx, id)
+		if err != nil { return err }
+		if u.TwoFactorVersion != version || !u.TwoFactorEnabled { return ErrConflict }
+		if err := q.DeleteRecoveryCodes(ctx, id); err != nil { return err }
+		for _, code := range codes {
+			if err := q.InsertRecoveryCode(ctx, id, auth.RecoveryCodeHash(key, code)); err != nil { return err }
+		}
+		if err := q.BumpTwoFactorVersion(ctx, id); err != nil { return err }
+		return q.DeleteUserTwoFactorChallenges(ctx, id)
+	})
 }
