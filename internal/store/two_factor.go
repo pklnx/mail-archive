@@ -101,8 +101,18 @@ func (s *Store) ConsumeRecoveryCode(ctx context.Context, id int64, hash []byte) 
 
 func (s *Store) ResetTwoFactor(ctx context.Context, id int64) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
-		if _, err := q.LockTwoFactorUser(ctx, id); err != nil {
+		u, err := q.LockTwoFactorUser(ctx, id)
+		if err != nil {
 			return err
+		}
+		if u.IsAdmin && u.TwoFactorEnabled {
+			admins, err := q.LockUsableAdmins(ctx)
+			if err != nil {
+				return err
+			}
+			if len(admins) == 1 && admins[0] == id {
+				return ErrLastAdmin
+			}
 		}
 		if err := q.DisableTwoFactor(ctx, id); err != nil {
 			return err
