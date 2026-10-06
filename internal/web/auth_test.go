@@ -156,7 +156,7 @@ func (f *authFixture) login(name, password string) *http.Response {
 		if challenge, ok := out["challenge"].(string); ok {
 			secret, ok := f.adminSecrets[name]
 			if !ok { f.t.Fatalf("missing test TOTP secret for %q", name) }
-			resp, _ = f.do("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": auth.GenerateTOTP(secret, time.Now())})
+			resp, _ = f.do("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": testTOTP(f.t, secret)})
 		}
 	}
 	return resp
