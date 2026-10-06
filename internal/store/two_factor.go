@@ -213,40 +213,32 @@ func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string
 }
 
 func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, key []byte) (int64, error) {
-	return s.inTx(ctx, func(q *db.Queries) error {
+	var version int64
+	err := s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		if u.LockedAt != nil || !u.TwoFactorEnabled || len(u.TwoFactorSecret) == 0 {
 			return ErrTwoFactorInvalid
 		}
 		secret, err := sealer.Open(u.TwoFactorSecret, []byte("totp-secret:user:"+itoa(id)))
-		if err != nil {
-			return 0, err
-		}
+		if err != nil { return err }
 		if counter, ok := auth.ValidateTOTP(string(secret), now); ok {
 			if u.TwoFactorLastCount != nil && counter <= *u.TwoFactorLastCount {
-				return 0, ErrTwoFactorReplay
+				return ErrTwoFactorReplay
 			}
 			n, err := q.AcceptTwoFactorCounter(ctx, id, counter)
-			if err != nil {
-				return 0, err
-			}
-			if n != 1 {
-				return 0, ErrTwoFactorReplay
-			}
-			return u.TwoFactorVersion, nil
+			if err != nil { return err }
+			if n != 1 { return ErrTwoFactorReplay }
+			version = u.TwoFactorVersion
+			return nil
 		}
 		ok, err := consumeRecoveryCodeTx(ctx, q, id, auth.RecoveryCodeHash(key, code))
-		if err != nil {
-			return 0, err
-		}
-		if ok {
-			return u.TwoFactorVersion, nil
-		}
-		return 0, ErrTwoFactorInvalid
+		if err != nil { return err }
+		if !ok { return ErrTwoFactorInvalid }
+		version = u.TwoFactorVersion
+		return nil
 	})
+	return version, err
 }
 
 func consumeRecoveryCodeTx(ctx context.Context, q *db.Queries, id int64, hash []byte) (bool, error) {
