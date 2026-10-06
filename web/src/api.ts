@@ -237,6 +237,8 @@ export const sessionApi = {
   },
   login: async (username: string, password: string): Promise<{ user?: User; twoFactorRequired?: boolean; challenge?: string }> =>
     (await send<{ user?: User; twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
+  login2FA: async (challenge: string, code: string): Promise<User> =>
+    (await send<{ user: User }>("POST", "/api/session/2fa", { challenge, code }))!.user,
   logout: () => send("DELETE", sessionPath),
 };
 
