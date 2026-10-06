@@ -141,8 +141,13 @@ export const UNAUTHORIZED_EVENT = "mail-archive:unauthorized";
 const sessionPath = "/api/session";
 
 async function errorFor(path: string, res: Response): Promise<ApiError> {
-  if (res.status === 401 && path !== sessionPath) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-  return errorFrom(res);
+  const err = await errorFrom(res);
+  // The session ended, or the user still has to replace a generated
+  // password: the login gate checks the session again.
+  if ((res.status === 401 && path !== sessionPath) || err.body.passwordChangeRequired === true) {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+  return err;
 }
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -211,6 +216,8 @@ export const messageURL = {
 export interface User {
   name: string;
   admin: boolean;
+  /** Logged in with a generated password: must choose their own first. */
+  mustChangePassword: boolean;
 }
 
 /** The login state: a user, or none and whether the first admin is missing. */
@@ -237,3 +244,37 @@ export function retryAfter(err: unknown): number | null {
   const s = err.body.retryAfter;
   return typeof s === "number" && s > 0 ? s : 60;
 }
+
+export const profileApi = {
+  changePassword: (current: string, next: string) => send("PUT", "/api/profile/password", { current, new: next }),
+};
+
+/** A user as admins see them on the users page. */
+export interface ManagedUser {
+  name: string;
+  admin: boolean;
+  locked: boolean;
+  mustChangePassword: boolean;
+  accounts: number;
+  createdAt: string;
+  lastLoginAt: string | null;
+  /** The logged-in admin, whose own row cannot be changed there. */
+  self: boolean;
+}
+
+/** A generated password, shown once. */
+export interface GeneratedPassword {
+  name: string;
+  password: string;
+}
+
+const userPath = (name: string) => `/api/users/${encodeURIComponent(name)}`;
+
+export const usersApi = {
+  list: async (signal?: AbortSignal) => (await getJSON<{ users: ManagedUser[] }>("/api/users", signal)).users,
+  create: async (name: string, admin: boolean) => (await send<GeneratedPassword>("POST", "/api/users", { name, admin }))!,
+  resetPassword: async (name: string) => (await send<GeneratedPassword>("POST", `${userPath(name)}/password`))!,
+  setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
+  setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
+  remove: (name: string) => send("DELETE", userPath(name)),
+};

@@ -82,12 +82,13 @@ type SyncRun struct {
 }
 
 type User struct {
-	ID                int64
-	Name              string
-	PasswordHash      string
-	IsAdmin           bool
-	LockedAt          *time.Time
-	CreatedAt         time.Time
-	PasswordChangedAt time.Time
-	LastLoginAt       *time.Time
+	ID                 int64
+	Name               string
+	PasswordHash       string
+	IsAdmin            bool
+	LockedAt           *time.Time
+	CreatedAt          time.Time
+	PasswordChangedAt  time.Time
+	LastLoginAt        *time.Time
+	MustChangePassword bool
 }

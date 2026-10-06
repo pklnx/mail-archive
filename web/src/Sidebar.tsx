@@ -7,7 +7,8 @@ interface Props {
   state: ViewState;
   accounts: AccountsState;
   select: (account: string, folder: string) => void;
-  manage: () => void;
+  /** Opens a page: "accounts", "users" or "profile". */
+  show: (view: string) => void;
   user: User;
   logout: () => void;
 }
@@ -16,7 +17,7 @@ const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-
 const active = "bg-blue-600 text-white";
 const idle = "hover:bg-zinc-200 dark:hover:bg-zinc-800";
 
-export function Sidebar({ state, accounts, select, manage, user, logout }: Props) {
+export function Sidebar({ state, accounts, select, show, user, logout }: Props) {
   const { data, error } = accounts;
   const mail = state.view === "";
   const all = mail && !state.account && !state.folder;
@@ -66,7 +67,7 @@ export function Sidebar({ state, accounts, select, manage, user, logout }: Props
         type="button"
         className={`${item} mt-auto ${state.view === "accounts" ? active : idle}`}
         aria-current={state.view === "accounts" ? "page" : undefined}
-        onClick={manage}
+        onClick={() => show("accounts")}
       >
         <span className="flex items-center gap-2">
           <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -76,10 +77,32 @@ export function Sidebar({ state, accounts, select, manage, user, logout }: Props
           {t.manageAccounts}
         </span>
       </button>
+      {user.admin && (
+        <button
+          type="button"
+          className={`${item} ${state.view === "users" ? active : idle}`}
+          aria-current={state.view === "users" ? "page" : undefined}
+          onClick={() => show("users")}
+        >
+          <span className="flex items-center gap-2">
+            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="9" cy="8" r="3.5" />
+              <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14a6 6 0 0 1 3 6" />
+            </svg>
+            {t.users}
+          </span>
+        </button>
+      )}
       <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-2 pt-2 text-sm dark:border-zinc-800">
-        <span className="truncate text-zinc-500" title={t.loggedInAs(user.name)}>
+        <button
+          type="button"
+          className={`truncate hover:underline ${state.view === "profile" ? "font-semibold" : "text-zinc-500"}`}
+          title={`${t.loggedInAs(user.name)} · ${t.profile}`}
+          aria-current={state.view === "profile" ? "page" : undefined}
+          onClick={() => show("profile")}
+        >
           {user.name}
-        </span>
+        </button>
         <button type="button" className="shrink-0 text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>
           {t.logOut}
         </button>

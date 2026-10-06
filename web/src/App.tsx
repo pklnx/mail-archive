@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { AccountsPage } from "./AccountsPage";
+import { ProfilePage } from "./Profile";
+import { UsersPage } from "./UsersPage";
 import { MessageList } from "./MessageList";
 import { MessageView } from "./MessageView";
 import { Sidebar } from "./Sidebar";
@@ -52,15 +54,23 @@ export function App({ user, logout }: Props) {
             update({ account, folder, m: "", view: "" });
             setMenuOpen(false);
           }}
-          manage={() => {
-            update({ view: "accounts", m: "" });
+          show={(view) => {
+            update({ view, m: "" });
             setMenuOpen(false);
           }}
         />
       </aside>
       {menuOpen && <div className="fixed inset-0 z-10 bg-black/30 lg:hidden" onClick={() => setMenuOpen(false)} />}
 
-      {state.view === "accounts" ? (
+      {state.view === "profile" ? (
+        <main className="min-h-0 md:col-span-2">
+          <ProfilePage name={user.name} close={() => update({ view: "" })} />
+        </main>
+      ) : state.view === "users" && user.admin ? (
+        <main className="min-h-0 md:col-span-2">
+          <UsersPage close={() => update({ view: "" })} />
+        </main>
+      ) : state.view === "accounts" ? (
         <main className="min-h-0 md:col-span-2">
           <AccountsPage
             accounts={accounts}

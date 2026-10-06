@@ -171,3 +171,28 @@ func decode(s string) (Params, []byte, []byte, error) {
 	}
 	return p, salt, key, nil
 }
+
+// generatedAlphabet has no characters that are easy to confuse (0/o, 1/l/i).
+const generatedAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+// GeneratePassword returns a random password for an admin to hand out, like
+// "k7mq2-x9tbr-4hdne-p3wza": 20 characters from 31, about 99 bits.
+func GeneratePassword() (string, error) {
+	var b strings.Builder
+	buf := make([]byte, 1)
+	for i := 0; i < 20; {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+		// Rejection sampling keeps every character equally likely.
+		if int(buf[0]) >= 256/len(generatedAlphabet)*len(generatedAlphabet) {
+			continue
+		}
+		if i > 0 && i%5 == 0 {
+			b.WriteByte('-')
+		}
+		b.WriteByte(generatedAlphabet[int(buf[0])%len(generatedAlphabet)])
+		i++
+	}
+	return b.String(), nil
+}

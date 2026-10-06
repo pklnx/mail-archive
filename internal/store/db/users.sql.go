@@ -44,19 +44,25 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (name, password_hash, is_admin)
-VALUES ($1, $2, $3)
-RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at
+INSERT INTO users (name, password_hash, is_admin, must_change_password)
+VALUES ($1, $2, $3, $4)
+RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password
 `
 
 type CreateUserParams struct {
-	Name         string
-	PasswordHash string
-	IsAdmin      bool
+	Name               string
+	PasswordHash       string
+	IsAdmin            bool
+	MustChangePassword bool
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Name, arg.PasswordHash, arg.IsAdmin)
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Name,
+		arg.PasswordHash,
+		arg.IsAdmin,
+		arg.MustChangePassword,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -67,6 +73,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.CreatedAt,
 		&i.PasswordChangedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
 	)
 	return i, err
 }
@@ -81,6 +88,21 @@ func (q *Queries) DeleteExpiredSessions(ctx context.Context, idleCutoff time.Tim
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteOtherSessions = `-- name: DeleteOtherSessions :exec
+DELETE FROM sessions WHERE user_id = $1 AND id <> $2
+`
+
+type DeleteOtherSessionsParams struct {
+	UserID int64
+	ID     []byte
+}
+
+// All sessions of a user except one.
+func (q *Queries) DeleteOtherSessions(ctx context.Context, arg DeleteOtherSessionsParams) error {
+	_, err := q.db.Exec(ctx, deleteOtherSessions, arg.UserID, arg.ID)
+	return err
 }
 
 const deleteSession = `-- name: DeleteSession :exec
@@ -114,7 +136,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin
+SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1
@@ -129,11 +151,12 @@ type GetSessionParams struct {
 }
 
 type GetSessionRow struct {
-	ID         []byte
-	LastSeenAt time.Time
-	UserID     int64
-	Name       string
-	IsAdmin    bool
+	ID                 []byte
+	LastSeenAt         time.Time
+	UserID             int64
+	Name               string
+	IsAdmin            bool
+	MustChangePassword bool
 }
 
 // A session is valid while it has not expired, was used after the idle
@@ -147,12 +170,13 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.UserID,
 		&i.Name,
 		&i.IsAdmin,
+		&i.MustChangePassword,
 	)
 	return i, err
 }
 
 const getUserByName = `-- name: GetUserByName :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at FROM users WHERE name = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password FROM users WHERE name = $1
 `
 
 func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) {
@@ -167,12 +191,13 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 		&i.CreatedAt,
 		&i.PasswordChangedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at FROM users ORDER BY name
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password FROM users ORDER BY name
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -193,6 +218,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.CreatedAt,
 			&i.PasswordChangedAt,
 			&i.LastLoginAt,
+			&i.MustChangePassword,
 		); err != nil {
 			return nil, err
 		}
@@ -258,6 +284,23 @@ func (q *Queries) RehashUserPassword(ctx context.Context, arg RehashUserPassword
 	return result.RowsAffected(), nil
 }
 
+const setUserAdmin = `-- name: SetUserAdmin :execrows
+UPDATE users SET is_admin = $2 WHERE id = $1
+`
+
+type SetUserAdminParams struct {
+	ID      int64
+	IsAdmin bool
+}
+
+func (q *Queries) SetUserAdmin(ctx context.Context, arg SetUserAdminParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserAdmin, arg.ID, arg.IsAdmin)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setUserLocked = `-- name: SetUserLocked :execrows
 UPDATE users SET locked_at = CASE WHEN $2::boolean THEN coalesce(locked_at, now()) END WHERE id = $1
 `
@@ -276,16 +319,17 @@ func (q *Queries) SetUserLocked(ctx context.Context, arg SetUserLockedParams) (i
 }
 
 const setUserPassword = `-- name: SetUserPassword :execrows
-UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1
+UPDATE users SET password_hash = $2, must_change_password = $3, password_changed_at = now() WHERE id = $1
 `
 
 type SetUserPasswordParams struct {
-	ID           int64
-	PasswordHash string
+	ID                 int64
+	PasswordHash       string
+	MustChangePassword bool
 }
 
 func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	result, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash, arg.MustChangePassword)
 	if err != nil {
 		return 0, err
 	}

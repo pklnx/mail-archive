@@ -189,3 +189,38 @@ func TestAccountOwners(t *testing.T) {
 		t.Fatal("unknown --user accepted")
 	}
 }
+
+func TestUserRoleAndResetCommands(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	ctx := context.Background()
+	if err := runUser(t, "correct horse battery\n", "add", "admin", "--admin", "--password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUser(t, "correct horse battery\n", "add", "kim", "--password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUser(t, "", "demote", "admin"); err == nil || !strings.Contains(err.Error(), "last admin") {
+		t.Fatalf("demote the last admin: %v", err)
+	}
+	if err := runUser(t, "", "promote", "kim"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUser(t, "", "demote", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := st.GetUserByName(ctx, "admin"); u.IsAdmin {
+		t.Fatal("admin still an admin")
+	}
+	before, _ := st.GetUserByName(ctx, "kim")
+	if err := runUser(t, "", "reset-password", "kim"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := st.GetUserByName(ctx, "kim")
+	if after.PasswordHash == before.PasswordHash || !after.MustChangePassword {
+		t.Fatalf("after reset: %+v", after)
+	}
+	if err := runUser(t, "", "list"); err != nil {
+		t.Fatal(err)
+	}
+}

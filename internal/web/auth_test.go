@@ -234,7 +234,7 @@ func TestSessionEnds(t *testing.T) {
 	f.login("alice", "correct horse battery")
 	f.expect("GET", "/api/status", nil, 200)
 	h, _ := cheapHasher.Hash(ctx, "another horse battery")
-	if err := f.st.SetUserPassword(ctx, alice.ID, h); err != nil {
+	if err := f.st.SetUserPassword(ctx, alice.ID, h, false); err != nil {
 		t.Fatal(err)
 	}
 	f.expect("GET", "/api/status", nil, 401)
