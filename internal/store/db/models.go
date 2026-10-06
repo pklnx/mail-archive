@@ -59,6 +59,15 @@ type MessageLocation struct {
 	LastSeenAt    time.Time
 }
 
+type Session struct {
+	ID         []byte
+	UserID     int64
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
+	UserAgent  string
+}
+
 type SyncRun struct {
 	ID              int64
 	AccountID       int64
@@ -68,4 +77,15 @@ type SyncRun struct {
 	MessagesFetched int32
 	MessagesNew     int32
 	Error           *string
+}
+
+type User struct {
+	ID                int64
+	Name              string
+	PasswordHash      string
+	IsAdmin           bool
+	LockedAt          *time.Time
+	CreatedAt         time.Time
+	PasswordChangedAt time.Time
+	LastLoginAt       *time.Time
 }

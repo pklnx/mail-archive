@@ -1,0 +1,198 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/pklnx/mail-archive/internal/store/db"
+)
+
+// ErrLastAdmin is returned when a change would leave no unlocked admin.
+var ErrLastAdmin = errors.New("this is the last admin who can log in")
+
+// User can log in to the web UI.
+type User struct {
+	ID                int64
+	Name              string
+	PasswordHash      string
+	IsAdmin           bool
+	LockedAt          *time.Time
+	CreatedAt         time.Time
+	PasswordChangedAt time.Time
+	LastLoginAt       *time.Time
+}
+
+func userFromDB(r db.User) *User {
+	return &User{
+		ID: r.ID, Name: r.Name, PasswordHash: r.PasswordHash, IsAdmin: r.IsAdmin,
+		LockedAt: r.LockedAt, CreatedAt: r.CreatedAt, PasswordChangedAt: r.PasswordChangedAt,
+		LastLoginAt: r.LastLoginAt,
+	}
+}
+
+// CreateUser inserts a user. The name must already be normalized.
+func (s *Store) CreateUser(ctx context.Context, name, passwordHash string, admin bool) (*User, error) {
+	r, err := s.q.CreateUser(ctx, db.CreateUserParams{Name: name, PasswordHash: passwordHash, IsAdmin: admin})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return nil, fmt.Errorf("user %q: %w", name, ErrConflict)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return userFromDB(r), nil
+}
+
+// GetUserByName looks up a user by login name.
+func (s *Store) GetUserByName(ctx context.Context, name string) (*User, error) {
+	r, err := s.q.GetUserByName(ctx, name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return userFromDB(r), nil
+}
+
+// ListUsers returns all users ordered by name.
+func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
+	rows, err := s.q.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*User, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, userFromDB(r))
+	}
+	return out, nil
+}
+
+// CountUsers returns the number of users.
+func (s *Store) CountUsers(ctx context.Context) (int64, error) {
+	return s.q.CountUsers(ctx)
+}
+
+// SetUserPassword stores a new password hash and ends all sessions of the
+// user.
+func (s *Store) SetUserPassword(ctx context.Context, id int64, passwordHash string) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := one(q.SetUserPassword(ctx, db.SetUserPasswordParams{ID: id, PasswordHash: passwordHash})); err != nil {
+			return err
+		}
+		return q.DeleteUserSessions(ctx, id)
+	})
+}
+
+// RehashUserPassword replaces the hash with a new hash of the same password,
+// e.g. after the hash parameters changed. Sessions stay valid.
+func (s *Store) RehashUserPassword(ctx context.Context, id int64, passwordHash string) error {
+	return one(s.q.RehashUserPassword(ctx, db.RehashUserPasswordParams{ID: id, PasswordHash: passwordHash}))
+}
+
+// RecordLogin sets the time of the last successful login.
+func (s *Store) RecordLogin(ctx context.Context, id int64) error {
+	return s.q.RecordLogin(ctx, id)
+}
+
+// SetUserLocked locks or unlocks a user. Locking ends all sessions of the
+// user and fails with ErrLastAdmin for the last unlocked admin.
+func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if locked {
+			if err := keepAnAdmin(ctx, q, id); err != nil {
+				return err
+			}
+		}
+		if err := one(q.SetUserLocked(ctx, db.SetUserLockedParams{ID: id, Locked: locked})); err != nil {
+			return err
+		}
+		if locked {
+			return q.DeleteUserSessions(ctx, id)
+		}
+		return nil
+	})
+}
+
+// DeleteUser deletes a user and their sessions. It fails with ErrLastAdmin
+// for the last unlocked admin.
+func (s *Store) DeleteUser(ctx context.Context, id int64) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := keepAnAdmin(ctx, q, id); err != nil {
+			return err
+		}
+		return one(q.DeleteUser(ctx, id))
+	})
+}
+
+// keepAnAdmin fails if user id is the only unlocked admin. The admin rows
+// stay locked until the transaction ends.
+func keepAnAdmin(ctx context.Context, q *db.Queries, id int64) error {
+	admins, err := q.LockActiveAdmins(ctx)
+	if err != nil {
+		return err
+	}
+	if len(admins) == 1 && admins[0] == id {
+		return ErrLastAdmin
+	}
+	return nil
+}
+
+// Session is a valid login session with its user.
+type Session struct {
+	UserID     int64
+	UserName   string
+	IsAdmin    bool
+	LastSeenAt time.Time
+}
+
+// CreateSession stores a session under the hash of its token.
+func (s *Store) CreateSession(ctx context.Context, idHash []byte, userID int64, expiresAt time.Time, userAgent string) error {
+	return s.q.CreateSession(ctx, db.CreateSessionParams{ID: idHash, UserID: userID, ExpiresAt: expiresAt, UserAgent: userAgent})
+}
+
+// GetSession returns a session that has not expired, was used after
+// idleCutoff and belongs to an unlocked user; otherwise ErrNotFound.
+func (s *Store) GetSession(ctx context.Context, idHash []byte, idleCutoff time.Time) (*Session, error) {
+	r, err := s.q.GetSession(ctx, db.GetSessionParams{ID: idHash, IdleCutoff: idleCutoff})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, LastSeenAt: r.LastSeenAt}, nil
+}
+
+// TouchSession records that a session was used now.
+func (s *Store) TouchSession(ctx context.Context, idHash []byte) error {
+	return s.q.TouchSession(ctx, idHash)
+}
+
+// DeleteSession ends a session.
+func (s *Store) DeleteSession(ctx context.Context, idHash []byte) error {
+	return s.q.DeleteSession(ctx, idHash)
+}
+
+// DeleteExpiredSessions removes sessions past their expiry or unused since
+// idleCutoff and returns how many were removed.
+func (s *Store) DeleteExpiredSessions(ctx context.Context, idleCutoff time.Time) (int64, error) {
+	return s.q.DeleteExpiredSessions(ctx, idleCutoff)
+}
+
+func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(s.q.WithTx(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

@@ -7,17 +7,97 @@
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account name, using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail | Plain `.eml` files and PostgreSQL rows, **not encrypted**. Use an encrypted disk. |
 | Your mail servers | Only read: `EXAMINE` and `BODY.PEEK[]`. |
-| The web UI | No login yet. Reachable from this computer only, with the protections below. |
+| The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
+| User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 
-## No login yet
+## Login
 
-The web server has no user accounts. Docker Compose publishes it on
-`127.0.0.1`, so only programs on the same computer can reach it. **Do not
-make it reachable from a network** (port forwarding, a reverse proxy, binding
-to `0.0.0.0`) until login through OpenID Connect is available.
+Every API request needs a login, except the login itself and `/healthz`. The
+page code (`/`, `/assets/`) is public; it contains no data.
 
-"Only localhost" is not enough on its own, because every website open in your
-browser runs on your computer too. The server therefore adds:
+- **Users** are created with `./ma user add NAME` (`--admin` for admins). There
+  is no self-registration. Passwords need at least 12 characters; there are no
+  other rules, so a long passphrase is fine.
+- **Sessions** end after 7 days without use and after 30 days at the latest.
+  Logging out, a new password (`./ma user set-password`), locking
+  (`./ma user lock`) and removing a user end their sessions at once. The
+  browser only gets a random token in an `HttpOnly`, `SameSite=Strict` cookie;
+  the database stores its SHA-256, so a database copy contains no usable
+  sessions.
+- **Failed logins:** after 5 failures for a user name within 15 minutes, the
+  name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
+  further failure. 20 failures from one address within 15 minutes block that
+  address for 15 minutes. Wrong names and wrong passwords get the same answer
+  and take the same time. The counters live in memory and reset when the
+  server restarts.
+- Behind a reverse proxy, the server sees the proxy's address for every
+  client, so all clients share the address limit; the limit per user name
+  still applies.
+
+Until [#27](https://github.com/pklnx/mail-archive/issues/27) lands, every
+logged-in user sees all accounts and mail.
+
+## Network access
+
+Docker Compose publishes the web UI on `127.0.0.1`, so only this computer can
+reach it. To use it from your home network or a VPN:
+
+1. **Use HTTPS.** Without it, passwords and session cookies cross the network
+   in plain text. Put a reverse proxy or `tailscale serve` in front; the
+   server then marks the cookie `Secure` (it recognizes `X-Forwarded-Proto:
+   https`).
+2. **Allow the host name** you type in the browser in
+   `MAIL_ARCHIVE_ALLOWED_HOSTS` (comma-separated, without port). Requests with
+   other names are rejected with `host not allowed` and logged.
+3. **Publish the port** only as far as needed with `WEB_BIND`. With a proxy
+   or `tailscale serve` on the same computer, keep the default `127.0.0.1`.
+
+Do not forward the port from the internet to the web UI.
+
+### Tailscale
+
+`tailscale serve` provides HTTPS with a certificate for the machine's name in
+your tailnet and forwards to the local port. In `.env`:
+
+```sh
+MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,mac.example-tailnet.ts.net
+```
+
+Then:
+
+```sh
+docker compose up -d web
+tailscale serve --bg 8080
+```
+
+Open `https://mac.example-tailnet.ts.net` from any device in your tailnet.
+
+### Reverse proxy in the home network
+
+For example [Caddy](https://caddyserver.com) on the same computer, with a
+name that resolves in your network:
+
+```text
+archive.home.example {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+With `MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,archive.home.example`.
+The proxy must pass the original `Host` header (Caddy does by default);
+otherwise the server's same-origin check rejects changes.
+
+### Plain LAN access
+
+`WEB_BIND=0.0.0.0` and the computer's LAN address or name in
+`MAIL_ARCHIVE_ALLOWED_HOSTS` work without a proxy, but without HTTPS anyone in
+the network who can read the traffic can take over a session. Use this only
+in a network you fully trust.
+
+## Browser protections
+
+Even with a login, every website open in your browser could try to use your
+session. The server therefore adds:
 
 ### DNS rebinding
 
@@ -45,8 +125,9 @@ image types are shown inline, everything else is a download.
 ### Login checks
 
 Adding or changing an account makes the server connect to the IMAP host and
-port given in the request. While the server is reachable only from your own
-computer this is harmless; it will be revisited together with login.
+port given in the request. Every logged-in user can do this, so the server
+can be used to probe hosts in your network. Only give logins to people you
+trust.
 
 ## The secret key
 

@@ -11,11 +11,27 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 const errors = [];
 const desktop = { width: 1280, height: 800 };
 
-async function page(colorScheme, viewport = desktop) {
+// The demo login from tools/demo.
+const login = { username: "demo", password: "demo-password" };
+
+async function page(colorScheme, viewport = desktop, { loggedIn = true } = {}) {
   const ctx = await browser.newContext({ locale: "en-US", timezoneId: "Europe/Berlin", colorScheme, viewport, deviceScaleFactor: 2 });
+  if (loggedIn) {
+    const res = await ctx.request.post(base + "/api/session", { data: login, headers: { Origin: base } });
+    if (!res.ok()) throw new Error(`demo login failed: ${res.status()}`);
+  }
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(String(e)));
   return p;
+}
+
+{
+  const p = await page("light", { width: 1280, height: 720 }, { loggedIn: false });
+  await p.goto(base + "/");
+  await p.getByLabel("User name").fill(login.username);
+  await p.getByRole("button", { name: "Log in" }).waitFor();
+  await p.screenshot({ path: `${out}/login.png` });
+  await p.context().close();
 }
 
 async function openMessage(p, subject) {

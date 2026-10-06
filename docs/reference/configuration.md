@@ -21,8 +21,9 @@ All settings are environment variables. With Docker Compose they come from
 |---|---|---|
 | `POSTGRES_PASSWORD` | (required) | Password of the bundled PostgreSQL. |
 | `ARCHIVE_DIR` | `./data` | Host directory mounted as `/data`. |
-| `WEB_PORT` | `8080` | Port of the web UI on `127.0.0.1`. |
+| `WEB_BIND` | `127.0.0.1` | Address the web UI is published on. `0.0.0.0` for all interfaces, or a LAN or Tailscale address. See [Network access](./security#network-access). |
+| `WEB_PORT` | `8080` | Port of the web UI. |
 | `POSTGRES_PORT` | `5432` | Port of PostgreSQL on `127.0.0.1`, for backups and development. |
 
-Both published ports listen on `127.0.0.1` only. Changes to `.env` take effect
-with `docker compose up -d web`.
+Both published ports listen on `127.0.0.1` only unless `WEB_BIND` is set.
+Changes to `.env` take effect with `docker compose up -d web`.

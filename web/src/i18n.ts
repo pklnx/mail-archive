@@ -95,6 +95,21 @@ const en = {
     `The server marks these folders as trash or spam: ${folders}. Archive them too? Mail archived from them stays in the archive even if you exclude them later.`,
   saveWithout: "Save without them",
   saveWithAll: "Save with all folders",
+  appName: "Mail Archive",
+  logIn: "Log in",
+  loggingIn: "Logging in…",
+  userName: "User name",
+  wrongLogin: "Wrong user name or password.",
+  userLocked: "This user is locked. Ask an admin to unlock it.",
+  tooManyAttempts: (seconds: number) =>
+    seconds < 60
+      ? `Too many failed attempts. Try again in ${seconds} seconds.`
+      : `Too many failed attempts. Try again in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "minute" : "minutes"}.`,
+  setupTitle: "Create the first admin",
+  setupText: "No user exists yet. Run this command in the mail-archive folder, then check again:",
+  checkAgain: "Check again",
+  logOut: "Log out",
+  loggedInAs: (name: string) => `Logged in as ${name}`,
   role: (r: string): string =>
     ({ trash: "Trash", junk: "Spam", drafts: "Drafts", sent: "Sent", archive: "Archive", all: "All mail", flagged: "Flagged" })[r] ?? r,
 };
@@ -193,6 +208,21 @@ const de: Messages = {
     `Der Server kennzeichnet diese Ordner als Papierkorb oder Spam: ${folders}. Sollen sie mitarchiviert werden? Was einmal archiviert ist, bleibt im Archiv, auch wenn du die Ordner später abwählst.`,
   saveWithout: "Ohne diese speichern",
   saveWithAll: "Mit allen Ordnern speichern",
+  appName: "Mail Archive",
+  logIn: "Anmelden",
+  loggingIn: "Anmeldung läuft…",
+  userName: "Benutzername",
+  wrongLogin: "Benutzername oder Passwort falsch.",
+  userLocked: "Dieser Benutzer ist gesperrt. Bitte einen Admin, ihn zu entsperren.",
+  tooManyAttempts: (seconds) =>
+    seconds < 60
+      ? `Zu viele Fehlversuche. Versuche es in ${seconds} Sekunden erneut.`
+      : `Zu viele Fehlversuche. Versuche es in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "Minute" : "Minuten"} erneut.`,
+  setupTitle: "Ersten Admin anlegen",
+  setupText: "Es gibt noch keinen Benutzer. Führe diesen Befehl im Ordner von mail-archive aus und prüfe dann erneut:",
+  checkAgain: "Erneut prüfen",
+  logOut: "Abmelden",
+  loggedInAs: (name) => `Angemeldet als ${name}`,
   role: (r) =>
     ({ trash: "Papierkorb", junk: "Spam", drafts: "Entwürfe", sent: "Gesendet", archive: "Archiv", all: "Alle Nachrichten", flagged: "Markiert" })[r] ?? r,
 };

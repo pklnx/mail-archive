@@ -31,6 +31,7 @@ func main() {
 		newMigrateCmd(),
 		newKeygenCmd(),
 		newAccountCmd(),
+		newUserCmd(),
 		newSyncCmd(),
 		newStatusCmd(),
 		newReindexCmd(),

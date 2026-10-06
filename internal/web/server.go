@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web/ui"
@@ -31,6 +32,8 @@ type Server struct {
 	allowedHosts []string
 	syncer       *archive.Syncer
 	runner       *archive.Runner
+	hasher       *auth.Hasher
+	limiter      *auth.Limiter
 }
 
 // Options configure a Server.
@@ -42,6 +45,8 @@ type Options struct {
 	// (no secret key configured) the archive can only be browsed.
 	Syncer *archive.Syncer
 	Runner *archive.Runner
+	// Hasher verifies passwords; nil means auth.DefaultParams.
+	Hasher *auth.Hasher
 }
 
 // New creates a Server.
@@ -56,7 +61,14 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 			hosts = append(hosts, h)
 		}
 	}
-	return &Server{store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner}
+	hasher := opts.Hasher
+	if hasher == nil {
+		hasher = auth.NewHasher(auth.DefaultParams)
+	}
+	return &Server{
+		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
+		hasher: hasher, limiter: auth.NewLimiter(),
+	}
 }
 
 // Handler returns the HTTP handler with all routes and protections.
@@ -65,6 +77,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	mux.HandleFunc("GET /api/session", s.handleGetSession)
+	mux.HandleFunc("POST /api/session", s.handleLogin)
+	mux.HandleFunc("DELETE /api/session", s.handleLogout)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
@@ -81,7 +96,7 @@ func (s *Server) Handler() http.Handler {
 	app := ui.Handler()
 	mux.Handle("GET /{$}", app)
 	mux.Handle("GET /assets/", app)
-	return s.protect(mux)
+	return s.protect(s.requireLogin(mux))
 }
 
 // ListenAndServe serves until ctx is cancelled, then shuts down gracefully.
@@ -96,6 +111,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
+	go s.cleanSessions(ctx)
 	select {
 	case err := <-errc:
 		return err

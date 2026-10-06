@@ -3,6 +3,25 @@
 The web UI is a client of this API; scripts can use it too. All responses
 are JSON unless noted. Errors look like `{"error": "message"}`.
 
+## Login
+
+Every endpoint below needs a session cookie and answers `401` without one.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists. |
+| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. `401` for a wrong name or password, `403` for a locked user, `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
+| `DELETE /api/session` | Log out (`204`). |
+
+With curl, keep the cookie in a file:
+
+```sh
+curl -c cookies.txt -X POST http://localhost:8080/api/session \
+  -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080' \
+  -d '{"username": "patrick", "password": "…"}'
+curl -b cookies.txt http://localhost:8080/api/status
+```
+
 ## Write requests
 
 `POST`, `PATCH` and `DELETE` requests are only accepted with:
@@ -12,7 +31,7 @@ are JSON unless noted. Errors look like `{"error": "message"}`.
   with curl, add it yourself.
 
 ```sh
-curl -X POST http://localhost:8080/api/sync \
+curl -b cookies.txt -X POST http://localhost:8080/api/sync \
   -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080'
 ```
 

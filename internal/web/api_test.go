@@ -160,7 +160,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		}
 	}
 	s := New(st, blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}})
-	f.srv = httptest.NewServer(s.Handler())
+	f.srv = httptest.NewServer(loggedIn(t, st, s.Handler()))
 	t.Cleanup(f.srv.Close)
 	return f
 }

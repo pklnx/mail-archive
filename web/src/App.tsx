@@ -7,8 +7,14 @@ import { ThemeToggle } from "./ThemeToggle";
 import { useAccounts } from "./useAccounts";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
+import type { User } from "./api";
 
-export function App() {
+interface Props {
+  user: User;
+  logout: () => void;
+}
+
+export function App({ user, logout }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -40,6 +46,8 @@ export function App() {
         <Sidebar
           state={state}
           accounts={accounts}
+          user={user}
+          logout={logout}
           select={(account, folder) => {
             update({ account, folder, m: "", view: "" });
             setMenuOpen(false);
