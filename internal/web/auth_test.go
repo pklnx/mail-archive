@@ -80,11 +80,14 @@ type authFixture struct {
 func newAuthFixture(t *testing.T) *authFixture {
 	t.Helper()
 	st := storetest.New(t)
-	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher})
+	key := bytes.Repeat([]byte{7}, 32)
+	sealer, err := crypto.NewSealer(key)
+	if err != nil { t.Fatal(err) }
+	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &authFixture{t: t, st: st, srv: srv, client: &http.Client{Jar: jar}}
+	return &authFixture{t: t, st: st, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}}
 }
 
 func (f *authFixture) addUser(name, password string, admin bool) *store.User {
