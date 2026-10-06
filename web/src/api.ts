@@ -218,6 +218,8 @@ export interface User {
   admin: boolean;
   /** Logged in with a generated password: must choose their own first. */
   mustChangePassword: boolean;
+  twoFactorEnabled: boolean;
+  twoFactorRequired: boolean;
 }
 
 /** The login state: a user, or none and whether the first admin is missing. */
@@ -233,8 +235,8 @@ export const sessionApi = {
     if (!res.ok) throw await errorFrom(res);
     return (await res.json()) as { user: User };
   },
-  login: async (username: string, password: string): Promise<User> =>
-    (await send<{ user: User }>("POST", sessionPath, { username, password }))!.user,
+  login: async (username: string, password: string): Promise<{ user?: User; twoFactorRequired?: boolean; challenge?: string }> =>
+    (await send<{ user?: User; twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
   logout: () => send("DELETE", sessionPath),
 };
 
@@ -245,8 +247,25 @@ export function retryAfter(err: unknown): number | null {
   return typeof s === "number" && s > 0 ? s : 60;
 }
 
+export interface TwoFactorSetup {
+  enabled: boolean;
+  required: boolean;
+  admin: boolean;
+  setupPending: boolean;
+  secret?: string;
+  otpauthUri?: string;
+  qrDataUrl?: string;
+}
+
 export const profileApi = {
   changePassword: (current: string, next: string) => send("PUT", "/api/profile/password", { current, new: next }),
+  twoFactor: {
+    get: () => getJSON<TwoFactorSetup>("/api/profile/2fa"),
+    setup: () => send<TwoFactorSetup>("POST", "/api/profile/2fa/setup"),
+    confirm: (code: string) => send<{ enabled: boolean; recoveryCodes: string[] }>("POST", "/api/profile/2fa/confirm", { code }),
+    disable: (currentPassword: string, code: string) => send("DELETE", "/api/profile/2fa", { currentPassword, code }),
+    regenerateRecoveryCodes: (code: string) => send<{ recoveryCodes: string[] }>("POST", "/api/profile/2fa/recovery-codes", { code }),
+  },
 };
 
 /** A user as admins see them on the users page. */
