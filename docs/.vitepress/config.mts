@@ -11,8 +11,12 @@ export default defineConfig({
   lastUpdated: true,
   // Fail the build on broken internal links; links to the local UI are fine.
   ignoreDeadLinks: "localhostLinks",
-  head: [["meta", { name: "theme-color", content: "#2563eb" }]],
+  head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/mail-archive/logo.svg" }],
+    ["meta", { name: "theme-color", content: "#2563eb" }],
+  ],
   themeConfig: {
+    logo: "/logo.svg",
     nav: [
       { text: "Guide", link: "/guide/getting-started" },
       { text: "Reference", link: "/reference/configuration" },

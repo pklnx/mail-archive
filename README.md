@@ -1,3 +1,5 @@
+<img src="docs/public/logo.svg" alt="" width="80">
+
 # mail-archive
 
 > [!WARNING]
