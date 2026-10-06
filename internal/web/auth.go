@@ -143,7 +143,7 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 		}
 		// A generated password and mandatory TOTP both use the same restricted
 		// state: the user can only finish authentication setup, not access mail.
-		if sess.MustChangePassword && !twoFactorSetupPathAllowed(r.Method, r.URL.Path) {
+		if sess.MustChangePassword && !(r.Method == http.MethodPut && r.URL.Path == profilePasswordPath) {
 			s.writeJSON(w, http.StatusForbidden, passwordChangeJSON{Error: "choose your own password first", PasswordChangeRequired: true})
 			return
 		}
