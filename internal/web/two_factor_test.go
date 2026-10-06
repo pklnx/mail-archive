@@ -36,6 +36,6 @@ func TestTwoFactorLoginChallenge(t *testing.T) {
 	challenge := out["challenge"].(string)
 	f.expect("GET", "/api/status", nil, 401)
 	f.expect("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": "000000"}, 401)
-	f.expect("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": auth.GenerateTOTP(secret, time.Now())}, 200)
+	f.expect("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": testTOTP(t, secret)}, 200)
 	f.expect("GET", "/api/status", nil, 200)
 }
