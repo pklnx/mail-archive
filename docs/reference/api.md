@@ -72,7 +72,12 @@ Body of `POST` and `PATCH` (in a `PATCH`, missing fields keep their value):
 }
 ```
 
-`name` renames the account in a `PATCH`. `excludedFolders` replaces the folder
+`name` renames the account in a `PATCH`. In a `POST`, if the server marks
+folders as trash or spam and they would be archived, the account is not
+saved: the answer is `409` with
+`{"error": "…", "suggestedExclusions": ["Trash", "Spam"]}`. Send the request
+again with `"confirmFolders": true`, with or without those folders in
+`excludedFolders`. `excludedFolders` replaces the folder
 selection: everything except these folders is archived.
 
 Each account in `GET /api/accounts` has a `sync` object:

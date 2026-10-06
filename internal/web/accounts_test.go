@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
 	"github.com/pklnx/mail-archive/internal/archive"
@@ -31,6 +32,13 @@ type manageFixture struct {
 
 func newManageFixture(t *testing.T, users ...*imapmemserver.User) *manageFixture {
 	t.Helper()
+	return newManageFixtureWithRoles(t, nil, users...)
+}
+
+// newManageFixtureWithRoles serves fixed mailboxes with special-use
+// attributes (see imaptest.StartWithRoles); nil serves the users' mailboxes.
+func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, users ...*imapmemserver.User) *manageFixture {
+	t.Helper()
 	st := storetest.New(t)
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
@@ -49,7 +57,11 @@ func newManageFixture(t *testing.T, users ...*imapmemserver.User) *manageFixture
 	f := &manageFixture{t: t, runnerDone: make(chan struct{})}
 	go func() { runner.Run(ctx); close(f.runnerDone) }()
 	t.Cleanup(func() { cancel(); <-f.runnerDone })
-	f.host, f.port = imaptest.Start(t, users...)
+	if roles != nil {
+		f.host, f.port = imaptest.StartWithRoles(t, roles, users...)
+	} else {
+		f.host, f.port = imaptest.Start(t, users...)
+	}
 	s := New(st, blobs, log, Options{AllowedHosts: []string{"127.0.0.1"}, Syncer: syncer, Runner: runner})
 	f.srv = httptest.NewServer(s.Handler())
 	t.Cleanup(f.srv.Close)
@@ -282,4 +294,50 @@ func TestRenameAccountAPI(t *testing.T) {
 	}
 	f.do("PATCH", "/api/accounts/example", map[string]any{"username": "alice"}, http.StatusNoContent)
 	f.do("PATCH", "/api/accounts/alice@example.com", map[string]any{"enabled": true}, http.StatusNotFound)
+}
+
+func TestCreateAccountConfirmsTrashAndSpam(t *testing.T) {
+	roles := map[string]imap.MailboxAttr{"INBOX": "", "Spam": imap.MailboxAttrJunk, "Papierkorb": imap.MailboxAttrTrash}
+	u := imapmemserver.NewUser("alice", "secret")
+	imaptest.CreateMailboxes(t, u, "INBOX", "Spam", "Papierkorb")
+	imaptest.Append(t, u, "INBOX", []byte(msgInvoice))
+	imaptest.Append(t, u, "Spam", []byte(msgNewsletter))
+	imaptest.Append(t, u, "Papierkorb", []byte(msgMeeting))
+	f := newManageFixtureWithRoles(t, roles, u)
+
+	// Without confirmation nothing is saved and the folders are named.
+	var c folderConfirmation
+	if err := json.Unmarshal(f.do("POST", "/api/accounts", f.newAccount("a", "alice", "secret"), http.StatusConflict), &c); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(c.SuggestedExclusions, ",") != "Papierkorb,Spam" {
+		t.Fatalf("suggestions: %+v", c)
+	}
+	if n := len(f.accounts().Accounts); n != 0 {
+		t.Fatalf("%d accounts saved without confirmation", n)
+	}
+	// A wrong password is still reported as such, not as a folder question.
+	f.do("POST", "/api/accounts", f.newAccount("a", "alice", "wrong"), http.StatusUnprocessableEntity)
+
+	// "Save without them": only INBOX is archived.
+	without := f.newAccount("without", "alice", "secret")
+	without["confirmFolders"] = true
+	without["excludedFolders"] = c.SuggestedExclusions
+	f.do("POST", "/api/accounts", without, http.StatusCreated)
+	if a := f.waitIdle("without"); len(a.Folders) != 1 || a.Folders[0].Name != "INBOX" {
+		t.Fatalf("without trash and spam: %+v", a.Folders)
+	}
+
+	// "Save with all folders".
+	all := f.newAccount("all", "alice", "secret")
+	all["confirmFolders"] = true
+	f.do("POST", "/api/accounts", all, http.StatusCreated)
+	if a := f.waitIdle("all"); len(a.Folders) != 3 {
+		t.Fatalf("with all folders: %+v", a.Folders)
+	}
+
+	// Already excluded: no question.
+	excluded := f.newAccount("excluded", "alice", "secret")
+	excluded["excludedFolders"] = []string{"spam", "papierkorb"}
+	f.do("POST", "/api/accounts", excluded, http.StatusCreated)
 }

@@ -61,7 +61,13 @@ Folder names are localized, for example `[Gmail]/Alle Nachrichten`. Run
 
 ## Choosing folders
 
-By default every folder is archived, spam and trash included. To skip some:
+By default every folder is archived, spam and trash included. When you add
+an account in the web UI and the server marks folders as trash or spam, the
+form asks before saving: **Save without them** or **Save with all folders**.
+The question comes before the first sync because mail that has been
+archived stays in the archive even if you deselect its folder later.
+
+To change the selection later:
 
 - **Web UI:** Manage accounts → Edit → Choose folders. The list comes live
   from the server; checked folders are archived. Roles reported by the server
