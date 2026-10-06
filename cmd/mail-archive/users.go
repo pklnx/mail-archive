@@ -343,11 +343,6 @@ func newUserReset2FACmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			sealer, err := a.cfg.Sealer()
-			if err != nil {
-				return err
-			}
-			_ = sealer // reset does not need to decrypt the existing secret
 			if err := a.store.ResetTwoFactor(cmd.Context(), u.ID); err != nil {
 				return err
 			}
