@@ -1,13 +1,13 @@
 -- name: GetTwoFactorUser :one
 SELECT id, name, is_admin, two_factor_enabled, two_factor_secret,
        two_factor_pending_secret, two_factor_last_counter, two_factor_version,
-       must_change_password
+       locked_at, must_change_password
 FROM users WHERE id = $1;
 
 -- name: LockTwoFactorUser :one
 SELECT id, name, is_admin, two_factor_enabled, two_factor_secret,
        two_factor_pending_secret, two_factor_last_counter, two_factor_version,
-       must_change_password
+       locked_at, must_change_password
 FROM users WHERE id = $1 FOR UPDATE;
 
 -- name: BeginTwoFactorSetup :exec
@@ -62,3 +62,7 @@ DELETE FROM two_factor_challenges WHERE id = $1;
 
 -- name: DeleteUserTwoFactorChallenges :exec
 DELETE FROM two_factor_challenges WHERE user_id = $1;
+
+-- name: LockTwoFactorChallenge :one
+SELECT id, user_id, two_factor_version, created_at, expires_at
+FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE;
