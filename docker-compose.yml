@@ -54,6 +54,8 @@ services:
       # How often each enabled account is synced; 0 turns the schedule off.
       MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
       MAIL_ARCHIVE_REQUIRE_2FA: ${MAIL_ARCHIVE_REQUIRE_2FA:-false}
+      # The address you open in the browser; passkeys work only there.
+      MAIL_ARCHIVE_PUBLIC_URL: ${MAIL_ARCHIVE_PUBLIC_URL:-http://localhost:${WEB_PORT:-8080}}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:

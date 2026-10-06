@@ -10,6 +10,7 @@
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
+| Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
 
 ## Login
 
@@ -29,10 +30,23 @@ page code (`/`, `/assets/`) is public; it contains no data.
   the database stores its SHA-256, so a database copy contains no usable
   sessions.
 - **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes.
+- **Passkeys** (WebAuthn) replace password and TOTP at the login. They are
+  bound to the host of `MAIL_ARCHIVE_PUBLIC_URL`, so a look-alike site cannot
+  use them. Every passkey login needs user verification (Face ID, Touch ID,
+  Windows Hello or the security key's PIN). Any authenticator is accepted
+  (attestation `none`). A sign count that does not go up rejects the login,
+  as it points to a copied authenticator. Adding a passkey needs the
+  password, and a TOTP or recovery code if the user has 2FA on. Removing a
+  passkey ends the user's other sessions. Admins with mandatory TOTP must
+  still set it up: a passkey session is restricted like a password session
+  until then. Starting a passkey login needs no session; it is limited to 30
+  per minute per address and 1000 open logins in total. Passwords stay: an
+  account never depends on passkeys alone.
 - **Failed logins:** after 5 failures for a user name within 15 minutes, the
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
   further failure. 20 failures from one address within 15 minutes block that
-  address for 15 minutes. Wrong names and wrong passwords get the same answer
+  address for 15 minutes. Failed passkey logins count for the address only.
+  Wrong names and wrong passwords get the same answer
   and take the same time. The counters live in memory and reset when the
   server restarts.
 - Behind a reverse proxy, the server sees the proxy's address for every
@@ -68,6 +82,7 @@ your tailnet and forwards to the local port. In `.env`:
 
 ```sh
 MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,mac.example-tailnet.ts.net
+MAIL_ARCHIVE_PUBLIC_URL=https://mac.example-tailnet.ts.net
 ```
 
 Then:
@@ -90,7 +105,8 @@ archive.home.example {
 }
 ```
 
-With `MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,archive.home.example`.
+With `MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,archive.home.example`
+and, for passkeys, `MAIL_ARCHIVE_PUBLIC_URL=https://archive.home.example`.
 The proxy must pass the original `Host` header (Caddy does by default);
 otherwise the server's same-origin check rejects changes.
 
@@ -99,7 +115,8 @@ otherwise the server's same-origin check rejects changes.
 `WEB_BIND=0.0.0.0` and the computer's LAN address or name in
 `MAIL_ARCHIVE_ALLOWED_HOSTS` work without a proxy, but without HTTPS anyone in
 the network who can read the traffic can take over a session. Use this only
-in a network you fully trust.
+in a network you fully trust. Browsers offer passkeys only over HTTPS or on
+`localhost`, so they do not work this way.
 
 ## Browser protections
 

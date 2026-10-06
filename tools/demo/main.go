@@ -149,9 +149,15 @@ func run(dbURL, listen string, log *slog.Logger) error {
 
 	runner := &archive.Runner{Syncer: syncer, Interval: 6 * time.Hour}
 	go runner.Run(ctx)
-	srv := web.New(st, blobs, log, web.Options{Syncer: syncer, Runner: runner, Sealer: sealer, SecretKey: key})
-	fmt.Printf("demo UI on http://%s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
-		listen, loginName, loginPassword, loginTOTPSecret)
+	// Passkeys need a host name: the demo is meant for localhost.
+	_, webPort, err := net.SplitHostPort(listen)
+	if err != nil {
+		return err
+	}
+	publicURL := "http://localhost:" + webPort
+	srv := web.New(st, blobs, log, web.Options{Syncer: syncer, Runner: runner, Sealer: sealer, SecretKey: key, PublicURL: publicURL})
+	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
+		publicURL, loginName, loginPassword, loginTOTPSecret)
 	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

@@ -4,7 +4,7 @@ import { createHmac } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
 
-const base = process.env.DEMO_URL ?? "http://127.0.0.1:18080";
+const base = process.env.DEMO_URL ?? "http://localhost:18080";
 const out = new URL("../public/screenshots/", import.meta.url).pathname;
 await mkdir(out, { recursive: true });
 
