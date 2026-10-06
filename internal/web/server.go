@@ -35,6 +35,7 @@ type Server struct {
 	runner       *archive.Runner
 	hasher       *auth.Hasher
 	sealer       *crypto.Sealer
+	secretKey    []byte
 	require2FA   bool
 	now          func() time.Time
 	limiter      *auth.Limiter
@@ -53,6 +54,8 @@ type Options struct {
 	Hasher *auth.Hasher
 	// Sealer protects TOTP secrets; nil keeps the existing browse-only mode.
 	Sealer *crypto.Sealer
+	// SecretKey is used only to key recovery-code hashes.
+	SecretKey []byte
 	// Require2FA requires TOTP for non-admin users as well. Admins always require it.
 	Require2FA bool
 	// Now is injectable for authentication tests.
@@ -77,7 +80,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	}
 	return &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
-		hasher: hasher, sealer: opts.Sealer, require2FA: opts.Require2FA, now: opts.Now, limiter: auth.NewLimiter(),
+		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: opts.Now, limiter: auth.NewLimiter(),
 	}
 }
 
