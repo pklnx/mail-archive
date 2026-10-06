@@ -46,7 +46,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (name, password_hash, is_admin, must_change_password)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password
+RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version
 `
 
 type CreateUserParams struct {
@@ -54,7 +54,6 @@ type CreateUserParams struct {
 	PasswordHash       string
 	IsAdmin            bool
 	MustChangePassword bool
-	TwoFactorEnabled   bool
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -75,6 +74,11 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PasswordChangedAt,
 		&i.LastLoginAt,
 		&i.MustChangePassword,
+		&i.TwoFactorSecret,
+		&i.TwoFactorEnabled,
+		&i.TwoFactorPendingSecret,
+		&i.TwoFactorLastCounter,
+		&i.TwoFactorVersion,
 	)
 	return i, err
 }
@@ -158,6 +162,7 @@ type GetSessionRow struct {
 	Name               string
 	IsAdmin            bool
 	MustChangePassword bool
+	TwoFactorEnabled bool
 }
 
 // A session is valid while it has not expired, was used after the idle
@@ -172,12 +177,13 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.Name,
 		&i.IsAdmin,
 		&i.MustChangePassword,
+		&i.TwoFactorEnabled,
 	)
 	return i, err
 }
 
 const getUserByName = `-- name: GetUserByName :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password FROM users WHERE name = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE name = $1
 `
 
 func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) {
@@ -193,12 +199,17 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 		&i.PasswordChangedAt,
 		&i.LastLoginAt,
 		&i.MustChangePassword,
+		&i.TwoFactorSecret,
+		&i.TwoFactorEnabled,
+		&i.TwoFactorPendingSecret,
+		&i.TwoFactorLastCounter,
+		&i.TwoFactorVersion,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password FROM users ORDER BY name
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users ORDER BY name
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
