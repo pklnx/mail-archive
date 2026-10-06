@@ -148,10 +148,18 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		if err := keepAnAdmin(ctx, q, id); err != nil {
 			return err
 		}
+		if owns, err := q.UserOwnsAccounts(ctx, &id); err != nil {
+			return err
+		} else if owns {
+			return ErrOwnsAccounts
+		}
 		return one(q.DeleteUser(ctx, id))
 	})
+	// An account added concurrently: the foreign key refuses the delete.
+	// PostgreSQL 18 reports ON DELETE RESTRICT as restrict_violation
+	// (23001), older versions as foreign_key_violation (23503).
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+	if errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503") {
 		return ErrOwnsAccounts
 	}
 	return err

@@ -435,3 +435,14 @@ func (q *Queries) UpdatePassword(ctx context.Context, arg UpdatePasswordParams) 
 	}
 	return result.RowsAffected(), nil
 }
+
+const userOwnsAccounts = `-- name: UserOwnsAccounts :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE owner_id = $1)
+`
+
+func (q *Queries) UserOwnsAccounts(ctx context.Context, ownerID *int64) (bool, error) {
+	row := q.db.QueryRow(ctx, userOwnsAccounts, ownerID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
