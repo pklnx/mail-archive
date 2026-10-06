@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // Runner syncs accounts in the background for the web server: on request
@@ -137,6 +139,10 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 func (r *Runner) syncOne(ctx context.Context, id int64) {
 	log := r.Syncer.logger()
 	a, err := r.Syncer.Store.GetAccount(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		log.Debug("sync skipped: account deleted while queued", "id", id)
+		return
+	}
 	if err != nil {
 		log.Error("load account for sync", "id", id, "err", err)
 		return

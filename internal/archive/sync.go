@@ -77,7 +77,8 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]Ac
 }
 
 // SyncAccount syncs all selected folders of one account and records a run.
-// It fails with ErrSyncRunning if the account is already being synced.
+// It fails with ErrSyncRunning if the account is already being synced and
+// with ErrAccountRemoved if it was removed or deleted.
 func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResult {
 	log := s.logger().With("account", a.Name)
 	res := AccountResult{Account: a.Name, OwnerID: a.OwnerID}
@@ -95,6 +96,20 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		return res
 	}
 	defer unlock()
+
+	// Read the account again under the lock: it may have been changed,
+	// removed or deleted since a was loaded. Deleting takes this lock too,
+	// so it cannot happen while the sync runs.
+	fresh, err := s.Store.GetAccount(ctx, a.ID)
+	if errors.Is(err, store.ErrNotFound) || err == nil && fresh.RemovedAt != nil {
+		res.Err = ErrAccountRemoved
+		return res
+	}
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	a = fresh
 
 	run, err := s.Store.StartSyncRun(ctx, a.ID)
 	if err != nil {

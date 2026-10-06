@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -122,8 +121,7 @@ func newAccountMoveCmd() *cobra.Command {
 		Use:   "move NAME --to USER",
 		Short: "Hand an account and its archived mail to another user",
 		Long: `Hand an account to another user, who then sees it and the mail found in it
-instead of the current owner. Also works for removed accounts. Not possible
-while the account is being synced.`,
+instead of the current owner. Also works for removed accounts.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := openApp(cmd.Context())
@@ -145,19 +143,11 @@ while the account is being synced.`,
 			if acc.OwnerID != nil && *acc.OwnerID == target.ID {
 				return fmt.Errorf("account %q already belongs to %q", acc.Name, target.Name)
 			}
-			unlock, ok, err := a.store.TryLockSync(cmd.Context(), acc.ID)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return archive.ErrSyncRunning
-			}
-			defer unlock()
-			if err := a.store.SetAccountOwner(cmd.Context(), acc.ID, target.ID); err != nil {
+			if err := a.store.SetAccountOwner(cmd.Context(), acc.Ref(), target.ID); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("%q already has an account named %q; rename one of them first", target.Name, acc.Name)
 				}
-				return err
+				return staleError(err)
 			}
 			fmt.Printf("account %q now belongs to %q\n", acc.Name, target.Name)
 			return nil

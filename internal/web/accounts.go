@@ -319,15 +319,18 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	// Check a new connection before changing anything, so a failed login
-	// leaves the account as it was (also when it is renamed in the same
-	// request).
-	var password string
+	// Everything that needs the network or the key happens before the
+	// transaction: the login check and encrypting the password. The change
+	// is then saved at once, and only if the account still is as read here
+	// (same owner and version); otherwise nothing is saved.
+	var change store.AccountChange
 	if in.changesConnection() {
-		if err := applyConnection(a, &in); err != nil {
+		conn := *a
+		if err := applyConnection(&conn, &in); err != nil {
 			s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 			return
 		}
+		var password string
 		if in.Password != nil {
 			if *in.Password == "" {
 				s.fail(w, r, http.StatusBadRequest, "password must not be empty", nil)
@@ -342,55 +345,40 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			password = pw
 		}
-		if _, err := s.syncer.CheckLogin(ctx, a, password); err != nil {
+		if _, err := s.syncer.CheckLogin(ctx, &conn, password); err != nil {
 			s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
 			return
 		}
-	}
-
-	if in.Name != nil && *in.Name != a.Name {
-		oldName := a.Name
-		err := archive.RenameAccount(ctx, s.store, a, *in.Name)
-		switch {
-		case errors.Is(err, archive.ErrSyncRunning):
-			s.fail(w, r, http.StatusConflict, "the account is being synced; try again when the sync has finished", nil)
-			return
-		case errors.Is(err, store.ErrConflict):
-			s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
-			return
-		case errors.Is(err, store.ErrNotFound):
-			s.failStore(w, r, err)
-			return
-		case err != nil:
-			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
-			return
-		}
-		s.log.Info("account renamed", "from", oldName, "to", a.Name)
-	}
-
-	if in.changesConnection() {
 		enc, err := archive.SealPassword(s.syncer.Sealer, a.ID, password)
 		if err != nil {
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
-		a.PasswordEnc = enc
-		if err := s.store.UpdateConnection(ctx, a); err != nil {
-			s.failStore(w, r, err)
-			return
-		}
+		change.Connection = &store.Connection{Host: conn.Host, Port: conn.Port, TLSMode: conn.TLSMode, Username: conn.Username, PasswordEnc: enc}
+	}
+	if in.Name != nil && *in.Name != a.Name {
+		change.Name = in.Name
 	}
 	if in.ExcludedFolders != nil {
-		if err := s.store.SetFolderFilters(ctx, a.ID, nil, *in.ExcludedFolders); err != nil {
-			s.failStore(w, r, err)
-			return
-		}
+		change.Folders = &store.FolderFilters{Excluded: *in.ExcludedFolders}
 	}
-	if in.Enabled != nil {
-		if err := s.store.SetAccountEnabled(ctx, a.ID, *in.Enabled); err != nil {
-			s.failStore(w, r, err)
-			return
-		}
+	change.Enabled = in.Enabled
+
+	err := s.store.UpdateAccount(ctx, a.Ref(), change)
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
+		return
+	case errors.Is(err, store.ErrStale):
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	case err != nil:
+		s.failStore(w, r, err)
+		return
+	}
+	if change.Name != nil {
+		s.log.Info("account renamed", "from", a.Name, "to", *change.Name)
+		a.Name = *change.Name
 	}
 	s.log.Info("account updated", "account", a.Name)
 	w.WriteHeader(http.StatusNoContent)
@@ -404,16 +392,23 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	running, err := s.store.SyncingAccounts(r.Context())
+	// Deleting must not overlap a sync that writes folders and messages for
+	// the account: hold its sync lock for the whole operation.
+	unlock, ok, err := s.store.TryLockSync(r.Context(), a.ID)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	if running[a.ID] {
+	if !ok {
 		s.fail(w, r, http.StatusConflict, "the account is being synced; try again when the sync has finished", nil)
 		return
 	}
-	res, err := s.store.DeleteOrRemoveAccount(r.Context(), a.ID)
+	defer unlock()
+	res, err := s.store.DeleteOrRemoveAccount(r.Context(), a.Ref())
+	if errors.Is(err, store.ErrStale) {
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	}
 	if err != nil {
 		s.failStore(w, r, err)
 		return

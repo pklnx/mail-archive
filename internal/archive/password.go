@@ -78,10 +78,15 @@ func UpgradePasswords(ctx context.Context, st *store.Store, sealer *crypto.Seale
 		if err != nil {
 			return n, err
 		}
-		if err := st.UpdatePassword(ctx, a.ID, enc); err != nil {
+		// Only if nobody set a new password meanwhile; that one is already
+		// bound to the ID.
+		replaced, err := st.ReplacePassword(ctx, a.ID, a.PasswordEnc, enc)
+		if err != nil {
 			return n, err
 		}
-		n++
+		if replaced {
+			n++
+		}
 	}
 	return n, nil
 }

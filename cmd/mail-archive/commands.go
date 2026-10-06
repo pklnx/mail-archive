@@ -412,6 +412,19 @@ func listOrDash(l []string, empty string) string {
 	return strings.Join(l, ", ")
 }
 
+// updateAccount saves a change to an account loaded with loadAccount, only
+// if nobody changed it in between.
+func updateAccount(cmd *cobra.Command, a *app, acc *store.Account, change store.AccountChange) error {
+	return staleError(a.store.UpdateAccount(cmd.Context(), acc.Ref(), change))
+}
+
+func staleError(err error) error {
+	if errors.Is(err, store.ErrStale) {
+		return errors.New("the account was changed meanwhile (web UI or another command); run the command again")
+	}
+	return err
+}
+
 func loadAccount(cmd *cobra.Command, name string) (*app, *store.Account, error) {
 	a, err := openApp(cmd.Context())
 	if err != nil {
@@ -491,7 +504,8 @@ func newAccountSetFoldersCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			if err := a.store.SetFolderFilters(cmd.Context(), acc.ID, included, excluded); err != nil {
+			change := store.AccountChange{Folders: &store.FolderFilters{Included: included, Excluded: excluded}}
+			if err := updateAccount(cmd, a, acc, change); err != nil {
 				return err
 			}
 			fmt.Printf("folder filters of %q updated\n", acc.Name)
@@ -527,7 +541,7 @@ func newAccountSetPasswordCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.store.UpdatePassword(cmd.Context(), acc.ID, enc); err != nil {
+			if err := updateAccount(cmd, a, acc, store.AccountChange{PasswordEnc: enc}); err != nil {
 				return err
 			}
 			fmt.Printf("password of %q updated\n", acc.Name)
@@ -542,21 +556,35 @@ func newAccountRenameCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rename NAME NEW-NAME",
 		Short: "Rename an account (its archived mail moves with it)",
-		Long:  `Rename an account. Not possible while the account is being synced.`,
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := archive.ValidateAccountName(args[1]); err != nil {
+				return err
+			}
 			a, acc, err := loadAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
 			defer a.close()
-			if err := archive.RenameAccount(cmd.Context(), a.store, acc, args[1]); err != nil {
+			// A password still bound to the old name would no longer decrypt
+			// after renaming: bind all passwords to the account ID first.
+			sealer, err := a.cfg.Sealer()
+			if err != nil {
+				return err
+			}
+			if _, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer); err != nil {
+				return err
+			}
+			if acc, err = findAccount(cmd, a, args[0]); err != nil {
+				return err
+			}
+			if err := updateAccount(cmd, a, acc, store.AccountChange{Name: &args[1]}); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("an account named %q already exists (removed accounts keep their name)", args[1])
 				}
 				return err
 			}
-			fmt.Printf("account %q renamed to %q\n", args[0], acc.Name)
+			fmt.Printf("account %q renamed to %q\n", args[0], args[1])
 			return nil
 		},
 	}
@@ -577,7 +605,7 @@ func newAccountEnableCmd(enable bool) *cobra.Command {
 				return err
 			}
 			defer a.close()
-			return a.store.SetAccountEnabled(cmd.Context(), acc.ID, enable)
+			return updateAccount(cmd, a, acc, store.AccountChange{Enabled: &enable})
 		},
 	}
 }
@@ -597,9 +625,18 @@ deleted completely.`,
 				return err
 			}
 			defer a.close()
-			res, err := a.store.DeleteOrRemoveAccount(cmd.Context(), acc.ID)
+			// Not while a sync writes folders and messages for the account.
+			unlock, ok, err := a.store.TryLockSync(cmd.Context(), acc.ID)
 			if err != nil {
 				return err
+			}
+			if !ok {
+				return archive.ErrSyncRunning
+			}
+			defer unlock()
+			res, err := a.store.DeleteOrRemoveAccount(cmd.Context(), acc.Ref())
+			if err != nil {
+				return staleError(err)
 			}
 			if res == store.AccountDeleted {
 				fmt.Printf("account %q deleted\n", acc.Name)

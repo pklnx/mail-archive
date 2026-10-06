@@ -42,7 +42,7 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 	if _, err := st.GetOrCreateFolder(ctx, empty.ID, "INBOX"); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := st.DeleteOrRemoveAccount(ctx, empty.ID); err != nil || res != store.AccountDeleted {
+	if res, err := st.DeleteOrRemoveAccount(ctx, empty.Ref()); err != nil || res != store.AccountDeleted {
 		t.Fatalf("delete empty: %v, %v", res, err)
 	}
 	if _, err := accountByName(st, "empty"); !errors.Is(err, store.ErrNotFound) {
@@ -59,7 +59,7 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 	if _, err := st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{meta}, []store.Location{{FolderID: folder.ID, UIDValidity: 1, UID: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if res, err := st.DeleteOrRemoveAccount(ctx, full.ID); err != nil || res != store.AccountRemoved {
+	if res, err := st.DeleteOrRemoveAccount(ctx, full.Ref()); err != nil || res != store.AccountRemoved {
 		t.Fatalf("remove full: %v, %v", res, err)
 	}
 	got, err := accountByName(st, "full")
@@ -70,13 +70,14 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 		t.Fatalf("removed account: %+v", got)
 	}
 	// Removed accounts cannot be changed or removed again.
-	if err := st.SetAccountEnabled(ctx, full.ID, true); !errors.Is(err, store.ErrNotFound) {
+	on := true
+	if err := st.UpdateAccount(ctx, got.Ref(), store.AccountChange{Enabled: &on}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("enable removed: %v", err)
 	}
-	if err := st.UpdatePassword(ctx, full.ID, []byte{2}); !errors.Is(err, store.ErrNotFound) {
+	if err := st.UpdateAccount(ctx, got.Ref(), store.AccountChange{PasswordEnc: []byte{2}}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("set password on removed: %v", err)
 	}
-	if _, err := st.DeleteOrRemoveAccount(ctx, full.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.DeleteOrRemoveAccount(ctx, got.Ref()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("remove twice: %v", err)
 	}
 	// Its mail is still listed under the account, for its owner: the first
@@ -183,23 +184,26 @@ func TestRenameAccount(t *testing.T) {
 	if _, err := st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{meta}, []store.Location{{FolderID: folder.ID, UIDValidity: 1, UID: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DeleteOrRemoveAccount(ctx, gone.ID); err != nil {
+	if _, err := st.DeleteOrRemoveAccount(ctx, gone.Ref()); err != nil {
 		t.Fatal(err)
 	}
+	rename := func(a *store.Account, name string) error {
+		return st.UpdateAccount(ctx, a.Ref(), store.AccountChange{Name: &name})
+	}
 
-	if err := st.RenameAccount(ctx, a.ID, "new"); err != nil {
+	if err := rename(a, "new"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := accountByName(st, "new")
-	if err != nil || got.ID != a.ID {
+	if err != nil || got.ID != a.ID || got.Version != a.Version+1 {
 		t.Fatalf("renamed account: %+v, %v", got, err)
 	}
 	for _, name := range []string{"taken", "gone"} {
-		if err := st.RenameAccount(ctx, a.ID, name); !errors.Is(err, store.ErrConflict) {
+		if err := rename(got, name); !errors.Is(err, store.ErrConflict) {
 			t.Errorf("rename to %q: %v, want ErrConflict", name, err)
 		}
 	}
-	if err := st.RenameAccount(ctx, gone.ID, "revived"); !errors.Is(err, store.ErrNotFound) {
+	if err := rename(gone, "revived"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("rename removed account: %v, want ErrNotFound", err)
 	}
 }

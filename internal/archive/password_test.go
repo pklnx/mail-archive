@@ -48,10 +48,11 @@ func TestPasswordBoundToAccountID(t *testing.T) {
 	}
 
 	// Renaming needs no new encryption.
-	if err := st.RenameAccount(ctx, a.ID, "renamed"); err != nil {
+	name := "renamed"
+	if err := st.UpdateAccount(ctx, a.Ref(), store.AccountChange{Name: &name}); err != nil {
 		t.Fatal(err)
 	}
-	a.Name = "renamed"
+	a, _ = st.GetAccount(ctx, a.ID)
 	if pw, err := OpenPassword(sealer, a); err != nil || pw != "alice-secret" {
 		t.Fatalf("after rename: %q, %v", pw, err)
 	}
@@ -76,7 +77,7 @@ func TestUpgradePasswords(t *testing.T) {
 	if err := st.CreateAccount(ctx, removed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DeleteOrRemoveAccount(ctx, removed.ID); err != nil {
+	if _, err := st.DeleteOrRemoveAccount(ctx, removed.Ref()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,5 +102,30 @@ func TestUpgradePasswords(t *testing.T) {
 	// With the wrong key, the upgrade stops instead of overwriting anything.
 	if _, err := UpgradePasswords(ctx, st, testSealer(t)); err == nil {
 		t.Fatal("upgrade with a wrong key succeeded")
+	}
+}
+
+func TestUpgradeBeforeRename(t *testing.T) {
+	// A password bound to the old name only survives a rename if it was
+	// upgraded first (the CLI's rename does that).
+	st := storetest.New(t)
+	ctx := context.Background()
+	sealer := testSealer(t)
+	old, _ := sealer.Seal([]byte("secret"), legacyPasswordContext("before"))
+	a := &store.Account{Name: "before", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: old}
+	if err := st.CreateAccount(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpgradePasswords(ctx, st, sealer); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = st.GetAccount(ctx, a.ID)
+	name := "after"
+	if err := st.UpdateAccount(ctx, a.Ref(), store.AccountChange{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ = st.GetAccount(ctx, a.ID)
+	if pw, err := OpenPassword(sealer, a); err != nil || pw != "secret" {
+		t.Fatalf("after rename: %q, %v", pw, err)
 	}
 }
