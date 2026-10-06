@@ -49,6 +49,18 @@ export interface AccountInput {
   password?: string;
   enabled?: boolean;
   excludedFolders?: string[];
+  /** POST only: save even if trash or spam folders would be archived. */
+  confirmFolders?: boolean;
+}
+
+/**
+ * The trash and spam folders the server asks about when an account is
+ * created without confirmFolders, or null for any other error.
+ */
+export function folderQuestion(err: unknown): string[] | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const list = err.body.suggestedExclusions;
+  return Array.isArray(list) && list.every((f) => typeof f === "string") ? (list as string[]) : null;
 }
 
 export interface ServerFolder {
@@ -113,6 +125,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The parsed JSON error body, for errors that carry more than a message. */
+    readonly body: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -125,13 +139,13 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 
 async function errorFrom(res: Response): Promise<ApiError> {
-  let msg = res.statusText;
+  let body: Record<string, unknown> = {};
   try {
-    msg = ((await res.json()) as { error?: string }).error ?? msg;
+    body = (await res.json()) as Record<string, unknown>;
   } catch {
     // not JSON
   }
-  return new ApiError(res.status, msg);
+  return new ApiError(res.status, typeof body.error === "string" ? body.error : res.statusText, body);
 }
 
 // Write requests carry JSON; the server rejects anything else (CSRF guard).

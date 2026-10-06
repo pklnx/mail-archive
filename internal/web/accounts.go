@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,6 +143,16 @@ type accountInput struct {
 	Enabled  *bool   `json:"enabled"`
 	// ExcludedFolders replaces the folder selection: everything except these.
 	ExcludedFolders *[]string `json:"excludedFolders"`
+	// ConfirmFolders (POST only) saves the account even if the server marks
+	// folders that would be archived as trash or junk.
+	ConfirmFolders bool `json:"confirmFolders"`
+}
+
+// folderConfirmation is the 409 answer of POST /api/accounts when trash or
+// junk folders would be archived and the client did not confirm that.
+type folderConfirmation struct {
+	Error               string   `json:"error"`
+	SuggestedExclusions []string `json:"suggestedExclusions"`
 }
 
 func (in *accountInput) changesConnection() bool {
@@ -209,19 +218,6 @@ func applyConnection(a *store.Account, in *accountInput) error {
 	return nil
 }
 
-// checkAndSeal verifies the login and encrypts the password for storage.
-func (s *Server) checkAndSeal(ctx context.Context, a *store.Account, password string) (int, string) {
-	if _, err := s.syncer.CheckLogin(ctx, a, password); err != nil {
-		return http.StatusUnprocessableEntity, "login failed: " + err.Error()
-	}
-	enc, err := s.syncer.Sealer.Seal([]byte(password), archive.PasswordContext(a.Name))
-	if err != nil {
-		return http.StatusInternalServerError, "internal error"
-	}
-	a.PasswordEnc = enc
-	return 0, ""
-}
-
 func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {
 		return
@@ -256,8 +252,23 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", a.Name), nil)
 		return
 	}
-	if status, msg := s.checkAndSeal(r.Context(), a, *in.Password); status != 0 {
-		s.fail(w, r, status, msg, nil)
+	folders, err := s.syncer.CheckLogin(r.Context(), a, *in.Password)
+	if err != nil {
+		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+		return
+	}
+	// Trash and spam are archived like any folder, but only after the user
+	// confirmed it: once the first sync ran, excluding them comes too late.
+	if suggest := archive.SuggestExclusions(folders, a.IncludedFolders, a.ExcludedFolders); len(suggest) > 0 && !in.ConfirmFolders {
+		s.writeJSON(w, http.StatusConflict, folderConfirmation{
+			Error:               "the server marks these folders as trash or spam; confirm whether to archive them",
+			SuggestedExclusions: suggest,
+		})
+		return
+	}
+	a.PasswordEnc, err = s.syncer.Sealer.Seal([]byte(*in.Password), archive.PasswordContext(a.Name))
+	if err != nil {
+		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if err := s.store.CreateAccount(r.Context(), a); err != nil {

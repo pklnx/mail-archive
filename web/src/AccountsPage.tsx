@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { accountsApi, type Account, type AccountInput, type ServerFolder, type TLSMode } from "./api";
+import { accountsApi, folderQuestion, type Account, type AccountInput, type ServerFolder, type TLSMode } from "./api";
 import { suggestName } from "./accountName";
 import { formatCount, formatInterval, relativeTime } from "./format";
 import { t } from "./i18n";
@@ -230,21 +230,32 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
 
   const shownName = nameTouched ? name : suggestName(username, host);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  // Trash and spam folders the server reported; the user decides whether
+  // to archive them before the account is saved.
+  const [question, setQuestion] = useState<string[] | null>(null);
+
+  const save = async (extra: AccountInput = {}) => {
     setBusy(true);
     setError("");
+    setQuestion(null);
     const body: AccountInput = { host: host.trim(), tls, port: port ? Number(port) : defaultPort[tls], username: username.trim() };
     if (password) body.password = password;
     const newName = shownName.trim();
     try {
       if (account) await accountsApi.update(account.name, newName !== account.name ? { ...body, name: newName } : body);
-      else await accountsApi.create({ ...body, name: newName });
+      else await accountsApi.create({ ...body, name: newName, ...extra });
       onSaved(newName);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const folders = folderQuestion(err);
+      if (folders) setQuestion(folders);
+      else setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
+  };
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    void save();
   };
 
   const field = "flex flex-col gap-1 text-sm";
@@ -317,6 +328,19 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
         <p role="alert" className="text-sm break-words text-red-600">
           {error}
         </p>
+      )}
+      {question && (
+        <div role="alert" className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950/40">
+          <p>{t.trashSpamQuestion(question.join(", "))}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={primary} disabled={busy} onClick={() => save({ confirmFolders: true, excludedFolders: question })}>
+              {t.saveWithout}
+            </button>
+            <button type="button" className={button} disabled={busy} onClick={() => save({ confirmFolders: true })}>
+              {t.saveWithAll}
+            </button>
+          </div>
+        </div>
       )}
       <div className="flex items-center gap-2">
         <button type="submit" className={primary} disabled={busy}>

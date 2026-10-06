@@ -91,6 +91,10 @@ const en = {
   confirmRemove: (name: string) =>
     `Remove "${name}"?\n\nIts archived mail stays searchable. The stored password is deleted and the account is no longer synced. This cannot be undone.`,
   failed: (err: string) => `Failed: ${err}`,
+  trashSpamQuestion: (folders: string) =>
+    `The server marks these folders as trash or spam: ${folders}. Archive them too? Mail archived from them stays in the archive even if you exclude them later.`,
+  saveWithout: "Save without them",
+  saveWithAll: "Save with all folders",
   role: (r: string): string =>
     ({ trash: "Trash", junk: "Spam", drafts: "Drafts", sent: "Sent", archive: "Archive", all: "All mail", flagged: "Flagged" })[r] ?? r,
 };
@@ -185,6 +189,10 @@ const de: Messages = {
   confirmRemove: (name) =>
     `„${name}“ entfernen?\n\nDie archivierten Mails bleiben durchsuchbar. Das gespeicherte Passwort wird gelöscht und das Konto nicht mehr synchronisiert. Das lässt sich nicht rückgängig machen.`,
   failed: (err) => `Fehlgeschlagen: ${err}`,
+  trashSpamQuestion: (folders) =>
+    `Der Server kennzeichnet diese Ordner als Papierkorb oder Spam: ${folders}. Sollen sie mitarchiviert werden? Was einmal archiviert ist, bleibt im Archiv, auch wenn du die Ordner später abwählst.`,
+  saveWithout: "Ohne diese speichern",
+  saveWithAll: "Mit allen Ordnern speichern",
   role: (r) =>
     ({ trash: "Papierkorb", junk: "Spam", drafts: "Entwürfe", sent: "Gesendet", archive: "Archiv", all: "Alle Nachrichten", flagged: "Markiert" })[r] ?? r,
 };
