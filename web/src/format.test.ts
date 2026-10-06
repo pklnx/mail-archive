@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileSize, senderName, shortDate, splitHighlights } from "./format";
+import { fileSize, formatInterval, relativeTime, senderName, shortDate, splitHighlights } from "./format";
 
 describe("splitHighlights", () => {
   it("splits on the server's markers", () => {
@@ -45,5 +45,17 @@ describe("shortDate", () => {
     expect(shortDate(new Date(2025, 0, 2).toISOString(), now)).toMatch(/2025/);
     expect(shortDate(null, now)).toBe("");
     expect(shortDate("garbage", now)).toBe("");
+  });
+});
+
+describe("relativeTime and formatInterval", () => {
+  it("formats in words", () => {
+    const now = new Date("2026-10-06T12:00:00Z");
+    expect(relativeTime("2026-10-06T11:55:00Z", now)).toBe("5 minutes ago");
+    expect(relativeTime("2026-10-05T12:00:00Z", now)).toBe("yesterday");
+    expect(relativeTime("garbage", now)).toBe("");
+    expect(formatInterval("6h0m0s")).toBe("6 hours");
+    expect(formatInterval("1h30m0s")).toBe("1 hour 30 minutes");
+    expect(formatInterval("5m0s")).toBe("5 minutes");
   });
 });

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { AccountsPage } from "./AccountsPage";
 import { MessageList } from "./MessageList";
 import { MessageView } from "./MessageView";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+import { useAccounts } from "./useAccounts";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
 
@@ -10,6 +12,7 @@ export function App() {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   const [menuOpen, setMenuOpen] = useState(false);
+  const accounts = useAccounts();
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -36,63 +39,76 @@ export function App() {
       >
         <Sidebar
           state={state}
+          accounts={accounts}
           select={(account, folder) => {
-            update({ account, folder, m: "" });
+            update({ account, folder, m: "", view: "" });
+            setMenuOpen(false);
+          }}
+          manage={() => {
+            update({ view: "accounts", m: "" });
             setMenuOpen(false);
           }}
         />
       </aside>
       {menuOpen && <div className="fixed inset-0 z-10 bg-black/30 lg:hidden" onClick={() => setMenuOpen(false)} />}
 
-      <section className={`min-h-0 flex-col border-r border-zinc-200 dark:border-zinc-800 ${reading ? "hidden md:flex" : "flex"}`}>
-        <div className="flex items-center gap-2 border-b border-zinc-200 p-2 dark:border-zinc-800">
-          <button
-            type="button"
-            aria-label={t.showMenu}
-            className="rounded px-2 py-1 text-lg lg:hidden"
-            onClick={() => setMenuOpen(true)}
-          >
-            ☰
-          </button>
-          <input
-            type="search"
-            aria-label={t.searchMail}
-            placeholder={state.account ? t.searchIn(state.folder || state.account) : t.searchAll}
-            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <ThemeToggle />
-        </div>
-        <div className="min-h-0 flex-1">
-          <MessageList
-            filter={filter}
-            selected={state.m}
-            // Commit a pending search first (same history entry), then open
-            // the message as a new entry: the debounced update cannot close it
-            // again, and Back returns to the search results.
-            open={(m) => {
-              if (typed !== state.q) update({ q: typed }, { replace: true });
-              update({ m });
-            }}
-          />
-        </div>
-      </section>
-
-      <main className={`min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
-        {reading ? (
-          <>
-            <button type="button" className="p-2 text-left text-sm text-blue-600 md:hidden" onClick={() => update({ m: "" })}>
-              {t.back}
+      {state.view === "accounts" ? (
+        <main className="min-h-0 md:col-span-2">
+          <AccountsPage accounts={accounts} close={() => update({ view: "" })} />
+        </main>
+      ) : (
+        <>
+        <section className={`min-h-0 flex-col border-r border-zinc-200 dark:border-zinc-800 ${reading ? "hidden md:flex" : "flex"}`}>
+          <div className="flex items-center gap-2 border-b border-zinc-200 p-2 dark:border-zinc-800">
+            <button
+              type="button"
+              aria-label={t.showMenu}
+              className="rounded px-2 py-1 text-lg lg:hidden"
+              onClick={() => setMenuOpen(true)}
+            >
+              ☰
             </button>
-            <div className="min-h-0 flex-1">
-              <MessageView id={state.m} />
-            </div>
-          </>
-        ) : (
-          <p className="m-auto text-sm text-zinc-500">{t.selectMessage}</p>
-        )}
-      </main>
+            <input
+              type="search"
+              aria-label={t.searchMail}
+              placeholder={state.account ? t.searchIn(state.folder || state.account) : t.searchAll}
+              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <ThemeToggle />
+          </div>
+          <div className="min-h-0 flex-1">
+            <MessageList
+              filter={filter}
+              selected={state.m}
+              // Commit a pending search first (same history entry), then open
+              // the message as a new entry: the debounced update cannot close it
+              // again, and Back returns to the search results.
+              open={(m) => {
+                if (typed !== state.q) update({ q: typed }, { replace: true });
+                update({ m });
+              }}
+            />
+          </div>
+        </section>
+
+        <main className={`min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
+          {reading ? (
+            <>
+              <button type="button" className="p-2 text-left text-sm text-blue-600 md:hidden" onClick={() => update({ m: "" })}>
+                {t.back}
+              </button>
+              <div className="min-h-0 flex-1">
+                <MessageView id={state.m} />
+              </div>
+            </>
+          ) : (
+            <p className="m-auto text-sm text-zinc-500">{t.selectMessage}</p>
+          )}
+        </main>
+        </>
+      )}
     </div>
   );
 }
