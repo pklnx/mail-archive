@@ -17,6 +17,10 @@ SELECT count(*) FROM users;
 -- the last two admins at the same time.
 SELECT id FROM users WHERE is_admin AND locked_at IS NULL FOR UPDATE;
 
+-- name: LockUsableAdmins :many
+-- Locks admins who are currently able to log in (unlocked and TOTP-enabled).
+SELECT id FROM users WHERE is_admin AND locked_at IS NULL AND two_factor_enabled FOR UPDATE;
+
 -- name: SetUserPassword :execrows
 UPDATE users SET password_hash = $2, must_change_password = $3, password_changed_at = now() WHERE id = $1;
 
