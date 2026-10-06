@@ -17,6 +17,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web/ui"
 )
@@ -33,6 +34,9 @@ type Server struct {
 	syncer       *archive.Syncer
 	runner       *archive.Runner
 	hasher       *auth.Hasher
+	sealer       *crypto.Sealer
+	require2FA   bool
+	now          func() time.Time
 	limiter      *auth.Limiter
 }
 
@@ -47,6 +51,12 @@ type Options struct {
 	Runner *archive.Runner
 	// Hasher verifies passwords; nil means auth.DefaultParams.
 	Hasher *auth.Hasher
+	// Sealer protects TOTP secrets; nil keeps the existing browse-only mode.
+	Sealer *crypto.Sealer
+	// Require2FA requires TOTP for non-admin users as well. Admins always require it.
+	Require2FA bool
+	// Now is injectable for authentication tests.
+	Now func() time.Time
 }
 
 // New creates a Server.
@@ -67,7 +77,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	}
 	return &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
-		hasher: hasher, limiter: auth.NewLimiter(),
+		hasher: hasher, sealer: opts.Sealer, require2FA: opts.Require2FA, now: opts.Now, limiter: auth.NewLimiter(),
 	}
 }
 
@@ -79,8 +89,14 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/session", s.handleGetSession)
 	mux.HandleFunc("POST /api/session", s.handleLogin)
+	mux.HandleFunc("POST /api/session/2fa", s.handleTwoFactorLogin)
 	mux.HandleFunc("DELETE /api/session", s.handleLogout)
 	mux.HandleFunc("PUT "+profilePasswordPath, s.handleChangeOwnPassword)
+	mux.HandleFunc("GET /api/profile/2fa", s.handleGetTwoFactor)
+	mux.HandleFunc("POST /api/profile/2fa/setup", s.handleBeginTwoFactor)
+	mux.HandleFunc("POST /api/profile/2fa/confirm", s.handleConfirmTwoFactor)
+	mux.HandleFunc("DELETE /api/profile/2fa", s.handleDisableTwoFactor)
+	mux.HandleFunc("POST /api/profile/2fa/recovery-codes", s.handleRegenerateRecoveryCodes)
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("PATCH /api/users/{name}", s.handleUpdateUser)
