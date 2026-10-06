@@ -276,6 +276,7 @@ export interface ManagedUser {
   admin: boolean;
   locked: boolean;
   mustChangePassword: boolean;
+  twoFactorEnabled: boolean;
   accounts: number;
   createdAt: string;
   lastLoginAt: string | null;
