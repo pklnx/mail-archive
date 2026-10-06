@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { MessageList } from "./MessageList";
 import { MessageView } from "./MessageView";
 import { Sidebar } from "./Sidebar";
+import { ThemeToggle } from "./ThemeToggle";
 import { useViewState } from "./urlState";
 
 export function App() {
@@ -60,6 +61,7 @@ export function App() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          <ThemeToggle />
         </div>
         <div className="min-h-0 flex-1">
           <MessageList

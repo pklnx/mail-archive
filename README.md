@@ -79,7 +79,9 @@ docker compose up -d --build web   # open http://localhost:8080
 
 The UI has three columns: accounts and folders, the message list with search,
 and the open message. Everything you select is part of the URL, so the back
-button and bookmarks work. HTML mail is shown in a sandboxed frame without
+button and bookmarks work. Light and dark mode follow the system; the
+sun/moon button next to the search field overrides it (remembered per
+browser). HTML mail is shown in a sandboxed frame without
 scripts; remote images (tracking pixels) are only loaded when you click
 "Load remote images".
 
