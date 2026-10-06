@@ -16,6 +16,7 @@ import (
 const (
 	// TOTPSecretBytes is the size of generated TOTP secrets.
 	TOTPSecretBytes = 20
+	// TOTPDigits is the number of digits in a TOTP code.
 	TOTPDigits      = 6
 	TOTPPeriod      = 30 * time.Second
 	TOTPWindow      = 1
