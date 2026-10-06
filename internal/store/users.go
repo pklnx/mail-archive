@@ -84,6 +84,13 @@ func (s *Store) createUser(ctx context.Context, name, passwordHash string, admin
 }
 
 // GetUserByName looks up a user by login name.
+func (s *Store) GetUserByID(ctx context.Context, id int64) (*User, error) {
+	r, err := s.q.GetUserByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) { return nil, ErrNotFound }
+	if err != nil { return nil, err }
+	return userFromDB(r), nil
+}
+
 func (s *Store) GetUserByName(ctx context.Context, name string) (*User, error) {
 	r, err := s.q.GetUserByName(ctx, name)
 	if errors.Is(err, pgx.ErrNoRows) {
