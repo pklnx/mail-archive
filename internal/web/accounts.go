@@ -267,12 +267,8 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	a.PasswordEnc, err = s.syncer.Sealer.Seal([]byte(*in.Password), archive.PasswordContext(a.Name))
-	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
-		return
-	}
-	if err := s.store.CreateAccount(r.Context(), a); err != nil {
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(s.syncer.Sealer, id, *in.Password) }
+	if err := s.store.CreateAccountSealed(r.Context(), a, seal); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists", a.Name), nil)
 			return
@@ -339,12 +335,12 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			password = *in.Password
 		} else {
-			pw, err := s.syncer.Sealer.Open(a.PasswordEnc, archive.PasswordContext(a.Name))
+			pw, err := archive.OpenPassword(s.syncer.Sealer, a)
 			if err != nil {
 				s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 				return
 			}
-			password = string(pw)
+			password = pw
 		}
 		if _, err := s.syncer.CheckLogin(ctx, a, password); err != nil {
 			s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
@@ -354,7 +350,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 
 	if in.Name != nil && *in.Name != a.Name {
 		oldName := a.Name
-		err := archive.RenameAccount(ctx, s.store, s.syncer.Sealer, a, *in.Name)
+		err := archive.RenameAccount(ctx, s.store, a, *in.Name)
 		switch {
 		case errors.Is(err, archive.ErrSyncRunning):
 			s.fail(w, r, http.StatusConflict, "the account is being synced; try again when the sync has finished", nil)
@@ -373,7 +369,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if in.changesConnection() {
-		enc, err := s.syncer.Sealer.Seal([]byte(password), archive.PasswordContext(a.Name))
+		enc, err := archive.SealPassword(s.syncer.Sealer, a.ID, password)
 		if err != nil {
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return

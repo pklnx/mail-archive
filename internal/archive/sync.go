@@ -20,12 +20,6 @@ import (
 // DefaultBatchSize is the number of messages committed per transaction.
 const DefaultBatchSize = 100
 
-// PasswordContext returns the associated data used to encrypt an account's
-// password, binding the ciphertext to the account name.
-func PasswordContext(accountName string) []byte {
-	return []byte("account-password:" + accountName)
-}
-
 // Syncer copies new messages from all enabled accounts.
 type Syncer struct {
 	Store     *store.Store
@@ -121,12 +115,12 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		return res
 	}
 
-	password, err := s.Sealer.Open(a.PasswordEnc, PasswordContext(a.Name))
+	password, err := OpenPassword(s.Sealer, a)
 	if err != nil {
-		res.Err = fmt.Errorf("decrypt password: %w", err)
+		res.Err = err
 		return finish("failed")
 	}
-	conn, err := s.dial(ctx, a, string(password))
+	conn, err := s.dial(ctx, a, password)
 	if err != nil {
 		res.Err = err
 		return finish("failed")
@@ -197,11 +191,11 @@ func (s *Syncer) CheckLogin(ctx context.Context, a *store.Account, password stri
 // ListFolders connects with the account's stored password and lists its
 // folders.
 func (s *Syncer) ListFolders(ctx context.Context, a *store.Account) ([]imapsync.Folder, error) {
-	password, err := s.Sealer.Open(a.PasswordEnc, PasswordContext(a.Name))
+	password, err := OpenPassword(s.Sealer, a)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt password: %w", err)
+		return nil, err
 	}
-	return s.CheckLogin(ctx, a, string(password))
+	return s.CheckLogin(ctx, a, password)
 }
 
 type storedBody struct {

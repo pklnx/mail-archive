@@ -4,7 +4,7 @@
 
 | Asset | Protection |
 |---|---|
-| IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account name, using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
+| IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail | Plain `.eml` files and PostgreSQL rows, **not encrypted**. Use an encrypted disk. |
 | Your mail servers | Only read: `EXAMINE` and `BODY.PEEK[]`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |

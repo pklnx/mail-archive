@@ -104,15 +104,12 @@ func run(dbURL, listen string, log *slog.Logger) error {
 
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	for _, u := range users {
-		enc, err := sealer.Seal([]byte(u.password), archive.PasswordContext(u.account))
-		if err != nil {
-			return err
-		}
 		a := &store.Account{
 			Name: u.account, Host: host, Port: portNum, TLSMode: store.TLSModeNone,
-			Username: u.login, PasswordEnc: enc, ExcludedFolders: u.excluded, Enabled: true,
+			Username: u.login, ExcludedFolders: u.excluded, Enabled: true,
 		}
-		if err := st.CreateAccount(ctx, a); err != nil {
+		seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, u.password) }
+		if err := st.CreateAccountSealed(ctx, a, seal); err != nil {
 			return err
 		}
 		if res := syncer.SyncAccount(ctx, a); res.Err != nil {

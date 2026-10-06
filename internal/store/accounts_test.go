@@ -187,19 +187,19 @@ func TestRenameAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := st.RenameAccount(ctx, a.ID, "new", []byte{9}); err != nil {
+	if err := st.RenameAccount(ctx, a.ID, "new"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := accountByName(st, "new")
-	if err != nil || got.ID != a.ID || string(got.PasswordEnc) != "\x09" {
+	if err != nil || got.ID != a.ID {
 		t.Fatalf("renamed account: %+v, %v", got, err)
 	}
 	for _, name := range []string{"taken", "gone"} {
-		if err := st.RenameAccount(ctx, a.ID, name, []byte{9}); !errors.Is(err, store.ErrConflict) {
+		if err := st.RenameAccount(ctx, a.ID, name); !errors.Is(err, store.ErrConflict) {
 			t.Errorf("rename to %q: %v, want ErrConflict", name, err)
 		}
 	}
-	if err := st.RenameAccount(ctx, gone.ID, "revived", []byte{9}); !errors.Is(err, store.ErrNotFound) {
+	if err := st.RenameAccount(ctx, gone.ID, "revived"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("rename removed account: %v, want ErrNotFound", err)
 	}
 }

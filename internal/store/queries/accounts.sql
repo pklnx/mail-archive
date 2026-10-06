@@ -60,8 +60,7 @@ WHERE id = $1 AND removed_at IS NULL;
 SELECT * FROM accounts WHERE id = $1;
 
 -- name: RenameAccount :execrows
--- The password is encrypted with the account name as context, so it changes too.
-UPDATE accounts SET name = $2, password_enc = $3, updated_at = now()
+UPDATE accounts SET name = $2, updated_at = now()
 WHERE id = $1 AND removed_at IS NULL;
 
 -- name: UserOwnsAccounts :one

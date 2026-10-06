@@ -64,6 +64,15 @@ func newMigrateCmd() *cobra.Command {
 		if pending, err := a.store.ListUnindexed(cmd.Context(), 1); err == nil && len(pending) > 0 {
 			fmt.Println("some messages are not in the full-text index yet: run `reindex` once")
 		}
+		if sealer, err := a.cfg.Sealer(); err == nil {
+			n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				fmt.Printf("stored passwords of %d account(s) bound to the account ID\n", n)
+			}
+		}
 		return nil
 	}
 	cmd := &cobra.Command{
@@ -244,11 +253,8 @@ The login is verified before the account is saved unless --skip-check is set.`,
 			if acc.OwnerID, err = newOwner(cmd, a); err != nil {
 				return err
 			}
-			acc.PasswordEnc, err = sealer.Seal([]byte(password), archive.PasswordContext(acc.Name))
-			if err != nil {
-				return err
-			}
-			if err := a.store.CreateAccount(cmd.Context(), &acc); err != nil {
+			seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, password) }
+			if err := a.store.CreateAccountSealed(cmd.Context(), &acc, seal); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("an account named %q already exists for this user (removed accounts keep their name)", acc.Name)
 				}
@@ -438,11 +444,11 @@ func newAccountFoldersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pw, err := sealer.Open(acc.PasswordEnc, archive.PasswordContext(acc.Name))
+			pw, err := archive.OpenPassword(sealer, acc)
 			if err != nil {
 				return err
 			}
-			conn, err := imapsync.Dial(cmd.Context(), imapConfig(acc, string(pw)))
+			conn, err := imapsync.Dial(cmd.Context(), imapConfig(acc, pw))
 			if err != nil {
 				return err
 			}
@@ -517,7 +523,7 @@ func newAccountSetPasswordCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			enc, err := sealer.Seal([]byte(pw), archive.PasswordContext(acc.Name))
+			enc, err := archive.SealPassword(sealer, acc.ID, pw)
 			if err != nil {
 				return err
 			}
@@ -536,20 +542,15 @@ func newAccountRenameCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "rename NAME NEW-NAME",
 		Short: "Rename an account (its archived mail moves with it)",
-		Long: `Rename an account. The stored password is encrypted again for the new name.
-Not possible while the account is being synced.`,
-		Args: cobra.ExactArgs(2),
+		Long:  `Rename an account. Not possible while the account is being synced.`,
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, acc, err := loadAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
 			defer a.close()
-			sealer, err := a.cfg.Sealer()
-			if err != nil {
-				return err
-			}
-			if err := archive.RenameAccount(cmd.Context(), a.store, sealer, acc, args[1]); err != nil {
+			if err := archive.RenameAccount(cmd.Context(), a.store, acc, args[1]); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("an account named %q already exists (removed accounts keep their name)", args[1])
 				}
@@ -713,6 +714,11 @@ network.`,
 			if sealer, err := a.cfg.Sealer(); err != nil {
 				log.Warn("account management and sync are off", "reason", err)
 			} else {
+				if n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer); err != nil {
+					return err
+				} else if n > 0 {
+					log.Info("stored passwords bound to the account ID", "accounts", n)
+				}
 				opts.Syncer = &archive.Syncer{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}
 				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Interval: a.cfg.SyncInterval}
 				runnerDone := make(chan struct{})

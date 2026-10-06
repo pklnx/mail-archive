@@ -176,6 +176,28 @@ func accountFromDB(r db.Account) *Account {
 
 // CreateAccount inserts a new account and sets its ID.
 func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
+	return createAccount(ctx, s.q, a)
+}
+
+// CreateAccountSealed inserts a new account whose password is encrypted with
+// its ID: seal gets the new ID and returns the encrypted password. Both
+// happen in one transaction.
+func (s *Store) CreateAccountSealed(ctx context.Context, a *Account, seal func(id int64) ([]byte, error)) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		a.PasswordEnc = []byte{}
+		if err := createAccount(ctx, q, a); err != nil {
+			return err
+		}
+		enc, err := seal(a.ID)
+		if err != nil {
+			return err
+		}
+		a.PasswordEnc = enc
+		return one(q.UpdatePassword(ctx, db.UpdatePasswordParams{ID: a.ID, PasswordEnc: enc}))
+	})
+}
+
+func createAccount(ctx context.Context, q *db.Queries, a *Account) error {
 	if a.IncludedFolders == nil {
 		a.IncludedFolders = []string{}
 	}
@@ -185,7 +207,7 @@ func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
 	if a.Port < 1 || a.Port > 65535 {
 		return fmt.Errorf("invalid port %d", a.Port)
 	}
-	row, err := s.q.CreateAccount(ctx, db.CreateAccountParams{
+	row, err := q.CreateAccount(ctx, db.CreateAccountParams{
 		Name:            a.Name,
 		Host:            a.Host,
 		Port:            int32(a.Port), //nolint:gosec // range checked above
@@ -242,12 +264,11 @@ func (s *Store) UpdateConnection(ctx context.Context, a *Account) error {
 	}))
 }
 
-// RenameAccount changes an account's name together with its password,
-// which must already be encrypted for the new name. It fails with
-// ErrConflict if the name is taken (also by a removed account) and with
+// RenameAccount changes an account's name. It fails with ErrConflict if the
+// owner already has an account with that name (also a removed one) and with
 // ErrNotFound for removed accounts.
-func (s *Store) RenameAccount(ctx context.Context, id int64, name string, passwordEnc []byte) error {
-	err := one(s.q.RenameAccount(ctx, db.RenameAccountParams{ID: id, Name: name, PasswordEnc: passwordEnc}))
+func (s *Store) RenameAccount(ctx context.Context, id int64, name string) error {
+	err := one(s.q.RenameAccount(ctx, db.RenameAccountParams{ID: id, Name: name}))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return fmt.Errorf("account %q: %w", name, ErrConflict)
