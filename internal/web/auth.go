@@ -273,7 +273,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, map[string]any{"twoFactorRequired": true, "challenge": challenge})
 		return
 	}
-	s.limiter.Succeed(name)
+	if !s.twoFactorRequiredUser(u) {
+		s.limiter.Succeed(name)
+	}
 	// A fresh token on every login: a token planted before the login is
 	// never promoted to a valid session.
 	if old := sessionToken(r); old != "" {
