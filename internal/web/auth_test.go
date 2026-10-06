@@ -144,7 +144,14 @@ func (f *authFixture) expect(method, path string, body any, want int) map[string
 
 func (f *authFixture) login(name, password string) *http.Response {
 	f.t.Helper()
-	resp, _ := f.do("POST", "/api/session", map[string]string{"username": name, "password": password})
+	resp, out := f.do("POST", "/api/session", map[string]string{"username": name, "password": password})
+	if resp.StatusCode == 200 {
+		if challenge, ok := out["challenge"].(string); ok {
+			secret, ok := f.adminSecrets[name]
+			if !ok { f.t.Fatalf("missing test TOTP secret for %q", name) }
+			resp, _ = f.do("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": auth.GenerateTOTP(secret, time.Now())})
+		}
+	}
 	return resp
 }
 
