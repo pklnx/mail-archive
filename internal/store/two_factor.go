@@ -191,8 +191,12 @@ func itoa(n int64) string {
 func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, recovery []string, key []byte) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
-		if err != nil { return err }
-		if u.LockedAt != nil || len(u.TwoFactorPending) == 0 { return ErrTwoFactorInvalid }
+		if err != nil {
+			return err
+		}
+		if u.LockedAt != nil || len(u.TwoFactorPending) == 0 {
+			return ErrTwoFactorInvalid
+		}
 		secret, err := sealer.Open(u.TwoFactorPending, []byte("totp-secret:user:"+itoa(id)+":pending"))
 		if err != nil { return err }
 		counter, ok, err := auth.ValidateTOTP(string(secret), code, now)
