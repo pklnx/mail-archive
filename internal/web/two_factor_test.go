@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pklnx/mail-archive/internal/auth"
 )
 
 func TestMandatoryAdminTOTP(t *testing.T) {
