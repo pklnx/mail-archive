@@ -34,8 +34,10 @@ page code (`/`, `/assets/`) is public; it contains no data.
   client, so all clients share the address limit; the limit per user name
   still applies.
 
-Until [#27](https://github.com/pklnx/mail-archive/issues/27) lands, every
-logged-in user sees all accounts and mail.
+Each user sees only their own accounts and the mail found in them. A message
+that is in two users' accounts is stored once and shown to both, each with
+only their own locations. Other users' accounts and messages answer `404`,
+also when someone guesses a message ID. Admins see only their own mail too.
 
 ## Network access
 

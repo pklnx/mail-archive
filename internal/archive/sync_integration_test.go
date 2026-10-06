@@ -92,7 +92,7 @@ func (f *fixture) addAccount(name, user, password string, excluded ...string) {
 
 func (f *fixture) sync() map[string]archive.AccountResult {
 	f.t.Helper()
-	results, err := f.syncer.SyncAll(f.ctx, nil)
+	results, err := f.syncer.SyncAll(f.ctx, nil, nil)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func (f *fixture) sync() map[string]archive.AccountResult {
 
 func (f *fixture) stats() (locations map[string]int64, unique int64) {
 	f.t.Helper()
-	stats, unique, err := f.store.Stats(f.ctx)
+	stats, unique, err := f.store.Stats(f.ctx, nil)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestSyncContinuesAfterAccountFailure(t *testing.T) {
 	}
 	expectResult(t, res["good"], 1, 1)
 
-	stats, _, err := f.store.Stats(f.ctx)
+	stats, _, err := f.store.Stats(f.ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,4 +262,16 @@ func TestSyncContinuesAfterAccountFailure(t *testing.T) {
 			t.Errorf("%s: last status = %v, want %s", s.Account, s.LastStatus, want)
 		}
 	}
+}
+
+// account returns the only account with this name.
+func (f *fixture) account(name string) (*store.Account, error) {
+	list, err := f.store.ListAccountsByName(f.ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) != 1 {
+		return nil, store.ErrNotFound
+	}
+	return list[0], nil
 }

@@ -15,7 +15,7 @@ func TestRenameAccount(t *testing.T) {
 	appendMsg(t, u, "INBOX", rawMessage("m1", "Hello"))
 	f := newFixture(t, u)
 	f.addAccount("postmaster@example.com", "u", "pw")
-	a, _ := f.store.GetAccountByName(f.ctx, "postmaster@example.com")
+	a, _ := f.account("postmaster@example.com")
 
 	if err := archive.RenameAccount(f.ctx, f.store, f.sealer, a, "bad/name"); err == nil {
 		t.Fatal("invalid name accepted")

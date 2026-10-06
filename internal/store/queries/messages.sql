@@ -29,3 +29,10 @@ FROM messages WHERE sha256 = $1;
 
 -- name: CountMessages :one
 SELECT count(*) FROM messages;
+
+-- name: CountOwnedMessages :one
+-- Unique messages found in the user's accounts.
+SELECT count(DISTINCT l.message_sha256) FROM message_locations l
+JOIN folders f ON f.id = l.folder_id
+JOIN accounts a ON a.id = f.account_id
+WHERE a.owner_id = $1;

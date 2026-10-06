@@ -1,6 +1,6 @@
 -- name: CreateAccount :one
-INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, owner_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING id, created_at;
 
 -- name: UpdatePassword :execrows
@@ -23,8 +23,24 @@ DELETE FROM folders WHERE account_id = $1;
 -- name: DeleteAccount :execrows
 DELETE FROM accounts WHERE id = $1;
 
--- name: GetAccountByName :one
-SELECT * FROM accounts WHERE name = $1;
+-- name: ListAccountsByName :many
+-- Accounts of all users with this name, for the CLI.
+SELECT * FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST;
+
+-- name: GetOwnedAccount :one
+SELECT * FROM accounts WHERE owner_id = $1 AND name = $2;
+
+-- name: ListOwnedAccounts :many
+SELECT * FROM accounts WHERE owner_id = $1 ORDER BY name;
+
+-- name: SetAccountOwner :execrows
+UPDATE accounts SET owner_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: AdoptUnownedAccounts :execrows
+UPDATE accounts SET owner_id = $1, updated_at = now() WHERE owner_id IS NULL;
+
+-- name: CountOwnedAccounts :many
+SELECT owner_id, count(*) AS accounts FROM accounts WHERE owner_id IS NOT NULL GROUP BY owner_id;
 
 -- name: ListAccounts :many
 SELECT * FROM accounts ORDER BY name;

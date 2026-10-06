@@ -177,7 +177,9 @@ func newAccountCmd() *cobra.Command {
 		newAccountEnableCmd(true),
 		newAccountEnableCmd(false),
 		newAccountRemoveCmd(),
+		newAccountMoveCmd(),
 	)
+	cmd.PersistentFlags().String("user", "", userFlagHelp)
 	return cmd
 }
 
@@ -222,6 +224,10 @@ The login is verified before the account is saved unless --skip-check is set.`,
 			if err != nil {
 				return err
 			}
+			// Fail on an unclear owner before asking for the password.
+			if _, err := newOwner(cmd, a); err != nil {
+				return err
+			}
 			password, err := readPassword(passwordStdin, "IMAP password for "+acc.Username+": ")
 			if err != nil {
 				return err
@@ -235,11 +241,17 @@ The login is verified before the account is saved unless --skip-check is set.`,
 				}
 				fmt.Fprintf(os.Stderr, "login ok, %d folders found\n", len(folders))
 			}
+			if acc.OwnerID, err = newOwner(cmd, a); err != nil {
+				return err
+			}
 			acc.PasswordEnc, err = sealer.Seal([]byte(password), archive.PasswordContext(acc.Name))
 			if err != nil {
 				return err
 			}
 			if err := a.store.CreateAccount(cmd.Context(), &acc); err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					return fmt.Errorf("an account named %q already exists for this user (removed accounts keep their name)", acc.Name)
+				}
 				return err
 			}
 			fmt.Printf("account %q added\n", acc.Name)
@@ -358,9 +370,20 @@ func newAccountListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			u, err := flagUser(cmd, a)
+			if err != nil {
+				return err
+			}
+			names, err := userNames(cmd, a)
+			if err != nil {
+				return err
+			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tSERVER\tUSER\tSTATE\tINCLUDE\tEXCLUDE")
+			fmt.Fprintln(w, "NAME\tOWNER\tSERVER\tLOGIN\tSTATE\tINCLUDE\tEXCLUDE")
 			for _, acc := range accounts {
+				if u != nil && (acc.OwnerID == nil || *acc.OwnerID != u.ID) {
+					continue
+				}
 				state := "enabled"
 				switch {
 				case acc.RemovedAt != nil:
@@ -368,7 +391,7 @@ func newAccountListCmd() *cobra.Command {
 				case !acc.Enabled:
 					state = "disabled"
 				}
-				fmt.Fprintf(w, "%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, acc.Host, acc.Port, acc.TLSMode,
+				fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, ownerName(names, acc.OwnerID), acc.Host, acc.Port, acc.TLSMode,
 					acc.Username, state, listOrDash(acc.IncludedFolders, "all"), listOrDash(acc.ExcludedFolders, "-"))
 			}
 			return w.Flush()
@@ -388,12 +411,9 @@ func loadAccount(cmd *cobra.Command, name string) (*app, *store.Account, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	acc, err := a.store.GetAccountByName(cmd.Context(), name)
+	acc, err := findAccount(cmd, a, name)
 	if err != nil {
 		a.close()
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, fmt.Errorf("account %q not found", name)
-		}
 		return nil, nil, err
 	}
 	if acc.RemovedAt != nil {
@@ -619,7 +639,17 @@ the archive. Run this periodically (cron, systemd timer).`,
 				Store: a.store, Blobs: blobs, Sealer: sealer,
 				Logger: newLogger(a.cfg.LogLevel),
 			}
-			results, err := syncer.SyncAll(cmd.Context(), only)
+			var owner *int64
+			if u, err := flagUser(cmd, a); err != nil {
+				return err
+			} else if u != nil {
+				owner = &u.ID
+			}
+			names, err := userNames(cmd, a)
+			if err != nil {
+				return err
+			}
+			results, err := syncer.SyncAll(cmd.Context(), only, owner)
 			failed := 0
 			for _, r := range results {
 				status := "ok"
@@ -630,7 +660,11 @@ the archive. Run this periodically (cron, systemd timer).`,
 					status = "error: " + r.Err.Error()
 					failed++
 				}
-				fmt.Printf("%-20s fetched=%-6d new=%-6d %s\n", r.Account, r.Fetched, r.New, status)
+				label := r.Account
+				if len(names) > 1 {
+					label = ownerName(names, r.OwnerID) + "/" + r.Account
+				}
+				fmt.Printf("%-20s fetched=%-6d new=%-6d %s\n", label, r.Fetched, r.New, status)
 			}
 			if err != nil {
 				return err
@@ -645,6 +679,7 @@ the archive. Run this periodically (cron, systemd timer).`,
 		},
 	}
 	cmd.Flags().StringArrayVar(&only, "account", nil, "only sync these accounts (repeatable; also syncs disabled ones)")
+	cmd.Flags().String("user", "", "only sync this user's accounts")
 	return cmd
 }
 
@@ -736,7 +771,7 @@ messages are indexed during sync. Safe to interrupt and rerun.`,
 }
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show archive statistics and the last sync per account",
 		Args:  cobra.NoArgs,
@@ -746,12 +781,22 @@ func newStatusCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			stats, unique, err := a.store.Stats(cmd.Context())
+			var owner *int64
+			if u, err := flagUser(cmd, a); err != nil {
+				return err
+			} else if u != nil {
+				owner = &u.ID
+			}
+			names, err := userNames(cmd, a)
+			if err != nil {
+				return err
+			}
+			stats, unique, err := a.store.Stats(cmd.Context(), owner)
 			if err != nil {
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ACCOUNT\tENABLED\tFOLDERS\tMESSAGES\tLAST SYNC\tSTATUS")
+			fmt.Fprintln(w, "ACCOUNT\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tLAST SYNC\tSTATUS")
 			for _, s := range stats {
 				last, status := "never", "-"
 				if s.LastRunAt != nil {
@@ -760,13 +805,19 @@ func newStatusCmd() *cobra.Command {
 				if s.LastStatus != nil {
 					status = *s.LastStatus
 				}
-				fmt.Fprintf(w, "%s\t%v\t%d\t%d\t%s\t%s\n", s.Account, s.Enabled, s.Folders, s.Locations, last, status)
+				fmt.Fprintf(w, "%s\t%s\t%v\t%d\t%d\t%s\t%s\n", s.Account, ownerName(names, s.OwnerID), s.Enabled, s.Folders, s.Locations, last, status)
 			}
 			if err := w.Flush(); err != nil {
 				return err
 			}
-			fmt.Printf("\nunique messages in archive: %d\n", unique)
+			if owner != nil {
+				fmt.Printf("\nunique messages of this user: %d\n", unique)
+			} else {
+				fmt.Printf("\nunique messages in archive: %d\n", unique)
+			}
 			return nil
 		},
 	}
+	cmd.Flags().String("user", "", "only this user's accounts")
+	return cmd
 }

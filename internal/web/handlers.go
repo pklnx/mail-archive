@@ -28,7 +28,8 @@ type statusAccount struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	stats, unique, err := s.store.Stats(r.Context())
+	owner := userID(r)
+	stats, unique, err := s.store.Stats(r.Context(), &owner)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -60,7 +61,7 @@ func toSummary(m store.MessageSummary) summaryJSON {
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := store.SearchFilter{Query: q.Get("q"), Account: q.Get("account"), Folder: q.Get("folder")}
+	f := store.SearchFilter{Owner: userID(r), Query: q.Get("q"), Account: q.Get("account"), Folder: q.Get("folder")}
 	var err error
 	if f.After, err = parseDate(q.Get("after")); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
@@ -140,7 +141,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), sha)
+	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -186,7 +187,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), sha)
+	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -231,7 +232,7 @@ func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), sha)
+	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -266,7 +267,7 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, "invalid part index", nil)
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), sha)
+	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return

@@ -23,10 +23,10 @@ characters and are prompted twice, or read once from stdin with
 | Command | Purpose |
 |---|---|
 | `user add NAME` | Create a user. `--admin` for an admin (admins will manage users in the web UI; they do not see other users' mail). |
-| `user list` | List users with role, state and last login. |
+| `user list` | List users with role, state, number of accounts and last login. |
 | `user set-password NAME` | Set a new password. Ends the user's sessions. |
 | `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
-| `user remove NAME` | Delete the user. |
+| `user remove NAME` | Delete the user. Refused while the user owns accounts, also removed ones; hand them over with `account move` first. |
 
 The last admin who can log in cannot be locked or removed.
 
@@ -35,13 +35,21 @@ The last admin who can log in cannot be locked or removed.
 | Command | Purpose |
 |---|---|
 | `account add NAME` | Add an account. Flags: `--host` and `--username` (required), `--port`, `--tls tls\|starttls\|none` (default `tls`), `--include FOLDER`, `--exclude FOLDER` (repeatable), `--password-stdin`, `--skip-check`. The login is checked before saving unless `--skip-check` is set. |
-| `account list` | List accounts with server, user, state (enabled, disabled, removed) and folder filters. |
+| `account list` | List accounts with owner, server, login, state (enabled, disabled, removed) and folder filters. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the folder filters with `--include` and `--exclude`. No flags: archive all folders. |
 | `account rename NAME NEW-NAME` | Rename the account; its mail moves with it. Refused while the account is being synced. |
 | `account set-password NAME` | Replace the stored password (`--password-stdin` to read it from stdin). |
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. |
 | `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). |
+| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused while syncing or if the user already has an account with that name. |
+
+Accounts belong to users, and names are unique per user. Every `account`
+command takes `--user USER`; it is needed when several users have an account
+with that name, and for `account add` when more than one user exists (with
+exactly one user, new accounts are theirs; with none yet, the first user
+created gets them). `account list` and `status` show all users' accounts
+unless `--user` is given.
 
 Folder filters: with `--include`, only those folders are archived; `--exclude`
 then removes folders from what is left. Names are matched case-insensitively.
@@ -51,7 +59,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | Command | Purpose |
 |---|---|
 | `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. |
-| `sync --account NAME` | Only these accounts (repeatable), also when disabled. |
-| `status` | Messages per account and the last sync result. |
+| `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
+| `status` | Messages per account with owner and the last sync result (`--user USER` for one user). |
 | `reindex` | Extract search text from messages archived before full-text search existed. |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API and sync schedule. Default `127.0.0.1:8080`. |

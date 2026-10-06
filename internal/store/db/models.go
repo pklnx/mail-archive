@@ -22,6 +22,7 @@ type Account struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	RemovedAt       *time.Time
+	OwnerID         *int64
 }
 
 type Folder struct {

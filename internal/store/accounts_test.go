@@ -12,6 +12,18 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
+// accountByName returns the only account with this name, of any owner.
+func accountByName(st *store.Store, name string) (*store.Account, error) {
+	list, err := st.ListAccountsByName(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) != 1 {
+		return nil, store.ErrNotFound
+	}
+	return list[0], nil
+}
+
 func createAccount(t *testing.T, st *store.Store, name string) *store.Account {
 	t.Helper()
 	a := &store.Account{Name: name, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, Enabled: true}
@@ -33,7 +45,7 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 	if res, err := st.DeleteOrRemoveAccount(ctx, empty.ID); err != nil || res != store.AccountDeleted {
 		t.Fatalf("delete empty: %v, %v", res, err)
 	}
-	if _, err := st.GetAccountByName(ctx, "empty"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := accountByName(st, "empty"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("empty account still there: %v", err)
 	}
 
@@ -50,7 +62,7 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 	if res, err := st.DeleteOrRemoveAccount(ctx, full.ID); err != nil || res != store.AccountRemoved {
 		t.Fatalf("remove full: %v, %v", res, err)
 	}
-	got, err := st.GetAccountByName(ctx, "full")
+	got, err := accountByName(st, "full")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +79,13 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 	if _, err := st.DeleteOrRemoveAccount(ctx, full.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("remove twice: %v", err)
 	}
-	// Its mail is still listed under the account.
-	list, err := st.ListAccountFolders(ctx)
+	// Its mail is still listed under the account, for its owner: the first
+	// user gets the accounts created before any user existed.
+	owner, err := st.CreateUser(ctx, "owner", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := st.ListAccountFolders(ctx, owner.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +190,7 @@ func TestRenameAccount(t *testing.T) {
 	if err := st.RenameAccount(ctx, a.ID, "new", []byte{9}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.GetAccountByName(ctx, "new")
+	got, err := accountByName(st, "new")
 	if err != nil || got.ID != a.ID || string(got.PasswordEnc) != "\x09" {
 		t.Fatalf("renamed account: %+v, %v", got, err)
 	}

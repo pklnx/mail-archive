@@ -39,7 +39,9 @@ internal/web (JSON API, UI from web/) ──────────────
 
 | Table | One row per |
 |---|---|
-| `accounts` | IMAP account: server, user, encrypted password, folder filters, `enabled`, `removed_at`. |
+| `users` | Login for the web UI: name, Argon2id hash, admin flag, `locked_at`. |
+| `sessions` | Login session: SHA-256 of the cookie token, user, last use, expiry. |
+| `accounts` | IMAP account: owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. |
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID and last sync time. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, date, path of the file, body text and search vector. |
 | `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date. |
@@ -49,6 +51,13 @@ Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
 twice with different headers (for example different `Received` lines) is
 stored twice.
+
+Deduplication is global, also across users: a message in two users'
+accounts is stored once. A user sees a message if at least one of its
+locations is in one of their accounts (removed accounts included), and only
+those locations. Every query of the web API takes the user's ID for this;
+the CLI, the schedule and `sync` work on all accounts. An account without
+owner exists only before the first user is created, who then gets it.
 
 ## Sync and concurrency
 

@@ -19,7 +19,7 @@ func TestSyncSkipsLockedAndRemovedAccounts(t *testing.T) {
 	f.addAccount("busy", "u", "pw")
 	f.addAccount("gone", "u", "pw")
 
-	busy, _ := f.store.GetAccountByName(f.ctx, "busy")
+	busy, _ := f.account("busy")
 	unlock, ok, err := f.store.TryLockSync(f.ctx, busy.ID)
 	if err != nil || !ok {
 		t.Fatal("lock", ok, err)
@@ -31,14 +31,14 @@ func TestSyncSkipsLockedAndRemovedAccounts(t *testing.T) {
 
 	// "gone" is removed after its first sync; later syncs skip it.
 	f.sync()
-	gone, _ := f.store.GetAccountByName(f.ctx, "gone")
+	gone, _ := f.account("gone")
 	if _, err := f.store.DeleteOrRemoveAccount(f.ctx, gone.ID); err != nil {
 		t.Fatal(err)
 	}
 	if res := f.sync(); len(res) != 1 || res["busy"].Err != nil {
 		t.Fatalf("sync after removal: %+v", res)
 	}
-	gone, _ = f.store.GetAccountByName(f.ctx, "gone")
+	gone, _ = f.account("gone")
 	if res := f.syncer.SyncAccount(f.ctx, gone); !errors.Is(res.Err, archive.ErrAccountRemoved) {
 		t.Fatalf("removed account: %v", res.Err)
 	}
@@ -53,7 +53,7 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	f := newFixture(t, u)
 	f.addAccount("on", "u", "pw")
 	f.addAccount("off", "u", "pw")
-	off, _ := f.store.GetAccountByName(f.ctx, "off")
+	off, _ := f.account("off")
 	if err := f.store.SetAccountEnabled(f.ctx, off.ID, false); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 
 	// The schedule syncs the enabled account once: its next run is due in
 	// an hour.
-	on, _ := f.store.GetAccountByName(f.ctx, "on")
+	on, _ := f.account("on")
 	waitForRun(t, f, on.ID, "ok")
 	first, _ := f.store.LastRuns(f.ctx)
 	time.Sleep(100 * time.Millisecond)

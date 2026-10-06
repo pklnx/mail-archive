@@ -11,9 +11,20 @@ import (
 )
 
 const getMessageSummary = `-- name: GetMessageSummary :one
-SELECT sha256, size, message_id, subject, from_addr, sent_at, sort_at, stored_path
-FROM messages WHERE sha256 = $1
+SELECT m.sha256, m.size, m.message_id, m.subject, m.from_addr, m.sent_at, m.sort_at, m.stored_path
+FROM messages m
+WHERE m.sha256 = $1
+  AND EXISTS (
+      SELECT 1 FROM message_locations l
+      JOIN folders f ON f.id = l.folder_id
+      JOIN accounts a ON a.id = f.account_id
+      WHERE l.message_sha256 = m.sha256 AND a.owner_id = $2::bigint)
 `
+
+type GetMessageSummaryParams struct {
+	Sha256 string
+	Owner  int64
+}
 
 type GetMessageSummaryRow struct {
 	Sha256     string
@@ -26,8 +37,9 @@ type GetMessageSummaryRow struct {
 	StoredPath string
 }
 
-func (q *Queries) GetMessageSummary(ctx context.Context, sha256 string) (GetMessageSummaryRow, error) {
-	row := q.db.QueryRow(ctx, getMessageSummary, sha256)
+// Only if the message was found in one of the user's accounts.
+func (q *Queries) GetMessageSummary(ctx context.Context, arg GetMessageSummaryParams) (GetMessageSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getMessageSummary, arg.Sha256, arg.Owner)
 	var i GetMessageSummaryRow
 	err := row.Scan(
 		&i.Sha256,
@@ -48,6 +60,7 @@ SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS remo
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 LEFT JOIN message_locations l ON l.folder_id = f.id
+WHERE a.owner_id = $1::bigint
 GROUP BY a.name, a.enabled, a.removed_at, f.name, f.last_synced_at
 ORDER BY a.name, f.name
 `
@@ -61,8 +74,8 @@ type ListFolderCountsRow struct {
 	LastSyncedAt *time.Time
 }
 
-func (q *Queries) ListFolderCounts(ctx context.Context) ([]ListFolderCountsRow, error) {
-	rows, err := q.db.Query(ctx, listFolderCounts)
+func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFolderCountsRow, error) {
+	rows, err := q.db.Query(ctx, listFolderCounts, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -93,9 +106,14 @@ SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date
 FROM message_locations l
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
-WHERE l.message_sha256 = $1
+WHERE l.message_sha256 = $1 AND a.owner_id = $2::bigint
 ORDER BY a.name, f.name
 `
+
+type ListLocationsParams struct {
+	Sha256 string
+	Owner  int64
+}
 
 type ListLocationsRow struct {
 	Account      string
@@ -105,8 +123,9 @@ type ListLocationsRow struct {
 	InternalDate *time.Time
 }
 
-func (q *Queries) ListLocations(ctx context.Context, messageSha256 string) ([]ListLocationsRow, error) {
-	rows, err := q.db.Query(ctx, listLocations, messageSha256)
+// The user's own locations of a message.
+func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([]ListLocationsRow, error) {
+	rows, err := q.db.Query(ctx, listLocations, arg.Sha256, arg.Owner)
 	if err != nil {
 		return nil, err
 	}
@@ -149,25 +168,27 @@ WHERE ($1::text IS NULL
                        websearch_to_tsquery('english', $1::text))
        OR m.subject ILIKE $2::text
        OR m.from_addr ILIKE $2::text)
-  AND ($3::text IS NULL AND $4::text IS NULL
-       OR EXISTS (
+  -- Only messages found in one of the user's accounts.
+  AND EXISTS (
            SELECT 1 FROM message_locations l
            JOIN folders f ON f.id = l.folder_id
            JOIN accounts a ON a.id = f.account_id
            WHERE l.message_sha256 = m.sha256
-             AND ($3::text IS NULL OR a.name = $3::text)
-             AND ($4::text IS NULL OR f.name = $4::text)))
-  AND ($5::timestamptz IS NULL OR m.sort_at >= $5::timestamptz)
-  AND ($6::timestamptz IS NULL OR m.sort_at < $6::timestamptz)
-  AND ($7::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($7::timestamptz, $8::text))
+             AND a.owner_id = $3::bigint
+             AND ($4::text IS NULL OR a.name = $4::text)
+             AND ($5::text IS NULL OR f.name = $5::text))
+  AND ($6::timestamptz IS NULL OR m.sort_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR m.sort_at < $7::timestamptz)
+  AND ($8::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($8::timestamptz, $9::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $9
+LIMIT $10
 `
 
 type SearchMessagesParams struct {
 	Query     *string
 	Pattern   *string
+	Owner     int64
 	Account   *string
 	Folder    *string
 	After     *time.Time
@@ -193,6 +214,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 	rows, err := q.db.Query(ctx, searchMessages,
 		arg.Query,
 		arg.Pattern,
+		arg.Owner,
 		arg.Account,
 		arg.Folder,
 		arg.After,

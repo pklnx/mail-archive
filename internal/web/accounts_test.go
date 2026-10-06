@@ -19,12 +19,15 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 type manageFixture struct {
 	t          *testing.T
+	st         *store.Store
 	srv        *httptest.Server
+	cookie     string // session token; empty means the fixture's own user
 	host       string
 	port       int
 	runnerDone chan struct{}
@@ -54,7 +57,7 @@ func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, 
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	runner := &archive.Runner{Syncer: syncer, CheckEvery: 10 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
-	f := &manageFixture{t: t, runnerDone: make(chan struct{})}
+	f := &manageFixture{t: t, st: st, runnerDone: make(chan struct{})}
 	go func() { runner.Run(ctx); close(f.runnerDone) }()
 	t.Cleanup(func() { cancel(); <-f.runnerDone })
 	if roles != nil {
@@ -79,6 +82,9 @@ func (f *manageFixture) do(method, path string, body any, want int) []byte {
 	req, _ := http.NewRequest(method, f.srv.URL+path, r)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", f.srv.URL)
+	if f.cookie != "" {
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: f.cookie})
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		f.t.Fatal(err)
@@ -258,6 +264,9 @@ func TestManagementNeedsSecretKey(t *testing.T) {
 	req, _ := http.NewRequest("POST", f.srv.URL+"/api/sync", http.NoBody)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", f.srv.URL)
+	if f.cookie != "" {
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: f.cookie})
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
