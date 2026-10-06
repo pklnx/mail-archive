@@ -42,7 +42,7 @@ type Config struct {
 	AllowedHosts []string
 	// SyncInterval of the web server's schedule; zero means off.
 	SyncInterval time.Duration
-	Require2FA bool
+	Require2FA    bool
 }
 
 // Load reads the configuration from the environment.
