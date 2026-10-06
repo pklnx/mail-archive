@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/store"
