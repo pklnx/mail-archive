@@ -65,7 +65,7 @@ func (s *Server) handleBeginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	uri := "otpauth://totp/" + url.PathEscape("Mail Archive:"+st.UserName) +
+	uri := "otpauth://totp/" + url.PathEscape("Mail Archive:"+currentSession(r).UserName) +
 		"?secret=" + url.QueryEscape(secret) + "&issuer=" + url.QueryEscape("Mail Archive")
 	code, err := qr.Encode(uri, qr.M)
 	if err != nil {
@@ -130,7 +130,7 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The limiter is keyed by the username only after the challenge is resolved.
-	ch, err := s.store.GetTwoFactorChallenge(r.Context(), in.Challenge)
+	_, err := s.store.GetTwoFactorChallenge(r.Context(), in.Challenge)
 	if err != nil {
 		s.fail(w, r, http.StatusUnauthorized, "invalid or expired two-factor challenge", nil)
 		return
@@ -140,7 +140,6 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: int(wait.Seconds()) + 1})
 		return
 	}
-	_ = ch
 	token, user, err := s.store.CompleteTwoFactorLogin(r.Context(), in.Challenge, strings.TrimSpace(in.Code), s.now(), s.sealer, s.secretKey, s.now().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
 	if err != nil {
 		if err == store.ErrTwoFactorInvalid || err == store.ErrTwoFactorReplay {
