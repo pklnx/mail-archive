@@ -13,11 +13,13 @@ import (
 )
 
 var (
+	// ErrTwoFactorInvalid indicates that a supplied second factor is invalid.
 	ErrTwoFactorInvalid = errors.New("invalid two-factor code")
 	ErrTwoFactorReplay = errors.New("two-factor code already used")
 	ErrTwoFactorExpired = errors.New("two-factor challenge expired")
 )
 
+// TwoFactorState describes the current TOTP state for a user.
 type TwoFactorState struct {
 	Enabled       bool
 	Secret        string
@@ -52,6 +54,7 @@ func twoFactorState(r db.TwoFactorUser, sealer *crypto.Sealer) (*TwoFactorState,
 	return out, nil
 }
 
+// GetTwoFactorState returns the user's TOTP state.
 func (s *Store) GetTwoFactorState(ctx context.Context, id int64, sealer *crypto.Sealer) (*TwoFactorState, error) {
 	r, err := s.q.GetTwoFactorUser(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -63,6 +66,7 @@ func (s *Store) GetTwoFactorState(ctx context.Context, id int64, sealer *crypto.
 	return twoFactorState(r, sealer)
 }
 
+// BeginTwoFactorSetup stores an encrypted pending TOTP secret.
 func (s *Store) BeginTwoFactorSetup(ctx context.Context, id int64, secret string, sealer *crypto.Sealer) error {
 	enc, err := sealer.Seal([]byte(secret), []byte("totp-secret:user:"+itoa(id)+":pending"))
 	if err != nil {
@@ -73,6 +77,7 @@ func (s *Store) BeginTwoFactorSetup(ctx context.Context, id int64, secret string
 	})
 }
 
+// EnableTwoFactor enables TOTP and stores recovery-code hashes.
 func (s *Store) EnableTwoFactor(ctx context.Context, id int64, secret string, counter int64, sealer *crypto.Sealer, recovery []string, key []byte) error {
 	enc, err := sealer.Seal([]byte(secret), []byte("totp-secret:user:"+itoa(id)))
 	if err != nil {
@@ -101,11 +106,13 @@ func (s *Store) EnableTwoFactor(ctx context.Context, id int64, secret string, co
 	})
 }
 
+// ConsumeRecoveryCode marks a recovery code as used.
 func (s *Store) ConsumeRecoveryCode(ctx context.Context, id int64, hash []byte) (bool, error) {
 	n, err := s.q.ConsumeRecoveryCode(ctx, id, hash)
 	return n == 1, err
 }
 
+// ResetTwoFactor disables TOTP, clears recovery material and ends sessions.
 func (s *Store) ResetTwoFactor(ctx context.Context, id int64) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
@@ -134,6 +141,7 @@ func (s *Store) ResetTwoFactor(ctx context.Context, id int64) error {
 	})
 }
 
+// CreateTwoFactorChallenge creates a short-lived login challenge.
 func (s *Store) CreateTwoFactorChallenge(ctx context.Context, id int64, version int64, expires time.Time) (string, error) {
 	token, hash, err := auth.NewSessionToken()
 	if err != nil {
@@ -145,6 +153,7 @@ func (s *Store) CreateTwoFactorChallenge(ctx context.Context, id int64, version 
 	return string(token), nil
 }
 
+// GetTwoFactorChallenge loads a non-expired login challenge.
 func (s *Store) GetTwoFactorChallenge(ctx context.Context, token string) (*db.TwoFactorChallenge, error) {
 	hash := auth.HashSessionToken(token)
 	c, err := s.q.GetTwoFactorChallenge(ctx, hash)
@@ -157,6 +166,7 @@ func (s *Store) GetTwoFactorChallenge(ctx context.Context, token string) (*db.Tw
 	return &c, nil
 }
 
+// ConsumeTwoFactorChallenge invalidates a login challenge.
 func (s *Store) ConsumeTwoFactorChallenge(ctx context.Context, token string) error {
 	return s.q.DeleteTwoFactorChallenge(ctx, auth.HashSessionToken(token))
 }
@@ -176,6 +186,7 @@ func itoa(n int64) string {
 }
 
 
+// ConfirmTwoFactorSetup validates the setup code and atomically enables TOTP.
 func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, recovery []string, key []byte) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
@@ -187,7 +198,7 @@ func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string
 		if err != nil || !ok { return ErrTwoFactorInvalid }
 		enc, err := sealer.Seal(secret, []byte("totp-secret:user:"+itoa(id)))
 		if err != nil { return err }
-		if err := q.EnableTwoFactor(ctx, id, enc, int64(counter)); err != nil { return err }
+		if err := q.EnableTwoFactor(ctx, id, enc, int64(counter)); err != nil { return err } //nolint:gosec // TOTP counters are bounded Unix time-step values.
 		if err := q.DeleteRecoveryCodes(ctx, id); err != nil { return err }
 		for _, rc := range recovery {
 			if err := q.InsertRecoveryCode(ctx, id, auth.RecoveryCodeHash(key, rc)); err != nil { return err }
@@ -196,6 +207,7 @@ func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string
 	})
 }
 
+// VerifyTwoFactorCode validates and consumes a TOTP or recovery code.
 func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, key []byte) (int64, error) {
 	var version int64
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -207,8 +219,8 @@ func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, 
 		counter, ok, err := auth.ValidateTOTP(string(secret), code, now)
 		if err != nil { return err }
 		if ok {
-			if u.TwoFactorLastCount != nil && int64(counter) <= *u.TwoFactorLastCount { return ErrTwoFactorReplay }
-			n, err := q.AcceptTwoFactorCounter(ctx, id, int64(counter))
+			if u.TwoFactorLastCount != nil && int64(counter) <= *u.TwoFactorLastCount /*nolint:gosec // TOTP counters are bounded Unix time-step values.*/ { return ErrTwoFactorReplay }
+			n, err := q.AcceptTwoFactorCounter(ctx, id, int64(counter)) //nolint:gosec // TOTP counters are bounded Unix time-step values.
 			if err != nil { return err }
 			if n != 1 { return ErrTwoFactorReplay }
 			version = u.TwoFactorVersion
@@ -228,6 +240,7 @@ func consumeRecoveryCodeTx(ctx context.Context, q *db.Queries, id int64, hash []
 	return n == 1, err
 }
 
+// CompleteTwoFactorLogin atomically completes a TOTP challenge and creates a session.
 func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, now time.Time, sealer *crypto.Sealer, key []byte, expiresAt time.Time, userAgent string) (string, *User, error) {
 	var outUser *User
 	rawToken, hash, err := auth.NewSessionToken()
@@ -254,8 +267,8 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		valid := false
 		counter, ok, err := auth.ValidateTOTP(string(secret), code, now)
 		if err != nil { return err }
-		if ok && (u.TwoFactorLastCount == nil || int64(counter) > *u.TwoFactorLastCount) {
-			n, err := q.AcceptTwoFactorCounter(ctx, u.ID, int64(counter))
+		if ok && (u.TwoFactorLastCount == nil || int64(counter) > *u.TwoFactorLastCount /*nolint:gosec // TOTP counters are bounded Unix time-step values.*/) {
+			n, err := q.AcceptTwoFactorCounter(ctx, u.ID, int64(counter)) //nolint:gosec // TOTP counters are bounded Unix time-step values.
 			if err != nil { return err }
 			valid = n == 1
 		}
@@ -276,6 +289,7 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 }
 
 
+// DisableTwoFactorIfVersion disables TOTP if its state version is unchanged.
 func (s *Store) DisableTwoFactorIfVersion(ctx context.Context, id, version int64, keepSession []byte) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
@@ -288,6 +302,7 @@ func (s *Store) DisableTwoFactorIfVersion(ctx context.Context, id, version int64
 	})
 }
 
+// ReplaceRecoveryCodesIfVersion replaces recovery codes if its state version is unchanged.
 func (s *Store) ReplaceRecoveryCodesIfVersion(ctx context.Context, id, version int64, codes []string, key []byte) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		u, err := q.LockTwoFactorUser(ctx, id)
