@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -114,7 +115,7 @@ func (s *Server) handleConfirmTwoFactor(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.store.ConfirmTwoFactorSetup(r.Context(), userID(r), strings.TrimSpace(in.Code), s.now(), s.sealer, codes, s.secretKey); err != nil {
-		if err == store.ErrTwoFactorInvalid || err == store.ErrTwoFactorReplay {
+		if errors.Is(err, store.ErrTwoFactorInvalid) || errors.Is(err, store.ErrTwoFactorReplay) {
 			s.limiter.Fail(currentSession(r).UserName, clientAddr(r))
 			s.fail(w, r, http.StatusUnauthorized, "invalid two-factor code", nil)
 			return
