@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	// TOTPSecretBytes is the size of generated TOTP secrets.
 	TOTPSecretBytes = 20
 	TOTPDigits      = 6
 	TOTPPeriod      = 30 * time.Second
@@ -40,7 +41,7 @@ func GenerateTOTP(secret string, t time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return totpForCounter(key, uint64(t.Unix()/int64(TOTPPeriod/time.Second))), nil
+	return totpForCounter(key, uint64(t.Unix()/int64(TOTPPeriod/time.Second))), nil //nolint:gosec // Unix TOTP counters are non-negative and far below uint64 limits.
 }
 
 // ValidateTOTP checks a code at now and returns the matched time-step counter.
