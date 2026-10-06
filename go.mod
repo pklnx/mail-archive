@@ -15,8 +15,8 @@ require (
 	golang.org/x/net v0.59.0
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0
+	rsc.io/qr v0.2.0
 )
-
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
