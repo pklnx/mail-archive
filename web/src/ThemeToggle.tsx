@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { currentTheme, setTheme, type Theme } from "./theme";
+import { t } from "./i18n";
 
 const icon = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
 
@@ -10,8 +11,8 @@ export function ThemeToggle() {
   return (
     <button
       type="button"
-      aria-label={`Switch to ${next} mode`}
-      title={`Switch to ${next} mode`}
+      aria-label={t.switchTheme(next)}
+      title={t.switchTheme(next)}
       className="shrink-0 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
       onClick={() => {
         setTheme(next);

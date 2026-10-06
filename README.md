@@ -81,7 +81,8 @@ The UI has three columns: accounts and folders, the message list with search,
 and the open message. Everything you select is part of the URL, so the back
 button and bookmarks work. Light and dark mode follow the system; the
 sun/moon button next to the search field overrides it (remembered per
-browser). HTML mail is shown in a sandboxed frame without
+browser). The UI speaks German or English, picked from the browser's
+language preferences (English for anything else). HTML mail is shown in a sandboxed frame without
 scripts; remote images (tracking pixels) are only loaded when you click
 "Load remote images".
 

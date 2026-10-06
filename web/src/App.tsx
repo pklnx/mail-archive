@@ -4,6 +4,7 @@ import { MessageView } from "./MessageView";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
 import { useViewState } from "./urlState";
+import { t } from "./i18n";
 
 export function App() {
   const [state, update] = useViewState();
@@ -47,7 +48,7 @@ export function App() {
         <div className="flex items-center gap-2 border-b border-zinc-200 p-2 dark:border-zinc-800">
           <button
             type="button"
-            aria-label="Show accounts and folders"
+            aria-label={t.showMenu}
             className="rounded px-2 py-1 text-lg lg:hidden"
             onClick={() => setMenuOpen(true)}
           >
@@ -55,8 +56,8 @@ export function App() {
           </button>
           <input
             type="search"
-            aria-label="Search mail"
-            placeholder={state.account ? `Search in ${state.folder || state.account}` : "Search all mail"}
+            aria-label={t.searchMail}
+            placeholder={state.account ? t.searchIn(state.folder || state.account) : t.searchAll}
             className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -82,14 +83,14 @@ export function App() {
         {reading ? (
           <>
             <button type="button" className="p-2 text-left text-sm text-blue-600 md:hidden" onClick={() => update({ m: "" })}>
-              ← Back
+              {t.back}
             </button>
             <div className="min-h-0 flex-1">
               <MessageView id={state.m} />
             </div>
           </>
         ) : (
-          <p className="m-auto text-sm text-zinc-500">Select a message to read it.</p>
+          <p className="m-auto text-sm text-zinc-500">{t.selectMessage}</p>
         )}
       </main>
     </div>

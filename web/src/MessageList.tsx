@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listMessages, type Filter, type MessageSummary } from "./api";
 import { senderName, shortDate } from "./format";
 import { Highlight } from "./Highlight";
+import { t } from "./i18n";
 
 interface Props {
   filter: Filter;
@@ -70,7 +71,7 @@ export function MessageList({ filter, selected, open }: Props) {
   }, [list.cursor, list.done, list.loading, list.error, load]);
 
   return (
-    <ul aria-label="Messages" className="h-full overflow-y-auto">
+    <ul aria-label={t.messages} className="h-full overflow-y-auto">
       {list.items.map((m) => {
         const on = m.id === selected;
         return (
@@ -89,7 +90,7 @@ export function MessageList({ filter, selected, open }: Props) {
                   {shortDate(m.sentAt ?? m.sortAt)}
                 </time>
               </div>
-              <div className="truncate text-sm">{m.subject || "(no subject)"}</div>
+              <div className="truncate text-sm">{m.subject || t.noSubject}</div>
               {m.snippet && (
                 <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">
                   <Highlight text={m.snippet} />
@@ -101,16 +102,16 @@ export function MessageList({ filter, selected, open }: Props) {
       })}
       {list.error && (
         <li className="p-4 text-sm text-red-600">
-          Could not load messages: {list.error}{" "}
+          {t.loadMessagesFailed(list.error)}{" "}
           <button type="button" className="underline" onClick={() => load(list.cursor, generation.current)}>
-            Retry
+            {t.retry}
           </button>
         </li>
       )}
       {!list.loading && !list.error && list.items.length === 0 && (
-        <li className="p-4 text-sm text-zinc-500">{filter.q ? "No messages match your search." : "No messages."}</li>
+        <li className="p-4 text-sm text-zinc-500">{filter.q ? t.noMatches : t.noMessages}</li>
       )}
-      {list.loading && <li className="p-4 text-sm text-zinc-500">Loading…</li>}
+      {list.loading && <li className="p-4 text-sm text-zinc-500">{t.loading}</li>}
       {!list.done && <li ref={sentinel} aria-hidden className="h-px" />}
     </ul>
   );
