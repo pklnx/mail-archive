@@ -561,7 +561,8 @@ func newAccountRenameCmd() *cobra.Command {
 			if err := archive.ValidateAccountName(args[1]); err != nil {
 				return err
 			}
-			a, acc, err := loadAccount(cmd, args[0])
+			// Loaded first for its checks (exists, not removed, --user).
+			a, _, err := loadAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -575,7 +576,8 @@ func newAccountRenameCmd() *cobra.Command {
 			if _, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer); err != nil {
 				return err
 			}
-			if acc, err = findAccount(cmd, a, args[0]); err != nil {
+			acc, err := findAccount(cmd, a, args[0]) // after the upgrade: new version
+			if err != nil {
 				return err
 			}
 			if err := updateAccount(cmd, a, acc, store.AccountChange{Name: &args[1]}); err != nil {
