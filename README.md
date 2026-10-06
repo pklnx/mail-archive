@@ -27,7 +27,7 @@ copy**: the servers are never modified.
   metadata lives in PostgreSQL.
 - **Full-text search** over subject, sender and body, with German and English
   stemming.
-- **Web UI** to browse, search and read mail, manage accounts and start syncs.
+- **Web UI** with login to browse, search and read mail, manage accounts and start syncs.
   Syncs also run on a schedule. Light and dark mode, German and English.
 - **Docker Compose** setup with images for amd64 and arm64 (Apple Silicon).
 - Works with mail.de, GMX, WEB.DE, Gmail, iCloud and any standard IMAP server.
@@ -38,13 +38,14 @@ copy**: the servers are never modified.
 git clone https://github.com/pklnx/mail-archive.git && cd mail-archive
 cp .env.example .env    # set POSTGRES_PASSWORD and MAIL_ARCHIVE_SECRET_KEY
 ./ma migrate
+./ma user add NAME --admin   # your login for the web UI
 docker compose up -d web
 ```
 
-Open <http://localhost:8080> and add an account under **Manage accounts**.
-The web UI has no login yet and is only reachable from your own computer;
-read [Security](https://pklnx.github.io/mail-archive/reference/security)
-before changing that.
+Open <http://localhost:8080>, log in and add an account under **Manage
+accounts**. The web UI is only reachable from your own computer; read
+[Security](https://pklnx.github.io/mail-archive/reference/security) before
+opening it to your network or a VPN.
 
 More in the [getting started guide](https://pklnx.github.io/mail-archive/guide/getting-started).
 

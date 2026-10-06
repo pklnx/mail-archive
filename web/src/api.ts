@@ -132,9 +132,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Dispatched on window when an API request answers 401: the session ended
+ * or was never there. The UI then shows the login page.
+ */
+export const UNAUTHORIZED_EVENT = "mail-archive:unauthorized";
+
+const sessionPath = "/api/session";
+
+async function errorFor(path: string, res: Response): Promise<ApiError> {
+  if (res.status === 401 && path !== sessionPath) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  return errorFrom(res);
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal, headers: { Accept: "application/json" } });
-  if (!res.ok) throw await errorFrom(res);
+  if (!res.ok) throw await errorFor(path, res);
   return (await res.json()) as T;
 }
 
@@ -155,7 +168,7 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T 
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) throw await errorFrom(res);
+  if (!res.ok) throw await errorFor(path, res);
   return res.status === 204 ? null : ((await res.json()) as T);
 }
 
@@ -194,3 +207,33 @@ export const messageURL = {
   raw: (id: string) => `/api/messages/${id}/raw`,
   part: (id: string, n: number) => `/api/messages/${id}/parts/${n}`,
 };
+
+export interface User {
+  name: string;
+  admin: boolean;
+}
+
+/** The login state: a user, or none and whether the first admin is missing. */
+export type SessionState = { user: User } | { user: null; setupRequired: boolean };
+
+export const sessionApi = {
+  get: async (signal?: AbortSignal): Promise<SessionState> => {
+    const res = await fetch(sessionPath, { signal, headers: { Accept: "application/json" } });
+    if (res.status === 401) {
+      const err = await errorFrom(res);
+      return { user: null, setupRequired: err.body.setupRequired === true };
+    }
+    if (!res.ok) throw await errorFrom(res);
+    return (await res.json()) as { user: User };
+  },
+  login: async (username: string, password: string): Promise<User> =>
+    (await send<{ user: User }>("POST", sessionPath, { username, password }))!.user,
+  logout: () => send("DELETE", sessionPath),
+};
+
+/** Seconds to wait after too many failed logins, from a 429 answer. */
+export function retryAfter(err: unknown): number | null {
+  if (!(err instanceof ApiError) || err.status !== 429) return null;
+  const s = err.body.retryAfter;
+  return typeof s === "number" && s > 0 ? s : 60;
+}

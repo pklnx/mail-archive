@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/pklnx/mail-archive/internal/config"
 )
 
-// The server has no login yet and is meant to listen on localhost only.
-// "Localhost only" alone does not protect it: any web page open in the
+// A login alone does not protect the server: any web page open in the
 // browser can send requests to it (CSRF), and with DNS rebinding a page can
-// even read the responses. The middleware below closes both holes:
+// even read the responses of a server on localhost. The middleware below
+// closes both holes:
 //
 //   - The Host header must be one of the allowed host names. A rebinding
 //     attack uses the attacker's domain as Host, so it is rejected.
@@ -41,6 +43,7 @@ func (s *Server) protect(next http.Handler) http.Handler {
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 
 		if !s.hostAllowed(r) {
+			s.log.Info("host not allowed; add it to "+config.EnvAllowedHosts+" if it is yours", "host", r.Host)
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
 		}

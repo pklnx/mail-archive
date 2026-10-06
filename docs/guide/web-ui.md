@@ -1,6 +1,8 @@
 # Web UI and search
 
-`docker compose up -d web` serves the UI on <http://localhost:8080>.
+`docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
+with a user created by `./ma user add`; your name and **Log out** are at the
+bottom of the sidebar.
 
 ![The three-column mail view](/screenshots/mail-light.png)
 

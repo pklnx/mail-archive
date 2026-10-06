@@ -33,10 +33,17 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web"
+)
+
+// The demo login, also used by docs/scripts/screenshots.mjs.
+const (
+	loginName     = "demo"
+	loginPassword = "demo-password" //nolint:gosec // public demo login
 )
 
 func main() {
@@ -118,10 +125,18 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		}
 	}
 
+	hash, err := auth.NewHasher(auth.DefaultParams).Hash(ctx, loginPassword)
+	if err != nil {
+		return err
+	}
+	if _, err := st.CreateUser(ctx, loginName, hash, true); err != nil {
+		return err
+	}
+
 	runner := &archive.Runner{Syncer: syncer, Interval: 6 * time.Hour}
 	go runner.Run(ctx)
 	srv := web.New(st, blobs, log, web.Options{Syncer: syncer, Runner: runner})
-	fmt.Printf("demo UI on http://%s (Ctrl-C to stop and delete the demo data)\n", listen)
+	fmt.Printf("demo UI on http://%s, log in as %q with password %q (Ctrl-C to stop and delete the demo data)\n", listen, loginName, loginPassword)
 	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

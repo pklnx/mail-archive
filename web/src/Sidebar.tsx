@@ -1,19 +1,22 @@
 import { t } from "./i18n";
 import type { AccountsState } from "./useAccounts";
 import type { ViewState } from "./urlState";
+import type { User } from "./api";
 
 interface Props {
   state: ViewState;
   accounts: AccountsState;
   select: (account: string, folder: string) => void;
   manage: () => void;
+  user: User;
+  logout: () => void;
 }
 
 const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-sm";
 const active = "bg-blue-600 text-white";
 const idle = "hover:bg-zinc-200 dark:hover:bg-zinc-800";
 
-export function Sidebar({ state, accounts, select, manage }: Props) {
+export function Sidebar({ state, accounts, select, manage, user, logout }: Props) {
   const { data, error } = accounts;
   const mail = state.view === "";
   const all = mail && !state.account && !state.folder;
@@ -73,6 +76,14 @@ export function Sidebar({ state, accounts, select, manage }: Props) {
           {t.manageAccounts}
         </span>
       </button>
+      <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-2 pt-2 text-sm dark:border-zinc-800">
+        <span className="truncate text-zinc-500" title={t.loggedInAs(user.name)}>
+          {user.name}
+        </span>
+        <button type="button" className="shrink-0 text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>
+          {t.logOut}
+        </button>
+      </div>
     </nav>
   );
 }

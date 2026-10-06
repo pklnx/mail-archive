@@ -63,7 +63,7 @@ func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, 
 		f.host, f.port = imaptest.Start(t, users...)
 	}
 	s := New(st, blobs, log, Options{AllowedHosts: []string{"127.0.0.1"}, Syncer: syncer, Runner: runner})
-	f.srv = httptest.NewServer(s.Handler())
+	f.srv = httptest.NewServer(loggedIn(t, st, s.Handler()))
 	t.Cleanup(f.srv.Close)
 	return f
 }

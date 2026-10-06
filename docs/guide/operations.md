@@ -41,6 +41,7 @@ Pull requests that change the database schema carry the label
 | When upgrading from | Run |
 |---|---|
 | A version without full-text search | `./ma reindex` once, so older messages become searchable. |
+| A version without login | `./ma user add NAME --admin` once; until then the web UI only shows how to do it. |
 
 ## Logs
 

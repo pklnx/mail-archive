@@ -13,6 +13,23 @@ With Docker Compose, run every command through the wrapper, for example
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. |
 | `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY`. |
 
+## Users
+
+Users log in to the web UI. Names are lowercase (`a-z`, `0-9`, `.`, `-`,
+`_`); `Patrick` and `patrick` are the same user. Passwords need at least 12
+characters and are prompted twice, or read once from stdin with
+`--password-stdin`.
+
+| Command | Purpose |
+|---|---|
+| `user add NAME` | Create a user. `--admin` for an admin (admins will manage users in the web UI; they do not see other users' mail). |
+| `user list` | List users with role, state and last login. |
+| `user set-password NAME` | Set a new password. Ends the user's sessions. |
+| `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
+| `user remove NAME` | Delete the user. |
+
+The last admin who can log in cannot be locked or removed.
+
 ## Accounts
 
 | Command | Purpose |

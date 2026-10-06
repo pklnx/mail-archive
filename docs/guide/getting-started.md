@@ -26,15 +26,20 @@ Edit `.env`:
   with `openssl rand -base64 32` and **back it up** (see
   [Backups](./operations#backups)).
 
-Then create the database schema and start the web server. `./ma` builds the
-image on its first run (a few minutes), `docker compose up` reuses it:
+Then create the database schema, your user for the web UI and start the web
+server. `./ma` builds the image on its first run (a few minutes),
+`docker compose up` reuses it:
 
 ```sh
 ./ma migrate
+./ma user add patrick --admin
 docker compose up -d web
 ```
 
-Open <http://localhost:8080>.
+`user add` asks for a password (at least 12 characters). Open
+<http://localhost:8080> and log in.
+
+![Login page](/screenshots/login.png)
 
 ::: tip The `./ma` wrapper
 `./ma` runs `docker compose run --rm mail-archive …`. It starts PostgreSQL
@@ -73,5 +78,7 @@ The password is prompted (or read from stdin with `--password-stdin`).
   [Syncing](./syncing) to change that or to run syncs from cron.
 - Archived messages appear in `./data` (set `ARCHIVE_DIR` in `.env` to move
   it) and in the web UI.
-- Read [Security](../reference/security) before you make the web server
-  reachable from anywhere but your own computer.
+- More people can get their own login with `./ma user add NAME`; see
+  [CLI](../reference/cli#user).
+- To use the web UI from your home network or a VPN, read
+  [Security](../reference/security#network-access) first.

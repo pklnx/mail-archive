@@ -88,9 +88,23 @@ echo "== status"
 ./ma status | tee "$work/out"
 expect "$work/out" "unique messages in archive: 3"
 
+echo "== user add"
+echo 'smoke test password' | ./ma user add smoke --admin --password-stdin | tee "$work/out"
+expect "$work/out" 'admin "smoke" created'
+
 echo "== web API"
 docker compose --progress quiet up -d --wait web
-api() { curl -fsS --retry 10 --retry-delay 1 --retry-all-errors "http://localhost:$WEB_PORT$1"; }
+base="http://localhost:$WEB_PORT"
+api() { curl -fsS --retry 10 --retry-delay 1 --retry-all-errors -b "$work/cookies" "$base$1"; }
+status=$(curl -s -o /dev/null -w '%{http_code}' --retry 10 --retry-delay 1 --retry-all-errors "$base/api/status")
+if [ "$status" != 401 ]; then
+	echo "expected 401 without a login, got $status" >&2
+	exit 1
+fi
+curl -fsS -c "$work/cookies" -X POST "$base/api/session" \
+	-H 'Content-Type: application/json' -H "Origin: $base" \
+	-d '{"username":"smoke","password":"smoke test password"}' > "$work/out"
+expect "$work/out" '"name":"smoke"'
 api "/api/messages?q=Smoke" > "$work/out"
 expect "$work/out" '"subject":"Smoke test 1"'
 if [ "$(grep -o '"id":' "$work/out" | wc -l | tr -d ' ')" -ne 3 ]; then

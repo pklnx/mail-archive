@@ -656,9 +656,12 @@ func newServeCmd() *cobra.Command {
 		Long: `Run the web server: the UI, the JSON API and the sync schedule
 (` + config.EnvSyncInterval + `, default 6h).
 
-There is no login yet, so it listens on localhost by default. Requests are only accepted with a Host header listed in
+Everything except the login page needs a login; create users with
+"user add". Requests are only accepted with a Host header listed in
 ` + config.EnvAllowedHosts + ` (default: localhost, 127.0.0.1, ::1), which blocks DNS
-rebinding; state-changing requests must come from the same origin.`,
+rebinding; state-changing requests must come from the same origin. Use HTTPS
+(a reverse proxy or tailscale serve) when the server is reachable from a
+network.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -689,6 +692,11 @@ rebinding; state-changing requests must come from the same origin.`,
 				} else {
 					log.Info("sync schedule off")
 				}
+			}
+			if n, err := a.store.CountUsers(cmd.Context()); err != nil {
+				return err
+			} else if n == 0 {
+				log.Warn("no users yet; the web UI shows how to create the first admin", "command", commandName()+" user add NAME --admin")
 			}
 			srv := web.New(a.store, blobs, log, opts)
 			log.Info("listening", "addr", listen)

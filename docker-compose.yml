@@ -3,6 +3,7 @@
 #   ./ma migrate                      # wrapper around `docker compose run`
 #   ./ma account add ...
 #   ./ma sync
+#   ./ma user add NAME --admin        # first login for the web UI
 #   docker compose up -d web          # web UI on http://localhost:8080 (image built by ./ma)
 #
 # Both images are multi-arch (amd64 and arm64, e.g. Apple Silicon).
@@ -31,7 +32,8 @@ services:
       timeout: 5s
       retries: 10
 
-  # Web server (JSON API). No login yet: reachable from this machine only.
+  # Web server (UI and JSON API, login required). Reachable from this machine
+  # only unless WEB_BIND is set; see docs/reference/security.md.
   # Start or update with: ./ma migrate && docker compose up -d web
   web:
     build:
@@ -48,13 +50,14 @@ services:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
-      MAIL_ARCHIVE_ALLOWED_HOSTS: localhost,127.0.0.1
+      MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}
       # How often each enabled account is synced; 0 turns the schedule off.
       MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:
-      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+      # WEB_BIND=0.0.0.0 (or a LAN or Tailscale address) opens it to a network.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
 
   mail-archive:
     build:
