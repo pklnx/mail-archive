@@ -278,8 +278,9 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		valid := false
 		counter, ok, err := auth.ValidateTOTP(string(secret), code, now)
 		if err != nil { return err }
-		if ok && (u.TwoFactorLastCount == nil || int64(counter) > *u.TwoFactorLastCount /*nolint:gosec // TOTP counters are bounded Unix time-step values.*/) {
-			n, err := q.AcceptTwoFactorCounter(ctx, u.ID, last) //nolint:gosec // TOTP counters are bounded Unix time-step values.
+		last, counterOK := counterToInt64(counter)
+		if ok && counterOK && (u.TwoFactorLastCount == nil || last > *u.TwoFactorLastCount) {
+			n, err := q.AcceptTwoFactorCounter(ctx, u.ID, last)
 			if err != nil { return err }
 			valid = n == 1
 		}
