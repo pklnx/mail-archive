@@ -1,6 +1,8 @@
-const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-const timeFmt = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
-const fullFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" });
+import { locale, t } from "./i18n";
+
+const dateFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium" });
+const timeFmt = new Intl.DateTimeFormat(locale, { timeStyle: "short" });
+const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "short" });
 
 /** Short date for lists: time for today, otherwise the date. */
 export function shortDate(iso: string | null, now = new Date()): string {
@@ -27,13 +29,14 @@ export function fileSize(bytes: number): string {
     v /= 1024;
     i++;
   }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+  const digits = v < 10 ? 1 : 0;
+  return `${v.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false })} ${units[i]}`;
 }
 
 /** The display name of an address like `"Jane Doe" <jane@x>`. */
 export function senderName(from: string): string {
   const m = /^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/.exec(from);
-  return (m?.[1] ?? from).trim() || "(unknown sender)";
+  return (m?.[1] ?? from).trim() || t.unknownSender;
 }
 
 export type Segment = { text: string; match: boolean };

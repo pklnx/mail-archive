@@ -2,11 +2,12 @@ import { useState } from "react";
 import { getMessage, messageURL, type MessageDetail } from "./api";
 import { fileSize, longDate } from "./format";
 import { useAsync } from "./useAsync";
+import { t } from "./i18n";
 
 export function MessageView({ id }: { id: string }) {
   const res = useAsync((signal) => getMessage(id, signal), [id]);
-  if (res.status === "loading") return <p className="p-6 text-sm text-zinc-500">Loading…</p>;
-  if (res.status === "error") return <p className="p-6 text-sm text-red-600">Could not load message: {res.error.message}</p>;
+  if (res.status === "loading") return <p className="p-6 text-sm text-zinc-500">{t.loading}</p>;
+  if (res.status === "error") return <p className="p-6 text-sm text-red-600">{t.loadMessageFailed(res.error.message)}</p>;
   // key: reset view options (HTML/text, images) for each message.
   return <Message key={id} msg={res.data} />;
 }
@@ -19,25 +20,25 @@ function Message({ msg }: { msg: MessageDetail }) {
   return (
     <article className="flex h-full flex-col">
       <header className="border-b border-zinc-200 p-4 dark:border-zinc-800">
-        <h1 className="text-lg font-semibold break-words">{msg.subject || "(no subject)"}</h1>
+        <h1 className="text-lg font-semibold break-words">{msg.subject || t.noSubject}</h1>
         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
-          <dt className="text-zinc-500">From</dt>
+          <dt className="text-zinc-500">{t.from}</dt>
           <dd className="break-words">{msg.from}</dd>
           {msg.to && (
             <>
-              <dt className="text-zinc-500">To</dt>
+              <dt className="text-zinc-500">{t.to}</dt>
               <dd className="break-words">{msg.to}</dd>
             </>
           )}
           {msg.cc && (
             <>
-              <dt className="text-zinc-500">Cc</dt>
+              <dt className="text-zinc-500">{t.cc}</dt>
               <dd className="break-words">{msg.cc}</dd>
             </>
           )}
-          <dt className="text-zinc-500">Date</dt>
+          <dt className="text-zinc-500">{t.date}</dt>
           <dd>{longDate(msg.sentAt) || msg.dateHeader}</dd>
-          <dt className="text-zinc-500">Found in</dt>
+          <dt className="text-zinc-500">{t.foundIn}</dt>
           <dd className="flex flex-wrap gap-1">
             {msg.locations.map((l) => (
               <span
@@ -52,25 +53,25 @@ function Message({ msg }: { msg: MessageDetail }) {
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           {msg.hasHtml && (
             <button type="button" className="rounded border border-zinc-300 px-2 py-0.5 dark:border-zinc-700" onClick={() => setShowHTML(!showHTML)}>
-              {showHTML ? "Show text" : "Show HTML"}
+              {showHTML ? t.showText : t.showHTML}
             </button>
           )}
           {msg.hasHtml && showHTML && !images && (
             <button
               type="button"
               className="rounded border border-zinc-300 px-2 py-0.5 dark:border-zinc-700"
-              title="Remote images can tell the sender that you opened this message."
+              title={t.remoteImagesHint}
               onClick={() => setImages(true)}
             >
-              Load remote images
+              {t.loadRemoteImages}
             </button>
           )}
           <a className="text-blue-600 hover:underline dark:text-blue-400" href={messageURL.raw(msg.id)} download>
-            Download .eml
+            {t.downloadEml}
           </a>
         </div>
         {attachments.length > 0 && (
-          <ul aria-label="Attachments" className="mt-3 flex flex-wrap gap-2">
+          <ul aria-label={t.attachments} className="mt-3 flex flex-wrap gap-2">
             {attachments.map((p) => (
               <li key={p.index}>
                 <a
@@ -78,14 +79,14 @@ function Message({ msg }: { msg: MessageDetail }) {
                   download={p.filename || undefined}
                   className="inline-flex items-center gap-1 rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
                 >
-                  📎 <span className="max-w-60 truncate">{p.filename || `part ${p.index}`}</span>
+                  📎 <span className="max-w-60 truncate">{p.filename || t.part(p.index)}</span>
                   <span className="text-zinc-500">{fileSize(p.size)}</span>
                 </a>
               </li>
             ))}
           </ul>
         )}
-        {msg.truncated && <p className="mt-2 text-xs text-amber-700">This message is very large; the preview is shortened.</p>}
+        {msg.truncated && <p className="mt-2 text-xs text-amber-700">{t.truncated}</p>}
       </header>
       {msg.hasHtml && showHTML ? (
         // No allow-scripts and no allow-same-origin: the mail's HTML runs with
@@ -95,7 +96,7 @@ function Message({ msg }: { msg: MessageDetail }) {
           // A new element per mode: changing src would add a browser history
           // entry, so Back would toggle images instead of leaving the message.
           key={images ? "with-images" : "no-images"}
-          title="Message content"
+          title={t.messageContent}
           className="min-h-0 w-full flex-1 bg-white"
           sandbox="allow-popups allow-popups-to-escape-sandbox"
           referrerPolicy="no-referrer"
