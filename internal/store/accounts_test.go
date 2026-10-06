@@ -151,3 +151,38 @@ func TestSyncRunProgressAndStaleRuns(t *testing.T) {
 		t.Fatalf("stale run: %s %q", status, msg)
 	}
 }
+
+func TestRenameAccount(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	a := createAccount(t, st, "old")
+	createAccount(t, st, "taken")
+	gone := createAccount(t, st, "gone")
+	folder, err := st.GetOrCreateFolder(ctx, gone.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := store.MessageMeta{SHA256: strings.Repeat("b", 64), Size: 1, StoredPath: "p"}
+	if _, err := st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{meta}, []store.Location{{FolderID: folder.ID, UIDValidity: 1, UID: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteOrRemoveAccount(ctx, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.RenameAccount(ctx, a.ID, "new", []byte{9}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetAccountByName(ctx, "new")
+	if err != nil || got.ID != a.ID || string(got.PasswordEnc) != "\x09" {
+		t.Fatalf("renamed account: %+v, %v", got, err)
+	}
+	for _, name := range []string{"taken", "gone"} {
+		if err := st.RenameAccount(ctx, a.ID, name, []byte{9}); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("rename to %q: %v, want ErrConflict", name, err)
+		}
+	}
+	if err := st.RenameAccount(ctx, gone.ID, "revived", []byte{9}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("rename removed account: %v, want ErrNotFound", err)
+	}
+}

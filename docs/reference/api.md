@@ -53,7 +53,7 @@ U+E001 (end).
 |---|---|
 | `GET /api/accounts` | All accounts with server settings (never the password), folders with message counts, and the sync state. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. |
-| `PATCH /api/accounts/{name}` | Change some fields. A new connection or password is checked with a login first. |
+| `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. A new connection or password is checked with a login first; if that fails, nothing changes. Renaming answers `409` while the account is being synced or when the name is taken. |
 | `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. |
 | `GET /api/accounts/{name}/server-folders` | The account's folders, live from the IMAP server: `name`, `specialUse` (role) and `selected`. |
 
@@ -72,7 +72,7 @@ Body of `POST` and `PATCH` (in a `PATCH`, missing fields keep their value):
 }
 ```
 
-`name` is only accepted when creating. `excludedFolders` replaces the folder
+`name` renames the account in a `PATCH`. `excludedFolders` replaces the folder
 selection: everything except these folders is archived.
 
 Each account in `GET /api/accounts` has a `sync` object:

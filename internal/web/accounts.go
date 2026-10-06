@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -174,22 +173,6 @@ func (s *Server) requireManage(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// validAccountName rejects names that would not work in URLs or logs.
-func validAccountName(name string) error {
-	if name == "" || len(name) > 64 {
-		return errors.New("name must be 1 to 64 characters")
-	}
-	if strings.TrimSpace(name) != name {
-		return errors.New("name must not start or end with spaces")
-	}
-	for _, c := range name {
-		if c == '/' || unicode.IsControl(c) {
-			return errors.New("name must not contain slashes or control characters")
-		}
-	}
-	return nil
-}
-
 // applyConnection copies connection fields from in to a and validates them.
 func applyConnection(a *store.Account, in *accountInput) error {
 	if in.Host != nil {
@@ -251,7 +234,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if in.Name != nil {
 		a.Name = *in.Name
 	}
-	if err := validAccountName(a.Name); err != nil {
+	if err := archive.ValidateAccountName(a.Name); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
@@ -316,20 +299,26 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Name != nil {
-		s.fail(w, r, http.StatusBadRequest, "accounts cannot be renamed", nil)
-		return
+		if err := archive.ValidateAccountName(*in.Name); err != nil {
+			s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+			return
+		}
 	}
 	a, ok := s.pathAccount(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
+
+	// Check a new connection before changing anything, so a failed login
+	// leaves the account as it was (also when it is renamed in the same
+	// request).
+	var password string
 	if in.changesConnection() {
 		if err := applyConnection(a, &in); err != nil {
 			s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 			return
 		}
-		var password string
 		if in.Password != nil {
 			if *in.Password == "" {
 				s.fail(w, r, http.StatusBadRequest, "password must not be empty", nil)
@@ -344,10 +333,39 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			password = string(pw)
 		}
-		if status, msg := s.checkAndSeal(ctx, a, password); status != 0 {
-			s.fail(w, r, status, msg, nil)
+		if _, err := s.syncer.CheckLogin(ctx, a, password); err != nil {
+			s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
 			return
 		}
+	}
+
+	if in.Name != nil && *in.Name != a.Name {
+		oldName := a.Name
+		err := archive.RenameAccount(ctx, s.store, s.syncer.Sealer, a, *in.Name)
+		switch {
+		case errors.Is(err, archive.ErrSyncRunning):
+			s.fail(w, r, http.StatusConflict, "the account is being synced; try again when the sync has finished", nil)
+			return
+		case errors.Is(err, store.ErrConflict):
+			s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
+			return
+		case errors.Is(err, store.ErrNotFound):
+			s.failStore(w, r, err)
+			return
+		case err != nil:
+			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
+			return
+		}
+		s.log.Info("account renamed", "from", oldName, "to", a.Name)
+	}
+
+	if in.changesConnection() {
+		enc, err := s.syncer.Sealer.Seal([]byte(password), archive.PasswordContext(a.Name))
+		if err != nil {
+			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
+			return
+		}
+		a.PasswordEnc = enc
 		if err := s.store.UpdateConnection(ctx, a); err != nil {
 			s.failStore(w, r, err)
 			return

@@ -190,7 +190,6 @@ func TestUpdateAccount(t *testing.T) {
 	// A wrong new password is rejected and the old one stays.
 	f.do("PATCH", "/api/accounts/private", map[string]any{"password": "wrong"}, http.StatusUnprocessableEntity)
 	f.do("PATCH", "/api/accounts/private", map[string]any{"username": "alice"}, http.StatusNoContent)
-	f.do("PATCH", "/api/accounts/private", map[string]any{"name": "other"}, http.StatusBadRequest)
 	f.do("PATCH", "/api/accounts/missing", map[string]any{"enabled": true}, http.StatusNotFound)
 
 	// Manual sync also works for a disabled account.
@@ -255,4 +254,32 @@ func TestManagementNeedsSecretKey(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
+}
+
+func TestRenameAccountAPI(t *testing.T) {
+	f := newManageFixture(t, testUser(t))
+	f.do("POST", "/api/accounts", f.newAccount("alice@example.com", "alice", "secret"), http.StatusCreated)
+	f.waitIdle("alice@example.com")
+	f.do("POST", "/api/accounts", map[string]any{
+		"name": "taken", "host": f.host, "port": f.port, "tls": "none", "username": "alice", "password": "secret", "enabled": false,
+	}, http.StatusCreated)
+
+	f.do("PATCH", "/api/accounts/alice@example.com", map[string]any{"name": "a/b"}, http.StatusBadRequest)
+	f.do("PATCH", "/api/accounts/alice@example.com", map[string]any{"name": "taken"}, http.StatusConflict)
+	// A failed login in the same request leaves the name unchanged.
+	f.do("PATCH", "/api/accounts/alice@example.com", map[string]any{"name": "example", "password": "wrong"}, http.StatusUnprocessableEntity)
+	f.account("alice@example.com")
+
+	f.do("PATCH", "/api/accounts/alice@example.com", map[string]any{"name": "example"}, http.StatusNoContent)
+	a := f.account("example")
+	if len(a.Folders) != 2 || a.Folders[0].Messages+a.Folders[1].Messages != 2 {
+		t.Fatalf("renamed account lost its mail: %+v", a.Folders)
+	}
+	// The re-encrypted password still works: a sync and a connection check succeed.
+	f.do("POST", "/api/accounts/example/sync", nil, http.StatusAccepted)
+	if run := f.waitIdle("example").Sync.LastRun; run.Status != "ok" {
+		t.Fatalf("sync after rename: %+v", run)
+	}
+	f.do("PATCH", "/api/accounts/example", map[string]any{"username": "alice"}, http.StatusNoContent)
+	f.do("PATCH", "/api/accounts/alice@example.com", map[string]any{"enabled": true}, http.StatusNotFound)
 }

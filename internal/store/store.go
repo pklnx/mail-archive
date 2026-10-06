@@ -237,6 +237,19 @@ func (s *Store) UpdateConnection(ctx context.Context, a *Account) error {
 	}))
 }
 
+// RenameAccount changes an account's name together with its password,
+// which must already be encrypted for the new name. It fails with
+// ErrConflict if the name is taken (also by a removed account) and with
+// ErrNotFound for removed accounts.
+func (s *Store) RenameAccount(ctx context.Context, id int64, name string, passwordEnc []byte) error {
+	err := one(s.q.RenameAccount(ctx, db.RenameAccountParams{ID: id, Name: name, PasswordEnc: passwordEnc}))
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return fmt.Errorf("account %q: %w", name, ErrConflict)
+	}
+	return err
+}
+
 // RemoveResult tells how DeleteOrRemoveAccount handled an account.
 type RemoveResult string
 

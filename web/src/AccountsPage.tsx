@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { accountsApi, type Account, type AccountInput, type ServerFolder, type TLSMode } from "./api";
+import { suggestName } from "./accountName";
 import { formatCount, formatInterval, relativeTime } from "./format";
 import { t } from "./i18n";
 import type { AccountsState } from "./useAccounts";
@@ -15,9 +16,11 @@ type Editing = { mode: "new" } | { mode: "edit"; name: string } | null;
 interface Props {
   accounts: AccountsState;
   close: () => void;
+  /** Called after an account got a new name, to update links to it. */
+  renamed: (from: string, to: string) => void;
 }
 
-export function AccountsPage({ accounts, close }: Props) {
+export function AccountsPage({ accounts, close, renamed }: Props) {
   const { data, error, reload } = accounts;
   const [editing, setEditing] = useState<Editing>(null);
   const [actionError, setActionError] = useState("");
@@ -86,8 +89,9 @@ export function AccountsPage({ accounts, close }: Props) {
               <AccountForm
                 account={a}
                 onCancel={() => setEditing(null)}
-                onSaved={() => {
+                onSaved={(name) => {
                   setEditing(null);
+                  if (name !== a.name) renamed(a.name, name);
                   reload();
                 }}
               />
@@ -206,11 +210,15 @@ interface FormProps {
   /** Editing an existing account; otherwise a new one. */
   account?: Account;
   onCancel: () => void;
-  onSaved: () => void;
+  /** Called with the saved account's name. */
+  onSaved: (name: string) => void;
 }
 
 function AccountForm({ account, onCancel, onSaved }: FormProps) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(account?.name ?? "");
+  // Until the user types a name, a new account gets one suggested from the
+  // login or the server.
+  const [nameTouched, setNameTouched] = useState(!!account);
   const [host, setHost] = useState(account?.host ?? "");
   const [tls, setTLS] = useState<TLSMode>(account?.tls ?? "tls");
   const [port, setPort] = useState(account && account.port !== defaultPort[account.tls] ? String(account.port) : "");
@@ -220,16 +228,19 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
   const [error, setError] = useState("");
   const hintId = useId();
 
+  const shownName = nameTouched ? name : suggestName(username, host);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError("");
     const body: AccountInput = { host: host.trim(), tls, port: port ? Number(port) : defaultPort[tls], username: username.trim() };
     if (password) body.password = password;
+    const newName = shownName.trim();
     try {
-      if (account) await accountsApi.update(account.name, body);
-      else await accountsApi.create({ ...body, name: name.trim() });
-      onSaved();
+      if (account) await accountsApi.update(account.name, newName !== account.name ? { ...body, name: newName } : body);
+      else await accountsApi.create({ ...body, name: newName });
+      onSaved(newName);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
@@ -240,25 +251,26 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
   return (
     <form onSubmit={submit} className={account ? "flex flex-col gap-3" : "flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"}>
       <h2 className="font-semibold">{account ? account.name : t.addAccount}</h2>
-      {!account && (
-        <div className={field}>
-          <label className={field}>
-            {t.fieldName}
-            <input
-              className={input}
-              required
-              maxLength={64}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="privat"
-              aria-describedby={`${hintId}-name`}
-            />
-          </label>
-          <span id={`${hintId}-name`} className="text-xs text-zinc-500">
-            {t.nameHint}
-          </span>
-        </div>
-      )}
+      <div className={field}>
+        <label className={field}>
+          {t.fieldName}
+          <input
+            className={input}
+            required
+            maxLength={64}
+            value={shownName}
+            onChange={(e) => {
+              setNameTouched(true);
+              setName(e.target.value);
+            }}
+            placeholder="private"
+            aria-describedby={`${hintId}-name`}
+          />
+        </label>
+        <span id={`${hintId}-name`} className="text-xs text-zinc-500">
+          {t.nameHint}
+        </span>
+      </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_9rem_7rem]">
         <label className={field}>
           {t.fieldHost}
