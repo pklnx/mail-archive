@@ -21,6 +21,7 @@ With Docker Compose, run every command through the wrapper, for example
 | `account list` | List accounts with server, user, state (enabled, disabled, removed) and folder filters. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the folder filters with `--include` and `--exclude`. No flags: archive all folders. |
+| `account rename NAME NEW-NAME` | Rename the account; its mail moves with it. Refused while the account is being synced. |
 | `account set-password NAME` | Replace the stored password (`--password-stdin` to read it from stdin). |
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. |
 | `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). |

@@ -173,6 +173,7 @@ func newAccountCmd() *cobra.Command {
 		newAccountFoldersCmd(),
 		newAccountSetFoldersCmd(),
 		newAccountSetPasswordCmd(),
+		newAccountRenameCmd(),
 		newAccountEnableCmd(true),
 		newAccountEnableCmd(false),
 		newAccountRemoveCmd(),
@@ -509,6 +510,35 @@ func newAccountSetPasswordCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin")
 	return cmd
+}
+
+func newAccountRenameCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rename NAME NEW-NAME",
+		Short: "Rename an account (its archived mail moves with it)",
+		Long: `Rename an account. The stored password is encrypted again for the new name.
+Not possible while the account is being synced.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, acc, err := loadAccount(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			sealer, err := a.cfg.Sealer()
+			if err != nil {
+				return err
+			}
+			if err := archive.RenameAccount(cmd.Context(), a.store, sealer, acc, args[1]); err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					return fmt.Errorf("an account named %q already exists (removed accounts keep their name)", args[1])
+				}
+				return err
+			}
+			fmt.Printf("account %q renamed to %q\n", args[0], acc.Name)
+			return nil
+		},
+	}
 }
 
 func newAccountEnableCmd(enable bool) *cobra.Command {

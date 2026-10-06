@@ -9,7 +9,7 @@ encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`.
 
 | Field | Notes |
 |---|---|
-| Name | Shown in the archive, for example `personal`. Cannot be changed later. |
+| Name | Shown in the archive and used in commands (`./ma sync --account NAME`). Suggested from the login's domain (`me@pklnx.space` → `pklnx`) or the server until you type your own. Can be changed later. |
 | IMAP server | Host name, see [Providers](#providers). |
 | Connection security | `TLS` (port 993) for almost every provider. `STARTTLS` uses port 143. `None` is for local tests only. |
 | Port | Leave empty for the default of the chosen security. |
@@ -78,12 +78,23 @@ deselect the folder later.
 
 ## Changing an account
 
-In the web UI, **Edit** changes the server, port, security, user name and
-password. Leave the password empty to keep the current one. Any change to the
+In the web UI, **Edit** changes the name, server, port, security, user name
+and password. Leave the password empty to keep the current one. Any change to the
 connection is checked with a real login before it is saved. On the command
 line, use `./ma account set-password NAME`.
 
-The account name cannot be changed: the encrypted password is bound to it.
+### Renaming
+
+Change the name in the edit form, or on the command line:
+
+```sh
+./ma account rename postmaster@pklnx.space pklnx
+```
+
+The archived mail moves with the account. The stored password is encrypted
+again for the new name, so renaming is refused while the account is being
+synced; try again when the sync has finished. Names of removed accounts stay
+taken, and removed accounts cannot be renamed.
 
 ## Disabling and removing
 

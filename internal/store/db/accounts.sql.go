@@ -187,6 +187,26 @@ func (q *Queries) RemoveAccount(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const renameAccount = `-- name: RenameAccount :execrows
+UPDATE accounts SET name = $2, password_enc = $3, updated_at = now()
+WHERE id = $1 AND removed_at IS NULL
+`
+
+type RenameAccountParams struct {
+	ID          int64
+	Name        string
+	PasswordEnc []byte
+}
+
+// The password is encrypted with the account name as context, so it changes too.
+func (q *Queries) RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameAccount, arg.ID, arg.Name, arg.PasswordEnc)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setAccountEnabled = `-- name: SetAccountEnabled :execrows
 UPDATE accounts SET enabled = $2, updated_at = now() WHERE id = $1 AND removed_at IS NULL
 `

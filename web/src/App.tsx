@@ -54,7 +54,13 @@ export function App() {
 
       {state.view === "accounts" ? (
         <main className="min-h-0 md:col-span-2">
-          <AccountsPage accounts={accounts} close={() => update({ view: "" })} />
+          <AccountsPage
+            accounts={accounts}
+            close={() => update({ view: "" })}
+            renamed={(from, to) => {
+              if (state.account === from) update({ account: to }, { replace: true });
+            }}
+          />
         </main>
       ) : (
         <>
