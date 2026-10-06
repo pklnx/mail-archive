@@ -9,6 +9,7 @@
 | Your mail servers | Only read: `EXAMINE` and `BODY.PEEK[]`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
+| TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 
 ## Login
 
@@ -27,6 +28,7 @@ page code (`/`, `/assets/`) is public; it contains no data.
   browser only gets a random token in an `HttpOnly`, `SameSite=Strict` cookie;
   the database stores its SHA-256, so a database copy contains no usable
   sessions.
+- **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes.
 - **Failed logins:** after 5 failures for a user name within 15 minutes, the
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
   further failure. 20 failures from one address within 15 minutes block that
