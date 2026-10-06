@@ -157,7 +157,7 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.checkTwoFactorLimiter(w, r, key) { return }
 	token, user, err := s.store.CompleteTwoFactorLogin(r.Context(), in.Challenge, strings.TrimSpace(in.Code), s.now(), s.sealer, s.secretKey, s.now().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
 	if err != nil {
-		if err == store.ErrTwoFactorInvalid || err == store.ErrTwoFactorReplay {
+		if errors.Is(err, store.ErrTwoFactorInvalid) || errors.Is(err, store.ErrTwoFactorReplay) {
 			// Use a stable key derived from the challenge rather than exposing
 			// whether the user exists.
 			s.limiter.Fail(u.Name, clientAddr(r))
