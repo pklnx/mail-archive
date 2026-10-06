@@ -20,6 +20,7 @@ type adminUserJSON struct {
 	Admin              bool       `json:"admin"`
 	Locked             bool       `json:"locked"`
 	MustChangePassword bool       `json:"mustChangePassword"`
+	TwoFactorEnabled   bool       `json:"twoFactorEnabled"`
 	Accounts           int64      `json:"accounts"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	LastLoginAt        *time.Time `json:"lastLoginAt"`
