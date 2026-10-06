@@ -29,7 +29,9 @@ deduplicated archive. It is a **read-only copy**: the servers are never modified
 - **Full-text search** in PostgreSQL over subject, sender and body, with
   German and English word stemming ("Rechnungen" finds "Rechnung").
 - **Web UI** (`serve`) for browsing, searching and reading archived mail,
-  with a JSON API underneath. Light and dark mode, works on phones.
+  managing accounts and starting syncs, with a JSON API underneath. Syncs
+  also run on a schedule. Light and dark mode, German and English, works on
+  phones.
 
 ## Quick start (Docker Compose)
 
@@ -50,7 +52,9 @@ starts PostgreSQL when needed, rebuilds the image after code changes (about a
 second when nothing changed) and hides Docker Compose's progress messages.
 Every command below also works as `docker compose run --rm mail-archive …`.
 
-Add accounts. The password is prompted and the login is checked before saving:
+Add accounts, either in the web UI (see below: "Manage accounts" at the
+bottom of the sidebar) or on the command line. The password is prompted and
+the login is checked before saving:
 
 ```sh
 ./ma account add private --host imap.mail.de --username me@mail.de
@@ -85,6 +89,11 @@ browser). The UI speaks German or English, picked from the browser's
 language preferences (English for anything else). HTML mail is shown in a sandboxed frame without
 scripts; remote images (tracking pixels) are only loaded when you click
 "Load remote images".
+
+"Manage accounts" at the bottom of the sidebar opens the account page: add
+accounts, change their server settings or password, choose folders, start a
+sync for one or all accounts, disable or remove accounts. Each account shows
+whether it is waiting, syncing (with live counts) or when it last synced.
 
 There is no login yet, so the server is only reachable from this machine
 (Compose publishes it on `127.0.0.1`). It also rejects requests whose `Host`
@@ -336,7 +345,6 @@ internal/config      environment configuration
 
 ## Roadmap
 
-- Account management and sync in the web UI (the API exists).
 - Login through any OpenID Connect provider, so the UI can be reachable from
   other devices.
 
