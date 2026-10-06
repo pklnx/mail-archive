@@ -12,6 +12,12 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
+var (
+	ErrTwoFactorInvalid = errors.New("invalid two-factor code")
+	ErrTwoFactorReplay = errors.New("two-factor code already used")
+	ErrTwoFactorExpired = errors.New("two-factor challenge expired")
+)
+
 type TwoFactorState struct {
 	Enabled       bool
 	Secret        string
@@ -20,12 +26,13 @@ type TwoFactorState struct {
 	Version       int64
 	IsAdmin       bool
 	MustChange    bool
+	Locked         bool
 }
 
 func twoFactorState(r db.TwoFactorUser, sealer *crypto.Sealer) (*TwoFactorState, error) {
 	out := &TwoFactorState{
 		Enabled: r.TwoFactorEnabled, Version: r.TwoFactorVersion,
-		IsAdmin: r.IsAdmin, MustChange: r.MustChangePassword,
+		IsAdmin: r.IsAdmin, MustChange: r.MustChangePassword, Locked: r.LockedAt != nil,
 	}
 	if len(r.TwoFactorSecret) > 0 {
 		b, err := sealer.Open(r.TwoFactorSecret, []byte("totp-secret:user:"+itoa(r.ID)))
@@ -166,4 +173,159 @@ func itoa(n int64) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+
+func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, recovery []string, key []byte) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		u, err := q.LockTwoFactorUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if u.LockedAt != nil || len(u.TwoFactorPending) == 0 {
+			return ErrTwoFactorInvalid
+		}
+		secret, err := sealer.Open(u.TwoFactorPending, []byte("totp-secret:user:"+itoa(id)+":pending"))
+		if err != nil {
+			return err
+		}
+		counter, ok := auth.ValidateTOTP(string(secret), now)
+		if !ok {
+			return ErrTwoFactorInvalid
+		}
+		enc, err := sealer.Seal(secret, []byte("totp-secret:user:"+itoa(id)))
+		if err != nil {
+			return err
+		}
+		if err := q.EnableTwoFactor(ctx, id, enc, counter); err != nil {
+			return err
+		}
+		if err := q.DeleteRecoveryCodes(ctx, id); err != nil {
+			return err
+		}
+		for _, rc := range recovery {
+			if err := q.InsertRecoveryCode(ctx, id, auth.RecoveryCodeHash(key, rc)); err != nil {
+				return err
+			}
+		}
+		return q.DeleteUserTwoFactorChallenges(ctx, id)
+	})
+}
+
+func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, key []byte) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		u, err := q.LockTwoFactorUser(ctx, id)
+		if err != nil {
+			return err
+		}
+		if u.LockedAt != nil || !u.TwoFactorEnabled || len(u.TwoFactorSecret) == 0 {
+			return ErrTwoFactorInvalid
+		}
+		secret, err := sealer.Open(u.TwoFactorSecret, []byte("totp-secret:user:"+itoa(id)))
+		if err != nil {
+			return err
+		}
+		if counter, ok := auth.ValidateTOTP(string(secret), now); ok {
+			if u.TwoFactorLastCount != nil && counter <= *u.TwoFactorLastCount {
+				return ErrTwoFactorReplay
+			}
+			n, err := q.AcceptTwoFactorCounter(ctx, id, counter)
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return ErrTwoFactorReplay
+			}
+			return nil
+		}
+		ok, err := consumeRecoveryCodeTx(ctx, q, id, auth.RecoveryCodeHash(key, code))
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+		return ErrTwoFactorInvalid
+	})
+}
+
+func consumeRecoveryCodeTx(ctx context.Context, q *db.Queries, id int64, hash []byte) (bool, error) {
+	n, err := q.ConsumeRecoveryCode(ctx, id, hash)
+	return n == 1, err
+}
+
+func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, now time.Time, sealer *crypto.Sealer, key []byte, expiresAt time.Time, userAgent string) (string, *User, error) {
+	var outUser *User
+	rawToken, hash, err := auth.NewSessionToken()
+	if err != nil {
+		return "", nil, err
+	}
+	err = s.inTx(ctx, func(q *db.Queries) error {
+		ch, err := s.q.GetTwoFactorChallenge(ctx, auth.HashSessionToken(token))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTwoFactorExpired
+			}
+			return err
+		}
+		u, err := q.LockTwoFactorUser(ctx, ch.UserID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTwoFactorExpired
+			}
+			return err
+		}
+		ch, err = q.LockTwoFactorChallenge(ctx, auth.HashSessionToken(token))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTwoFactorExpired
+			}
+			return err
+		}
+		if ch.UserID != u.ID || ch.TwoFactorVersion != u.TwoFactorVersion || !u.TwoFactorEnabled || u.LockedAt != nil {
+			return ErrTwoFactorExpired
+		}
+		secret, err := sealer.Open(u.TwoFactorSecret, []byte("totp-secret:user:"+itoa(u.ID)))
+		if err != nil {
+			return err
+		}
+		valid := false
+		if counter, ok := auth.ValidateTOTP(string(secret), now); ok {
+			if u.TwoFactorLastCount == nil || counter > *u.TwoFactorLastCount {
+				n, err := q.AcceptTwoFactorCounter(ctx, u.ID, counter)
+				if err != nil {
+					return err
+				}
+				valid = n == 1
+			}
+		}
+		if !valid {
+			ok, err := consumeRecoveryCodeTx(ctx, q, u.ID, auth.RecoveryCodeHash(key, code))
+			if err != nil {
+				return err
+			}
+			valid = ok
+		}
+		if !valid {
+			return ErrTwoFactorInvalid
+		}
+		if err := q.DeleteTwoFactorChallenge(ctx, auth.HashSessionToken(token)); err != nil {
+			return err
+		}
+		if err := q.CreateSession(ctx, hash, u.ID, expiresAt, userAgent); err != nil {
+			return err
+		}
+		if err := q.RecordLogin(ctx, u.ID); err != nil {
+			return err
+		}
+		outUser = userFromDB(db.User{
+			ID: u.ID, Name: u.Name, IsAdmin: u.IsAdmin,
+			PasswordHash: "", LockedAt: u.LockedAt, MustChangePassword: u.MustChangePassword,
+		})
+		return nil
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return string(rawToken), outUser, nil
 }
