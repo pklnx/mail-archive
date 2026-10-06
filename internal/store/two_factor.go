@@ -15,7 +15,9 @@ import (
 var (
 	// ErrTwoFactorInvalid indicates that a supplied second factor is invalid.
 	ErrTwoFactorInvalid = errors.New("invalid two-factor code")
+	// ErrTwoFactorReplay indicates that a TOTP time-step was already accepted.
 	ErrTwoFactorReplay = errors.New("two-factor code already used")
+	// ErrTwoFactorExpired indicates that a login challenge is no longer valid.
 	ErrTwoFactorExpired = errors.New("two-factor challenge expired")
 )
 
