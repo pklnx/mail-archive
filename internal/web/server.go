@@ -10,9 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/auth"
@@ -39,6 +42,10 @@ type Server struct {
 	require2FA   bool
 	now          func() time.Time
 	limiter      *auth.Limiter
+	// webauthn is nil without a public URL: no passkeys.
+	webauthn      *webauthn.WebAuthn
+	publicOrigin  string
+	passkeyBegins *auth.Rate
 }
 
 // Options configure a Server.
@@ -60,6 +67,9 @@ type Options struct {
 	Require2FA bool
 	// Now is injectable for authentication tests.
 	Now func() time.Time
+	// PublicURL is the address users open (MAIL_ARCHIVE_PUBLIC_URL). It
+	// turns passkeys on; its host is accepted in addition to AllowedHosts.
+	PublicURL string
 }
 
 // New creates a Server.
@@ -82,9 +92,18 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	if now == nil {
 		now = time.Now
 	}
+	wa, origin, err := newWebAuthn(opts.PublicURL)
+	if err != nil {
+		// config.Load checked the URL already; this is a programming error.
+		log.Error("passkeys are off", "err", err)
+	}
+	if wa != nil && !slices.Contains(hosts, wa.Config.RPID) {
+		hosts = append(hosts, wa.Config.RPID)
+	}
 	return &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
+		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
 	}
 }
 
@@ -105,6 +124,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/session", s.handleGetSession)
 	mux.HandleFunc("POST /api/session", s.handleLogin)
 	mux.HandleFunc("POST /api/session/2fa", s.handleTwoFactorLogin)
+	mux.HandleFunc("POST "+passkeyLoginBeginPath, s.handleBeginPasskeyLogin)
+	mux.HandleFunc("POST "+passkeyLoginFinishPath, s.handleFinishPasskeyLogin)
 	mux.HandleFunc("DELETE /api/session", s.handleLogout)
 	mux.HandleFunc("PUT "+profilePasswordPath, s.handleChangeOwnPassword)
 	mux.HandleFunc("GET /api/profile/2fa", s.handleGetTwoFactor)
@@ -112,12 +133,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/profile/2fa/confirm", s.handleConfirmTwoFactor)
 	mux.HandleFunc("DELETE /api/profile/2fa", s.handleDisableTwoFactor)
 	mux.HandleFunc("POST /api/profile/2fa/recovery-codes", s.handleRegenerateRecoveryCodes)
+	mux.HandleFunc("GET /api/profile/passkeys", s.handleListPasskeys)
+	mux.HandleFunc("POST /api/profile/passkeys/begin", s.handleBeginPasskeyRegistration)
+	mux.HandleFunc("POST /api/profile/passkeys/finish", s.handleFinishPasskeyRegistration)
+	mux.HandleFunc("DELETE /api/profile/passkeys/{id}", s.handleRemovePasskey)
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("POST /api/users", s.handleCreateUser)
 	mux.HandleFunc("PATCH /api/users/{name}", s.handleUpdateUser)
 	mux.HandleFunc("DELETE /api/users/{name}", s.handleDeleteUser)
 	mux.HandleFunc("POST /api/users/{name}/password", s.handleResetUserPassword)
 	mux.HandleFunc("POST /api/users/{name}/2fa/reset", s.handleResetUserTwoFactor)
+	mux.HandleFunc("DELETE /api/users/{name}/passkeys", s.handleRemoveUserPasskeys)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)

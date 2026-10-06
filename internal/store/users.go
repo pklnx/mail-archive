@@ -127,11 +127,21 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 
 // SetUserPassword stores a new password hash and ends all sessions of the
 // user. With mustChange (a generated password), the user has to choose
-// their own password at the next login.
-func (s *Store) SetUserPassword(ctx context.Context, id int64, passwordHash string, mustChange bool) error {
+// their own password at the next login. With dropPasskeys, the user's
+// passkeys go too: after a compromise a new password alone would not lock
+// the attacker out.
+func (s *Store) SetUserPassword(ctx context.Context, id int64, passwordHash string, mustChange, dropPasskeys bool) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
+		if _, err := lockUser(ctx, q, id); err != nil {
+			return err
+		}
 		if err := one(q.SetUserPassword(ctx, db.SetUserPasswordParams{ID: id, PasswordHash: passwordHash, MustChangePassword: mustChange})); err != nil {
 			return err
+		}
+		if dropPasskeys {
+			if _, err := removePasskeys(ctx, q, id); err != nil {
+				return err
+			}
 		}
 		return q.DeleteUserSessions(ctx, id)
 	})

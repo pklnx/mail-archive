@@ -87,6 +87,12 @@ func newAuthFixture(t *testing.T) *authFixture {
 // newAuthFixtureWith is newAuthFixture with MAIL_ARCHIVE_REQUIRE_2FA.
 func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 	t.Helper()
+	return newAuthFixtureOpts(t, Options{Require2FA: require2FA})
+}
+
+// newAuthFixtureOpts is newAuthFixture with Require2FA and PublicURL from opts.
+func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
+	t.Helper()
 	st := storetest.New(t)
 	key := bytes.Repeat([]byte{7}, 32)
 	sealer, err := crypto.NewSealer(key)
@@ -96,7 +102,7 @@ func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 	clock := &testClock{now: time.Now()}
 	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
 		AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key, Now: clock.Now,
-		Require2FA: require2FA,
+		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL,
 	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
@@ -305,7 +311,7 @@ func TestSessionEnds(t *testing.T) {
 	f.login("alice", "correct horse battery")
 	f.expect("GET", "/api/status", nil, 200)
 	h, _ := cheapHasher.Hash(ctx, "another horse battery")
-	if err := f.st.SetUserPassword(ctx, alice.ID, h, false); err != nil {
+	if err := f.st.SetUserPassword(ctx, alice.ID, h, false, false); err != nil {
 		t.Fatal(err)
 	}
 	f.expect("GET", "/api/status", nil, 401)

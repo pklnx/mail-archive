@@ -1,8 +1,10 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -21,6 +23,7 @@ type adminUserJSON struct {
 	Locked             bool       `json:"locked"`
 	MustChangePassword bool       `json:"mustChangePassword"`
 	TwoFactorEnabled   bool       `json:"twoFactorEnabled"`
+	Passkeys           int64      `json:"passkeys"`
 	Accounts           int64      `json:"accounts"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	LastLoginAt        *time.Time `json:"lastLoginAt"`
@@ -51,11 +54,16 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	passkeys, err := s.store.PasskeyCounts(r.Context())
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	out := make([]adminUserJSON, 0, len(users))
 	for _, u := range users {
 		out = append(out, adminUserJSON{
 			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TwoFactorEnabled,
-			Accounts: owned[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
+			Passkeys: passkeys[u.ID], Accounts: owned[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
 		})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"users": out})
@@ -132,20 +140,35 @@ func (s *Server) pathUser(w http.ResponseWriter, r *http.Request) (*store.User, 
 	return u, true
 }
 
+// passwordResetInput is the optional body of a password reset. Passkeys
+// are removed unless removePasskeys is false: after a compromise a new
+// password alone would not lock the attacker out.
+type passwordResetInput struct {
+	RemovePasskeys *bool `json:"removePasskeys"`
+}
+
 func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	u, ok := s.pathUser(w, r)
 	if !ok {
 		return
 	}
+	var in passwordResetInput
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		s.fail(w, r, http.StatusBadRequest, "invalid request body: "+err.Error(), nil)
+		return
+	}
+	removePasskeys := in.RemovePasskeys == nil || *in.RemovePasskeys
 	pw, hash, ok := s.generatePassword(w, r)
 	if !ok {
 		return
 	}
-	if err := s.store.SetUserPassword(r.Context(), u.ID, hash, true); err != nil {
+	if err := s.store.SetUserPassword(r.Context(), u.ID, hash, true, removePasskeys); err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	s.log.Info("password reset", "user", u.Name, "by", currentSession(r).UserName)
+	s.log.Info("password reset", "user", u.Name, "passkeysRemoved", removePasskeys, "by", currentSession(r).UserName)
 	s.writeJSON(w, http.StatusOK, generatedPasswordJSON{Name: u.Name, Password: pw})
 }
 
