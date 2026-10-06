@@ -23,6 +23,7 @@ const (
 	// EnvSyncInterval is how often the web server syncs each enabled account
 	// (Go duration like "6h"; "0" turns the schedule off).
 	EnvSyncInterval = "MAIL_ARCHIVE_SYNC_INTERVAL"
+	EnvRequire2FA   = "MAIL_ARCHIVE_REQUIRE_2FA"
 )
 
 // DefaultSyncInterval is used when EnvSyncInterval is not set.
@@ -41,6 +42,7 @@ type Config struct {
 	AllowedHosts []string
 	// SyncInterval of the web server's schedule; zero means off.
 	SyncInterval time.Duration
+	Require2FA    bool
 }
 
 // Load reads the configuration from the environment.
@@ -69,6 +71,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.SyncInterval = interval
+	cfg.Require2FA = strings.EqualFold(strings.TrimSpace(os.Getenv(EnvRequire2FA)), "true")
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
 		if err != nil {
