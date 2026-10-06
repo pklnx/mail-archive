@@ -54,6 +54,7 @@ type CreateUserParams struct {
 	PasswordHash       string
 	IsAdmin            bool
 	MustChangePassword bool
+	TwoFactorEnabled   bool
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -136,7 +137,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password
+SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1
