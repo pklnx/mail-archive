@@ -89,6 +89,11 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 }
 
 // Handler returns the HTTP handler with all routes and protections.
+func (s *Server) currentTime() time.Time {
+	if s.now != nil { return s.now() }
+	return time.Now()
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
