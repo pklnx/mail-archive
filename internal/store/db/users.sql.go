@@ -237,6 +237,31 @@ SELECT id FROM users WHERE is_admin AND locked_at IS NULL FOR UPDATE
 
 // Locks the rows of all unlocked admins, so that two changes cannot remove
 // the last two admins at the same time.
+const lockUsableAdmins = `-- name: LockUsableAdmins :many
+-- Locks admins who are currently able to log in (unlocked and TOTP-enabled).
+SELECT id FROM users WHERE is_admin AND locked_at IS NULL AND two_factor_enabled FOR UPDATE
+`
+
+func (q *Queries) LockUsableAdmins(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, lockUsableAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (q *Queries) LockActiveAdmins(ctx context.Context) ([]int64, error) {
 	rows, err := q.db.Query(ctx, lockActiveAdmins)
 	if err != nil {
