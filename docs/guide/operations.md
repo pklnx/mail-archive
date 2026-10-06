@@ -28,6 +28,9 @@ docker compose up -d web  # restart the web server with the new image
 ./ma --version            # the version you are running
 ```
 
+`./ma migrate` rebuilds the image for every service, so the web server and
+a cron job that uses `docker compose run` both run the new version afterwards.
+
 Pull requests that change the database schema carry the label
 `db-migration`. Back up the database before you upgrade past one of them.
 

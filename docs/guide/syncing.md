@@ -48,14 +48,22 @@ MAIL_ARCHIVE_SYNC_INTERVAL=0     # off: sync only by hand
 
 Apply a change with `docker compose up -d web`.
 
-## Without the web server
+## Do you need cron?
 
-`./ma sync` is a one-shot command. Schedule it with cron (macOS and Linux),
-for example every hour:
+Usually not. While the `web` container runs, its schedule syncs every
+enabled account. cron is only useful if you do not run the web server.
+
+In that case, schedule the one-shot command, for example every hour:
 
 ```text
-0 * * * * /path/to/mail-archive/ma sync >> /path/to/mail-archive/sync.log 2>&1
+0 * * * * cd /path/to/mail-archive && docker compose run --rm -T mail-archive sync >> sync.log 2>&1
 ```
+
+This starts in about a second. `./ma sync` works too, but checks first
+whether the image needs rebuilding, which takes a few seconds more on every
+run. The plain `docker compose run` does not rebuild, so after an update run
+`./ma migrate` once (see [Upgrades](./operations#upgrades)); it rebuilds the
+image that cron and the web server use.
 
 cron runs with a minimal `PATH`. If `docker` is not found, add a line such as
 `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab. `sync` exits
