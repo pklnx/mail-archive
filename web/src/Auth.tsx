@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, UNAUTHORIZED_EVENT, retryAfter, sessionApi, type SessionState, type User } from "./api";
-import { PasswordForm } from "./Profile";
+import { PasswordForm, TwoFactorSetup } from "./Profile";
 import { ThemeToggle } from "./ThemeToggle";
 import { t } from "./i18n";
 import logo from "./logo.svg";
@@ -64,6 +64,17 @@ export function AuthGate({ children }: Props) {
         </Centered>
       );
     }
+    if (state.user.twoFactorRequired && !state.user.twoFactorEnabled) {
+      return (
+        <Centered>
+          <Brand />
+          <h2 className="font-semibold">{t.twoFactorSetup}</h2>
+          <p>{t.twoFactorRequired}</p>
+          <TwoFactorSetup onDone={() => check()} />
+          <button type="button" className="self-start text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>{t.logOut}</button>
+        </Centered>
+      );
+    }
     return children(state.user, logout);
   }
   if (state.setupRequired) return <SetupNotice check={check} />;
@@ -103,13 +114,23 @@ function LoginPage({ done }: { done: (user: User) => void }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [challenge, setChallenge] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      done(await sessionApi.login(username, password));
+      const result = await sessionApi.login(username, password);
+      if (result.user) done(result.user);
+      else if (result.twoFactorRequired && result.challenge) {
+        // Second step. The code field reuses the password state: clear it,
+        // so the password is never shown in the visible code field.
+        setChallenge(result.challenge);
+        setPassword("");
+        setBusy(false);
+      }
+      else throw new Error("invalid login response");
     } catch (err) {
       setError(loginError(err));
       setPassword("");
@@ -117,6 +138,37 @@ function LoginPage({ done }: { done: (user: User) => void }) {
     }
   };
 
+
+  if (challenge) {
+    return (
+      <Centered>
+        <Brand />
+        <h2 className="font-semibold">{t.twoFactorLogin}</h2>
+        <p>{t.twoFactorLoginText}</p>
+        <form className="flex flex-col gap-3" onSubmit={async (e) => {
+          e.preventDefault(); setBusy(true); setError("");
+          try { done(await sessionApi.login2FA(challenge, password)); }
+          catch (err) {
+            if (err instanceof ApiError && err.status === 401 && err.message.includes("expired")) {
+              setChallenge(null);
+              setError(t.twoFactorExpired);
+            } else {
+              setError(err instanceof ApiError && err.status === 401 ? t.invalidTwoFactor : loginError(err));
+            }
+            setPassword("");
+            setBusy(false);
+          }
+        }}>
+          <label className="flex flex-col gap-1">{t.twoFactorCode}
+            {/* Text, not numeric: recovery codes contain letters. */}
+            <input className={input} required autoFocus autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          {error && <p role="alert" className="text-red-600">{error}</p>}
+          <button type="submit" className={`${primary} mt-1`} disabled={busy}>{busy ? t.loggingIn : t.logIn}</button>
+        </form>
+      </Centered>
+    );
+  }
   return (
     <Centered>
       <Brand />

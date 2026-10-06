@@ -30,6 +30,11 @@ type sessionKey struct{}
 // may use (besides the session endpoints).
 const profilePasswordPath = "/api/profile/password" //nolint:gosec // a URL path, not a credential
 
+type twoFactorSetupJSON struct {
+	Error                  string `json:"error"`
+	TwoFactorSetupRequired bool   `json:"twoFactorSetupRequired"`
+}
+
 type passwordChangeJSON struct {
 	Error                  string `json:"error"`
 	PasswordChangeRequired bool   `json:"passwordChangeRequired"`
@@ -96,7 +101,7 @@ func (s *Server) session(r *http.Request) (*store.Session, error) {
 		return nil, nil
 	}
 	hash := auth.HashSessionToken(token)
-	sess, err := s.store.GetSession(r.Context(), hash, time.Now().Add(-auth.IdleTimeout))
+	sess, err := s.store.GetSession(r.Context(), hash, s.now().Add(-auth.IdleTimeout))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
@@ -117,7 +122,7 @@ func (s *Server) session(r *http.Request) (*store.Session, error) {
 // they contain no data.
 func (s *Server) requireLogin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" || r.URL.Path == "/api/session/2fa" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -130,9 +135,16 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 			s.fail(w, r, http.StatusUnauthorized, "login required", nil)
 			return
 		}
-		// A user with a generated password must choose their own first.
+		// A generated password, and a required 2FA that is not set up yet,
+		// both restrict the session to finishing the setup: first the
+		// password, then 2FA.
 		if sess.MustChangePassword && (r.Method != http.MethodPut || r.URL.Path != profilePasswordPath) {
 			s.writeJSON(w, http.StatusForbidden, passwordChangeJSON{Error: "choose your own password first", PasswordChangeRequired: true})
+			return
+		}
+		if !sess.MustChangePassword && s.twoFactorRequired(sess.IsAdmin) && !sess.TwoFactorEnabled &&
+			!twoFactorSetupPathAllowed(r.Method, r.URL.Path) {
+			s.writeJSON(w, http.StatusForbidden, twoFactorSetupJSON{Error: "set up two-factor authentication first", TwoFactorSetupRequired: true})
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess)))
@@ -145,6 +157,14 @@ type userJSON struct {
 	// MustChangePassword: the user logged in with a generated password and
 	// must choose their own before anything else works.
 	MustChangePassword bool `json:"mustChangePassword"`
+	// TwoFactorEnabled and TwoFactorRequired: a user who must use 2FA but
+	// has not set it up can only do that until it is on.
+	TwoFactorEnabled  bool `json:"twoFactorEnabled"`
+	TwoFactorRequired bool `json:"twoFactorRequired"`
+}
+
+func (s *Server) userJSON(name string, admin, mustChange, twoFactor bool) userJSON {
+	return userJSON{Name: name, Admin: admin, MustChangePassword: mustChange, TwoFactorEnabled: twoFactor, TwoFactorRequired: s.twoFactorRequired(admin)}
 }
 
 type sessionJSON struct {
@@ -165,7 +185,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess != nil {
-		s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{Name: sess.UserName, Admin: sess.IsAdmin, MustChangePassword: sess.MustChangePassword}})
+		s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(sess.UserName, sess.IsAdmin, sess.MustChangePassword, sess.TwoFactorEnabled)})
 		return
 	}
 	n, err := s.store.CountUsers(r.Context())
@@ -225,7 +245,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusUnauthorized, errWrongLogin, nil)
 		return
 	}
-	s.limiter.Succeed(name)
 	if u.LockedAt != nil {
 		s.fail(w, r, http.StatusForbidden, "this user is locked", nil)
 		return
@@ -239,6 +258,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// With 2FA on (required or voluntary), the password is only the first
+	// step: the limiter is reset after the second one.
+	if u.TwoFactorEnabled {
+		s.startTwoFactorLogin(w, r, u)
+		return
+	}
+	s.limiter.Succeed(name)
 	// A fresh token on every login: a token planted before the login is
 	// never promoted to a valid session.
 	if old := sessionToken(r); old != "" {
@@ -253,7 +279,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if len(ua) > 256 {
 		ua = ua[:256]
 	}
-	if err := s.store.CreateSession(ctx, hash, u.ID, time.Now().Add(auth.MaxSessionAge), ua); err != nil {
+	if err := s.store.CreateSession(ctx, hash, u.ID, s.currentTime().Add(auth.MaxSessionAge), ua); err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -262,7 +288,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("login", "user", u.Name, "addr", addr)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{Name: u.Name, Admin: u.IsAdmin, MustChangePassword: u.MustChangePassword}})
+	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, false)})
 }
 
 type retryJSON struct {
@@ -297,6 +323,9 @@ func (s *Server) cleanSessions(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
+		if err := s.store.DeleteExpiredTwoFactorChallenges(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("delete expired two-factor challenges", "err", err)
+		}
 		if n, err := s.store.DeleteExpiredSessions(ctx, time.Now().Add(-auth.IdleTimeout)); err != nil {
 			if ctx.Err() == nil {
 				s.log.Warn("delete expired sessions", "err", err)

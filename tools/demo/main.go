@@ -44,6 +44,8 @@ import (
 const (
 	loginName     = "demo"
 	loginPassword = "demo-password" //nolint:gosec // public demo login
+	// loginTOTPSecret is the demo admin's 2FA secret (admins need 2FA).
+	loginTOTPSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" //nolint:gosec // public demo login
 )
 
 func main() {
@@ -126,7 +128,18 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if _, err := st.CreateUser(ctx, loginName, hash, true); err != nil {
+	admin, err := st.CreateUser(ctx, loginName, hash, true)
+	if err != nil {
+		return err
+	}
+	code, err := auth.GenerateTOTP(loginTOTPSecret, time.Now())
+	if err != nil {
+		return err
+	}
+	if err := st.BeginTwoFactorSetup(ctx, admin.ID, loginTOTPSecret, sealer); err != nil {
+		return err
+	}
+	if err := st.ConfirmTwoFactorSetup(ctx, admin.ID, code, time.Now(), sealer, nil, key); err != nil {
 		return err
 	}
 	// A second user for the users page; it has no accounts.
@@ -136,8 +149,9 @@ func run(dbURL, listen string, log *slog.Logger) error {
 
 	runner := &archive.Runner{Syncer: syncer, Interval: 6 * time.Hour}
 	go runner.Run(ctx)
-	srv := web.New(st, blobs, log, web.Options{Syncer: syncer, Runner: runner})
-	fmt.Printf("demo UI on http://%s, log in as %q with password %q (Ctrl-C to stop and delete the demo data)\n", listen, loginName, loginPassword)
+	srv := web.New(st, blobs, log, web.Options{Syncer: syncer, Runner: runner, Sealer: sealer, SecretKey: key})
+	fmt.Printf("demo UI on http://%s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
+		listen, loginName, loginPassword, loginTOTPSecret)
 	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

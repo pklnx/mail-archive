@@ -12,7 +12,8 @@ them; other users' accounts and messages answer `404`.
 | Endpoint | Description |
 |---|---|
 | `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists. |
-| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. `401` for a wrong name or password, `403` for a locked user, `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
+| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user, `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
+| `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge, `429` like the password step. |
 | `DELETE /api/session` | Log out (`204`). |
 
 With curl, keep the cookie in a file:
@@ -31,16 +32,29 @@ change their own login with them (`403`); they use the profile endpoint.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
+| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
 | `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. |
 | `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. |
 | `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}` or `{"locked": true\|false}`. `409` for the last admin. |
+| `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
 | `DELETE /api/users/{name}` | Remove a user. `409` while they own accounts, or for the last admin. |
+| `GET /api/profile/2fa` | `{"enabled", "required", "admin", "setupPending"}`. |
+| `POST /api/profile/2fa/setup` | Start setup: `{"secret", "otpauthUri", "qrDataUrl"}` (a PNG data URL). `409` while 2FA is on. |
+| `POST /api/profile/2fa/confirm` | Finish setup with `{"code": "..."}`. Answers `{"recoveryCodes": [...]}`, shown only here. `401` for a wrong code. |
+| `POST /api/profile/2fa/recovery-codes` | New recovery codes with `{"code": "..."}`; the old ones stop working. |
+| `DELETE /api/profile/2fa` | Turn 2FA off with `{"currentPassword": "...", "code": "..."}` (`204`). `403` when 2FA is required for this user. |
 | `PUT /api/profile/password` | Every user: `{"current": "...", "new": "..."}`. `401` for a wrong current password (counts like a failed login, then `429`), `400` for a new password that is too short or unchanged. Other sessions end. |
 
 After logging in with a generated password, `GET /api/session` reports
 `"mustChangePassword": true`, and every other endpoint except
 `PUT /api/profile/password` answers `403` with `"passwordChangeRequired": true`.
+
+A user who must use 2FA but has not set it up (admins always, everyone with
+`MAIL_ARCHIVE_REQUIRE_2FA=true`) gets `"twoFactorRequired": true` and
+`"twoFactorEnabled": false` from `GET /api/session`. Until setup is done,
+every endpoint except `GET /api/profile/2fa`, `POST /api/profile/2fa/setup`
+and `POST /api/profile/2fa/confirm` answers `403` with
+`"twoFactorSetupRequired": true`. The password change comes first.
 
 ## Write requests
 

@@ -13,6 +13,11 @@ installing:
 ./ma user add patrick --admin
 ```
 
+Administrators must set up two-factor authentication (TOTP) at their first
+web login, after choosing their own password. Admins cannot turn it off.
+Another admin, or `./ma user reset-2fa NAME` on the command line, can reset
+it; the admin then sets it up again at the next login.
+
 This first user also gets all accounts that were added before any user
 existed.
 
@@ -35,6 +40,9 @@ On the command line, `./ma user add NAME` asks for a password instead, and
 
 For every other user, admins can:
 
+- **Reset 2FA:** only shown while the user has 2FA on. Turns it off and logs
+  the user out everywhere. Admins, and everyone when 2FA is required, set it
+  up again at the next login.
 - **Reset password:** generates a new password, shown once. The user is logged
   out everywhere and must change it at the next login.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in.
@@ -60,3 +68,24 @@ one you use stays logged in.
 
 Wrong current passwords count like failed logins: after 5 within 15 minutes,
 you have to wait.
+
+## Two-factor authentication
+
+In your profile, **Set up 2FA** shows a QR code. Scan it with an
+authenticator app (for example Aegis, 2FAS or Google Authenticator) or type
+the key below it, then enter the 6-digit code from the app.
+
+You then get 10 recovery codes, shown **once**. Keep them somewhere safe:
+each one replaces a code from the app a single time, for example when the
+phone is lost. You can generate new ones in your profile; the old ones stop
+working.
+
+From then on, the login asks for a code after the password. A code works
+only once and only for about 30 seconds before or after its time.
+
+Users who are not admins can turn 2FA off in their profile with their
+password and a code, unless the server requires it for everyone
+(`MAIL_ARCHIVE_REQUIRE_2FA=true`, see
+[Configuration](../reference/configuration)).
+
+If you lose both the app and the recovery codes, an admin resets your 2FA.

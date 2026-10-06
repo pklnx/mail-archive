@@ -95,3 +95,26 @@ describe("users and profile", () => {
     }
   });
 });
+
+describe("two-factor", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("asks the login gate to check again when 2FA setup is required", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: "set up two-factor authentication first", twoFactorSetupRequired: true }), { status: 403 }),
+    );
+    const seen = vi.fn();
+    window.addEventListener(UNAUTHORIZED_EVENT, seen);
+    try {
+      await expect(listAccounts()).rejects.toBeInstanceOf(ApiError);
+      expect(seen).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(UNAUTHORIZED_EVENT, seen);
+    }
+  });
+
+  it("returns the challenge of a password login with 2FA", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ twoFactorRequired: true, challenge: "abc" }), { status: 200 }));
+    expect(await sessionApi.login("alice", "pw")).toEqual({ twoFactorRequired: true, challenge: "abc" });
+  });
+});

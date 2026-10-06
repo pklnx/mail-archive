@@ -53,6 +53,7 @@ services:
       MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}
       # How often each enabled account is synced; 0 turns the schedule off.
       MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
+      MAIL_ARCHIVE_REQUIRE_2FA: ${MAIL_ARCHIVE_REQUIRE_2FA:-false}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:

@@ -27,6 +27,7 @@ Create the first admin with:  user add NAME --admin`,
 		newUserListCmd(),
 		newUserSetPasswordCmd(),
 		newUserResetPasswordCmd(),
+		newUserReset2FACmd(),
 		newUserAdminCmd(true),
 		newUserAdminCmd(false),
 		newUserLockCmd(true),
@@ -325,6 +326,26 @@ func newUserAdminCmd(admin bool) *cobra.Command {
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("%q %s\n", u.Name, done)
+			return nil
+		},
+	}
+}
+
+func newUserReset2FACmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset-2fa NAME",
+		Short: "Reset a user's TOTP and end their sessions",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, u, err := loadUser(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			if err := a.store.ResetTwoFactor(cmd.Context(), u.ID); err != nil {
+				return err
+			}
+			fmt.Printf("2FA of %q reset; existing logins ended\n", u.Name)
 			return nil
 		},
 	}

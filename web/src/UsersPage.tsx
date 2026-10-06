@@ -82,6 +82,7 @@ export function UsersPage({ close }: { close: () => void }) {
               <span className={`text-sm ${u.locked ? "text-red-600" : "text-zinc-500"}`}>
                 {u.locked ? t.stateLocked : u.mustChangePassword ? t.stateMustChange : t.stateActive}
               </span>
+              <span className="text-sm text-zinc-500">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
               <span className="ml-auto text-sm text-zinc-500">
                 {t.colAccounts}: {u.accounts} · {t.colLastLogin}: {u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}
               </span>
@@ -90,6 +91,15 @@ export function UsersPage({ close }: { close: () => void }) {
               <p className="text-sm text-zinc-500">{t.selfHint}</p>
             ) : (
               <div className="flex flex-wrap gap-2">
+                {u.twoFactorEnabled && (
+                  <button
+                    type="button"
+                    className={button}
+                    onClick={() => window.confirm(t.twoFactorResetConfirm(u.name)) && run(() => usersApi.reset2FA(u.name))}
+                  >
+                    {t.twoFactorReset}
+                  </button>
+                )}
                 <button
                   type="button"
                   className={button}

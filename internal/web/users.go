@@ -20,6 +20,7 @@ type adminUserJSON struct {
 	Admin              bool       `json:"admin"`
 	Locked             bool       `json:"locked"`
 	MustChangePassword bool       `json:"mustChangePassword"`
+	TwoFactorEnabled   bool       `json:"twoFactorEnabled"`
 	Accounts           int64      `json:"accounts"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	LastLoginAt        *time.Time `json:"lastLoginAt"`
@@ -53,7 +54,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	out := make([]adminUserJSON, 0, len(users))
 	for _, u := range users {
 		out = append(out, adminUserJSON{
-			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword,
+			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TwoFactorEnabled,
 			Accounts: owned[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
 		})
 	}

@@ -13,10 +13,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
+	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -29,7 +31,7 @@ var cheapHasher = auth.NewHasher(auth.Params{Memory: 64, Time: 1, Threads: 1})
 func loggedIn(t *testing.T, st *store.Store, h http.Handler) http.Handler {
 	t.Helper()
 	ctx := context.Background()
-	u, err := st.CreateUser(ctx, "tester", "unused", true)
+	u, err := st.CreateUser(ctx, "tester", "unused", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,20 +69,39 @@ func sessionFor(t *testing.T, st *store.Store, name string) (*store.User, string
 }
 
 type authFixture struct {
-	t      *testing.T
-	st     *store.Store
-	srv    *httptest.Server
-	client *http.Client
+	t            *testing.T
+	st           *store.Store
+	srv          *httptest.Server
+	client       *http.Client
+	sealer       *crypto.Sealer
+	secretKey    []byte
+	adminSecrets map[string]string
+	clock        *testClock
 }
 
 func newAuthFixture(t *testing.T) *authFixture {
 	t.Helper()
+	return newAuthFixtureWith(t, false)
+}
+
+// newAuthFixtureWith is newAuthFixture with MAIL_ARCHIVE_REQUIRE_2FA.
+func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
+	t.Helper()
 	st := storetest.New(t)
-	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher})
+	key := bytes.Repeat([]byte{7}, 32)
+	sealer, err := crypto.NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &testClock{now: time.Now()}
+	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+		AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key, Now: clock.Now,
+		Require2FA: require2FA,
+	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &authFixture{t: t, st: st, srv: srv, client: &http.Client{Jar: jar}}
+	return &authFixture{t: t, st: st, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
 }
 
 func (f *authFixture) addUser(name, password string, admin bool) *store.User {
@@ -92,6 +113,13 @@ func (f *authFixture) addUser(name, password string, admin bool) *store.User {
 	u, err := f.st.CreateUser(context.Background(), name, h, admin)
 	if err != nil {
 		f.t.Fatal(err)
+	}
+	if admin {
+		// Admins need 2FA: set it up like the profile page does.
+		f.enableTOTP(u)
+		if u, err = f.st.GetUserByName(context.Background(), name); err != nil {
+			f.t.Fatal(err)
+		}
 	}
 	return u
 }
@@ -125,9 +153,52 @@ func (f *authFixture) expect(method, path string, body any, want int) map[string
 	return out
 }
 
+// enableTOTP turns 2FA on for u and returns its secret and recovery codes.
+func (f *authFixture) enableTOTP(u *store.User) (string, []string) {
+	f.t.Helper()
+	ctx := context.Background()
+	secret, err := auth.GenerateTOTPSecret()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	codes, err := auth.GenerateRecoveryCodes()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.st.BeginTwoFactorSetup(ctx, u.ID, secret, f.sealer); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.st.ConfirmTwoFactorSetup(ctx, u.ID, f.code(secret), f.clock.Now(), f.sealer, codes, f.secretKey); err != nil {
+		f.t.Fatal(err)
+	}
+	f.adminSecrets[u.Name] = secret
+	return secret, codes
+}
+
+// code returns the TOTP code for secret one time step after the last one,
+// like a user who logs in again after a while: each step counts only once.
+func (f *authFixture) code(secret string) string {
+	f.t.Helper()
+	f.clock.Advance(auth.TOTPPeriod)
+	code, err := auth.GenerateTOTP(secret, f.clock.Now())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return code
+}
+
 func (f *authFixture) login(name, password string) *http.Response {
 	f.t.Helper()
-	resp, _ := f.do("POST", "/api/session", map[string]string{"username": name, "password": password})
+	resp, out := f.do("POST", "/api/session", map[string]string{"username": name, "password": password})
+	if resp.StatusCode == 200 {
+		if challenge, ok := out["challenge"].(string); ok {
+			secret, ok := f.adminSecrets[auth.NormalizeUserName(name)]
+			if !ok {
+				f.t.Fatalf("missing test TOTP secret for %q", name)
+			}
+			resp, _ = f.do("POST", "/api/session/2fa", map[string]string{"challenge": challenge, "code": f.code(secret)})
+		}
+	}
 	return resp
 }
 
@@ -337,4 +408,23 @@ func TestSecureCookie(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testClock is the server's clock in auth tests. Logins with a TOTP code
+// advance it by one time step, as each step is accepted only once.
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }

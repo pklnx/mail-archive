@@ -749,10 +749,11 @@ network.`,
 				return err
 			}
 			log := newLogger(a.cfg.LogLevel)
-			opts := web.Options{AllowedHosts: a.cfg.AllowedHosts}
+			opts := web.Options{AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey}
 			if sealer, err := a.cfg.Sealer(); err != nil {
 				log.Warn("account management and sync are off", "reason", err)
 			} else {
+				opts.Sealer = sealer
 				if n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer); err != nil {
 					return err
 				} else if n > 0 {

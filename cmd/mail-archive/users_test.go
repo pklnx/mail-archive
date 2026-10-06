@@ -5,9 +5,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -222,5 +224,38 @@ func TestUserRoleAndResetCommands(t *testing.T) {
 	}
 	if err := runUser(t, "", "list"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A sole admin who lost their authenticator must get back in: reset-2fa
+// works for the last admin too.
+func TestResetTwoFactorOfLastAdmin(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	ctx := context.Background()
+	if err := runUser(t, "correct horse battery\n", "add", "admin", "--admin", "--password-stdin"); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.GetUserByName(ctx, "admin")
+	keyStr, _ := crypto.GenerateKey()
+	key, _ := crypto.ParseKey(keyStr)
+	sealer, err := crypto.NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := auth.GenerateTOTPSecret()
+	now := time.Now()
+	code, _ := auth.GenerateTOTP(secret, now)
+	if err := st.BeginTwoFactorSetup(ctx, u.ID, secret, sealer); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ConfirmTwoFactorSetup(ctx, u.ID, code, now, sealer, []string{"abcd-efgh-jkmn-pqrs"}, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUser(t, "", "reset-2fa", "admin"); err != nil {
+		t.Fatalf("reset-2fa of the last admin: %v", err)
+	}
+	if st2, _ := st.GetTwoFactorState(ctx, u.ID); st2.Enabled || st2.SetupPending {
+		t.Fatalf("after reset: %+v", st2)
 	}
 }

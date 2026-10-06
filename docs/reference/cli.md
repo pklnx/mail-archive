@@ -26,6 +26,7 @@ characters and are prompted twice, or read once from stdin with
 | `user list` | List users with role, state (active, locked, must change password), number of accounts and last login. |
 | `user set-password NAME` | Set a new password. Ends the user's sessions. |
 | `user reset-password NAME` | Generate a password, print it once; the user must change it at the next login. Ends the user's sessions. |
+| `user reset-2fa NAME` | Turn off the user's 2FA, for example after a lost phone. Ends the user's sessions; admins set it up again at the next login. |
 | `user promote NAME`, `user demote NAME` | Grant or take away the admin role. |
 | `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
 | `user remove NAME` | Delete the user. Refused while the user owns accounts, also removed ones; hand them over with `account move` first. |

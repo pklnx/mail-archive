@@ -144,7 +144,7 @@ async function errorFor(path: string, res: Response): Promise<ApiError> {
   const err = await errorFrom(res);
   // The session ended, or the user still has to replace a generated
   // password: the login gate checks the session again.
-  if ((res.status === 401 && path !== sessionPath) || err.body.passwordChangeRequired === true) {
+  if ((res.status === 401 && path !== sessionPath) || err.body.passwordChangeRequired === true || err.body.twoFactorSetupRequired === true) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   return err;
@@ -218,6 +218,8 @@ export interface User {
   admin: boolean;
   /** Logged in with a generated password: must choose their own first. */
   mustChangePassword: boolean;
+  twoFactorEnabled: boolean;
+  twoFactorRequired: boolean;
 }
 
 /** The login state: a user, or none and whether the first admin is missing. */
@@ -233,8 +235,10 @@ export const sessionApi = {
     if (!res.ok) throw await errorFrom(res);
     return (await res.json()) as { user: User };
   },
-  login: async (username: string, password: string): Promise<User> =>
-    (await send<{ user: User }>("POST", sessionPath, { username, password }))!.user,
+  login: async (username: string, password: string): Promise<{ user?: User; twoFactorRequired?: boolean; challenge?: string }> =>
+    (await send<{ user?: User; twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
+  login2FA: async (challenge: string, code: string): Promise<User> =>
+    (await send<{ user: User }>("POST", "/api/session/2fa", { challenge, code }))!.user,
   logout: () => send("DELETE", sessionPath),
 };
 
@@ -245,8 +249,25 @@ export function retryAfter(err: unknown): number | null {
   return typeof s === "number" && s > 0 ? s : 60;
 }
 
+export interface TwoFactorSetup {
+  enabled: boolean;
+  required: boolean;
+  admin: boolean;
+  setupPending: boolean;
+  secret?: string;
+  otpauthUri?: string;
+  qrDataUrl?: string;
+}
+
 export const profileApi = {
   changePassword: (current: string, next: string) => send("PUT", "/api/profile/password", { current, new: next }),
+  twoFactor: {
+    get: () => getJSON<TwoFactorSetup>("/api/profile/2fa"),
+    setup: () => send<TwoFactorSetup>("POST", "/api/profile/2fa/setup"),
+    confirm: (code: string) => send<{ enabled: boolean; recoveryCodes: string[] }>("POST", "/api/profile/2fa/confirm", { code }),
+    disable: (currentPassword: string, code: string) => send("DELETE", "/api/profile/2fa", { currentPassword, code }),
+    regenerateRecoveryCodes: (code: string) => send<{ recoveryCodes: string[] }>("POST", "/api/profile/2fa/recovery-codes", { code }),
+  },
 };
 
 /** A user as admins see them on the users page. */
@@ -255,6 +276,7 @@ export interface ManagedUser {
   admin: boolean;
   locked: boolean;
   mustChangePassword: boolean;
+  twoFactorEnabled: boolean;
   accounts: number;
   createdAt: string;
   lastLoginAt: string | null;
@@ -277,4 +299,5 @@ export const usersApi = {
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
   setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
   remove: (name: string) => send("DELETE", userPath(name)),
+  reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
 };
