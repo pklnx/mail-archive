@@ -38,7 +38,7 @@ copy**: the servers are never modified.
 git clone https://github.com/pklnx/mail-archive.git && cd mail-archive
 cp .env.example .env    # set POSTGRES_PASSWORD and MAIL_ARCHIVE_SECRET_KEY
 ./ma migrate
-docker compose up -d --build web
+docker compose up -d web
 ```
 
 Open <http://localhost:8080> and add an account under **Manage accounts**.

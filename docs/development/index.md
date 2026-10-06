@@ -100,6 +100,9 @@ make sqlc-check    # what CI runs: vet queries and fail on stale code
 
 ## Pull requests and labels
 
+Changes start as an issue with an approved plan; see
+[Issues, plans and releases](./process).
+
 `main` is protected: changes go through pull requests, which can only be
 squash-merged when all CI checks pass. To accept a pull request, review it and
 enable **auto-merge**; GitHub merges it once CI is green.
@@ -110,6 +113,7 @@ enable **auto-merge**; GitHub merges it once CI is green.
 | `dependencies` | Dependency update (set by Dependabot). |
 | `db-migration` | Changes the database schema (set automatically). Back up before upgrading. |
 | `breaking` | Needs manual steps when upgrading (set by hand). |
+| `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
 
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.

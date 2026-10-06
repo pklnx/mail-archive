@@ -11,6 +11,10 @@ set -eu
 
 cd "$(dirname "$0")"
 
+# The version shown by `mail-archive --version`, baked into the image.
+MAIL_ARCHIVE_VERSION=${MAIL_ARCHIVE_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
+export MAIL_ARCHIVE_VERSION
+
 compose() {
 	docker compose --progress quiet "$@"
 }

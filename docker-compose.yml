@@ -3,7 +3,7 @@
 #   ./ma migrate                      # wrapper around `docker compose run`
 #   ./ma account add ...
 #   ./ma sync
-#   docker compose up -d --build web  # web API on http://localhost:8080
+#   docker compose up -d web          # web UI on http://localhost:8080 (image built by ./ma)
 #
 # Both images are multi-arch (amd64 and arm64, e.g. Apple Silicon).
 
@@ -32,10 +32,12 @@ services:
       retries: 10
 
   # Web server (JSON API). No login yet: reachable from this machine only.
-  # Start or update with: docker compose up -d --build web
+  # Start or update with: ./ma migrate && docker compose up -d web
   web:
     build:
       context: .
+      args:
+        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
     image: mail-archive:local
     restart: unless-stopped
     command: ["serve", "--listen", ":8080"]
@@ -57,6 +59,8 @@ services:
   mail-archive:
     build:
       context: .
+      args:
+        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
     image: mail-archive:local
     # One-shot CLI: not started by `docker compose up`, use `docker compose run`.
     profiles: ["cli"]

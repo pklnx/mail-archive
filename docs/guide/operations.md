@@ -23,8 +23,9 @@ accounts exist, so back up both the files and the database.
 
 ```sh
 git pull
-./ma migrate                       # apply new database migrations
-docker compose up -d --build web   # restart the web server with the new code
+./ma migrate              # rebuild the image, apply new database migrations
+docker compose up -d web  # restart the web server with the new image
+./ma --version            # the version you are running
 ```
 
 Pull requests that change the database schema carry the label

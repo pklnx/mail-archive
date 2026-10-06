@@ -26,11 +26,12 @@ Edit `.env`:
   with `openssl rand -base64 32` and **back it up** (see
   [Backups](./operations#backups)).
 
-Then create the database schema and start the web server:
+Then create the database schema and start the web server. `./ma` builds the
+image on its first run (a few minutes), `docker compose up` reuses it:
 
 ```sh
 ./ma migrate
-docker compose up -d --build web
+docker compose up -d web
 ```
 
 Open <http://localhost:8080>.

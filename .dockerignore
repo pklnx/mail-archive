@@ -6,4 +6,6 @@ data
 *.out
 web/node_modules
 internal/web/ui/dist
-tmp-e2e
+docs/node_modules
+docs/.vitepress/cache
+docs/.vitepress/dist
