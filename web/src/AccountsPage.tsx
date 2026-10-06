@@ -115,7 +115,7 @@ export function AccountsPage({ accounts, close }: Props) {
               <Card key={a.name}>
                 <div className="flex flex-wrap items-baseline gap-x-3">
                   <span className="font-semibold">{a.name}</span>
-                  <span className="text-sm text-zinc-500">{t.messageCount(formatCount(messageCount(a)))}</span>
+                  <span className="text-sm text-zinc-500">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
                 </div>
                 <p className="text-sm text-zinc-500">{t.removedNote}</p>
               </Card>
@@ -172,7 +172,7 @@ function AccountCard({ account: a, manage, onSync, onEdit, onToggle, onRemove }:
         <span className="min-w-0 truncate text-sm text-zinc-500">
           {a.username} · {a.host}
         </span>
-        <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(formatCount(messageCount(a)))}</span>
+        <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
       </div>
       <p className={`text-sm ${status.error ? "text-red-600" : "text-zinc-600 dark:text-zinc-400"}`} aria-live="polite">
         {busy && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}

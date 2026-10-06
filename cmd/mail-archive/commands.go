@@ -622,9 +622,11 @@ func newServeCmd() *cobra.Command {
 	var listen string
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the web server (JSON API)",
-		Long: `Run the web server. There is no login yet, so it listens on localhost by
-default. Requests are only accepted with a Host header listed in
+		Short: "Run the web server (UI, JSON API, sync schedule)",
+		Long: `Run the web server: the UI, the JSON API and the sync schedule
+(` + config.EnvSyncInterval + `, default 6h).
+
+There is no login yet, so it listens on localhost by default. Requests are only accepted with a Host header listed in
 ` + config.EnvAllowedHosts + ` (default: localhost, 127.0.0.1, ::1), which blocks DNS
 rebinding; state-changing requests must come from the same origin.`,
 		Args: cobra.NoArgs,

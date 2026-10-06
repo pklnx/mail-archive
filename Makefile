@@ -6,7 +6,7 @@ VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo de
 SQLC      := GOTOOLCHAIN=$$($(GO) env GOVERSION) $(GO) run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 TEST_DATABASE_URL ?= postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable
 
-.PHONY: web web-test build test test-unit lint vuln generate sqlc-check tidy docker docker-multiarch clean
+.PHONY: web web-test docs docs-screenshots build test test-unit lint vuln generate sqlc-check tidy docker docker-multiarch clean
 
 ## web: build the web UI (embedded by `build`)
 web:
@@ -15,6 +15,14 @@ web:
 ## web-test: typecheck and unit-test the web UI
 web-test:
 	cd web && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
+
+## docs: build the documentation site into docs/.vitepress/dist
+docs:
+	cd docs && corepack enable && pnpm install --frozen-lockfile && pnpm build
+
+## docs-screenshots: regenerate docs/public/screenshots (needs DEMO_DATABASE_URL)
+docs-screenshots:
+	scripts/docs-screenshots.sh
 
 build:
 	$(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o $(BIN) ./cmd/mail-archive

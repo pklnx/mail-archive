@@ -23,5 +23,8 @@ describe("messages", () => {
     }
     expect(de.searchIn("Inbox")).toBe("In Inbox suchen");
     expect(de.switchTheme("dark")).toBe("Zum dunklen Modus wechseln");
+    expect(en.messageCount(1, "1")).toBe("1 message");
+    expect(en.messageCount(1200, "1,200")).toBe("1,200 messages");
+    expect(de.messageCount(1, "1")).toBe("1 Nachricht");
   });
 });

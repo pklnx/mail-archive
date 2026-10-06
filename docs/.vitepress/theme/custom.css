@@ -1,0 +1,22 @@
+/* Screenshot on the home page: one image per color scheme. */
+.screenshot {
+  max-width: 1152px;
+  margin: 48px auto 24px;
+  padding: 0 24px;
+}
+.screenshot img {
+  width: 100%;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  box-shadow: var(--vp-shadow-3);
+}
+.dark .screenshot .light-only,
+html:not(.dark) .screenshot .dark-only {
+  display: none;
+}
+
+/* Screenshots in guide pages get a frame so they stand out from the page. */
+.vp-doc img {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+}
