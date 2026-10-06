@@ -53,6 +53,21 @@ func (q *Queries) AccountStats(ctx context.Context) ([]AccountStatsRow, error) {
 	return items, nil
 }
 
+const failStaleSyncRuns = `-- name: FailStaleSyncRuns :execrows
+UPDATE sync_runs SET finished_at = now(), status = 'failed', error = 'interrupted'
+WHERE account_id = $1 AND finished_at IS NULL
+`
+
+// Runs left "running" by a process that died. Only called while holding the
+// account's sync lock, so no other run of the account can be active.
+func (q *Queries) FailStaleSyncRuns(ctx context.Context, accountID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, failStaleSyncRuns, accountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const finishSyncRun = `-- name: FinishSyncRun :execrows
 UPDATE sync_runs
 SET finished_at = now(), status = $1, messages_fetched = $2,
@@ -83,19 +98,23 @@ func (q *Queries) FinishSyncRun(ctx context.Context, arg FinishSyncRunParams) (i
 }
 
 const lastSyncRuns = `-- name: LastSyncRuns :many
-SELECT DISTINCT ON (account_id) account_id, started_at, status, error
+SELECT DISTINCT ON (account_id) account_id, started_at, finished_at, status,
+       messages_fetched, messages_new, error
 FROM sync_runs
 ORDER BY account_id, started_at DESC
 `
 
 type LastSyncRunsRow struct {
-	AccountID int64
-	StartedAt time.Time
-	Status    string
-	Error     *string
+	AccountID       int64
+	StartedAt       time.Time
+	FinishedAt      *time.Time
+	Status          string
+	MessagesFetched int32
+	MessagesNew     int32
+	Error           *string
 }
 
-// The most recent sync run per account.
+// The most recent sync run per account, with counters.
 func (q *Queries) LastSyncRuns(ctx context.Context) ([]LastSyncRunsRow, error) {
 	rows, err := q.db.Query(ctx, lastSyncRuns)
 	if err != nil {
@@ -108,7 +127,10 @@ func (q *Queries) LastSyncRuns(ctx context.Context) ([]LastSyncRunsRow, error) {
 		if err := rows.Scan(
 			&i.AccountID,
 			&i.StartedAt,
+			&i.FinishedAt,
 			&i.Status,
+			&i.MessagesFetched,
+			&i.MessagesNew,
 			&i.Error,
 		); err != nil {
 			return nil, err
@@ -130,4 +152,20 @@ func (q *Queries) StartSyncRun(ctx context.Context, accountID int64) (int64, err
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const updateSyncRunProgress = `-- name: UpdateSyncRunProgress :exec
+UPDATE sync_runs SET messages_fetched = $1, messages_new = $2
+WHERE id = $3 AND finished_at IS NULL
+`
+
+type UpdateSyncRunProgressParams struct {
+	MessagesFetched int32
+	MessagesNew     int32
+	ID              int64
+}
+
+func (q *Queries) UpdateSyncRunProgress(ctx context.Context, arg UpdateSyncRunProgressParams) error {
+	_, err := q.db.Exec(ctx, updateSyncRunProgress, arg.MessagesFetched, arg.MessagesNew, arg.ID)
+	return err
 }

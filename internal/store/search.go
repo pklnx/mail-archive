@@ -126,6 +126,7 @@ type FolderCount struct {
 type AccountFolders struct {
 	Name    string
 	Enabled bool
+	Removed bool
 	Folders []FolderCount
 }
 
@@ -138,7 +139,7 @@ func (s *Store) ListAccountFolders(ctx context.Context) ([]AccountFolders, error
 	var out []AccountFolders
 	for _, r := range rows {
 		if len(out) == 0 || out[len(out)-1].Name != r.Account {
-			out = append(out, AccountFolders{Name: r.Account, Enabled: r.Enabled, Folders: []FolderCount{}})
+			out = append(out, AccountFolders{Name: r.Account, Enabled: r.Enabled, Removed: r.Removed, Folders: []FolderCount{}})
 		}
 		if r.Folder != nil {
 			a := &out[len(out)-1]

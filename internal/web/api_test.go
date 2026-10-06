@@ -159,7 +159,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 			t.Fatal(err)
 		}
 	}
-	s := New(st, blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), []string{"127.0.0.1"})
+	s := New(st, blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}})
 	f.srv = httptest.NewServer(s.Handler())
 	t.Cleanup(f.srv.Close)
 	return f
@@ -363,9 +363,7 @@ func TestRawAndParts(t *testing.T) {
 
 func TestAccountsAndStatus(t *testing.T) {
 	f := newAPIFixture(t)
-	var a struct {
-		Accounts []accountJSON `json:"accounts"`
-	}
+	var a accountsResponse
 	f.getJSON("/api/accounts", 200, &a)
 	if len(a.Accounts) != 2 || a.Accounts[1].Name != "bob" || len(a.Accounts[1].Folders) != 2 {
 		t.Fatalf("accounts = %+v", a)

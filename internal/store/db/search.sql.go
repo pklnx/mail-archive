@@ -43,18 +43,19 @@ func (q *Queries) GetMessageSummary(ctx context.Context, sha256 string) (GetMess
 }
 
 const listFolderCounts = `-- name: ListFolderCounts :many
-SELECT a.name AS account, a.enabled, f.name AS folder, count(l.id) AS messages,
-       f.last_synced_at
+SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed,
+       f.name AS folder, count(l.id) AS messages, f.last_synced_at
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 LEFT JOIN message_locations l ON l.folder_id = f.id
-GROUP BY a.name, a.enabled, f.name, f.last_synced_at
+GROUP BY a.name, a.enabled, a.removed_at, f.name, f.last_synced_at
 ORDER BY a.name, f.name
 `
 
 type ListFolderCountsRow struct {
 	Account      string
 	Enabled      bool
+	Removed      bool
 	Folder       *string
 	Messages     int64
 	LastSyncedAt *time.Time
@@ -72,6 +73,7 @@ func (q *Queries) ListFolderCounts(ctx context.Context) ([]ListFolderCountsRow, 
 		if err := rows.Scan(
 			&i.Account,
 			&i.Enabled,
+			&i.Removed,
 			&i.Folder,
 			&i.Messages,
 			&i.LastSyncedAt,

@@ -1,4 +1,4 @@
-// Package web serves the JSON API (and later the UI) over HTTP.
+// Package web serves the JSON API and the UI over HTTP.
 package web
 
 import (
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web/ui"
@@ -28,21 +29,34 @@ type Server struct {
 	blobs        *blobstore.Store
 	log          *slog.Logger
 	allowedHosts []string
+	syncer       *archive.Syncer
+	runner       *archive.Runner
 }
 
-// New creates a Server. allowedHosts are host names (without port) accepted
-// in the Host header; nil means DefaultAllowedHosts.
-func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, allowedHosts []string) *Server {
-	if len(allowedHosts) == 0 {
-		allowedHosts = DefaultAllowedHosts
+// Options configure a Server.
+type Options struct {
+	// AllowedHosts are host names (without port) accepted in the Host
+	// header; empty means DefaultAllowedHosts.
+	AllowedHosts []string
+	// Syncer and Runner enable account management and sync. Without them
+	// (no secret key configured) the archive can only be browsed.
+	Syncer *archive.Syncer
+	Runner *archive.Runner
+}
+
+// New creates a Server.
+func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options) *Server {
+	allowed := opts.AllowedHosts
+	if len(allowed) == 0 {
+		allowed = DefaultAllowedHosts
 	}
-	hosts := make([]string, 0, len(allowedHosts))
-	for _, h := range allowedHosts {
+	hosts := make([]string, 0, len(allowed))
+	for _, h := range allowed {
 		if h = strings.Trim(strings.ToLower(strings.TrimSpace(h)), "[]"); h != "" {
 			hosts = append(hosts, h)
 		}
 	}
-	return &Server{store: st, blobs: blobs, log: log, allowedHosts: hosts}
+	return &Server{store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner}
 }
 
 // Handler returns the HTTP handler with all routes and protections.
@@ -53,6 +67,12 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
+	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
+	mux.HandleFunc("PATCH /api/accounts/{name}", s.handleUpdateAccount)
+	mux.HandleFunc("DELETE /api/accounts/{name}", s.handleDeleteAccount)
+	mux.HandleFunc("GET /api/accounts/{name}/server-folders", s.handleServerFolders)
+	mux.HandleFunc("POST /api/accounts/{name}/sync", s.handleSyncAccount)
+	mux.HandleFunc("POST /api/sync", s.handleSyncAll)
 	mux.HandleFunc("GET /api/messages", s.handleListMessages)
 	mux.HandleFunc("GET /api/messages/{sha}", s.handleMessage)
 	mux.HandleFunc("GET /api/messages/{sha}/html", s.handleMessageHTML)

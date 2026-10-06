@@ -47,6 +47,8 @@ services:
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       MAIL_ARCHIVE_ALLOWED_HOSTS: localhost,127.0.0.1
+      # How often each enabled account is synced; 0 turns the schedule off.
+      MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:

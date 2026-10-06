@@ -10,7 +10,7 @@ import (
 )
 
 func TestProtect(t *testing.T) {
-	s := New(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	s := New(nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	h := s.protect(ok)
 

@@ -148,6 +148,9 @@ type Account struct {
 	ExcludedFolders []string
 	Enabled         bool
 	CreatedAt       time.Time
+	// RemovedAt is set for removed accounts: their archived mail stays, but
+	// they have no password and are never synced.
+	RemovedAt *time.Time
 }
 
 func accountFromDB(r db.Account) *Account {
@@ -163,6 +166,7 @@ func accountFromDB(r db.Account) *Account {
 		ExcludedFolders: r.ExcludedFolders,
 		Enabled:         r.Enabled,
 		CreatedAt:       r.CreatedAt,
+		RemovedAt:       r.RemovedAt,
 	}
 }
 
@@ -222,28 +226,67 @@ func (s *Store) SetFolderFilters(ctx context.Context, id int64, included, exclud
 	}))
 }
 
-// DeleteAccount removes an account that has no archived data yet.
-func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
-	n, err := s.q.CountAccountLocations(ctx, id)
-	if err != nil {
-		return err
+// UpdateConnection replaces the server settings and encrypted password.
+func (s *Store) UpdateConnection(ctx context.Context, a *Account) error {
+	if a.Port < 1 || a.Port > 65535 {
+		return fmt.Errorf("invalid port %d", a.Port)
 	}
-	if n > 0 {
-		return fmt.Errorf("account has %d archived message locations; disable it instead", n)
-	}
+	return one(s.q.UpdateAccountConnection(ctx, db.UpdateAccountConnectionParams{
+		ID: a.ID, Host: a.Host, Port: int32(a.Port), //nolint:gosec // range checked above
+		TlsMode: string(a.TLSMode), Username: a.Username, PasswordEnc: a.PasswordEnc,
+	}))
+}
+
+// RemoveResult tells how DeleteOrRemoveAccount handled an account.
+type RemoveResult string
+
+// Possible outcomes of DeleteOrRemoveAccount.
+const (
+	AccountDeleted RemoveResult = "deleted" // no archived mail: the account is gone
+	AccountRemoved RemoveResult = "removed" // archived mail kept, credentials wiped
+)
+
+// DeleteOrRemoveAccount deletes an account without archived mail. An account
+// with archived mail is marked as removed instead: its mail stays searchable
+// and keeps showing where it came from, but the password is wiped and the
+// account is never synced again.
+func (s *Store) DeleteOrRemoveAccount(ctx context.Context, id int64) (RemoveResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.q.WithTx(tx)
-	if err := q.DeleteAccountFolders(ctx, id); err != nil {
-		return err
+	n, err := q.CountAccountLocations(ctx, id)
+	if err != nil {
+		return "", err
 	}
-	if err := one(q.DeleteAccount(ctx, id)); err != nil {
-		return err
+	result := AccountRemoved
+	if n == 0 {
+		result = AccountDeleted
+		if err := q.DeleteAccountFolders(ctx, id); err != nil {
+			return "", err
+		}
+		err = one(q.DeleteAccount(ctx, id))
+	} else {
+		err = one(q.RemoveAccount(ctx, id))
 	}
-	return tx.Commit(ctx)
+	if err != nil {
+		return "", err
+	}
+	return result, tx.Commit(ctx)
+}
+
+// GetAccount looks up an account by ID.
+func (s *Store) GetAccount(ctx context.Context, id int64) (*Account, error) {
+	r, err := s.q.GetAccount(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return accountFromDB(r), nil
 }
 
 // GetAccountByName looks up an account by its unique name.
@@ -386,8 +429,12 @@ type SyncRun struct {
 	Error           string
 }
 
-// StartSyncRun creates a running sync record.
+// StartSyncRun creates a running sync record. Call it while holding the
+// account's sync lock: it closes runs left open by a process that died.
 func (s *Store) StartSyncRun(ctx context.Context, accountID int64) (*SyncRun, error) {
+	if _, err := s.q.FailStaleSyncRuns(ctx, accountID); err != nil {
+		return nil, err
+	}
 	id, err := s.q.StartSyncRun(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -402,6 +449,39 @@ func (s *Store) FinishSyncRun(ctx context.Context, r *SyncRun) error {
 		MessagesFetched: clampInt32(r.MessagesFetched),
 		MessagesNew:     clampInt32(r.MessagesNew),
 	}))
+}
+
+// UpdateSyncRunProgress stores the counters of a running sync.
+func (s *Store) UpdateSyncRunProgress(ctx context.Context, r *SyncRun) error {
+	return s.q.UpdateSyncRunProgress(ctx, db.UpdateSyncRunProgressParams{
+		ID: r.ID, MessagesFetched: clampInt32(r.MessagesFetched), MessagesNew: clampInt32(r.MessagesNew),
+	})
+}
+
+// LastRun is the most recent sync run of an account.
+type LastRun struct {
+	StartedAt       time.Time
+	FinishedAt      *time.Time
+	Status          string
+	MessagesFetched int
+	MessagesNew     int
+	Error           string
+}
+
+// LastRuns returns the most recent sync run per account ID.
+func (s *Store) LastRuns(ctx context.Context) (map[int64]LastRun, error) {
+	rows, err := s.q.LastSyncRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]LastRun, len(rows))
+	for _, r := range rows {
+		out[r.AccountID] = LastRun{
+			StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Status: r.Status,
+			MessagesFetched: int(r.MessagesFetched), MessagesNew: int(r.MessagesNew), Error: deref(r.Error),
+		}
+	}
+	return out, nil
 }
 
 // AccountStats summarizes the archive for one account.
@@ -421,19 +501,18 @@ func (s *Store) Stats(ctx context.Context) ([]AccountStats, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	runs, err := s.q.LastSyncRuns(ctx)
+	lastRun, err := s.LastRuns(ctx)
 	if err != nil {
 		return nil, 0, err
-	}
-	lastRun := make(map[int64]db.LastSyncRunsRow, len(runs))
-	for _, r := range runs {
-		lastRun[r.AccountID] = r
 	}
 	out := make([]AccountStats, 0, len(rows))
 	for _, r := range rows {
 		st := AccountStats{Account: r.Name, Enabled: r.Enabled, Folders: int(r.Folders), Locations: r.Locations}
 		if run, ok := lastRun[r.ID]; ok {
-			st.LastRunAt, st.LastStatus, st.LastRunError = &run.StartedAt, &run.Status, run.Error
+			st.LastRunAt, st.LastStatus = &run.StartedAt, &run.Status
+			if run.Error != "" {
+				st.LastRunError = &run.Error
+			}
 		}
 		out = append(out, st)
 	}

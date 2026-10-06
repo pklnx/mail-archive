@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
@@ -36,6 +37,12 @@ type Syncer struct {
 	Dial func(context.Context, imapsync.Config) (*imapsync.Conn, error)
 }
 
+// ErrSyncRunning is returned when another process already syncs the account.
+var ErrSyncRunning = errors.New("a sync of this account is already running")
+
+// ErrAccountRemoved is returned when syncing an account that was removed.
+var ErrAccountRemoved = errors.New("account was removed")
+
 // AccountResult is the outcome of syncing one account.
 type AccountResult struct {
 	Account string
@@ -44,8 +51,9 @@ type AccountResult struct {
 	Err     error
 }
 
-// SyncAll syncs every enabled account (or only the named ones). A failing
-// account does not stop the others.
+// SyncAll syncs every enabled account (or only the named ones, even if
+// disabled). Removed accounts are skipped. A failing account does not stop
+// the others.
 func (s *Syncer) SyncAll(ctx context.Context, only []string) ([]AccountResult, error) {
 	accounts, err := s.Store.ListAccounts(ctx)
 	if err != nil {
@@ -53,6 +61,9 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string) ([]AccountResult, e
 	}
 	var results []AccountResult
 	for _, a := range accounts {
+		if a.RemovedAt != nil {
+			continue
+		}
 		if len(only) > 0 && !containsFold(only, a.Name) {
 			continue
 		}
@@ -68,9 +79,24 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string) ([]AccountResult, e
 }
 
 // SyncAccount syncs all selected folders of one account and records a run.
+// It fails with ErrSyncRunning if the account is already being synced.
 func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResult {
 	log := s.logger().With("account", a.Name)
 	res := AccountResult{Account: a.Name}
+	if a.RemovedAt != nil {
+		res.Err = ErrAccountRemoved
+		return res
+	}
+	unlock, ok, err := s.Store.TryLockSync(ctx, a.ID)
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	if !ok {
+		res.Err = ErrSyncRunning
+		return res
+	}
+	defer unlock()
 
 	run, err := s.Store.StartSyncRun(ctx, a.ID)
 	if err != nil {
@@ -96,14 +122,7 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		res.Err = fmt.Errorf("decrypt password: %w", err)
 		return finish("failed")
 	}
-	dial := s.Dial
-	if dial == nil {
-		dial = imapsync.Dial
-	}
-	conn, err := dial(ctx, imapsync.Config{
-		Host: a.Host, Port: a.Port, TLSMode: string(a.TLSMode),
-		Username: a.Username, Password: string(password),
-	})
+	conn, err := s.dial(ctx, a, string(password))
 	if err != nil {
 		res.Err = err
 		return finish("failed")
@@ -120,7 +139,14 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 			log.Debug("skip folder", "folder", f.Name)
 			continue
 		}
-		fetched, added, err := s.syncFolder(ctx, conn, a, f.Name, log.With("folder", f.Name))
+		base := res
+		progress := func(fetched, added int) {
+			run.MessagesFetched, run.MessagesNew = base.Fetched+fetched, base.New+added
+			if err := s.Store.UpdateSyncRunProgress(ctx, run); err != nil {
+				log.Debug("record sync progress", "err", err)
+			}
+		}
+		fetched, added, err := s.syncFolder(ctx, conn, a, f.Name, progress, log.With("folder", f.Name))
 		res.Fetched += fetched
 		res.New += added
 		if err != nil {
@@ -140,12 +166,49 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 	return finish("ok")
 }
 
+func (s *Syncer) dial(ctx context.Context, a *store.Account, password string) (*imapsync.Conn, error) {
+	dial := s.Dial
+	if dial == nil {
+		dial = imapsync.Dial
+	}
+	return dial(ctx, imapsync.Config{
+		Host: a.Host, Port: a.Port, TLSMode: string(a.TLSMode),
+		Username: a.Username, Password: password,
+	})
+}
+
+// CheckLogin connects with the given settings and password and lists the
+// folders, to verify an account before it is saved.
+func (s *Syncer) CheckLogin(ctx context.Context, a *store.Account, password string) ([]imapsync.Folder, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	conn, err := s.dial(ctx, a, password)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	return conn.ListFolders()
+}
+
+// ListFolders connects with the account's stored password and lists its
+// folders.
+func (s *Syncer) ListFolders(ctx context.Context, a *store.Account) ([]imapsync.Folder, error) {
+	password, err := s.Sealer.Open(a.PasswordEnc, PasswordContext(a.Name))
+	if err != nil {
+		return nil, fmt.Errorf("decrypt password: %w", err)
+	}
+	return s.CheckLogin(ctx, a, string(password))
+}
+
 type storedBody struct {
 	blob    blobstore.Blob
 	created bool
 }
 
-func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.Account, name string, log *slog.Logger) (fetched, added int, err error) {
+// syncFolder copies new messages of one folder. progress is called after each
+// committed batch with the folder's counts so far.
+func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.Account, name string,
+	progress func(fetched, added int), log *slog.Logger) (fetched, added int, err error) {
 	status, err := conn.Examine(name)
 	if err != nil {
 		return 0, 0, err
@@ -186,6 +249,7 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 		}
 		added += n
 		metas, locs = metas[:0], locs[:0]
+		progress(fetched, added)
 		return nil
 	}
 

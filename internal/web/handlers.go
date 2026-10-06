@@ -43,35 +43,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"uniqueMessages": unique, "accounts": accounts})
 }
 
-type folderJSON struct {
-	Name         string     `json:"name"`
-	Messages     int64      `json:"messages"`
-	LastSyncedAt *time.Time `json:"lastSyncedAt"`
-}
-
-type accountJSON struct {
-	Name    string       `json:"name"`
-	Enabled bool         `json:"enabled"`
-	Folders []folderJSON `json:"folders"`
-}
-
-func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
-	list, err := s.store.ListAccountFolders(r.Context())
-	if err != nil {
-		s.failStore(w, r, err)
-		return
-	}
-	out := make([]accountJSON, 0, len(list))
-	for _, a := range list {
-		aj := accountJSON{Name: a.Name, Enabled: a.Enabled, Folders: make([]folderJSON, 0, len(a.Folders))}
-		for _, f := range a.Folders {
-			aj.Folders = append(aj.Folders, folderJSON{Name: f.Name, Messages: f.Messages, LastSyncedAt: f.LastSyncedAt})
-		}
-		out = append(out, aj)
-	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
-}
-
 type summaryJSON struct {
 	ID      string     `json:"id"`
 	Size    int64      `json:"size"`

@@ -15,8 +15,20 @@ SELECT a.id, a.name, a.enabled,
 FROM accounts a
 ORDER BY a.name;
 
+
+-- name: UpdateSyncRunProgress :exec
+UPDATE sync_runs SET messages_fetched = @messages_fetched, messages_new = @messages_new
+WHERE id = @id AND finished_at IS NULL;
+
+-- name: FailStaleSyncRuns :execrows
+-- Runs left "running" by a process that died. Only called while holding the
+-- account's sync lock, so no other run of the account can be active.
+UPDATE sync_runs SET finished_at = now(), status = 'failed', error = 'interrupted'
+WHERE account_id = $1 AND finished_at IS NULL;
+
 -- name: LastSyncRuns :many
--- The most recent sync run per account.
-SELECT DISTINCT ON (account_id) account_id, started_at, status, error
+-- The most recent sync run per account, with counters.
+SELECT DISTINCT ON (account_id) account_id, started_at, finished_at, status,
+       messages_fetched, messages_new, error
 FROM sync_runs
 ORDER BY account_id, started_at DESC;
