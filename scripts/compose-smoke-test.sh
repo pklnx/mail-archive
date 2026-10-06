@@ -55,6 +55,9 @@ WEB_PORT=${SMOKE_WEB_PORT:-58080}
 ENV
 WEB_PORT=${SMOKE_WEB_PORT:-58080}
 
+# Self-hosted runners can retain volumes after a cancelled previous run.
+docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+
 expect() { # expect <file> <extended regex>
 	if ! grep -Eq "$2" "$1"; then
 		echo "expected output matching: $2" >&2
