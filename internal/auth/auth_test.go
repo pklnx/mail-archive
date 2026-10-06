@@ -197,3 +197,23 @@ func TestLimiterSweeps(t *testing.T) {
 		t.Fatalf("after sweep: %d users, %d addrs", len(l.users), len(l.addrs))
 	}
 }
+
+func TestGeneratePassword(t *testing.T) {
+	seen := map[string]bool{}
+	for range 100 {
+		pw, err := GeneratePassword()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pw) != 23 || strings.Count(pw, "-") != 3 || ValidatePassword(pw) != nil {
+			t.Fatalf("password %q", pw)
+		}
+		if strings.ContainsAny(pw, "01lo") {
+			t.Fatalf("lookalike character in %q", pw)
+		}
+		if seen[pw] {
+			t.Fatalf("%q generated twice", pw)
+		}
+		seen[pw] = true
+	}
+}

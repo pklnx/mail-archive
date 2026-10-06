@@ -24,6 +24,24 @@ curl -c cookies.txt -X POST http://localhost:8080/api/session \
 curl -b cookies.txt http://localhost:8080/api/status
 ```
 
+## Users and profile
+
+The user endpoints are only for admins; other users get `403`. Admins cannot
+change their own login with them (`403`); they use the profile endpoint.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
+| `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. |
+| `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. |
+| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}` or `{"locked": true\|false}`. `409` for the last admin. |
+| `DELETE /api/users/{name}` | Remove a user. `409` while they own accounts, or for the last admin. |
+| `PUT /api/profile/password` | Every user: `{"current": "...", "new": "..."}`. `401` for a wrong current password (counts like a failed login, then `429`), `400` for a new password that is too short or unchanged. Other sessions end. |
+
+After logging in with a generated password, `GET /api/session` reports
+`"mustChangePassword": true`, and every other endpoint except
+`PUT /api/profile/password` answers `403` with `"passwordChangeRequired": true`.
+
 ## Write requests
 
 `POST`, `PATCH` and `DELETE` requests are only accepted with:

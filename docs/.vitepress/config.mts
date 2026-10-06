@@ -30,6 +30,7 @@ export default defineConfig({
           { text: "Accounts and providers", link: "/guide/accounts" },
           { text: "Syncing", link: "/guide/syncing" },
           { text: "Web UI and search", link: "/guide/web-ui" },
+          { text: "Users", link: "/guide/users" },
           { text: "Backups and upgrades", link: "/guide/operations" },
         ],
       },

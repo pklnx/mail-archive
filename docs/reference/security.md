@@ -15,8 +15,11 @@
 Every API request needs a login, except the login itself and `/healthz`. The
 page code (`/`, `/assets/`) is public; it contains no data.
 
-- **Users** are created with `./ma user add NAME` (`--admin` for admins). There
-  is no self-registration. Passwords need at least 12 characters; there are no
+- **Users** are created by admins in the web UI or with `./ma user add NAME`
+  (`--admin` for admins). There is no self-registration. Passwords generated
+  by the server (new users, resets) have about 99 bits of entropy, are shown
+  once and must be replaced by the user at the first login; until then the
+  server refuses every other request. Passwords need at least 12 characters; there are no
   other rules, so a long passphrase is fine.
 - **Sessions** end after 7 days without use and after 30 days at the latest.
   Logging out, a new password (`./ma user set-password`), locking

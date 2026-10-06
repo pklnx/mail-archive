@@ -78,7 +78,6 @@ The password is prompted (or read from stdin with `--password-stdin`).
   [Syncing](./syncing) to change that or to run syncs from cron.
 - Archived messages appear in `./data` (set `ARCHIVE_DIR` in `.env` to move
   it) and in the web UI.
-- More people can get their own login with `./ma user add NAME`; see
-  [CLI](../reference/cli#user).
+- More people get their own login from an admin; see [Users](./users).
 - To use the web UI from your home network or a VPN, read
   [Security](../reference/security#network-access) first.

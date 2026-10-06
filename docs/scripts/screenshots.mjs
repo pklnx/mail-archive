@@ -73,6 +73,17 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  const p = await page("light");
+  await p.goto(base + "/?view=users");
+  await p.getByText("sam").first().waitFor();
+  await p.screenshot({ path: `${out}/users.png` });
+  await p.goto(base + "/?view=profile");
+  await p.getByRole("heading", { name: "Profile" }).waitFor();
+  await p.screenshot({ path: `${out}/profile.png` });
+  await p.context().close();
+}
+
+{
   const p = await page("light", { width: 390, height: 780 });
   await openMessage(p, "Photos from the weekend");
   await p.screenshot({ path: `${out}/mail-phone.png` });

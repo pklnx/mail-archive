@@ -26,10 +26,25 @@ const touchInterval = time.Minute
 
 type sessionKey struct{}
 
+// profilePasswordPath is the one endpoint a user with a generated password
+// may use (besides the session endpoints).
+const profilePasswordPath = "/api/profile/password" //nolint:gosec // a URL path, not a credential
+
+type passwordChangeJSON struct {
+	Error                  string `json:"error"`
+	PasswordChangeRequired bool   `json:"passwordChangeRequired"`
+}
+
+// currentSession returns the session of a request that passed requireLogin.
+func currentSession(r *http.Request) *store.Session {
+	sess, _ := r.Context().Value(sessionKey{}).(*store.Session)
+	return sess
+}
+
 // userID returns the logged-in user of a request that passed requireLogin.
 // Without a session it returns 0, which matches no owner.
 func userID(r *http.Request) int64 {
-	if sess, ok := r.Context().Value(sessionKey{}).(*store.Session); ok {
+	if sess := currentSession(r); sess != nil {
 		return sess.UserID
 	}
 	return 0
@@ -115,6 +130,11 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 			s.fail(w, r, http.StatusUnauthorized, "login required", nil)
 			return
 		}
+		// A user with a generated password must choose their own first.
+		if sess.MustChangePassword && (r.Method != http.MethodPut || r.URL.Path != profilePasswordPath) {
+			s.writeJSON(w, http.StatusForbidden, passwordChangeJSON{Error: "choose your own password first", PasswordChangeRequired: true})
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess)))
 	})
 }
@@ -122,6 +142,9 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 type userJSON struct {
 	Name  string `json:"name"`
 	Admin bool   `json:"admin"`
+	// MustChangePassword: the user logged in with a generated password and
+	// must choose their own before anything else works.
+	MustChangePassword bool `json:"mustChangePassword"`
 }
 
 type sessionJSON struct {
@@ -142,7 +165,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess != nil {
-		s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{Name: sess.UserName, Admin: sess.IsAdmin}})
+		s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{Name: sess.UserName, Admin: sess.IsAdmin, MustChangePassword: sess.MustChangePassword}})
 		return
 	}
 	n, err := s.store.CountUsers(r.Context())
@@ -239,7 +262,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("login", "user", u.Name, "addr", addr)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{Name: u.Name, Admin: u.IsAdmin}})
+	s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{Name: u.Name, Admin: u.IsAdmin, MustChangePassword: u.MustChangePassword}})
 }
 
 type retryJSON struct {

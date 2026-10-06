@@ -26,6 +26,9 @@ Create the first admin with:  user add NAME --admin`,
 		newUserAddCmd(),
 		newUserListCmd(),
 		newUserSetPasswordCmd(),
+		newUserResetPasswordCmd(),
+		newUserAdminCmd(true),
+		newUserAdminCmd(false),
 		newUserLockCmd(true),
 		newUserLockCmd(false),
 		newUserRemoveCmd(),
@@ -143,13 +146,17 @@ func newUserListCmd() *cobra.Command {
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tROLE\tSTATE\tACCOUNTS\tCREATED\tLAST LOGIN")
+			// STATE says "must change password" for generated passwords.
 			for _, u := range users {
 				role, state, last := "user", "active", "never"
 				if u.IsAdmin {
 					role = "admin"
 				}
-				if u.LockedAt != nil {
+				switch {
+				case u.LockedAt != nil:
 					state = "locked"
+				case u.MustChangePassword:
+					state = "must change password"
 				}
 				if u.LastLoginAt != nil {
 					last = u.LastLoginAt.Local().Format(time.DateTime)
@@ -205,7 +212,7 @@ func newUserSetPasswordCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.store.SetUserPassword(cmd.Context(), u.ID, hash); err != nil {
+			if err := a.store.SetUserPassword(cmd.Context(), u.ID, hash, false); err != nil {
 				return err
 			}
 			fmt.Printf("password of %q changed; existing logins ended\n", u.Name)
@@ -263,6 +270,61 @@ func newUserRemoveCmd() *cobra.Command {
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("user %q removed\n", u.Name)
+			return nil
+		},
+	}
+}
+
+func newUserResetPasswordCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset-password NAME",
+		Short: "Generate a new password the user must change at the next login",
+		Long: `Generate a random password and print it once. Hand it to the user: at the
+next login they must choose their own password. The user is logged out
+everywhere.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, u, err := loadUser(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			pw, err := auth.GeneratePassword()
+			if err != nil {
+				return err
+			}
+			hash, err := hashPassword(cmd, pw)
+			if err != nil {
+				return err
+			}
+			if err := a.store.SetUserPassword(cmd.Context(), u.ID, hash, true); err != nil {
+				return err
+			}
+			fmt.Printf("new password for %q (shown only now; to be changed at the next login):\n%s\n", u.Name, pw)
+			return nil
+		},
+	}
+}
+
+func newUserAdminCmd(admin bool) *cobra.Command {
+	use, short, done := "demote NAME", "Take the admin role away", "is no longer an admin"
+	if admin {
+		use, short, done = "promote NAME", "Make a user an admin", "is now an admin"
+	}
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, u, err := loadUser(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			if err := a.store.SetUserAdmin(cmd.Context(), u.ID, admin); err != nil {
+				return lastAdminError(err, u.Name)
+			}
+			fmt.Printf("%q %s\n", u.Name, done)
 			return nil
 		},
 	}

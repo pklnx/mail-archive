@@ -1,6 +1,6 @@
 -- name: CreateUser :one
-INSERT INTO users (name, password_hash, is_admin)
-VALUES ($1, $2, $3)
+INSERT INTO users (name, password_hash, is_admin, must_change_password)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetUserByName :one
@@ -18,7 +18,14 @@ SELECT count(*) FROM users;
 SELECT id FROM users WHERE is_admin AND locked_at IS NULL FOR UPDATE;
 
 -- name: SetUserPassword :execrows
-UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1;
+UPDATE users SET password_hash = $2, must_change_password = $3, password_changed_at = now() WHERE id = $1;
+
+-- name: SetUserAdmin :execrows
+UPDATE users SET is_admin = $2 WHERE id = $1;
+
+-- name: DeleteOtherSessions :exec
+-- All sessions of a user except one.
+DELETE FROM sessions WHERE user_id = $1 AND id <> $2;
 
 -- name: RehashUserPassword :execrows
 -- Replaces the hash with one of the same password (new parameters); unlike
@@ -41,7 +48,7 @@ VALUES ($1, $2, $3, $4);
 -- name: GetSession :one
 -- A session is valid while it has not expired, was used after the idle
 -- cutoff and its user is not locked.
-SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin
+SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1

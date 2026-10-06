@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, UNAUTHORIZED_EVENT, retryAfter, sessionApi, type SessionState, type User } from "./api";
+import { PasswordForm } from "./Profile";
 import { ThemeToggle } from "./ThemeToggle";
 import { t } from "./i18n";
 import logo from "./logo.svg";
@@ -49,6 +50,20 @@ export function AuthGate({ children }: Props) {
     const logout = () => {
       sessionApi.logout().finally(() => setState({ user: null, setupRequired: false }));
     };
+    if (state.user.mustChangePassword) {
+      const user = state.user;
+      return (
+        <Centered>
+          <Brand />
+          <h2 className="font-semibold">{t.chooseOwnPassword}</h2>
+          <p>{t.chooseOwnPasswordText}</p>
+          <PasswordForm done={() => setState({ user: { ...user, mustChangePassword: false } })} />
+          <button type="button" className="self-start text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>
+            {t.logOut}
+          </button>
+        </Centered>
+      );
+    }
     return children(state.user, logout);
   }
   if (state.setupRequired) return <SetupNotice check={check} />;

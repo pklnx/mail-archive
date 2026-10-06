@@ -129,6 +129,10 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	if _, err := st.CreateUser(ctx, loginName, hash, true); err != nil {
 		return err
 	}
+	// A second user for the users page; it has no accounts.
+	if _, err := st.CreateUserWithGeneratedPassword(ctx, "sam", hash, false); err != nil {
+		return err
+	}
 
 	runner := &archive.Runner{Syncer: syncer, Interval: 6 * time.Hour}
 	go runner.Run(ctx)
