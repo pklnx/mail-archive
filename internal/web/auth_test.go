@@ -100,6 +100,16 @@ func (f *authFixture) addUser(name, password string, admin bool) *store.User {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	if admin {
+		secret := "JBSWY3DPEHPK3PXP"
+		ctx := context.Background()
+		if err := f.st.BeginTwoFactorSetup(ctx, u.ID, secret, f.sealer); err != nil { f.t.Fatal(err) }
+		codes := []string{"test-recovery-1"}
+		if err := f.st.ConfirmTwoFactorSetup(ctx, u.ID, auth.GenerateTOTP(secret, time.Now()), time.Now(), f.sealer, codes, f.secretKey); err != nil { f.t.Fatal(err) }
+		f.adminSecrets[name] = secret
+		u, err = f.st.GetUserByName(ctx, name)
+		if err != nil { f.t.Fatal(err) }
+	}
 	return u
 }
 
