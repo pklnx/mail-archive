@@ -94,7 +94,7 @@ func totpForCounter(key []byte, counter uint64) string {
 
 // GenerateRecoveryCodes creates high-entropy one-time recovery codes.
 func GenerateRecoveryCodes() ([]string, error) {
-	const alphabetLen = byte(len(recoveryAlphabet))
+	const alphabetLen = len(recoveryAlphabet)
 	limit := byte(256 / alphabetLen * alphabetLen)
 	out := make([]string, RecoveryCodeCount)
 	buf := make([]byte, 1)
