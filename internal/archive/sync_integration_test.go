@@ -1,28 +1,25 @@
 package archive_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/emersion/go-imap/v2"
-	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -34,48 +31,13 @@ func rawMessage(id, subject string) []byte {
 
 func appendMsg(t *testing.T, u *imapmemserver.User, mailbox string, raw []byte) {
 	t.Helper()
-	// bytes.Reader implements imap.LiteralReader (Read + Size).
-	if _, err := u.Append(mailbox, bytes.NewReader(raw), &imap.AppendOptions{Time: time.Now()}); err != nil {
-		t.Fatalf("append to %s: %v", mailbox, err)
-	}
+	imaptest.Append(t, u, mailbox, raw)
 }
 
 func createMailboxes(t *testing.T, u *imapmemserver.User, names ...string) {
 	t.Helper()
-	for _, n := range names {
-		if err := u.Create(n, nil); err != nil {
-			t.Fatalf("create %s: %v", n, err)
-		}
-	}
+	imaptest.CreateMailboxes(t, u, names...)
 }
-
-func startIMAPServer(t *testing.T, users ...*imapmemserver.User) (host string, port int) {
-	t.Helper()
-	mem := imapmemserver.New()
-	for _, u := range users {
-		mem.AddUser(u)
-	}
-	srv := imapserver.New(&imapserver.Options{
-		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
-			return mem.NewSession(), nil, nil
-		},
-		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}},
-		InsecureAuth: true,
-		Logger:       slogDiscard{},
-	})
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
-	addr := ln.Addr().(*net.TCPAddr)
-	return addr.IP.String(), addr.Port
-}
-
-type slogDiscard struct{}
-
-func (slogDiscard) Printf(string, ...any) {}
 
 type fixture struct {
 	t       *testing.T
@@ -102,7 +64,7 @@ func newFixture(t *testing.T, users ...*imapmemserver.User) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, port := startIMAPServer(t, users...)
+	host, port := imaptest.Start(t, users...)
 	return &fixture{
 		t: t, ctx: context.Background(), store: st, blobs: blobs, dataDir: dataDir, sealer: sealer,
 		host: host, port: port,

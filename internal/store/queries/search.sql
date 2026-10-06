@@ -46,10 +46,10 @@ WHERE l.message_sha256 = $1
 ORDER BY a.name, f.name;
 
 -- name: ListFolderCounts :many
-SELECT a.name AS account, a.enabled, f.name AS folder, count(l.id) AS messages,
-       f.last_synced_at
+SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed,
+       f.name AS folder, count(l.id) AS messages, f.last_synced_at
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 LEFT JOIN message_locations l ON l.folder_id = f.id
-GROUP BY a.name, a.enabled, f.name, f.last_synced_at
+GROUP BY a.name, a.enabled, a.removed_at, f.name, f.last_synced_at
 ORDER BY a.name, f.name;

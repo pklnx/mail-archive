@@ -84,8 +84,33 @@ func (q *Queries) DeleteAccountFolders(ctx context.Context, accountID int64) err
 	return err
 }
 
+const getAccount = `-- name: GetAccount :one
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at FROM accounts WHERE id = $1
+`
+
+func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccount, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Host,
+		&i.Port,
+		&i.TlsMode,
+		&i.Username,
+		&i.PasswordEnc,
+		&i.IncludedFolders,
+		&i.ExcludedFolders,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RemovedAt,
+	)
+	return i, err
+}
+
 const getAccountByName = `-- name: GetAccountByName :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at FROM accounts WHERE name = $1
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at FROM accounts WHERE name = $1
 `
 
 func (q *Queries) GetAccountByName(ctx context.Context, name string) (Account, error) {
@@ -104,12 +129,13 @@ func (q *Queries) GetAccountByName(ctx context.Context, name string) (Account, e
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RemovedAt,
 	)
 	return i, err
 }
 
 const listAccounts = `-- name: ListAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at FROM accounts ORDER BY name
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at FROM accounts ORDER BY name
 `
 
 func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
@@ -134,6 +160,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RemovedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -145,8 +172,23 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 	return items, nil
 }
 
+const removeAccount = `-- name: RemoveAccount :execrows
+UPDATE accounts
+SET removed_at = now(), enabled = FALSE, password_enc = ''::bytea, updated_at = now()
+WHERE id = $1 AND removed_at IS NULL
+`
+
+// Keeps the archived data; wipes the credentials.
+func (q *Queries) RemoveAccount(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, removeAccount, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setAccountEnabled = `-- name: SetAccountEnabled :execrows
-UPDATE accounts SET enabled = $2, updated_at = now() WHERE id = $1
+UPDATE accounts SET enabled = $2, updated_at = now() WHERE id = $1 AND removed_at IS NULL
 `
 
 type SetAccountEnabledParams struct {
@@ -163,7 +205,7 @@ func (q *Queries) SetAccountEnabled(ctx context.Context, arg SetAccountEnabledPa
 }
 
 const setFolderFilters = `-- name: SetFolderFilters :execrows
-UPDATE accounts SET included_folders = $2, excluded_folders = $3, updated_at = now() WHERE id = $1
+UPDATE accounts SET included_folders = $2, excluded_folders = $3, updated_at = now() WHERE id = $1 AND removed_at IS NULL
 `
 
 type SetFolderFiltersParams struct {
@@ -180,8 +222,38 @@ func (q *Queries) SetFolderFilters(ctx context.Context, arg SetFolderFiltersPara
 	return result.RowsAffected(), nil
 }
 
+const updateAccountConnection = `-- name: UpdateAccountConnection :execrows
+UPDATE accounts
+SET host = $2, port = $3, tls_mode = $4, username = $5, password_enc = $6, updated_at = now()
+WHERE id = $1 AND removed_at IS NULL
+`
+
+type UpdateAccountConnectionParams struct {
+	ID          int64
+	Host        string
+	Port        int32
+	TlsMode     string
+	Username    string
+	PasswordEnc []byte
+}
+
+func (q *Queries) UpdateAccountConnection(ctx context.Context, arg UpdateAccountConnectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAccountConnection,
+		arg.ID,
+		arg.Host,
+		arg.Port,
+		arg.TlsMode,
+		arg.Username,
+		arg.PasswordEnc,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updatePassword = `-- name: UpdatePassword :execrows
-UPDATE accounts SET password_enc = $2, updated_at = now() WHERE id = $1
+UPDATE accounts SET password_enc = $2, updated_at = now() WHERE id = $1 AND removed_at IS NULL
 `
 
 type UpdatePasswordParams struct {

@@ -358,10 +358,17 @@ func newAccountListCmd() *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tSERVER\tUSER\tENABLED\tINCLUDE\tEXCLUDE")
+			fmt.Fprintln(w, "NAME\tSERVER\tUSER\tSTATE\tINCLUDE\tEXCLUDE")
 			for _, acc := range accounts {
-				fmt.Fprintf(w, "%s\t%s:%d (%s)\t%s\t%v\t%s\t%s\n", acc.Name, acc.Host, acc.Port, acc.TLSMode,
-					acc.Username, acc.Enabled, listOrDash(acc.IncludedFolders, "all"), listOrDash(acc.ExcludedFolders, "-"))
+				state := "enabled"
+				switch {
+				case acc.RemovedAt != nil:
+					state = "removed"
+				case !acc.Enabled:
+					state = "disabled"
+				}
+				fmt.Fprintf(w, "%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, acc.Host, acc.Port, acc.TLSMode,
+					acc.Username, state, listOrDash(acc.IncludedFolders, "all"), listOrDash(acc.ExcludedFolders, "-"))
 			}
 			return w.Flush()
 		},
@@ -387,6 +394,10 @@ func loadAccount(cmd *cobra.Command, name string) (*app, *store.Account, error) 
 			return nil, nil, fmt.Errorf("account %q not found", name)
 		}
 		return nil, nil, err
+	}
+	if acc.RemovedAt != nil {
+		a.close()
+		return nil, nil, fmt.Errorf("account %q was removed; its archived mail is kept, but it cannot be changed or synced", name)
 	}
 	return a, acc, nil
 }
@@ -523,18 +534,27 @@ func newAccountEnableCmd(enable bool) *cobra.Command {
 func newAccountRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove NAME",
-		Short: "Remove an account that has no archived messages yet",
-		Args:  cobra.ExactArgs(1),
+		Short: "Remove an account (archived mail is kept)",
+		Long: `Remove an account. If mail from it is already archived, the mail stays
+searchable and keeps showing where it came from; the account's password is
+deleted and it is never synced again. An account without archived mail is
+deleted completely.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, acc, err := loadAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
 			defer a.close()
-			if err := a.store.DeleteAccount(cmd.Context(), acc.ID); err != nil {
+			res, err := a.store.DeleteOrRemoveAccount(cmd.Context(), acc.ID)
+			if err != nil {
 				return err
 			}
-			fmt.Printf("account %q removed\n", acc.Name)
+			if res == store.AccountDeleted {
+				fmt.Printf("account %q deleted\n", acc.Name)
+			} else {
+				fmt.Printf("account %q removed; its archived mail is kept\n", acc.Name)
+			}
 			return nil
 		},
 	}
@@ -573,7 +593,10 @@ the archive. Run this periodically (cron, systemd timer).`,
 			failed := 0
 			for _, r := range results {
 				status := "ok"
-				if r.Err != nil {
+				switch {
+				case errors.Is(r.Err, archive.ErrSyncRunning):
+					status = "skipped: already syncing (web server or another run)"
+				case r.Err != nil:
 					status = "error: " + r.Err.Error()
 					failed++
 				}
@@ -616,7 +639,26 @@ rebinding; state-changing requests must come from the same origin.`,
 				return err
 			}
 			log := newLogger(a.cfg.LogLevel)
-			srv := web.New(a.store, blobs, log, a.cfg.AllowedHosts)
+			opts := web.Options{AllowedHosts: a.cfg.AllowedHosts}
+			if sealer, err := a.cfg.Sealer(); err != nil {
+				log.Warn("account management and sync are off", "reason", err)
+			} else {
+				opts.Syncer = &archive.Syncer{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}
+				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Interval: a.cfg.SyncInterval}
+				runnerDone := make(chan struct{})
+				go func() {
+					opts.Runner.Run(cmd.Context())
+					close(runnerDone)
+				}()
+				// Let a running sync record its outcome before the store closes.
+				defer func() { <-runnerDone }()
+				if a.cfg.SyncInterval > 0 {
+					log.Info("sync schedule on", "interval", a.cfg.SyncInterval)
+				} else {
+					log.Info("sync schedule off")
+				}
+			}
+			srv := web.New(a.store, blobs, log, opts)
 			log.Info("listening", "addr", listen)
 			if err := srv.ListenAndServe(cmd.Context(), listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err

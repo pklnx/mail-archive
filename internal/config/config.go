@@ -3,8 +3,10 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pklnx/mail-archive/internal/crypto"
 )
@@ -18,7 +20,16 @@ const (
 	// EnvAllowedHosts is a comma-separated list of host names the web server
 	// accepts in the Host header (protection against DNS rebinding).
 	EnvAllowedHosts = "MAIL_ARCHIVE_ALLOWED_HOSTS"
+	// EnvSyncInterval is how often the web server syncs each enabled account
+	// (Go duration like "6h"; "0" turns the schedule off).
+	EnvSyncInterval = "MAIL_ARCHIVE_SYNC_INTERVAL"
 )
+
+// DefaultSyncInterval is used when EnvSyncInterval is not set.
+const DefaultSyncInterval = 6 * time.Hour
+
+// MinSyncInterval protects mail servers from being polled too often.
+const MinSyncInterval = 5 * time.Minute
 
 // Config holds the application configuration.
 type Config struct {
@@ -28,6 +39,8 @@ type Config struct {
 	LogLevel    string
 	// AllowedHosts for the web server; empty means the server's defaults.
 	AllowedHosts []string
+	// SyncInterval of the web server's schedule; zero means off.
+	SyncInterval time.Duration
 }
 
 // Load reads the configuration from the environment.
@@ -51,6 +64,11 @@ func Load() (*Config, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	interval, err := parseSyncInterval(os.Getenv(EnvSyncInterval))
+	if err != nil {
+		return nil, err
+	}
+	cfg.SyncInterval = interval
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
 		if err != nil {
@@ -59,6 +77,21 @@ func Load() (*Config, error) {
 		cfg.SecretKey = key
 	}
 	return cfg, nil
+}
+
+func parseSyncInterval(v string) (time.Duration, error) {
+	if v == "" {
+		return DefaultSyncInterval, nil
+	}
+	if v == "0" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < MinSyncInterval {
+		return 0, fmt.Errorf("%s: want a duration of at least %s (like 6h) or 0 to turn the schedule off, got %q",
+			EnvSyncInterval, MinSyncInterval, v)
+	}
+	return d, nil
 }
 
 // Sealer returns a Sealer for the configured secret key.

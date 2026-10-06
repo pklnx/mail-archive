@@ -21,6 +21,7 @@ type Account struct {
 	Enabled         bool
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	RemovedAt       *time.Time
 }
 
 type Folder struct {

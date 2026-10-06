@@ -102,16 +102,41 @@ The JSON API behind the UI:
 | `GET /api/messages/{id}/html[?images=1]` | HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
 | `GET /api/messages/{id}/parts/{n}` | One attachment. Only common image types are shown inline; everything else is a download. |
-| `GET /api/accounts` | Accounts with folders and message counts. |
+| `GET /api/accounts` | Accounts with server settings (never the password), folders, message counts and sync state (`idle`, `queued`, `running`) with the last run. |
+| `POST /api/accounts` | Add an account: `{"name", "host", "port", "tls", "username", "password", "excludedFolders"}`. The login is checked first; the first sync starts right away. |
+| `PATCH /api/accounts/{name}` | Change server settings, password, `enabled` or `excludedFolders` (archive everything except these). A new connection or password is checked first. |
+| `DELETE /api/accounts/{name}` | Remove an account. With archived mail it is only marked as removed (see below); without, it is deleted. |
+| `GET /api/accounts/{name}/server-folders` | The account's folders, live from the server, with their role and whether they are archived. |
+| `POST /api/accounts/{name}/sync` | Queue a sync of one account (also a disabled one). |
+| `POST /api/sync` | Queue a sync of all enabled accounts. |
 | `GET /api/status` | Same as `./ma status`. |
+
+Write requests need `Content-Type: application/json` and an `Origin` header
+matching the server (browsers send it; with curl add
+`-H 'Origin: http://localhost:8080'`). Account management and sync need
+`MAIL_ARCHIVE_SECRET_KEY` on the server; without it the archive can only be
+browsed.
+
+**Removing an account keeps its mail.** The mail stays searchable and still
+shows the account and folder it came from. The stored password is deleted
+and the account is never synced again. Its name stays taken, so a new
+account needs a different name. An account without archived mail is
+deleted completely.
 
 After upgrading from a version without search, run `./ma reindex` once so
 that older messages become searchable.
 
 ### Run it regularly
 
-`sync` is a one-shot command. Schedule it with cron (macOS and Linux), for
-example every hour:
+The web server syncs every enabled account on a schedule: an account is due
+when its last sync started more than `MAIL_ARCHIVE_SYNC_INTERVAL` ago
+(default `6h`, minimum `5m`; `0` turns the schedule off). It syncs one
+account at a time. A sync started by hand, by the schedule or by `./ma sync`
+never runs twice for the same account at once: a PostgreSQL lock guards each
+account, and the second one is skipped.
+
+Without the web server, `sync` is a one-shot command. Schedule it with cron
+(macOS and Linux), for example every hour:
 
 ```cron
 0 * * * * /path/to/mail-archive/ma sync >> /path/to/mail-archive/sync.log 2>&1
@@ -161,10 +186,10 @@ supported yet.
 | `account set-folders NAME` | Replace the include and exclude lists. |
 | `account set-password NAME` | Replace the stored password. |
 | `account enable\|disable NAME` | Include or exclude an account from `sync`. Archived data is kept. |
-| `account remove NAME` | Delete an account that has no archived messages yet. |
-| `sync [--account NAME]` | Copy new messages. Exits non-zero if any account failed. |
+| `account remove NAME` | Remove an account. Archived mail is kept; see "Removing an account keeps its mail". |
+| `sync [--account NAME]` | Copy new messages. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. |
 | `status` | Per-account statistics and the last sync result. |
-| `serve [--listen ADDR]` | Run the web server (JSON API). Default `127.0.0.1:8080`. |
+| `serve [--listen ADDR]` | Run the web server (UI, JSON API, sync schedule). Default `127.0.0.1:8080`. |
 | `reindex` | Extract text for full-text search from messages archived before search existed. |
 
 ## Configuration
@@ -178,6 +203,7 @@ All configuration comes from environment variables:
 | `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for `.eml` files. |
 | `MAIL_ARCHIVE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
 | `MAIL_ARCHIVE_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host names the web server accepts (comma-separated). |
+| `MAIL_ARCHIVE_SYNC_INTERVAL` | `6h` | How often the web server syncs each enabled account. At least `5m`; `0` turns the schedule off. |
 | `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. Set to `./ma` by the wrapper. |
 
 ## Backups
@@ -281,10 +307,11 @@ protection); keep it that way instead of adding exceptions.
 
 ```
 cmd/mail-archive     CLI
-internal/archive     sync orchestration, deduplication, header parsing
+internal/archive     sync orchestration, schedule, deduplication, header parsing
 internal/imapsync    read-only IMAP client
 internal/mime        MIME parsing: text for search, parts for display
 internal/web         HTTP server, JSON API, request protection
+internal/imaptest    in-memory IMAP server for tests
 internal/web/ui      embedded web UI build
 web/                 web UI source (React)
 internal/blobstore   content-addressed .eml storage
@@ -306,10 +333,9 @@ internal/config      environment configuration
 
 ## Roadmap
 
-- Account management and sync from the UI.
+- Account management and sync in the web UI (the API exists).
 - Login through any OpenID Connect provider, so the UI can be reachable from
   other devices.
-- Optional daemon mode with a built-in schedule.
 
 ## License
 
