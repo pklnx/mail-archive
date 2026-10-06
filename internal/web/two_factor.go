@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/base64"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -122,6 +121,10 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
+	if !s.twoFactorReady() {
+		s.fail(w, r, http.StatusServiceUnavailable, "two-factor authentication is unavailable", nil)
+		return
+	}
 	if in.Challenge == "" || strings.TrimSpace(in.Code) == "" {
 		s.fail(w, r, http.StatusUnauthorized, "invalid two-factor code", nil)
 		return
@@ -132,11 +135,12 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusUnauthorized, "invalid or expired two-factor challenge", nil)
 		return
 	}
-	u, err := s.store.GetUserByName(r.Context(), "")
-	_ = u
+	key := "2fa:" + in.Challenge
+	if wait := s.limiter.Blocked(key, clientAddr(r)); wait > 0 {
+		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: int(wait.Seconds()) + 1})
+		return
+	}
 	_ = ch
-	// The challenge endpoint intentionally does not reveal the user name before
-	// the atomic completion; rate limiting uses the challenge's resolved user.
 	token, user, err := s.store.CompleteTwoFactorLogin(r.Context(), in.Challenge, strings.TrimSpace(in.Code), s.now(), s.sealer, s.secretKey, s.now().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
 	if err != nil {
 		if err == store.ErrTwoFactorInvalid || err == store.ErrTwoFactorReplay {
@@ -239,4 +243,3 @@ func (s *Server) handleRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 	s.writeJSON(w, http.StatusOK, map[string]any{"recoveryCodes": codes})
 }
 
-var _ = fmt.Sprintf
