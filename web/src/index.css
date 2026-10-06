@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Dark mode is class-based (html.dark): it follows the system until the user
+   picks a theme with the toggle (see theme.ts). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 html,
 body,
 #root {
