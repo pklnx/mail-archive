@@ -240,6 +240,7 @@ type Session struct {
 	UserName           string
 	IsAdmin            bool
 	MustChangePassword bool
+	TwoFactorEnabled bool
 	LastSeenAt         time.Time
 }
 
@@ -258,7 +259,7 @@ func (s *Store) GetSession(ctx context.Context, idHash []byte, idleCutoff time.T
 	if err != nil {
 		return nil, err
 	}
-	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, MustChangePassword: r.MustChangePassword, LastSeenAt: r.LastSeenAt}, nil
+	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, LastSeenAt: r.LastSeenAt}, nil
 }
 
 // TouchSession records that a session was used now.
