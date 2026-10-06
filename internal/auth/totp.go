@@ -13,12 +13,14 @@ import (
 	"time"
 )
 
+// TOTP parameters (the interoperable profile of RFC 6238) and recovery
+// codes.
 const (
-	TOTPSecretBytes = 20
-	TOTPDigits      = 6
-	TOTPPeriod      = 30 * time.Second
-	TOTPWindow      = 1
-	RecoveryCodeCount = 10
+	TOTPSecretBytes    = 20
+	TOTPDigits         = 6
+	TOTPPeriod         = 30 * time.Second
+	TOTPWindow         = 1
+	RecoveryCodeCount  = 10
 	RecoveryCodeLength = 16
 )
 
@@ -40,7 +42,11 @@ func GenerateTOTP(secret string, t time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return totpForCounter(key, uint64(t.Unix()/int64(TOTPPeriod/time.Second))), nil
+	step := t.Unix() / int64(TOTPPeriod/time.Second)
+	if step < 0 {
+		return "", errors.New("time before 1970")
+	}
+	return totpForCounter(key, uint64(step)), nil
 }
 
 // ValidateTOTP checks a code at now and returns the matched time-step counter.
@@ -118,6 +124,17 @@ func GenerateRecoveryCodes() ([]string, error) {
 	return out, nil
 }
 
+// NormalizeTOTPCode removes spaces a user may type ("123 456").
+func NormalizeTOTPCode(code string) string {
+	return strings.Join(strings.Fields(code), "")
+}
+
+// normalizeRecoveryCode makes "ABCD-efgh ijkl-mnpq" and "abcdefghijklmnpq"
+// the same code.
+func normalizeRecoveryCode(code string) string {
+	return strings.ToLower(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(code)))
+}
+
 // RecoveryCodeHash returns a keyed hash suitable for database lookup. The
 // key is derived from MAIL_ARCHIVE_SECRET_KEY, so a database-only leak cannot
 // be used to verify guesses offline.
@@ -126,6 +143,6 @@ func RecoveryCodeHash(secretKey []byte, code string) []byte {
 	_, _ = k.Write([]byte("mail-archive recovery codes v1"))
 	key := k.Sum(nil)
 	h := hmac.New(sha256.New, key)
-	_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(code))))
+	_, _ = h.Write([]byte(normalizeRecoveryCode(code)))
 	return h.Sum(nil)
 }

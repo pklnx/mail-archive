@@ -81,19 +81,34 @@ type SyncRun struct {
 	Error           *string
 }
 
-type User struct {
-	ID                 int64
-	Name               string
-	PasswordHash       string
-	IsAdmin            bool
-	LockedAt           *time.Time
-	CreatedAt          time.Time
-	PasswordChangedAt  time.Time
-	LastLoginAt        *time.Time
-	MustChangePassword bool
-	TwoFactorSecret []byte
-	TwoFactorEnabled bool
-	TwoFactorPendingSecret []byte
-	TwoFactorLastCounter *int64
+type TwoFactorChallenge struct {
+	ID               []byte
+	UserID           int64
 	TwoFactorVersion int64
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+}
+
+type TwoFactorRecoveryCode struct {
+	ID       int64
+	UserID   int64
+	CodeHash []byte
+	UsedAt   *time.Time
+}
+
+type User struct {
+	ID                     int64
+	Name                   string
+	PasswordHash           string
+	IsAdmin                bool
+	LockedAt               *time.Time
+	CreatedAt              time.Time
+	PasswordChangedAt      time.Time
+	LastLoginAt            *time.Time
+	MustChangePassword     bool
+	TwoFactorSecret        []byte
+	TwoFactorEnabled       bool
+	TwoFactorPendingSecret []byte
+	TwoFactorLastCounter   *int64
+	TwoFactorVersion       int64
 }

@@ -78,9 +78,13 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	if hasher == nil {
 		hasher = auth.NewHasher(auth.DefaultParams)
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
-		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: opts.Now, limiter: auth.NewLimiter(),
+		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 	}
 }
 

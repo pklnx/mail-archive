@@ -162,7 +162,7 @@ type GetSessionRow struct {
 	Name               string
 	IsAdmin            bool
 	MustChangePassword bool
-	TwoFactorEnabled bool
+	TwoFactorEnabled   bool
 }
 
 // A session is valid while it has not expired, was used after the idle
@@ -178,6 +178,32 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.IsAdmin,
 		&i.MustChangePassword,
 		&i.TwoFactorEnabled,
+	)
+	return i, err
+}
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.PasswordHash,
+		&i.IsAdmin,
+		&i.LockedAt,
+		&i.CreatedAt,
+		&i.PasswordChangedAt,
+		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TwoFactorSecret,
+		&i.TwoFactorEnabled,
+		&i.TwoFactorPendingSecret,
+		&i.TwoFactorLastCounter,
+		&i.TwoFactorVersion,
 	)
 	return i, err
 }
@@ -205,18 +231,6 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
 	)
-	return i, err
-}
-
-const getUserByID = `-- name: GetUserByID :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE id = $1
-`
-
-func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
-	row := q.db.QueryRow(ctx, getUserByID, id)
-	var i User
-	err := row.Scan(&i.ID, &i.Name, &i.PasswordHash, &i.IsAdmin, &i.LockedAt, &i.CreatedAt, &i.PasswordChangedAt, &i.LastLoginAt, &i.MustChangePassword,
-		&i.TwoFactorSecret, &i.TwoFactorEnabled, &i.TwoFactorPendingSecret, &i.TwoFactorLastCounter, &i.TwoFactorVersion)
 	return i, err
 }
 
@@ -265,33 +279,33 @@ SELECT id FROM users WHERE is_admin AND locked_at IS NULL FOR UPDATE
 
 // Locks the rows of all unlocked admins, so that two changes cannot remove
 // the last two admins at the same time.
-const lockUsableAdmins = `-- name: LockUsableAdmins :many
--- Locks admins who are currently able to log in (unlocked and TOTP-enabled).
-SELECT id FROM users WHERE is_admin AND locked_at IS NULL AND two_factor_enabled FOR UPDATE
-`
-
-func (q *Queries) LockUsableAdmins(ctx context.Context) ([]int64, error) {
-	rows, err := q.db.Query(ctx, lockUsableAdmins)
+func (q *Queries) LockActiveAdmins(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, lockActiveAdmins)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []int64
+	var items []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return ids, nil
+	return items, nil
 }
 
-func (q *Queries) LockActiveAdmins(ctx context.Context) ([]int64, error) {
-	rows, err := q.db.Query(ctx, lockActiveAdmins)
+const lockUsableAdmins = `-- name: LockUsableAdmins :many
+SELECT id FROM users WHERE is_admin AND locked_at IS NULL AND two_factor_enabled FOR UPDATE
+`
+
+// Locks admins who are currently able to log in (unlocked and TOTP-enabled).
+func (q *Queries) LockUsableAdmins(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, lockUsableAdmins)
 	if err != nil {
 		return nil, err
 	}

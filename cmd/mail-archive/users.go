@@ -331,7 +331,6 @@ func newUserAdminCmd(admin bool) *cobra.Command {
 	}
 }
 
-
 func newUserReset2FACmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reset-2fa NAME",

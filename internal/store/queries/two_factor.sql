@@ -1,14 +1,6 @@
--- name: GetTwoFactorUser :one
-SELECT id, name, is_admin, two_factor_enabled, two_factor_secret,
-       two_factor_pending_secret, two_factor_last_counter, two_factor_version,
-       locked_at, must_change_password
-FROM users WHERE id = $1;
-
--- name: LockTwoFactorUser :one
-SELECT id, name, is_admin, two_factor_enabled, two_factor_secret,
-       two_factor_pending_secret, two_factor_last_counter, two_factor_version,
-       locked_at, must_change_password
-FROM users WHERE id = $1 FOR UPDATE;
+-- name: LockUser :one
+-- The row stays locked until the transaction ends.
+SELECT * FROM users WHERE id = $1 FOR UPDATE;
 
 -- name: BeginTwoFactorSetup :exec
 UPDATE users
@@ -53,10 +45,6 @@ WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL;
 INSERT INTO two_factor_challenges
 (id, user_id, two_factor_version, expires_at) VALUES ($1, $2, $3, $4);
 
--- name: GetTwoFactorChallenge :one
-SELECT id, user_id, two_factor_version, created_at, expires_at
-FROM two_factor_challenges WHERE id = $1 AND expires_at > now();
-
 -- name: DeleteTwoFactorChallenge :exec
 DELETE FROM two_factor_challenges WHERE id = $1;
 
@@ -64,5 +52,11 @@ DELETE FROM two_factor_challenges WHERE id = $1;
 DELETE FROM two_factor_challenges WHERE user_id = $1;
 
 -- name: LockTwoFactorChallenge :one
-SELECT id, user_id, two_factor_version, created_at, expires_at
-FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE;
+-- Only challenges that have not expired.
+SELECT * FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE;
+
+-- name: GetTwoFactorChallengeUser :one
+SELECT user_id FROM two_factor_challenges WHERE id = $1 AND expires_at > now();
+
+-- name: DeleteExpiredTwoFactorChallenges :exec
+DELETE FROM two_factor_challenges WHERE expires_at <= now();

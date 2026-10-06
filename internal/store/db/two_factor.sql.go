@@ -10,47 +10,24 @@ import (
 	"time"
 )
 
-type TwoFactorUser struct {
-	ID int64
-	Name string
-	IsAdmin bool
-	TwoFactorEnabled bool
-	TwoFactorSecret []byte
-	TwoFactorPending []byte
-	TwoFactorLastCount *int64
-	TwoFactorVersion int64
-	LockedAt *time.Time
-	MustChangePassword bool
-}
-
-const getTwoFactorUser = `-- name: GetTwoFactorUser :one
-SELECT id, name, is_admin, two_factor_enabled, two_factor_secret,
-       two_factor_pending_secret, two_factor_last_counter, two_factor_version,
-       locked_at, must_change_password
-FROM users WHERE id = $1
+const acceptTwoFactorCounter = `-- name: AcceptTwoFactorCounter :execrows
+UPDATE users
+SET two_factor_last_counter = $2
+WHERE id = $1 AND two_factor_enabled = TRUE
+  AND (two_factor_last_counter IS NULL OR two_factor_last_counter < $2)
 `
 
-func (q *Queries) GetTwoFactorUser(ctx context.Context, id int64) (TwoFactorUser, error) {
-	row := q.db.QueryRow(ctx, getTwoFactorUser, id)
-	var u TwoFactorUser
-	err := row.Scan(&u.ID, &u.Name, &u.IsAdmin, &u.TwoFactorEnabled, &u.TwoFactorSecret,
-		&u.TwoFactorPending, &u.TwoFactorLastCount, &u.TwoFactorVersion, &u.LockedAt, &u.MustChangePassword)
-	return u, err
+type AcceptTwoFactorCounterParams struct {
+	ID                   int64
+	TwoFactorLastCounter *int64
 }
 
-const lockTwoFactorUser = `-- name: LockTwoFactorUser :one
-SELECT id, name, is_admin, two_factor_enabled, two_factor_secret,
-       two_factor_pending_secret, two_factor_last_counter, two_factor_version,
-       locked_at, must_change_password
-FROM users WHERE id = $1 FOR UPDATE
-`
-
-func (q *Queries) LockTwoFactorUser(ctx context.Context, id int64) (TwoFactorUser, error) {
-	row := q.db.QueryRow(ctx, lockTwoFactorUser, id)
-	var u TwoFactorUser
-	err := row.Scan(&u.ID, &u.Name, &u.IsAdmin, &u.TwoFactorEnabled, &u.TwoFactorSecret,
-		&u.TwoFactorPending, &u.TwoFactorLastCount, &u.TwoFactorVersion, &u.LockedAt, &u.MustChangePassword)
-	return u, err
+func (q *Queries) AcceptTwoFactorCounter(ctx context.Context, arg AcceptTwoFactorCounterParams) (int64, error) {
+	result, err := q.db.Exec(ctx, acceptTwoFactorCounter, arg.ID, arg.TwoFactorLastCounter)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const beginTwoFactorSetup = `-- name: BeginTwoFactorSetup :exec
@@ -59,48 +36,14 @@ SET two_factor_pending_secret = $2, two_factor_version = two_factor_version + 1
 WHERE id = $1
 `
 
-func (q *Queries) BeginTwoFactorSetup(ctx context.Context, id int64, secret []byte) error {
-	_, err := q.db.Exec(ctx, beginTwoFactorSetup, id, secret)
-	return err
+type BeginTwoFactorSetupParams struct {
+	ID                     int64
+	TwoFactorPendingSecret []byte
 }
 
-const enableTwoFactor = `-- name: EnableTwoFactor :exec
-UPDATE users
-SET two_factor_secret = $2, two_factor_pending_secret = NULL,
-    two_factor_enabled = TRUE, two_factor_last_counter = $3,
-    two_factor_version = two_factor_version + 1
-WHERE id = $1
-`
-
-func (q *Queries) EnableTwoFactor(ctx context.Context, id int64, secret []byte, counter int64) error {
-	_, err := q.db.Exec(ctx, enableTwoFactor, id, secret, counter)
+func (q *Queries) BeginTwoFactorSetup(ctx context.Context, arg BeginTwoFactorSetupParams) error {
+	_, err := q.db.Exec(ctx, beginTwoFactorSetup, arg.ID, arg.TwoFactorPendingSecret)
 	return err
-}
-
-const disableTwoFactor = `-- name: DisableTwoFactor :exec
-UPDATE users
-SET two_factor_secret = NULL, two_factor_pending_secret = NULL,
-    two_factor_enabled = FALSE, two_factor_last_counter = NULL,
-    two_factor_version = two_factor_version + 1
-WHERE id = $1
-`
-
-func (q *Queries) DisableTwoFactor(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, disableTwoFactor, id)
-	return err
-}
-
-const acceptTwoFactorCounter = `-- name: AcceptTwoFactorCounter :execrows
-UPDATE users
-SET two_factor_last_counter = $2
-WHERE id = $1 AND two_factor_enabled = TRUE
-  AND (two_factor_last_counter IS NULL OR two_factor_last_counter < $2)
-`
-
-func (q *Queries) AcceptTwoFactorCounter(ctx context.Context, id, counter int64) (int64, error) {
-	r, err := q.db.Exec(ctx, acceptTwoFactorCounter, id, counter)
-	if err != nil { return 0, err }
-	return r.RowsAffected(), nil
 }
 
 const bumpTwoFactorVersion = `-- name: BumpTwoFactorVersion :exec
@@ -112,12 +55,53 @@ func (q *Queries) BumpTwoFactorVersion(ctx context.Context, id int64) error {
 	return err
 }
 
-const insertRecoveryCode = `-- name: InsertRecoveryCode :exec
-INSERT INTO two_factor_recovery_codes (user_id, code_hash) VALUES ($1, $2)
+const consumeRecoveryCode = `-- name: ConsumeRecoveryCode :execrows
+UPDATE two_factor_recovery_codes
+SET used_at = now()
+WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL
 `
 
-func (q *Queries) InsertRecoveryCode(ctx context.Context, userID int64, hash []byte) error {
-	_, err := q.db.Exec(ctx, insertRecoveryCode, userID, hash)
+type ConsumeRecoveryCodeParams struct {
+	UserID   int64
+	CodeHash []byte
+}
+
+func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, consumeRecoveryCode, arg.UserID, arg.CodeHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createTwoFactorChallenge = `-- name: CreateTwoFactorChallenge :exec
+INSERT INTO two_factor_challenges
+(id, user_id, two_factor_version, expires_at) VALUES ($1, $2, $3, $4)
+`
+
+type CreateTwoFactorChallengeParams struct {
+	ID               []byte
+	UserID           int64
+	TwoFactorVersion int64
+	ExpiresAt        time.Time
+}
+
+func (q *Queries) CreateTwoFactorChallenge(ctx context.Context, arg CreateTwoFactorChallengeParams) error {
+	_, err := q.db.Exec(ctx, createTwoFactorChallenge,
+		arg.ID,
+		arg.UserID,
+		arg.TwoFactorVersion,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const deleteExpiredTwoFactorChallenges = `-- name: DeleteExpiredTwoFactorChallenges :exec
+DELETE FROM two_factor_challenges WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredTwoFactorChallenges(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredTwoFactorChallenges)
 	return err
 }
 
@@ -128,60 +112,6 @@ DELETE FROM two_factor_recovery_codes WHERE user_id = $1
 func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, deleteRecoveryCodes, userID)
 	return err
-}
-
-const consumeRecoveryCode = `-- name: ConsumeRecoveryCode :execrows
-UPDATE two_factor_recovery_codes
-SET used_at = now()
-WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL
-`
-
-func (q *Queries) ConsumeRecoveryCode(ctx context.Context, userID int64, hash []byte) (int64, error) {
-	r, err := q.db.Exec(ctx, consumeRecoveryCode, userID, hash)
-	if err != nil { return 0, err }
-	return r.RowsAffected(), nil
-}
-
-const createTwoFactorChallenge = `-- name: CreateTwoFactorChallenge :exec
-INSERT INTO two_factor_challenges
-(id, user_id, two_factor_version, expires_at) VALUES ($1, $2, $3, $4)
-`
-
-func (q *Queries) CreateTwoFactorChallenge(ctx context.Context, id []byte, userID, version int64, expires time.Time) error {
-	_, err := q.db.Exec(ctx, createTwoFactorChallenge, id, userID, version, expires)
-	return err
-}
-
-type TwoFactorChallenge struct {
-	ID []byte
-	UserID int64
-	TwoFactorVersion int64
-	CreatedAt time.Time
-	ExpiresAt time.Time
-}
-
-const getTwoFactorChallenge = `-- name: GetTwoFactorChallenge :one
-SELECT id, user_id, two_factor_version, created_at, expires_at
-FROM two_factor_challenges WHERE id = $1 AND expires_at > now()
-`
-
-func (q *Queries) GetTwoFactorChallenge(ctx context.Context, id []byte) (TwoFactorChallenge, error) {
-	row := q.db.QueryRow(ctx, getTwoFactorChallenge, id)
-	var c TwoFactorChallenge
-	err := row.Scan(&c.ID, &c.UserID, &c.TwoFactorVersion, &c.CreatedAt, &c.ExpiresAt)
-	return c, err
-}
-
-const lockTwoFactorChallenge = `-- name: LockTwoFactorChallenge :one
-SELECT id, user_id, two_factor_version, created_at, expires_at
-FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE
-`
-
-func (q *Queries) LockTwoFactorChallenge(ctx context.Context, id []byte) (TwoFactorChallenge, error) {
-	row := q.db.QueryRow(ctx, lockTwoFactorChallenge, id)
-	var c TwoFactorChallenge
-	err := row.Scan(&c.ID, &c.UserID, &c.TwoFactorVersion, &c.CreatedAt, &c.ExpiresAt)
-	return c, err
 }
 
 const deleteTwoFactorChallenge = `-- name: DeleteTwoFactorChallenge :exec
@@ -200,4 +130,106 @@ DELETE FROM two_factor_challenges WHERE user_id = $1
 func (q *Queries) DeleteUserTwoFactorChallenges(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, deleteUserTwoFactorChallenges, userID)
 	return err
+}
+
+const disableTwoFactor = `-- name: DisableTwoFactor :exec
+UPDATE users
+SET two_factor_secret = NULL, two_factor_pending_secret = NULL,
+    two_factor_enabled = FALSE, two_factor_last_counter = NULL,
+    two_factor_version = two_factor_version + 1
+WHERE id = $1
+`
+
+func (q *Queries) DisableTwoFactor(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, disableTwoFactor, id)
+	return err
+}
+
+const enableTwoFactor = `-- name: EnableTwoFactor :exec
+UPDATE users
+SET two_factor_secret = $2, two_factor_pending_secret = NULL,
+    two_factor_enabled = TRUE, two_factor_last_counter = $3,
+    two_factor_version = two_factor_version + 1
+WHERE id = $1
+`
+
+type EnableTwoFactorParams struct {
+	ID                   int64
+	TwoFactorSecret      []byte
+	TwoFactorLastCounter *int64
+}
+
+func (q *Queries) EnableTwoFactor(ctx context.Context, arg EnableTwoFactorParams) error {
+	_, err := q.db.Exec(ctx, enableTwoFactor, arg.ID, arg.TwoFactorSecret, arg.TwoFactorLastCounter)
+	return err
+}
+
+const getTwoFactorChallengeUser = `-- name: GetTwoFactorChallengeUser :one
+SELECT user_id FROM two_factor_challenges WHERE id = $1 AND expires_at > now()
+`
+
+func (q *Queries) GetTwoFactorChallengeUser(ctx context.Context, id []byte) (int64, error) {
+	row := q.db.QueryRow(ctx, getTwoFactorChallengeUser, id)
+	var user_id int64
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
+const insertRecoveryCode = `-- name: InsertRecoveryCode :exec
+INSERT INTO two_factor_recovery_codes (user_id, code_hash) VALUES ($1, $2)
+`
+
+type InsertRecoveryCodeParams struct {
+	UserID   int64
+	CodeHash []byte
+}
+
+func (q *Queries) InsertRecoveryCode(ctx context.Context, arg InsertRecoveryCodeParams) error {
+	_, err := q.db.Exec(ctx, insertRecoveryCode, arg.UserID, arg.CodeHash)
+	return err
+}
+
+const lockTwoFactorChallenge = `-- name: LockTwoFactorChallenge :one
+SELECT id, user_id, two_factor_version, created_at, expires_at FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE
+`
+
+// Only challenges that have not expired.
+func (q *Queries) LockTwoFactorChallenge(ctx context.Context, id []byte) (TwoFactorChallenge, error) {
+	row := q.db.QueryRow(ctx, lockTwoFactorChallenge, id)
+	var i TwoFactorChallenge
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TwoFactorVersion,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
+const lockUser = `-- name: LockUser :one
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE id = $1 FOR UPDATE
+`
+
+// The row stays locked until the transaction ends.
+func (q *Queries) LockUser(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, lockUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.PasswordHash,
+		&i.IsAdmin,
+		&i.LockedAt,
+		&i.CreatedAt,
+		&i.PasswordChangedAt,
+		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TwoFactorSecret,
+		&i.TwoFactorEnabled,
+		&i.TwoFactorPendingSecret,
+		&i.TwoFactorLastCounter,
+		&i.TwoFactorVersion,
+	)
+	return i, err
 }
