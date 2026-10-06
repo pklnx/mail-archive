@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"time"
 
@@ -119,11 +118,10 @@ func (s *Store) ResetTwoFactor(ctx context.Context, id int64) error {
 }
 
 func (s *Store) CreateTwoFactorChallenge(ctx context.Context, id int64, version int64, expires time.Time) (string, error) {
-	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
+	token, hash, err := auth.NewSessionToken()
+	if err != nil {
 		return "", err
 	}
-	hash := auth.HashSessionToken(string(token))
 	if err := s.q.CreateTwoFactorChallenge(ctx, hash, id, version, expires); err != nil {
 		return "", err
 	}
