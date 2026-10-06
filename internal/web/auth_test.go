@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
+	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -71,6 +72,9 @@ type authFixture struct {
 	st     *store.Store
 	srv    *httptest.Server
 	client *http.Client
+	sealer *crypto.Sealer
+	secretKey []byte
+	adminSecrets map[string]string
 }
 
 func newAuthFixture(t *testing.T) *authFixture {
