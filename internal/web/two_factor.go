@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +12,17 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 	"rsc.io/qr"
 )
+
+func (s *Server) checkTwoFactorLimiter(w http.ResponseWriter, r *http.Request, key string) bool {
+	if wait := s.limiter.Blocked(key, clientAddr(r)); wait > 0 {
+		secs := int(wait.Seconds())
+		if secs < 1 { secs = 1 }
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
+		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: secs})
+		return false
+	}
+	return true
+}
 
 type twoFactorSetupJSON struct {
 	Enabled       bool   `json:"enabled"`
@@ -92,6 +104,7 @@ func (s *Server) handleConfirmTwoFactor(w http.ResponseWriter, r *http.Request) 
 	if !s.decode(w, r, &in) {
 		return
 	}
+	if !s.checkTwoFactorLimiter(w, r, currentSession(r).UserName) { return }
 	if len(strings.TrimSpace(in.Code)) != auth.TOTPDigits {
 		s.fail(w, r, http.StatusUnauthorized, "invalid two-factor code", nil)
 		return
@@ -141,7 +154,8 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := u.Name
-	if wait := s.limiter.Blocked(key, clientAddr(r)); wait > 0 {
+	if !s.checkTwoFactorLimiter(w, r, key) { return }
+	if false {
 		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: int(wait.Seconds()) + 1})
 		return
 	}
@@ -190,6 +204,7 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 	if !s.decode(w, r, &in) {
 		return
 	}
+	if !s.checkTwoFactorLimiter(w, r, sess.UserName) { return }
 	u, err := s.store.GetUserByName(r.Context(), sess.UserName)
 	if err != nil {
 		s.failStore(w, r, err)
