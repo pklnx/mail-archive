@@ -13,18 +13,26 @@ import (
 	"time"
 )
 
-const (
-	// TOTPSecretBytes is the size of generated TOTP secrets.
-	TOTPSecretBytes = 20
-	// TOTPDigits is the number of digits in a TOTP code.
-	TOTPDigits      = 6
-	TOTPPeriod      = 30 * time.Second
-	TOTPWindow      = 1
-	RecoveryCodeCount = 10
-	RecoveryCodeLength = 16
-)
+// TOTPSecretBytes is the size of generated TOTP secrets.
+const TOTPSecretBytes = 20
+
+// TOTPDigits is the number of digits in a TOTP code.
+const TOTPDigits = 6
+
+// TOTPPeriod is the RFC 6238 TOTP time-step duration.
+const TOTPPeriod = 30 * time.Second
+
+// TOTPWindow is the number of adjacent time steps accepted for clock skew.
+const TOTPWindow = 1
+
+// RecoveryCodeCount is the number of recovery codes generated during setup.
+const RecoveryCodeCount = 10
+
+// RecoveryCodeLength is the number of alphanumeric characters in each recovery code.
+const RecoveryCodeLength = 16
 
 const recoveryAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
 
 // GenerateTOTPSecret returns a cryptographically random Base32 secret suitable
 // for use with RFC 6238 authenticator applications.
