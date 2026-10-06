@@ -93,6 +93,13 @@ export function UsersPage({ close }: { close: () => void }) {
                 <button
                   type="button"
                   className={button}
+                  onClick={() => u.twoFactorEnabled && window.confirm(t.twoFactorResetConfirm(u.name)) && run(() => usersApi.reset2FA(u.name))}
+                >
+                  {t.twoFactorReset}
+                </button>
+                <button
+                  type="button"
+                  className={button}
                   onClick={() => window.confirm(t.confirmResetPassword(u.name)) && run(async () => setGenerated(await usersApi.resetPassword(u.name)))}
                 >
                   {t.resetPassword}
