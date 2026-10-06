@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>mail-archive</title>
+  <!-- Copies: web/src/logo.svg (favicon of the UI), docs/public/logo.svg (docs). -->
+  <rect width="64" height="64" rx="14" fill="#2563eb"/>
+  <!-- archive box -->
+  <rect x="12" y="30" width="40" height="22" rx="3" fill="#fff"/>
+  <rect x="9" y="25" width="46" height="8" rx="2.5" fill="#dbeafe"/>
+  <rect x="26" y="37" width="12" height="4" rx="2" fill="#2563eb"/>
+  <!-- envelope dropping in -->
+  <g transform="translate(20 8)">
+    <rect width="24" height="16" rx="2.5" fill="#fff"/>
+    <path d="M2 2.5 12 9.5 22 2.5" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

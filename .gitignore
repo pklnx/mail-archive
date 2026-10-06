@@ -40,3 +40,6 @@ go.work.sum
 /internal/web/ui/dist/*
 !/internal/web/ui/dist/.keep
 /web/node_modules/
+/docs/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/

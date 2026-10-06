@@ -1,0 +1,17 @@
+{
+  "name": "mail-archive-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "packageManager": "pnpm@12.9.1+sha512.06b055fff5cd20dc12781de173ced3310ce0951bf2ec620211a16045d5444d5c93a663210764ef29a653a610459ba0368f0e74f84d80c54723cf95aae7bc0d6d",
+  "devDependencies": {
+    "playwright-core": "1.63.0",
+    "vitepress": "2.0.0-alpha.20"
+  }
+}

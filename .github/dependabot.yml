@@ -16,6 +16,14 @@ updates:
     groups:
       web-dependencies:
         patterns: ["*"]
+  - package-ecosystem: npm # pnpm lockfile in docs/ (VitePress)
+    directory: /docs
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      docs-dependencies:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
