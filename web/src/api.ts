@@ -144,7 +144,7 @@ async function errorFor(path: string, res: Response): Promise<ApiError> {
   const err = await errorFrom(res);
   // The session ended, or the user still has to replace a generated
   // password: the login gate checks the session again.
-  if ((res.status === 401 && path !== sessionPath) || err.body.passwordChangeRequired === true) {
+  if ((res.status === 401 && path !== sessionPath) || err.body.passwordChangeRequired === true || err.body.twoFactorSetupRequired === true) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   return err;

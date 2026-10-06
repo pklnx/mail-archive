@@ -123,7 +123,13 @@ function LoginPage({ done }: { done: (user: User) => void }) {
     try {
       const result = await sessionApi.login(username, password);
       if (result.user) done(result.user);
-      else if (result.twoFactorRequired && result.challenge) setChallenge(result.challenge);
+      else if (result.twoFactorRequired && result.challenge) {
+        // Second step. The code field reuses the password state: clear it,
+        // so the password is never shown in the visible code field.
+        setChallenge(result.challenge);
+        setPassword("");
+        setBusy(false);
+      }
       else throw new Error("invalid login response");
     } catch (err) {
       setError(loginError(err));
@@ -142,10 +148,20 @@ function LoginPage({ done }: { done: (user: User) => void }) {
         <form className="flex flex-col gap-3" onSubmit={async (e) => {
           e.preventDefault(); setBusy(true); setError("");
           try { done(await sessionApi.login2FA(challenge, password)); }
-          catch (err) { setError(err instanceof ApiError && err.status === 401 ? t.invalidTwoFactor : loginError(err)); setPassword(""); setBusy(false); }
+          catch (err) {
+            if (err instanceof ApiError && err.status === 401 && err.message.includes("expired")) {
+              setChallenge(null);
+              setError(t.twoFactorExpired);
+            } else {
+              setError(err instanceof ApiError && err.status === 401 ? t.invalidTwoFactor : loginError(err));
+            }
+            setPassword("");
+            setBusy(false);
+          }
         }}>
           <label className="flex flex-col gap-1">{t.twoFactorCode}
-            <input className={input} inputMode="numeric" autoFocus autoComplete="one-time-code" value={password} onChange={(e) => setPassword(e.target.value)} />
+            {/* Text, not numeric: recovery codes contain letters. */}
+            <input className={input} required autoFocus autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
           {error && <p role="alert" className="text-red-600">{error}</p>}
           <button type="submit" className={`${primary} mt-1`} disabled={busy}>{busy ? t.loggingIn : t.logIn}</button>

@@ -93,6 +93,13 @@ export function ProfilePage({ name, close }: { name: string; close: () => void }
 }
 
 
+function twoFactorError(err: unknown): string {
+  const wait = retryAfter(err);
+  if (wait !== null) return t.tooManyAttempts(wait);
+  if (err instanceof ApiError && err.status === 401) return err.message.includes("password") ? t.wrongCurrentPassword : t.invalidTwoFactor;
+  return t.failed(err instanceof Error ? err.message : String(err));
+}
+
 export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
   const [state, setState] = useState<TwoFactorSetupState | null>(null);
   const [setup, setSetup] = useState<TwoFactorSetupState | null>(null);
@@ -104,14 +111,14 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
 
   const load = async () => {
     try { setState(await profileApi.twoFactor.get()); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    catch (err) { setError(twoFactorError(err)); }
   };
   useEffect(() => { void load(); }, []);
 
   const start = async () => {
     setBusy(true); setError("");
     try { setSetup((await profileApi.twoFactor.setup())!); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };
 
@@ -119,10 +126,10 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
     e.preventDefault(); setBusy(true); setError("");
     try {
       const result = await profileApi.twoFactor.confirm(code);
+      // onDone only after the recovery codes were shown (see below).
       setRecovery(result!.recoveryCodes);
       setSetup(null); setCode(""); setState((s) => s ? { ...s, enabled: true, setupPending: false } : s);
-      onDone?.();
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };
 
@@ -131,7 +138,7 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
     try {
       await profileApi.twoFactor.disable(password, code);
       setPassword(""); setCode(""); setState((s) => s ? { ...s, enabled: false } : s);
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };
 
@@ -140,7 +147,7 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
     try {
       const result = await profileApi.twoFactor.regenerateRecoveryCodes(code);
       setRecovery(result!.recoveryCodes); setCode("");
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };
 
@@ -150,7 +157,7 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
       <h3 className="font-semibold">{t.twoFactorRecovery}</h3>
       <p className="text-sm text-zinc-500">{t.twoFactorRecoveryText}</p>
       <pre className="rounded-md bg-zinc-100 p-3 text-xs dark:bg-zinc-800">{recovery.join("\n")}</pre>
-      <button type="button" className={primary} onClick={() => setRecovery(null)}>{t.done}</button>
+      <button type="button" className={`${primary} self-start`} onClick={() => { setRecovery(null); onDone?.(); }}>{t.twoFactorCodesSaved}</button>
     </div>
   );
   if (!state.enabled) {
@@ -163,8 +170,10 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
     );
     return (
       <div className="flex flex-col gap-3">
-        {setup.qrDataUrl && <img src={setup.qrDataUrl} alt="TOTP QR code" className="h-56 w-56 self-center" />}
-        <p className="break-all rounded-md bg-zinc-100 p-2 text-xs dark:bg-zinc-800">{setup.secret}</p>
+        {setup.qrDataUrl && <img src={setup.qrDataUrl} alt={t.twoFactorQR} className="h-56 w-56 self-center rounded bg-white p-2" />}
+        <p className="text-sm text-zinc-500">{t.twoFactorSetupText}</p>
+        <p className="text-sm text-zinc-500">{t.twoFactorManualKey}</p>
+        <code className="break-all rounded-md bg-zinc-100 p-2 font-mono text-xs select-all dark:bg-zinc-800">{setup.secret}</code>
         <form className="flex flex-col gap-3" onSubmit={confirm}>
           <label className="flex flex-col gap-1">{t.twoFactorCode}
             <input className={input} inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} />
@@ -177,7 +186,7 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
   }
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-green-700 dark:text-green-400">{t.twoFactor}: enabled.</p>
+      <p className="text-sm text-green-700 dark:text-green-400">{t.twoFactorOn}</p>
       {state.admin ? <p className="text-sm text-zinc-500">{t.twoFactorAdminRequired}</p> : (
         <>
           <form className="flex flex-col gap-3" onSubmit={regenerate}>
@@ -192,7 +201,7 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
               <input className={input} type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
             </label>
             <label className="flex flex-col gap-1">{t.twoFactorCode}
-              <input className={input} required value={code} onChange={(e) => setCode(e.target.value)} />
+              <input className={input} required autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} />
             </label>
             <button type="submit" className="self-start rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-300" disabled={busy}>{t.twoFactorDisable}</button>
           </form>

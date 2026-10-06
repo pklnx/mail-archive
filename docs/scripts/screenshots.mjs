@@ -1,5 +1,6 @@
 // Takes the screenshots in docs/public/screenshots from the demo server
 // (go run ./tools/demo). Run through `make docs-screenshots`.
+import { createHmac } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
 
@@ -11,15 +12,45 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 const errors = [];
 const desktop = { width: 1280, height: 800 };
 
-// The demo login from tools/demo.
+// The demo login from tools/demo. Admins need 2FA, so the demo admin has a
+// fixed TOTP secret.
 const login = { username: "demo", password: "demo-password" };
+const totpSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+
+// totp computes an RFC 6238 code, one time step ahead: the demo used the
+// current step to set up 2FA, and each step is accepted only once.
+let step = Math.floor(Date.now() / 30000);
+function totp() {
+  step++;
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const c of totpSecret) bits += alphabet.indexOf(c).toString(2).padStart(5, "0");
+  const key = Buffer.from(bits.match(/.{8}/g).map((b) => parseInt(b, 2)));
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac("sha1", key).update(msg).digest();
+  const off = mac[mac.length - 1] & 0xf;
+  return String((mac.readUInt32BE(off) & 0x7fffffff) % 1000000).padStart(6, "0");
+}
+
+// Log in once and share the session cookie: each TOTP step counts once.
+let session;
+async function loginOnce() {
+  if (session) return session;
+  const ctx = await browser.newContext();
+  const res = await ctx.request.post(base + "/api/session", { data: login, headers: { Origin: base } });
+  if (!res.ok()) throw new Error(`demo login failed: ${res.status()}`);
+  const { challenge } = await res.json();
+  const second = await ctx.request.post(base + "/api/session/2fa", { data: { challenge, code: totp() }, headers: { Origin: base } });
+  if (!second.ok()) throw new Error(`demo second factor failed: ${second.status()}`);
+  session = await ctx.storageState();
+  await ctx.close();
+  return session;
+}
 
 async function page(colorScheme, viewport = desktop, { loggedIn = true } = {}) {
-  const ctx = await browser.newContext({ locale: "en-US", timezoneId: "Europe/Berlin", colorScheme, viewport, deviceScaleFactor: 2 });
-  if (loggedIn) {
-    const res = await ctx.request.post(base + "/api/session", { data: login, headers: { Origin: base } });
-    if (!res.ok()) throw new Error(`demo login failed: ${res.status()}`);
-  }
+  const storageState = loggedIn ? await loginOnce() : undefined;
+  const ctx = await browser.newContext({ locale: "en-US", timezoneId: "Europe/Berlin", colorScheme, viewport, deviceScaleFactor: 2, storageState });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(String(e)));
   return p;
