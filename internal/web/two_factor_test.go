@@ -29,7 +29,7 @@ func TestTwoFactorLoginChallenge(t *testing.T) {
 	secret := "JBSWY3DPEHPK3PXP"
 	ctx := context.Background()
 	if err := f.st.BeginTwoFactorSetup(ctx, u.ID, secret, f.sealer); err != nil { t.Fatal(err) }
-	if err := f.st.ConfirmTwoFactorSetup(ctx, u.ID, auth.GenerateTOTP(secret, time.Now()), time.Now(), f.sealer, []string{"recovery-test"}, f.secretKey); err != nil { t.Fatal(err) }
+	if err := f.st.ConfirmTwoFactorSetup(ctx, u.ID, testTOTP(t, secret), time.Now(), f.sealer, []string{"recovery-test"}, f.secretKey); err != nil { t.Fatal(err) }
 
 	resp, out := f.do("POST", "/api/session", map[string]string{"username": "alice", "password": "correct horse battery"})
 	if resp.StatusCode != 200 || out["twoFactorRequired"] != true { t.Fatalf("login: %d %v", resp.StatusCode, out) }
