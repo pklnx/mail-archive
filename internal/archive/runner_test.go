@@ -9,6 +9,7 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/store"
 )
 
 func TestSyncSkipsLockedAndRemovedAccounts(t *testing.T) {
@@ -32,7 +33,7 @@ func TestSyncSkipsLockedAndRemovedAccounts(t *testing.T) {
 	// "gone" is removed after its first sync; later syncs skip it.
 	f.sync()
 	gone, _ := f.account("gone")
-	if _, err := f.store.DeleteOrRemoveAccount(f.ctx, gone.ID); err != nil {
+	if _, err := f.store.DeleteOrRemoveAccount(f.ctx, gone.Ref()); err != nil {
 		t.Fatal(err)
 	}
 	if res := f.sync(); len(res) != 1 || res["busy"].Err != nil {
@@ -54,7 +55,8 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	f.addAccount("on", "u", "pw")
 	f.addAccount("off", "u", "pw")
 	off, _ := f.account("off")
-	if err := f.store.SetAccountEnabled(f.ctx, off.ID, false); err != nil {
+	disabled := false
+	if err := f.store.UpdateAccount(f.ctx, off.Ref(), store.AccountChange{Enabled: &disabled}); err != nil {
 		t.Fatal(err)
 	}
 

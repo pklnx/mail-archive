@@ -20,7 +20,7 @@ func TestUsersSeeOnlyTheirOwnMail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetAccountOwner(ctx, bob.ID, other.ID); err != nil {
+	if err := f.st.SetAccountOwner(ctx, bob.Ref(), other.ID); err != nil {
 		t.Fatal(err)
 	}
 	g := *f
@@ -134,4 +134,48 @@ func accountByName(st *store.Store, name string) (*store.Account, error) {
 		return nil, store.ErrNotFound
 	}
 	return list[0], nil
+}
+
+func TestAccountChangesWhileSyncing(t *testing.T) {
+	f := newManageFixture(t, testUser(t))
+	f.do("POST", "/api/accounts", withConfirm(f.newAccount("private", "alice", "secret")), 201)
+	f.waitIdle("private")
+	acc, err := accountByName(f.st, "private")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the sync lock like a running sync does.
+	unlock, ok, err := f.st.TryLockSync(context.Background(), acc.ID)
+	if err != nil || !ok {
+		t.Fatal("lock", ok, err)
+	}
+	f.do("DELETE", "/api/accounts/private", nil, 409)
+	// Everything else works during the sync and is saved at once.
+	f.do("PATCH", "/api/accounts/private", map[string]any{"name": "renamed", "enabled": false, "excludedFolders": []string{"Spam"}}, 204)
+	unlock()
+
+	a := f.account("renamed")
+	if a.Enabled || len(a.ExcludedFolders) != 1 {
+		t.Fatalf("after PATCH: %+v", a)
+	}
+	f.do("DELETE", "/api/accounts/renamed", nil, 200)
+}
+
+func TestOldOwnerCannotChangeMovedAccount(t *testing.T) {
+	f := newManageFixture(t, testUser(t))
+	other, token := sessionFor(t, f.st, "other")
+	g := *f
+	g.cookie = token
+	f.do("POST", "/api/accounts", withConfirm(f.newAccount("private", "alice", "secret")), 201)
+	f.waitIdle("private")
+	acc, _ := accountByName(f.st, "private")
+	if err := f.st.SetAccountOwner(context.Background(), acc.Ref(), other.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.do("PATCH", "/api/accounts/private", map[string]any{"enabled": false}, 404)
+	f.do("DELETE", "/api/accounts/private", nil, 404)
+	if a := g.account("private"); !a.Enabled {
+		t.Fatal("the old owner changed the account")
+	}
 }

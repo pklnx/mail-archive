@@ -116,7 +116,7 @@ func run(dbURL, listen string, log *slog.Logger) error {
 			return fmt.Errorf("sync %s: %w", u.account, res.Err)
 		}
 		if u.removed {
-			if _, err := st.DeleteOrRemoveAccount(ctx, a.ID); err != nil {
+			if _, err := st.DeleteOrRemoveAccount(ctx, a.Ref()); err != nil {
 				return err
 			}
 		}

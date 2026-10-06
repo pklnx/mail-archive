@@ -13,11 +13,25 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
+// migrateDownThrough rolls back migrations until the named one is rolled
+// back, and returns the error of the first failing step.
+func migrateDownThrough(st *store.Store, name string) error {
+	for {
+		r, err := st.MigrateDown(context.Background())
+		if err != nil {
+			return err
+		}
+		if strings.HasSuffix(r, name) {
+			return nil
+		}
+	}
+}
+
 func TestOwnerMigration(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
-	if r, err := st.MigrateDown(ctx); err != nil || !strings.HasSuffix(r, "00005_account_owner.sql") {
-		t.Fatalf("down: %q, %v", r, err)
+	if err := migrateDownThrough(st, "00005_account_owner.sql"); err != nil {
+		t.Fatal(err)
 	}
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -56,11 +70,11 @@ func TestOwnerMigration(t *testing.T) {
 	}
 
 	// Rolling back needs globally unique names again.
-	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "same name") {
+	if err := migrateDownThrough(st, "00005_account_owner.sql"); err == nil || !strings.Contains(err.Error(), "same name") {
 		t.Fatalf("down with duplicate names: %v", err)
 	}
 	exec(`UPDATE accounts SET name = 'personal-2' WHERE id = ` + itoa(dup.ID))
-	if _, err := st.MigrateDown(ctx); err != nil {
+	if err := migrateDownThrough(st, "00005_account_owner.sql"); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	exec(`INSERT INTO accounts (name, host, port, tls_mode, username, password_enc) VALUES ('fresh', 'h', 993, 'tls', 'u', '\x01')`)
@@ -96,7 +110,7 @@ func TestFirstUserAdoptsAccounts(t *testing.T) {
 	}
 
 	// Moving between users, with name conflicts per owner.
-	if err := st.SetAccountOwner(ctx, a.ID, second.ID); err != nil {
+	if err := st.SetAccountOwner(ctx, a.Ref(), second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.ListOwnedAccounts(ctx, second.ID); len(got) != 1 || got[0].Name != "before-users" {
@@ -106,10 +120,10 @@ func TestFirstUserAdoptsAccounts(t *testing.T) {
 	if err := st.CreateAccount(ctx, clash); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetAccountOwner(ctx, clash.ID, second.ID); !errors.Is(err, store.ErrConflict) {
+	if err := st.SetAccountOwner(ctx, clash.Ref(), second.ID); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("move onto a taken name: %v", err)
 	}
-	if err := st.SetAccountOwner(ctx, late.ID, first.ID); err != nil {
+	if err := st.SetAccountOwner(ctx, late.Ref(), first.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +131,8 @@ func TestFirstUserAdoptsAccounts(t *testing.T) {
 	if err := st.DeleteUser(ctx, second.ID); !errors.Is(err, store.ErrOwnsAccounts) {
 		t.Fatalf("delete an owner: %v", err)
 	}
-	if _, err := st.DeleteOrRemoveAccount(ctx, a.ID); err != nil {
+	a, _ = st.GetAccount(ctx, a.ID)
+	if _, err := st.DeleteOrRemoveAccount(ctx, a.Ref()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.DeleteUser(ctx, second.ID); err != nil {

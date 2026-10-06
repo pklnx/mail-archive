@@ -11,7 +11,7 @@ import (
 )
 
 const adoptUnownedAccounts = `-- name: AdoptUnownedAccounts :execrows
-UPDATE accounts SET owner_id = $1, updated_at = now() WHERE owner_id IS NULL
+UPDATE accounts SET owner_id = $1, version = version + 1, updated_at = now() WHERE owner_id IS NULL
 `
 
 func (q *Queries) AdoptUnownedAccounts(ctx context.Context, ownerID *int64) (int64, error) {
@@ -67,7 +67,7 @@ func (q *Queries) CountOwnedAccounts(ctx context.Context) ([]CountOwnedAccountsR
 const createAccount = `-- name: CreateAccount :one
 INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, owner_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, created_at
+RETURNING id, created_at, version
 `
 
 type CreateAccountParams struct {
@@ -86,6 +86,7 @@ type CreateAccountParams struct {
 type CreateAccountRow struct {
 	ID        int64
 	CreatedAt time.Time
+	Version   int64
 }
 
 func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (CreateAccountRow, error) {
@@ -102,7 +103,7 @@ func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (C
 		arg.OwnerID,
 	)
 	var i CreateAccountRow
-	err := row.Scan(&i.ID, &i.CreatedAt)
+	err := row.Scan(&i.ID, &i.CreatedAt, &i.Version)
 	return i, err
 }
 
@@ -128,7 +129,7 @@ func (q *Queries) DeleteAccountFolders(ctx context.Context, accountID int64) err
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id FROM accounts WHERE id = $1
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version FROM accounts WHERE id = $1
 `
 
 func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
@@ -149,12 +150,13 @@ func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
 		&i.UpdatedAt,
 		&i.RemovedAt,
 		&i.OwnerID,
+		&i.Version,
 	)
 	return i, err
 }
 
 const getOwnedAccount = `-- name: GetOwnedAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id FROM accounts WHERE owner_id = $1 AND name = $2
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version FROM accounts WHERE owner_id = $1 AND name = $2
 `
 
 type GetOwnedAccountParams struct {
@@ -180,12 +182,13 @@ func (q *Queries) GetOwnedAccount(ctx context.Context, arg GetOwnedAccountParams
 		&i.UpdatedAt,
 		&i.RemovedAt,
 		&i.OwnerID,
+		&i.Version,
 	)
 	return i, err
 }
 
 const listAccounts = `-- name: ListAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id FROM accounts ORDER BY name
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version FROM accounts ORDER BY name
 `
 
 func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
@@ -212,6 +215,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.UpdatedAt,
 			&i.RemovedAt,
 			&i.OwnerID,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -224,7 +228,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 }
 
 const listAccountsByName = `-- name: ListAccountsByName :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST
 `
 
 // Accounts of all users with this name, for the CLI.
@@ -252,6 +256,7 @@ func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]Accoun
 			&i.UpdatedAt,
 			&i.RemovedAt,
 			&i.OwnerID,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -264,7 +269,7 @@ func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]Accoun
 }
 
 const listOwnedAccounts = `-- name: ListOwnedAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id FROM accounts WHERE owner_id = $1 ORDER BY name
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version FROM accounts WHERE owner_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Account, error) {
@@ -291,6 +296,7 @@ func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Acco
 			&i.UpdatedAt,
 			&i.RemovedAt,
 			&i.OwnerID,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -302,9 +308,37 @@ func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Acco
 	return items, nil
 }
 
+const lockAccount = `-- name: LockAccount :one
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version FROM accounts WHERE id = $1 FOR UPDATE
+`
+
+// The row stays locked until the transaction ends.
+func (q *Queries) LockAccount(ctx context.Context, id int64) (Account, error) {
+	row := q.db.QueryRow(ctx, lockAccount, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Host,
+		&i.Port,
+		&i.TlsMode,
+		&i.Username,
+		&i.PasswordEnc,
+		&i.IncludedFolders,
+		&i.ExcludedFolders,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RemovedAt,
+		&i.OwnerID,
+		&i.Version,
+	)
+	return i, err
+}
+
 const removeAccount = `-- name: RemoveAccount :execrows
 UPDATE accounts
-SET removed_at = now(), enabled = FALSE, password_enc = ''::bytea, updated_at = now()
+SET removed_at = now(), enabled = FALSE, password_enc = ''::bytea, version = version + 1, updated_at = now()
 WHERE id = $1 AND removed_at IS NULL
 `
 
@@ -317,35 +351,20 @@ func (q *Queries) RemoveAccount(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
-const renameAccount = `-- name: RenameAccount :execrows
-UPDATE accounts SET name = $2, updated_at = now()
-WHERE id = $1 AND removed_at IS NULL
+const replacePassword = `-- name: ReplacePassword :execrows
+UPDATE accounts SET password_enc = $1 WHERE id = $2 AND password_enc = $3
 `
 
-type RenameAccountParams struct {
-	ID   int64
-	Name string
+type ReplacePasswordParams struct {
+	NewEnc []byte
+	ID     int64
+	OldEnc []byte
 }
 
-func (q *Queries) RenameAccount(ctx context.Context, arg RenameAccountParams) (int64, error) {
-	result, err := q.db.Exec(ctx, renameAccount, arg.ID, arg.Name)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const setAccountEnabled = `-- name: SetAccountEnabled :execrows
-UPDATE accounts SET enabled = $2, updated_at = now() WHERE id = $1 AND removed_at IS NULL
-`
-
-type SetAccountEnabledParams struct {
-	ID      int64
-	Enabled bool
-}
-
-func (q *Queries) SetAccountEnabled(ctx context.Context, arg SetAccountEnabledParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setAccountEnabled, arg.ID, arg.Enabled)
+// Compare-and-swap: only if the password is still the one that was read.
+// The logical state does not change, so the version stays.
+func (q *Queries) ReplacePassword(ctx context.Context, arg ReplacePasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replacePassword, arg.NewEnc, arg.ID, arg.OldEnc)
 	if err != nil {
 		return 0, err
 	}
@@ -353,7 +372,7 @@ func (q *Queries) SetAccountEnabled(ctx context.Context, arg SetAccountEnabledPa
 }
 
 const setAccountOwner = `-- name: SetAccountOwner :execrows
-UPDATE accounts SET owner_id = $2, updated_at = now() WHERE id = $1
+UPDATE accounts SET owner_id = $2, version = version + 1, updated_at = now() WHERE id = $1
 `
 
 type SetAccountOwnerParams struct {
@@ -369,56 +388,8 @@ func (q *Queries) SetAccountOwner(ctx context.Context, arg SetAccountOwnerParams
 	return result.RowsAffected(), nil
 }
 
-const setFolderFilters = `-- name: SetFolderFilters :execrows
-UPDATE accounts SET included_folders = $2, excluded_folders = $3, updated_at = now() WHERE id = $1 AND removed_at IS NULL
-`
-
-type SetFolderFiltersParams struct {
-	ID              int64
-	IncludedFolders []string
-	ExcludedFolders []string
-}
-
-func (q *Queries) SetFolderFilters(ctx context.Context, arg SetFolderFiltersParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setFolderFilters, arg.ID, arg.IncludedFolders, arg.ExcludedFolders)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const updateAccountConnection = `-- name: UpdateAccountConnection :execrows
-UPDATE accounts
-SET host = $2, port = $3, tls_mode = $4, username = $5, password_enc = $6, updated_at = now()
-WHERE id = $1 AND removed_at IS NULL
-`
-
-type UpdateAccountConnectionParams struct {
-	ID          int64
-	Host        string
-	Port        int32
-	TlsMode     string
-	Username    string
-	PasswordEnc []byte
-}
-
-func (q *Queries) UpdateAccountConnection(ctx context.Context, arg UpdateAccountConnectionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateAccountConnection,
-		arg.ID,
-		arg.Host,
-		arg.Port,
-		arg.TlsMode,
-		arg.Username,
-		arg.PasswordEnc,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const updatePassword = `-- name: UpdatePassword :execrows
-UPDATE accounts SET password_enc = $2, updated_at = now() WHERE id = $1 AND removed_at IS NULL
+UPDATE accounts SET password_enc = $2 WHERE id = $1
 `
 
 type UpdatePasswordParams struct {
@@ -426,6 +397,7 @@ type UpdatePasswordParams struct {
 	PasswordEnc []byte
 }
 
+// Only for a new account, inside the transaction that creates it.
 func (q *Queries) UpdatePassword(ctx context.Context, arg UpdatePasswordParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updatePassword, arg.ID, arg.PasswordEnc)
 	if err != nil {
@@ -443,4 +415,42 @@ func (q *Queries) UserOwnsAccounts(ctx context.Context, ownerID *int64) (bool, e
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const writeAccount = `-- name: WriteAccount :exec
+UPDATE accounts
+SET name = $1, host = $2, port = $3, tls_mode = $4, username = $5,
+    password_enc = $6, included_folders = $7,
+    excluded_folders = $8, enabled = $9,
+    version = version + 1, updated_at = now()
+WHERE id = $10
+`
+
+type WriteAccountParams struct {
+	Name            string
+	Host            string
+	Port            int32
+	TlsMode         string
+	Username        string
+	PasswordEnc     []byte
+	IncludedFolders []string
+	ExcludedFolders []string
+	Enabled         bool
+	ID              int64
+}
+
+func (q *Queries) WriteAccount(ctx context.Context, arg WriteAccountParams) error {
+	_, err := q.db.Exec(ctx, writeAccount,
+		arg.Name,
+		arg.Host,
+		arg.Port,
+		arg.TlsMode,
+		arg.Username,
+		arg.PasswordEnc,
+		arg.IncludedFolders,
+		arg.ExcludedFolders,
+		arg.Enabled,
+		arg.ID,
+	)
+	return err
 }

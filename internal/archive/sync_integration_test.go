@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -271,4 +272,31 @@ func (f *fixture) account(name string) (*store.Account, error) {
 		return nil, store.ErrNotFound
 	}
 	return list[0], nil
+}
+
+func TestSyncSkipsAccountDeletedMeanwhile(t *testing.T) {
+	u := imapmemserver.NewUser("u", "pw")
+	createMailboxes(t, u, "INBOX")
+	appendMsg(t, u, "INBOX", rawMessage("m1", "Hello"))
+	f := newFixture(t, u)
+	f.addAccount("short-lived", "u", "pw")
+	a, _ := f.account("short-lived") // loaded, e.g. by the runner
+
+	// Deleted before the sync takes the lock.
+	unlock, ok, err := f.store.TryLockSync(f.ctx, a.ID)
+	if err != nil || !ok {
+		t.Fatal("lock", ok, err)
+	}
+	if _, err := f.store.DeleteOrRemoveAccount(f.ctx, a.Ref()); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+
+	if res := f.syncer.SyncAccount(f.ctx, a); !errors.Is(res.Err, archive.ErrAccountRemoved) {
+		t.Fatalf("sync of a deleted account: %v", res.Err)
+	}
+	runs, err := f.store.LastRuns(f.ctx)
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("runs recorded: %v, %v", runs, err)
+	}
 }

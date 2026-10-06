@@ -154,6 +154,8 @@ type Account struct {
 	// OwnerID is the user who sees the account and its mail. It is nil only
 	// before the first user exists; that user then gets the account.
 	OwnerID *int64
+	// Version increases with every change; see UpdateAccount.
+	Version int64
 }
 
 func accountFromDB(r db.Account) *Account {
@@ -171,6 +173,7 @@ func accountFromDB(r db.Account) *Account {
 		CreatedAt:       r.CreatedAt,
 		RemovedAt:       r.RemovedAt,
 		OwnerID:         r.OwnerID,
+		Version:         r.Version,
 	}
 }
 
@@ -226,94 +229,8 @@ func createAccount(ctx context.Context, q *db.Queries, a *Account) error {
 	if err != nil {
 		return err
 	}
-	a.ID, a.CreatedAt = row.ID, row.CreatedAt
+	a.ID, a.CreatedAt, a.Version = row.ID, row.CreatedAt, row.Version
 	return nil
-}
-
-// UpdatePassword replaces an account's encrypted password.
-func (s *Store) UpdatePassword(ctx context.Context, id int64, passwordEnc []byte) error {
-	return one(s.q.UpdatePassword(ctx, db.UpdatePasswordParams{ID: id, PasswordEnc: passwordEnc}))
-}
-
-// SetAccountEnabled enables or disables an account.
-func (s *Store) SetAccountEnabled(ctx context.Context, id int64, enabled bool) error {
-	return one(s.q.SetAccountEnabled(ctx, db.SetAccountEnabledParams{ID: id, Enabled: enabled}))
-}
-
-// SetFolderFilters replaces the include and exclude folder lists.
-func (s *Store) SetFolderFilters(ctx context.Context, id int64, included, excluded []string) error {
-	if included == nil {
-		included = []string{}
-	}
-	if excluded == nil {
-		excluded = []string{}
-	}
-	return one(s.q.SetFolderFilters(ctx, db.SetFolderFiltersParams{
-		ID: id, IncludedFolders: included, ExcludedFolders: excluded,
-	}))
-}
-
-// UpdateConnection replaces the server settings and encrypted password.
-func (s *Store) UpdateConnection(ctx context.Context, a *Account) error {
-	if a.Port < 1 || a.Port > 65535 {
-		return fmt.Errorf("invalid port %d", a.Port)
-	}
-	return one(s.q.UpdateAccountConnection(ctx, db.UpdateAccountConnectionParams{
-		ID: a.ID, Host: a.Host, Port: int32(a.Port), //nolint:gosec // range checked above
-		TlsMode: string(a.TLSMode), Username: a.Username, PasswordEnc: a.PasswordEnc,
-	}))
-}
-
-// RenameAccount changes an account's name. It fails with ErrConflict if the
-// owner already has an account with that name (also a removed one) and with
-// ErrNotFound for removed accounts.
-func (s *Store) RenameAccount(ctx context.Context, id int64, name string) error {
-	err := one(s.q.RenameAccount(ctx, db.RenameAccountParams{ID: id, Name: name}))
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return fmt.Errorf("account %q: %w", name, ErrConflict)
-	}
-	return err
-}
-
-// RemoveResult tells how DeleteOrRemoveAccount handled an account.
-type RemoveResult string
-
-// Possible outcomes of DeleteOrRemoveAccount.
-const (
-	AccountDeleted RemoveResult = "deleted" // no archived mail: the account is gone
-	AccountRemoved RemoveResult = "removed" // archived mail kept, credentials wiped
-)
-
-// DeleteOrRemoveAccount deletes an account without archived mail. An account
-// with archived mail is marked as removed instead: its mail stays searchable
-// and keeps showing where it came from, but the password is wiped and the
-// account is never synced again.
-func (s *Store) DeleteOrRemoveAccount(ctx context.Context, id int64) (RemoveResult, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	q := s.q.WithTx(tx)
-	n, err := q.CountAccountLocations(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	result := AccountRemoved
-	if n == 0 {
-		result = AccountDeleted
-		if err := q.DeleteAccountFolders(ctx, id); err != nil {
-			return "", err
-		}
-		err = one(q.DeleteAccount(ctx, id))
-	} else {
-		err = one(q.RemoveAccount(ctx, id))
-	}
-	if err != nil {
-		return "", err
-	}
-	return result, tx.Commit(ctx)
 }
 
 // GetAccount looks up an account by ID.
@@ -359,17 +276,6 @@ func accountsFromDB(rows []db.Account, err error) ([]*Account, error) {
 		out = append(out, accountFromDB(r))
 	}
 	return out, nil
-}
-
-// SetAccountOwner hands an account to another user. It fails with
-// ErrConflict if that user already has an account with the same name.
-func (s *Store) SetAccountOwner(ctx context.Context, id, owner int64) error {
-	err := one(s.q.SetAccountOwner(ctx, db.SetAccountOwnerParams{ID: id, OwnerID: &owner}))
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return fmt.Errorf("account name: %w", ErrConflict)
-	}
-	return err
 }
 
 // CountOwnedAccounts returns the number of accounts per owner ID.

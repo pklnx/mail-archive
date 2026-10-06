@@ -76,6 +76,48 @@ The API reports an account as *running* when any session holds its lock
 (looked up in `pg_locks`), so syncs started by the command line are visible
 too.
 
+## Accounts: ownership and changes
+
+Every account has an owner, and every change to an account goes through
+one of three store functions: `UpdateAccount` (name, connection, password,
+folder filters, enabled), `SetAccountOwner` and `DeleteOrRemoveAccount`.
+Each takes an `AccountRef`: the ID together with the owner and the
+`version` the caller read. Each runs in one transaction that
+
+1. locks the row (`SELECT … FOR UPDATE`),
+2. checks that the account exists, is not removed and still has the
+   expected owner (`ErrNotFound` otherwise, exactly like an unknown
+   account: the API answers `404`),
+3. checks the version (`ErrStale` otherwise: `409`, reload and retry),
+4. applies all changes and increments the version.
+
+So concurrent changes are serialized, a change based on an outdated read is
+refused instead of overwriting the newer state, a combined change is saved
+completely or not at all, and an account handed to another user can no
+longer be changed by its former owner. Work that needs the network or the
+key (the login check, encrypting the password) happens before the
+transaction, never while a row is locked.
+
+| Layer | Responsible for |
+|---|---|
+| SQL queries for messages, folders, search, status, account lists | Showing only the user's own data (owner filter in every query). |
+| Store mutation functions | Owner, version and atomicity of every account change. |
+| Web handlers and CLI | Resolving the account (owner-scoped in the web), checking input, calling one mutation, mapping errors to `404`/`409`. |
+| Sync lock | Keeping deletes away from running syncs. |
+
+A sync never writes the `accounts` row. Renaming, new connection settings,
+filters, enabling and moving therefore do not disturb a running sync and
+apply from the next one. Only deleting must not overlap a sync, which
+writes folders and messages for the account: `DeleteOrRemoveAccount`
+requires the caller to hold the account's sync lock (`409` if a sync holds
+it), and a sync reads the account again after taking the lock, so it skips
+an account deleted while it was queued.
+
+Stored IMAP passwords are bound to the account ID (AES-GCM associated
+data), so renaming or moving needs no new encryption. `UpgradePasswords`
+converts passwords bound to the old name with compare-and-swap, so it never
+overwrites a password set at the same moment.
+
 ## Search
 
 `messages.search` is a generated `tsvector` that combines the `simple`,

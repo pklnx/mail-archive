@@ -165,6 +165,14 @@ func TestAccountOwners(t *testing.T) {
 		t.Fatalf("kim owns %d accounts", len(l))
 	}
 
+	// Renaming works per user and keeps the stored password readable.
+	if err := runCmd(t, newAccountCmd(), "", "rename", "personal", "private", "--user", "kim"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetOwnedAccount(ctx, kim.ID, "private"); err != nil {
+		t.Fatalf("renamed account: %v", err)
+	}
+
 	// Users with accounts cannot be removed.
 	if err := runUser(t, "", "remove", "kim"); err == nil || !strings.Contains(err.Error(), "owns 2 account") {
 		t.Fatalf("remove an owner: %v", err)

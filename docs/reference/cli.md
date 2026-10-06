@@ -38,11 +38,16 @@ The last admin who can log in cannot be locked or removed.
 | `account list` | List accounts with owner, server, login, state (enabled, disabled, removed) and folder filters. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the folder filters with `--include` and `--exclude`. No flags: archive all folders. |
-| `account rename NAME NEW-NAME` | Rename the account; its mail moves with it. Refused while the account is being synced. |
+| `account rename NAME NEW-NAME` | Rename the account; its mail moves with it. |
 | `account set-password NAME` | Replace the stored password (`--password-stdin` to read it from stdin). |
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. |
-| `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). |
-| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused while syncing or if the user already has an account with that name. |
+| `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced. |
+| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. |
+
+Account changes work while the account is being synced and apply from the
+next sync; only `account remove` waits for the sync to finish. A command
+that finds the account changed in the meantime (by the web UI or another
+command) stops without changing anything; run it again.
 
 Accounts belong to users, and names are unique per user. Every `account`
 command takes `--user USER`; it is needed when several users have an account
