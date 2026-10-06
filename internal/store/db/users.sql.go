@@ -208,6 +208,18 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 	return i, err
 }
 
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(&i.ID, &i.Name, &i.PasswordHash, &i.IsAdmin, &i.LockedAt, &i.CreatedAt, &i.PasswordChangedAt, &i.LastLoginAt, &i.MustChangePassword,
+		&i.TwoFactorSecret, &i.TwoFactorEnabled, &i.TwoFactorPendingSecret, &i.TwoFactorLastCounter, &i.TwoFactorVersion)
+	return i, err
+}
+
 const listUsers = `-- name: ListUsers :many
 SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users ORDER BY name
 `
