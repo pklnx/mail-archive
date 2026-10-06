@@ -105,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/users/{name}", s.handleUpdateUser)
 	mux.HandleFunc("DELETE /api/users/{name}", s.handleDeleteUser)
 	mux.HandleFunc("POST /api/users/{name}/password", s.handleResetUserPassword)
+	mux.HandleFunc("POST /api/users/{name}/2fa/reset", s.handleResetUserTwoFactor)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
 	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
