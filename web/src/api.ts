@@ -299,4 +299,5 @@ export const usersApi = {
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
   setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
   remove: (name: string) => send("DELETE", userPath(name)),
+  reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
 };
