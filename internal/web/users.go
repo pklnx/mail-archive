@@ -269,3 +269,21 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 	s.log.Info("password changed", "user", u.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+
+func (s *Server) handleResetUserTwoFactor(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.pathUser(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.ResetTwoFactor(r.Context(), u.ID); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			s.fail(w, r, http.StatusConflict, "cannot reset the last usable administrator's two-factor authentication", nil)
+			return
+		}
+		s.failStore(w, r, err)
+		return
+	}
+	s.log.Info("2fa reset", "user", u.Name, "by", currentSession(r).UserName)
+	w.WriteHeader(http.StatusNoContent)
+}
