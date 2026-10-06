@@ -202,7 +202,7 @@ make test TEST_DATABASE_URL='postgres://mailarchive:<password>@localhost:5432/ma
 make lint
 make vuln               # govulncheck
 make docker-multiarch   # build amd64 + arm64 images
-make web                # build the web UI (needs Node.js 24 with corepack)
+make web                # build the web UI (needs Node.js 26 and corepack)
 scripts/compose-smoke-test.sh   # end-to-end test of Compose and ./ma (also in CI)
 ```
 
@@ -264,6 +264,9 @@ make sqlc-check    # what CI runs: vet queries and fail on stale code
 The UI lives in `web/` (React, TypeScript, Vite, Tailwind CSS; pnpm via
 corepack). `make web` builds it into `internal/web/ui/dist`, which is embedded
 into the binary; a plain `go build` without it serves a hint page instead.
+
+Node.js 26 no longer ships corepack, so install it once with
+`npm install -g corepack`.
 
 ```sh
 cd web
