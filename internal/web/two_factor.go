@@ -130,12 +130,17 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The limiter is keyed by the username only after the challenge is resolved.
-	_, err := s.store.GetTwoFactorChallenge(r.Context(), in.Challenge)
+	ch, err := s.store.GetTwoFactorChallenge(r.Context(), in.Challenge)
 	if err != nil {
 		s.fail(w, r, http.StatusUnauthorized, "invalid or expired two-factor challenge", nil)
 		return
 	}
-	key := "2fa:" + in.Challenge
+	u, err := s.store.GetUserByID(r.Context(), ch.UserID)
+	if err != nil {
+		s.fail(w, r, http.StatusUnauthorized, "invalid or expired two-factor challenge", nil)
+		return
+	}
+	key := u.Name
 	if wait := s.limiter.Blocked(key, clientAddr(r)); wait > 0 {
 		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: int(wait.Seconds()) + 1})
 		return
@@ -145,14 +150,14 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		if err == store.ErrTwoFactorInvalid || err == store.ErrTwoFactorReplay {
 			// Use a stable key derived from the challenge rather than exposing
 			// whether the user exists.
-			s.limiter.Fail("2fa:"+in.Challenge, clientAddr(r))
+			s.limiter.Fail(u.Name, clientAddr(r))
 			s.fail(w, r, http.StatusUnauthorized, "invalid two-factor code", nil)
 			return
 		}
 		s.fail(w, r, http.StatusUnauthorized, "invalid or expired two-factor challenge", nil)
 		return
 	}
-	s.limiter.Succeed("2fa:"+in.Challenge)
+	s.limiter.Succeed(u.Name)
 	clearSessionCookies(w, r)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
 	s.writeJSON(w, http.StatusOK, sessionJSON{User: userJSON{
