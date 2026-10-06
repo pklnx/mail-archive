@@ -91,4 +91,9 @@ type User struct {
 	PasswordChangedAt  time.Time
 	LastLoginAt        *time.Time
 	MustChangePassword bool
+	TwoFactorSecret []byte
+	TwoFactorEnabled bool
+	TwoFactorPendingSecret []byte
+	TwoFactorLastCounter *int64
+	TwoFactorVersion int64
 }
