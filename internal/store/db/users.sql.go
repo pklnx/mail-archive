@@ -243,6 +243,11 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.PasswordChangedAt,
 			&i.LastLoginAt,
 			&i.MustChangePassword,
+			&i.TwoFactorSecret,
+			&i.TwoFactorEnabled,
+			&i.TwoFactorPendingSecret,
+			&i.TwoFactorLastCounter,
+			&i.TwoFactorVersion,
 		); err != nil {
 			return nil, err
 		}
