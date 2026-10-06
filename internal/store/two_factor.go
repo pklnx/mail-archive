@@ -187,7 +187,6 @@ func itoa(n int64) string {
 	return string(b[i:])
 }
 
-
 // ConfirmTwoFactorSetup validates the setup code and atomically enables TOTP.
 func (s *Store) ConfirmTwoFactorSetup(ctx context.Context, id int64, code string, now time.Time, sealer *crypto.Sealer, recovery []string, key []byte) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
@@ -221,10 +220,10 @@ func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, 
 		counter, ok, err := auth.ValidateTOTP(string(secret), code, now)
 		if err != nil { return err }
 		if ok {
-			if u.TwoFactorLastCount != nil && int64(counter) <= *u.TwoFactorLastCount /*nolint:gosec // TOTP counters are bounded Unix time-step values.*/ { return ErrTwoFactorReplay }
-			last, ok := counterToInt64(counter)
-			if !ok { return ErrTwoFactorReplay }
-			n, err := q.AcceptTwoFactorCounter(ctx, id, last) //nolint:gosec // TOTP counters are bounded Unix time-step values.
+			last, counterOK := counterToInt64(counter)
+			if !counterOK { return ErrTwoFactorReplay }
+			if u.TwoFactorLastCount != nil && last <= *u.TwoFactorLastCount { return ErrTwoFactorReplay }
+			n, err := q.AcceptTwoFactorCounter(ctx, id, last)
 			if err != nil { return err }
 			if n != 1 { return ErrTwoFactorReplay }
 			version = u.TwoFactorVersion
@@ -240,7 +239,8 @@ func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, 
 }
 
 func counterToInt64(counter uint64) (int64, bool) {
-	if counter > uint64(^uint64(0)>>1) {
+	const maxInt64Counter = 1<<63 - 1
+	if counter > maxInt64Counter {
 		return 0, false
 	}
 	return int64(counter), true //nolint:gosec // explicit range check above proves the conversion is safe.
