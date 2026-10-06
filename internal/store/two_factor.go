@@ -261,7 +261,7 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		return "", nil, err
 	}
 	err = s.inTx(ctx, func(q *db.Queries) error {
-		ch, err := s.q.GetTwoFactorChallenge(ctx, auth.HashSessionToken(token))
+		ch, err := q.GetTwoFactorChallenge(ctx, auth.HashSessionToken(token))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrTwoFactorExpired
