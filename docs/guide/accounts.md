@@ -3,6 +3,11 @@
 An account is one IMAP mailbox. Its password is stored in PostgreSQL,
 encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`.
 
+Every account belongs to one user, who alone sees it and the mail found in
+it. Accounts added in the web UI belong to you; names only need to be unique
+among your own accounts. On the command line, `--user` picks the owner; see
+[CLI](../reference/cli#accounts).
+
 ## Adding an account
 
 **Web UI:** Manage accounts → Add account. Fill in:

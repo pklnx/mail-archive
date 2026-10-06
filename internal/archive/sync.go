@@ -20,12 +20,6 @@ import (
 // DefaultBatchSize is the number of messages committed per transaction.
 const DefaultBatchSize = 100
 
-// PasswordContext returns the associated data used to encrypt an account's
-// password, binding the ciphertext to the account name.
-func PasswordContext(accountName string) []byte {
-	return []byte("account-password:" + accountName)
-}
-
 // Syncer copies new messages from all enabled accounts.
 type Syncer struct {
 	Store     *store.Store
@@ -46,15 +40,16 @@ var ErrAccountRemoved = errors.New("account was removed")
 // AccountResult is the outcome of syncing one account.
 type AccountResult struct {
 	Account string
+	OwnerID *int64
 	Fetched int
 	New     int
 	Err     error
 }
 
 // SyncAll syncs every enabled account (or only the named ones, even if
-// disabled). Removed accounts are skipped. A failing account does not stop
-// the others.
-func (s *Syncer) SyncAll(ctx context.Context, only []string) ([]AccountResult, error) {
+// disabled), of all users or, with owner set, of one user. Removed accounts
+// are skipped. A failing account does not stop the others.
+func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]AccountResult, error) {
 	accounts, err := s.Store.ListAccounts(ctx)
 	if err != nil {
 		return nil, err
@@ -62,6 +57,9 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string) ([]AccountResult, e
 	var results []AccountResult
 	for _, a := range accounts {
 		if a.RemovedAt != nil {
+			continue
+		}
+		if owner != nil && (a.OwnerID == nil || *a.OwnerID != *owner) {
 			continue
 		}
 		if len(only) > 0 && !containsFold(only, a.Name) {
@@ -82,7 +80,7 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string) ([]AccountResult, e
 // It fails with ErrSyncRunning if the account is already being synced.
 func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResult {
 	log := s.logger().With("account", a.Name)
-	res := AccountResult{Account: a.Name}
+	res := AccountResult{Account: a.Name, OwnerID: a.OwnerID}
 	if a.RemovedAt != nil {
 		res.Err = ErrAccountRemoved
 		return res
@@ -117,12 +115,12 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		return res
 	}
 
-	password, err := s.Sealer.Open(a.PasswordEnc, PasswordContext(a.Name))
+	password, err := OpenPassword(s.Sealer, a)
 	if err != nil {
-		res.Err = fmt.Errorf("decrypt password: %w", err)
+		res.Err = err
 		return finish("failed")
 	}
-	conn, err := s.dial(ctx, a, string(password))
+	conn, err := s.dial(ctx, a, password)
 	if err != nil {
 		res.Err = err
 		return finish("failed")
@@ -193,11 +191,11 @@ func (s *Syncer) CheckLogin(ctx context.Context, a *store.Account, password stri
 // ListFolders connects with the account's stored password and lists its
 // folders.
 func (s *Syncer) ListFolders(ctx context.Context, a *store.Account) ([]imapsync.Folder, error) {
-	password, err := s.Sealer.Open(a.PasswordEnc, PasswordContext(a.Name))
+	password, err := OpenPassword(s.Sealer, a)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt password: %w", err)
+		return nil, err
 	}
-	return s.CheckLogin(ctx, a, string(password))
+	return s.CheckLogin(ctx, a, password)
 }
 
 type storedBody struct {

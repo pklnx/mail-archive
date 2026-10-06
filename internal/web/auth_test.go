@@ -48,6 +48,24 @@ func loggedIn(t *testing.T, st *store.Store, h http.Handler) http.Handler {
 	})
 }
 
+// sessionFor creates a user and returns a session token for it.
+func sessionFor(t *testing.T, st *store.Store, name string) (*store.User, string) {
+	t.Helper()
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, name, "unused", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, hash, err := auth.NewSessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateSession(ctx, hash, u.ID, time.Now().Add(time.Hour), ""); err != nil {
+		t.Fatal(err)
+	}
+	return u, token
+}
+
 type authFixture struct {
 	t      *testing.T
 	st     *store.Store

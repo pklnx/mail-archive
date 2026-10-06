@@ -4,7 +4,7 @@
 
 | Asset | Protection |
 |---|---|
-| IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account name, using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
+| IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail | Plain `.eml` files and PostgreSQL rows, **not encrypted**. Use an encrypted disk. |
 | Your mail servers | Only read: `EXAMINE` and `BODY.PEEK[]`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
@@ -34,8 +34,10 @@ page code (`/`, `/assets/`) is public; it contains no data.
   client, so all clients share the address limit; the limit per user name
   still applies.
 
-Until [#27](https://github.com/pklnx/mail-archive/issues/27) lands, every
-logged-in user sees all accounts and mail.
+Each user sees only their own accounts and the mail found in them. A message
+that is in two users' accounts is stored once and shown to both, each with
+only their own locations. Other users' accounts and messages answer `404`,
+also when someone guesses a message ID. Admins see only their own mail too.
 
 ## Network access
 

@@ -96,10 +96,12 @@ JVBERi0xLjQK
 )
 
 type apiFixture struct {
-	t   *testing.T
-	srv *httptest.Server
-	ids map[string]string // name -> sha256
-	raw map[string]string
+	t      *testing.T
+	st     *store.Store
+	srv    *httptest.Server
+	cookie string            // session token; empty means the fixture's own user
+	ids    map[string]string // name -> sha256
+	raw    map[string]string
 }
 
 func newAPIFixture(t *testing.T) *apiFixture {
@@ -110,7 +112,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	f := &apiFixture{t: t, ids: map[string]string{}, raw: map[string]string{
+	f := &apiFixture{t: t, st: st, ids: map[string]string{}, raw: map[string]string{
 		"invoice": msgInvoice, "meeting": msgMeeting, "newsletter": msgNewsletter, "rich": msgRich,
 	}}
 
@@ -167,7 +169,11 @@ func newAPIFixture(t *testing.T) *apiFixture {
 
 func (f *apiFixture) get(path string) *http.Response {
 	f.t.Helper()
-	resp, err := http.Get(f.srv.URL + path)
+	req, _ := http.NewRequest("GET", f.srv.URL+path, nil)
+	if f.cookie != "" {
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: f.cookie})
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		f.t.Fatal(err)
 	}

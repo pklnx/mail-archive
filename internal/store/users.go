@@ -12,6 +12,10 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
+// ErrOwnsAccounts is returned when a user who still owns accounts would be
+// deleted.
+var ErrOwnsAccounts = errors.New("the user still owns accounts")
+
 // ErrLastAdmin is returned when a change would leave no unlocked admin.
 var ErrLastAdmin = errors.New("this is the last admin who can log in")
 
@@ -35,17 +39,34 @@ func userFromDB(r db.User) *User {
 	}
 }
 
-// CreateUser inserts a user. The name must already be normalized.
+// CreateUser inserts a user. The name must already be normalized. The
+// first user also gets all accounts without owner, i.e. those added before
+// any user existed.
 func (s *Store) CreateUser(ctx context.Context, name, passwordHash string, admin bool) (*User, error) {
-	r, err := s.q.CreateUser(ctx, db.CreateUserParams{Name: name, PasswordHash: passwordHash, IsAdmin: admin})
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return nil, fmt.Errorf("user %q: %w", name, ErrConflict)
-	}
+	var u *User
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		r, err := q.CreateUser(ctx, db.CreateUserParams{Name: name, PasswordHash: passwordHash, IsAdmin: admin})
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("user %q: %w", name, ErrConflict)
+		}
+		if err != nil {
+			return err
+		}
+		u = userFromDB(r)
+		n, err := q.CountUsers(ctx)
+		if err != nil {
+			return err
+		}
+		if n == 1 {
+			_, err = q.AdoptUnownedAccounts(ctx, &u.ID)
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	return userFromDB(r), nil
+	return u, nil
 }
 
 // GetUserByName looks up a user by login name.
@@ -120,14 +141,28 @@ func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error 
 }
 
 // DeleteUser deletes a user and their sessions. It fails with ErrLastAdmin
-// for the last unlocked admin.
+// for the last unlocked admin and with ErrOwnsAccounts while the user owns
+// accounts (also removed ones, whose mail stays in the archive).
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inTx(ctx, func(q *db.Queries) error {
 		if err := keepAnAdmin(ctx, q, id); err != nil {
 			return err
 		}
+		if owns, err := q.UserOwnsAccounts(ctx, &id); err != nil {
+			return err
+		} else if owns {
+			return ErrOwnsAccounts
+		}
 		return one(q.DeleteUser(ctx, id))
 	})
+	// An account added concurrently: the foreign key refuses the delete.
+	// PostgreSQL 18 reports ON DELETE RESTRICT as restrict_violation
+	// (23001), older versions as foreign_key_violation (23503).
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503") {
+		return ErrOwnsAccounts
+	}
+	return err
 }
 
 // keepAnAdmin fails if user id is the only unlocked admin. The admin rows

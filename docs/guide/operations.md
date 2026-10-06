@@ -41,7 +41,8 @@ Pull requests that change the database schema carry the label
 | When upgrading from | Run |
 |---|---|
 | A version without full-text search | `./ma reindex` once, so older messages become searchable. |
-| A version without login | `./ma user add NAME --admin` once; until then the web UI only shows how to do it. |
+| A version without login | `./ma user add NAME --admin` once; until then the web UI only shows how to do it. This first user gets all existing accounts. |
+| A version without separate users | Nothing. Existing accounts belong to the oldest admin; hand some to other users with `./ma account move NAME --to USER`. `./ma migrate` also encrypts the stored IMAP passwords again, bound to the account ID instead of the name (needs `MAIL_ARCHIVE_SECRET_KEY`; the web server does the same when it starts). Older versions cannot read these passwords: going back means entering them again with `account set-password`. |
 
 ## Logs
 

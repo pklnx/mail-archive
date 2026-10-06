@@ -6,6 +6,8 @@ are JSON unless noted. Errors look like `{"error": "message"}`.
 ## Login
 
 Every endpoint below needs a session cookie and answers `401` without one.
+All of them only see the logged-in user's accounts and the messages found in
+them; other users' accounts and messages answer `404`.
 
 | Endpoint | Description |
 |---|---|

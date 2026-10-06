@@ -18,8 +18,10 @@ const (
 	HighlightEnd   = ""
 )
 
-// SearchFilter selects messages for a listing. Empty fields are ignored.
+// SearchFilter selects messages for a listing. Empty fields are ignored,
+// except Owner: only messages found in that user's accounts are listed.
 type SearchFilter struct {
+	Owner   int64
 	Query   string
 	Account string
 	Folder  string
@@ -46,7 +48,7 @@ type MessageSummary struct {
 // full-text query, account, folder and date range.
 func (s *Store) SearchMessages(ctx context.Context, f SearchFilter) ([]MessageSummary, error) {
 	p := db.SearchMessagesParams{
-		Account: nonEmpty(f.Account), Folder: nonEmpty(f.Folder),
+		Owner: f.Owner, Account: nonEmpty(f.Account), Folder: nonEmpty(f.Folder),
 		After: f.After, Before: f.Before, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
@@ -87,16 +89,17 @@ type MessageDetail struct {
 	Locations  []MessageLocation
 }
 
-// GetMessageDetail returns metadata and locations of one message.
-func (s *Store) GetMessageDetail(ctx context.Context, sha256 string) (*MessageDetail, error) {
-	r, err := s.q.GetMessageSummary(ctx, sha256)
+// GetMessageDetail returns metadata and the user's own locations of one
+// message. Messages not found in any of the user's accounts are ErrNotFound.
+func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string) (*MessageDetail, error) {
+	r, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Owner: owner})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	locs, err := s.q.ListLocations(ctx, sha256)
+	locs, err := s.q.ListLocations(ctx, db.ListLocationsParams{Sha256: sha256, Owner: owner})
 	if err != nil {
 		return nil, err
 	}
@@ -130,9 +133,9 @@ type AccountFolders struct {
 	Folders []FolderCount
 }
 
-// ListAccountFolders returns all accounts with their folders and counts.
-func (s *Store) ListAccountFolders(ctx context.Context) ([]AccountFolders, error) {
-	rows, err := s.q.ListFolderCounts(ctx)
+// ListAccountFolders returns a user's accounts with their folders and counts.
+func (s *Store) ListAccountFolders(ctx context.Context, owner int64) ([]AccountFolders, error) {
+	rows, err := s.q.ListFolderCounts(ctx, owner)
 	if err != nil {
 		return nil, err
 	}

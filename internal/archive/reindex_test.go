@@ -22,7 +22,11 @@ func TestReindexFillsLegacyMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acc := &store.Account{Name: "a", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}}
+	owner, err := st.CreateUser(ctx, "owner", "h", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc := &store.Account{Name: "a", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &owner.ID}
 	if err := st.CreateAccount(ctx, acc); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +54,7 @@ func TestReindexFillsLegacyMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	search := func() int {
-		rows, err := st.SearchMessages(ctx, store.SearchFilter{Query: "Wartungsvertrag", Limit: 10})
+		rows, err := st.SearchMessages(ctx, store.SearchFilter{Owner: owner.ID, Query: "Wartungsvertrag", Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}

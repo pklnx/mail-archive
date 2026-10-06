@@ -78,7 +78,7 @@ func TestStatsWithAndWithoutSyncRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	synced, err := st.GetAccountByName(ctx, "synced")
+	synced, err := accountByName(st, "synced")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestStatsWithAndWithoutSyncRuns(t *testing.T) {
 		}
 	}
 
-	stats, unique, err := st.Stats(ctx)
+	stats, unique, err := st.Stats(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

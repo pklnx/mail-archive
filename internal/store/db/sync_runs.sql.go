@@ -11,24 +11,27 @@ import (
 )
 
 const accountStats = `-- name: AccountStats :many
-SELECT a.id, a.name, a.enabled,
+SELECT a.id, a.name, a.enabled, a.owner_id,
        (SELECT count(*) FROM folders f WHERE f.account_id = a.id) AS folders,
        (SELECT count(*) FROM message_locations l JOIN folders f ON f.id = l.folder_id
         WHERE f.account_id = a.id) AS locations
 FROM accounts a
-ORDER BY a.name
+WHERE $1::bigint IS NULL OR a.owner_id = $1::bigint
+ORDER BY a.name, a.owner_id
 `
 
 type AccountStatsRow struct {
 	ID        int64
 	Name      string
 	Enabled   bool
+	OwnerID   *int64
 	Folders   int64
 	Locations int64
 }
 
-func (q *Queries) AccountStats(ctx context.Context) ([]AccountStatsRow, error) {
-	rows, err := q.db.Query(ctx, accountStats)
+// All accounts, or only those of one owner.
+func (q *Queries) AccountStats(ctx context.Context, owner *int64) ([]AccountStatsRow, error) {
+	rows, err := q.db.Query(ctx, accountStats, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +43,7 @@ func (q *Queries) AccountStats(ctx context.Context) ([]AccountStatsRow, error) {
 			&i.ID,
 			&i.Name,
 			&i.Enabled,
+			&i.OwnerID,
 			&i.Folders,
 			&i.Locations,
 		); err != nil {

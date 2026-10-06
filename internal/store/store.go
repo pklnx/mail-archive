@@ -151,6 +151,9 @@ type Account struct {
 	// RemovedAt is set for removed accounts: their archived mail stays, but
 	// they have no password and are never synced.
 	RemovedAt *time.Time
+	// OwnerID is the user who sees the account and its mail. It is nil only
+	// before the first user exists; that user then gets the account.
+	OwnerID *int64
 }
 
 func accountFromDB(r db.Account) *Account {
@@ -167,11 +170,34 @@ func accountFromDB(r db.Account) *Account {
 		Enabled:         r.Enabled,
 		CreatedAt:       r.CreatedAt,
 		RemovedAt:       r.RemovedAt,
+		OwnerID:         r.OwnerID,
 	}
 }
 
 // CreateAccount inserts a new account and sets its ID.
 func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
+	return createAccount(ctx, s.q, a)
+}
+
+// CreateAccountSealed inserts a new account whose password is encrypted with
+// its ID: seal gets the new ID and returns the encrypted password. Both
+// happen in one transaction.
+func (s *Store) CreateAccountSealed(ctx context.Context, a *Account, seal func(id int64) ([]byte, error)) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		a.PasswordEnc = []byte{}
+		if err := createAccount(ctx, q, a); err != nil {
+			return err
+		}
+		enc, err := seal(a.ID)
+		if err != nil {
+			return err
+		}
+		a.PasswordEnc = enc
+		return one(q.UpdatePassword(ctx, db.UpdatePasswordParams{ID: a.ID, PasswordEnc: enc}))
+	})
+}
+
+func createAccount(ctx context.Context, q *db.Queries, a *Account) error {
 	if a.IncludedFolders == nil {
 		a.IncludedFolders = []string{}
 	}
@@ -181,7 +207,7 @@ func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
 	if a.Port < 1 || a.Port > 65535 {
 		return fmt.Errorf("invalid port %d", a.Port)
 	}
-	row, err := s.q.CreateAccount(ctx, db.CreateAccountParams{
+	row, err := q.CreateAccount(ctx, db.CreateAccountParams{
 		Name:            a.Name,
 		Host:            a.Host,
 		Port:            int32(a.Port), //nolint:gosec // range checked above
@@ -191,6 +217,7 @@ func (s *Store) CreateAccount(ctx context.Context, a *Account) error {
 		IncludedFolders: a.IncludedFolders,
 		ExcludedFolders: a.ExcludedFolders,
 		Enabled:         a.Enabled,
+		OwnerID:         a.OwnerID,
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -237,12 +264,11 @@ func (s *Store) UpdateConnection(ctx context.Context, a *Account) error {
 	}))
 }
 
-// RenameAccount changes an account's name together with its password,
-// which must already be encrypted for the new name. It fails with
-// ErrConflict if the name is taken (also by a removed account) and with
+// RenameAccount changes an account's name. It fails with ErrConflict if the
+// owner already has an account with that name (also a removed one) and with
 // ErrNotFound for removed accounts.
-func (s *Store) RenameAccount(ctx context.Context, id int64, name string, passwordEnc []byte) error {
-	err := one(s.q.RenameAccount(ctx, db.RenameAccountParams{ID: id, Name: name, PasswordEnc: passwordEnc}))
+func (s *Store) RenameAccount(ctx context.Context, id int64, name string) error {
+	err := one(s.q.RenameAccount(ctx, db.RenameAccountParams{ID: id, Name: name}))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return fmt.Errorf("account %q: %w", name, ErrConflict)
@@ -302,9 +328,9 @@ func (s *Store) GetAccount(ctx context.Context, id int64) (*Account, error) {
 	return accountFromDB(r), nil
 }
 
-// GetAccountByName looks up an account by its unique name.
-func (s *Store) GetAccountByName(ctx context.Context, name string) (*Account, error) {
-	r, err := s.q.GetAccountByName(ctx, name)
+// GetOwnedAccount looks up one of a user's accounts by name.
+func (s *Store) GetOwnedAccount(ctx context.Context, owner int64, name string) (*Account, error) {
+	r, err := s.q.GetOwnedAccount(ctx, db.GetOwnedAccountParams{OwnerID: &owner, Name: name})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -314,9 +340,17 @@ func (s *Store) GetAccountByName(ctx context.Context, name string) (*Account, er
 	return accountFromDB(r), nil
 }
 
-// ListAccounts returns all accounts ordered by name.
-func (s *Store) ListAccounts(ctx context.Context) ([]*Account, error) {
-	rows, err := s.q.ListAccounts(ctx)
+// ListAccountsByName returns the accounts of all users with this name.
+func (s *Store) ListAccountsByName(ctx context.Context, name string) ([]*Account, error) {
+	return accountsFromDB(s.q.ListAccountsByName(ctx, name))
+}
+
+// ListOwnedAccounts returns a user's accounts ordered by name.
+func (s *Store) ListOwnedAccounts(ctx context.Context, owner int64) ([]*Account, error) {
+	return accountsFromDB(s.q.ListOwnedAccounts(ctx, &owner))
+}
+
+func accountsFromDB(rows []db.Account, err error) ([]*Account, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -325,6 +359,37 @@ func (s *Store) ListAccounts(ctx context.Context) ([]*Account, error) {
 		out = append(out, accountFromDB(r))
 	}
 	return out, nil
+}
+
+// SetAccountOwner hands an account to another user. It fails with
+// ErrConflict if that user already has an account with the same name.
+func (s *Store) SetAccountOwner(ctx context.Context, id, owner int64) error {
+	err := one(s.q.SetAccountOwner(ctx, db.SetAccountOwnerParams{ID: id, OwnerID: &owner}))
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return fmt.Errorf("account name: %w", ErrConflict)
+	}
+	return err
+}
+
+// CountOwnedAccounts returns the number of accounts per owner ID.
+func (s *Store) CountOwnedAccounts(ctx context.Context) (map[int64]int64, error) {
+	rows, err := s.q.CountOwnedAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]int64, len(rows))
+	for _, r := range rows {
+		if r.OwnerID != nil {
+			out[*r.OwnerID] = r.Accounts
+		}
+	}
+	return out, nil
+}
+
+// ListAccounts returns the accounts of all users ordered by name.
+func (s *Store) ListAccounts(ctx context.Context) ([]*Account, error) {
+	return accountsFromDB(s.q.ListAccounts(ctx))
 }
 
 // Folder is the sync state of one IMAP folder.
@@ -500,6 +565,7 @@ func (s *Store) LastRuns(ctx context.Context) (map[int64]LastRun, error) {
 // AccountStats summarizes the archive for one account.
 type AccountStats struct {
 	Account      string
+	OwnerID      *int64
 	Enabled      bool
 	Folders      int
 	Locations    int64
@@ -508,9 +574,10 @@ type AccountStats struct {
 	LastRunError *string
 }
 
-// Stats returns per-account statistics and the number of unique messages.
-func (s *Store) Stats(ctx context.Context) ([]AccountStats, int64, error) {
-	rows, err := s.q.AccountStats(ctx)
+// Stats returns per-account statistics and the number of unique messages,
+// for all accounts or, with owner set, for one user's accounts.
+func (s *Store) Stats(ctx context.Context, owner *int64) ([]AccountStats, int64, error) {
+	rows, err := s.q.AccountStats(ctx, owner)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -520,7 +587,7 @@ func (s *Store) Stats(ctx context.Context) ([]AccountStats, int64, error) {
 	}
 	out := make([]AccountStats, 0, len(rows))
 	for _, r := range rows {
-		st := AccountStats{Account: r.Name, Enabled: r.Enabled, Folders: int(r.Folders), Locations: r.Locations}
+		st := AccountStats{Account: r.Name, OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Locations: r.Locations}
 		if run, ok := lastRun[r.ID]; ok {
 			st.LastRunAt, st.LastStatus = &run.StartedAt, &run.Status
 			if run.Error != "" {
@@ -529,7 +596,12 @@ func (s *Store) Stats(ctx context.Context) ([]AccountStats, int64, error) {
 		}
 		out = append(out, st)
 	}
-	unique, err := s.q.CountMessages(ctx)
+	var unique int64
+	if owner == nil {
+		unique, err = s.q.CountMessages(ctx)
+	} else {
+		unique, err = s.q.CountOwnedMessages(ctx, owner)
+	}
 	return out, unique, err
 }
 

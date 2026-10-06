@@ -62,12 +62,12 @@ type accountsResponse struct {
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	accounts, err := s.store.ListAccounts(ctx)
+	accounts, err := s.store.ListOwnedAccounts(ctx, userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	counts, err := s.store.ListAccountFolders(ctx)
+	counts, err := s.store.ListAccountFolders(ctx, userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -226,7 +226,8 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
-	a := &store.Account{Enabled: true, TLSMode: store.TLSModeTLS}
+	owner := userID(r)
+	a := &store.Account{Enabled: true, TLSMode: store.TLSModeTLS, OwnerID: &owner}
 	if in.Name != nil {
 		a.Name = *in.Name
 	}
@@ -248,7 +249,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if in.Enabled != nil {
 		a.Enabled = *in.Enabled
 	}
-	if _, err := s.store.GetAccountByName(r.Context(), a.Name); err == nil {
+	if _, err := s.store.GetOwnedAccount(r.Context(), userID(r), a.Name); err == nil {
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", a.Name), nil)
 		return
 	}
@@ -266,12 +267,8 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	a.PasswordEnc, err = s.syncer.Sealer.Seal([]byte(*in.Password), archive.PasswordContext(a.Name))
-	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
-		return
-	}
-	if err := s.store.CreateAccount(r.Context(), a); err != nil {
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(s.syncer.Sealer, id, *in.Password) }
+	if err := s.store.CreateAccountSealed(r.Context(), a, seal); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists", a.Name), nil)
 			return
@@ -289,7 +286,8 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 // pathAccount loads the account named in the URL. Removed accounts are
 // rejected: they cannot be changed or synced.
 func (s *Server) pathAccount(w http.ResponseWriter, r *http.Request) (*store.Account, bool) {
-	a, err := s.store.GetAccountByName(r.Context(), r.PathValue("name"))
+	// Other users' accounts are not found, like names that do not exist.
+	a, err := s.store.GetOwnedAccount(r.Context(), userID(r), r.PathValue("name"))
 	if err != nil {
 		s.failStore(w, r, err)
 		return nil, false
@@ -337,12 +335,12 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			password = *in.Password
 		} else {
-			pw, err := s.syncer.Sealer.Open(a.PasswordEnc, archive.PasswordContext(a.Name))
+			pw, err := archive.OpenPassword(s.syncer.Sealer, a)
 			if err != nil {
 				s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 				return
 			}
-			password = string(pw)
+			password = pw
 		}
 		if _, err := s.syncer.CheckLogin(ctx, a, password); err != nil {
 			s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
@@ -352,7 +350,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 
 	if in.Name != nil && *in.Name != a.Name {
 		oldName := a.Name
-		err := archive.RenameAccount(ctx, s.store, s.syncer.Sealer, a, *in.Name)
+		err := archive.RenameAccount(ctx, s.store, a, *in.Name)
 		switch {
 		case errors.Is(err, archive.ErrSyncRunning):
 			s.fail(w, r, http.StatusConflict, "the account is being synced; try again when the sync has finished", nil)
@@ -371,7 +369,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if in.changesConnection() {
-		enc, err := s.syncer.Sealer.Seal([]byte(password), archive.PasswordContext(a.Name))
+		enc, err := archive.SealPassword(s.syncer.Sealer, a.ID, password)
 		if err != nil {
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
@@ -472,7 +470,7 @@ func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {
 		return
 	}
-	accounts, err := s.store.ListAccounts(r.Context())
+	accounts, err := s.store.ListOwnedAccounts(r.Context(), userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return

@@ -15,9 +15,9 @@ func TestRenameAccount(t *testing.T) {
 	appendMsg(t, u, "INBOX", rawMessage("m1", "Hello"))
 	f := newFixture(t, u)
 	f.addAccount("postmaster@example.com", "u", "pw")
-	a, _ := f.store.GetAccountByName(f.ctx, "postmaster@example.com")
+	a, _ := f.account("postmaster@example.com")
 
-	if err := archive.RenameAccount(f.ctx, f.store, f.sealer, a, "bad/name"); err == nil {
+	if err := archive.RenameAccount(f.ctx, f.store, a, "bad/name"); err == nil {
 		t.Fatal("invalid name accepted")
 	}
 
@@ -26,18 +26,18 @@ func TestRenameAccount(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal("lock", ok, err)
 	}
-	if err := archive.RenameAccount(f.ctx, f.store, f.sealer, a, "example"); !errors.Is(err, archive.ErrSyncRunning) {
+	if err := archive.RenameAccount(f.ctx, f.store, a, "example"); !errors.Is(err, archive.ErrSyncRunning) {
 		t.Fatalf("rename during sync: %v", err)
 	}
 	unlock()
 
-	if err := archive.RenameAccount(f.ctx, f.store, f.sealer, a, "example"); err != nil {
+	if err := archive.RenameAccount(f.ctx, f.store, a, "example"); err != nil {
 		t.Fatal(err)
 	}
 	if a.Name != "example" {
 		t.Fatalf("name = %q", a.Name)
 	}
-	// The password was encrypted for the new name: the account still syncs.
+	// The password is bound to the ID, not the name: the account still syncs.
 	res := f.sync()
 	expectResult(t, res["example"], 1, 1)
 }

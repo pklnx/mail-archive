@@ -21,6 +21,21 @@ func (q *Queries) CountMessages(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countOwnedMessages = `-- name: CountOwnedMessages :one
+SELECT count(DISTINCT l.message_sha256) FROM message_locations l
+JOIN folders f ON f.id = l.folder_id
+JOIN accounts a ON a.id = f.account_id
+WHERE a.owner_id = $1
+`
+
+// Unique messages found in the user's accounts.
+func (q *Queries) CountOwnedMessages(ctx context.Context, ownerID *int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countOwnedMessages, ownerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getMessage = `-- name: GetMessage :one
 SELECT sha256, size, message_id, subject, from_addr, sent_at, stored_path
 FROM messages WHERE sha256 = $1

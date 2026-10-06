@@ -26,6 +26,15 @@ const touchInterval = time.Minute
 
 type sessionKey struct{}
 
+// userID returns the logged-in user of a request that passed requireLogin.
+// Without a session it returns 0, which matches no owner.
+func userID(r *http.Request) int64 {
+	if sess, ok := r.Context().Value(sessionKey{}).(*store.Session); ok {
+		return sess.UserID
+	}
+	return 0
+}
+
 // secureRequest reports whether the browser reached the server over HTTPS,
 // directly or through a reverse proxy or `tailscale serve`.
 func secureRequest(r *http.Request) bool {

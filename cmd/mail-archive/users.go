@@ -94,7 +94,8 @@ Admins will manage users in the web UI. They do not see other users' mail.`,
 			if err != nil {
 				return err
 			}
-			if _, err := a.store.CreateUser(cmd.Context(), name, hash, admin); err != nil {
+			u, err := a.store.CreateUser(cmd.Context(), name, hash, admin)
+			if err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("user %q already exists", name)
 				}
@@ -105,6 +106,10 @@ Admins will manage users in the web UI. They do not see other users' mail.`,
 				role = "admin"
 			}
 			fmt.Printf("%s %q created\n", role, name)
+			// The first user gets the accounts added before any user existed.
+			if counts, err := a.store.CountOwnedAccounts(cmd.Context()); err == nil && counts[u.ID] > 0 {
+				fmt.Printf("%q owns the %d existing account(s)\n", name, counts[u.ID])
+			}
 			return nil
 		},
 	}
@@ -128,12 +133,16 @@ func newUserListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			owned, err := a.store.CountOwnedAccounts(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if len(users) == 0 {
 				fmt.Printf("No users yet. Create the first admin with: %s user add NAME --admin\n", commandName())
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tROLE\tSTATE\tCREATED\tLAST LOGIN")
+			fmt.Fprintln(w, "NAME\tROLE\tSTATE\tACCOUNTS\tCREATED\tLAST LOGIN")
 			for _, u := range users {
 				role, state, last := "user", "active", "never"
 				if u.IsAdmin {
@@ -145,7 +154,7 @@ func newUserListCmd() *cobra.Command {
 				if u.LastLoginAt != nil {
 					last = u.LastLoginAt.Local().Format(time.DateTime)
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", u.Name, role, state, u.CreatedAt.Local().Format(time.DateOnly), last)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n", u.Name, role, state, owned[u.ID], u.CreatedAt.Local().Format(time.DateOnly), last)
 			}
 			return w.Flush()
 		},
@@ -234,7 +243,7 @@ func newUserLockCmd(lock bool) *cobra.Command {
 func newUserRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove NAME",
-		Short: "Delete a user",
+		Short: "Delete a user (only without accounts)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, u, err := loadUser(cmd, args[0])
@@ -243,6 +252,14 @@ func newUserRemoveCmd() *cobra.Command {
 			}
 			defer a.close()
 			if err := a.store.DeleteUser(cmd.Context(), u.ID); err != nil {
+				if errors.Is(err, store.ErrOwnsAccounts) {
+					n := int64(0)
+					if counts, cerr := a.store.CountOwnedAccounts(cmd.Context()); cerr == nil {
+						n = counts[u.ID]
+					}
+					return fmt.Errorf("%q still owns %d account(s), also removed ones; hand them to another user first with: %s account move NAME --user %s --to USER",
+						u.Name, n, commandName(), u.Name)
+				}
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("user %q removed\n", u.Name)
