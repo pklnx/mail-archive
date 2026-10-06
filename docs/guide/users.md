@@ -13,6 +13,8 @@ installing:
 ./ma user add patrick --admin
 ```
 
+Administrators must complete TOTP setup on their first web login. Admins cannot disable TOTP; another admin or `./ma user reset-2fa NAME` can reset it, after which the admin must set it up again.
+
 This first user also gets all accounts that were added before any user
 existed.
 
@@ -35,6 +37,7 @@ On the command line, `./ma user add NAME` asks for a password instead, and
 
 For every other user, admins can:
 
+- **Reset TOTP:** logs the user out everywhere and requires TOTP setup again. The last usable admin cannot be reset.
 - **Reset password:** generates a new password, shown once. The user is logged
   out everywhere and must change it at the next login.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in.
