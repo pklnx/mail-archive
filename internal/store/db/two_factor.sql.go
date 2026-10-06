@@ -19,6 +19,7 @@ type TwoFactorUser struct {
 	TwoFactorPending   []byte
 	TwoFactorLastCount *int64
 	TwoFactorVersion   int64
+	LockedAt           *time.Time
 	MustChangePassword bool
 }
 
@@ -30,7 +31,7 @@ func (q *Queries) GetTwoFactorUser(ctx context.Context, id int64) (TwoFactorUser
 	row := q.db.QueryRow(ctx, getTwoFactorUser, id)
 	var u TwoFactorUser
 	err := row.Scan(&u.ID, &u.Name, &u.IsAdmin, &u.TwoFactorEnabled, &u.TwoFactorSecret,
-		&u.TwoFactorPending, &u.TwoFactorLastCount, &u.TwoFactorVersion, &u.MustChangePassword)
+		&u.TwoFactorPending, &u.TwoFactorLastCount, &u.TwoFactorVersion, &u.LockedAt, &u.MustChangePassword)
 	return u, err
 }
 
@@ -134,6 +135,18 @@ const getTwoFactorChallenge = `-- name: GetTwoFactorChallenge :one\nFROM two_fac
 
 func (q *Queries) GetTwoFactorChallenge(ctx context.Context, id []byte) (TwoFactorChallenge, error) {
 	row := q.db.QueryRow(ctx, getTwoFactorChallenge, id)
+	var c TwoFactorChallenge
+	err := row.Scan(&c.ID, &c.UserID, &c.TwoFactorVersion, &c.CreatedAt, &c.ExpiresAt)
+	return c, err
+}
+
+const lockTwoFactorChallenge = `-- name: LockTwoFactorChallenge :one
+SELECT id, user_id, two_factor_version, created_at, expires_at
+FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE
+`
+
+func (q *Queries) LockTwoFactorChallenge(ctx context.Context, id []byte) (TwoFactorChallenge, error) {
+	row := q.db.QueryRow(ctx, lockTwoFactorChallenge, id)
 	var c TwoFactorChallenge
 	err := row.Scan(&c.ID, &c.UserID, &c.TwoFactorVersion, &c.CreatedAt, &c.ExpiresAt)
 	return c, err
