@@ -107,8 +107,14 @@ func TestResetDuringLoginWins(t *testing.T) {
 	challenge := f.as().passwordStep("alice", "correct horse battery")
 
 	f.loginOK("admin", "correct horse battery")
+	if on := f.listedTwoFactor(); !on["alice"] || !on["admin"] {
+		t.Fatalf("2FA in user list before reset: %v", on)
+	}
 	f.expect("POST", "/api/users/alice/2fa/reset", nil, 204)
 	f.expect("POST", "/api/users/admin/2fa/reset", nil, 403) // not your own
+	if on := f.listedTwoFactor(); on["alice"] || !on["admin"] {
+		t.Fatalf("2FA in user list after reset: %v", on)
+	}
 
 	// The pending login and the existing session are both gone.
 	f.secondStep(challenge, f.code(secret), 401)
@@ -202,4 +208,17 @@ func TestGeneratedPasswordThenTOTP(t *testing.T) {
 	boss.expect("PUT", "/api/profile/password", map[string]string{"current": pw, "new": "the boss passphrase"}, 204)
 	boss.expect("GET", "/api/status", nil, 403)
 	boss.expect("POST", "/api/profile/2fa/setup", nil, 200)
+}
+
+// listedTwoFactor returns twoFactorEnabled per name from the admin user list.
+func (f *authFixture) listedTwoFactor() map[string]bool {
+	f.t.Helper()
+	users, _ := f.expect("GET", "/api/users", nil, 200)["users"].([]any)
+	on := map[string]bool{}
+	for _, u := range users {
+		m, _ := u.(map[string]any)
+		name, _ := m["name"].(string)
+		on[name], _ = m["twoFactorEnabled"].(bool)
+	}
+	return on
 }

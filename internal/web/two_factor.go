@@ -172,7 +172,7 @@ func (s *Server) startTwoFactorLogin(w http.ResponseWriter, r *http.Request, u *
 		_ = s.store.DeleteSession(r.Context(), auth.HashSessionToken(old))
 	}
 	// Wall-clock time: the database compares the expiry with now().
-	challenge, err := s.store.CreateTwoFactorChallenge(r.Context(), u.ID, u.TwoFactorVersion, time.Now().Add(twoFactorChallengeTTL))
+	challenge, err := s.store.CreateTwoFactorChallenge(r.Context(), u.ID, u.TwoFactorVersion, s.currentTime().Add(twoFactorChallengeTTL))
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
