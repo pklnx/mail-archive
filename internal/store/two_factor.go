@@ -30,7 +30,7 @@ type TwoFactorState struct {
 	Version       int64
 	IsAdmin       bool
 	MustChange    bool
-	Locked         bool
+	Locked        bool
 }
 
 func twoFactorState(r db.TwoFactorUser, sealer *crypto.Sealer) (*TwoFactorState, error) {
@@ -152,7 +152,7 @@ func (s *Store) CreateTwoFactorChallenge(ctx context.Context, id int64, version 
 	if err := s.q.CreateTwoFactorChallenge(ctx, hash, id, version, expires); err != nil {
 		return "", err
 	}
-	return string(token), nil
+	return token, nil
 }
 
 // GetTwoFactorChallenge loads a non-expired login challenge.
@@ -222,7 +222,9 @@ func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, 
 		if err != nil { return err }
 		if ok {
 			if u.TwoFactorLastCount != nil && int64(counter) <= *u.TwoFactorLastCount /*nolint:gosec // TOTP counters are bounded Unix time-step values.*/ { return ErrTwoFactorReplay }
-			n, err := q.AcceptTwoFactorCounter(ctx, id, int64(counter)) //nolint:gosec // TOTP counters are bounded Unix time-step values.
+			last, ok := counterToInt64(counter)
+			if !ok { return ErrTwoFactorReplay }
+			n, err := q.AcceptTwoFactorCounter(ctx, id, last) //nolint:gosec // TOTP counters are bounded Unix time-step values.
 			if err != nil { return err }
 			if n != 1 { return ErrTwoFactorReplay }
 			version = u.TwoFactorVersion
@@ -235,6 +237,13 @@ func (s *Store) VerifyTwoFactorCode(ctx context.Context, id int64, code string, 
 		return nil
 	})
 	return version, err
+}
+
+func counterToInt64(counter uint64) (int64, bool) {
+	if counter > uint64(^uint64(0)>>1) {
+		return 0, false
+	}
+	return int64(counter), true //nolint:gosec // explicit range check above proves the conversion is safe.
 }
 
 func consumeRecoveryCodeTx(ctx context.Context, q *db.Queries, id int64, hash []byte) (bool, error) {
@@ -270,7 +279,7 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		counter, ok, err := auth.ValidateTOTP(string(secret), code, now)
 		if err != nil { return err }
 		if ok && (u.TwoFactorLastCount == nil || int64(counter) > *u.TwoFactorLastCount /*nolint:gosec // TOTP counters are bounded Unix time-step values.*/) {
-			n, err := q.AcceptTwoFactorCounter(ctx, u.ID, int64(counter)) //nolint:gosec // TOTP counters are bounded Unix time-step values.
+			n, err := q.AcceptTwoFactorCounter(ctx, u.ID, last) //nolint:gosec // TOTP counters are bounded Unix time-step values.
 			if err != nil { return err }
 			valid = n == 1
 		}
@@ -287,7 +296,7 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		return nil
 	})
 	if err != nil { return "", nil, err }
-	return string(rawToken), outUser, nil
+	return rawToken, outUser, nil
 }
 
 
