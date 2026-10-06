@@ -17,6 +17,8 @@ export function UsersPage({ close }: { close: () => void }) {
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [generated, setGenerated] = useState<GeneratedPassword | null>(null);
+  // The user whose password reset waits for confirmation.
+  const [resetting, setResetting] = useState<ManagedUser | null>(null);
 
   const reload = useCallback(() => {
     usersApi.list().then(
@@ -83,6 +85,7 @@ export function UsersPage({ close }: { close: () => void }) {
                 {u.locked ? t.stateLocked : u.mustChangePassword ? t.stateMustChange : t.stateActive}
               </span>
               <span className="text-sm text-zinc-500">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
+              {u.passkeys > 0 && <span className="text-sm text-zinc-500">{t.passkeyCount(u.passkeys)}</span>}
               <span className="ml-auto text-sm text-zinc-500">
                 {t.colAccounts}: {u.accounts} · {t.colLastLogin}: {u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}
               </span>
@@ -100,11 +103,16 @@ export function UsersPage({ close }: { close: () => void }) {
                     {t.twoFactorReset}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className={button}
-                  onClick={() => window.confirm(t.confirmResetPassword(u.name)) && run(async () => setGenerated(await usersApi.resetPassword(u.name)))}
-                >
+                {u.passkeys > 0 && (
+                  <button
+                    type="button"
+                    className={button}
+                    onClick={() => window.confirm(t.confirmRemovePasskeys(u.name, u.passkeys)) && run(() => usersApi.removePasskeys(u.name))}
+                  >
+                    {t.removePasskeys}
+                  </button>
+                )}
+                <button type="button" className={button} onClick={() => setResetting(u)}>
                   {t.resetPassword}
                 </button>
                 <button
@@ -126,9 +134,46 @@ export function UsersPage({ close }: { close: () => void }) {
                 </button>
               </div>
             )}
+            {resetting?.name === u.name && (
+              <ResetPasswordConfirm
+                user={u}
+                cancel={() => setResetting(null)}
+                confirm={(removePasskeys) => {
+                  setResetting(null);
+                  void run(async () => setGenerated(await usersApi.resetPassword(u.name, removePasskeys)));
+                }}
+              />
+            )}
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Asks before a password reset. Passkeys are removed by default: after a
+ * compromise, a new password alone would not lock the attacker out.
+ */
+function ResetPasswordConfirm({ user, cancel, confirm }: { user: ManagedUser; cancel: () => void; confirm: (removePasskeys: boolean) => void }) {
+  const [removePasskeys, setRemovePasskeys] = useState(true);
+  return (
+    <div role="group" className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+      <p>{t.confirmResetPassword(user.name)}</p>
+      {user.passkeys > 0 && (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={removePasskeys} onChange={(e) => setRemovePasskeys(e.target.checked)} />
+          {t.resetAlsoPasskeys(user.passkeys)}
+        </label>
+      )}
+      <div className="flex gap-2">
+        <button type="button" className={primary} onClick={() => confirm(user.passkeys > 0 && removePasskeys)}>
+          {t.confirmReset}
+        </button>
+        <button type="button" className={button} onClick={cancel}>
+          {t.cancel}
+        </button>
+      </div>
     </div>
   );
 }
