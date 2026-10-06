@@ -279,7 +279,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if len(ua) > 256 {
 		ua = ua[:256]
 	}
-	if err := s.store.CreateSession(ctx, hash, u.ID, s.now().Add(auth.MaxSessionAge), ua); err != nil {
+	if err := s.store.CreateSession(ctx, hash, u.ID, s.currentTime().Add(auth.MaxSessionAge), ua); err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
