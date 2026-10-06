@@ -1,7 +1,8 @@
 # Issues, plans and releases
 
 Work goes through four steps: **issue → plan → approval → pull request**.
-Nothing is implemented before its plan is approved.
+Nothing is implemented before its plan is approved. The maintainer decides
+what gets planned and what gets built; labels carry these decisions.
 
 ## 1. Issue
 
@@ -17,8 +18,9 @@ Every change starts as a GitHub issue:
 
 ## 2. Plan
 
-Before any code, the implementation plan is posted as a comment on the issue
-and the issue gets the label `plan-review`. A plan covers:
+The maintainer labels an issue **`plan`** to ask for an implementation plan.
+The plan is posted as a comment on the issue, and the label changes from
+`plan` to **`review`**. A plan covers:
 
 - the approach and the files or components it touches,
 - API, database or behavior changes (a schema change means `db-migration`),
@@ -28,9 +30,9 @@ and the issue gets the label `plan-review`. A plan covers:
 
 ## 3. Review and approval
 
-The maintainer reads the plan, asks questions or asks for changes in the
-issue. When the plan is good, the maintainer **replaces `plan-review` with
-`ready`**. Only `ready` issues are implemented.
+The maintainer reads the plan and asks questions or for changes in the
+issue; the plan is updated in place. When it is good, the maintainer
+replaces `review` with **`ready`**. Only `ready` issues are implemented.
 
 The order of `ready` issues is chosen during implementation, with a short
 reason (dependencies between issues, risk, size). Changes to an approved plan
@@ -47,9 +49,14 @@ reviews and enables auto-merge.
 
 | Label | Set by | Meaning |
 |---|---|---|
-| `plan-review` | implementer | A plan is posted and waits for review. |
+| `plan` | maintainer | Please write an implementation plan. |
+| `review` | implementer | The plan is posted and waits for the maintainer. |
 | `ready` | maintainer | The plan is approved; the issue may be implemented. |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change. |
+
+Label changes do not notify anyone by themselves: after setting `plan` or
+`ready`, say so in the chat with the implementer (for example "plan #18" or
+"ready: #18, #19").
 
 ## Releases
 

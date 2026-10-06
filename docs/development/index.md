@@ -113,7 +113,7 @@ enable **auto-merge**; GitHub merges it once CI is green.
 | `dependencies` | Dependency update (set by Dependabot). |
 | `db-migration` | Changes the database schema (set automatically). Back up before upgrading. |
 | `breaking` | Needs manual steps when upgrading (set by hand). |
-| `plan-review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
+| `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
 
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.

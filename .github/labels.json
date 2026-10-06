@@ -6,6 +6,7 @@
   { "name": "dependencies",  "color": "0366d6", "description": "Dependency updates (set by Dependabot)" },
   { "name": "db-migration",  "color": "fbca04", "description": "Changes the database schema; back up before deploying" },
   { "name": "breaking",      "color": "b60205", "description": "Requires manual steps when updating" },
-  { "name": "plan-review",   "color": "d4c5f9", "description": "Implementation plan posted; waiting for the maintainer's review" },
+  { "name": "plan",          "color": "c2e0c6", "description": "Maintainer asks for an implementation plan" },
+  { "name": "review",        "color": "d4c5f9", "description": "Plan posted as a comment; waiting for the maintainer's review" },
   { "name": "ready",         "color": "0e8a16", "description": "Plan approved by the maintainer; ready to implement" }
 ]

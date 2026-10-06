@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before work starts, an implementation plan is posted here as a comment and labeled `plan-review`.
-        It is implemented once the maintainer approves it with the label `ready`.
+        When the maintainer labels this issue `plan`, an implementation plan is posted here as a comment
+        and the label changes to `review`. It is implemented once the maintainer approves it with `ready`.
   - type: textarea
     id: problem
     attributes:
