@@ -145,6 +145,9 @@ func (s *Store) SetUserAdmin(ctx context.Context, id int64, admin bool) error {
 			if err := keepAnAdmin(ctx, q, id); err != nil {
 				return err
 			}
+			if err := keepUsableAdmin(ctx, q, id); err != nil {
+				return err
+			}
 		}
 		return one(q.SetUserAdmin(ctx, db.SetUserAdminParams{ID: id, IsAdmin: admin}))
 	})
@@ -169,6 +172,9 @@ func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error 
 			if err := keepAnAdmin(ctx, q, id); err != nil {
 				return err
 			}
+			if err := keepUsableAdmin(ctx, q, id); err != nil {
+				return err
+			}
 		}
 		if err := one(q.SetUserLocked(ctx, db.SetUserLockedParams{ID: id, Locked: locked})); err != nil {
 			return err
@@ -186,6 +192,9 @@ func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error 
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		if err := keepAnAdmin(ctx, q, id); err != nil {
+			return err
+		}
+		if err := keepUsableAdmin(ctx, q, id); err != nil {
 			return err
 		}
 		if owns, err := q.UserOwnsAccounts(ctx, &id); err != nil {
@@ -271,4 +280,16 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+
+func keepUsableAdmin(ctx context.Context, q *db.Queries, id int64) error {
+	admins, err := q.LockUsableAdmins(ctx)
+	if err != nil {
+		return err
+	}
+	if len(admins) == 1 && admins[0] == id {
+		return ErrLastAdmin
+	}
+	return nil
 }
