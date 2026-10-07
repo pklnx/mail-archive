@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -47,9 +48,15 @@ type MessageSummary struct {
 // SearchMessages lists messages newest first, optionally filtered by a
 // full-text query, account, folder and date range.
 func (s *Store) SearchMessages(ctx context.Context, f SearchFilter) ([]MessageSummary, error) {
+	rowLimit := min(max(f.Limit, 1), 500)
+	rowLimit32 := int32(500)
+	if rowLimit >= math.MinInt32 && rowLimit <= math.MaxInt32 {
+		rowLimit32 = int32(rowLimit)
+	}
+
 	p := db.SearchMessagesParams{
 		Owner: f.Owner, Account: nonEmpty(f.Account), Folder: nonEmpty(f.Folder),
-		After: f.After, Before: f.Before, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
+		After: f.After, Before: f.Before, RowLimit: rowLimit32, //nolint:gosec // clamped and bounds-checked
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		pattern := "%" + escapeLike(q) + "%"
