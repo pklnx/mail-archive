@@ -15,6 +15,16 @@ fi
 
 work=$(mktemp -d)
 
+# Several CI runners can share one Docker host. Each runner gets its own
+# Compose project, image tag, test container and random host ports, so
+# parallel runs don't collide; a rerun on the same runner still cleans up
+# what a cancelled run left behind.
+suffix=$(printf '%s' "${RUNNER_NAME:-local}" | tr -c 'a-zA-Z0-9' '-' | tr 'A-Z' 'a-z')
+COMPOSE_PROJECT_NAME=mail-archive-smoke-$suffix
+MAIL_ARCHIVE_IMAGE=mail-archive:smoke-$suffix
+export COMPOSE_PROJECT_NAME MAIL_ARCHIVE_IMAGE
+imap=imap-test-$suffix
+
 # Archive files belong to the container user (UID 65532, mode 0600/0700), so
 # on Linux the host user cannot read or delete them. Inspect and remove them
 # from a container instead, reusing the PostgreSQL image (it has a shell).
@@ -28,10 +38,10 @@ cleanup() {
 	if [ "$status" -ne 0 ]; then
 		echo "--- smoke test failed, logs follow ---" >&2
 		docker compose logs postgres >&2 || true
-		docker logs imap-test >&2 || true
+		docker logs "$imap" >&2 || true
 		docker compose logs web >&2 || true
 	fi
-	docker rm -f imap-test >/dev/null 2>&1 || true
+	docker rm -f "$imap" >/dev/null 2>&1 || true
 	in_data 'rm -rf /data/* /data/.[!.]*' >/dev/null 2>&1 || true
 	docker compose --progress quiet down -v >/dev/null 2>&1 || true
 	rm -f .env
@@ -50,13 +60,14 @@ cat > .env <<ENV
 POSTGRES_PASSWORD=smoke-test
 MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
 ARCHIVE_DIR=$work/data
-POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-55432}
-WEB_PORT=${SMOKE_WEB_PORT:-58080}
+POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-0}
+WEB_PORT=${SMOKE_WEB_PORT:-0}
+MAIL_ARCHIVE_PUBLIC_URL=http://localhost
 ENV
-WEB_PORT=${SMOKE_WEB_PORT:-58080}
 
 # Self-hosted runners can retain volumes after a cancelled previous run.
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+docker rm -f "$imap" >/dev/null 2>&1 || true
 
 expect() { # expect <file> <extended regex>
 	if ! grep -Eq "$2" "$1"; then
@@ -70,12 +81,12 @@ echo "== migrate"
 ./ma migrate | tee "$work/out"
 expect "$work/out" "applied 00001_initial.sql"
 
-docker run -d --rm --name imap-test --network mail-archive_default \
+docker run -d --rm --name "$imap" --network "${COMPOSE_PROJECT_NAME}_default" \
 	-v "$work/imap-testserver:/imap-testserver:ro" \
 	gcr.io/distroless/static-debian12:nonroot /imap-testserver >/dev/null
 
 echo "== account add"
-echo secret | ./ma account add test --host imap-test --port 1143 --tls none \
+echo secret | ./ma account add test --host "$imap" --port 1143 --tls none \
 	--username alice --exclude Trash | tee "$work/out"
 expect "$work/out" 'account "test" added'
 
@@ -97,6 +108,7 @@ expect "$work/out" 'user "smoke" created'
 
 echo "== web API"
 docker compose --progress quiet up -d --wait web
+WEB_PORT=$(docker compose port web 8080 | sed 's/.*://')
 base="http://localhost:$WEB_PORT"
 api() { curl -fsS --retry 10 --retry-delay 1 --retry-all-errors -b "$work/cookies" "$base$1"; }
 status=$(curl -s -o /dev/null -w '%{http_code}' --retry 10 --retry-delay 1 --retry-all-errors "$base/api/status")

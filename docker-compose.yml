@@ -40,7 +40,7 @@ services:
       context: .
       args:
         VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
-    image: mail-archive:local
+    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
     restart: unless-stopped
     command: ["serve", "--listen", ":8080"]
     depends_on:
@@ -67,7 +67,7 @@ services:
       context: .
       args:
         VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
-    image: mail-archive:local
+    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
     # One-shot CLI: not started by `docker compose up`, use `docker compose run`.
     profiles: ["cli"]
     depends_on:
