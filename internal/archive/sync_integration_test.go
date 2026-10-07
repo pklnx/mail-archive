@@ -109,7 +109,7 @@ func (f *fixture) stats() (locations map[string]int64, unique int64) {
 	}
 	locations = map[string]int64{}
 	for _, s := range stats {
-		locations[s.Account] = s.Locations
+		locations[s.Account] = s.Messages
 	}
 	return locations, unique
 }
@@ -185,8 +185,35 @@ func TestSyncMergesAndDeduplicates(t *testing.T) {
 	res = f.sync()
 	expectResult(t, res["alice"], 1, 0)
 	locs, unique = f.stats()
-	if unique != 5 || locs["alice"] != 5 {
-		t.Fatalf("after rescan: unique=%d locations=%v", unique, locs)
+	if unique != 5 || locs["alice"] != 4 {
+		t.Fatalf("after rescan: unique=%d messages=%v", unique, locs)
+	}
+	// The old location stays as history, but counts follow the message
+	// lists: Archive holds one message, not two.
+	owner, err := f.store.CreateUser(f.ctx, "owner", "x", false) // the first user gets the accounts
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders, err := f.store.ListAccountFolders(f.ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int64{}
+	for _, a := range folders {
+		for _, fc := range a.Folders {
+			counts[a.Name+"/"+fc.Name] = fc.Messages
+		}
+	}
+	if counts["alice/INBOX"] != 3 || counts["alice/Archive"] != 1 || counts["bob/INBOX"] != 2 {
+		t.Fatalf("folder counts after rescan: %v", counts)
+	}
+	a2 := sha256.Sum256(rawMessage("a2", "Archived"))
+	d, err := f.store.GetMessageDetail(f.ctx, owner.ID, hex.EncodeToString(a2[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Locations) != 2 || d.Locations[0].Superseded || !d.Locations[1].Superseded {
+		t.Fatalf("locations after rescan: %+v", d.Locations)
 	}
 
 	// Metadata was parsed from the stored message.

@@ -37,7 +37,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]statusAccount, 0, len(stats))
 	for _, st := range stats {
 		accounts = append(accounts, statusAccount{
-			Name: st.Account, Enabled: st.Enabled, Folders: st.Folders, Messages: st.Locations,
+			Name: st.Account, Enabled: st.Enabled, Folders: st.Folders, Messages: st.Messages,
 			LastRunAt: st.LastRunAt, LastStatus: st.LastStatus, LastError: st.LastRunError,
 		})
 	}
@@ -111,6 +111,8 @@ type locationJSON struct {
 	UID          int64      `json:"uid"`
 	Flags        []string   `json:"flags"`
 	InternalDate *time.Time `json:"internalDate"`
+	// Superseded: from before the folder's UIDVALIDITY changed (renumbered).
+	Superseded bool `json:"superseded"`
 }
 
 type partJSON struct {
@@ -172,7 +174,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 			flags = []string{}
 		}
 		out.Locations = append(out.Locations, locationJSON{
-			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate,
+			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, out)

@@ -11,8 +11,8 @@ WHERE id = @id;
 -- All accounts, or only those of one owner.
 SELECT a.id, a.name, a.enabled, a.owner_id,
        (SELECT count(*) FROM folders f WHERE f.account_id = a.id) AS folders,
-       (SELECT count(*) FROM message_locations l JOIN folders f ON f.id = l.folder_id
-        WHERE f.account_id = a.id) AS locations
+       (SELECT count(DISTINCT l.message_sha256) FROM message_locations l JOIN folders f ON f.id = l.folder_id
+        WHERE f.account_id = a.id) AS messages
 FROM accounts a
 WHERE sqlc.narg(owner)::bigint IS NULL OR a.owner_id = sqlc.narg(owner)::bigint
 ORDER BY a.name, a.owner_id;

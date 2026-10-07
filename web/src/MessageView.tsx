@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { getMessage, messageURL, type MessageDetail } from "./api";
-import { fileSize, longDate } from "./format";
+import { fileSize, locationLabel, longDate } from "./format";
 import { useAsync } from "./useAsync";
 import { t } from "./i18n";
 
@@ -42,10 +42,11 @@ function Message({ msg }: { msg: MessageDetail }) {
           <dd className="flex flex-wrap gap-1">
             {msg.locations.map((l) => (
               <span
-                key={`${l.account}/${l.folder}/${l.uid}`}
-                className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-zinc-800"
+                key={`${l.account}/${l.folder}/${l.uid}/${l.superseded}`}
+                className={`rounded px-1.5 py-0.5 text-xs ${l.superseded ? "text-zinc-500 italic" : "bg-zinc-100 dark:bg-zinc-800"}`}
+                title={l.superseded ? t.renumberedHint : undefined}
               >
-                {l.account} / {l.folder}
+                {locationLabel(l)}
               </span>
             ))}
           </dd>

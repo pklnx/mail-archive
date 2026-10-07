@@ -59,6 +59,29 @@ those locations. Every query of the web API takes the user's ID for this;
 the CLI, the schedule and `sync` work on all accounts. An account without
 owner exists only before the first user is created, who then gets it.
 
+### UIDVALIDITY and counts
+
+When a server renumbers a folder (a new `UIDVALIDITY`), the sync stores the
+new value and fetches the folder again from UID 1. Every message still there
+gets a new location; the old locations stay as history. A location is
+**superseded** when `l.uidvalidity <> f.uidvalidity`; queries use exactly
+this expression, and the API marks such locations (`superseded`).
+
+Counts are distinct messages, like the message lists:
+
+- A folder count is the number of distinct messages in that folder. A
+  message with an old and a new location counts once; one the server deleted
+  before the renumbering (only an old location) still counts.
+- An account count (`status`, `/api/status`) is the number of distinct
+  messages in that account. The same bytes in INBOX and Archive count once
+  in each folder but once for the account, so folder counts do not add up
+  to the account count.
+
+`ListFolderCounts` counts per folder in a subquery that reads
+`message_locations_folder_sha_idx` alone. A `count(DISTINCT …)` over the
+grouped join was about 20 times slower on 500,000 locations;
+`TestFolderCountCost` (`MAIL_ARCHIVE_BENCH=1`) measures it.
+
 ## Sync and concurrency
 
 `archive.Syncer` syncs one account: it takes the account's PostgreSQL

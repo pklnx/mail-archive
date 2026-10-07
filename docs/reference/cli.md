@@ -70,6 +70,6 @@ then removes folders from what is left. Names are matched case-insensitively.
 |---|---|
 | `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
-| `status` | Messages per account with owner and the last sync result (`--user USER` for one user). |
+| `status` | Distinct messages per account with owner and the last sync result (`--user USER` for one user). |
 | `reindex` | Extract search text from messages archived before full-text search existed. |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API and sync schedule. Default `127.0.0.1:8080`. |

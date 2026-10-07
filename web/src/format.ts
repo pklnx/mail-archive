@@ -4,6 +4,12 @@ const dateFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium" });
 const timeFmt = new Intl.DateTimeFormat(locale, { timeStyle: "short" });
 const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "short" });
 
+/** How a location reads in the message view; old locations get a note. */
+export function locationLabel(l: { account: string; folder: string; superseded: boolean }): string {
+  const where = `${l.account} / ${l.folder}`;
+  return l.superseded ? `${where} (${t.renumbered})` : where;
+}
+
 /** Short date for lists: time for today, otherwise the date. */
 export function shortDate(iso: string | null, now = new Date()): string {
   if (!iso) return "";

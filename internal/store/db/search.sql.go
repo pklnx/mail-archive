@@ -56,12 +56,14 @@ func (q *Queries) GetMessageSummary(ctx context.Context, arg GetMessageSummaryPa
 
 const listFolderCounts = `-- name: ListFolderCounts :many
 SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed,
-       f.name AS folder, count(l.id) AS messages, f.last_synced_at
+       f.name AS folder,
+       (SELECT count(*) FROM (
+            SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
+       )::bigint AS messages,
+       f.last_synced_at
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
-LEFT JOIN message_locations l ON l.folder_id = f.id
 WHERE a.owner_id = $1::bigint
-GROUP BY a.name, a.enabled, a.removed_at, f.name, f.last_synced_at
 ORDER BY a.name, f.name
 `
 
@@ -74,6 +76,11 @@ type ListFolderCountsRow struct {
 	LastSyncedAt *time.Time
 }
 
+// The number of distinct messages per folder, like the folder's message
+// list: a message with an old and a new location (after a UIDVALIDITY
+// change) counts once. The subquery per folder uses
+// message_locations_folder_sha_idx; a count(DISTINCT) over the grouped join
+// is about 20 times slower on large archives.
 func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFolderCountsRow, error) {
 	rows, err := q.db.Query(ctx, listFolderCounts, owner)
 	if err != nil {
@@ -102,12 +109,13 @@ func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFold
 }
 
 const listLocations = `-- name: ListLocations :many
-SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date
+SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
+       (l.uidvalidity <> f.uidvalidity)::boolean AS superseded
 FROM message_locations l
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
 WHERE l.message_sha256 = $1 AND a.owner_id = $2::bigint
-ORDER BY a.name, f.name
+ORDER BY superseded, a.name, f.name
 `
 
 type ListLocationsParams struct {
@@ -121,9 +129,13 @@ type ListLocationsRow struct {
 	Uid          int64
 	Flags        []string
 	InternalDate *time.Time
+	Superseded   bool
 }
 
-// The user's own locations of a message.
+// The user's own locations of a message, current ones first. A location is
+// superseded when the folder's UIDVALIDITY changed since it was stored: the
+// server renumbered the folder, and the rescan added a new location for
+// every message still there. Superseded locations stay as history.
 func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([]ListLocationsRow, error) {
 	rows, err := q.db.Query(ctx, listLocations, arg.Sha256, arg.Owner)
 	if err != nil {
@@ -139,6 +151,7 @@ func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([
 			&i.Uid,
 			&i.Flags,
 			&i.InternalDate,
+			&i.Superseded,
 		); err != nil {
 			return nil, err
 		}

@@ -79,6 +79,9 @@ type MessageLocation struct {
 	UID          int64
 	Flags        []string
 	InternalDate *time.Time
+	// Superseded: stored under an older UIDVALIDITY of the folder. The server
+	// renumbered the folder since; the location is kept as history.
+	Superseded bool
 }
 
 // MessageDetail is a message's stored metadata and locations.
@@ -112,13 +115,13 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 	}
 	for _, l := range locs {
 		d.Locations = append(d.Locations, MessageLocation{
-			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate,
+			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 		})
 	}
 	return d, nil
 }
 
-// FolderCount is the number of archived message locations in a folder.
+// FolderCount is the number of distinct archived messages in a folder.
 type FolderCount struct {
 	Name         string
 	Messages     int64
