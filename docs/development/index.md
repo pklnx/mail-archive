@@ -129,6 +129,3 @@ file changes on `main`.
   permissions unless a job needs more.
 - Direct Go dependencies are few: go-imap v2 (still in beta) with go-sasl,
   go-message, pgx, goose, cobra, x/net, x/term and x/text.
-
-CI runs on a [self-hosted runner](./self-hosted-runner); pull requests from
-forks run on GitHub-hosted runners.

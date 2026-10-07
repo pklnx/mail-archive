@@ -49,7 +49,6 @@ export default defineConfig({
           { text: "Contributing", link: "/development/" },
           { text: "Issues, plans and releases", link: "/development/process" },
           { text: "Architecture", link: "/development/architecture" },
-          { text: "Self-hosted CI runner", link: "/development/self-hosted-runner" },
         ],
       },
     ],

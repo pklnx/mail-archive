@@ -15,15 +15,12 @@ fi
 
 work=$(mktemp -d)
 
-# Several CI runners can share one Docker host. Each runner gets its own
-# Compose project, image tag, test container and random host ports, so
-# parallel runs don't collide; a rerun on the same runner still cleans up
-# what a cancelled run left behind.
-suffix=$(printf '%s' "${RUNNER_NAME:-local}" | tr -c 'a-zA-Z0-9' '-' | tr 'A-Z' 'a-z')
-COMPOSE_PROJECT_NAME=mail-archive-smoke-$suffix
-MAIL_ARCHIVE_IMAGE=mail-archive:smoke-$suffix
+# Own Compose project, image tag, test container and random host ports, so
+# the test does not touch a local mail-archive installation.
+COMPOSE_PROJECT_NAME=mail-archive-smoke
+MAIL_ARCHIVE_IMAGE=mail-archive:smoke
 export COMPOSE_PROJECT_NAME MAIL_ARCHIVE_IMAGE
-imap=imap-test-$suffix
+imap=mail-archive-smoke-imap
 
 # Archive files belong to the container user (UID 65532, mode 0600/0700), so
 # on Linux the host user cannot read or delete them. Inspect and remove them
@@ -65,7 +62,7 @@ WEB_PORT=${SMOKE_WEB_PORT:-0}
 MAIL_ARCHIVE_PUBLIC_URL=http://localhost
 ENV
 
-# Self-hosted runners can retain volumes after a cancelled previous run.
+# Remove what an interrupted previous run left behind.
 docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 docker rm -f "$imap" >/dev/null 2>&1 || true
 

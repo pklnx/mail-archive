@@ -21,8 +21,7 @@ concurrency:
 
 jobs:
   build:
-    # Same runner rule as ci.yml: forks and the CI_RUNNER switch use GitHub-hosted runners.
-    runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: docs
@@ -47,7 +46,6 @@ jobs:
   deploy:
     if: github.event_name != 'pull_request'
     needs: build
-    # Publishing needs a token that can write to Pages; it never runs on the self-hosted runner.
     runs-on: ubuntu-latest
     permissions:
       pages: write
