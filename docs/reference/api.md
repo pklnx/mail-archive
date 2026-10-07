@@ -111,11 +111,15 @@ U+E001 (end).
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/accounts` | All accounts with server settings (never the password), folders with message counts, and the sync state. |
+| `GET /api/accounts` | All accounts with `kind` (`imap`, or `import` for mail imported from files), server settings (never the password), folders with message counts, and the sync state. Import accounts have an empty `host`, `tls` and `username`, `port` 0, and `enabled` false. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. |
 | `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. A new connection or password is checked with a login first; if that fails, nothing changes. All fields are saved together or not at all. `409` when the name is taken or when the account was changed since it was loaded (reload and try again). Works while the account is being synced; the change applies from the next sync. |
 | `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced. |
 | `GET /api/accounts/{name}/server-folders` | The account's folders, live from the IMAP server: `name`, `specialUse` (role) and `selected`. |
+
+Import accounts only take a rename and a `DELETE`. These answer `409`
+`import accounts cannot be synced or changed` for them: sync,
+`server-folders`, and a `PATCH` with fields other than `name`.
 
 Body of `POST` and `PATCH` (in a `PATCH`, missing fields keep their value):
 
@@ -166,5 +170,5 @@ empty when the schedule is off.
 | Endpoint | Description |
 |---|---|
 | `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. |
-| `POST /api/sync` | Queue all enabled accounts. Answers `202` with `{"queued": n}`. |
-| `GET /api/status` | Messages per account and the last sync, like `./ma status`. |
+| `POST /api/sync` | Queue all enabled IMAP accounts. Answers `202` with `{"queued": n}`. |
+| `GET /api/status` | Messages per account with its `kind` and the last sync or import, like `./ma status`. |

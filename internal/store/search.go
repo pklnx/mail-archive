@@ -131,6 +131,7 @@ type FolderCount struct {
 // AccountFolders is an account with its folders, for navigation.
 type AccountFolders struct {
 	Name    string
+	Kind    AccountKind
 	Enabled bool
 	Removed bool
 	Folders []FolderCount
@@ -145,7 +146,7 @@ func (s *Store) ListAccountFolders(ctx context.Context, owner int64) ([]AccountF
 	var out []AccountFolders
 	for _, r := range rows {
 		if len(out) == 0 || out[len(out)-1].Name != r.Account {
-			out = append(out, AccountFolders{Name: r.Account, Enabled: r.Enabled, Removed: r.Removed, Folders: []FolderCount{}})
+			out = append(out, AccountFolders{Name: r.Account, Kind: AccountKind(r.Kind), Enabled: r.Enabled, Removed: r.Removed, Folders: []FolderCount{}})
 		}
 		if r.Folder != nil {
 			a := &out[len(out)-1]

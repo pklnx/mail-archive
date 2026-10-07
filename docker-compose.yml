@@ -80,6 +80,8 @@ services:
     volumes:
       # Raw .eml files. A bind mount keeps them visible on the host for backups.
       - ${ARCHIVE_DIR:-./data}:/data
+      # mbox files and Maildirs for `./ma import`, read-only.
+      - ${IMPORT_DIR:-./import}:/import:ro
 
 volumes:
   pgdata:

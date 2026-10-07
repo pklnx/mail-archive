@@ -1,0 +1,32 @@
+From - Mon Jan  5 09:15:00 2026
+X-Mozilla-Status: 0001
+X-Mozilla-Status2: 00000000
+Message-ID: <tb1@example.com>
+From: Anna <anna@example.com>
+Subject: First message
+Date: Mon, 5 Jan 2026 09:14:00 +0100
+Status: RO
+X-Status: A
+
+Hello.
+From the start of a line, this stays in the body.
+>From an escaped line.
+
+From - Tue Jan  6 10:00:00 2026
+Message-ID: <tb2@example.com>
+From: Ben <ben@example.com>
+Subject: Second message
+Date: Tue, 6 Jan 2026 09:59:00 +0100
+Status: O
+X-Status: F
+
+Unread and flagged.
+
+From - Wed Jan  7 11:30:00 2026
+Message-ID: <tb3@example.com>
+From: Anna <anna@example.com>
+Subject: Third message
+Date: Wed, 7 Jan 2026 11:29:00 +0100
+
+No status headers.
+

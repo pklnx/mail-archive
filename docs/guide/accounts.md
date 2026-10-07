@@ -8,6 +8,10 @@ it. Accounts added in the web UI belong to you; names only need to be unique
 among your own accounts. On the command line, `--user` picks the owner; see
 [CLI](../reference/cli#accounts).
 
+Mail from files (mbox, Maildir) goes into an import account instead; see
+[Importing mail](./importing). Import accounts have no server and are never
+synced; only renaming, moving and removing apply to them.
+
 ## Adding an account
 
 **Web UI:** Manage accounts → Add account. Fill in:

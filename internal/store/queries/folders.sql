@@ -11,3 +11,8 @@ UPDATE folders SET last_uid = GREATEST(last_uid, @last_uid::bigint), last_synced
 
 -- name: TouchFolder :execrows
 UPDATE folders SET last_synced_at = now() WHERE id = $1;
+
+-- name: LocationInFolder :one
+-- Whether the message already has a location in the folder; uses
+-- message_locations_sha_idx.
+SELECT EXISTS (SELECT 1 FROM message_locations WHERE message_sha256 = @sha256 AND folder_id = @folder_id);

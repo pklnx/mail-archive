@@ -24,6 +24,7 @@ type Account struct {
 	RemovedAt       *time.Time
 	OwnerID         *int64
 	Version         int64
+	Kind            string
 }
 
 type Folder struct {

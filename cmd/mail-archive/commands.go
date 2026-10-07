@@ -394,8 +394,14 @@ func newAccountListCmd() *cobra.Command {
 				switch {
 				case acc.RemovedAt != nil:
 					state = "removed"
+				case acc.Kind == store.KindImport:
+					state = "import"
 				case !acc.Enabled:
 					state = "disabled"
+				}
+				if acc.Kind == store.KindImport {
+					fmt.Fprintf(w, "%s\t%s\timport\t-\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID), state)
+					continue
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, ownerName(names, acc.OwnerID), acc.Host, acc.Port, acc.TLSMode,
 					acc.Username, state, listOrDash(acc.IncludedFolders, "all"), listOrDash(acc.ExcludedFolders, "-"))
@@ -442,13 +448,27 @@ func loadAccount(cmd *cobra.Command, name string) (*app, *store.Account, error) 
 	return a, acc, nil
 }
 
+// loadIMAPAccount is loadAccount for commands that only make sense for
+// accounts synced from a server.
+func loadIMAPAccount(cmd *cobra.Command, name string) (*app, *store.Account, error) {
+	a, acc, err := loadAccount(cmd, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if acc.Kind == store.KindImport {
+		a.close()
+		return nil, nil, fmt.Errorf("%q is an import account: it has no server and is never synced; run import again to add mail", acc.Name)
+	}
+	return a, acc, nil
+}
+
 func newAccountFoldersCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "folders NAME",
 		Short: "Connect to the server and show which folders would be archived",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, acc, err := loadAccount(cmd, args[0])
+			a, acc, err := loadIMAPAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -499,7 +519,7 @@ func newAccountSetFoldersCmd() *cobra.Command {
 		Short: "Replace the include/exclude folder lists (no flags = archive all folders)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, acc, err := loadAccount(cmd, args[0])
+			a, acc, err := loadIMAPAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -524,7 +544,7 @@ func newAccountSetPasswordCmd() *cobra.Command {
 		Short: "Replace the stored IMAP password",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, acc, err := loadAccount(cmd, args[0])
+			a, acc, err := loadIMAPAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -602,7 +622,7 @@ func newAccountEnableCmd(enable bool) *cobra.Command {
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, acc, err := loadAccount(cmd, args[0])
+			a, acc, err := loadIMAPAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -689,6 +709,9 @@ the archive. Run this periodically (cron, systemd timer).`,
 			if err != nil {
 				return err
 			}
+			if err := refuseImportAccounts(cmd, a, only, owner); err != nil {
+				return err
+			}
 			results, err := syncer.SyncAll(cmd.Context(), only, owner)
 			failed := 0
 			for _, r := range results {
@@ -721,6 +744,29 @@ the archive. Run this periodically (cron, systemd timer).`,
 	cmd.Flags().StringArrayVar(&only, "account", nil, "only sync these accounts (repeatable; also syncs disabled ones)")
 	cmd.Flags().String("user", "", "only sync this user's accounts")
 	return cmd
+}
+
+// refuseImportAccounts fails if a name given to sync --account is an import
+// account (of the owner, if set).
+func refuseImportAccounts(cmd *cobra.Command, a *app, only []string, owner *int64) error {
+	if len(only) == 0 {
+		return nil
+	}
+	accounts, err := a.store.ListAccounts(cmd.Context())
+	if err != nil {
+		return err
+	}
+	for _, acc := range accounts {
+		if acc.Kind != store.KindImport || acc.RemovedAt != nil || owner != nil && (acc.OwnerID == nil || *acc.OwnerID != *owner) {
+			continue
+		}
+		for _, name := range only {
+			if strings.EqualFold(name, acc.Name) {
+				return fmt.Errorf("%s is an import account; run import again instead", acc.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func newServeCmd() *cobra.Command {
@@ -851,7 +897,11 @@ func newStatusCmd() *cobra.Command {
 				if s.LastStatus != nil {
 					status = *s.LastStatus
 				}
-				fmt.Fprintf(w, "%s\t%s\t%v\t%d\t%d\t%s\t%s\n", s.Account, ownerName(names, s.OwnerID), s.Enabled, s.Folders, s.Messages, last, status)
+				enabled := fmt.Sprint(s.Enabled)
+				if s.Kind == store.KindImport {
+					enabled = "import"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\t%s\n", s.Account, ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, last, status)
 			}
 			if err := w.Flush(); err != nil {
 				return err

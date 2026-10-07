@@ -122,7 +122,7 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 	now := time.Now()
 	var due []int64
 	for _, a := range accounts {
-		if !a.Enabled || a.RemovedAt != nil {
+		if !a.Enabled || a.RemovedAt != nil || a.Kind != store.KindIMAP {
 			continue
 		}
 		if run, ok := runs[a.ID]; ok && now.Sub(run.StartedAt) < r.Interval {
@@ -149,7 +149,7 @@ func (r *Runner) syncOne(ctx context.Context, id int64) {
 	}
 	res := r.Syncer.SyncAccount(ctx, a)
 	switch {
-	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved):
+	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrImportAccount):
 		log.Debug("sync skipped", "account", a.Name, "reason", res.Err)
 	case res.Err != nil:
 		log.Error("sync failed", "account", a.Name, "err", res.Err)

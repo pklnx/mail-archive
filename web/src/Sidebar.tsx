@@ -38,12 +38,14 @@ export function Sidebar({ state, accounts, select, show, user, logout }: Props) 
           >
             <span className="truncate">{a.name}</span>
             {a.sync.state !== "idle" ? (
-              <span className="text-xs font-normal opacity-70" title={t.syncing}>
+              <span className="text-xs font-normal opacity-70" title={a.kind === "import" ? t.importing : t.syncing}>
                 <span aria-hidden className="inline-block animate-spin">↻</span>
-                <span className="sr-only">{t.syncing}</span>
+                <span className="sr-only">{a.kind === "import" ? t.importing : t.syncing}</span>
               </span>
             ) : a.removed ? (
               <span className="text-xs font-normal opacity-70">{t.removed}</span>
+            ) : a.kind === "import" ? (
+              <span className="text-xs font-normal opacity-70">{t.imported}</span>
             ) : (
               !a.enabled && <span className="text-xs font-normal opacity-70">{t.disabled}</span>
             )}

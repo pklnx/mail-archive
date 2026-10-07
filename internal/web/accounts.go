@@ -32,7 +32,10 @@ type syncJSON struct {
 }
 
 type accountJSON struct {
-	Name            string       `json:"name"`
+	Name string `json:"name"`
+	// Kind is "imap", or "import" for mail imported from files; import
+	// accounts have no server and are never synced.
+	Kind            string       `json:"kind"`
 	Enabled         bool         `json:"enabled"`
 	Removed         bool         `json:"removed"`
 	Host            string       `json:"host"`
@@ -100,10 +103,13 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, a := range accounts {
 		aj := accountJSON{
-			Name: a.Name, Enabled: a.Enabled, Removed: a.RemovedAt != nil,
+			Name: a.Name, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.RemovedAt != nil,
 			Host: a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
 			Folders: folders[a.Name], Sync: syncJSON{State: "idle"},
+		}
+		if a.Kind == store.KindImport {
+			aj.TLS = ""
 		}
 		if aj.Folders == nil {
 			aj.Folders = []folderJSON{}
@@ -299,6 +305,16 @@ func (s *Server) pathAccount(w http.ResponseWriter, r *http.Request) (*store.Acc
 	return a, true
 }
 
+// pathIMAPAccount is pathAccount for requests that need a server.
+func (s *Server) pathIMAPAccount(w http.ResponseWriter, r *http.Request) (*store.Account, bool) {
+	a, ok := s.pathAccount(w, r)
+	if ok && a.Kind == store.KindImport {
+		s.fail(w, r, http.StatusConflict, store.ErrImportAccount.Error(), nil)
+		return nil, false
+	}
+	return a, ok
+}
+
 func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {
 		return
@@ -315,6 +331,10 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	a, ok := s.pathAccount(w, r)
 	if !ok {
+		return
+	}
+	if a.Kind == store.KindImport && (in.changesConnection() || in.ExcludedFolders != nil || in.Enabled != nil) {
+		s.fail(w, r, http.StatusConflict, store.ErrImportAccount.Error(), nil)
 		return
 	}
 	ctx := r.Context()
@@ -369,7 +389,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrConflict):
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
 		return
-	case errors.Is(err, store.ErrStale):
+	case errors.Is(err, store.ErrStale), errors.Is(err, store.ErrImportAccount):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
 	case err != nil:
@@ -429,7 +449,7 @@ func (s *Server) handleServerFolders(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {
 		return
 	}
-	a, ok := s.pathAccount(w, r)
+	a, ok := s.pathIMAPAccount(w, r)
 	if !ok {
 		return
 	}
@@ -452,7 +472,7 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {
 		return
 	}
-	a, ok := s.pathAccount(w, r)
+	a, ok := s.pathIMAPAccount(w, r)
 	if !ok {
 		return
 	}
@@ -472,7 +492,7 @@ func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 	}
 	var ids []int64
 	for _, a := range accounts {
-		if a.Enabled && a.RemovedAt == nil {
+		if a.Enabled && a.RemovedAt == nil && a.Kind == store.KindIMAP {
 			ids = append(ids, a.ID)
 		}
 	}

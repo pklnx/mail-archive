@@ -19,6 +19,8 @@ export interface LastRun {
 
 export interface Account {
   name: string;
+  /** "import": mail imported from files with `import`; no server, never synced. */
+  kind: "imap" | "import";
   enabled: boolean;
   /** Removed accounts keep their mail but are never synced or changed. */
   removed: boolean;

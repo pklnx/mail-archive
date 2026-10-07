@@ -50,7 +50,7 @@ export function AccountsPage({ accounts, close, renamed }: Props) {
           <h1 className="mr-auto text-xl font-semibold">{t.accountsTitle}</h1>
           {manage && (
             <>
-              <button type="button" className={button} disabled={active.length === 0} onClick={() => run(accountsApi.syncAll)}>
+              <button type="button" className={button} disabled={syncableCount(active) === 0} onClick={() => run(accountsApi.syncAll)}>
                 {t.syncAll}
               </button>
               <button type="button" className={primary} onClick={() => setEditing({ mode: "new" })}>
@@ -137,12 +137,25 @@ function Card({ children }: { children: ReactNode }) {
   );
 }
 
+/** Accounts "Sync all" can sync: import accounts never are. */
+export function syncableCount(accounts: Account[]): number {
+  return accounts.filter((a) => !a.removed && a.kind !== "import").length;
+}
+
 function messageCount(a: Account): number {
   return a.folders.reduce((n, f) => n + f.messages, 0);
 }
 
 export function syncStatus(a: Account): { text: string; error?: string } {
   const run = a.sync.lastRun;
+  if (a.kind === "import") {
+    if (a.sync.state === "running") return { text: t.importRunning(run?.fetched ?? 0, run?.new ?? 0) };
+    if (!run) return { text: t.importedNote };
+    const when = relativeTime(run.finishedAt ?? run.startedAt);
+    if (run.status === "ok") return { text: t.lastImportOk(when, run.new) };
+    if (run.status === "partial") return { text: t.lastImportPartial(when), error: run.error };
+    return { text: t.lastImportFailed(when), error: run.error };
+  }
   if (a.sync.state === "queued") return { text: t.stateQueued };
   if (a.sync.state === "running") return { text: t.stateRunning(run?.fetched ?? 0, run?.new ?? 0) };
   if (!run) return { text: t.neverSynced };
@@ -169,6 +182,38 @@ interface CardProps {
 function AccountCard({ account: a, manage, onSync, onEdit, onToggle, onRemove }: CardProps) {
   const status = syncStatus(a);
   const busy = a.sync.state !== "idle";
+  if (a.kind === "import") {
+    return (
+      <Card>
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <span className="font-semibold">{a.name}</span>
+          <span className="text-sm text-zinc-500">{t.imported}</span>
+          <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+        </div>
+        <p className={`text-sm ${status.error ? "text-red-600" : "text-zinc-600 dark:text-zinc-400"}`} aria-live="polite">
+          {busy && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}
+          {status.text}
+        </p>
+        {status.error && <p className="text-xs break-words text-red-600">{status.error}</p>}
+        {a.folders.length > 0 && (
+          <ul className="flex flex-wrap gap-x-3 text-xs text-zinc-500">
+            {a.folders.map((f) => (
+              <li key={f.name}>
+                {f.name} <span className="tabular-nums">({formatCount(f.messages)})</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {manage && (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={`${button} text-red-600`} disabled={busy} onClick={onRemove}>
+              {t.remove}
+            </button>
+          </div>
+        )}
+      </Card>
+    );
+  }
   return (
     <Card>
       <div className="flex flex-wrap items-baseline gap-x-3">

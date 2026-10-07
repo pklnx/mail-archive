@@ -47,6 +47,24 @@ func (q *Queries) GetOrCreateFolder(ctx context.Context, arg GetOrCreateFolderPa
 	return i, err
 }
 
+const locationInFolder = `-- name: LocationInFolder :one
+SELECT EXISTS (SELECT 1 FROM message_locations WHERE message_sha256 = $1 AND folder_id = $2)
+`
+
+type LocationInFolderParams struct {
+	Sha256   string
+	FolderID int64
+}
+
+// Whether the message already has a location in the folder; uses
+// message_locations_sha_idx.
+func (q *Queries) LocationInFolder(ctx context.Context, arg LocationInFolderParams) (bool, error) {
+	row := q.db.QueryRow(ctx, locationInFolder, arg.Sha256, arg.FolderID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const resetFolder = `-- name: ResetFolder :execrows
 UPDATE folders SET uidvalidity = $2, last_uid = 0 WHERE id = $1
 `

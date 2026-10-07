@@ -11,7 +11,7 @@ import (
 )
 
 const accountStats = `-- name: AccountStats :many
-SELECT a.id, a.name, a.enabled, a.owner_id,
+SELECT a.id, a.name, a.enabled, a.owner_id, a.kind,
        (SELECT count(*) FROM folders f WHERE f.account_id = a.id) AS folders,
        (SELECT count(DISTINCT l.message_sha256) FROM message_locations l JOIN folders f ON f.id = l.folder_id
         WHERE f.account_id = a.id) AS messages
@@ -25,6 +25,7 @@ type AccountStatsRow struct {
 	Name     string
 	Enabled  bool
 	OwnerID  *int64
+	Kind     string
 	Folders  int64
 	Messages int64
 }
@@ -44,6 +45,7 @@ func (q *Queries) AccountStats(ctx context.Context, owner *int64) ([]AccountStat
 			&i.Name,
 			&i.Enabled,
 			&i.OwnerID,
+			&i.Kind,
 			&i.Folders,
 			&i.Messages,
 		); err != nil {
