@@ -86,7 +86,7 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		res.Err = ErrAccountRemoved
 		return res
 	}
-	unlock, ok, err := s.Store.TryLockSync(ctx, a.ID)
+	unlock, ok, err := s.Store.TryLockSyncForWrite(ctx, a.ID)
 	if err != nil {
 		res.Err = err
 		return res

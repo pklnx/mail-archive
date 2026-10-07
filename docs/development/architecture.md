@@ -21,11 +21,12 @@ internal/web (JSON API, UI from web/) ──────────────
 | Path | Purpose |
 |---|---|
 | `cmd/mail-archive` | Command line (cobra). |
-| `internal/archive` | Sync of accounts and folders, deduplication, header parsing, the background `Runner` with its schedule, `reindex`. |
+| `internal/archive` | Sync of accounts and folders, deduplication, header parsing, the background `Runner` with its schedule, `reindex`, `verify` and `export`. |
+| `internal/mailbox` | mboxrd and Maildir writers and readers for `export`. |
 | `internal/imapsync` | Read-only IMAP client on top of go-imap v2. |
 | `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and written atomically. |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
-| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock. |
+| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock and the blob lock. |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
@@ -98,6 +99,16 @@ It syncs one account at a time.
 The API reports an account as *running* when any session holds its lock
 (looked up in `pg_locks`), so syncs started by the command line are visible
 too.
+
+A sync writes each `.eml` file before the batch with its row commits, so for
+a moment a file has no row. `verify` must not take such a file for an orphan.
+The **blob lock** (advisory lock class `0x6d62`, key 0) handles this: a sync
+takes it shared with `TryLockSyncForWrite`, on the connection that holds the
+account lock, for the whole run. `verify` takes it exclusively, only while it
+looks for orphans; a sync that starts meanwhile waits. If the lock stays busy
+longer than `--lock-timeout`, `verify` skips the orphan check and exits `2`.
+Deleting an account takes only the account lock, so it never waits for
+`verify`. PostgreSQL drops both locks with the connection when a process dies.
 
 ## Accounts: ownership and changes
 

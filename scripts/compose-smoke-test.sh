@@ -140,4 +140,29 @@ if [ "$count" -ne 3 ]; then
 	exit 1
 fi
 
+echo "== verify"
+./ma verify | tee "$work/out"
+expect "$work/out" 'checked 3 message\(s\): no problems'
+
+echo "== export"
+./ma export --user smoke --format mbox --out /data/export/smoke | tee "$work/out"
+expect "$work/out" "exported 3 message\(s\)"
+in_data 'test -s /data/export/smoke/test/INBOX.mbox && head -c 5 /data/export/smoke/test/INBOX.mbox' > "$work/out"
+expect "$work/out" '^From '
+# Exports are not taken for orphans.
+./ma verify > "$work/out"
+expect "$work/out" 'no problems'
+
+echo "== backup"
+./ma backup "$work/backups" | tee "$work/out"
+expect "$work/out" "wrote .*mailarchive-[0-9TZ]+\.dump"
+dump=$(ls "$work/backups"/mailarchive-*.dump)
+docker compose --progress quiet exec -T postgres pg_restore --list < "$dump" > "$work/out"
+expect "$work/out" 'TABLE public messages'
+expect "$work/backups/BACKUP-NOTE.txt" 'MAIL_ARCHIVE_SECRET_KEY'
+if grep -qF "$(grep MAIL_ARCHIVE_SECRET_KEY .env | cut -d= -f2-)" "$work/backups/BACKUP-NOTE.txt"; then
+	echo "the backup note contains the secret key" >&2
+	exit 1
+fi
+
 echo "smoke test passed"

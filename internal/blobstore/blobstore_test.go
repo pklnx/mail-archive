@@ -79,3 +79,75 @@ func TestPutCleansUpOnError(t *testing.T) {
 		t.Fatalf("temp files left behind: %d", len(tmpEntries))
 	}
 }
+
+func TestWalk(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, _, err := s.Put(strings.NewReader("Subject: hi\r\n\r\nhello\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.eml"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := blob.SHA256
+	write := func(rel string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tmp/put-1")
+	write("messages/" + h[:2] + "/" + h[2:4] + "/notes.txt")
+	write("messages/" + h[:2] + "/" + h + ".eml")
+	write("messages/zz/00/x.eml")
+	write("messages/" + h[:2] + "/ff/" + h + ".eml") // wrong directory for the hash
+	write("export/a.mbox")                           // not walked
+	if err := os.Symlink(outside, filepath.Join(root, "messages", "ab")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.eml"), filepath.Join(root, "messages", h[:2], h[2:4], strings.Repeat("0", 64)+".eml")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]EntryKind{}
+	err = s.Walk(func(e Entry) error {
+		if strings.Contains(e.Path, "secret") {
+			t.Errorf("followed a symlink: %s", e.Path)
+		}
+		got[e.Path] = e.Kind
+		if e.Kind == EntryBlob && (e.SHA256 != h || e.Size != blob.Size) {
+			t.Errorf("blob entry %+v", e)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]EntryKind{
+		blob.Path:   EntryBlob,
+		"tmp/put-1": EntryTemp,
+		"messages/" + h[:2] + "/" + h[2:4] + "/notes.txt": EntryUnexpected,
+		"messages/" + h[:2] + "/" + h + ".eml":            EntryUnexpected,
+		"messages/zz":                                     EntryUnexpected,
+		"messages/" + h[:2] + "/ff/" + h + ".eml":         EntryUnexpected,
+		"messages/ab":                                     EntryUnexpected,
+		"messages/" + h[:2] + "/" + h[2:4] + "/" + strings.Repeat("0", 64) + ".eml": EntryUnexpected,
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %v", got)
+	}
+	for p, k := range want {
+		if g, ok := got[p]; !ok || g != k {
+			t.Errorf("%s: got %v (found %v), want %v", p, g, ok, k)
+		}
+	}
+}
