@@ -749,7 +749,7 @@ network.`,
 				return err
 			}
 			log := newLogger(a.cfg.LogLevel)
-			opts := web.Options{AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey}
+			opts := web.Options{AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL}
 			if sealer, err := a.cfg.Sealer(); err != nil {
 				log.Warn("account management and sync are off", "reason", err)
 			} else {

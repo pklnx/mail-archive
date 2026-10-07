@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, folderQuestion, listAccounts, profileApi, retryAfter, sessionApi, usersApi } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, folderQuestion, listAccounts, passkeyApi, profileApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
 
 describe("folderQuestion", () => {
   it("returns the folders the server asks about", () => {
@@ -44,6 +44,25 @@ describe("session", () => {
     } finally {
       window.removeEventListener(UNAUTHORIZED_EVENT, seen);
     }
+  });
+  it("reads where passkeys work", async () => {
+    reply(401, { error: "login required", setupRequired: false, passkeyOrigin: "https://archive.example.test" });
+    expect(await sessionApi.get()).toEqual({ user: null, setupRequired: false, passkeyOrigin: "https://archive.example.test" });
+  });
+  it("does not announce a failed passkey login", async () => {
+    const seen = vi.fn();
+    window.addEventListener(UNAUTHORIZED_EVENT, seen);
+    try {
+      reply(401, { error: "the passkey was not accepted" });
+      await expect(passkeyApi.finishLogin("t", {})).rejects.toBeInstanceOf(ApiError);
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(UNAUTHORIZED_EVENT, seen);
+    }
+  });
+  it("recognizes an unknown passkey", () => {
+    expect(unknownPasskey(new ApiError(401, "x", { unknownCredential: true, rpId: "a.test", credentialId: "AQ" }))).toEqual({ rpId: "a.test", credentialId: "AQ" });
+    expect(unknownPasskey(new ApiError(401, "x", {}))).toBeNull();
   });
   it("reads the wait time after too many attempts", () => {
     expect(retryAfter(new ApiError(429, "x", { retryAfter: 120 }))).toBe(120);

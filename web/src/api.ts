@@ -144,7 +144,7 @@ async function errorFor(path: string, res: Response): Promise<ApiError> {
   const err = await errorFrom(res);
   // The session ended, or the user still has to replace a generated
   // password: the login gate checks the session again.
-  if ((res.status === 401 && path !== sessionPath) || err.body.passwordChangeRequired === true || err.body.twoFactorSetupRequired === true) {
+  if ((res.status === 401 && !path.startsWith(sessionPath)) || err.body.passwordChangeRequired === true || err.body.twoFactorSetupRequired === true) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   return err;
@@ -222,15 +222,19 @@ export interface User {
   twoFactorRequired: boolean;
 }
 
-/** The login state: a user, or none and whether the first admin is missing. */
-export type SessionState = { user: User } | { user: null; setupRequired: boolean };
+/**
+ * The login state: a user, or none and whether the first admin is missing.
+ * passkeyOrigin is where passkey logins work, if the server offers them.
+ */
+export type SessionState = { user: User } | { user: null; setupRequired: boolean; passkeyOrigin?: string };
 
 export const sessionApi = {
   get: async (signal?: AbortSignal): Promise<SessionState> => {
     const res = await fetch(sessionPath, { signal, headers: { Accept: "application/json" } });
     if (res.status === 401) {
       const err = await errorFrom(res);
-      return { user: null, setupRequired: err.body.setupRequired === true };
+      const origin = err.body.passkeyOrigin;
+      return { user: null, setupRequired: err.body.setupRequired === true, passkeyOrigin: typeof origin === "string" ? origin : undefined };
     }
     if (!res.ok) throw await errorFrom(res);
     return (await res.json()) as { user: User };
@@ -240,6 +244,46 @@ export const sessionApi = {
   login2FA: async (challenge: string, code: string): Promise<User> =>
     (await send<{ user: User }>("POST", "/api/session/2fa", { challenge, code }))!.user,
   logout: () => send("DELETE", sessionPath),
+};
+
+/** A ceremony started on the server: options for the browser and a token. */
+export interface Ceremony {
+  token: string;
+  publicKey: Record<string, unknown>;
+}
+
+export interface Passkey {
+  id: number;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export interface PasskeyList {
+  /** False when the server has no public URL. */
+  available: boolean;
+  /** Where passkeys work, like https://archive.example.ts.net. */
+  origin?: string;
+  max: number;
+  passkeys: Passkey[];
+}
+
+/** The server's answer for a passkey it does not know. */
+export function unknownPasskey(err: unknown): { rpId: string; credentialId: string } | null {
+  if (!(err instanceof ApiError) || err.body.unknownCredential !== true) return null;
+  const { rpId, credentialId } = err.body;
+  return typeof rpId === "string" && typeof credentialId === "string" ? { rpId, credentialId } : null;
+}
+
+export const passkeyApi = {
+  beginLogin: async () => (await send<Ceremony>("POST", "/api/session/passkey/begin"))!,
+  finishLogin: async (token: string, credential: unknown) =>
+    (await send<{ user: User }>("POST", "/api/session/passkey/finish", { token, credential }))!.user,
+  list: () => getJSON<PasskeyList>("/api/profile/passkeys"),
+  beginRegistration: async (name: string, currentPassword: string, code: string) =>
+    (await send<Ceremony>("POST", "/api/profile/passkeys/begin", { name, currentPassword, code }))!,
+  finishRegistration: (token: string, credential: unknown) => send("POST", "/api/profile/passkeys/finish", { token, credential }),
+  remove: async (id: number) => (await send<{ credentialId: string; rpId?: string }>("DELETE", `/api/profile/passkeys/${id}`))!,
 };
 
 /** Seconds to wait after too many failed logins, from a 429 answer. */
@@ -277,6 +321,7 @@ export interface ManagedUser {
   locked: boolean;
   mustChangePassword: boolean;
   twoFactorEnabled: boolean;
+  passkeys: number;
   accounts: number;
   createdAt: string;
   lastLoginAt: string | null;
@@ -295,9 +340,11 @@ const userPath = (name: string) => `/api/users/${encodeURIComponent(name)}`;
 export const usersApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ users: ManagedUser[] }>("/api/users", signal)).users,
   create: async (name: string, admin: boolean) => (await send<GeneratedPassword>("POST", "/api/users", { name, admin }))!,
-  resetPassword: async (name: string) => (await send<GeneratedPassword>("POST", `${userPath(name)}/password`))!,
+  resetPassword: async (name: string, removePasskeys: boolean) =>
+    (await send<GeneratedPassword>("POST", `${userPath(name)}/password`, { removePasskeys }))!,
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
   setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
   remove: (name: string) => send("DELETE", userPath(name)),
   reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
+  removePasskeys: (name: string) => send("DELETE", `${userPath(name)}/passkeys`),
 };

@@ -14,6 +14,7 @@ All settings are environment variables. With Docker Compose they come from
 | `MAIL_ARCHIVE_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host names the web server accepts in the `Host` header, comma-separated. See [Security](./security#dns-rebinding). |
 | `MAIL_ARCHIVE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
 | `MAIL_ARCHIVE_REQUIRE_2FA` | `false` | Require TOTP for all non-admin users. Administrators always require TOTP. |
+| `MAIL_ARCHIVE_PUBLIC_URL` | (none; Compose: `http://localhost:WEB_PORT`) | The address you open in the browser, like `https://archive.example.ts.net`: scheme, host name and port, no path. Passkeys work only there; without it they are off. Only `https://` with a host name, or `http://localhost`. Its host is accepted in addition to `MAIL_ARCHIVE_ALLOWED_HOSTS`. Changing the host later makes existing passkeys unusable. |
 | `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. The `./ma` wrapper sets it to `./ma`. |
 
 ## Docker Compose only

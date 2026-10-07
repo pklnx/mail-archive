@@ -46,7 +46,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (name, password_hash, is_admin, must_change_password)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version
+RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle
 `
 
 type CreateUserParams struct {
@@ -79,6 +79,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.TwoFactorPendingSecret,
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
+		&i.WebauthnHandle,
 	)
 	return i, err
 }
@@ -183,7 +184,7 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE id = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -204,12 +205,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.TwoFactorPendingSecret,
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
+		&i.WebauthnHandle,
 	)
 	return i, err
 }
 
 const getUserByName = `-- name: GetUserByName :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users WHERE name = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle FROM users WHERE name = $1
 `
 
 func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) {
@@ -230,12 +232,13 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 		&i.TwoFactorPendingSecret,
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
+		&i.WebauthnHandle,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version FROM users ORDER BY name
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle FROM users ORDER BY name
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -262,6 +265,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.TwoFactorPendingSecret,
 			&i.TwoFactorLastCounter,
 			&i.TwoFactorVersion,
+			&i.WebauthnHandle,
 		); err != nil {
 			return nil, err
 		}

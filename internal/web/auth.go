@@ -30,6 +30,24 @@ type sessionKey struct{}
 // may use (besides the session endpoints).
 const profilePasswordPath = "/api/profile/password" //nolint:gosec // a URL path, not a credential
 
+// The passkey login endpoints, which need no session.
+//
+//nolint:gosec // URL paths, not credentials
+const (
+	passkeyLoginBeginPath  = "/api/session/passkey/begin"
+	passkeyLoginFinishPath = "/api/session/passkey/finish"
+)
+
+// publicPath reports whether an API path works without a session: the
+// login endpoints.
+func publicPath(path string) bool {
+	switch path {
+	case "/api/session", "/api/session/2fa", passkeyLoginBeginPath, passkeyLoginFinishPath:
+		return true
+	}
+	return false
+}
+
 type twoFactorSetupJSON struct {
 	Error                  string `json:"error"`
 	TwoFactorSetupRequired bool   `json:"twoFactorSetupRequired"`
@@ -122,7 +140,7 @@ func (s *Server) session(r *http.Request) (*store.Session, error) {
 // they contain no data.
 func (s *Server) requireLogin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/session" || r.URL.Path == "/api/session/2fa" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || publicPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -176,6 +194,8 @@ type noSessionJSON struct {
 	// SetupRequired is true while no user exists; the UI then explains how
 	// to create the first admin.
 	SetupRequired bool `json:"setupRequired"`
+	// PasskeyOrigin is where passkey logins work; empty when they are off.
+	PasskeyOrigin string `json:"passkeyOrigin,omitempty"`
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +213,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	s.writeJSON(w, http.StatusUnauthorized, noSessionJSON{Error: "login required", SetupRequired: n == 0})
+	s.writeJSON(w, http.StatusUnauthorized, noSessionJSON{Error: "login required", SetupRequired: n == 0, PasskeyOrigin: s.publicOrigin})
 }
 
 type loginInput struct {
@@ -325,6 +345,9 @@ func (s *Server) cleanSessions(ctx context.Context) {
 	for {
 		if err := s.store.DeleteExpiredTwoFactorChallenges(ctx); err != nil && ctx.Err() == nil {
 			s.log.Warn("delete expired two-factor challenges", "err", err)
+		}
+		if err := s.store.DeleteExpiredWebAuthnCeremonies(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("delete expired passkey ceremonies", "err", err)
 		}
 		if n, err := s.store.DeleteExpiredSessions(ctx, time.Now().Add(-auth.IdleTimeout)); err != nil {
 			if ctx.Err() == nil {

@@ -93,6 +93,28 @@ func (l *Limiter) Fail(user, addr string) {
 		u.blockedUntil = now.Add(min(userBlockMin<<u.blocks, userBlockMax))
 		u.blocks = min(u.blocks+1, 8)
 	}
+	l.failAddr(addr, now)
+}
+
+// BlockedAddr is Blocked for a login without a user name, like a passkey.
+func (l *Limiter) BlockedAddr(addr string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if f, now := l.addrs[addr], l.now(); f != nil && f.blockedUntil.After(now) {
+		return f.blockedUntil.Sub(now)
+	}
+	return 0
+}
+
+// FailAddr records a failed login without a user name: only the address
+// counts.
+func (l *Limiter) FailAddr(addr string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.failAddr(addr, l.now())
+}
+
+func (l *Limiter) failAddr(addr string, now time.Time) {
 	a := entry(l.addrs, addr, now)
 	if len(a.times) >= addrFailures {
 		a.blockedUntil = now.Add(addrBlockTime)

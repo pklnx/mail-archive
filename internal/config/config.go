@@ -4,6 +4,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -24,6 +26,10 @@ const (
 	// (Go duration like "6h"; "0" turns the schedule off).
 	EnvSyncInterval = "MAIL_ARCHIVE_SYNC_INTERVAL"
 	EnvRequire2FA   = "MAIL_ARCHIVE_REQUIRE_2FA"
+	// EnvPublicURL is the address users open in the browser, like
+	// https://archive.example.ts.net. Passkeys need it: they are bound to
+	// its host name.
+	EnvPublicURL = "MAIL_ARCHIVE_PUBLIC_URL"
 )
 
 // DefaultSyncInterval is used when EnvSyncInterval is not set.
@@ -43,6 +49,9 @@ type Config struct {
 	// SyncInterval of the web server's schedule; zero means off.
 	SyncInterval time.Duration
 	Require2FA   bool
+	// PublicURL is the web UI's origin (scheme, host and port, no path);
+	// empty turns passkeys off.
+	PublicURL string
 }
 
 // Load reads the configuration from the environment.
@@ -72,6 +81,13 @@ func Load() (*Config, error) {
 	}
 	cfg.SyncInterval = interval
 	cfg.Require2FA = strings.EqualFold(strings.TrimSpace(os.Getenv(EnvRequire2FA)), "true")
+	if v := strings.TrimSpace(os.Getenv(EnvPublicURL)); v != "" {
+		origin, _, err := ParsePublicURL(v)
+		if err != nil {
+			return nil, err
+		}
+		cfg.PublicURL = origin
+	}
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
 		if err != nil {
@@ -80,6 +96,39 @@ func Load() (*Config, error) {
 		cfg.SecretKey = key
 	}
 	return cfg, nil
+}
+
+// ParsePublicURL checks a public URL and returns its origin (scheme, host
+// and port) and the WebAuthn relying party ID (the host name alone). Only
+// https is allowed, or http on localhost: browsers offer passkeys nowhere
+// else. Paths, queries and IP addresses are refused.
+func ParsePublicURL(v string) (origin, rpID string, err error) {
+	bad := func(why string) (string, string, error) {
+		return "", "", fmt.Errorf("%s: %s, got %q (example: https://archive.example.ts.net)", EnvPublicURL, why, v)
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		return bad("not a URL")
+	}
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case u.Scheme != "https" && (u.Scheme != "http" || host != "localhost"):
+		return bad("want https://, or http://localhost")
+	case host == "":
+		return bad("no host name")
+	case net.ParseIP(host) != nil:
+		return bad("passkeys need a host name, not an IP address")
+	case u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "":
+		return bad("want only scheme, host and port")
+	}
+	origin = u.Scheme + "://" + host
+	if port := u.Port(); port != "" {
+		defaultPort := u.Scheme == "https" && port == "443" || u.Scheme == "http" && port == "80"
+		if !defaultPort {
+			origin += ":" + port
+		}
+	}
+	return origin, host, nil
 }
 
 func parseSyncInterval(v string) (time.Duration, error) {

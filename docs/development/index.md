@@ -66,7 +66,7 @@ make docs-screenshots DEMO_DATABASE_URL='postgres://mailarchive:<password>@local
 It needs a Chromium for Playwright (`npx playwright install chromium`, or set
 `CHROMIUM_PATH`). Run it after visible UI changes and commit the new images.
 The demo alone: `go run ./tools/demo -db URL`, then open
-<http://127.0.0.1:18080>.
+<http://localhost:18080> (passkeys need the host name, not the IP address).
 
 ## Database migrations
 

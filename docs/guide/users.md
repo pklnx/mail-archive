@@ -44,7 +44,11 @@ For every other user, admins can:
   the user out everywhere. Admins, and everyone when 2FA is required, set it
   up again at the next login.
 - **Reset password:** generates a new password, shown once. The user is logged
-  out everywhere and must change it at the next login.
+  out everywhere and must change it at the next login. Their passkeys are
+  removed too, unless you untick the box: after a break-in, a new password
+  alone would not lock the intruder out.
+- **Remove passkeys:** removes all passkeys of the user and logs them out
+  everywhere, for example after a lost phone.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in.
 - **Make admin / Remove admin.**
 - **Remove:** only for users without accounts. A user who still owns accounts
@@ -89,3 +93,26 @@ password and a code, unless the server requires it for everyone
 [Configuration](../reference/configuration)).
 
 If you lose both the app and the recovery codes, an admin resets your 2FA.
+
+## Passkeys
+
+A passkey signs you in with Face ID, Touch ID, Windows Hello or a security
+key, without password and code. It works only at the address in
+`MAIL_ARCHIVE_PUBLIC_URL` (see [Configuration](../reference/configuration)),
+over HTTPS or on `localhost`.
+
+In your profile, enter a name for the passkey (like *iPhone*), your
+password and, if you use 2FA, a code, then click **Add passkey** and confirm
+on your device. You can have up to 10 passkeys.
+
+At the login, click **Sign in with a passkey**, or pick the passkey in the
+user name field when the browser offers it.
+
+**Remove** in your profile deletes a passkey and logs out your other
+devices. Your password keeps working; admins must still keep TOTP set up.
+
+The passkey itself stays on your device or in your password manager. Chrome
+and Safari are told to forget it; Firefox and some password managers keep
+offering it, and signing in with it then says it is not registered. Delete
+it there too (in Firefox: Settings, Privacy & Security, Passkeys; on a Mac:
+the Passwords app).
