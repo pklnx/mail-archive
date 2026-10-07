@@ -115,4 +115,4 @@ The passkey itself stays on your device or in your password manager. Chrome
 and Safari are told to forget it; Firefox and some password managers keep
 offering it, and signing in with it then says it is not registered. Delete
 it there too (in Firefox: Settings, Privacy & Security, Passkeys; on a Mac:
-System Settings, Passwords).
+the Passwords app).
