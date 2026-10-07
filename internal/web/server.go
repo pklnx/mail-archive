@@ -263,9 +263,10 @@ func parseLimit(v string, def, maxLimit int) (int, error) {
 	if v == "" {
 		return def, nil
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > maxLimit {
+	// Bit size 32: the limit ends up as an int32 query parameter.
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil || n < 1 || n > int64(maxLimit) {
 		return 0, fmt.Errorf("limit must be between 1 and %d", maxLimit)
 	}
-	return n, nil
+	return int(n), nil
 }
