@@ -12,6 +12,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The self-hosted runner keeps Go's module and build caches on disk between
+  # jobs. Restoring and saving the Actions cache there costs about 70 s per
+  # job and gains nothing, so it is used on GitHub-hosted runners only.
+  GO_CACHE: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'true' || 'false' }}
+
 # Runners: jobs run on the self-hosted runner (label mail-archive-ci, see
 # docs/development/self-hosted-runner.md). Pull requests from forks always use
 # GitHub-hosted runners, so code from outside the repository never runs on
@@ -27,8 +33,9 @@ jobs:
           POSTGRES_USER: mailarchive
           POSTGRES_PASSWORD: mailarchive
           POSTGRES_DB: mailarchive
-        # Docker bypasses the host firewall: publish on loopback only.
-        ports: ["127.0.0.1:5432:5432"]
+        # Docker bypasses the host firewall: publish on loopback only. A
+        # random host port lets several runners on one server test at once.
+        ports: ["127.0.0.1::5432"]
         options: >-
           --health-cmd "pg_isready -U mailarchive"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -39,11 +46,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.GO_CACHE }}
       - run: go mod verify
       - run: go vet ./...
       - run: go test -race -count=1 ./...
         env:
-          TEST_DATABASE_URL: postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable
+          TEST_DATABASE_URL: postgres://mailarchive:mailarchive@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/mailarchive?sslmode=disable
 
   lint:
     runs-on: ${{ (vars.CI_RUNNER == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","mail-archive-ci"]') }}
@@ -54,6 +62,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.GO_CACHE }}
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
@@ -69,6 +78,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.GO_CACHE }}
       # govulncheck version is pinned in the Makefile and verified through
       # the Go checksum database.
       - run: make vuln
@@ -97,6 +107,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ env.GO_CACHE }}
       - run: scripts/compose-smoke-test.sh
 
   web:
