@@ -110,3 +110,9 @@ user name field when the browser offers it.
 
 **Remove** in your profile deletes a passkey and logs out your other
 devices. Your password keeps working; admins must still keep TOTP set up.
+
+The passkey itself stays on your device or in your password manager. Chrome
+and Safari are told to forget it; Firefox and some password managers keep
+offering it, and signing in with it then says it is not registered. Delete
+it there too (in Firefox: Settings, Privacy & Security, Passkeys; on a Mac:
+System Settings, Passwords).
