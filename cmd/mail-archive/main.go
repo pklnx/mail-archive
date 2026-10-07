@@ -37,6 +37,7 @@ func main() {
 		newReindexCmd(),
 		newVerifyCmd(),
 		newExportCmd(),
+		newImportCmd(),
 		newBackupCmd(),
 		newServeCmd(),
 	)

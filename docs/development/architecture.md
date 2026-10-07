@@ -22,7 +22,7 @@ internal/web (JSON API, UI from web/) ──────────────
 |---|---|
 | `cmd/mail-archive` | Command line (cobra). |
 | `internal/archive` | Sync of accounts and folders, deduplication, header parsing, the background `Runner` with its schedule, `reindex`, `verify` and `export`. |
-| `internal/mailbox` | mboxrd and Maildir writers and readers for `export`. |
+| `internal/mailbox` | mbox and Maildir writers for `export`; readers and source walkers (Thunderbird, Apple Mail, Maildir++) for `import`. |
 | `internal/imapsync` | Read-only IMAP client on top of go-imap v2. |
 | `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and written atomically. |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
@@ -42,11 +42,11 @@ internal/web (JSON API, UI from web/) ──────────────
 |---|---|
 | `users` | Login for the web UI: name, Argon2id hash, admin flag, `locked_at`. |
 | `sessions` | Login session: SHA-256 of the cookie token, user, last use, expiry. |
-| `accounts` | IMAP account: owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. |
+| `accounts` | Account: `kind` (`imap`, or `import` for mail from files), owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. Import accounts have port 0 and are never enabled; check constraints enforce both. |
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID and last sync time. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, date, path of the file, body text and search vector. |
 | `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date. |
-| `sync_runs` | Sync of an account: start, end, status, counters, error. |
+| `sync_runs` | Sync or import of an account: start, end, status, counters, error. |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -82,6 +82,26 @@ Counts are distinct messages, like the message lists:
 `message_locations_folder_sha_idx` alone. A `count(DISTINCT …)` over the
 grouped join was about 20 times slower on 500,000 locations;
 `TestFolderCountCost` (`MAIL_ARCHIVE_BENCH=1`) measures it.
+
+## Storing messages: sync and import
+
+Sync and import store a message the same way (`internal/archive/ingest.go`):
+the bytes stream into the blob store while they are hashed,
+`archive.BuildMeta` extracts headers (at most 1 MiB) and search text for
+messages the database does not know yet, and a folder writer commits batches
+of 100 messages with their locations and the folder's last UID
+(`Store.SaveBatch`). Fields extracted in `BuildMeta` thus apply to imported
+mail too.
+
+`archive.Importer` reads mbox files (`mailbox.MboxScanner`, streaming, one
+line buffer per message) and Maildirs. Bytes stay as they are with one
+exception, so that copies deduplicate against IMAP: if a message's first line
+ends in LF only, every LF not preceded by CR becomes CRLF
+(`mailbox.CRLFReader`). A message is skipped when its hash already has a
+location in the folder (`LocationInFolder`), which makes a rerun add nothing.
+The first import into a folder sets its `UIDVALIDITY` to the import's start
+time; UIDs continue from the folder's last UID. An import holds the account's
+lock with `TryLockSyncForWrite`, like a sync, and records a `sync_runs` row.
 
 ## Sync and concurrency
 

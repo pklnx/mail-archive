@@ -32,6 +32,9 @@ Messages deleted on the server stay in the archive.
 | `./ma sync` | All enabled accounts. |
 | `./ma sync --account NAME` | Only that account, also when it is disabled. |
 
+[Import accounts](./importing) are never synced, not even by name: run
+`import` again to add mail to them.
+
 The web server works through its queue one account at a time, so a large
 first sync does not open many connections at once.
 

@@ -64,7 +64,7 @@ ORDER BY superseded, a.name, f.name;
 -- change) counts once. The subquery per folder uses
 -- message_locations_folder_sha_idx; a count(DISTINCT) over the grouped join
 -- is about 20 times slower on large archives.
-SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed,
+SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed, a.kind,
        f.name AS folder,
        (SELECT count(*) FROM (
             SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d

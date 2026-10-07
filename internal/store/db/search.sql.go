@@ -55,7 +55,7 @@ func (q *Queries) GetMessageSummary(ctx context.Context, arg GetMessageSummaryPa
 }
 
 const listFolderCounts = `-- name: ListFolderCounts :many
-SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed,
+SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed, a.kind,
        f.name AS folder,
        (SELECT count(*) FROM (
             SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
@@ -71,6 +71,7 @@ type ListFolderCountsRow struct {
 	Account      string
 	Enabled      bool
 	Removed      bool
+	Kind         string
 	Folder       *string
 	Messages     int64
 	LastSyncedAt *time.Time
@@ -94,6 +95,7 @@ func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFold
 			&i.Account,
 			&i.Enabled,
 			&i.Removed,
+			&i.Kind,
 			&i.Folder,
 			&i.Messages,
 			&i.LastSyncedAt,

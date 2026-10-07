@@ -101,6 +101,9 @@ func (s *Store) UpdateAccount(ctx context.Context, ref AccountRef, c AccountChan
 		if err != nil {
 			return err
 		}
+		if AccountKind(r.Kind) == KindImport && (c.Connection != nil || c.PasswordEnc != nil || c.Folders != nil || c.Enabled != nil) {
+			return ErrImportAccount
+		}
 		p := db.WriteAccountParams{
 			ID: r.ID, Name: r.Name, Host: r.Host, Port: r.Port, TlsMode: r.TlsMode, Username: r.Username,
 			PasswordEnc: r.PasswordEnc, IncludedFolders: r.IncludedFolders, ExcludedFolders: r.ExcludedFolders,

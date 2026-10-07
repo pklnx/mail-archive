@@ -29,6 +29,7 @@ export default defineConfig({
           { text: "Getting started", link: "/guide/getting-started" },
           { text: "Accounts and providers", link: "/guide/accounts" },
           { text: "Syncing", link: "/guide/syncing" },
+          { text: "Importing mail", link: "/guide/importing" },
           { text: "Web UI and search", link: "/guide/web-ui" },
           { text: "Users", link: "/guide/users" },
           { text: "Backups and upgrades", link: "/guide/operations" },

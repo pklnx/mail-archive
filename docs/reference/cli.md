@@ -40,13 +40,13 @@ can do the same in the web UI; see [Users](../guide/users).
 | Command | Purpose |
 |---|---|
 | `account add NAME` | Add an account. Flags: `--host` and `--username` (required), `--port`, `--tls tls\|starttls\|none` (default `tls`), `--include FOLDER`, `--exclude FOLDER` (repeatable), `--password-stdin`, `--skip-check`. The login is checked before saving unless `--skip-check` is set. |
-| `account list` | List accounts with owner, server, login, state (enabled, disabled, removed) and folder filters. |
+| `account list` | List accounts with owner, server, login, state (enabled, disabled, removed, import) and folder filters. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the folder filters with `--include` and `--exclude`. No flags: archive all folders. |
 | `account rename NAME NEW-NAME` | Rename the account; its mail moves with it. |
 | `account set-password NAME` | Replace the stored password (`--password-stdin` to read it from stdin). |
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. |
-| `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced. |
+| `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced or imported into. |
 | `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. |
 
 Account changes work while the account is being synced and apply from the
@@ -70,12 +70,37 @@ then removes folders from what is left. Names are matched case-insensitively.
 |---|---|
 | `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
-| `status` | Distinct messages per account with owner and the last sync result (`--user USER` for one user). |
+| `status` | Distinct messages per account with owner and the last sync result (`--user USER` for one user). Import accounts show `import` instead of enabled. |
+| `import NAME --from PATH --format mbox\|maildir` | Import mbox files or a Maildir into the import account `NAME`, created if needed. See below. |
 | `reindex` | Extract search text from messages archived before full-text search existed. |
 | `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API and sync schedule. Default `127.0.0.1:8080`. |
+
+### import
+
+```sh
+./ma import old-laptop --from /import/thunderbird --format mbox
+./ma import takeout --from "/import/All mail Including Spam and Trash.mbox" --format mbox --folder Gmail
+./ma import old-server --from /import/Maildir --format maildir --dry-run
+```
+
+| Flag | Default | |
+|---|---|---|
+| `--from PATH` | | A file or directory. With Docker Compose under `/import` (`./import` on the host, read-only). |
+| `--format` | | `mbox` or `maildir`. |
+| `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. |
+| `--user USER` | the only user | The owner of the import account. |
+| `--max-message-size SIZE` | `256MiB` | Larger messages are skipped; the import then exits `1` (`partial`). |
+| `--dry-run` | off | List folders and message counts, store nothing. |
+
+Running the same import again adds only what is missing. Progress goes to
+stderr after every batch, a summary per folder to stdout. Exit codes: `0`
+done, `1` messages skipped or an error. Import accounts are never synced:
+`sync --account NAME` refuses them, and `account enable`, `disable`,
+`set-password`, `set-folders` and `folders` do not apply. `rename`, `move`
+and `remove` work. See [Importing mail](../guide/importing).
 
 ### verify
 

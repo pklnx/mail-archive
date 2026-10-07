@@ -19,6 +19,7 @@ const maxPartSize = 64 << 20
 
 type statusAccount struct {
 	Name       string     `json:"name"`
+	Kind       string     `json:"kind"`
 	Enabled    bool       `json:"enabled"`
 	Folders    int        `json:"folders"`
 	Messages   int64      `json:"messages"`
@@ -37,7 +38,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	accounts := make([]statusAccount, 0, len(stats))
 	for _, st := range stats {
 		accounts = append(accounts, statusAccount{
-			Name: st.Account, Enabled: st.Enabled, Folders: st.Folders, Messages: st.Messages,
+			Name: st.Account, Kind: string(st.Kind), Enabled: st.Enabled, Folders: st.Folders, Messages: st.Messages,
 			LastRunAt: st.LastRunAt, LastStatus: st.LastStatus, LastError: st.LastRunError,
 		})
 	}

@@ -290,7 +290,10 @@ func TestBackupNote(t *testing.T) {
 	if strings.Contains(note, key) {
 		t.Fatal("the note contains the key")
 	}
-	for _, want := range []string{"mailarchive-x.dump", "2026-10-07T19:01:02Z", "/srv/archive", "MAIL_ARCHIVE_SECRET_KEY", "00010_location_folder_sha_index.sql", "pg_restore --clean --if-exists"} {
+	if !regexpMatch(`Last migration: \d{5}_\w+\.sql\n`, note) {
+		t.Errorf("note lacks the last migration:\n%s", note)
+	}
+	for _, want := range []string{"mailarchive-x.dump", "2026-10-07T19:01:02Z", "/srv/archive", "MAIL_ARCHIVE_SECRET_KEY", "pg_restore --clean --if-exists"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q:\n%s", want, note)
 		}

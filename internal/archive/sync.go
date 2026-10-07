@@ -37,6 +37,9 @@ var ErrSyncRunning = errors.New("a sync of this account is already running")
 // ErrAccountRemoved is returned when syncing an account that was removed.
 var ErrAccountRemoved = errors.New("account was removed")
 
+// ErrImportAccount is returned when syncing an import account.
+var ErrImportAccount = store.ErrImportAccount
+
 // AccountResult is the outcome of syncing one account.
 type AccountResult struct {
 	Account string
@@ -47,8 +50,8 @@ type AccountResult struct {
 }
 
 // SyncAll syncs every enabled account (or only the named ones, even if
-// disabled), of all users or, with owner set, of one user. Removed accounts
-// are skipped. A failing account does not stop the others.
+// disabled), of all users or, with owner set, of one user. Removed and
+// import accounts are skipped. A failing account does not stop the others.
 func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]AccountResult, error) {
 	accounts, err := s.Store.ListAccounts(ctx)
 	if err != nil {
@@ -56,7 +59,7 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]Ac
 	}
 	var results []AccountResult
 	for _, a := range accounts {
-		if a.RemovedAt != nil {
+		if a.RemovedAt != nil || a.Kind == store.KindImport {
 			continue
 		}
 		if owner != nil && (a.OwnerID == nil || *a.OwnerID != *owner) {
@@ -78,12 +81,17 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]Ac
 
 // SyncAccount syncs all selected folders of one account and records a run.
 // It fails with ErrSyncRunning if the account is already being synced and
-// with ErrAccountRemoved if it was removed or deleted.
+// with ErrAccountRemoved if it was removed or deleted, and with
+// ErrImportAccount for import accounts.
 func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResult {
 	log := s.logger().With("account", a.Name)
 	res := AccountResult{Account: a.Name, OwnerID: a.OwnerID}
 	if a.RemovedAt != nil {
 		res.Err = ErrAccountRemoved
+		return res
+	}
+	if a.Kind == store.KindImport {
+		res.Err = ErrImportAccount
 		return res
 	}
 	unlock, ok, err := s.Store.TryLockSyncForWrite(ctx, a.ID)
@@ -243,28 +251,8 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 		return 0, 0, s.Store.TouchFolder(ctx, folder.ID)
 	}
 
-	batchSize := s.BatchSize
-	if batchSize <= 0 {
-		batchSize = DefaultBatchSize
-	}
-	var (
-		metas  []store.MessageMeta
-		locs   []store.Location
-		maxUID uint32
-	)
-	flush := func() error {
-		if len(metas) == 0 {
-			return nil
-		}
-		n, err := s.Store.SaveBatch(ctx, folder.ID, maxUID, metas, locs)
-		if err != nil {
-			return err
-		}
-		added += n
-		metas, locs = metas[:0], locs[:0]
-		progress(fetched, added)
-		return nil
-	}
+	var w *folderWriter
+	w = newFolderWriter(s.Store, folder.ID, s.BatchSize, func(int) { progress(fetched, w.added) })
 
 	sink := func(r io.Reader) (storedBody, error) {
 		blob, created, err := s.Blobs.Put(r)
@@ -275,56 +263,23 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 			return err
 		}
 		fetched++
-		meta, err := s.metaFor(ctx, m.Body)
+		meta, err := BuildMeta(ctx, s.Store, s.Blobs, m.Body.blob, m.Body.created)
 		if err != nil {
 			return err
 		}
-		metas = append(metas, meta)
-		locs = append(locs, store.Location{
+		return w.add(ctx, meta, store.Location{
 			FolderID: folder.ID, UIDValidity: folder.UIDValidity, UID: m.UID,
 			Flags: m.Flags, InternalDate: m.InternalDate,
 		})
-		maxUID = max(maxUID, m.UID)
-		if len(metas) >= batchSize {
-			return flush()
-		}
-		return nil
 	})
+	if err == nil {
+		err = w.flush(ctx)
+	}
 	if err != nil {
-		return fetched, added, err
+		return fetched, w.added, err
 	}
-	if err := flush(); err != nil {
-		return fetched, added, err
-	}
-	log.Debug("folder synced", "fetched", fetched, "new", added)
-	return fetched, added, nil
-}
-
-// metaFor builds message metadata, parsing headers only for messages not yet
-// known to the database.
-func (s *Syncer) metaFor(ctx context.Context, b storedBody) (store.MessageMeta, error) {
-	meta := store.MessageMeta{SHA256: b.blob.SHA256, Size: b.blob.Size, StoredPath: b.blob.Path}
-	if !b.created {
-		exists, err := s.Store.MessageExists(ctx, b.blob.SHA256)
-		if err != nil {
-			return meta, err
-		}
-		if exists {
-			return meta, nil // metadata is already stored; ON CONFLICT ignores this row
-		}
-	}
-	f, err := s.Blobs.Open(b.blob.Path)
-	if err != nil {
-		return meta, err
-	}
-	defer func() { _ = f.Close() }()
-	h := ParseHeaders(f)
-	meta.MessageID, meta.Subject, meta.From, meta.SentAt = h.MessageID, h.Subject, h.From, h.Date
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return meta, err
-	}
-	meta.BodyText = mime.IndexText(f)
-	return meta, nil
+	log.Debug("folder synced", "fetched", fetched, "new", w.added)
+	return fetched, w.added, nil
 }
 
 // Reindex extracts body text for messages archived before full-text search

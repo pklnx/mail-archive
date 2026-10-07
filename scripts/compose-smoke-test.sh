@@ -50,13 +50,16 @@ trap cleanup EXIT
 # Test IMAP server, run as a container on the Compose network.
 CGO_ENABLED=0 go build -o "$work/imap-testserver" ./tools/imap-testserver
 
-mkdir -p "$work/data"
+mkdir -p "$work/data" "$work/import"
+cp -R internal/archive/testdata/import/thunderbird "$work/import/"
+chmod -R a+rX "$work/import"
 # The app container runs as UID 65532; on Docker Desktop this is a no-op.
 chmod 0777 "$work/data"
 cat > .env <<ENV
 POSTGRES_PASSWORD=smoke-test
 MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
 ARCHIVE_DIR=$work/data
+IMPORT_DIR=$work/import
 POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-0}
 WEB_PORT=${SMOKE_WEB_PORT:-0}
 MAIL_ARCHIVE_PUBLIC_URL=http://localhost
@@ -140,13 +143,19 @@ if [ "$count" -ne 3 ]; then
 	exit 1
 fi
 
+echo "== import"
+./ma import old --from /import/thunderbird --format mbox | tee "$work/out"
+expect "$work/out" "ok: read 4, added 4 \(4 new to the archive\)"
+./ma import old --from /import/thunderbird --format mbox > "$work/out"
+expect "$work/out" "4 already there"
+
 echo "== verify"
 ./ma verify | tee "$work/out"
-expect "$work/out" 'checked 3 message\(s\): no problems'
+expect "$work/out" 'checked 7 message\(s\): no problems'
 
 echo "== export"
 ./ma export --user smoke --format mbox --out /data/export/smoke | tee "$work/out"
-expect "$work/out" "exported 3 message\(s\)"
+expect "$work/out" "exported 7 message\(s\)"
 in_data 'test -s /data/export/smoke/test/INBOX.mbox && head -c 5 /data/export/smoke/test/INBOX.mbox' > "$work/out"
 expect "$work/out" '^From '
 # Exports are not taken for orphans.
