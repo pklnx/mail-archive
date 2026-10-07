@@ -101,6 +101,8 @@ export interface Location {
   uid: number;
   flags: string[];
   internalDate: string | null;
+  /** From before the folder's UIDVALIDITY changed: the server renumbered the folder. */
+  superseded: boolean;
 }
 
 export interface MessageDetail extends MessageSummary {

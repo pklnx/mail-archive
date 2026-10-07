@@ -851,7 +851,7 @@ func newStatusCmd() *cobra.Command {
 				if s.LastStatus != nil {
 					status = *s.LastStatus
 				}
-				fmt.Fprintf(w, "%s\t%s\t%v\t%d\t%d\t%s\t%s\n", s.Account, ownerName(names, s.OwnerID), s.Enabled, s.Folders, s.Locations, last, status)
+				fmt.Fprintf(w, "%s\t%s\t%v\t%d\t%d\t%s\t%s\n", s.Account, ownerName(names, s.OwnerID), s.Enabled, s.Folders, s.Messages, last, status)
 			}
 			if err := w.Flush(); err != nil {
 				return err

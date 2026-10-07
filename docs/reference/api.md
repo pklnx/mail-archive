@@ -85,7 +85,7 @@ without it these endpoints answer `503` and `GET /api/accounts` reports
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags). |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
 | `GET /api/messages/{id}/parts/{n}` | One attachment. PNG, JPEG, GIF and WebP are shown inline; everything else is a download. |

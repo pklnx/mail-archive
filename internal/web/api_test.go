@@ -140,6 +140,10 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Like a first sync: the folder's UIDVALIDITY is set before its messages.
+		if err := st.ResetFolder(ctx, folder.ID, 1); err != nil {
+			t.Fatal(err)
+		}
 		var metas []store.MessageMeta
 		var locs []store.Location
 		for i, name := range l.msgs {
@@ -298,7 +302,8 @@ func TestMessageDetail(t *testing.T) {
 	f := newAPIFixture(t)
 	var m messageJSON
 	f.getJSON("/api/messages/"+f.ids["invoice"], 200, &m)
-	if len(m.Locations) != 2 || m.Locations[0].Account != "alice" || m.Locations[1].Account != "bob" {
+	if len(m.Locations) != 2 || m.Locations[0].Account != "alice" || m.Locations[1].Account != "bob" ||
+		m.Locations[0].Superseded || m.Locations[1].Superseded {
 		t.Errorf("locations = %+v", m.Locations)
 	}
 	if !strings.Contains(m.Text, "Ihre Rechnung liegt bei") || m.HasHTML || m.MessageID != "invoice@x" {

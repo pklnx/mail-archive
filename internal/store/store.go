@@ -470,11 +470,13 @@ func (s *Store) LastRuns(ctx context.Context) (map[int64]LastRun, error) {
 
 // AccountStats summarizes the archive for one account.
 type AccountStats struct {
-	Account      string
-	OwnerID      *int64
-	Enabled      bool
-	Folders      int
-	Locations    int64
+	Account string
+	OwnerID *int64
+	Enabled bool
+	Folders int
+	// Messages counts distinct messages; one found in two folders of the
+	// account counts once.
+	Messages     int64
 	LastRunAt    *time.Time
 	LastStatus   *string
 	LastRunError *string
@@ -493,7 +495,7 @@ func (s *Store) Stats(ctx context.Context, owner *int64) ([]AccountStats, int64,
 	}
 	out := make([]AccountStats, 0, len(rows))
 	for _, r := range rows {
-		st := AccountStats{Account: r.Name, OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Locations: r.Locations}
+		st := AccountStats{Account: r.Name, OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Messages: r.Messages}
 		if run, ok := lastRun[r.ID]; ok {
 			st.LastRunAt, st.LastStatus = &run.StartedAt, &run.Status
 			if run.Error != "" {

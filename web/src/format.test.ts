@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fileSize, formatInterval, relativeTime, senderName, shortDate, splitHighlights } from "./format";
+import { fileSize, formatInterval, locationLabel, relativeTime, senderName, shortDate, splitHighlights } from "./format";
+import { t } from "./i18n";
 
 describe("splitHighlights", () => {
   it("splits on the server's markers", () => {
@@ -57,5 +58,12 @@ describe("relativeTime and formatInterval", () => {
     expect(formatInterval("6h0m0s")).toBe("6 hours");
     expect(formatInterval("1h30m0s")).toBe("1 hour 30 minutes");
     expect(formatInterval("5m0s")).toBe("5 minutes");
+  });
+});
+
+describe("locationLabel", () => {
+  it("marks locations from before a renumbering", () => {
+    expect(locationLabel({ account: "work", folder: "INBOX", superseded: false })).toBe("work / INBOX");
+    expect(locationLabel({ account: "work", folder: "INBOX", superseded: true })).toBe(`work / INBOX (${t.renumbered})`);
   });
 });

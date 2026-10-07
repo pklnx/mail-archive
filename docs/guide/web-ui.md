@@ -10,13 +10,16 @@ and **Log out** are at the bottom of the sidebar. Admins also find
 ## Layout
 
 - **Sidebar:** all mail, then each account with its folders and message
-  counts. A spinner marks accounts that are syncing; removed accounts are
+  counts. A count is the number of distinct messages in the folder, as in
+  its list. A spinner marks accounts that are syncing; removed accounts are
   marked as such. **Manage accounts** at the bottom opens the
   [account page](./accounts).
 - **Message list:** newest first, with search at the top. More messages load
   as you scroll.
 - **Message:** headers, where the message was found (every account and
-  folder), attachments and the body.
+  folder), attachments and the body. A place marked *renumbered* is from
+  before the server renumbered that folder; the message is listed there
+  again under its new number if it is still on the server.
 
 Everything you select is part of the URL, so the back button, reloads and
 bookmarks work. On a phone the columns become separate screens.
