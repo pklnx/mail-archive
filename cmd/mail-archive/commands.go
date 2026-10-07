@@ -713,7 +713,7 @@ the archive. Run this periodically (cron, systemd timer).`,
 				return fmt.Errorf("no account matches %v", only)
 			}
 			if failed > 0 {
-				return &exitError{fmt.Sprintf("%d account(s) failed", failed)}
+				return &exitError{msg: fmt.Sprintf("%d account(s) failed", failed)}
 			}
 			return nil
 		},

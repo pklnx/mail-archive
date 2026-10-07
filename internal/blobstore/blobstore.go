@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Store is a content-addressed file store rooted at a directory.
@@ -102,4 +103,123 @@ func (s *Store) Exists(hash string) bool {
 
 func (s *Store) abs(relPath string) string {
 	return filepath.Join(s.root, filepath.FromSlash(relPath))
+}
+
+// Root returns the directory the store lives in.
+func (s *Store) Root() string { return s.root }
+
+// EntryKind classifies a file found by Walk.
+type EntryKind int
+
+const (
+	// EntryBlob is a file named like a blob, in its directory.
+	EntryBlob EntryKind = iota
+	// EntryTemp is a regular file in tmp/, left by an unfinished Put.
+	EntryTemp
+	// EntryUnexpected is anything else: symlinks, other file types, wrong
+	// names or depths. Walk does not descend into unexpected directories.
+	EntryUnexpected
+)
+
+// Entry is a file or directory found by Walk.
+type Entry struct {
+	Kind   EntryKind
+	Path   string // relative to the store root, slash separated
+	SHA256 string // for EntryBlob
+	Size   int64  // for regular files
+	Reason string // for EntryUnexpected
+}
+
+// Walk calls fn for every entry below messages/ and tmp/. Symlinks are
+// reported, never followed.
+func (s *Store) Walk(fn func(Entry) error) error {
+	if err := s.walkMessages(fn); err != nil {
+		return err
+	}
+	return s.walkTemp(fn)
+}
+
+func (s *Store) walkMessages(fn func(Entry) error) error {
+	base := filepath.Join(s.root, "messages")
+	return filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == base {
+			return nil
+		}
+		rel, err := filepath.Rel(s.root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		parts := strings.Split(rel, "/") // messages, ab, cd, <hash>.eml
+		unexpected := func(reason string) error {
+			if err := fn(Entry{Kind: EntryUnexpected, Path: rel, Reason: reason}); err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return unexpected("symlink")
+		}
+		depth := len(parts) - 1
+		if d.IsDir() {
+			if depth > 2 || !isHex(parts[depth], 2) {
+				return unexpected("unexpected directory")
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return unexpected("not a regular file")
+		}
+		hash, ok := strings.CutSuffix(parts[depth], ".eml")
+		if depth != 3 || !ok || !isHex(hash, 64) || hash[0:2] != parts[1] || hash[2:4] != parts[2] {
+			return unexpected("unexpected file name or place")
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return fn(Entry{Kind: EntryBlob, Path: rel, SHA256: hash, Size: info.Size()})
+	})
+}
+
+func (s *Store) walkTemp(fn func(Entry) error) error {
+	entries, err := os.ReadDir(filepath.Join(s.root, "tmp"))
+	if err != nil {
+		return err
+	}
+	for _, d := range entries {
+		e := Entry{Kind: EntryTemp, Path: "tmp/" + d.Name()}
+		if !d.Type().IsRegular() {
+			e.Kind, e.Reason = EntryUnexpected, "not a regular file"
+		} else if info, err := d.Info(); err != nil {
+			return err
+		} else {
+			e.Size = info.Size()
+		}
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// IsHash reports whether s is a lowercase hex SHA-256.
+func IsHash(s string) bool { return isHex(s, 64) }
+
+func isHex(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	for _, c := range []byte(s) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

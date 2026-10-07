@@ -35,21 +35,36 @@ func main() {
 		newSyncCmd(),
 		newStatusCmd(),
 		newReindexCmd(),
+		newVerifyCmd(),
+		newExportCmd(),
+		newBackupCmd(),
 		newServeCmd(),
 	)
 	if err := root.ExecuteContext(ctx); err != nil {
 		var exitErr *exitError
 		if !errors.As(err, &exitErr) {
 			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
 		}
-		os.Exit(1)
+		os.Exit(exitErr.exitCode())
 	}
 }
 
-// exitError signals a failure that was already reported to the user.
-type exitError struct{ msg string }
+// exitError signals a failure that was already reported to the user. The
+// process exits with code, or 1 when it is 0.
+type exitError struct {
+	msg  string
+	code int
+}
 
 func (e *exitError) Error() string { return e.msg }
+
+func (e *exitError) exitCode() int {
+	if e.code == 0 {
+		return 1
+	}
+	return e.code
+}
 
 func newLogger(level string) *slog.Logger {
 	var l slog.Level

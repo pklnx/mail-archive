@@ -72,4 +72,55 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `status` | Distinct messages per account with owner and the last sync result (`--user USER` for one user). |
 | `reindex` | Extract search text from messages archived before full-text search existed. |
+| `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
+| `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
+| `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API and sync schedule. Default `127.0.0.1:8080`. |
+
+### verify
+
+`verify` reads every archived message from disk and hashes it again, then
+checks every file in the data directory's `messages/` and `tmp/` against the
+database. It changes no database row and no archived file.
+
+| Finding | Meaning |
+|---|---|
+| `missing` | The database has the message, the file is gone. Listed with user, account, folder and UID. |
+| `corrupt` | The file's content or size no longer matches its SHA-256. Listed like `missing`. |
+| `bad-path` | The database points to a different path than the hash gives. |
+| `orphan` | A message file without a database row, for example after an interrupted sync or a restore from an older dump. |
+| `stale-temp` | A file in `tmp/` left by an interrupted sync. |
+| `unexpected` | Anything else in `messages/` or `tmp/`: symlinks, other names. Never moved. |
+| `io-error` | A file that could not be read. |
+
+| Flag | Default | |
+|---|---|---|
+| `--jobs N` | 4 | Files hashed in parallel, 1 to 16. |
+| `--lock-timeout D` | `1m` | The orphan check waits this long while a sync writes files, then is skipped. |
+| `--fix-orphans` | off | Move orphans and `stale-temp` files to `orphans/<UTC time>/` in the data directory. Delete that directory yourself once you are sure. |
+
+Exit codes: `0` nothing found, `1` findings, `2` the check is incomplete
+(orphan check skipped, unreadable files, no database connection, wrong
+flags). Progress goes to stderr every 10,000 messages.
+
+### export
+
+```sh
+./ma export --user anna --format mbox --out /data/export/anna
+./ma export --account private --folder INBOX --format maildir --out /data/export/inbox
+```
+
+Writes one mbox file (`DIR/<account>/<folder>.mbox`, mboxrd) or one Maildir
+(`DIR/<account>/<folder>/{cur,new,tmp}`) per folder. Each message is written
+once per folder, byte for byte; the mbox adds a final newline where one is
+missing. Removed accounts are included, mail synced during the export is not.
+`DIR` must not exist; it appears when the export is complete. Characters that
+cannot be part of a file name (`/`, `\`, `%`, control characters, a leading
+`.`) are written as `%XX`.
+
+One export never mixes users: give `--user`, or `--account` (with `--user`
+when several users have an account with that name). With Docker Compose,
+`DIR` must be under `/data`, which is `./data` on the host. Exits `1` if
+messages were skipped because their file is missing or corrupt (run `verify`).
+See [Exporting mail](../guide/operations#exporting-mail).
+
