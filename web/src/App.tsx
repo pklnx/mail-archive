@@ -4,6 +4,8 @@ import { ProfilePage } from "./Profile";
 import { UsersPage } from "./UsersPage";
 import { MessageList } from "./MessageList";
 import { MessageView } from "./MessageView";
+import { SearchFilters } from "./SearchFilters";
+import { hasPrefix, searchFilter } from "./searchSyntax";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
 import { useAccounts } from "./useAccounts";
@@ -20,7 +22,15 @@ export function App({ user, logout }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   const [menuOpen, setMenuOpen] = useState(false);
+  // On small screens the filter row is folded away until needed.
+  const prefixed = hasPrefix(query);
+  const [filtersOpen, setFiltersOpen] = useState(prefixed);
   const accounts = useAccounts();
+
+  // A typed prefix (or one from the URL) shows the filters it set.
+  useEffect(() => {
+    if (prefixed) setFiltersOpen(true);
+  }, [prefixed]);
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -34,7 +44,7 @@ export function App({ user, logout }: Props) {
     return () => window.clearTimeout(t);
   }, [typed, state.q, update]);
 
-  const filter = { q: state.q.trim(), account: state.account, folder: state.folder };
+  const filter = { ...searchFilter(state.q), account: state.account, folder: state.folder };
   const reading = state.m !== "";
 
   return (
@@ -100,7 +110,25 @@ export function App({ user, logout }: Props) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+            <button
+              type="button"
+              aria-label={t.filters}
+              title={t.filters}
+              aria-expanded={filtersOpen}
+              aria-controls="search-filters"
+              className={`shrink-0 rounded-md p-1.5 hover:bg-zinc-200 dark:hover:bg-zinc-800 md:hidden ${
+                prefixed ? "text-blue-600 dark:text-blue-400" : "text-zinc-500 dark:text-zinc-400"
+              }`}
+              onClick={() => setFiltersOpen((o) => !o)}
+            >
+              <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" />
+              </svg>
+            </button>
             <ThemeToggle />
+          </div>
+          <div id="search-filters" className={filtersOpen ? "" : "hidden md:block"}>
+            <SearchFilters query={query} setQuery={setQuery} />
           </div>
           <div className="min-h-0 flex-1">
             <MessageList

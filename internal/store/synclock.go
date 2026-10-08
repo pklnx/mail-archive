@@ -15,6 +15,10 @@ const syncLockClass = 0x6d61
 // hold it shared, verify holds it exclusive while it looks for orphans.
 const blobLockClass = 0x6d62
 
+// reindexLockClass is the first key of the advisory lock that lets only one
+// reindex run at a time ("mc" in ASCII); the second key is always 0.
+const reindexLockClass = 0x6d63
+
 // TryLockSync takes the sync lock of an account, so that the CLI, the web
 // server and the schedule never sync the same account at the same time. It
 // returns false if another session holds the lock. The lock is held on a
@@ -78,11 +82,22 @@ func (s *Store) tryLockSync(ctx context.Context, accountID int64, blobs bool) (u
 // returns false while a sync or import writes blobs. Until unlock is
 // called, new writers wait.
 func (s *Store) TryLockBlobs(ctx context.Context) (unlock func(), ok bool, err error) {
+	return s.tryLockClass(ctx, blobLockClass)
+}
+
+// TryLockReindex takes the reindex lock. It returns false if another
+// session runs a reindex.
+func (s *Store) TryLockReindex(ctx context.Context) (unlock func(), ok bool, err error) {
+	return s.tryLockClass(ctx, reindexLockClass)
+}
+
+// tryLockClass takes the session lock (class, 0) on a dedicated connection.
+func (s *Store) tryLockClass(ctx context.Context, class int32) (unlock func(), ok bool, err error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return nil, false, err
 	}
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, 0)", blobLockClass).Scan(&ok); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, 0)", class).Scan(&ok); err != nil {
 		conn.Release()
 		return nil, false, err
 	}
@@ -92,7 +107,7 @@ func (s *Store) TryLockBlobs(ctx context.Context) (unlock func(), ok bool, err e
 	}
 	return func() {
 		bg := context.WithoutCancel(ctx)
-		if _, err := conn.Exec(bg, "SELECT pg_advisory_unlock($1, 0)", blobLockClass); err != nil {
+		if _, err := conn.Exec(bg, "SELECT pg_advisory_unlock($1, 0)", class); err != nil {
 			_ = conn.Conn().Close(bg)
 		}
 		conn.Release()

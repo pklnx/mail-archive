@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, folderQuestion, listAccounts, passkeyApi, profileApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
 
 describe("folderQuestion", () => {
   it("returns the folders the server asks about", () => {
@@ -135,5 +135,27 @@ describe("two-factor", () => {
   it("returns the challenge of a password login with 2FA", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ twoFactorRequired: true, challenge: "abc" }), { status: 200 }));
     expect(await sessionApi.login("alice", "pw")).toEqual({ twoFactorRequired: true, challenge: "abc" });
+  });
+});
+
+describe("listMessages", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends the search filters", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ messages: [], nextCursor: null }), { headers: { "Content-Type": "application/json" } }),
+    );
+    await listMessages(
+      { q: "steuer", to: "Finanzamt Köln", from: "", hasAttachment: true, after: "2024-01-01T00:00:00+01:00" },
+      null,
+    );
+    const url = new URL(String(fetch.mock.calls[0]?.[0]), "http://x");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      q: "steuer",
+      to: "Finanzamt Köln",
+      has: "attachment",
+      after: "2024-01-01T00:00:00+01:00",
+      limit: "50",
+    });
   });
 });

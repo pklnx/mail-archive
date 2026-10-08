@@ -72,7 +72,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `status` | Distinct messages per account with owner and the last sync result (`--user USER` for one user). Import accounts show `import` instead of enabled. |
 | `import NAME --from PATH --format mbox\|maildir` | Import mbox files or a Maildir into the import account `NAME`, created if needed. See below. |
-| `reindex` | Extract search text from messages archived before full-text search existed. |
+| `reindex` | Extract body text, To and Cc recipients and attachment names from messages archived by an older version, so search and its filters find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Safe to interrupt and rerun, and to run alongside the web server and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |

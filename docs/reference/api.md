@@ -96,16 +96,28 @@ Query parameters of `GET /api/messages`:
 
 | Parameter | Description |
 |---|---|
-| `q` | Search query; see [Search](../guide/web-ui#search). |
+| `q` | Full-text query over subject, sender and body; see [Search](../guide/web-ui#search). Prefixes such as `to:` are parsed by the web UI, not here. |
 | `account`, `folder` | Only messages found in this account or folder. |
-| `after`, `before` | Date range, `YYYY-MM-DD` (UTC). |
+| `from` | Part of the sender's name or address, in any case. |
+| `to` | Part of a name or address in To or Cc, in any case. Bcc is not stored. |
+| `attachment` | Part of an attachment's file name, in any case. Implies `has=attachment`. |
+| `has` | Only `attachment`: messages with at least one attachment. |
+| `after`, `before` | Date range. `after` is inclusive, `before` exclusive. `YYYY-MM-DD` means midnight UTC; RFC 3339 with an offset (`2024-01-01T00:00:00+01:00`) sets another midnight. |
 | `limit` | Page size, 1 to 200, default 50. |
 | `cursor` | The `nextCursor` of the previous page. |
 
+`from`, `to` and `attachment` take at most 200 characters each. All filters
+combine. `400` for a longer value, a `has` other than `attachment`, an
+invalid date, or `after` later than `before`.
+
 The response is `{"messages": [...], "nextCursor": "..." | null}`. Each
-message has `id`, `size`, `subject`, `from`, `sentAt`, `sortAt` and, for
-searches, a `snippet` in which matches are marked with U+E000 (start) and
-U+E001 (end).
+message has `id`, `size`, `subject`, `from`, `sentAt`, `sortAt`,
+`hasAttachment` and, for searches, a `snippet` in which matches are marked
+with U+E000 (start) and U+E001 (end).
+
+Recipients, attachment names and `hasAttachment` of messages archived before
+they were recorded are empty until `reindex` has run; see
+[Upgrades](../guide/operations#one-time-steps).
 
 ## Accounts
 

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pklnx/mail-archive/internal/mime"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -53,16 +54,41 @@ type summaryJSON struct {
 	SentAt  *time.Time `json:"sentAt"`
 	SortAt  time.Time  `json:"sortAt"`
 	// Snippet marks query matches with U+E000 (start) and U+E001 (end).
-	Snippet string `json:"snippet,omitempty"`
+	Snippet       string `json:"snippet,omitempty"`
+	HasAttachment bool   `json:"hasAttachment"`
 }
 
 func toSummary(m store.MessageSummary) summaryJSON {
-	return summaryJSON{ID: m.SHA256, Size: m.Size, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt, Snippet: m.Snippet}
+	return summaryJSON{
+		ID: m.SHA256, Size: m.Size, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt,
+		Snippet: m.Snippet, HasAttachment: m.HasAttachment,
+	}
 }
+
+// maxFilterLen is the maximum length in characters of the from, to and
+// attachment filters.
+const maxFilterLen = 200
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := store.SearchFilter{Owner: userID(r), Query: q.Get("q"), Account: q.Get("account"), Folder: q.Get("folder")}
+	f := store.SearchFilter{
+		Owner: userID(r), Query: q.Get("q"), Account: q.Get("account"), Folder: q.Get("folder"),
+		From: q.Get("from"), To: q.Get("to"), Attachment: q.Get("attachment"),
+	}
+	for _, name := range []string{"from", "to", "attachment"} {
+		if utf8.RuneCountInString(q.Get(name)) > maxFilterLen {
+			s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("%s must be at most %d characters", name, maxFilterLen), nil)
+			return
+		}
+	}
+	switch q.Get("has") {
+	case "":
+	case "attachment":
+		f.HasAttachment = true
+	default:
+		s.fail(w, r, http.StatusBadRequest, `has must be "attachment"`, nil)
+		return
+	}
 	var err error
 	if f.After, err = parseDate(q.Get("after")); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
@@ -70,6 +96,10 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.Before, err = parseDate(q.Get("before")); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if f.After != nil && f.Before != nil && f.After.After(*f.Before) {
+		s.fail(w, r, http.StatusBadRequest, "after must not be later than before", nil)
 		return
 	}
 	if f.Limit, err = parseLimit(q.Get("limit"), 50, 200); err != nil {

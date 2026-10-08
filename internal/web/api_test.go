@@ -17,7 +17,6 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobstore"
-	"github.com/pklnx/mail-archive/internal/mime"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
@@ -36,6 +35,8 @@ func crlf(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
 var (
 	msgInvoice = crlf(`Message-ID: <invoice@x>
 From: Stadtwerke <rechnung@stadtwerke.example>
+To: Kunde <kunde@example.com>
+Cc: =?UTF-8?Q?Buchhaltung_M=C3=BCller?= <buchhaltung@example.com>
 Subject: =?UTF-8?Q?Rechnung_f=C3=BCr_Oktober?=
 Date: Mon, 5 Oct 2026 10:00:00 +0000
 Content-Type: text/plain; charset=utf-8
@@ -152,12 +153,11 @@ func newAPIFixture(t *testing.T) *apiFixture {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h := archive.ParseHeaders(strings.NewReader(raw))
-			metas = append(metas, store.MessageMeta{
-				SHA256: blob.SHA256, Size: blob.Size, StoredPath: blob.Path,
-				MessageID: h.MessageID, Subject: h.Subject, From: h.From, SentAt: h.Date,
-				BodyText: mime.IndexText(strings.NewReader(raw)),
-			})
+			meta, err := archive.BuildMeta(ctx, st, blobs, blob, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			metas = append(metas, meta)
 			locs = append(locs, store.Location{FolderID: folder.ID, UIDValidity: 1, UID: uint32(i + 1), Flags: []string{`\Seen`}})
 			f.ids[name] = blob.SHA256
 		}
@@ -242,6 +242,19 @@ func TestListAndSearch(t *testing.T) {
 		{"account=bob&folder=Archive", []string{"newsletter"}},
 		{"account=nobody", []string{}},
 		{"after=2026-10-06&before=2026-10-08", []string{"newsletter", "meeting"}},
+		{"after=2026-10-06T00:00:00%2B02:00&before=2026-10-07T00:00:00%2B02:00", []string{"meeting"}}, // local midnight
+		{"to=" + url.QueryEscape("Buchhaltung Müller"), []string{"invoice"}},                          // Cc
+		{"to=KUNDE@example", []string{"invoice"}},
+		{"to=alice@", []string{"rich"}},
+		{"q=alice", []string{"meeting"}}, // free text finds the sender, not the recipient
+		{"from=stadtwerke", []string{"invoice"}},
+		{"from=alice&to=alice", []string{}},
+		{"attachment=vertrag", []string{"rich"}},
+		{"attachment=logo", []string{}}, // inline image referenced by cid:
+		{"q=Vertrag.pdf", []string{}},   // attachment names only through attachment=
+		{"has=attachment", []string{"rich"}},
+		{"has=attachment&account=bob", []string{}},
+		{"to=" + url.QueryEscape("%"), []string{}},
 	}
 	for _, c := range cases {
 		if got := f.list(c.query); !equal(got, c.want) {
@@ -256,6 +269,13 @@ func TestListAndSearch(t *testing.T) {
 	}
 	if r.Messages[0].Subject != "Rechnung für Oktober" {
 		t.Errorf("subject = %q", r.Messages[0].Subject)
+	}
+
+	f.getJSON("/api/messages", 200, &r)
+	for _, m := range r.Messages {
+		if m.HasAttachment != (f.name(m.ID) == "rich") {
+			t.Errorf("%s: hasAttachment = %v", f.name(m.ID), m.HasAttachment)
+		}
 	}
 }
 
@@ -282,15 +302,22 @@ func TestPagination(t *testing.T) {
 func TestBadRequests(t *testing.T) {
 	f := newAPIFixture(t)
 	for path, want := range map[string]int{
-		"/api/messages?limit=0":                       400,
-		"/api/messages?limit=1000":                    400,
-		"/api/messages?after=yesterday":               400,
-		"/api/messages?cursor=garbage":                400,
-		"/api/messages/not-a-sha":                     400,
-		"/api/messages/" + strings.Repeat("0", 64):    404,
-		"/api/messages/" + f.ids["rich"] + "/parts/x": 400,
-		"/api/messages/" + f.ids["rich"] + "/parts/9": 404,
-		"/api/messages/" + f.ids["invoice"] + "/html": 404, // plain text only
+		"/api/messages?limit=0":                                         400,
+		"/api/messages?limit=1000":                                      400,
+		"/api/messages?after=yesterday":                                 400,
+		"/api/messages?after=2026-10-08&before=2026-10-07":              400,
+		"/api/messages?after=2026-10-07&before=2026-10-07":              200, // empty range
+		"/api/messages?has=pdf":                                         400,
+		"/api/messages?to=" + strings.Repeat("a", 201):                  400,
+		"/api/messages?from=" + strings.Repeat("a", 201):                400,
+		"/api/messages?attachment=" + strings.Repeat("a", 201):          400,
+		"/api/messages?to=" + url.QueryEscape(strings.Repeat("ä", 200)): 200, // characters, not bytes
+		"/api/messages?cursor=garbage":                                  400,
+		"/api/messages/not-a-sha":                                       400,
+		"/api/messages/" + strings.Repeat("0", 64):                      404,
+		"/api/messages/" + f.ids["rich"] + "/parts/x":                   400,
+		"/api/messages/" + f.ids["rich"] + "/parts/9":                   404,
+		"/api/messages/" + f.ids["invoice"] + "/html":                   404, // plain text only
 	} {
 		if resp := f.get(path); resp.StatusCode != want {
 			t.Errorf("GET %s: status %d, want %d", path, resp.StatusCode, want)
