@@ -127,7 +127,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 
 const listUnindexed = `-- name: ListUnindexed :many
 SELECT sha256, stored_path FROM messages
-WHERE index_version < $1 AND sha256 > $2::text
+WHERE index_version < $1 AND sha256 > $2::bpchar
 ORDER BY sha256
 LIMIT $3
 `
@@ -144,7 +144,8 @@ type ListUnindexedRow struct {
 }
 
 // Messages extracted by an older version, in primary key order after the
-// last one seen, so a full pass reads the table once.
+// last one seen, so a full pass reads the table once. The bpchar cast lets
+// the primary key index seek to the start of each batch.
 func (q *Queries) ListUnindexed(ctx context.Context, arg ListUnindexedParams) ([]ListUnindexedRow, error) {
 	rows, err := q.db.Query(ctx, listUnindexed, arg.IndexVersion, arg.After, arg.RowLimit)
 	if err != nil {

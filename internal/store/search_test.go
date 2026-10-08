@@ -212,8 +212,8 @@ func (e *explainer) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 
 func (e *explainer) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
 
-// The filters use their indexes on an archive of 50,000 messages, a quarter
-// of them with attachments. The plans
+// The filters and reindex use their indexes on an archive of 50,000
+// messages, a quarter of them with attachments. The plans
 // are those of the generated query with the given parameters.
 func TestSearchFilterPlans(t *testing.T) {
 	_, url := storetest.NewWithURL(t)
@@ -258,6 +258,18 @@ ANALYZE;`
 		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx"},
 		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx"},
 	}
+	explain := func(t *testing.T, rec *explainer) string {
+		t.Helper()
+		rows, err := conn.Query(ctx, "EXPLAIN "+rec.sql, rec.args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(lines, "\n")
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			c.p.Owner, c.p.RowLimit = owner, 51
@@ -265,18 +277,26 @@ ANALYZE;`
 			if _, err := db.New(&rec).SearchMessages(ctx, c.p); !errors.Is(err, errRecorded) {
 				t.Fatalf("record: %v", err)
 			}
-			rows, err := conn.Query(ctx, "EXPLAIN "+rec.sql, rec.args...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
-			if err != nil {
-				t.Fatal(err)
-			}
-			plan := strings.Join(lines, "\n")
-			if !strings.Contains(plan, c.index) {
+			if plan := explain(t, &rec); !strings.Contains(plan, c.index) {
 				t.Errorf("plan does not use %s:\n%s", c.index, plan)
 			}
 		})
 	}
+
+	// Each reindex batch seeks to its start in the primary key instead of
+	// reading from the first row again. Right after the upgrade, every row
+	// is pending.
+	t.Run("reindex batch", func(t *testing.T) {
+		if _, err := conn.Exec(ctx, `UPDATE messages SET index_version = 0; ANALYZE messages`); err != nil {
+			t.Fatal(err)
+		}
+		var rec explainer
+		p := db.ListUnindexedParams{IndexVersion: store.IndexVersion, After: strings.Repeat("8", 64), RowLimit: 200}
+		if _, err := db.New(&rec).ListUnindexed(ctx, p); !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		if plan := explain(t, &rec); !strings.Contains(plan, "Index Cond: (sha256 >") {
+			t.Errorf("plan does not seek in the primary key:\n%s", plan)
+		}
+	})
 }

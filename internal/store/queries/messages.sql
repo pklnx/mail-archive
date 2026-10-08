@@ -12,9 +12,10 @@ ON CONFLICT (sha256) DO NOTHING;
 
 -- name: ListUnindexed :many
 -- Messages extracted by an older version, in primary key order after the
--- last one seen, so a full pass reads the table once.
+-- last one seen, so a full pass reads the table once. The bpchar cast lets
+-- the primary key index seek to the start of each batch.
 SELECT sha256, stored_path FROM messages
-WHERE index_version < @index_version AND sha256 > @after::text
+WHERE index_version < @index_version AND sha256 > @after::bpchar
 ORDER BY sha256
 LIMIT @row_limit;
 

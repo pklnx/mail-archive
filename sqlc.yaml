@@ -19,3 +19,7 @@ sql:
             go_type:
               type: time.Time
               pointer: true
+          # A bare ::bpchar cast (to compare with CHAR(64) hashes through
+          # their index) is a string like the columns themselves.
+          - db_type: bpchar
+            go_type: string
