@@ -80,6 +80,7 @@ export interface MessageSummary {
   sortAt: string;
   /** Matches are marked with U+E000 (start) and U+E001 (end). */
   snippet?: string;
+  hasAttachment: boolean;
 }
 
 export interface MessagePage {
@@ -123,6 +124,14 @@ export interface Filter {
   q?: string;
   account?: string;
   folder?: string;
+  /** Substrings of the sender, a To or Cc recipient, an attachment name. */
+  from?: string;
+  to?: string;
+  attachment?: string;
+  hasAttachment?: boolean;
+  /** RFC 3339; after is inclusive, before exclusive. */
+  after?: string;
+  before?: string;
 }
 
 export class ApiError extends Error {
@@ -202,6 +211,12 @@ export function listMessages(filter: Filter, cursor: string | null, signal?: Abo
   if (filter.q) p.set("q", filter.q);
   if (filter.account) p.set("account", filter.account);
   if (filter.folder) p.set("folder", filter.folder);
+  if (filter.from) p.set("from", filter.from);
+  if (filter.to) p.set("to", filter.to);
+  if (filter.attachment) p.set("attachment", filter.attachment);
+  if (filter.hasAttachment) p.set("has", "attachment");
+  if (filter.after) p.set("after", filter.after);
+  if (filter.before) p.set("before", filter.before);
   if (cursor) p.set("cursor", cursor);
   p.set("limit", "50");
   return getJSON(`/api/messages?${p}`, signal);

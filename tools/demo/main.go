@@ -312,6 +312,32 @@ Content-Transfer-Encoding: base64
 			"Your parcel 00340434 will be delivered today between 10 am and 2 pm.")},
 		{"personal", "Sent", plain(alex, "Dr. Jordan Lee <office@taxadvisor.example>", "Re: Tax appointment", ago(2, 0),
 			"Hello Dr. Lee,\n\nOctober 14 at 10 am works for me.\n\nBest regards\nAlex Morgan")},
+		// Apple Mail sends PDFs as named inline parts; they count as attachments.
+		{"personal", "Sent", crlf(`From: ` + alex + `
+To: Dr. Jordan Lee <office@taxadvisor.example>
+Cc: Robin Morgan <robin@example.com>
+Subject: Documents for the tax return
+Date: ` + ago(1, 0).Format(time.RFC1123Z) + `
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="apple"
+
+--apple
+Content-Type: text/plain; charset=utf-8
+
+Hello Dr. Lee,
+
+attached are the receipts for our tax return. Robin has the bank statements.
+
+Best regards
+Alex Morgan
+--apple
+Content-Type: application/pdf; name="Receipts 2025.pdf"
+Content-Disposition: inline; filename="Receipts 2025.pdf"
+Content-Transfer-Encoding: base64
+
+` + base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\n% demo\n")) + `
+--apple--
+`)},
 		{"personal", "Archive", plain("Home Insurance <service@insurance.example>", alex, "Your 2026 premium invoice", ago(30, 0),
 			"Your premium invoice for 2026 is available in your customer portal.")},
 		{"personal", "Spam", plain("Prize Office <win@prizes.example>", alex, "You have won!!!", ago(1, 5),

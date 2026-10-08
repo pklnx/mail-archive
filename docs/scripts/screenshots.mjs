@@ -82,10 +82,12 @@ for (const scheme of ["light", "dark"]) {
 {
   const p = await page("light");
   await p.goto(base + "/");
-  await p.getByRole("searchbox").fill("invoice");
+  // Mail to the tax advisor from the last month, with words from the body.
+  const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  await p.getByRole("searchbox").fill(`to:taxadvisor after:${since} receipts`);
   await p.waitForFunction(() => document.querySelectorAll('[aria-label="Messages"] mark').length > 0);
-  await p.getByRole("button", { name: /City Utilities/ }).click();
-  await p.getByRole("heading", { name: /Your invoice for October/ }).waitFor();
+  await p.getByRole("button", { name: /Documents for the tax return/ }).click();
+  await p.getByRole("heading", { name: /Documents for the tax return/ }).waitFor();
   await p.screenshot({ path: `${out}/search.png` });
   await p.context().close();
 }

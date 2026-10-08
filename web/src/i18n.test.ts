@@ -21,7 +21,7 @@ describe("messages", () => {
     for (const key of Object.keys(en) as (keyof typeof en)[]) {
       if (typeof en[key] === "string") expect(de[key], key).not.toBe("");
     }
-    expect(de.searchIn("Inbox")).toBe("In Inbox suchen");
+    expect(de.searchIn("Inbox")).toBe("In Inbox suchen (from:, to:)");
     expect(de.switchTheme("dark")).toBe("Zum dunklen Modus wechseln");
     expect(en.messageCount(1, "1")).toBe("1 message");
     expect(en.messageCount(1200, "1,200")).toBe("1,200 messages");

@@ -22,7 +22,10 @@ const initial: ListState = { items: [], cursor: null, loading: true, error: "", 
 
 export function MessageList({ filter, selected, open }: Props) {
   const [list, setList] = useState<ListState>(initial);
-  const key = `${filter.q}\u0000${filter.account}\u0000${filter.folder}`;
+  const key = JSON.stringify(filter);
+  const searching = Boolean(
+    filter.q || filter.from || filter.to || filter.attachment || filter.hasAttachment || filter.after || filter.before,
+  );
   const generation = useRef(0);
 
   const load = useCallback(
@@ -86,9 +89,15 @@ export function MessageList({ filter, selected, open }: Props) {
             >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="truncate text-sm font-semibold">{senderName(m.from)}</span>
-                <time className="shrink-0 text-xs text-zinc-500" dateTime={m.sortAt}>
-                  {shortDate(m.sentAt ?? m.sortAt)}
-                </time>
+                <span className="flex shrink-0 items-center gap-1 text-xs text-zinc-500">
+                  {m.hasAttachment && (
+                    <svg role="img" aria-label={t.hasAttachment} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <title>{t.hasAttachment}</title>
+                      <path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
+                    </svg>
+                  )}
+                  <time dateTime={m.sortAt}>{shortDate(m.sentAt ?? m.sortAt)}</time>
+                </span>
               </div>
               <div className="truncate text-sm">{m.subject || t.noSubject}</div>
               {m.snippet && (
@@ -109,7 +118,7 @@ export function MessageList({ filter, selected, open }: Props) {
         </li>
       )}
       {!list.loading && !list.error && list.items.length === 0 && (
-        <li className="p-4 text-sm text-zinc-500">{filter.q ? t.noMatches : t.noMessages}</li>
+        <li className="p-4 text-sm text-zinc-500">{searching ? t.noMatches : t.noMessages}</li>
       )}
       {list.loading && <li className="p-4 text-sm text-zinc-500">{t.loading}</li>}
       {!list.done && <li ref={sentinel} aria-hidden className="h-px" />}
