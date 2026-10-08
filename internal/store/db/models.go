@@ -53,6 +53,9 @@ type Message struct {
 	AttachmentNames *string
 	HasAttachment   bool
 	IndexVersion    int16
+	InReplyTo       *string
+	ReferenceIds    []string
+	ThreadID        *string
 }
 
 type MessageLocation struct {

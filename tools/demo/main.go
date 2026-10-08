@@ -262,6 +262,17 @@ func plain(from, to, subject string, date time.Time, body string) string {
 		from, to, subject, date.Format(time.RFC1123Z), body))
 }
 
+// reply is a plain message that answers the message with ID parent; refs
+// are the earlier IDs of the conversation, oldest first.
+func reply(id, from, to, subject string, date time.Time, body string, refs ...string) string {
+	links := ""
+	if len(refs) > 0 {
+		links = "In-Reply-To: <" + refs[len(refs)-1] + ">\nReferences: <" + strings.Join(refs, "> <") + ">\n"
+	}
+	return crlf(fmt.Sprintf("Message-ID: <%s>\n%sFrom: %s\nTo: %s\nSubject: %s\nDate: %s\nContent-Type: text/plain; charset=utf-8\n\n%s\n",
+		id, links, from, to, subject, date.Format(time.RFC1123Z), body))
+}
+
 // A 16x16 blue square as an inline image.
 const logoPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGNQTX5NEmIY1TCqYfhqAAB2SXMQ7mVTQgAAAABJRU5ErkJggg=="
 
@@ -338,6 +349,13 @@ Content-Transfer-Encoding: base64
 ` + base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\n% demo\n")) + `
 --apple--
 `)},
+		// A conversation across INBOX and Sent.
+		{"personal", "INBOX", reply("quote-1@kitchen.example", "Riley Chen <riley@kitchen.example>", alex, "Quote for the kitchen renovation", ago(6, 0),
+			"Hello Alex,\n\nplease find our quote below: $12,400 including the countertop.\n\nRiley")},
+		{"personal", "Sent", reply("re-quote@example.com", alex, "Riley Chen <riley@kitchen.example>", "Re: Quote for the kitchen renovation", ago(5, 2),
+			"Hi Riley,\n\nthanks! Could you start in November?\n\nAlex", "quote-1@kitchen.example")},
+		{"personal", "INBOX", reply("quote-2@kitchen.example", "Riley Chen <riley@kitchen.example>", alex, "Re: Quote for the kitchen renovation", ago(4, 0),
+			"Hi Alex,\n\nyes, November 3 works. I will send the contract tomorrow.\n\nRiley", "quote-1@kitchen.example", "re-quote@example.com")},
 		{"personal", "Archive", plain("Home Insurance <service@insurance.example>", alex, "Your 2026 premium invoice", ago(30, 0),
 			"Your premium invoice for 2026 is available in your customer portal.")},
 		{"personal", "Spam", plain("Prize Office <win@prizes.example>", alex, "You have won!!!", ago(1, 5),

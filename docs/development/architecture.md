@@ -44,7 +44,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `sessions` | Login session: SHA-256 of the cookie token, user, last use, expiry. |
 | `accounts` | Account: `kind` (`imap`, or `import` for mail from files), owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. Import accounts have port 0 and are never enabled; check constraints enforce both. |
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID and last sync time. |
-| `messages` | Unique message content (by SHA-256): size, subject, sender, date, path of the file, body text and search vector. |
+| `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
 | `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date. |
 | `sync_runs` | Sync or import of an account: start, end, status, counters, error. |
 
@@ -94,7 +94,7 @@ messages with their locations and the folder's last UID (`Store.SaveBatch`).
 Fields extracted in `BuildMeta` thus apply to imported mail too.
 
 `messages.index_version` records which extraction filled a row
-(`store.IndexVersion`, currently 2). Sync and import write the current
+(`store.IndexVersion`, currently 3). Sync and import write the current
 version. A migration that needs new extracted fields adds columns without
 filling them; existing rows keep their lower version, and `reindex` walks
 them in primary-key order, 200 per transaction, and fills them from the
@@ -197,6 +197,31 @@ indexes; `to` uses one index over To and Cc joined by a newline. A partial
 index on `(sort_at, sha256) WHERE has_attachment` serves `has:attachment`
 without a query. The web UI parses prefixes such as `to:` from the search
 field (`web/src/searchSyntax.ts`); the server only sees API parameters.
+
+## Conversations
+
+`thread_id` is the first `References` ID, else `In-Reply-To`, else the own
+`Message-ID` (`archive.threadID`). Queries group by the thread key
+`COALESCE(thread_id, sha256)`, so a message without IDs is its own thread,
+and use `messages_thread_idx` on that key with `(sort_at, sha256)`. The
+thread ID depends only on the message bytes, which fits the global
+deduplication: the row is shared, only its visibility differs per user.
+There is no subject threading and no tree walk, so cycles cannot occur.
+
+The message view adds one hop of direct links that need no common thread
+ID: the parent (`message_id = in_reply_to`) and the replies (their
+`in_reply_to` or `reference_ids` name the message). Every query uses the
+owner predicate of the listings, so another user's reply to a shared
+message is never listed or counted.
+
+The grouped list (`SearchThreads`) walks the date order and keeps a message
+only if no newer message of its thread passes the same filters
+(`NOT EXISTS` over the thread index), so it stops after a page like the
+plain list. `CountThreadMatches` counts the matches for the rows of a page.
+sqlc has no fragments, so the filter predicate exists four times in
+`search.sql`, between `filters:begin` and `filters:end` comments;
+`TestSearchFilterCopies` keeps the copies equal and
+`TestSearchThreadsParity` checks grouping against the plain list.
 
 ## Web server
 

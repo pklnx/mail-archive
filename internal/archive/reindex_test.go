@@ -3,10 +3,13 @@ package archive_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -233,5 +236,165 @@ func TestSetIndexDataKeepsNewerRows(t *testing.T) {
 	e.store(legacyRaw)
 	if n := e.reindex(); n != 1 {
 		t.Fatalf("Reindex updated %d", n)
+	}
+}
+
+const replyRaw = "Message-ID: <r@x>\r\nIn-Reply-To: <o@x>\r\nReferences: <o@x>\r\nSubject: Re: Alt\r\n\r\nJa.\r\n"
+
+// Rows extracted by the previous version (2) get the links between replies.
+func TestReindexFillsThreadsAfterVersionBump(t *testing.T) {
+	e := newReindexEnv(t)
+	sha := e.store(replyRaw)
+	e.store("Message-ID: <n@x>\r\nSubject: neu\r\n\r\nx\r\n") // current: not updated
+	if _, err := e.conn.Exec(e.ctx, `UPDATE messages SET in_reply_to = NULL, reference_ids = '{}', thread_id = NULL,
+		index_version = 2 WHERE sha256 = $1`, sha); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.reindex(); n != 1 {
+		t.Fatalf("Reindex updated %d, want 1", n)
+	}
+	var inReplyTo, threadID string
+	var refs []string
+	if err := e.conn.QueryRow(e.ctx, `SELECT in_reply_to, reference_ids, thread_id FROM messages WHERE sha256 = $1`, sha).
+		Scan(&inReplyTo, &refs, &threadID); err != nil {
+		t.Fatal(err)
+	}
+	if inReplyTo != "o@x" || len(refs) != 1 || refs[0] != "o@x" || threadID != "o@x" {
+		t.Errorf("in_reply_to %q, references %v, thread %q", inReplyTo, refs, threadID)
+	}
+}
+
+// Messages stored before the conversation migration get their links from
+// reindex after it.
+func TestReindexAfterConversationMigration(t *testing.T) {
+	e := newReindexEnv(t)
+	if name, err := e.st.MigrateDown(e.ctx); err != nil || !strings.Contains(name, "conversations") {
+		t.Fatalf("MigrateDown = %q, %v", name, err)
+	}
+	blob, _, err := e.blobs.Put(strings.NewReader(replyRaw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the previous version stored: no thread columns yet.
+	if _, err := e.conn.Exec(e.ctx, `INSERT INTO messages (sha256, size, stored_path, message_id, subject, body_text, index_version)
+		VALUES ($1, $2, $3, 'r@x', 'Re: Alt', 'Ja.', 2)`, blob.SHA256, blob.Size, blob.Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.conn.Exec(e.ctx, `INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid)
+		VALUES ($1, $2, 1, 1)`, blob.SHA256, e.folder); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.Migrate(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := e.st.HasUnindexed(e.ctx); err != nil || !pending {
+		t.Fatalf("HasUnindexed = %v, %v", pending, err)
+	}
+	if n := e.reindex(); n != 1 {
+		t.Fatalf("Reindex updated %d", n)
+	}
+	if n := e.search(store.SearchFilter{Thread: "o@x"}); n != 1 {
+		t.Errorf("thread o@x lists %d messages", n)
+	}
+}
+
+// A reindex cancelled in the middle leaves the rest pending; the next run
+// finishes it.
+func TestReindexContinuesAfterCancel(t *testing.T) {
+	e := newReindexEnv(t)
+	for i := range 3 {
+		e.legacy(e.store(fmt.Sprintf("Message-ID: <c%d@x>\r\nSubject: %d\r\n\r\nx\r\n", i, i)))
+	}
+	ctx, cancel := context.WithCancel(e.ctx)
+	cancel()
+	if _, err := archive.Reindex(ctx, e.st, e.blobs, e.log); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Reindex: %v", err)
+	}
+	if pending, err := e.st.HasUnindexed(e.ctx); err != nil || !pending {
+		t.Fatalf("HasUnindexed after cancel = %v, %v", pending, err)
+	}
+	if n := e.reindex(); n != 3 {
+		t.Fatalf("Reindex after cancel updated %d", n)
+	}
+}
+
+// TestReindexCost measures reindex on 10,000 messages of about 8 KB body
+// text that the previous version (2) extracted: every row is rewritten,
+// and the generated full-text column with it. It writes about 100 MB, so it
+// runs only with MAIL_ARCHIVE_BENCH=1:
+//
+//	MAIL_ARCHIVE_BENCH=1 go test -run TestReindexCost -v ./internal/archive/
+func TestReindexCost(t *testing.T) {
+	if os.Getenv("MAIL_ARCHIVE_BENCH") != "1" {
+		t.Skip("set MAIL_ARCHIVE_BENCH=1 to run")
+	}
+	e := newReindexEnv(t)
+	body := strings.Repeat("Sehr geehrte Damen und Herren, anbei das Angebot für die Küche. ", 128)
+	const n = 10000
+	metas := make([]store.MessageMeta, 0, 500)
+	locs := make([]store.Location, 0, 500)
+	for i := range n {
+		raw := fmt.Sprintf("Message-ID: <m%d@x>\r\nIn-Reply-To: <m%d@x>\r\nSubject: Angebot %d\r\n\r\n%s\r\n", i, i-i%5, i, body)
+		blob, _, err := e.blobs.Put(strings.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.uid++
+		metas = append(metas, meta)
+		locs = append(locs, store.Location{FolderID: e.folder, UIDValidity: 1, UID: e.uid})
+		if len(metas) == cap(metas) || i == n-1 {
+			if _, err := e.st.SaveBatch(e.ctx, e.folder, e.uid, metas, locs); err != nil {
+				t.Fatal(err)
+			}
+			metas, locs = metas[:0], locs[:0]
+		}
+	}
+	for _, sql := range []string{`UPDATE messages SET index_version = 2`, `VACUUM ANALYZE messages`} {
+		if _, err := e.conn.Exec(e.ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Now()
+	if got := e.reindex(); got != n {
+		t.Fatalf("Reindex updated %d", got)
+	}
+	t.Logf("reindex of %d messages: %v (%.1f ms per message)", n, time.Since(start), float64(time.Since(start).Milliseconds())/n)
+}
+
+// Rolling the conversation migration back and applying it again leaves the
+// messages pending, so reindex fills the conversation fields again.
+func TestReindexAfterConversationRollback(t *testing.T) {
+	e := newReindexEnv(t)
+	sha := e.store(replyRaw) // current version, with conversation fields
+	var bodyBefore string
+	if err := e.conn.QueryRow(e.ctx, `SELECT body_text FROM messages WHERE sha256 = $1`, sha).Scan(&bodyBefore); err != nil {
+		t.Fatal(err)
+	}
+	if name, err := e.st.MigrateDown(e.ctx); err != nil || !strings.Contains(name, "conversations") {
+		t.Fatalf("MigrateDown = %q, %v", name, err)
+	}
+	if _, err := e.st.Migrate(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.search(store.SearchFilter{Thread: "o@x"}); n != 0 {
+		t.Fatalf("thread o@x lists %d messages before reindex", n)
+	}
+	var version int16
+	var body string
+	if err := e.conn.QueryRow(e.ctx, `SELECT index_version, body_text FROM messages WHERE sha256 = $1`, sha).Scan(&version, &body); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 || body != bodyBefore {
+		t.Fatalf("after rollback: version %d, body %q", version, body)
+	}
+	if n := e.reindex(); n != 1 {
+		t.Fatalf("Reindex updated %d, want 1", n)
+	}
+	if n := e.search(store.SearchFilter{Thread: "o@x"}); n != 1 {
+		t.Errorf("thread o@x lists %d messages after reindex", n)
 	}
 }

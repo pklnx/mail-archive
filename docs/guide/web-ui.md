@@ -93,6 +93,30 @@ attachments show a paperclip in the list.
 Messages archived by an older version need a one-time `./ma reindex` before
 filters and full-text search find them; see [Upgrades](./operations#upgrades).
 
+## Conversations
+
+A message that belongs to a conversation shows it above its text: the
+messages before and after it, oldest first, with date, sender and subject.
+The message it answers is marked "In reply to", answers to it "Reply", and
+the open message "This message". Select one to open it. Messages from INBOX
+and Sent come together here, also from different accounts.
+
+![A reply with its conversation above the text](/screenshots/conversation.png)
+
+"Group by conversation" in the filter row lists one row per conversation:
+its newest message, with the number of its messages as a badge. The arrow
+on the right shows the earlier ones below it. With a search or filters, a
+row is the newest message that matches, the badge counts the matches, and
+the arrow lists the other matches. The URL keeps the setting (`group=1`).
+
+![The list grouped by conversation, one conversation expanded](/screenshots/grouped.png)
+
+A conversation is found through the `References` and `In-Reply-To` headers
+that mail programs add to replies; subjects are not compared. A reply
+without these headers starts a conversation of its own. You only see the
+messages in your own accounts, also when someone else archived the other
+half of a conversation.
+
 ## Appearance and language
 
 Light and dark mode follow the system. The sun/moon button next to the search

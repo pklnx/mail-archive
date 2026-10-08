@@ -3,11 +3,13 @@ SELECT EXISTS (SELECT 1 FROM messages WHERE sha256 = $1);
 
 -- name: InsertMessage :execrows
 INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text,
-                      to_addr, cc_addr, attachment_names, has_attachment, index_version)
+                      to_addr, cc_addr, attachment_names, has_attachment,
+                      in_reply_to, reference_ids, thread_id, index_version)
 VALUES (@sha256, @size, NULLIF(@message_id::text, ''), NULLIF(@subject::text, ''),
         NULLIF(@from_addr::text, ''), @sent_at, @stored_path, @body_text::text,
         NULLIF(@to_addr::text, ''), NULLIF(@cc_addr::text, ''), NULLIF(@attachment_names::text, ''),
-        @has_attachment, @index_version)
+        @has_attachment, NULLIF(@in_reply_to::text, ''), @reference_ids::text[], NULLIF(@thread_id::text, ''),
+        @index_version)
 ON CONFLICT (sha256) DO NOTHING;
 
 -- name: ListUnindexed :many
@@ -27,7 +29,8 @@ SELECT EXISTS (SELECT 1 FROM messages WHERE index_version < @index_version);
 UPDATE messages
 SET body_text = @body_text::text, to_addr = NULLIF(@to_addr::text, ''), cc_addr = NULLIF(@cc_addr::text, ''),
     attachment_names = NULLIF(@attachment_names::text, ''), has_attachment = @has_attachment,
-    index_version = @index_version
+    in_reply_to = NULLIF(@in_reply_to::text, ''), reference_ids = @reference_ids::text[],
+    thread_id = NULLIF(@thread_id::text, ''), index_version = @index_version
 WHERE sha256 = @sha256 AND index_version < @index_version;
 
 -- name: UpsertLocation :exec

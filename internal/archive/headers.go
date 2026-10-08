@@ -21,6 +21,12 @@ type Headers struct {
 	To        string
 	Cc        string
 	Date      *time.Time
+	// InReplyTo is the first ID of the In-Reply-To header and References
+	// the IDs of the References header (see messageIDs); ThreadID is
+	// derived from them (see threadID).
+	InReplyTo  string
+	References []string
+	ThreadID   string
 }
 
 // Header values are cut at these lengths. Recipient lists get more room,
@@ -59,6 +65,11 @@ func ParseHeaders(r io.Reader) Headers {
 	if d, err := mail.ParseDate(h.Get("Date")); err == nil {
 		out.Date = &d
 	}
+	if ids := messageIDs(strings.Join(h["In-Reply-To"], " ")); len(ids) > 0 {
+		out.InReplyTo = ids[0]
+	}
+	out.References = trimReferences(messageIDs(strings.Join(h["References"], " ")))
+	out.ThreadID = threadID(out)
 	return out
 }
 

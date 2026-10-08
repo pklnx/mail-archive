@@ -15,10 +15,11 @@ var ErrReindexRunning = errors.New("reindex already running")
 // reindexBatch is the number of messages per transaction.
 const reindexBatch = 200
 
-// Reindex extracts the index data (body text, recipients, attachments) of
-// messages stored by an older version, so search finds them. It walks the
-// table once in batches and returns how many messages it updated. It is
-// safe to interrupt and rerun, and to run while syncs store new messages.
+// Reindex extracts the index data (body text, recipients, attachments,
+// links between replies) of messages stored by an older version, so search
+// and conversations find them. It walks the table once in batches and
+// returns how many messages it updated. It is safe to interrupt and rerun,
+// and to run while syncs store new messages.
 func Reindex(ctx context.Context, st *store.Store, blobs *blobstore.Store, log *slog.Logger) (int, error) {
 	unlock, ok, err := st.TryLockReindex(ctx)
 	if err != nil {

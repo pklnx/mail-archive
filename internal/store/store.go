@@ -408,7 +408,7 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			Sha256: m.SHA256, Size: m.Size, MessageID: m.MessageID, Subject: m.Subject,
 			FromAddr: m.From, SentAt: m.SentAt, StoredPath: m.StoredPath, BodyText: m.BodyText,
 			ToAddr: m.To, CcAddr: m.Cc, AttachmentNames: m.attachmentNames(), HasAttachment: m.HasAttachment,
-			IndexVersion: IndexVersion,
+			InReplyTo: m.InReplyTo, ReferenceIds: m.referenceIDs(), ThreadID: m.ThreadID, IndexVersion: IndexVersion,
 		})
 		if err != nil {
 			return 0, fmt.Errorf("insert message %s: %w", m.SHA256, err)

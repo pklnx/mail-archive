@@ -18,6 +18,7 @@ import (
 
 type searchMsg struct {
 	sha     string
+	id      string // Message-ID
 	subject string
 	from    string
 	sent    string // RFC 3339
@@ -71,7 +72,7 @@ func (f *searchFixture) add(path string, m searchMsg) {
 	}
 	m.data.BodyText = m.body
 	meta := store.MessageMeta{
-		SHA256: m.sha, Size: 1, StoredPath: m.sha, Subject: m.subject, From: m.from, SentAt: &sent, IndexData: m.data,
+		SHA256: m.sha, Size: 1, StoredPath: m.sha, MessageID: m.id, Subject: m.subject, From: m.from, SentAt: &sent, IndexData: m.data,
 	}
 	f.uid++
 	folder := f.folders[path]

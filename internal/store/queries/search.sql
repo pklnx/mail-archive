@@ -12,21 +12,23 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
        END::text AS snippet
 FROM messages m
-WHERE (sqlc.narg(query)::text IS NULL
-       OR m.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
-                       websearch_to_tsquery('german', sqlc.narg(query)::text) ||
-                       websearch_to_tsquery('english', sqlc.narg(query)::text))
-       OR m.subject ILIKE sqlc.narg(pattern)::text
-       OR m.from_addr ILIKE sqlc.narg(pattern)::text)
+WHERE
+  -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+  (sqlc.narg(query)::text IS NULL
+   OR m.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('english', sqlc.narg(query)::text))
+   OR m.subject ILIKE sqlc.narg(pattern)::text
+   OR m.from_addr ILIKE sqlc.narg(pattern)::text)
   -- Only messages found in one of the user's accounts.
   AND EXISTS (
-           SELECT 1 FROM message_locations l
-           JOIN folders f ON f.id = l.folder_id
-           JOIN accounts a ON a.id = f.account_id
-           WHERE l.message_sha256 = m.sha256
-             AND a.owner_id = sqlc.arg(owner)::bigint
-             AND (sqlc.narg(account)::text IS NULL OR a.name = sqlc.narg(account)::text)
-             AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
+       SELECT 1 FROM message_locations l
+       JOIN folders f ON f.id = l.folder_id
+       JOIN accounts a ON a.id = f.account_id
+       WHERE l.message_sha256 = m.sha256
+         AND a.owner_id = sqlc.arg(owner)::bigint
+         AND (sqlc.narg(account)::text IS NULL OR a.name = sqlc.narg(account)::text)
+         AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
   AND (sqlc.narg(from_pattern)::text IS NULL OR m.from_addr ILIKE sqlc.narg(from_pattern)::text)
@@ -34,16 +36,137 @@ WHERE (sqlc.narg(query)::text IS NULL
        OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
   AND (sqlc.narg(attachment_pattern)::text IS NULL OR m.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
   AND (NOT sqlc.arg(has_attachment)::boolean OR m.has_attachment)
+  AND (sqlc.narg(thread)::text IS NULL OR COALESCE(m.thread_id, m.sha256) = sqlc.narg(thread)::text)
   AND (sqlc.narg(after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(after)::timestamptz)
   AND (sqlc.narg(before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(before)::timestamptz)
+  -- filters:end
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
        OR (m.sort_at, m.sha256) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_sha)::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
 LIMIT sqlc.arg(row_limit);
 
+-- name: SearchThreads :many
+-- One row per thread (the thread key COALESCE(thread_id, sha256)): the
+-- newest message of the thread that matches the filters. Walking the date
+-- order and skipping messages with a newer match in their thread stops
+-- after row_limit rows, like SearchMessages.
+SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_attachment,
+       CASE
+           WHEN sqlc.narg(query)::text IS NULL THEN left(coalesce(m.body_text, ''), 240)
+           ELSE ts_headline('german', coalesce(m.body_text, ''),
+                    websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('english', sqlc.narg(query)::text),
+                    'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
+       END::text AS snippet,
+       COALESCE(m.thread_id, m.sha256)::text AS thread_key
+FROM messages m
+WHERE
+  -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+  (sqlc.narg(query)::text IS NULL
+   OR m.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('english', sqlc.narg(query)::text))
+   OR m.subject ILIKE sqlc.narg(pattern)::text
+   OR m.from_addr ILIKE sqlc.narg(pattern)::text)
+  -- Only messages found in one of the user's accounts.
+  AND EXISTS (
+       SELECT 1 FROM message_locations l
+       JOIN folders f ON f.id = l.folder_id
+       JOIN accounts a ON a.id = f.account_id
+       WHERE l.message_sha256 = m.sha256
+         AND a.owner_id = sqlc.arg(owner)::bigint
+         AND (sqlc.narg(account)::text IS NULL OR a.name = sqlc.narg(account)::text)
+         AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
+  -- Filters on single fields. Recipients and attachment names are only
+  -- found here, not by the full-text query.
+  AND (sqlc.narg(from_pattern)::text IS NULL OR m.from_addr ILIKE sqlc.narg(from_pattern)::text)
+  AND (sqlc.narg(to_pattern)::text IS NULL
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+  AND (sqlc.narg(attachment_pattern)::text IS NULL OR m.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
+  AND (NOT sqlc.arg(has_attachment)::boolean OR m.has_attachment)
+  AND (sqlc.narg(thread)::text IS NULL OR COALESCE(m.thread_id, m.sha256) = sqlc.narg(thread)::text)
+  AND (sqlc.narg(after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(after)::timestamptz)
+  AND (sqlc.narg(before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(before)::timestamptz)
+  -- filters:end
+  AND NOT EXISTS (
+      SELECT 1 FROM messages n
+      WHERE COALESCE(n.thread_id, n.sha256) = COALESCE(m.thread_id, m.sha256)
+        AND (n.sort_at, n.sha256) > (m.sort_at, m.sha256)
+        AND
+        -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+        (sqlc.narg(query)::text IS NULL
+         OR n.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                          websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                          websearch_to_tsquery('english', sqlc.narg(query)::text))
+         OR n.subject ILIKE sqlc.narg(pattern)::text
+         OR n.from_addr ILIKE sqlc.narg(pattern)::text)
+        -- Only messages found in one of the user's accounts.
+        AND EXISTS (
+             SELECT 1 FROM message_locations l
+             JOIN folders f ON f.id = l.folder_id
+             JOIN accounts a ON a.id = f.account_id
+             WHERE l.message_sha256 = n.sha256
+               AND a.owner_id = sqlc.arg(owner)::bigint
+               AND (sqlc.narg(account)::text IS NULL OR a.name = sqlc.narg(account)::text)
+               AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
+        -- Filters on single fields. Recipients and attachment names are only
+        -- found here, not by the full-text query.
+        AND (sqlc.narg(from_pattern)::text IS NULL OR n.from_addr ILIKE sqlc.narg(from_pattern)::text)
+        AND (sqlc.narg(to_pattern)::text IS NULL
+             OR (coalesce(n.to_addr, '') || E'\n' || coalesce(n.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+        AND (sqlc.narg(attachment_pattern)::text IS NULL OR n.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
+        AND (NOT sqlc.arg(has_attachment)::boolean OR n.has_attachment)
+        AND (sqlc.narg(thread)::text IS NULL OR COALESCE(n.thread_id, n.sha256) = sqlc.narg(thread)::text)
+        AND (sqlc.narg(after)::timestamptz IS NULL OR n.sort_at >= sqlc.narg(after)::timestamptz)
+        AND (sqlc.narg(before)::timestamptz IS NULL OR n.sort_at < sqlc.narg(before)::timestamptz)
+        -- filters:end
+  )
+  AND (sqlc.narg(cursor_at)::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_sha)::text))
+ORDER BY m.sort_at DESC, m.sha256 DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: CountThreadMatches :many
+-- The number of messages per thread that match the filters, for the rows
+-- of one SearchThreads page.
+SELECT COALESCE(t.thread_id, t.sha256)::text AS thread_key, count(*)::bigint AS matches
+FROM messages t
+WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
+  AND
+  -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+  (sqlc.narg(query)::text IS NULL
+   OR t.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                    websearch_to_tsquery('english', sqlc.narg(query)::text))
+   OR t.subject ILIKE sqlc.narg(pattern)::text
+   OR t.from_addr ILIKE sqlc.narg(pattern)::text)
+  -- Only messages found in one of the user's accounts.
+  AND EXISTS (
+       SELECT 1 FROM message_locations l
+       JOIN folders f ON f.id = l.folder_id
+       JOIN accounts a ON a.id = f.account_id
+       WHERE l.message_sha256 = t.sha256
+         AND a.owner_id = sqlc.arg(owner)::bigint
+         AND (sqlc.narg(account)::text IS NULL OR a.name = sqlc.narg(account)::text)
+         AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
+  -- Filters on single fields. Recipients and attachment names are only
+  -- found here, not by the full-text query.
+  AND (sqlc.narg(from_pattern)::text IS NULL OR t.from_addr ILIKE sqlc.narg(from_pattern)::text)
+  AND (sqlc.narg(to_pattern)::text IS NULL
+       OR (coalesce(t.to_addr, '') || E'\n' || coalesce(t.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+  AND (sqlc.narg(attachment_pattern)::text IS NULL OR t.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
+  AND (NOT sqlc.arg(has_attachment)::boolean OR t.has_attachment)
+  AND (sqlc.narg(thread)::text IS NULL OR COALESCE(t.thread_id, t.sha256) = sqlc.narg(thread)::text)
+  AND (sqlc.narg(after)::timestamptz IS NULL OR t.sort_at >= sqlc.narg(after)::timestamptz)
+  AND (sqlc.narg(before)::timestamptz IS NULL OR t.sort_at < sqlc.narg(before)::timestamptz)
+  -- filters:end
+GROUP BY 1;
+
 -- name: GetMessageSummary :one
 -- Only if the message was found in one of the user's accounts.
-SELECT m.sha256, m.size, m.message_id, m.subject, m.from_addr, m.sent_at, m.sort_at, m.stored_path
+SELECT m.sha256, m.size, m.message_id, m.subject, m.from_addr, m.sent_at, m.sort_at, m.stored_path,
+       m.in_reply_to, COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE m.sha256 = @sha256
   AND EXISTS (

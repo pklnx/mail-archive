@@ -1,18 +1,24 @@
 import { useState } from "react";
-import { getMessage, messageURL, type MessageDetail } from "./api";
-import { fileSize, locationLabel, longDate } from "./format";
+import { getConversation, getMessage, messageURL, type ConversationEntry, type MessageDetail } from "./api";
+import { fileSize, locationLabel, longDate, senderName, shortDate } from "./format";
 import { useAsync } from "./useAsync";
 import { t } from "./i18n";
 
-export function MessageView({ id }: { id: string }) {
+interface Props {
+  id: string;
+  /** Opens another message, from the conversation. */
+  open: (id: string) => void;
+}
+
+export function MessageView({ id, open }: Props) {
   const res = useAsync((signal) => getMessage(id, signal), [id]);
   if (res.status === "loading") return <p className="p-6 text-sm text-zinc-500">{t.loading}</p>;
   if (res.status === "error") return <p className="p-6 text-sm text-red-600">{t.loadMessageFailed(res.error.message)}</p>;
   // key: reset view options (HTML/text, images) for each message.
-  return <Message key={id} msg={res.data} />;
+  return <Message key={id} msg={res.data} open={open} />;
 }
 
-function Message({ msg }: { msg: MessageDetail }) {
+function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void }) {
   const [showHTML, setShowHTML] = useState(msg.hasHtml);
   const [images, setImages] = useState(false);
   const attachments = msg.parts.filter((p) => p.attachment);
@@ -89,6 +95,7 @@ function Message({ msg }: { msg: MessageDetail }) {
         )}
         {msg.truncated && <p className="mt-2 text-xs text-amber-700">{t.truncated}</p>}
       </header>
+      <ConversationSection id={msg.id} open={open} />
       {msg.hasHtml && showHTML ? (
         // No allow-scripts and no allow-same-origin: the mail's HTML runs with
         // an opaque origin and cannot reach the API. The server's CSP adds
@@ -107,5 +114,61 @@ function Message({ msg }: { msg: MessageDetail }) {
         <pre className="min-h-0 flex-1 overflow-auto p-4 font-sans text-sm whitespace-pre-wrap break-words">{msg.text}</pre>
       )}
     </article>
+  );
+}
+
+const relationLabel: Partial<Record<ConversationEntry["relation"], string>> = {
+  self: t.thisMessage,
+  parent: t.inReplyTo,
+  reply: t.replyLabel,
+};
+
+/**
+ * The other messages of the conversation, oldest first. It loads on its own,
+ * so the message shows first and an error here does not hide it.
+ */
+function ConversationSection({ id, open }: { id: string; open: (id: string) => void }) {
+  const res = useAsync((signal) => getConversation(id, signal), [id]);
+  if (res.status === "loading") return null;
+  if (res.status === "error") {
+    return <p className="border-b border-zinc-200 px-4 py-2 text-xs text-red-600 dark:border-zinc-800">{t.loadConversationFailed(res.error.message)}</p>;
+  }
+  const c = res.data;
+  if (c.messages.length < 2) return null;
+  const hidden = c.total - c.messages.length;
+  return (
+    <section aria-label={t.conversation} className="max-h-48 shrink-0 overflow-y-auto border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
+      <h2 className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">{t.conversation}</h2>
+      {c.truncated && <p className="mt-1 text-xs text-zinc-500">{t.earlierNotShown(hidden)}</p>}
+      <ol className="mt-1 text-sm">
+        {c.messages.map((m) => {
+          const self = m.relation === "self";
+          const label = relationLabel[m.relation];
+          const line = (
+            <>
+              <time className="w-20 shrink-0 text-xs text-zinc-500" dateTime={m.sortAt}>
+                {shortDate(m.sentAt ?? m.sortAt)}
+              </time>
+              <span className="max-w-40 shrink-0 truncate">{senderName(m.from)}</span>
+              <span className="min-w-0 flex-1 truncate text-zinc-600 dark:text-zinc-400">{m.subject || t.noSubject}</span>
+              {label && <span className="shrink-0 rounded bg-zinc-100 px-1.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{label}</span>}
+            </>
+          );
+          return (
+            <li key={m.id}>
+              {self ? (
+                <div aria-current="true" className="flex items-baseline gap-2 rounded px-1 py-0.5 font-semibold">
+                  {line}
+                </div>
+              ) : (
+                <button type="button" className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800" onClick={() => open(m.id)}>
+                  {line}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
   );
 }

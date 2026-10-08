@@ -81,6 +81,9 @@ export interface MessageSummary {
   /** Matches are marked with U+E000 (start) and U+E001 (end). */
   snippet?: string;
   hasAttachment: boolean;
+  /** Grouped listings: the thread key and the number of matching messages in it. */
+  thread?: string;
+  count?: number;
 }
 
 export interface MessagePage {
@@ -110,6 +113,8 @@ export interface Location {
 
 export interface MessageDetail extends MessageSummary {
   messageId: string;
+  /** The Message-ID this message answers. */
+  inReplyTo?: string;
   to: string;
   cc: string;
   dateHeader: string;
@@ -132,6 +137,29 @@ export interface Filter {
   /** RFC 3339; after is inclusive, before exclusive. */
   after?: string;
   before?: string;
+  /** One row per conversation. */
+  group?: boolean;
+  /** Only the messages of this conversation (a thread key). */
+  thread?: string;
+}
+
+export type Relation = "self" | "parent" | "reply" | "thread";
+
+export interface ConversationEntry {
+  id: string;
+  subject: string;
+  from: string;
+  sentAt: string | null;
+  sortAt: string;
+  relation: Relation;
+}
+
+export interface Conversation {
+  /** Oldest first. */
+  messages: ConversationEntry[];
+  total: number;
+  /** Older messages were left out. */
+  truncated: boolean;
 }
 
 export class ApiError extends Error {
@@ -206,7 +234,7 @@ export const accountsApi = {
   syncAll: () => send("POST", "/api/sync"),
 };
 
-export function listMessages(filter: Filter, cursor: string | null, signal?: AbortSignal): Promise<MessagePage> {
+export function listMessages(filter: Filter, cursor: string | null, signal?: AbortSignal, limit = 50): Promise<MessagePage> {
   const p = new URLSearchParams();
   if (filter.q) p.set("q", filter.q);
   if (filter.account) p.set("account", filter.account);
@@ -217,13 +245,19 @@ export function listMessages(filter: Filter, cursor: string | null, signal?: Abo
   if (filter.hasAttachment) p.set("has", "attachment");
   if (filter.after) p.set("after", filter.after);
   if (filter.before) p.set("before", filter.before);
+  if (filter.group) p.set("group", "1");
+  if (filter.thread) p.set("thread", filter.thread);
   if (cursor) p.set("cursor", cursor);
-  p.set("limit", "50");
+  p.set("limit", String(limit));
   return getJSON(`/api/messages?${p}`, signal);
 }
 
 export function getMessage(id: string, signal?: AbortSignal): Promise<MessageDetail> {
   return getJSON(`/api/messages/${encodeURIComponent(id)}`, signal);
+}
+
+export function getConversation(id: string, signal?: AbortSignal): Promise<Conversation> {
+  return getJSON(`/api/messages/${encodeURIComponent(id)}/conversation`, signal);
 }
 
 export const messageURL = {

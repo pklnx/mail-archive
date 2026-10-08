@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func TestParseHeaders(t *testing.T) {
 
 func TestParseHeadersLenient(t *testing.T) {
 	h := ParseHeaders(strings.NewReader("garbage without headers"))
-	if h != (Headers{}) {
+	if !reflect.DeepEqual(h, Headers{}) {
 		t.Errorf("expected empty headers, got %+v", h)
 	}
 

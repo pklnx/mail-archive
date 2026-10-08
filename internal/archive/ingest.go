@@ -57,6 +57,7 @@ func indexData(h Headers, idx mime.Indexed) store.IndexData {
 	return store.IndexData{
 		BodyText: idx.Text, To: h.To, Cc: h.Cc,
 		AttachmentNames: idx.AttachmentNames, HasAttachment: idx.HasAttachment,
+		InReplyTo: h.InReplyTo, ReferenceIDs: h.References, ThreadID: h.ThreadID,
 	}
 }
 

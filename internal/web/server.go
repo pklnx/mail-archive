@@ -154,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sync", s.handleSyncAll)
 	mux.HandleFunc("GET /api/messages", s.handleListMessages)
 	mux.HandleFunc("GET /api/messages/{sha}", s.handleMessage)
+	mux.HandleFunc("GET /api/messages/{sha}/conversation", s.handleConversation)
 	mux.HandleFunc("GET /api/messages/{sha}/html", s.handleMessageHTML)
 	mux.HandleFunc("GET /api/messages/{sha}/raw", s.handleMessageRaw)
 	mux.HandleFunc("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart)
