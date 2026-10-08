@@ -2,20 +2,32 @@
 SELECT EXISTS (SELECT 1 FROM messages WHERE sha256 = $1);
 
 -- name: InsertMessage :execrows
-INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text)
+INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text,
+                      to_addr, cc_addr, attachment_names, has_attachment, index_version)
 VALUES (@sha256, @size, NULLIF(@message_id::text, ''), NULLIF(@subject::text, ''),
-        NULLIF(@from_addr::text, ''), @sent_at, @stored_path, @body_text::text)
+        NULLIF(@from_addr::text, ''), @sent_at, @stored_path, @body_text::text,
+        NULLIF(@to_addr::text, ''), NULLIF(@cc_addr::text, ''), NULLIF(@attachment_names::text, ''),
+        @has_attachment, @index_version)
 ON CONFLICT (sha256) DO NOTHING;
 
 -- name: ListUnindexed :many
--- Messages archived before full-text search existed.
+-- Messages extracted by an older version, in primary key order after the
+-- last one seen, so a full pass reads the table once.
 SELECT sha256, stored_path FROM messages
-WHERE body_text IS NULL
+WHERE index_version < @index_version AND sha256 > @after::text
 ORDER BY sha256
-LIMIT $1;
+LIMIT @row_limit;
 
--- name: SetBodyText :exec
-UPDATE messages SET body_text = $2 WHERE sha256 = $1;
+-- name: HasUnindexed :one
+SELECT EXISTS (SELECT 1 FROM messages WHERE index_version < @index_version);
+
+-- name: SetIndexData :execrows
+-- Never overwrites a row that a newer version already extracted.
+UPDATE messages
+SET body_text = @body_text::text, to_addr = NULLIF(@to_addr::text, ''), cc_addr = NULLIF(@cc_addr::text, ''),
+    attachment_names = NULLIF(@attachment_names::text, ''), has_attachment = @has_attachment,
+    index_version = @index_version
+WHERE sha256 = @sha256 AND index_version < @index_version;
 
 -- name: UpsertLocation :exec
 INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date)

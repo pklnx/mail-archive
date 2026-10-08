@@ -367,7 +367,7 @@ type MessageMeta struct {
 	From       string
 	SentAt     *time.Time
 	StoredPath string
-	BodyText   string // plain text for full-text search
+	IndexData
 }
 
 // Location is where a message was found on a server.
@@ -407,6 +407,8 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		n, err := q.InsertMessage(ctx, db.InsertMessageParams{
 			Sha256: m.SHA256, Size: m.Size, MessageID: m.MessageID, Subject: m.Subject,
 			FromAddr: m.From, SentAt: m.SentAt, StoredPath: m.StoredPath, BodyText: m.BodyText,
+			ToAddr: m.To, CcAddr: m.Cc, AttachmentNames: m.attachmentNames(), HasAttachment: m.HasAttachment,
+			IndexVersion: IndexVersion,
 		})
 		if err != nil {
 			return 0, fmt.Errorf("insert message %s: %w", m.SHA256, err)

@@ -23,6 +23,11 @@ const (
 	MaxIndexText = 256 << 10
 	// maxBody is the maximum size of a text or HTML body kept in memory.
 	maxBody = 4 << 20
+	// MaxAttachmentNames and MaxAttachmentNameBytes bound the attachment
+	// file names stored for search; the bytes count the names joined by
+	// newlines.
+	MaxAttachmentNames     = 100
+	MaxAttachmentNameBytes = 16 << 10
 )
 
 // Message is a parsed message.
@@ -47,8 +52,11 @@ type Part struct {
 	Filename    string
 	ContentID   string // without angle brackets
 	Size        int64  // decoded size in bytes
-	Attachment  bool   // Content-Disposition: attachment, or a named non-text part
-	Inline      bool   // Content-Disposition: inline
+	// Attachment: Content-Disposition: attachment, or a named non-text
+	// part that is not referenced by Content-ID (Apple Mail sends PDFs as
+	// named inline parts). Images embedded via cid: are not attachments.
+	Attachment bool
+	Inline     bool // Content-Disposition: inline
 }
 
 // Parse reads a raw RFC 5322 message.
@@ -135,15 +143,48 @@ func OpenPart(r io.Reader, index int, maxSize int64) (Part, []byte, error) {
 	return Part{}, nil, ErrNoPart
 }
 
-// IndexText returns plain text for full-text search: the text body, or the
-// HTML body converted to text, truncated to MaxIndexText.
-func IndexText(r io.Reader) string {
+// Indexed is what search stores about a message's body and parts.
+type Indexed struct {
+	// Text is the text body, or the HTML body converted to text, truncated
+	// to MaxIndexText.
+	Text string
+	// AttachmentNames are the file names of the attachments, in walk
+	// order, within MaxAttachmentNames and MaxAttachmentNameBytes.
+	AttachmentNames []string
+	HasAttachment   bool
+}
+
+// Index parses a raw message for search.
+func Index(r io.Reader) Indexed {
 	m := Parse(r)
 	text := m.Text
 	if strings.TrimSpace(text) == "" && m.HTML != "" {
 		text = HTMLToText(m.HTML)
 	}
-	return truncate(clean(text), MaxIndexText)
+	out := Indexed{Text: truncate(clean(text), MaxIndexText)}
+	size, full := 0, false
+	for _, p := range m.Parts {
+		if !p.Attachment {
+			continue
+		}
+		out.HasAttachment = true
+		if full || p.Filename == "" {
+			continue
+		}
+		add := len(p.Filename)
+		if len(out.AttachmentNames) > 0 {
+			add++ // newline separator
+		}
+		// Stop at the first name that does not fit, so the stored list is
+		// a prefix of the message's attachments.
+		if len(out.AttachmentNames) == MaxAttachmentNames || size+add > MaxAttachmentNameBytes {
+			full = true
+			continue
+		}
+		size += add
+		out.AttachmentNames = append(out.AttachmentNames, p.Filename)
+	}
+	return out
 }
 
 func describe(part *message.Entity, index int) Part {
@@ -166,7 +207,7 @@ func describe(part *message.Entity, index int) Part {
 	case "inline":
 		p.Inline = true
 	}
-	if !p.Attachment && !p.Inline && p.Filename != "" && !strings.HasPrefix(p.ContentType, "text/") {
+	if !p.Attachment && p.Filename != "" && !strings.HasPrefix(p.ContentType, "text/") && (!p.Inline || p.ContentID == "") {
 		p.Attachment = true
 	}
 	return p

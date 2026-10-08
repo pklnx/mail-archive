@@ -167,7 +167,7 @@ func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([
 
 const searchMessages = `-- name: SearchMessages :many
 
-SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at,
+SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_attachment,
        CASE
            WHEN $1::text IS NULL THEN left(coalesce(m.body_text, ''), 240)
            ELSE ts_headline('german', coalesce(m.body_text, ''),
@@ -192,35 +192,47 @@ WHERE ($1::text IS NULL
              AND a.owner_id = $3::bigint
              AND ($4::text IS NULL OR a.name = $4::text)
              AND ($5::text IS NULL OR f.name = $5::text))
-  AND ($6::timestamptz IS NULL OR m.sort_at >= $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR m.sort_at < $7::timestamptz)
-  AND ($8::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($8::timestamptz, $9::text))
+  -- Filters on single fields. Recipients and attachment names are only
+  -- found here, not by the full-text query.
+  AND ($6::text IS NULL OR m.from_addr ILIKE $6::text)
+  AND ($7::text IS NULL
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $7::text)
+  AND ($8::text IS NULL OR m.attachment_names ILIKE $8::text)
+  AND (NOT $9::boolean OR m.has_attachment)
+  AND ($10::timestamptz IS NULL OR m.sort_at >= $10::timestamptz)
+  AND ($11::timestamptz IS NULL OR m.sort_at < $11::timestamptz)
+  AND ($12::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($12::timestamptz, $13::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $10
+LIMIT $14
 `
 
 type SearchMessagesParams struct {
-	Query     *string
-	Pattern   *string
-	Owner     int64
-	Account   *string
-	Folder    *string
-	After     *time.Time
-	Before    *time.Time
-	CursorAt  *time.Time
-	CursorSha *string
-	RowLimit  int32
+	Query             *string
+	Pattern           *string
+	Owner             int64
+	Account           *string
+	Folder            *string
+	FromPattern       *string
+	ToPattern         *string
+	AttachmentPattern *string
+	HasAttachment     bool
+	After             *time.Time
+	Before            *time.Time
+	CursorAt          *time.Time
+	CursorSha         *string
+	RowLimit          int32
 }
 
 type SearchMessagesRow struct {
-	Sha256   string
-	Size     int64
-	Subject  *string
-	FromAddr *string
-	SentAt   *time.Time
-	SortAt   *time.Time
-	Snippet  string
+	Sha256        string
+	Size          int64
+	Subject       *string
+	FromAddr      *string
+	SentAt        *time.Time
+	SortAt        *time.Time
+	HasAttachment bool
+	Snippet       string
 }
 
 // Listing and search for the web API. Results are ordered by date (newest
@@ -232,6 +244,10 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 		arg.Owner,
 		arg.Account,
 		arg.Folder,
+		arg.FromPattern,
+		arg.ToPattern,
+		arg.AttachmentPattern,
+		arg.HasAttachment,
 		arg.After,
 		arg.Before,
 		arg.CursorAt,
@@ -252,6 +268,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 			&i.FromAddr,
 			&i.SentAt,
 			&i.SortAt,
+			&i.HasAttachment,
 			&i.Snippet,
 		); err != nil {
 			return nil, err

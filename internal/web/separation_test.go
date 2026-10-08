@@ -43,6 +43,24 @@ func TestUsersSeeOnlyTheirOwnMail(t *testing.T) {
 	if got := f.list("account=bob"); len(got) != 0 {
 		t.Errorf("filter by another user's account: %v", got)
 	}
+	for _, q := range []string{"to=alice@example.com", "attachment=Vertrag", "has=attachment", "from=Bob"} {
+		if got := g.list(q); len(got) != 0 {
+			t.Errorf("%s found another user's mail: %v", q, got)
+		}
+		if got := f.list(q); !equal(got, []string{"rich"}) {
+			t.Errorf("%s as owner: %v", q, got)
+		}
+	}
+	// The shared invoice is found through each user's own accounts.
+	if got := g.list("to=buchhaltung&account=bob"); !equal(got, []string{"invoice"}) {
+		t.Errorf("second user, to: %v", got)
+	}
+	if got := f.list("to=buchhaltung&account=bob"); len(got) != 0 {
+		t.Errorf("first user found the invoice in the second user's account: %v", got)
+	}
+	if got := f.list("to=buchhaltung&account=alice"); !equal(got, []string{"invoice"}) {
+		t.Errorf("first user, to: %v", got)
+	}
 
 	// Shared message: only the user's own locations.
 	var d struct {

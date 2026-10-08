@@ -30,18 +30,34 @@ func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blo
 			return meta, nil // metadata is already stored; ON CONFLICT ignores this row
 		}
 	}
-	f, err := blobs.Open(blob.Path)
+	h, idx, err := extract(blobs, blob.Path)
 	if err != nil {
 		return meta, err
 	}
+	meta.MessageID, meta.Subject, meta.From, meta.SentAt = h.MessageID, h.Subject, h.From, h.Date
+	meta.IndexData = indexData(h, idx)
+	return meta, nil
+}
+
+// extract parses the headers and the body of a stored message.
+func extract(blobs *blobstore.Store, path string) (Headers, mime.Indexed, error) {
+	f, err := blobs.Open(path)
+	if err != nil {
+		return Headers{}, mime.Indexed{}, err
+	}
 	defer func() { _ = f.Close() }()
 	h := ParseHeaders(io.LimitReader(f, maxHeaderBytes))
-	meta.MessageID, meta.Subject, meta.From, meta.SentAt = h.MessageID, h.Subject, h.From, h.Date
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return meta, err
+		return Headers{}, mime.Indexed{}, err
 	}
-	meta.BodyText = mime.IndexText(f)
-	return meta, nil
+	return h, mime.Index(f), nil
+}
+
+func indexData(h Headers, idx mime.Indexed) store.IndexData {
+	return store.IndexData{
+		BodyText: idx.Text, To: h.To, Cc: h.Cc,
+		AttachmentNames: idx.AttachmentNames, HasAttachment: idx.HasAttachment,
+	}
 }
 
 // folderWriter collects the messages of one folder and commits them in

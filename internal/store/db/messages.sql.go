@@ -66,22 +66,41 @@ func (q *Queries) GetMessage(ctx context.Context, sha256 string) (GetMessageRow,
 	return i, err
 }
 
+const hasUnindexed = `-- name: HasUnindexed :one
+SELECT EXISTS (SELECT 1 FROM messages WHERE index_version < $1)
+`
+
+func (q *Queries) HasUnindexed(ctx context.Context, indexVersion int16) (bool, error) {
+	row := q.db.QueryRow(ctx, hasUnindexed, indexVersion)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertMessage = `-- name: InsertMessage :execrows
-INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text)
+INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text,
+                      to_addr, cc_addr, attachment_names, has_attachment, index_version)
 VALUES ($1, $2, NULLIF($3::text, ''), NULLIF($4::text, ''),
-        NULLIF($5::text, ''), $6, $7, $8::text)
+        NULLIF($5::text, ''), $6, $7, $8::text,
+        NULLIF($9::text, ''), NULLIF($10::text, ''), NULLIF($11::text, ''),
+        $12, $13)
 ON CONFLICT (sha256) DO NOTHING
 `
 
 type InsertMessageParams struct {
-	Sha256     string
-	Size       int64
-	MessageID  string
-	Subject    string
-	FromAddr   string
-	SentAt     *time.Time
-	StoredPath string
-	BodyText   string
+	Sha256          string
+	Size            int64
+	MessageID       string
+	Subject         string
+	FromAddr        string
+	SentAt          *time.Time
+	StoredPath      string
+	BodyText        string
+	ToAddr          string
+	CcAddr          string
+	AttachmentNames string
+	HasAttachment   bool
+	IndexVersion    int16
 }
 
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (int64, error) {
@@ -94,6 +113,11 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 		arg.SentAt,
 		arg.StoredPath,
 		arg.BodyText,
+		arg.ToAddr,
+		arg.CcAddr,
+		arg.AttachmentNames,
+		arg.HasAttachment,
+		arg.IndexVersion,
 	)
 	if err != nil {
 		return 0, err
@@ -103,19 +127,26 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 
 const listUnindexed = `-- name: ListUnindexed :many
 SELECT sha256, stored_path FROM messages
-WHERE body_text IS NULL
+WHERE index_version < $1 AND sha256 > $2::text
 ORDER BY sha256
-LIMIT $1
+LIMIT $3
 `
+
+type ListUnindexedParams struct {
+	IndexVersion int16
+	After        string
+	RowLimit     int32
+}
 
 type ListUnindexedRow struct {
 	Sha256     string
 	StoredPath string
 }
 
-// Messages archived before full-text search existed.
-func (q *Queries) ListUnindexed(ctx context.Context, limit int32) ([]ListUnindexedRow, error) {
-	rows, err := q.db.Query(ctx, listUnindexed, limit)
+// Messages extracted by an older version, in primary key order after the
+// last one seen, so a full pass reads the table once.
+func (q *Queries) ListUnindexed(ctx context.Context, arg ListUnindexedParams) ([]ListUnindexedRow, error) {
+	rows, err := q.db.Query(ctx, listUnindexed, arg.IndexVersion, arg.After, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -145,18 +176,39 @@ func (q *Queries) MessageExists(ctx context.Context, sha256 string) (bool, error
 	return exists, err
 }
 
-const setBodyText = `-- name: SetBodyText :exec
-UPDATE messages SET body_text = $2 WHERE sha256 = $1
+const setIndexData = `-- name: SetIndexData :execrows
+UPDATE messages
+SET body_text = $1::text, to_addr = NULLIF($2::text, ''), cc_addr = NULLIF($3::text, ''),
+    attachment_names = NULLIF($4::text, ''), has_attachment = $5,
+    index_version = $6
+WHERE sha256 = $7 AND index_version < $6
 `
 
-type SetBodyTextParams struct {
-	Sha256   string
-	BodyText *string
+type SetIndexDataParams struct {
+	BodyText        string
+	ToAddr          string
+	CcAddr          string
+	AttachmentNames string
+	HasAttachment   bool
+	IndexVersion    int16
+	Sha256          string
 }
 
-func (q *Queries) SetBodyText(ctx context.Context, arg SetBodyTextParams) error {
-	_, err := q.db.Exec(ctx, setBodyText, arg.Sha256, arg.BodyText)
-	return err
+// Never overwrites a row that a newer version already extracted.
+func (q *Queries) SetIndexData(ctx context.Context, arg SetIndexDataParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setIndexData,
+		arg.BodyText,
+		arg.ToAddr,
+		arg.CcAddr,
+		arg.AttachmentNames,
+		arg.HasAttachment,
+		arg.IndexVersion,
+		arg.Sha256,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertLocation = `-- name: UpsertLocation :exec

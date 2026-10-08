@@ -18,10 +18,17 @@ type Headers struct {
 	MessageID string
 	Subject   string
 	From      string
+	To        string
+	Cc        string
 	Date      *time.Time
 }
 
-const maxHeaderField = 2000
+// Header values are cut at these lengths. Recipient lists get more room,
+// so long distribution lists stay searchable.
+const (
+	maxHeaderField    = 2000
+	maxRecipientField = 16 << 10
+)
 
 var wordDecoder = &mime.WordDecoder{
 	CharsetReader: func(charset string, input io.Reader) (io.Reader, error) {
@@ -43,9 +50,11 @@ func ParseHeaders(r io.Reader) Headers {
 	}
 	h := msg.Header
 	out := Headers{
-		MessageID: clean(strings.Trim(strings.TrimSpace(h.Get("Message-Id")), "<>")),
-		Subject:   clean(decode(h.Get("Subject"))),
-		From:      clean(decode(h.Get("From"))),
+		MessageID: clean(strings.Trim(strings.TrimSpace(h.Get("Message-Id")), "<>"), maxHeaderField),
+		Subject:   clean(decode(h.Get("Subject")), maxHeaderField),
+		From:      clean(decode(h.Get("From")), maxHeaderField),
+		To:        clean(decode(strings.Join(h["To"], ", ")), maxRecipientField),
+		Cc:        clean(decode(strings.Join(h["Cc"], ", ")), maxRecipientField),
 	}
 	if d, err := mail.ParseDate(h.Get("Date")); err == nil {
 		out.Date = &d
@@ -60,13 +69,14 @@ func decode(s string) string {
 	return s
 }
 
-// clean makes a header value safe for a PostgreSQL TEXT column.
-func clean(s string) string {
+// clean makes a header value safe for a PostgreSQL TEXT column: valid
+// UTF-8, whitespace collapsed, at most limit bytes.
+func clean(s string, limit int) string {
 	s = strings.ToValidUTF8(s, "�")
 	s = strings.ReplaceAll(s, "\x00", "")
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > maxHeaderField {
-		cut := maxHeaderField
+	if len(s) > limit {
+		cut := limit
 		for cut > 0 && !utf8.RuneStart(s[cut]) {
 			cut--
 		}

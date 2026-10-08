@@ -61,8 +61,8 @@ func newMigrateCmd() *cobra.Command {
 		for _, m := range applied {
 			fmt.Println("applied", m)
 		}
-		if pending, err := a.store.ListUnindexed(cmd.Context(), 1); err == nil && len(pending) > 0 {
-			fmt.Println("some messages are not in the full-text index yet: run `reindex` once")
+		if pending, err := a.store.HasUnindexed(cmd.Context()); err == nil && pending {
+			fmt.Println("some messages are not fully searchable yet: run `reindex` once")
 		}
 		if sealer, err := a.cfg.Sealer(); err == nil {
 			n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer)
@@ -820,6 +820,9 @@ network.`,
 					log.Info("sync schedule off")
 				}
 			}
+			if pending, err := a.store.HasUnindexed(cmd.Context()); err == nil && pending {
+				log.Warn("some messages are not fully searchable yet", "command", commandName()+" reindex")
+			}
 			if n, err := a.store.CountUsers(cmd.Context()); err != nil {
 				return err
 			} else if n == 0 {
@@ -840,10 +843,12 @@ network.`,
 func newReindexCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reindex",
-		Short: "Extract text for full-text search from messages archived earlier",
-		Long: `Extract the body text of messages that have none yet, so full-text search
-finds them. Needed once after upgrading to a version with search; new
-messages are indexed during sync. Safe to interrupt and rerun.`,
+		Short: "Extract search data from messages archived by an older version",
+		Long: `Extract the body text, the To and Cc recipients and the attachment names of
+messages archived by an older version, so search and its filters find them.
+Needed once after an upgrade that says so; sync and import index new messages
+themselves. Reads every message stored by an older version. Safe to
+interrupt and rerun, and to run while the web server and syncs run.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -856,7 +861,10 @@ messages are indexed during sync. Safe to interrupt and rerun.`,
 				return err
 			}
 			n, err := archive.Reindex(cmd.Context(), a.store, blobs, newLogger(a.cfg.LogLevel))
-			fmt.Printf("indexed %d message(s)\n", n)
+			if errors.Is(err, archive.ErrReindexRunning) {
+				return err
+			}
+			fmt.Printf("updated %d message(s)\n", n)
 			return err
 		},
 	}

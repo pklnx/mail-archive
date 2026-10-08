@@ -2,7 +2,7 @@
 -- first) and paginated with a keyset cursor (sort_at, sha256).
 
 -- name: SearchMessages :many
-SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at,
+SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_attachment,
        CASE
            WHEN sqlc.narg(query)::text IS NULL THEN left(coalesce(m.body_text, ''), 240)
            ELSE ts_headline('german', coalesce(m.body_text, ''),
@@ -27,6 +27,13 @@ WHERE (sqlc.narg(query)::text IS NULL
              AND a.owner_id = sqlc.arg(owner)::bigint
              AND (sqlc.narg(account)::text IS NULL OR a.name = sqlc.narg(account)::text)
              AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
+  -- Filters on single fields. Recipients and attachment names are only
+  -- found here, not by the full-text query.
+  AND (sqlc.narg(from_pattern)::text IS NULL OR m.from_addr ILIKE sqlc.narg(from_pattern)::text)
+  AND (sqlc.narg(to_pattern)::text IS NULL
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+  AND (sqlc.narg(attachment_pattern)::text IS NULL OR m.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
+  AND (NOT sqlc.arg(has_attachment)::boolean OR m.has_attachment)
   AND (sqlc.narg(after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(after)::timestamptz)
   AND (sqlc.narg(before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(before)::timestamptz)
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL

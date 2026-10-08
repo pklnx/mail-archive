@@ -37,17 +37,22 @@ type Folder struct {
 }
 
 type Message struct {
-	Sha256     string
-	Size       int64
-	MessageID  *string
-	Subject    *string
-	FromAddr   *string
-	SentAt     *time.Time
-	StoredPath string
-	CreatedAt  time.Time
-	BodyText   *string
-	SortAt     *time.Time
-	Search     interface{}
+	Sha256          string
+	Size            int64
+	MessageID       *string
+	Subject         *string
+	FromAddr        *string
+	SentAt          *time.Time
+	StoredPath      string
+	CreatedAt       time.Time
+	BodyText        *string
+	SortAt          *time.Time
+	Search          interface{}
+	ToAddr          *string
+	CcAddr          *string
+	AttachmentNames *string
+	HasAttachment   bool
+	IndexVersion    int16
 }
 
 type MessageLocation struct {
