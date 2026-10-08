@@ -158,4 +158,17 @@ describe("listMessages", () => {
       limit: "50",
     });
   });
+
+  it("asks for grouped rows and for one conversation", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ messages: [], nextCursor: null }), { headers: { "Content-Type": "application/json" } }));
+    await listMessages({ group: true }, null);
+    await listMessages({ q: "x", thread: "a@x", group: false }, null, undefined, 200);
+    const params = fetch.mock.calls.map((c) => Object.fromEntries(new URL(String(c[0]), "http://x").searchParams));
+    expect(params).toEqual([
+      { group: "1", limit: "50" },
+      { q: "x", thread: "a@x", limit: "200" },
+    ]);
+  });
 });

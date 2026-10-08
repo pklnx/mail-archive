@@ -23,11 +23,11 @@ export function App({ user, logout }: Props) {
   const [query, setQuery] = useState(state.q);
   const [menuOpen, setMenuOpen] = useState(false);
   // On small screens the filter row is folded away until needed.
-  const prefixed = hasPrefix(query);
+  const prefixed = hasPrefix(query) || state.group === "1";
   const [filtersOpen, setFiltersOpen] = useState(prefixed);
   const accounts = useAccounts();
 
-  // A typed prefix (or one from the URL) shows the filters it set.
+  // A typed prefix or grouping (also from the URL) shows the filters it set.
   useEffect(() => {
     if (prefixed) setFiltersOpen(true);
   }, [prefixed]);
@@ -44,7 +44,7 @@ export function App({ user, logout }: Props) {
     return () => window.clearTimeout(t);
   }, [typed, state.q, update]);
 
-  const filter = { ...searchFilter(state.q), account: state.account, folder: state.folder };
+  const filter = { ...searchFilter(state.q), account: state.account, folder: state.folder, group: state.group === "1" };
   const reading = state.m !== "";
 
   return (
@@ -128,7 +128,12 @@ export function App({ user, logout }: Props) {
             <ThemeToggle />
           </div>
           <div id="search-filters" className={filtersOpen ? "" : "hidden md:block"}>
-            <SearchFilters query={query} setQuery={setQuery} />
+            <SearchFilters
+              query={query}
+              setQuery={setQuery}
+              group={state.group === "1"}
+              setGroup={(on) => update({ group: on ? "1" : "" }, { replace: true })}
+            />
           </div>
           <div className="min-h-0 flex-1">
             <MessageList
@@ -152,7 +157,7 @@ export function App({ user, logout }: Props) {
                 {t.back}
               </button>
               <div className="min-h-0 flex-1">
-                <MessageView id={state.m} />
+                <MessageView id={state.m} open={(m) => update({ m })} />
               </div>
             </>
           ) : (

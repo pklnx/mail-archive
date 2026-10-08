@@ -93,6 +93,29 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The last message of a conversation, with the conversation above the body.
+  const p = await page("light");
+  await openMessage(p, "Re: Quote for the kitchen renovation");
+  await p.getByRole("region", { name: "Conversation" }).waitFor();
+  await p.getByRole("list", { name: "Messages" }).evaluate((el) => el.scrollTo(0, 0));
+  await p.screenshot({ path: `${out}/conversation.png` });
+  await p.context().close();
+}
+
+{
+  // The list grouped by conversation, with one conversation expanded.
+  const p = await page("light");
+  await p.goto(base + "/?group=1");
+  await p.getByRole("button", { name: /Show all 3 messages/ }).click();
+  await p.getByRole("list", { name: "Conversation" }).getByRole("button").nth(2).waitFor();
+  // Start the list at the conversation, and move the mouse off the button.
+  await p.getByRole("button", { name: "Hide the messages" }).evaluate((el) => el.closest("li").scrollIntoView({ block: "start" }));
+  await p.mouse.move(0, 0);
+  await p.screenshot({ path: `${out}/grouped.png` });
+  await p.context().close();
+}
+
+{
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
   await p.getByText(/Last sync/).first().waitFor();

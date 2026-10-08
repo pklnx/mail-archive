@@ -5,6 +5,9 @@ interface Props {
   /** The text in the search field. */
   query: string;
   setQuery: (q: string) => void;
+  /** One row per conversation; kept in the URL, not in the search text. */
+  group: boolean;
+  setGroup: (on: boolean) => void;
 }
 
 const field =
@@ -15,7 +18,7 @@ const field =
  * They edit the prefix tokens in the search text, so both stay in sync.
  * Attachment names (attachment:) are typed only.
  */
-export function SearchFilters({ query, setQuery }: Props) {
+export function SearchFilters({ query, setQuery, group, setGroup }: Props) {
   const p = parseQuery(query);
   const set = (key: TokenKey, value: string) => setQuery(setToken(query, key, value));
   const input = (key: "from" | "to" | "after" | "before", label: string, type: "text" | "date") => (
@@ -30,9 +33,13 @@ export function SearchFilters({ query, setQuery }: Props) {
       {input("to", t.toOrCc, "text")}
       {input("after", t.since, "date")}
       {input("before", t.before, "date")}
-      <label className="col-span-2 flex items-center gap-2">
+      <label className="flex items-center gap-2">
         <input type="checkbox" checked={p.hasAttachment} onChange={(e) => set("has", e.target.checked ? "attachment" : "")} />
         {t.hasAttachment}
+      </label>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={group} onChange={(e) => setGroup(e.target.checked)} />
+        {t.groupByConversation}
       </label>
     </div>
   );
