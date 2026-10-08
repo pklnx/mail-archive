@@ -85,7 +85,8 @@ without it these endpoints answer `503` and `GET /api/accounts` reports
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). |
+| `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
 | `GET /api/messages/{id}/parts/{n}` | One attachment. PNG, JPEG, GIF and WebP are shown inline; everything else is a download. |
@@ -103,21 +104,47 @@ Query parameters of `GET /api/messages`:
 | `attachment` | Part of an attachment's file name, in any case. Implies `has=attachment`. |
 | `has` | Only `attachment`: messages with at least one attachment. |
 | `after`, `before` | Date range. `after` is inclusive, `before` exclusive. `YYYY-MM-DD` means midnight UTC; RFC 3339 with an offset (`2024-01-01T00:00:00+01:00`) sets another midnight. |
+| `group` | `1`: one row per conversation, the newest message of it that matches all other parameters. `0` or empty: one row per message. |
+| `thread` | Only the messages of this conversation: a `thread` value from a grouped row or a message. At most 2000 bytes. |
 | `limit` | Page size, 1 to 200, default 50. |
 | `cursor` | The `nextCursor` of the previous page. |
 
 `from`, `to` and `attachment` take at most 200 characters each. All filters
-combine. `400` for a longer value, a `has` other than `attachment`, an
-invalid date, or `after` later than `before`.
+combine. `400` for a longer value, a `has` other than `attachment`, a
+`group` other than `0` or `1`, a longer `thread`, an invalid date, or
+`after` later than `before`.
 
 The response is `{"messages": [...], "nextCursor": "..." | null}`. Each
 message has `id`, `size`, `subject`, `from`, `sentAt`, `sortAt`,
 `hasAttachment` and, for searches, a `snippet` in which matches are marked
-with U+E000 (start) and U+E001 (end).
+with U+E000 (start) and U+E001 (end). With `group=1` each row also has
+`thread` and `count`, the number of the conversation's messages that match;
+`thread=` with the same other parameters lists exactly those. The cursor
+works the same in both modes.
 
-Recipients, attachment names and `hasAttachment` of messages archived before
-they were recorded are empty until `reindex` has run; see
-[Upgrades](../guide/operations#one-time-steps).
+Recipients, attachment names, `hasAttachment` and conversations of messages
+archived before they were recorded are empty until `reindex` has run; see
+[Upgrades](../guide/operations#one-time-steps). Until then, each such
+message is a conversation of its own.
+
+### Conversations
+
+A message's conversation (its thread key) is the first ID in its
+`References` header, else its `In-Reply-To`, else its own `Message-ID`, else
+the message alone. Subjects are not used.
+
+`GET /api/messages/{id}/conversation` answers
+`{"messages": [...], "total": N, "truncated": false}`, oldest first: the
+messages of the conversation, plus the message it answers and its replies
+even when they belong to another conversation (a reply with only an
+`In-Reply-To` to a message in the middle of a conversation). Each entry has
+`id`, `subject`, `from`, `sentAt`, `sortAt` and `relation`: `self`, `parent`
+(the message it answers), `reply` (answers it or names it in `References`)
+or `thread`. At most the newest 200 are listed; `total` counts all, and
+`truncated` says that older ones were left out.
+
+Only messages found in the user's own accounts are listed or counted, in
+conversations, grouped rows and `thread=` alike.
 
 ## Accounts
 
