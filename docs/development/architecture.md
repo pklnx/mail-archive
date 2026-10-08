@@ -87,11 +87,21 @@ grouped join was about 20 times slower on 500,000 locations;
 
 Sync and import store a message the same way (`internal/archive/ingest.go`):
 the bytes stream into the blob store while they are hashed,
-`archive.BuildMeta` extracts headers (at most 1 MiB) and search text for
-messages the database does not know yet, and a folder writer commits batches
-of 100 messages with their locations and the folder's last UID
-(`Store.SaveBatch`). Fields extracted in `BuildMeta` thus apply to imported
-mail too.
+`archive.BuildMeta` extracts headers (at most 1 MiB) and the index data
+(body text, To and Cc, attachment names, `has_attachment`) for messages the
+database does not know yet, and a folder writer commits batches of 100
+messages with their locations and the folder's last UID (`Store.SaveBatch`).
+Fields extracted in `BuildMeta` thus apply to imported mail too.
+
+`messages.index_version` records which extraction filled a row
+(`store.IndexVersion`, currently 2). Sync and import write the current
+version. A migration that needs new extracted fields adds columns without
+filling them; existing rows keep their lower version, and `reindex` walks
+them in primary-key order, 200 per transaction, and fills them from the
+stored files. Its update only touches rows below the current version, so it
+never overwrites a row that a sync stored meanwhile. An advisory lock
+(class `mc`) keeps a second reindex out. A later extraction bumps
+`IndexVersion` and adds its fields to the same pass.
 
 `archive.Importer` reads mbox files (`mailbox.MboxScanner`, streaming, one
 line buffer per message) and Maildirs. Bytes stay as they are with one
@@ -180,6 +190,13 @@ with a GIN index. Queries use `websearch_to_tsquery` in all three
 configurations; subject and sender also match as substrings through
 `pg_trgm`. Results are ordered by date and paginated with a keyset cursor
 (date, SHA-256), so deep pages stay fast.
+
+Recipients and attachment names are not in the `tsvector`. The filters
+`from`, `to` and `attachment` are `ILIKE` substring matches with trigram
+indexes; `to` uses one index over To and Cc joined by a newline. A partial
+index on `(sort_at, sha256) WHERE has_attachment` serves `has:attachment`
+without a query. The web UI parses prefixes such as `to:` from the search
+field (`web/src/searchSyntax.ts`); the server only sees API parameters.
 
 ## Web server
 

@@ -54,10 +54,44 @@ Search covers subject, sender and body text. Words are matched in German and
 English forms: `invoices` finds `invoice`, `Rechnungen` finds `Rechnung`.
 Matches are highlighted in the result snippets.
 
-![Search results with highlighted matches](/screenshots/search.png)
+### Filters
 
-Messages archived before full-text search existed need a one-time
-`./ma reindex`; see [Upgrades](./operations#upgrades).
+Prefixes in the search field narrow the results. They combine with each other
+and with the words around them, and are not case sensitive.
+
+| Prefix | Finds |
+|---|---|
+| `from:sam` | Messages whose sender's name or address contains `sam`. |
+| `to:taxadvisor` | Messages with `taxadvisor` in a To or Cc name or address. Bcc is not stored. |
+| `to:"Jordan Lee"` | Quotes allow spaces. |
+| `attachment:lease` | Messages with an attachment whose file name contains `lease`. |
+| `has:attachment` | Messages with at least one attachment. |
+| `after:2024-01-01` | Sent on or after 1 January 2024. |
+| `before:2025-01-01` | Sent before 1 January 2025, so up to 31 December 2024. |
+
+Dates are days in your browser's time zone. If a prefix appears twice, the
+last one counts. Anything else stays a search word, for example `subject:`,
+an invalid date or a URL.
+
+Recipients and attachment names are found only with `to:` and `attachment:`,
+not by plain words: otherwise your own address would match nearly every
+message you received. The contents of attachments are not searched.
+
+The filter row under the search field sets the same prefixes for From, To or
+Cc, the date range and attachments. It writes them into the search field, and
+prefixes you type show up in it. On a phone it is behind the filter button
+and opens by itself when the search contains a prefix. The URL keeps the
+whole search, so Back, reload and bookmarks keep the filters.
+
+A message has an attachment when a part is marked as one, or when it is a
+named file that is not text, such as a PDF that Apple Mail sends inline.
+Images embedded in the message body (`cid:`) do not count. Messages with
+attachments show a paperclip in the list.
+
+![Search with a recipient, a date and a word](/screenshots/search.png)
+
+Messages archived by an older version need a one-time `./ma reindex` before
+filters and full-text search find them; see [Upgrades](./operations#upgrades).
 
 ## Appearance and language
 
