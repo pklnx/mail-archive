@@ -106,8 +106,8 @@ for (const scheme of ["light", "dark"]) {
   // The list grouped by conversation, with one conversation expanded.
   const p = await page("light");
   await p.goto(base + "/?group=1");
-  await p.getByRole("button", { name: /Show all 3 messages/ }).click();
-  await p.getByRole("list", { name: "Conversation" }).getByRole("button").nth(2).waitFor();
+  await p.getByRole("button", { name: /Show 2 earlier messages/ }).click();
+  await p.getByRole("list", { name: "Conversation" }).getByRole("button").nth(1).waitFor();
   // Start the list at the conversation, and move the mouse off the button.
   await p.getByRole("button", { name: "Hide the messages" }).evaluate((el) => el.closest("li").scrollIntoView({ block: "start" }));
   await p.mouse.move(0, 0);

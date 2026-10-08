@@ -18,7 +18,11 @@ CREATE INDEX messages_in_reply_to_idx ON messages (in_reply_to);
 CREATE INDEX messages_reference_ids_idx ON messages USING GIN (reference_ids);
 
 -- +goose Down
--- Only data that reindex can recompute is lost.
+-- Only data that reindex can recompute is lost. Rows extracted with the
+-- conversation fields go back to the version before them, so that reindex
+-- fills the fields again when this migration is applied again. Only
+-- index_version is set, so the full-text column is not recomputed.
+UPDATE messages SET index_version = 2 WHERE index_version > 2;
 DROP INDEX messages_reference_ids_idx;
 DROP INDEX messages_in_reply_to_idx;
 DROP INDEX messages_thread_idx;

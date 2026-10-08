@@ -174,8 +174,8 @@ function ThreadRow({ m, filter, selected, open }: { m: MessageSummary; filter: F
           type="button"
           aria-expanded={expanded}
           aria-controls={id}
-          aria-label={expanded ? t.hideConversation : t.showConversation(count)}
-          title={expanded ? t.hideConversation : t.showConversation(count)}
+          aria-label={expanded ? t.hideConversation : t.showConversation(count - 1)}
+          title={expanded ? t.hideConversation : t.showConversation(count - 1)}
           className="shrink-0 border-b border-zinc-200 px-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           onClick={() => setExpanded(!expanded)}
         >
@@ -184,7 +184,9 @@ function ThreadRow({ m, filter, selected, open }: { m: MessageSummary; filter: F
           </svg>
         </button>
       </div>
-      {expanded && <ThreadMembers id={id} filter={{ ...filter, group: false, thread: m.thread }} count={count} selected={selected} open={open} />}
+      {expanded && (
+        <ThreadMembers id={id} filter={{ ...filter, group: false, thread: m.thread }} newest={m.id} count={count} selected={selected} open={open} />
+      )}
     </>
   );
 }
@@ -192,22 +194,37 @@ function ThreadRow({ m, filter, selected, open }: { m: MessageSummary; filter: F
 /** At most this many messages of an expanded conversation (the API's page limit). */
 const maxMembers = 200;
 
-function ThreadMembers({ id, filter, count, selected, open }: { id: string; filter: Filter; count: number; selected: string; open: (id: string) => void }) {
+/** The messages of an expanded conversation without its newest one, which the row above shows. */
+export function earlierMembers(members: MessageSummary[], newest: string): MessageSummary[] {
+  return members.filter((m) => m.id !== newest);
+}
+
+interface ThreadMembersProps {
+  id: string;
+  filter: Filter;
+  /** The message of the grouped row. */
+  newest: string;
+  count: number;
+  selected: string;
+  open: (id: string) => void;
+}
+
+function ThreadMembers({ id, filter, newest, count, selected, open }: ThreadMembersProps) {
   const key = JSON.stringify(filter);
   const res = useAsync((signal) => listMessages(filter, null, signal, maxMembers), [key]);
+  const members = res.status === "ok" ? earlierMembers(res.data.messages, newest) : [];
+  const hidden = count - 1 - members.length;
   return (
     <ul id={id} aria-label={t.conversation} className="bg-zinc-50/60 dark:bg-zinc-900/40">
       {res.status === "loading" && <li className="py-2 pl-8 text-xs text-zinc-500">{t.loading}</li>}
       {res.status === "error" && <li className="py-2 pl-8 text-xs text-red-600">{t.loadMessagesFailed(res.error.message)}</li>}
       {res.status === "ok" &&
-        res.data.messages.map((x) => (
+        members.map((x) => (
           <li key={x.id}>
             <Row m={x} selected={selected} open={open} nested />
           </li>
         ))}
-      {res.status === "ok" && count > res.data.messages.length && (
-        <li className="py-2 pl-8 text-xs text-zinc-500">{t.moreInConversation(count - res.data.messages.length)}</li>
-      )}
+      {res.status === "ok" && hidden > 0 && <li className="py-2 pl-8 text-xs text-zinc-500">{t.moreInConversation(hidden)}</li>}
     </ul>
   );
 }

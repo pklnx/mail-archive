@@ -105,9 +105,9 @@ and Sent come together here, also from different accounts.
 
 "Group by conversation" in the filter row lists one row per conversation:
 its newest message, with the number of its messages as a badge. The arrow
-on the right shows all of them. With a search or filters, a row is the
-newest message that matches, the badge counts the matches, and the arrow
-lists them. The URL keeps the setting (`group=1`).
+on the right shows the earlier ones below it. With a search or filters, a
+row is the newest message that matches, the badge counts the matches, and
+the arrow lists the other matches. The URL keeps the setting (`group=1`).
 
 ![The list grouped by conversation, one conversation expanded](/screenshots/grouped.png)
 

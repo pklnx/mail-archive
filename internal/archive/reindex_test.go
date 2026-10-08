@@ -364,3 +364,37 @@ func TestReindexCost(t *testing.T) {
 	}
 	t.Logf("reindex of %d messages: %v (%.1f ms per message)", n, time.Since(start), float64(time.Since(start).Milliseconds())/n)
 }
+
+// Rolling the conversation migration back and applying it again leaves the
+// messages pending, so reindex fills the conversation fields again.
+func TestReindexAfterConversationRollback(t *testing.T) {
+	e := newReindexEnv(t)
+	sha := e.store(replyRaw) // current version, with conversation fields
+	var bodyBefore string
+	if err := e.conn.QueryRow(e.ctx, `SELECT body_text FROM messages WHERE sha256 = $1`, sha).Scan(&bodyBefore); err != nil {
+		t.Fatal(err)
+	}
+	if name, err := e.st.MigrateDown(e.ctx); err != nil || !strings.Contains(name, "conversations") {
+		t.Fatalf("MigrateDown = %q, %v", name, err)
+	}
+	if _, err := e.st.Migrate(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.search(store.SearchFilter{Thread: "o@x"}); n != 0 {
+		t.Fatalf("thread o@x lists %d messages before reindex", n)
+	}
+	var version int16
+	var body string
+	if err := e.conn.QueryRow(e.ctx, `SELECT index_version, body_text FROM messages WHERE sha256 = $1`, sha).Scan(&version, &body); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 || body != bodyBefore {
+		t.Fatalf("after rollback: version %d, body %q", version, body)
+	}
+	if n := e.reindex(); n != 1 {
+		t.Fatalf("Reindex updated %d, want 1", n)
+	}
+	if n := e.search(store.SearchFilter{Thread: "o@x"}); n != 1 {
+		t.Errorf("thread o@x lists %d messages after reindex", n)
+	}
+}
