@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { accountsApi, folderQuestion, type Account, type AccountInput, type ServerFolder, type TLSMode } from "./api";
 import { suggestName } from "./accountName";
-import { formatCount, formatInterval, relativeTime } from "./format";
+import { formatCount, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 import type { AccountsState } from "./useAccounts";
 
@@ -146,6 +146,17 @@ function messageCount(a: Account): number {
   return a.folders.reduce((n, f) => n + f.messages, 0);
 }
 
+/** The failure streak and staleness of an IMAP account, for its card. */
+export function syncHealthNote(a: Account): { text: string; failing: boolean } | null {
+  if (a.kind !== "imap" || a.removed) return null;
+  const s = a.sync;
+  if (s.failureStreak >= 2 && s.failingSince) {
+    return { text: t.failureStreak(s.failureStreak, shortDate(s.failingSince)), failing: s.health === "failing" };
+  }
+  if (s.health === "stale") return { text: t.staleNote, failing: false };
+  return null;
+}
+
 export function syncStatus(a: Account): { text: string; error?: string } {
   const run = a.sync.lastRun;
   if (a.kind === "import") {
@@ -181,6 +192,7 @@ interface CardProps {
 
 function AccountCard({ account: a, manage, onSync, onEdit, onToggle, onRemove }: CardProps) {
   const status = syncStatus(a);
+  const health = syncHealthNote(a);
   const busy = a.sync.state !== "idle";
   if (a.kind === "import") {
     return (
@@ -228,6 +240,9 @@ function AccountCard({ account: a, manage, onSync, onEdit, onToggle, onRemove }:
         {status.text}
       </p>
       {status.error && <p className="text-xs break-words text-red-600">{status.error}</p>}
+      {health && (
+        <p className={`text-sm ${health.failing ? "font-medium text-red-600" : "text-amber-700 dark:text-amber-500"}`}>{health.text}</p>
+      )}
       {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.disabledNote}</p>}
       {manage && (
         <div className="flex flex-wrap gap-2">

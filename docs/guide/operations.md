@@ -116,7 +116,122 @@ Pull requests that change the database schema carry the label
 | A version without login | `./ma user add NAME --admin` once; until then the web UI only shows how to do it. This first user gets all existing accounts. |
 | A version without separate users | Nothing. Existing accounts belong to the oldest admin; hand some to other users with `./ma account move NAME --to USER`. `./ma migrate` also encrypts the stored IMAP passwords again, bound to the account ID instead of the name (needs `MAIL_ARCHIVE_SECRET_KEY`; the web server does the same when it starts). Older versions cannot read these passwords: going back means entering them again with `account set-password`. |
 | A version without 2FA | Nothing to run. Every admin must set up TOTP at the next web login and needs an authenticator app for it. Recovery codes and TOTP secrets depend on `MAIL_ARCHIVE_SECRET_KEY`: after changing the key nobody with 2FA can log in until `./ma user reset-2fa NAME` resets it. |
+| A version without sync alerts | Nothing to run. The migration counts each account's failed syncs since its last success. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, accounts that are already failing are announced once after the upgrade. |
 | A version without passkeys | Nothing to run. To use passkeys, set `MAIL_ARCHIVE_PUBLIC_URL` to the address you open in the browser (Compose defaults to `http://localhost:WEB_PORT`). Passkeys are bound to its host name: after changing it, remove the passkeys (`./ma user remove-passkeys NAME`) and register them again. |
+
+## Monitoring and alerts
+
+An account whose syncs fail (a changed password, a provider that blocks the
+login, an expired app password) loses mail until someone notices. Three
+things make it visible:
+
+- **The web UI** shows a banner above the mail when one of your accounts
+  keeps failing or has not synced for a while; see [Web UI](./web-ui#sync-problems).
+- **An alert** through a webhook: one message when an account's syncs keep
+  failing, one when they work again. See [Syncing](./syncing#alerts) for
+  what counts.
+- **`/healthz/sync`** for a monitoring tool such as Uptime Kuma.
+
+### Webhook alerts
+
+Set the URL in `.env` and restart the web server
+(`docker compose up -d web`). Alerts are sent by the web server, and at the
+end of `./ma sync`, so a cron setup without the web server gets them too.
+Check the settings with:
+
+```sh
+./ma notify test
+```
+
+It sends a test message, prints the HTTP status and exits non-zero if the
+receiver refused it.
+
+**ntfy** (app for Android and iOS, or self-hosted):
+
+```sh
+MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL=https://ntfy.sh/mail-archive-k3v9q2x7w1
+MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
+```
+
+Anyone who knows a topic on the public ntfy.sh server can read it, and the
+alerts name your accounts. Use a long random topic, or better a protected
+topic with an access token:
+
+```sh
+MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...
+```
+
+A self-hosted ntfy on the LAN works too (`http://192.168.1.5:2586/alerts`);
+plain `http` to another machine logs a warning at start, because the alert
+and the token travel unencrypted.
+
+**Gotify:** `https://gotify.example.org/message` with the format `json` and
+`MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer <app token>` (or
+`?token=<app token>` in the URL).
+
+**Slack, Mattermost, Discord:** create an incoming webhook and use its URL
+with the format `json`. They show the `text` (Slack, Mattermost) or `content`
+(Discord) field.
+
+**Anything else:** the `json` format posts:
+
+```json
+{
+  "id": "3-1759320000-failing",
+  "event": "failing",
+  "title": "Mail archive: sync of work keeps failing",
+  "message": "Account \"work\" (owner anna, ID 3) failed 3 syncs in a row since 2026-10-01 12:00 UTC.\nLast error: …",
+  "text": "…", "content": "…",
+  "accounts": [{"id": "3-1759320000-failing", "event": "failing", "accountId": 3, "account": "work",
+                "owner": "anna", "failureStreak": 3, "failingSince": "2026-10-01T12:00:00Z", "lastError": "…"}]
+}
+```
+
+`event` is `failing`, `recovered`, `mixed` (alerts and recoveries in one
+message) or `test`. Several accounts that change at the same time go into one
+message (up to 50 per request). The `id` is also sent as the
+`X-Mail-Archive-Id` header.
+
+Alerts are delivered **at least once**: if the server stops right after the
+receiver accepted a message, it is sent again with the same `id`. ntfy, Gotify
+and Slack do not drop such repeats; a receiver of your own can use the `id`.
+A receiver that is down is retried after 30 seconds, then with growing
+pauses up to an hour, and given up after 24 hours (logged as
+`notification given up`). An answer like `400` or `404` usually means a wrong
+URL, token or format: it is logged as an error and retried hourly. Redirects
+are not followed.
+
+The log records each alert (`alert sent`, `recovery sent`) with the account
+and its owner. It never contains the webhook URL, the authorization or the
+message; failed attempts name only the scheme and host.
+
+### /healthz/sync
+
+`GET /healthz/sync` needs no login and answers:
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | `{"status":"ok"}` | Every enabled account syncs. |
+| `503` | `{"status":"degraded","failing":[3,7],"stale":[5]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two `MAIL_ARCHIVE_SYNC_INTERVAL`s. |
+| `503` | `{"status":"unavailable"}` | The database cannot be reached. |
+
+Disabled, removed and import accounts are left out; with the schedule off
+(`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts as stale. The answer is
+cached for 15 seconds. `./ma status` shows each account's ID next to its
+name, and in `FAILED` how many syncs in a row failed.
+
+The request must use an allowed host name (`MAIL_ARCHIVE_ALLOWED_HOSTS`),
+like every request. For Uptime Kuma, add an HTTP monitor for
+`http://localhost:8080/healthz/sync`, or from another machine with a
+host name you allowed. With curl:
+
+```sh
+curl -fsS http://localhost:8080/healthz/sync || echo "mail-archive: syncs failing"
+```
+
+Do not use `/healthz/sync` as the container's healthcheck: Docker would
+restart the web server whenever an IMAP account fails, which fixes nothing.
+`/healthz` only says whether the server is up and is the right check there.
 
 ## Logs
 

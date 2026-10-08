@@ -21,6 +21,9 @@ type Runner struct {
 	Interval time.Duration
 	// CheckEvery is how often the schedule is checked (default one minute).
 	CheckEvery time.Duration
+	// AfterSync, if set, is called after each sync, for example to deliver
+	// notifications right away.
+	AfterSync func()
 
 	mu     sync.Mutex
 	queue  []int64
@@ -148,6 +151,9 @@ func (r *Runner) syncOne(ctx context.Context, id int64) {
 		return
 	}
 	res := r.Syncer.SyncAccount(ctx, a)
+	if r.AfterSync != nil {
+		r.AfterSync()
+	}
 	switch {
 	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrImportAccount):
 		log.Debug("sync skipped", "account", a.Name, "reason", res.Err)

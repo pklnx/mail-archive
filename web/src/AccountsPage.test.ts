@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Account } from "./api";
-import { syncableCount, syncStatus } from "./AccountsPage";
+import type { Account, SyncInfo } from "./api";
+import { syncableCount, syncHealthNote, syncStatus } from "./AccountsPage";
+import { bannerState } from "./HealthBanner";
 import { isActive } from "./useAccounts";
 
-function account(sync: Account["sync"], kind: Account["kind"] = "imap"): Account {
+function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, kind: Account["kind"] = "imap"): Account {
   return {
     name: "a", kind, enabled: kind === "imap", removed: false, host: "h", port: 993, tls: "tls", username: "u",
-    includedFolders: [], excludedFolders: [], folders: [], sync,
+    includedFolders: [], excludedFolders: [], folders: [],
+    sync: { failureStreak: 0, failingSince: null, health: "ok", ...sync },
   };
 }
 
@@ -41,9 +43,40 @@ describe("syncStatus", () => {
     expect(syncableCount([{ ...account(idle), removed: true }])).toBe(0);
   });
   it("polls fast only while a sync is pending", () => {
-    const data = { manage: true, syncInterval: "", accounts: [account({ state: "idle", lastRun: null })] };
+    const data = { manage: true, syncInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };
     expect(isActive(data)).toBe(false);
     expect(isActive({ ...data, accounts: [account({ state: "queued", lastRun: null })] })).toBe(true);
     expect(isActive(null)).toBe(false);
+  });
+  it("shows the failure streak and staleness", () => {
+    const idle = { state: "idle" as const, lastRun: null };
+    expect(syncHealthNote(account(idle))).toBeNull();
+    expect(syncHealthNote(account({ ...idle, failureStreak: 1, failingSince: "2026-10-01T12:00:00Z" }))).toBeNull();
+    const failing = syncHealthNote(account({ ...idle, failureStreak: 4, failingSince: "2026-10-01T12:00:00Z", health: "failing" }));
+    expect(failing?.text).toMatch(/^Failed 4 times in a row since /);
+    expect(failing?.failing).toBe(true);
+    expect(syncHealthNote(account({ ...idle, failureStreak: 2, failingSince: "2026-10-01T12:00:00Z" }))?.failing).toBe(false);
+    expect(syncHealthNote(account({ ...idle, health: "stale" }))?.text).toMatch(/two sync intervals/);
+    expect(syncHealthNote(account(idle, "import"))).toBeNull();
+  });
+});
+
+describe("bannerState", () => {
+  const idle = { state: "idle" as const, lastRun: null };
+  const named = (name: string, sync: Partial<SyncInfo>, over: Partial<Account> = {}) => ({ ...account({ ...idle, ...sync }), name, ...over });
+  it("lists own failing and stale accounts", () => {
+    const data = {
+      manage: true, syncInterval: "6h0m0s", alertAfter: 3,
+      accounts: [
+        named("work", { health: "failing", failureStreak: 3 }),
+        named("old", { health: "stale" }),
+        named("fine", {}),
+        named("off", { health: "failing" }, { enabled: false }),
+        named("gone", { health: "failing" }, { removed: true }),
+      ],
+    };
+    expect(bannerState(data)).toEqual({ failing: ["work"], stale: ["old"], otherFailing: 0 });
+    expect(bannerState({ ...data, otherFailing: 2 }).otherFailing).toBe(2);
+    expect(bannerState(null)).toEqual({ failing: [], stale: [], otherFailing: 0 });
   });
 });

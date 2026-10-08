@@ -29,6 +29,13 @@ type syncJSON struct {
 	// State is "idle", "queued" or "running" (also when the CLI syncs).
 	State   string       `json:"state"`
 	LastRun *lastRunJSON `json:"lastRun"`
+	// FailureStreak counts the failed syncs in a row; FailingSince is when
+	// the first of them started (null without a streak).
+	FailureStreak int        `json:"failureStreak"`
+	FailingSince  *time.Time `json:"failingSince"`
+	// Health is "ok", "failing" (the last alertAfter syncs failed) or
+	// "stale" (no successful sync within two intervals).
+	Health string `json:"health"`
 }
 
 type accountJSON struct {
@@ -61,6 +68,11 @@ type accountsResponse struct {
 	Manage bool `json:"manage"`
 	// SyncInterval of the schedule ("6h0m0s"), empty if off.
 	SyncInterval string `json:"syncInterval"`
+	// AlertAfter failed syncs in a row make an account failing.
+	AlertAfter int `json:"alertAfter"`
+	// OtherFailing, for admins only, counts the failing accounts of other
+	// users. Admins never see their names.
+	OtherFailing *int64 `json:"otherFailing,omitempty"`
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +97,12 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	me := userID(r)
+	health, err := s.store.SyncHealth(ctx, &me)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	var queued map[int64]bool
 	if s.runner != nil {
 		queued = s.runner.Queued()
@@ -97,7 +115,22 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		folders[a.Name] = list
 	}
-	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Manage: s.syncer != nil && s.runner != nil}
+	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
+	if sess := currentSession(r); sess != nil && sess.IsAdmin {
+		failing, err := s.store.CountFailingByOwner(ctx, s.alertAfter)
+		if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		var others int64
+		for owner, n := range failing {
+			if owner != me {
+				others += n
+			}
+		}
+		out.OtherFailing = &others
+	}
+	now := s.currentTime()
 	if s.runner != nil && s.runner.Interval > 0 {
 		out.SyncInterval = s.runner.Interval.String()
 	}
@@ -106,7 +139,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			Name: a.Name, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.RemovedAt != nil,
 			Host: a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
-			Folders: folders[a.Name], Sync: syncJSON{State: "idle"},
+			Folders: folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},
+		}
+		if h := health[a.ID]; h != nil {
+			aj.Sync.FailureStreak, aj.Sync.FailingSince = h.FailureStreak, h.FailingSince
+			aj.Sync.Health = h.State(s.alertAfter, s.syncInterval(), now)
 		}
 		if a.Kind == store.KindImport {
 			aj.TLS = ""

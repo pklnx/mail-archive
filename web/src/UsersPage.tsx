@@ -86,6 +86,7 @@ export function UsersPage({ close }: { close: () => void }) {
               </span>
               <span className="text-sm text-zinc-500">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
               {u.passkeys > 0 && <span className="text-sm text-zinc-500">{t.passkeyCount(u.passkeys)}</span>}
+              {u.failingAccounts > 0 && <span className="text-sm font-medium text-red-600">{t.failingCount(u.failingAccounts)}</span>}
               <span className="ml-auto text-sm text-zinc-500">
                 {t.colAccounts}: {u.accounts} · {t.colLastLogin}: {u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}
               </span>

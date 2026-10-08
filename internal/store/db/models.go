@@ -27,6 +27,21 @@ type Account struct {
 	Kind            string
 }
 
+type AccountSyncHealth struct {
+	AccountID          int64
+	FailureStreak      int32
+	FailingSince       *time.Time
+	LastSuccessAt      *time.Time
+	NotifiedState      string
+	NotifiedAt         *time.Time
+	NotifyAttempts     int32
+	NotifyNextAt       *time.Time
+	NotifyError        *string
+	NotifyFirstErrorAt *time.Time
+	NotifyLease        []byte
+	NotifyLeaseUntil   *time.Time
+}
+
 type Folder struct {
 	ID           int64
 	AccountID    int64

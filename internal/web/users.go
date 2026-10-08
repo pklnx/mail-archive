@@ -18,15 +18,17 @@ import (
 // other users' accounts or mail, just how many accounts a user has.
 
 type adminUserJSON struct {
-	Name               string     `json:"name"`
-	Admin              bool       `json:"admin"`
-	Locked             bool       `json:"locked"`
-	MustChangePassword bool       `json:"mustChangePassword"`
-	TwoFactorEnabled   bool       `json:"twoFactorEnabled"`
-	Passkeys           int64      `json:"passkeys"`
-	Accounts           int64      `json:"accounts"`
-	CreatedAt          time.Time  `json:"createdAt"`
-	LastLoginAt        *time.Time `json:"lastLoginAt"`
+	Name               string `json:"name"`
+	Admin              bool   `json:"admin"`
+	Locked             bool   `json:"locked"`
+	MustChangePassword bool   `json:"mustChangePassword"`
+	TwoFactorEnabled   bool   `json:"twoFactorEnabled"`
+	Passkeys           int64  `json:"passkeys"`
+	Accounts           int64  `json:"accounts"`
+	// FailingAccounts counts the user's accounts whose syncs keep failing.
+	FailingAccounts int64      `json:"failingAccounts"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	LastLoginAt     *time.Time `json:"lastLoginAt"`
 	// Self marks the logged-in admin, whose own row cannot be changed here.
 	Self bool `json:"self"`
 }
@@ -59,11 +61,16 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	failing, err := s.store.CountFailingByOwner(r.Context(), s.alertAfter)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	out := make([]adminUserJSON, 0, len(users))
 	for _, u := range users {
 		out = append(out, adminUserJSON{
 			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TwoFactorEnabled,
-			Passkeys: passkeys[u.ID], Accounts: owned[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
+			Passkeys: passkeys[u.ID], Accounts: owned[u.ID], FailingAccounts: failing[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
 		})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"users": out})

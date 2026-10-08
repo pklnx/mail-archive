@@ -31,7 +31,19 @@ export interface Account {
   includedFolders: string[];
   excludedFolders: string[];
   folders: Folder[];
-  sync: { state: "idle" | "queued" | "running"; lastRun: LastRun | null };
+  sync: SyncInfo;
+}
+
+/** "failing": the last alertAfter syncs failed; "stale": no successful sync within two intervals. */
+export type Health = "ok" | "failing" | "stale";
+
+export interface SyncInfo {
+  state: "idle" | "queued" | "running";
+  lastRun: LastRun | null;
+  /** Failed syncs in a row, and when the first of them started. */
+  failureStreak: number;
+  failingSince: string | null;
+  health: Health;
 }
 
 export interface AccountsResponse {
@@ -40,6 +52,10 @@ export interface AccountsResponse {
   manage: boolean;
   /** Go duration like "6h0m0s", empty if the schedule is off. */
   syncInterval: string;
+  /** Failed syncs in a row that make an account failing. */
+  alertAfter: number;
+  /** Admins only: failing accounts of other users, as a count. */
+  otherFailing?: number;
 }
 
 export interface AccountInput {
@@ -376,6 +392,8 @@ export interface ManagedUser {
   twoFactorEnabled: boolean;
   passkeys: number;
   accounts: number;
+  /** The user's accounts whose syncs keep failing. */
+  failingAccounts: number;
   createdAt: string;
   lastLoginAt: string | null;
   /** The logged-in admin, whose own row cannot be changed there. */

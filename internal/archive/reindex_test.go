@@ -264,13 +264,26 @@ func TestReindexFillsThreadsAfterVersionBump(t *testing.T) {
 	}
 }
 
+// rollBackThrough rolls migrations back up to and including the one whose
+// file name contains name.
+func (e *reindexEnv) rollBackThrough(name string) {
+	e.t.Helper()
+	for {
+		got, err := e.st.MigrateDown(e.ctx)
+		if err != nil {
+			e.t.Fatalf("MigrateDown = %q, %v", got, err)
+		}
+		if strings.Contains(got, name) {
+			return
+		}
+	}
+}
+
 // Messages stored before the conversation migration get their links from
 // reindex after it.
 func TestReindexAfterConversationMigration(t *testing.T) {
 	e := newReindexEnv(t)
-	if name, err := e.st.MigrateDown(e.ctx); err != nil || !strings.Contains(name, "conversations") {
-		t.Fatalf("MigrateDown = %q, %v", name, err)
-	}
+	e.rollBackThrough("conversations")
 	blob, _, err := e.blobs.Put(strings.NewReader(replyRaw))
 	if err != nil {
 		t.Fatal(err)
@@ -374,9 +387,7 @@ func TestReindexAfterConversationRollback(t *testing.T) {
 	if err := e.conn.QueryRow(e.ctx, `SELECT body_text FROM messages WHERE sha256 = $1`, sha).Scan(&bodyBefore); err != nil {
 		t.Fatal(err)
 	}
-	if name, err := e.st.MigrateDown(e.ctx); err != nil || !strings.Contains(name, "conversations") {
-		t.Fatalf("MigrateDown = %q, %v", name, err)
-	}
+	e.rollBackThrough("conversations")
 	if _, err := e.st.Migrate(e.ctx); err != nil {
 		t.Fatal(err)
 	}

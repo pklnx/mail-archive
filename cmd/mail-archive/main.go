@@ -39,6 +39,7 @@ func main() {
 		newExportCmd(),
 		newImportCmd(),
 		newBackupCmd(),
+		newNotifyCmd(),
 		newServeCmd(),
 	)
 	if err := root.ExecuteContext(ctx); err != nil {
