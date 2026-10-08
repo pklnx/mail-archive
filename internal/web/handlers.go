@@ -27,6 +27,9 @@ type statusAccount struct {
 	LastRunAt  *time.Time `json:"lastRunAt"`
 	LastStatus *string    `json:"lastStatus"`
 	LastError  *string    `json:"lastError"`
+	// FailureStreak and Health as in GET /api/accounts.
+	FailureStreak int    `json:"failureStreak"`
+	Health        string `json:"health"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -36,12 +39,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	health, err := s.store.SyncHealth(r.Context(), &owner)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	now := s.currentTime()
 	accounts := make([]statusAccount, 0, len(stats))
 	for _, st := range stats {
-		accounts = append(accounts, statusAccount{
+		a := statusAccount{
 			Name: st.Account, Kind: string(st.Kind), Enabled: st.Enabled, Folders: st.Folders, Messages: st.Messages,
-			LastRunAt: st.LastRunAt, LastStatus: st.LastStatus, LastError: st.LastRunError,
-		})
+			LastRunAt: st.LastRunAt, LastStatus: st.LastStatus, LastError: st.LastRunError, Health: store.HealthOK,
+		}
+		if h := health[st.AccountID]; h != nil {
+			a.FailureStreak, a.Health = h.FailureStreak, h.State(s.alertAfter, s.syncInterval(), now)
+		}
+		accounts = append(accounts, a)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"uniqueMessages": unique, "accounts": accounts})
 }

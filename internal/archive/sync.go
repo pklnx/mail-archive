@@ -130,6 +130,13 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		if res.Err != nil {
 			run.Error = res.Err.Error()
 		}
+		// A run cancelled by a shutdown says nothing about the account.
+		switch {
+		case status == "ok" || status == "partial":
+			run.Health = store.HealthSuccess
+		case ctx.Err() == nil:
+			run.Health = store.HealthFailure
+		}
 		// Record the outcome even if ctx was cancelled.
 		if err := s.Store.FinishSyncRun(context.WithoutCancel(ctx), run); err != nil {
 			log.Error("record sync run", "err", err)

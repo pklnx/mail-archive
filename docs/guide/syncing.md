@@ -91,3 +91,33 @@ command line show up as well. `./ma status` prints the same per account.
 
 A sync ends as `ok`, `partial` (some folders failed; the others are archived)
 or `failed` (for example a wrong password).
+
+## Alerts
+
+An account counts as **failing** when its last
+`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs (default 3) failed in a row, from
+the schedule, a button or `./ma sync` alike. It counts as **stale** when no
+sync succeeded within two sync intervals (counted from when it was added, if
+it never did). Both show in the web UI and in
+[`/healthz/sync`](./operations#healthz-sync); a failing account also sends an
+alert if a [webhook](./operations#webhook-alerts) is set up.
+
+What counts:
+
+- A `failed` sync extends the streak.
+- An `ok` or `partial` sync ends it: the login worked. Folders that keep
+  failing in `partial` syncs do not alert.
+- A sync stopped by a shutdown, a sync shown as `interrupted` after a crash,
+  and a sync skipped because another one runs change nothing.
+- Imports are never counted.
+
+Each failing streak sends **one alert** when it reaches the threshold and
+**one recovery** after the next successful sync, no matter how many syncs
+fail in between. If the account recovers before the alert went out, nothing
+is sent. Stale accounts do not send alerts; `/healthz/sync` reports them.
+
+Alerts and recoveries end silently when the account is disabled, removed or
+deleted. A disabled account keeps its state: enabled again while still
+failing, it sends no second alert, and its next successful sync sends the
+recovery. If it was disabled before its alert went out, the alert follows
+once it is enabled again.

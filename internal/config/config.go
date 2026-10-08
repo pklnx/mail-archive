@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,27 @@ const (
 	// https://archive.example.ts.net. Passkeys need it: they are bound to
 	// its host name.
 	EnvPublicURL = "MAIL_ARCHIVE_PUBLIC_URL"
+	// EnvAlertAfterFailures is how many syncs of an account in a row must
+	// fail before it counts as failing (alert, banner, /healthz/sync).
+	EnvAlertAfterFailures = "MAIL_ARCHIVE_ALERT_AFTER_FAILURES"
+	// EnvNotifyWebhookURL is where alerts are posted; empty turns them off.
+	EnvNotifyWebhookURL = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL"
+	// EnvNotifyWebhookFormat is "json" (default) or "ntfy".
+	EnvNotifyWebhookFormat = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT"
+	// EnvNotifyWebhookAuthorization is sent as the Authorization header.
+	EnvNotifyWebhookAuthorization = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION"
+)
+
+// DefaultAlertAfterFailures is used when EnvAlertAfterFailures is not set.
+const DefaultAlertAfterFailures = 3
+
+// MaxAlertAfterFailures is the largest accepted threshold.
+const MaxAlertAfterFailures = 100
+
+// Webhook formats.
+const (
+	WebhookFormatJSON = "json"
+	WebhookFormatNtfy = "ntfy"
 )
 
 // DefaultSyncInterval is used when EnvSyncInterval is not set.
@@ -52,6 +74,18 @@ type Config struct {
 	// PublicURL is the web UI's origin (scheme, host and port, no path);
 	// empty turns passkeys off.
 	PublicURL string
+	// AlertAfterFailures: failed syncs in a row that make an account failing.
+	AlertAfterFailures int
+	// Webhook for alerts; nil turns them off.
+	Webhook *Webhook
+}
+
+// Webhook is where alerts are sent. The URL and the authorization value
+// are secrets: never log them.
+type Webhook struct {
+	URL           *url.URL
+	Format        string
+	Authorization string
 }
 
 // Load reads the configuration from the environment.
@@ -87,6 +121,15 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 		cfg.PublicURL = origin
+	}
+	cfg.AlertAfterFailures, err = parseAlertAfter(os.Getenv(EnvAlertAfterFailures))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Webhook, err = ParseWebhook(os.Getenv(EnvNotifyWebhookURL), os.Getenv(EnvNotifyWebhookFormat),
+		os.Getenv(EnvNotifyWebhookAuthorization))
+	if err != nil {
+		return nil, err
 	}
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
@@ -144,6 +187,80 @@ func parseSyncInterval(v string) (time.Duration, error) {
 			EnvSyncInterval, MinSyncInterval, v)
 	}
 	return d, nil
+}
+
+func parseAlertAfter(v string) (int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return DefaultAlertAfterFailures, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > MaxAlertAfterFailures {
+		return 0, fmt.Errorf("%s: want a number from 1 to %d, got %q", EnvAlertAfterFailures, MaxAlertAfterFailures, v)
+	}
+	return n, nil
+}
+
+// ParseWebhook checks the webhook settings. An empty URL means no webhook
+// (Compose always passes a format); an authorization without a URL is an
+// error. Errors never contain the URL or the authorization value: both may
+// hold tokens.
+func ParseWebhook(rawURL, format, authorization string) (*Webhook, error) {
+	rawURL, format = strings.TrimSpace(rawURL), strings.ToLower(strings.TrimSpace(format))
+	authorization = strings.TrimSpace(authorization)
+	if rawURL == "" {
+		if authorization != "" {
+			return nil, fmt.Errorf("%s is set, but %s is not", EnvNotifyWebhookAuthorization, EnvNotifyWebhookURL)
+		}
+		return nil, nil
+	}
+	bad := func(why string) (*Webhook, error) {
+		return nil, fmt.Errorf("%s: %s (the value is not shown, it may contain a token)", EnvNotifyWebhookURL, why)
+	}
+	u, err := url.Parse(rawURL)
+	switch {
+	case err != nil:
+		return bad("not a URL")
+	case u.Scheme != "http" && u.Scheme != "https":
+		return bad("want an http:// or https:// URL")
+	case u.Host == "" || u.Hostname() == "":
+		return bad("no host name")
+	case u.Fragment != "" || strings.Contains(rawURL, "#"):
+		return bad("a URL with a #fragment is not allowed")
+	}
+	switch format {
+	case "":
+		format = WebhookFormatJSON
+	case WebhookFormatJSON, WebhookFormatNtfy:
+	default:
+		return nil, fmt.Errorf("%s: want %s or %s, got %q", EnvNotifyWebhookFormat, WebhookFormatJSON, WebhookFormatNtfy, format)
+	}
+	for _, r := range authorization {
+		if r < 0x20 || r == 0x7f {
+			return nil, fmt.Errorf("%s: contains a control character", EnvNotifyWebhookAuthorization)
+		}
+	}
+	return &Webhook{URL: u, Format: format, Authorization: authorization}, nil
+}
+
+// Target names the webhook's scheme and host, for logs. The path, query and
+// user info are left out: they may hold tokens.
+func (w *Webhook) Target() string {
+	return w.URL.Scheme + "://" + w.URL.Host
+}
+
+// PlainHTTP reports whether the webhook sends alerts unencrypted to a host
+// other than this machine.
+func (w *Webhook) PlainHTTP() bool {
+	if w.URL.Scheme != "http" {
+		return false
+	}
+	host := w.URL.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
 }
 
 // Sealer returns a Sealer for the configured secret key.

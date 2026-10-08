@@ -20,6 +20,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web/ui"
@@ -46,6 +47,9 @@ type Server struct {
 	webauthn      *webauthn.WebAuthn
 	publicOrigin  string
 	passkeyBegins *auth.Rate
+	// alertAfter failed syncs in a row make an account failing.
+	alertAfter  int
+	healthCache syncHealthCache
 }
 
 // Options configure a Server.
@@ -70,6 +74,9 @@ type Options struct {
 	// PublicURL is the address users open (MAIL_ARCHIVE_PUBLIC_URL). It
 	// turns passkeys on; its host is accepted in addition to AllowedHosts.
 	PublicURL string
+	// AlertAfterFailures is how many failed syncs in a row make an account
+	// failing (MAIL_ARCHIVE_ALERT_AFTER_FAILURES); zero means the default.
+	AlertAfterFailures int
 }
 
 // New creates a Server.
@@ -92,6 +99,10 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	if now == nil {
 		now = time.Now
 	}
+	alertAfter := opts.AlertAfterFailures
+	if alertAfter <= 0 {
+		alertAfter = config.DefaultAlertAfterFailures
+	}
 	wa, origin, err := newWebAuthn(opts.PublicURL)
 	if err != nil {
 		// config.Load checked the URL already; this is a programming error.
@@ -104,6 +115,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
+		alertAfter: alertAfter,
 	}
 }
 
@@ -121,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	mux.HandleFunc("GET /healthz/sync", s.handleSyncHealth)
 	mux.HandleFunc("GET /api/session", s.handleGetSession)
 	mux.HandleFunc("POST /api/session", s.handleLogin)
 	mux.HandleFunc("POST /api/session/2fa", s.handleTwoFactorLogin)

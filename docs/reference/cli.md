@@ -68,9 +68,10 @@ then removes folders from what is left. Names are matched case-insensitively.
 
 | Command | Purpose |
 |---|---|
-| `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. |
+| `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
-| `status` | Distinct messages per account with owner and the last sync result (`--user USER` for one user). Import accounts show `import` instead of enabled. |
+| `status` | Distinct messages per account with its ID, owner and the last sync result (`--user USER` for one user). Import accounts show `import` instead of enabled. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. |
+| `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `import NAME --from PATH --format mbox\|maildir` | Import mbox files or a Maildir into the import account `NAME`, created if needed. See below. |
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Safe to interrupt and rerun, and to run alongside the web server and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |

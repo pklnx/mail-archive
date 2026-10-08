@@ -154,6 +154,27 @@ port given in the request. Every logged-in user can do this, so the server
 can be used to probe hosts in your network. Only give logins to people you
 trust.
 
+## Sync health and alerts
+
+`/healthz/sync` needs no login, so that monitoring tools can use it. It names
+no accounts, users or mail, only account IDs. Still, anyone who can reach the
+server with an allowed host name learns how many accounts exist (roughly,
+from the IDs) and which ones fail to sync. The answer is cached for 15
+seconds, so it cannot be used to load the database.
+
+The alert webhook comes from the environment only, never from the web UI, so
+users cannot make the server send requests to addresses of their choice.
+There is no block of private addresses: ntfy or Gotify on the LAN is a main
+use. The webhook URL and `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` are
+secrets (topic names and tokens): they are never logged, and error messages
+name only the scheme and host. Redirects are not followed, so the
+authorization and the message never reach another host. A request times out
+after 10 seconds and at most 4 KiB of the answer is read.
+
+Alerts name the account, its owner, its ID and the last sync error (up to
+200 characters). Treat the receiver like `./ma status`, which shows the same:
+on the public ntfy.sh server, use a protected topic or a long random one.
+
 ## The secret key
 
 `MAIL_ARCHIVE_SECRET_KEY` encrypts the stored passwords. Keep it outside the

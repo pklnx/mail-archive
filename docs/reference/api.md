@@ -194,15 +194,26 @@ Each account in `GET /api/accounts` has a `sync` object:
     "status": "running",
     "fetched": 120,
     "new": 87
-  }
+  },
+  "failureStreak": 0,
+  "failingSince": null,
+  "health": "ok"
 }
 ```
 
 `state` is `idle`, `queued` or `running` (also when the command line syncs
 the account). `status` of the last run is `running`, `ok`, `partial` or
-`failed`, with `error` set for the latter two. The response also has
-`manage` (see above) and `syncInterval`, a Go duration such as `6h0m0s`, or
-empty when the schedule is off.
+`failed`, with `error` set for the latter two. `failureStreak` counts the
+failed syncs in a row and `failingSince` is when the first of them started
+(`null` without a streak). `health` is `failing` when the last `alertAfter`
+syncs failed, `stale` when no sync succeeded within two sync intervals, else
+`ok`; disabled accounts are always `ok`. See [Syncing](../guide/syncing#alerts).
+
+The response also has `manage` (see above), `syncInterval`, a Go duration
+such as `6h0m0s`, or empty when the schedule is off, and `alertAfter`
+(`MAIL_ARCHIVE_ALERT_AFTER_FAILURES`). For admins it also has
+`otherFailing`: how many accounts of other users are failing, as a number
+only.
 
 ## Sync
 
@@ -210,4 +221,14 @@ empty when the schedule is off.
 |---|---|
 | `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. |
 | `POST /api/sync` | Queue all enabled IMAP accounts. Answers `202` with `{"queued": n}`. |
-| `GET /api/status` | Messages per account with its `kind` and the last sync or import, like `./ma status`. |
+| `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak` and `health`, like `./ma status`. |
+
+## Health checks
+
+These need no login and no `/api/` prefix. Like every request, they need an
+allowed `Host`.
+
+| Endpoint | Description |
+|---|---|
+| `GET /healthz` | `200 ok` while the server runs. |
+| `GET /healthz/sync` | `200 {"status":"ok"}`, or `503` with `{"status":"degraded","failing":[…],"stale":[…]}` (account IDs only) or `{"status":"unavailable"}`. Cached for 15 seconds. See [Monitoring and alerts](../guide/operations#healthz-sync). |

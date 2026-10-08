@@ -26,6 +26,23 @@ bookmarks work. On a phone the columns become separate screens.
 
 <img src="/screenshots/mail-phone.png" alt="A message on a phone" width="320">
 
+## Sync problems
+
+When one of your accounts keeps failing to sync (by default three syncs in a
+row) or has not synced successfully for two sync intervals, a banner above
+the mail names it: red for failing, amber for not synced for a while.
+**Open accounts** leads to the account page, where the card says how often
+in a row and since when the sync failed, with the last error. The banner
+disappears after the next successful sync. It refreshes with the account
+list every 30 seconds; screen readers hear it when the set of failing
+accounts changes. Disabled accounts never appear in it.
+
+Admins see only their own accounts by name. For other users' accounts they
+get a count ("2 accounts of other users keep failing") and **Show users**,
+where each user with failing accounts is marked; only the owner, or
+`./ma status` on the command line, shows which accounts they are. See
+[Syncing](./syncing#alerts) for what counts as failing.
+
 ## Reading mail
 
 HTML mail is shown in a sandboxed frame: no scripts, no forms, no plugins.

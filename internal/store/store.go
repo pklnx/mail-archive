@@ -452,6 +452,8 @@ type SyncRun struct {
 	MessagesFetched int
 	MessagesNew     int
 	Error           string
+	// Health is how the run changes the account's failure streak.
+	Health HealthEffect
 }
 
 // StartSyncRun creates a running sync record. Call it while holding the
@@ -467,13 +469,26 @@ func (s *Store) StartSyncRun(ctx context.Context, accountID int64) (*SyncRun, er
 	return &SyncRun{ID: id, AccountID: accountID, Status: "running"}, nil
 }
 
-// FinishSyncRun stores the final state of a sync run.
+// FinishSyncRun stores the final state of a sync run and, in the same
+// transaction, its effect on the account's failure streak.
 func (s *Store) FinishSyncRun(ctx context.Context, r *SyncRun) error {
-	return one(s.q.FinishSyncRun(ctx, db.FinishSyncRunParams{
-		ID: r.ID, Status: r.Status, Error: r.Error,
-		MessagesFetched: clampInt32(r.MessagesFetched),
-		MessagesNew:     clampInt32(r.MessagesNew),
-	}))
+	return s.inTx(ctx, func(q *db.Queries) error {
+		err := one(q.FinishSyncRun(ctx, db.FinishSyncRunParams{
+			ID: r.ID, Status: r.Status, Error: r.Error,
+			MessagesFetched: clampInt32(r.MessagesFetched),
+			MessagesNew:     clampInt32(r.MessagesNew),
+		}))
+		if err != nil {
+			return err
+		}
+		switch r.Health {
+		case HealthSuccess:
+			return q.RecordSyncSuccess(ctx, r.AccountID)
+		case HealthFailure:
+			return q.RecordSyncFailure(ctx, r.AccountID)
+		}
+		return nil
+	})
 }
 
 // UpdateSyncRunProgress stores the counters of a running sync.
@@ -511,11 +526,12 @@ func (s *Store) LastRuns(ctx context.Context) (map[int64]LastRun, error) {
 
 // AccountStats summarizes the archive for one account.
 type AccountStats struct {
-	Account string
-	Kind    AccountKind
-	OwnerID *int64
-	Enabled bool
-	Folders int
+	AccountID int64
+	Account   string
+	Kind      AccountKind
+	OwnerID   *int64
+	Enabled   bool
+	Folders   int
 	// Messages counts distinct messages; one found in two folders of the
 	// account counts once.
 	Messages     int64
@@ -537,7 +553,7 @@ func (s *Store) Stats(ctx context.Context, owner *int64) ([]AccountStats, int64,
 	}
 	out := make([]AccountStats, 0, len(rows))
 	for _, r := range rows {
-		st := AccountStats{Account: r.Name, Kind: AccountKind(r.Kind), OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Messages: r.Messages}
+		st := AccountStats{AccountID: r.ID, Account: r.Name, Kind: AccountKind(r.Kind), OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Messages: r.Messages}
 		if run, ok := lastRun[r.ID]; ok {
 			st.LastRunAt, st.LastStatus = &run.StartedAt, &run.Status
 			if run.Error != "" {

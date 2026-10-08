@@ -679,7 +679,10 @@ func newSyncCmd() *cobra.Command {
 
 The server is never modified: folders are opened read-only and messages are
 fetched without setting the \Seen flag. Messages deleted on the server stay in
-the archive. Run this periodically (cron, systemd timer).`,
+the archive. Run this periodically (cron, systemd timer).
+
+With ` + config.EnvNotifyWebhookURL + ` set, alerts for accounts whose syncs keep
+failing, and their recovery, are sent at the end.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -695,10 +698,8 @@ the archive. Run this periodically (cron, systemd timer).`,
 			if err != nil {
 				return err
 			}
-			syncer := &archive.Syncer{
-				Store: a.store, Blobs: blobs, Sealer: sealer,
-				Logger: newLogger(a.cfg.LogLevel),
-			}
+			log := newLogger(a.cfg.LogLevel)
+			syncer := &archive.Syncer{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}
 			var owner *int64
 			if u, err := flagUser(cmd, a); err != nil {
 				return err
@@ -713,6 +714,7 @@ the archive. Run this periodically (cron, systemd timer).`,
 				return err
 			}
 			results, err := syncer.SyncAll(cmd.Context(), only, owner)
+			deliverAfterSync(cmd.Context(), newNotifier(a, log), log)
 			failed := 0
 			for _, r := range results {
 				status := "ok"
@@ -795,7 +797,28 @@ network.`,
 				return err
 			}
 			log := newLogger(a.cfg.LogLevel)
-			opts := web.Options{AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL}
+			opts := web.Options{
+				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
+				AlertAfterFailures: a.cfg.AlertAfterFailures,
+			}
+			var afterSync func()
+			if n := newNotifier(a, log); n != nil {
+				ctx, cancel := context.WithCancel(cmd.Context())
+				notifierDone := make(chan struct{})
+				go func() {
+					n.Run(ctx)
+					close(notifierDone)
+				}()
+				// Stop it also when serve fails, and before the store closes.
+				defer func() {
+					cancel()
+					<-notifierDone
+				}()
+				log.Info("alerts on", "target", a.cfg.Webhook.Target(), "after_failures", a.cfg.AlertAfterFailures)
+				afterSync = n.Wake
+			} else {
+				log.Info("alerts off", "reason", config.EnvNotifyWebhookURL+" is not set")
+			}
 			if sealer, err := a.cfg.Sealer(); err != nil {
 				log.Warn("account management and sync are off", "reason", err)
 			} else {
@@ -806,7 +829,7 @@ network.`,
 					log.Info("stored passwords bound to the account ID", "accounts", n)
 				}
 				opts.Syncer = &archive.Syncer{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}
-				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Interval: a.cfg.SyncInterval}
+				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Interval: a.cfg.SyncInterval, AfterSync: afterSync}
 				runnerDone := make(chan struct{})
 				go func() {
 					opts.Runner.Run(cmd.Context())
@@ -874,7 +897,10 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show archive statistics and the last sync per account",
-		Args:  cobra.NoArgs,
+		Long: `Show per account its ID (as listed by /healthz/sync and in alerts), the
+number of folders and messages, the last sync, and in FAILED how many syncs
+in a row failed and since when.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
 			if err != nil {
@@ -895,8 +921,12 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			health, err := a.store.SyncHealth(cmd.Context(), owner)
+			if err != nil {
+				return err
+			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ACCOUNT\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tLAST SYNC\tSTATUS")
+			fmt.Fprintln(w, "ID\tACCOUNT\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tLAST SYNC\tSTATUS\tFAILED")
 			for _, s := range stats {
 				last, status := "never", "-"
 				if s.LastRunAt != nil {
@@ -909,7 +939,8 @@ func newStatusCmd() *cobra.Command {
 				if s.Kind == store.KindImport {
 					enabled = "import"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\t%s\n", s.Account, ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, last, status)
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n", s.AccountID, s.Account, ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, last, status,
+					failedColumn(health[s.AccountID]))
 			}
 			if err := w.Flush(); err != nil {
 				return err

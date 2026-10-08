@@ -55,6 +55,10 @@ For every other user, admins can:
   (also removed ones) must hand them over first, on the command line:
   `./ma account move NAME --user OLD --to NEW`.
 
+A user whose accounts keep failing to sync is marked with the number of
+those accounts, so you can tell them; the account names stay private to
+the user.
+
 The last admin who can log in can be neither locked, removed nor demoted.
 Admins cannot change their own login on this page: they use their profile,
 or another admin does it.

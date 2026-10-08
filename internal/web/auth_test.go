@@ -90,7 +90,8 @@ func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 	return newAuthFixtureOpts(t, Options{Require2FA: require2FA})
 }
 
-// newAuthFixtureOpts is newAuthFixture with Require2FA and PublicURL from opts.
+// newAuthFixtureOpts is newAuthFixture with Require2FA, PublicURL, Runner
+// and AlertAfterFailures from opts.
 func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 	t.Helper()
 	st := storetest.New(t)
@@ -102,7 +103,7 @@ func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 	clock := &testClock{now: time.Now()}
 	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
 		AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key, Now: clock.Now,
-		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL,
+		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL, Runner: opts.Runner, AlertAfterFailures: opts.AlertAfterFailures,
 	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
