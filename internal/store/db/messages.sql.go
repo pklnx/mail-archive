@@ -79,11 +79,13 @@ func (q *Queries) HasUnindexed(ctx context.Context, indexVersion int16) (bool, e
 
 const insertMessage = `-- name: InsertMessage :execrows
 INSERT INTO messages (sha256, size, message_id, subject, from_addr, sent_at, stored_path, body_text,
-                      to_addr, cc_addr, attachment_names, has_attachment, index_version)
+                      to_addr, cc_addr, attachment_names, has_attachment,
+                      in_reply_to, reference_ids, thread_id, index_version)
 VALUES ($1, $2, NULLIF($3::text, ''), NULLIF($4::text, ''),
         NULLIF($5::text, ''), $6, $7, $8::text,
         NULLIF($9::text, ''), NULLIF($10::text, ''), NULLIF($11::text, ''),
-        $12, $13)
+        $12, NULLIF($13::text, ''), $14::text[], NULLIF($15::text, ''),
+        $16)
 ON CONFLICT (sha256) DO NOTHING
 `
 
@@ -100,6 +102,9 @@ type InsertMessageParams struct {
 	CcAddr          string
 	AttachmentNames string
 	HasAttachment   bool
+	InReplyTo       string
+	ReferenceIds    []string
+	ThreadID        string
 	IndexVersion    int16
 }
 
@@ -117,6 +122,9 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (i
 		arg.CcAddr,
 		arg.AttachmentNames,
 		arg.HasAttachment,
+		arg.InReplyTo,
+		arg.ReferenceIds,
+		arg.ThreadID,
 		arg.IndexVersion,
 	)
 	if err != nil {
@@ -181,8 +189,9 @@ const setIndexData = `-- name: SetIndexData :execrows
 UPDATE messages
 SET body_text = $1::text, to_addr = NULLIF($2::text, ''), cc_addr = NULLIF($3::text, ''),
     attachment_names = NULLIF($4::text, ''), has_attachment = $5,
-    index_version = $6
-WHERE sha256 = $7 AND index_version < $6
+    in_reply_to = NULLIF($6::text, ''), reference_ids = $7::text[],
+    thread_id = NULLIF($8::text, ''), index_version = $9
+WHERE sha256 = $10 AND index_version < $9
 `
 
 type SetIndexDataParams struct {
@@ -191,6 +200,9 @@ type SetIndexDataParams struct {
 	CcAddr          string
 	AttachmentNames string
 	HasAttachment   bool
+	InReplyTo       string
+	ReferenceIds    []string
+	ThreadID        string
 	IndexVersion    int16
 	Sha256          string
 }
@@ -203,6 +215,9 @@ func (q *Queries) SetIndexData(ctx context.Context, arg SetIndexDataParams) (int
 		arg.CcAddr,
 		arg.AttachmentNames,
 		arg.HasAttachment,
+		arg.InReplyTo,
+		arg.ReferenceIds,
+		arg.ThreadID,
 		arg.IndexVersion,
 		arg.Sha256,
 	)

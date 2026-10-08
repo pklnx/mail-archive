@@ -10,8 +10,101 @@ import (
 	"time"
 )
 
+const countThreadMatches = `-- name: CountThreadMatches :many
+SELECT COALESCE(t.thread_id, t.sha256)::text AS thread_key, count(*)::bigint AS matches
+FROM messages t
+WHERE COALESCE(t.thread_id, t.sha256) = ANY($1::text[])
+  AND
+  -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+  ($2::text IS NULL
+   OR t.search @@ (websearch_to_tsquery('simple', $2::text) ||
+                    websearch_to_tsquery('german', $2::text) ||
+                    websearch_to_tsquery('english', $2::text))
+   OR t.subject ILIKE $3::text
+   OR t.from_addr ILIKE $3::text)
+  -- Only messages found in one of the user's accounts.
+  AND EXISTS (
+       SELECT 1 FROM message_locations l
+       JOIN folders f ON f.id = l.folder_id
+       JOIN accounts a ON a.id = f.account_id
+       WHERE l.message_sha256 = t.sha256
+         AND a.owner_id = $4::bigint
+         AND ($5::text IS NULL OR a.name = $5::text)
+         AND ($6::text IS NULL OR f.name = $6::text))
+  -- Filters on single fields. Recipients and attachment names are only
+  -- found here, not by the full-text query.
+  AND ($7::text IS NULL OR t.from_addr ILIKE $7::text)
+  AND ($8::text IS NULL
+       OR (coalesce(t.to_addr, '') || E'\n' || coalesce(t.cc_addr, '')) ILIKE $8::text)
+  AND ($9::text IS NULL OR t.attachment_names ILIKE $9::text)
+  AND (NOT $10::boolean OR t.has_attachment)
+  AND ($11::text IS NULL OR COALESCE(t.thread_id, t.sha256) = $11::text)
+  AND ($12::timestamptz IS NULL OR t.sort_at >= $12::timestamptz)
+  AND ($13::timestamptz IS NULL OR t.sort_at < $13::timestamptz)
+  -- filters:end
+GROUP BY 1
+`
+
+type CountThreadMatchesParams struct {
+	ThreadKeys        []string
+	Query             *string
+	Pattern           *string
+	Owner             int64
+	Account           *string
+	Folder            *string
+	FromPattern       *string
+	ToPattern         *string
+	AttachmentPattern *string
+	HasAttachment     bool
+	Thread            *string
+	After             *time.Time
+	Before            *time.Time
+}
+
+type CountThreadMatchesRow struct {
+	ThreadKey string
+	Matches   int64
+}
+
+// The number of messages per thread that match the filters, for the rows
+// of one SearchThreads page.
+func (q *Queries) CountThreadMatches(ctx context.Context, arg CountThreadMatchesParams) ([]CountThreadMatchesRow, error) {
+	rows, err := q.db.Query(ctx, countThreadMatches,
+		arg.ThreadKeys,
+		arg.Query,
+		arg.Pattern,
+		arg.Owner,
+		arg.Account,
+		arg.Folder,
+		arg.FromPattern,
+		arg.ToPattern,
+		arg.AttachmentPattern,
+		arg.HasAttachment,
+		arg.Thread,
+		arg.After,
+		arg.Before,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountThreadMatchesRow
+	for rows.Next() {
+		var i CountThreadMatchesRow
+		if err := rows.Scan(&i.ThreadKey, &i.Matches); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getMessageSummary = `-- name: GetMessageSummary :one
-SELECT m.sha256, m.size, m.message_id, m.subject, m.from_addr, m.sent_at, m.sort_at, m.stored_path
+SELECT m.sha256, m.size, m.message_id, m.subject, m.from_addr, m.sent_at, m.sort_at, m.stored_path,
+       m.in_reply_to, COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE m.sha256 = $1
   AND EXISTS (
@@ -35,6 +128,8 @@ type GetMessageSummaryRow struct {
 	SentAt     *time.Time
 	SortAt     *time.Time
 	StoredPath string
+	InReplyTo  *string
+	ThreadKey  string
 }
 
 // Only if the message was found in one of the user's accounts.
@@ -50,6 +145,8 @@ func (q *Queries) GetMessageSummary(ctx context.Context, arg GetMessageSummaryPa
 		&i.SentAt,
 		&i.SortAt,
 		&i.StoredPath,
+		&i.InReplyTo,
+		&i.ThreadKey,
 	)
 	return i, err
 }
@@ -177,21 +274,23 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
        END::text AS snippet
 FROM messages m
-WHERE ($1::text IS NULL
-       OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
-                       websearch_to_tsquery('german', $1::text) ||
-                       websearch_to_tsquery('english', $1::text))
-       OR m.subject ILIKE $2::text
-       OR m.from_addr ILIKE $2::text)
+WHERE
+  -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+  ($1::text IS NULL
+   OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
+                    websearch_to_tsquery('german', $1::text) ||
+                    websearch_to_tsquery('english', $1::text))
+   OR m.subject ILIKE $2::text
+   OR m.from_addr ILIKE $2::text)
   -- Only messages found in one of the user's accounts.
   AND EXISTS (
-           SELECT 1 FROM message_locations l
-           JOIN folders f ON f.id = l.folder_id
-           JOIN accounts a ON a.id = f.account_id
-           WHERE l.message_sha256 = m.sha256
-             AND a.owner_id = $3::bigint
-             AND ($4::text IS NULL OR a.name = $4::text)
-             AND ($5::text IS NULL OR f.name = $5::text))
+       SELECT 1 FROM message_locations l
+       JOIN folders f ON f.id = l.folder_id
+       JOIN accounts a ON a.id = f.account_id
+       WHERE l.message_sha256 = m.sha256
+         AND a.owner_id = $3::bigint
+         AND ($4::text IS NULL OR a.name = $4::text)
+         AND ($5::text IS NULL OR f.name = $5::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
   AND ($6::text IS NULL OR m.from_addr ILIKE $6::text)
@@ -199,12 +298,14 @@ WHERE ($1::text IS NULL
        OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $7::text)
   AND ($8::text IS NULL OR m.attachment_names ILIKE $8::text)
   AND (NOT $9::boolean OR m.has_attachment)
-  AND ($10::timestamptz IS NULL OR m.sort_at >= $10::timestamptz)
-  AND ($11::timestamptz IS NULL OR m.sort_at < $11::timestamptz)
-  AND ($12::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($12::timestamptz, $13::text))
+  AND ($10::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $10::text)
+  AND ($11::timestamptz IS NULL OR m.sort_at >= $11::timestamptz)
+  AND ($12::timestamptz IS NULL OR m.sort_at < $12::timestamptz)
+  -- filters:end
+  AND ($13::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($13::timestamptz, $14::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $14
+LIMIT $15
 `
 
 type SearchMessagesParams struct {
@@ -217,6 +318,7 @@ type SearchMessagesParams struct {
 	ToPattern         *string
 	AttachmentPattern *string
 	HasAttachment     bool
+	Thread            *string
 	After             *time.Time
 	Before            *time.Time
 	CursorAt          *time.Time
@@ -248,6 +350,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 		arg.ToPattern,
 		arg.AttachmentPattern,
 		arg.HasAttachment,
+		arg.Thread,
 		arg.After,
 		arg.Before,
 		arg.CursorAt,
@@ -270,6 +373,165 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 			&i.SortAt,
 			&i.HasAttachment,
 			&i.Snippet,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchThreads = `-- name: SearchThreads :many
+SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_attachment,
+       CASE
+           WHEN $1::text IS NULL THEN left(coalesce(m.body_text, ''), 240)
+           ELSE ts_headline('german', coalesce(m.body_text, ''),
+                    websearch_to_tsquery('simple', $1::text) ||
+                    websearch_to_tsquery('german', $1::text) ||
+                    websearch_to_tsquery('english', $1::text),
+                    'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
+       END::text AS snippet,
+       COALESCE(m.thread_id, m.sha256)::text AS thread_key
+FROM messages m
+WHERE
+  -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+  ($1::text IS NULL
+   OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
+                    websearch_to_tsquery('german', $1::text) ||
+                    websearch_to_tsquery('english', $1::text))
+   OR m.subject ILIKE $2::text
+   OR m.from_addr ILIKE $2::text)
+  -- Only messages found in one of the user's accounts.
+  AND EXISTS (
+       SELECT 1 FROM message_locations l
+       JOIN folders f ON f.id = l.folder_id
+       JOIN accounts a ON a.id = f.account_id
+       WHERE l.message_sha256 = m.sha256
+         AND a.owner_id = $3::bigint
+         AND ($4::text IS NULL OR a.name = $4::text)
+         AND ($5::text IS NULL OR f.name = $5::text))
+  -- Filters on single fields. Recipients and attachment names are only
+  -- found here, not by the full-text query.
+  AND ($6::text IS NULL OR m.from_addr ILIKE $6::text)
+  AND ($7::text IS NULL
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $7::text)
+  AND ($8::text IS NULL OR m.attachment_names ILIKE $8::text)
+  AND (NOT $9::boolean OR m.has_attachment)
+  AND ($10::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $10::text)
+  AND ($11::timestamptz IS NULL OR m.sort_at >= $11::timestamptz)
+  AND ($12::timestamptz IS NULL OR m.sort_at < $12::timestamptz)
+  -- filters:end
+  AND NOT EXISTS (
+      SELECT 1 FROM messages n
+      WHERE COALESCE(n.thread_id, n.sha256) = COALESCE(m.thread_id, m.sha256)
+        AND (n.sort_at, n.sha256) > (m.sort_at, m.sha256)
+        AND
+        -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
+        ($1::text IS NULL
+         OR n.search @@ (websearch_to_tsquery('simple', $1::text) ||
+                          websearch_to_tsquery('german', $1::text) ||
+                          websearch_to_tsquery('english', $1::text))
+         OR n.subject ILIKE $2::text
+         OR n.from_addr ILIKE $2::text)
+        -- Only messages found in one of the user's accounts.
+        AND EXISTS (
+             SELECT 1 FROM message_locations l
+             JOIN folders f ON f.id = l.folder_id
+             JOIN accounts a ON a.id = f.account_id
+             WHERE l.message_sha256 = n.sha256
+               AND a.owner_id = $3::bigint
+               AND ($4::text IS NULL OR a.name = $4::text)
+               AND ($5::text IS NULL OR f.name = $5::text))
+        -- Filters on single fields. Recipients and attachment names are only
+        -- found here, not by the full-text query.
+        AND ($6::text IS NULL OR n.from_addr ILIKE $6::text)
+        AND ($7::text IS NULL
+             OR (coalesce(n.to_addr, '') || E'\n' || coalesce(n.cc_addr, '')) ILIKE $7::text)
+        AND ($8::text IS NULL OR n.attachment_names ILIKE $8::text)
+        AND (NOT $9::boolean OR n.has_attachment)
+        AND ($10::text IS NULL OR COALESCE(n.thread_id, n.sha256) = $10::text)
+        AND ($11::timestamptz IS NULL OR n.sort_at >= $11::timestamptz)
+        AND ($12::timestamptz IS NULL OR n.sort_at < $12::timestamptz)
+        -- filters:end
+  )
+  AND ($13::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($13::timestamptz, $14::text))
+ORDER BY m.sort_at DESC, m.sha256 DESC
+LIMIT $15
+`
+
+type SearchThreadsParams struct {
+	Query             *string
+	Pattern           *string
+	Owner             int64
+	Account           *string
+	Folder            *string
+	FromPattern       *string
+	ToPattern         *string
+	AttachmentPattern *string
+	HasAttachment     bool
+	Thread            *string
+	After             *time.Time
+	Before            *time.Time
+	CursorAt          *time.Time
+	CursorSha         *string
+	RowLimit          int32
+}
+
+type SearchThreadsRow struct {
+	Sha256        string
+	Size          int64
+	Subject       *string
+	FromAddr      *string
+	SentAt        *time.Time
+	SortAt        *time.Time
+	HasAttachment bool
+	Snippet       string
+	ThreadKey     string
+}
+
+// One row per thread (the thread key COALESCE(thread_id, sha256)): the
+// newest message of the thread that matches the filters. Walking the date
+// order and skipping messages with a newer match in their thread stops
+// after row_limit rows, like SearchMessages.
+func (q *Queries) SearchThreads(ctx context.Context, arg SearchThreadsParams) ([]SearchThreadsRow, error) {
+	rows, err := q.db.Query(ctx, searchThreads,
+		arg.Query,
+		arg.Pattern,
+		arg.Owner,
+		arg.Account,
+		arg.Folder,
+		arg.FromPattern,
+		arg.ToPattern,
+		arg.AttachmentPattern,
+		arg.HasAttachment,
+		arg.Thread,
+		arg.After,
+		arg.Before,
+		arg.CursorAt,
+		arg.CursorSha,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchThreadsRow
+	for rows.Next() {
+		var i SearchThreadsRow
+		if err := rows.Scan(
+			&i.Sha256,
+			&i.Size,
+			&i.Subject,
+			&i.FromAddr,
+			&i.SentAt,
+			&i.SortAt,
+			&i.HasAttachment,
+			&i.Snippet,
+			&i.ThreadKey,
 		); err != nil {
 			return nil, err
 		}

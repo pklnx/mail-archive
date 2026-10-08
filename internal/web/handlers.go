@@ -56,24 +56,45 @@ type summaryJSON struct {
 	// Snippet marks query matches with U+E000 (start) and U+E001 (end).
 	Snippet       string `json:"snippet,omitempty"`
 	HasAttachment bool   `json:"hasAttachment"`
+	// Thread is an opaque thread key for ?thread=. Count is the number of
+	// matching messages in the thread, in grouped listings only.
+	Thread string `json:"thread,omitempty"`
+	Count  int64  `json:"count,omitempty"`
 }
 
 func toSummary(m store.MessageSummary) summaryJSON {
 	return summaryJSON{
 		ID: m.SHA256, Size: m.Size, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt,
-		Snippet: m.Snippet, HasAttachment: m.HasAttachment,
+		Snippet: m.Snippet, HasAttachment: m.HasAttachment, Thread: m.Thread, Count: m.Count,
 	}
 }
 
 // maxFilterLen is the maximum length in characters of the from, to and
-// attachment filters.
-const maxFilterLen = 200
+// attachment filters; maxThreadLen the maximum length in bytes of a thread
+// key.
+const (
+	maxFilterLen = 200
+	maxThreadLen = 2000
+)
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.SearchFilter{
 		Owner: userID(r), Query: q.Get("q"), Account: q.Get("account"), Folder: q.Get("folder"),
-		From: q.Get("from"), To: q.Get("to"), Attachment: q.Get("attachment"),
+		From: q.Get("from"), To: q.Get("to"), Attachment: q.Get("attachment"), Thread: q.Get("thread"),
+	}
+	if len(f.Thread) > maxThreadLen {
+		s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("thread must be at most %d bytes", maxThreadLen), nil)
+		return
+	}
+	var grouped bool
+	switch q.Get("group") {
+	case "", "0":
+	case "1":
+		grouped = true
+	default:
+		s.fail(w, r, http.StatusBadRequest, `group must be "1" or "0"`, nil)
+		return
 	}
 	for _, name := range []string{"from", "to", "attachment"} {
 		if utf8.RuneCountInString(q.Get(name)) > maxFilterLen {
@@ -117,7 +138,11 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	// Fetch one extra row to know whether another page exists.
 	want := f.Limit
 	f.Limit++
-	rows, err := s.store.SearchMessages(r.Context(), f)
+	search := s.store.SearchMessages
+	if grouped {
+		search = s.store.SearchThreads
+	}
+	rows, err := search(r.Context(), f)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -159,6 +184,7 @@ type partJSON struct {
 type messageJSON struct {
 	summaryJSON
 	MessageID string         `json:"messageId"`
+	InReplyTo string         `json:"inReplyTo,omitempty"`
 	To        string         `json:"to"`
 	Cc        string         `json:"cc"`
 	DateRaw   string         `json:"dateHeader"`
@@ -186,10 +212,11 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	out := messageJSON{
 		summaryJSON: toSummary(d.MessageSummary),
-		MessageID:   d.MessageID, To: m.To, Cc: m.Cc, DateRaw: m.Date,
+		MessageID:   d.MessageID, InReplyTo: d.InReplyTo, To: m.To, Cc: m.Cc, DateRaw: m.Date,
 		Text: m.Text, HasHTML: m.HTML != "", Truncated: m.Truncated,
 		Parts: make([]partJSON, 0, len(m.Parts)), Locations: make([]locationJSON, 0, len(d.Locations)),
 	}
+	out.Thread = d.Thread
 	if out.Text == "" && m.HTML != "" {
 		out.Text = mime.HTMLToText(m.HTML)
 	}
@@ -215,6 +242,35 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 // The Content-Security-Policy forbids scripts, forms, plugins and remote
 // content. Remote images stay blocked (they reveal that a mail was opened)
 // unless the client asks for them with ?images=1.
+type conversationEntryJSON struct {
+	ID      string     `json:"id"`
+	Subject string     `json:"subject"`
+	From    string     `json:"from"`
+	SentAt  *time.Time `json:"sentAt"`
+	SortAt  time.Time  `json:"sortAt"`
+	// Relation to the requested message: self, parent, reply or thread.
+	Relation string `json:"relation"`
+}
+
+func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
+	sha, ok := s.pathSHA(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.store.GetConversation(r.Context(), userID(r), sha)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	items := make([]conversationEntryJSON, 0, len(c.Messages))
+	for _, m := range c.Messages {
+		items = append(items, conversationEntryJSON{
+			ID: m.SHA256, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt, Relation: m.Relation,
+		})
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"messages": items, "total": c.Total, "truncated": c.Truncated})
+}
+
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
