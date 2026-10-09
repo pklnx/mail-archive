@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,14 +94,20 @@ func (n *Notifier) Run(ctx context.Context) {
 	}
 }
 
-// Deliver sends every announcement that is due, in batches of BatchSize. It
-// stops at the first failed request; the retry waits for its time. It
-// returns an error only if the database fails.
+// Deliver sends every announcement that is due, in batches of BatchSize:
+// failing syncs and recoveries first, then loss alerts. It stops at the
+// first failed request; the retry waits for its time. It returns an error
+// only if the database fails.
 func (n *Notifier) Deliver(ctx context.Context) error {
-	for ctx.Err() == nil {
-		claimed, ok, err := n.pass(ctx)
-		if err != nil || !ok || claimed < BatchSize {
-			return err
+	for _, pass := range []func(context.Context) (int, bool, error){n.pass, n.passLoss} {
+		for ctx.Err() == nil {
+			claimed, ok, err := pass(ctx)
+			if err != nil || !ok {
+				return err
+			}
+			if claimed < BatchSize {
+				break
+			}
 		}
 	}
 	return nil
@@ -277,7 +284,7 @@ func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word
 	}
-	return fmt.Sprintf("%d %ss", n, word)
+	return thousands(n) + " " + word + "s"
 }
 
 func orDash(s string) string {
@@ -299,4 +306,129 @@ func (n *Notifier) logger() *slog.Logger {
 		return n.Logger
 	}
 	return slog.Default()
+}
+
+// passLoss claims and sends one batch of loss alerts. ok is false when the
+// request failed.
+func (n *Notifier) passLoss(ctx context.Context) (claimed int, ok bool, err error) {
+	lease := make([]byte, 16)
+	_, _ = rand.Read(lease)
+	pending, err := n.Store.ClaimLossAlerts(ctx, lease, LeaseDuration, store.LossAlertMaxAge, BatchSize)
+	if err != nil || len(pending) == 0 {
+		return 0, true, err
+	}
+	msg := BuildLossMessage(pending)
+	status, sendErr := n.Webhook.Send(ctx, msg)
+	bg := context.WithoutCancel(ctx)
+	log := n.logger()
+	if sendErr == nil {
+		for i, p := range pending {
+			if err := n.Store.FinishLossAlert(bg, p.ID, lease, false, ""); err != nil {
+				return len(pending), true, n.lostLossLease(p, err)
+			}
+			log.Info("loss alert sent", "account", p.Account, "owner", p.Owner, "lost", p.Lost,
+				"attempts", p.Attempts+1, "id", msg.Accounts[i].ID)
+		}
+		return len(pending), true, nil
+	}
+
+	var de *DeliveryError
+	if !errors.As(sendErr, &de) {
+		de = &DeliveryError{Err: sendErr}
+	}
+	if de.Permanent() {
+		log.Error("notification rejected; check the webhook settings", "target", n.Webhook.Target(), "status", de.Status)
+	} else {
+		log.Warn("notification failed", "target", n.Webhook.Target(), "status", status, "err", de.Error())
+	}
+	now := n.now()
+	for i, p := range pending {
+		// A loss alert is about one run: past the age limit it is no news.
+		if now.Sub(p.CreatedAt) >= store.LossAlertMaxAge {
+			if err := n.Store.FinishLossAlert(bg, p.ID, lease, true, de.Error()); err != nil {
+				return len(pending), false, n.lostLossLease(p, err)
+			}
+			log.Error("notification given up", "account", p.Account, "owner", p.Owner, "attempts", p.Attempts+1,
+				"event", EventGone, "id", msg.Accounts[i].ID)
+			continue
+		}
+		next := now.Add(RetryDelay(p.Attempts, de))
+		if err := n.Store.DeferLossAlert(bg, p.ID, lease, next, de.Error()); err != nil {
+			return len(pending), false, n.lostLossLease(p, err)
+		}
+	}
+	return len(pending), false, nil
+}
+
+func (n *Notifier) lostLossLease(p store.PendingLossAlert, err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		n.logger().Warn("notification lease expired; the message may be sent twice", "account", p.Account)
+		return nil
+	}
+	return err
+}
+
+// LossEventID is the stable ID of one loss alert: the sync run that found
+// the loss.
+func LossEventID(syncRunID int64) string {
+	return fmt.Sprintf("gone-%d", syncRunID)
+}
+
+// BuildLossMessage turns claimed loss alerts into one message.
+func BuildLossMessage(pending []store.PendingLossAlert) *Message {
+	m := &Message{Event: EventGone, Accounts: make([]AccountEvent, 0, len(pending))}
+	var lines, ids []string
+	total := 0
+	for _, p := range pending {
+		ev := AccountEvent{
+			ID: LossEventID(p.SyncRunID), Event: EventGone, AccountID: p.AccountID, Account: p.Account, Owner: p.Owner,
+			Lost: p.Lost, PresentBefore: p.PresentBefore, MoreFolders: p.MoreFolders,
+		}
+		for _, f := range p.Folders {
+			ev.Folders = append(ev.Folders, FolderLoss{Name: f.Name, Lost: f.Lost})
+		}
+		total += p.Lost
+		m.Accounts = append(m.Accounts, ev)
+		ids = append(ids, ev.ID)
+		lines = append(lines, describeLoss(ev))
+	}
+	if len(pending) == 1 {
+		m.Title = fmt.Sprintf("Mail archive: %s deleted on the server (%s)", plural(total, "message"), m.Accounts[0].Account)
+		m.ID = ids[0]
+	} else {
+		m.Title = fmt.Sprintf("Mail archive: %s deleted on the server in %d accounts", plural(total, "message"), len(pending))
+		sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
+		m.ID = "batch-" + hex.EncodeToString(sum[:8])
+	}
+	m.Body = strings.Join(lines, "\n\n")
+	return m
+}
+
+func describeLoss(ev AccountEvent) string {
+	s := fmt.Sprintf("Account %q (owner %s, ID %d): %s of %s are no longer on the server. They stay in the archive.",
+		ev.Account, orDash(ev.Owner), ev.AccountID, thousands(ev.Lost), plural(ev.PresentBefore, "message"))
+	if len(ev.Folders) > 0 {
+		parts := make([]string, 0, len(ev.Folders))
+		for _, f := range ev.Folders {
+			parts = append(parts, f.Name+" "+thousands(f.Lost))
+		}
+		s += "\nFolders: " + strings.Join(parts, ", ")
+		if ev.MoreFolders > 0 {
+			s += fmt.Sprintf(" and %d more", ev.MoreFolders)
+		}
+		s += "."
+	}
+	return s
+}
+
+// thousands writes n with commas: 1234567 is "1,234,567".
+func thousands(n int) string {
+	if n < 0 {
+		return "-" + thousands(-n)
+	}
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }

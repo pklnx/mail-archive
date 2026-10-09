@@ -118,6 +118,7 @@ Pull requests that change the database schema carry the label
 | A version without 2FA | Nothing to run. Every admin must set up TOTP at the next web login and needs an authenticator app for it. Recovery codes and TOTP secrets depend on `MAIL_ARCHIVE_SECRET_KEY`: after changing the key nobody with 2FA can log in until `./ma user reset-2fa NAME` resets it. |
 | A version without sync alerts | Nothing to run. The migration counts each account's failed syncs since its last success. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, accounts that are already failing are announced once after the upgrade. |
 | A version without reconcile | Nothing to run. The migration only adds columns and an index. The first sync after the upgrade compares every folder with the server (one UID and flag listing per folder, no bodies; see [Reconcile](./syncing#reconcile)). Messages deleted on the server before the upgrade are found by it too. |
+| A version without loss alerts | Nothing to run. The migration adds an empty table. |
 | A version without passkeys | Nothing to run. To use passkeys, set `MAIL_ARCHIVE_PUBLIC_URL` to the address you open in the browser (Compose defaults to `http://localhost:WEB_PORT`). Passkeys are bound to its host name: after changing it, remove the passkeys (`./ma user remove-passkeys NAME`) and register them again. |
 
 ## Monitoring and alerts
@@ -130,7 +131,8 @@ things make it visible:
   keeps failing or has not synced for a while; see [Web UI](./web-ui#sync-problems).
 - **An alert** through a webhook: one message when an account's syncs keep
   failing, one when they work again. See [Syncing](./syncing#alerts) for
-  what counts.
+  what counts. Another alert reports mail deleted on the server in bulk;
+  see [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
 - **`/healthz/sync`** for a monitoring tool such as Uptime Kuma.
 
 ### Webhook alerts
@@ -189,7 +191,26 @@ with the format `json`. They show the `text` (Slack, Mattermost) or `content`
 ```
 
 `event` is `failing`, `recovered`, `mixed` (alerts and recoveries in one
-message) or `test`. Several accounts that change at the same time go into one
+message), `gone` (mail deleted on the server) or `test`. A `gone` message
+looks like this:
+
+```json
+{
+  "id": "gone-812",
+  "event": "gone",
+  "title": "Mail archive: 1,234 messages deleted on the server (personal)",
+  "message": "Account \"personal\" (owner anna, ID 3): 1,234 of 5,000 messages are no longer on the server. They stay in the archive.\nFolders: INBOX 1,200, Archive 34.",
+  "text": "…", "content": "…",
+  "accounts": [{"id": "gone-812", "event": "gone", "accountId": 3, "account": "personal", "owner": "anna",
+                "failureStreak": 0, "failingSince": null, "lost": 1234, "presentBefore": 5000,
+                "folders": [{"name": "INBOX", "lost": 1200}, {"name": "Archive", "lost": 34}]}]
+}
+```
+
+Its `id` names the sync run that found the loss. `folders` lists at most 20
+folders, most first; `moreFolders` counts the rest. With ntfy it has the
+priority `high` and the tag `wastebasket`. Sync alerts and `gone` alerts
+never share a message. Several accounts that change at the same time go into one
 message (up to 50 per request). The `id` is also sent as the
 `X-Mail-Archive-Id` header.
 
@@ -198,12 +219,12 @@ receiver accepted a message, it is sent again with the same `id`. ntfy, Gotify
 and Slack do not drop such repeats; a receiver of your own can use the `id`.
 A receiver that is down is retried after 30 seconds, then with growing
 pauses up to an hour, and given up after 24 hours (logged as
-`notification given up`). An answer like `400` or `404` usually means a wrong
+`notification given up`; a `gone` alert 24 hours after its run). An answer like `400` or `404` usually means a wrong
 URL, token or format: it is logged as an error and retried hourly. Redirects
 are not followed.
 
-The log records each alert (`alert sent`, `recovery sent`) with the account
-and its owner. It never contains the webhook URL, the authorization or the
+The log records each alert (`alert sent`, `recovery sent`, `loss alert sent`)
+with the account and its owner. It never contains the webhook URL, the authorization or the
 message; failed attempts name only the scheme and host.
 
 ### /healthz/sync

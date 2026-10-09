@@ -27,7 +27,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and written atomically. |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock and the blob lock. |
-| `internal/notify` | Alerts for accounts whose syncs keep failing: compares each account's failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. |
+| `internal/notify` | Alerts for accounts whose syncs keep failing: compares each account's failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
@@ -48,6 +48,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
 | `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. |
 | `sync_runs` | Sync or import of an account: start, end, status, counters (also of the reconcile), error. |
+| `loss_alerts` | Alert about messages an account lost on the server in one sync run, with its delivery state. |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -167,6 +168,20 @@ Any error writes nothing and ends the run `partial`, which counts as a
 success for [sync health](#sync-and-concurrency). Stored folders that the
 filters select but `LIST` no longer returns are marked gone with
 `MarkFolderVanished`.
+
+**Loss alerts.** When a run's reconciles marked at least 10 locations gone,
+`finish` (also of a cancelled run, with an uncancelled context) counts the
+messages that lost their last present location in the account during the
+run (`LostMessages`: gone locations from the partial index with
+`gone_at >= sync_runs.started_at`, outside the folders whose first
+reconcile ran in it, without a present location in the account). If
+`store.LossAlertDue` holds, `FinishSyncRun` inserts a `loss_alerts` row in
+the same transaction as the run. `account_sync_health` holds one state per
+account that the notifier compares with what it announced; losses are
+events, so they get an outbox of their own with the same lease and retry
+columns. `Notifier.Deliver` sends them in a second pass. Rows not sent
+within 24 hours are given up by the next finished run, so the pending
+index stays small without a webhook.
 
 `last_seen_at` is not rewritten for every present location on every run. A
 present location was seen at its folder's `last_reconciled_at`, so the API

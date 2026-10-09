@@ -120,7 +120,7 @@ func warnOnLoss(log *slog.Logger, r store.FolderReconcile) {
 // reconcileVanished marks the stored folders that the filters select but
 // the server no longer lists. listed are the names from a successful LIST.
 func (s *Syncer) reconcileVanished(ctx context.Context, a *store.Account, listed []imapsync.Folder,
-	opts SyncOptions, now time.Time, counts *store.ReconcileCounts, log *slog.Logger) error {
+	opts SyncOptions, now time.Time, counts *store.ReconcileCounts, baseline *[]int64, log *slog.Logger) error {
 	states, err := s.Store.ListFolderStates(ctx, a.ID)
 	if err != nil {
 		return err
@@ -131,6 +131,9 @@ func (s *Syncer) reconcileVanished(ctx context.Context, a *store.Account, listed
 		}
 		if slices.ContainsFunc(listed, func(l imapsync.Folder) bool { return l.Name == f.Name }) {
 			continue
+		}
+		if f.LastReconciledAt == nil {
+			*baseline = append(*baseline, f.ID)
 		}
 		n, err := s.Store.MarkFolderVanished(ctx, f.ID)
 		if err != nil {

@@ -172,7 +172,9 @@ authorization and the message never reach another host. A request times out
 after 10 seconds and at most 4 KiB of the answer is read.
 
 Alerts name the account, its owner, its ID and the last sync error (up to
-200 characters). Treat the receiver like `./ma status`, which shows the same:
+200 characters). Alerts about mail deleted on the server name the account,
+its owner and ID, the number of messages and the names of up to 20 folders,
+never subjects, addresses or UIDs. Treat the receiver like `./ma status`, which shows the same:
 on the public ntfy.sh server, use a protected topic or a long random one.
 
 ## Messages no longer on the server

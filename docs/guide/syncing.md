@@ -170,7 +170,36 @@ new flags. A warning is logged when one folder loses at least 100 messages,
 or at least 10 % of them, in one run, and when a folder vanished. The log
 names folders and counts, never subjects or addresses.
 
-A webhook alert for such losses is not sent yet.
+### Alert for mail deleted on the server
+
+With a [webhook](./operations#webhook-alerts) set up, a run that finds many
+of an account's messages deleted sends one alert. It counts **messages
+that lost their last copy on the server** in that account during the run:
+
+- A message moved to another folder of the account is not lost, nor is a
+  renamed folder: the messages are still on the server. Neither is a
+  folder the server renumbered.
+- A folder's first reconcile never counts. It finds what was deleted
+  before, for example everything deleted before the upgrade that brought
+  reconcile.
+- Copies in other accounts, also of other users, do not matter.
+
+The run alerts when it lost **at least 100 messages**, or **at least 10**
+that make up **at least 10 %** of the messages the account had on the
+server before. Losing 3 of 40 drafts does not alert; losing 12 of 20
+messages does.
+
+Each run alerts at most once per account. Losses spread over several runs,
+each below the threshold, do not add up. A run stopped by a shutdown after
+some folders were reconciled still alerts for those.
+
+A message moved into a folder whose sync failed in the same run counts as
+lost, because its new copy is not archived yet. The next run of that folder
+finds it; the alert says that the messages stay in the archive.
+
+An alert that cannot be delivered is retried like the
+[sync alerts](./operations#webhook-alerts) and dropped 24 hours after the
+run. So setting up a webhook later never sends old losses.
 
 ### CONDSTORE
 
