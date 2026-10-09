@@ -11,6 +11,7 @@ All settings are environment variables. With Docker Compose they come from
 | `MAIL_ARCHIVE_SECRET_KEY` | (required to add accounts and sync) | 32 bytes, base64. Encrypts IMAP passwords. Create with `openssl rand -base64 32` or `./ma keygen`. Without it the web UI is browse-only. |
 | `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for the `.eml` files. |
 | `MAIL_ARCHIVE_SYNC_INTERVAL` | `6h` | How often the web server syncs each enabled account. A Go duration like `30m` or `12h`; at least `5m`; `0` turns the schedule off. |
+| `MAIL_ARCHIVE_RECONCILE_INTERVAL` | `24h` | How often a sync compares each folder with the server, to mark messages deleted there and update flags. Used by the web server's schedule and by `sync`. At least `1h`; `0` reconciles only with the **Check server** button or `sync --reconcile`. See [Reconcile](../guide/syncing#reconcile). |
 | `MAIL_ARCHIVE_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host names the web server accepts in the `Host` header, comma-separated. See [Security](./security#dns-rebinding). |
 | `MAIL_ARCHIVE_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
 | `MAIL_ARCHIVE_REQUIRE_2FA` | `false` | Require TOTP for all non-admin users. Administrators always require TOTP. |
@@ -34,9 +35,10 @@ All settings are environment variables. With Docker Compose they come from
 Both published ports listen on `127.0.0.1` only unless `WEB_BIND` is set.
 Changes to `.env` take effect with `docker compose up -d web`.
 
-Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_ALERT_AFTER_FAILURES`
-and the three `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*` variables to both the web server
-and the CLI (`./ma`), so `./ma sync` from cron sends alerts too.
+Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_RECONCILE_INTERVAL`,
+`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the three `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
+variables to both the web server and the CLI (`./ma`), so `./ma sync` from
+cron reconciles and sends alerts too.
 
 Invalid values stop the server and every command at start, with a message
 naming the variable. Messages about the webhook URL never repeat it.

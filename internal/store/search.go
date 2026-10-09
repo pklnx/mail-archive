@@ -39,6 +39,9 @@ type SearchFilter struct {
 	Thread string
 	After  *time.Time
 	Before *time.Time
+	// Gone lists only messages no longer on any server: the owner's IMAP
+	// locations (of Account, if set) exist and are all gone.
+	Gone bool
 	// Cursor continues a previous page (the last row's SortAt and SHA256).
 	CursorAt  *time.Time
 	CursorSHA string
@@ -122,7 +125,7 @@ func searchParams(f SearchFilter) db.SearchMessagesParams {
 		Owner: f.Owner, Account: nonEmpty(f.Account), Folder: nonEmpty(f.Folder),
 		FromPattern: likePattern(f.From), ToPattern: likePattern(f.To), AttachmentPattern: likePattern(f.Attachment),
 		HasAttachment: f.HasAttachment || strings.TrimSpace(f.Attachment) != "",
-		Thread:        nonEmpty(f.Thread), After: f.After, Before: f.Before, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
+		Thread:        nonEmpty(f.Thread), After: f.After, Before: f.Before, Gone: f.Gone, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		pattern := "%" + escapeLike(q) + "%"
@@ -144,6 +147,10 @@ type MessageLocation struct {
 	// Superseded: stored under an older UIDVALIDITY of the folder. The server
 	// renumbered the folder since; the location is kept as history.
 	Superseded bool
+	// GoneAt is when a reconcile found the location missing on the server.
+	GoneAt *time.Time
+	// LastSeenAt is when the server last listed the location.
+	LastSeenAt time.Time
 }
 
 // MessageDetail is a message's stored metadata and locations.
@@ -182,6 +189,7 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 	for _, l := range locs {
 		d.Locations = append(d.Locations, MessageLocation{
 			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
+			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt,
 		})
 	}
 	return d, nil
@@ -250,6 +258,8 @@ type FolderCount struct {
 	Name         string
 	Messages     int64
 	LastSyncedAt *time.Time
+	// LastReconciledAt is when the folder was last compared with the server.
+	LastReconciledAt *time.Time
 }
 
 // AccountFolders is an account with its folders, for navigation.
@@ -274,7 +284,9 @@ func (s *Store) ListAccountFolders(ctx context.Context, owner int64) ([]AccountF
 		}
 		if r.Folder != nil {
 			a := &out[len(out)-1]
-			a.Folders = append(a.Folders, FolderCount{Name: *r.Folder, Messages: r.Messages, LastSyncedAt: r.LastSyncedAt})
+			a.Folders = append(a.Folders, FolderCount{
+				Name: *r.Folder, Messages: r.Messages, LastSyncedAt: r.LastSyncedAt, LastReconciledAt: r.LastReconciledAt,
+			})
 		}
 	}
 	return out, nil

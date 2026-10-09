@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 const advanceFolder = `-- name: AdvanceFolder :exec
@@ -26,7 +27,7 @@ func (q *Queries) AdvanceFolder(ctx context.Context, arg AdvanceFolderParams) er
 const getOrCreateFolder = `-- name: GetOrCreateFolder :one
 INSERT INTO folders (account_id, name) VALUES ($1, $2)
 ON CONFLICT (account_id, name) DO UPDATE SET name = EXCLUDED.name
-RETURNING id, uidvalidity, last_uid
+RETURNING id, uidvalidity, last_uid, last_reconciled_at
 `
 
 type GetOrCreateFolderParams struct {
@@ -35,15 +36,21 @@ type GetOrCreateFolderParams struct {
 }
 
 type GetOrCreateFolderRow struct {
-	ID          int64
-	Uidvalidity int64
-	LastUid     int64
+	ID               int64
+	Uidvalidity      int64
+	LastUid          int64
+	LastReconciledAt *time.Time
 }
 
 func (q *Queries) GetOrCreateFolder(ctx context.Context, arg GetOrCreateFolderParams) (GetOrCreateFolderRow, error) {
 	row := q.db.QueryRow(ctx, getOrCreateFolder, arg.AccountID, arg.Name)
 	var i GetOrCreateFolderRow
-	err := row.Scan(&i.ID, &i.Uidvalidity, &i.LastUid)
+	err := row.Scan(
+		&i.ID,
+		&i.Uidvalidity,
+		&i.LastUid,
+		&i.LastReconciledAt,
+	)
 	return i, err
 }
 

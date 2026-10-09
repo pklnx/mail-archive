@@ -20,6 +20,22 @@ func TestParseSyncInterval(t *testing.T) {
 	}
 }
 
+func TestParseReconcileInterval(t *testing.T) {
+	parse := func(v string) (time.Duration, error) {
+		return parseInterval(EnvReconcileInterval, v, DefaultReconcileInterval, MinReconcileInterval, "24h")
+	}
+	for in, want := range map[string]time.Duration{"": 24 * time.Hour, "0": 0, "1h": time.Hour, "72h": 72 * time.Hour} {
+		if got, err := parse(in); err != nil || got != want {
+			t.Errorf("parse(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"30m", "-1h", "daily"} {
+		if _, err := parse(in); err == nil || !strings.Contains(err.Error(), EnvReconcileInterval) {
+			t.Errorf("parse(%q) = %v, want an error naming the variable", in, err)
+		}
+	}
+}
+
 func TestParsePublicURL(t *testing.T) {
 	for _, c := range []struct{ in, origin, rpID string }{
 		{"https://archive.example.ts.net", "https://archive.example.ts.net", "archive.example.ts.net"},

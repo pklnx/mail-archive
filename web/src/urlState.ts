@@ -1,6 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-// The UI state lives in the URL query (?q=&account=&folder=&group=&m=&view=), so
+// The UI state lives in the URL query (?q=&account=&folder=&group=&gone=&m=&view=), so
 // the back button, reloads and bookmarks work without a router library.
 
 export interface ViewState {
@@ -9,13 +9,15 @@ export interface ViewState {
   folder: string;
   /** "1" lists one row per conversation. */
   group: string;
+  /** "1" lists only messages no longer on any server. */
+  gone: string;
   /** Open message id. */
   m: string;
   /** "accounts" shows account management instead of the mail columns. */
   view: string;
 }
 
-const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "m", "view"];
+const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view"];
 
 export function parseState(search: string): ViewState {
   const p = new URLSearchParams(search);
@@ -24,6 +26,7 @@ export function parseState(search: string): ViewState {
     account: p.get("account") ?? "",
     folder: p.get("folder") ?? "",
     group: p.get("group") === "1" ? "1" : "",
+    gone: p.get("gone") === "1" ? "1" : "",
     m: p.get("m") ?? "",
     view: p.get("view") ?? "",
   };

@@ -20,7 +20,7 @@ copy**: the servers are never modified.
 
 - **Read-only.** Folders are opened with `EXAMINE` and messages are fetched with
   `BODY.PEEK[]`; not even the `\Seen` flag changes. Mail deleted on the server
-  stays in the archive.
+  stays in the archive, and a daily reconcile marks it as **only in archive**.
 - **Many mailboxes, one archive.** Identical messages are stored once, with
   every account, folder and UID where they were found.
 - **Plain files.** Raw messages are `.eml` files that any mail client opens;

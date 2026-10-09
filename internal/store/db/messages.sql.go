@@ -231,7 +231,7 @@ const upsertLocation = `-- name: UpsertLocation :exec
 INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (folder_id, uidvalidity, uid)
-DO UPDATE SET flags = EXCLUDED.flags, last_seen_at = now()
+DO UPDATE SET flags = EXCLUDED.flags, last_seen_at = now(), gone_at = NULL
 `
 
 type UpsertLocationParams struct {
@@ -243,6 +243,8 @@ type UpsertLocationParams struct {
 	InternalDate  *time.Time
 }
 
+// A location stored again (a UIDVALIDITY that returned to an old value) is
+// on the server again.
 func (q *Queries) UpsertLocation(ctx context.Context, arg UpsertLocationParams) error {
 	_, err := q.db.Exec(ctx, upsertLocation,
 		arg.MessageSha256,

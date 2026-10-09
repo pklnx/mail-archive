@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { Account, SyncInfo } from "./api";
-import { syncableCount, syncHealthNote, syncStatus } from "./AccountsPage";
+import { reconcileNote, syncableCount, syncHealthNote, syncStatus } from "./AccountsPage";
 import { bannerState } from "./HealthBanner";
 import { isActive } from "./useAccounts";
 
 function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, kind: Account["kind"] = "imap"): Account {
   return {
     name: "a", kind, enabled: kind === "imap", removed: false, host: "h", port: 993, tls: "tls", username: "u",
-    includedFolders: [], excludedFolders: [], folders: [],
+    includedFolders: [], excludedFolders: [], folders: [], goneMessages: 0, lastReconciledAt: null,
     sync: { failureStreak: 0, failingSince: null, health: "ok", ...sync },
   };
 }
 
-const run = { startedAt: "2026-10-06T10:00:00Z", finishedAt: "2026-10-06T10:01:00Z", fetched: 7, new: 3 };
+const run = {
+  startedAt: "2026-10-06T10:00:00Z", finishedAt: "2026-10-06T10:01:00Z", fetched: 7, new: 3,
+  reconciledFolders: 0, gone: 0, back: 0, flagsChanged: 0,
+};
 
 describe("syncStatus", () => {
   it("describes each state", () => {
@@ -43,7 +46,7 @@ describe("syncStatus", () => {
     expect(syncableCount([{ ...account(idle), removed: true }])).toBe(0);
   });
   it("polls fast only while a sync is pending", () => {
-    const data = { manage: true, syncInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };
+    const data = { manage: true, syncInterval: "", reconcileInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };
     expect(isActive(data)).toBe(false);
     expect(isActive({ ...data, accounts: [account({ state: "queued", lastRun: null })] })).toBe(true);
     expect(isActive(null)).toBe(false);
@@ -61,12 +64,32 @@ describe("syncStatus", () => {
   });
 });
 
+describe("reconcileNote", () => {
+  const idle = { state: "idle" as const, lastRun: null };
+  it("says when the server was last checked and what is gone", () => {
+    expect(reconcileNote(account(idle))).toEqual({ gone: null, check: "Not compared with the server yet." });
+    const checked = {
+      ...account({ state: "idle", lastRun: { ...run, status: "ok", reconciledFolders: 4, gone: 2, back: 1, flagsChanged: 5 } }),
+      goneMessages: 1234,
+      lastReconciledAt: "2026-10-06T10:01:00Z",
+    };
+    const note = reconcileNote(checked);
+    expect(note?.gone).toBe("1,234 messages no longer on the server");
+    expect(note?.check).toMatch(/^Last compared with the server .* · last run: 2 gone, 1 back, 5 flag changes$/);
+    expect(reconcileNote({ ...checked, goneMessages: 1 })?.gone).toBe("1 message no longer on the server");
+  });
+  it("is left out for import and removed accounts", () => {
+    expect(reconcileNote(account(idle, "import"))).toBeNull();
+    expect(reconcileNote({ ...account(idle), removed: true })).toBeNull();
+  });
+});
+
 describe("bannerState", () => {
   const idle = { state: "idle" as const, lastRun: null };
   const named = (name: string, sync: Partial<SyncInfo>, over: Partial<Account> = {}) => ({ ...account({ ...idle, ...sync }), name, ...over });
   it("lists own failing and stale accounts", () => {
     const data = {
-      manage: true, syncInterval: "6h0m0s", alertAfter: 3,
+      manage: true, syncInterval: "6h0m0s", reconcileInterval: "24h0m0s", alertAfter: 3,
       accounts: [
         named("work", { health: "failing", failureStreak: 3 }),
         named("old", { health: "stale" }),

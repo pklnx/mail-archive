@@ -18,7 +18,7 @@ hero:
 
 features:
   - title: Read-only
-    details: Folders are opened with EXAMINE and fetched with BODY.PEEK[]. Nothing changes on the server, not even the \Seen flag. Mail deleted on the server stays in the archive.
+    details: Folders are opened with EXAMINE and fetched with BODY.PEEK[]. Nothing changes on the server, not even the \Seen flag. Mail deleted on the server stays in the archive and is marked as only in archive.
   - title: Many mailboxes, one archive
     details: Identical messages are stored once. For every message the archive remembers each account, folder and UID where it was found.
   - title: Plain files

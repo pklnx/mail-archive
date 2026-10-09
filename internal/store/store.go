@@ -338,6 +338,8 @@ type Folder struct {
 	Name        string
 	UIDValidity uint32
 	LastUID     uint32
+	// LastReconciledAt is nil until the folder was first reconciled.
+	LastReconciledAt *time.Time
 }
 
 // GetOrCreateFolder returns the sync state for a folder, creating it if new.
@@ -348,8 +350,9 @@ func (s *Store) GetOrCreateFolder(ctx context.Context, accountID int64, name str
 	}
 	return &Folder{
 		ID: r.ID, AccountID: accountID, Name: name,
-		UIDValidity: uint32(r.Uidvalidity), //nolint:gosec // stored from uint32
-		LastUID:     uint32(r.LastUid),     //nolint:gosec // stored from uint32
+		UIDValidity:      uint32(r.Uidvalidity), //nolint:gosec // stored from uint32
+		LastUID:          uint32(r.LastUid),     //nolint:gosec // stored from uint32
+		LastReconciledAt: r.LastReconciledAt,
 	}, nil
 }
 
@@ -452,6 +455,7 @@ type SyncRun struct {
 	MessagesFetched int
 	MessagesNew     int
 	Error           string
+	Reconcile       ReconcileCounts
 	// Health is how the run changes the account's failure streak.
 	Health HealthEffect
 }
@@ -475,8 +479,12 @@ func (s *Store) FinishSyncRun(ctx context.Context, r *SyncRun) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		err := one(q.FinishSyncRun(ctx, db.FinishSyncRunParams{
 			ID: r.ID, Status: r.Status, Error: r.Error,
-			MessagesFetched: clampInt32(r.MessagesFetched),
-			MessagesNew:     clampInt32(r.MessagesNew),
+			MessagesFetched:   clampInt32(r.MessagesFetched),
+			MessagesNew:       clampInt32(r.MessagesNew),
+			ReconciledFolders: clampInt32(r.Reconcile.Folders),
+			LocationsGone:     clampInt32(r.Reconcile.Gone),
+			LocationsBack:     clampInt32(r.Reconcile.Back),
+			FlagsChanged:      clampInt32(r.Reconcile.FlagsChanged),
 		}))
 		if err != nil {
 			return err
@@ -506,6 +514,7 @@ type LastRun struct {
 	MessagesFetched int
 	MessagesNew     int
 	Error           string
+	Reconcile       ReconcileCounts
 }
 
 // LastRuns returns the most recent sync run per account ID.
@@ -519,6 +528,10 @@ func (s *Store) LastRuns(ctx context.Context) (map[int64]LastRun, error) {
 		out[r.AccountID] = LastRun{
 			StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Status: r.Status,
 			MessagesFetched: int(r.MessagesFetched), MessagesNew: int(r.MessagesNew), Error: deref(r.Error),
+			Reconcile: ReconcileCounts{
+				Folders: int(r.ReconciledFolders), Gone: int(r.LocationsGone),
+				Back: int(r.LocationsBack), FlagsChanged: int(r.FlagsChanged),
+			},
 		}
 	}
 	return out, nil
@@ -534,10 +547,14 @@ type AccountStats struct {
 	Folders   int
 	// Messages counts distinct messages; one found in two folders of the
 	// account counts once.
-	Messages     int64
-	LastRunAt    *time.Time
-	LastStatus   *string
-	LastRunError *string
+	Messages int64
+	// Gone counts messages whose locations in this account are all gone
+	// from the server.
+	Gone             int64
+	LastReconciledAt *time.Time
+	LastRunAt        *time.Time
+	LastStatus       *string
+	LastRunError     *string
 }
 
 // Stats returns per-account statistics and the number of unique messages,
@@ -553,7 +570,8 @@ func (s *Store) Stats(ctx context.Context, owner *int64) ([]AccountStats, int64,
 	}
 	out := make([]AccountStats, 0, len(rows))
 	for _, r := range rows {
-		st := AccountStats{AccountID: r.ID, Account: r.Name, Kind: AccountKind(r.Kind), OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Messages: r.Messages}
+		st := AccountStats{AccountID: r.ID, Account: r.Name, Kind: AccountKind(r.Kind), OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Messages: r.Messages,
+			Gone: r.Gone, LastReconciledAt: r.LastReconciledAt}
 		if run, ok := lastRun[r.ID]; ok {
 			st.LastRunAt, st.LastStatus = &run.StartedAt, &run.Status
 			if run.Error != "" {

@@ -27,19 +27,29 @@ type Runner struct {
 
 	mu     sync.Mutex
 	queue  []int64
-	queued map[int64]bool
+	queued map[int64]SyncOptions
 	wake   chan struct{}
 }
 
 // Enqueue adds accounts to the sync queue. Accounts already waiting are not
 // added twice. It returns immediately; Run does the work.
 func (r *Runner) Enqueue(ids ...int64) {
+	r.EnqueueWith(SyncOptions{}, ids...)
+}
+
+// EnqueueWith is Enqueue with options. An account already waiting keeps
+// its place; a request to reconcile upgrades its queued sync.
+func (r *Runner) EnqueueWith(opts SyncOptions, ids ...int64) {
 	r.mu.Lock()
 	r.init()
 	for _, id := range ids {
-		if !r.queued[id] {
-			r.queued[id] = true
+		cur, ok := r.queued[id]
+		switch {
+		case !ok:
+			r.queued[id] = opts
 			r.queue = append(r.queue, id)
+		case opts.Reconcile && (!cur.Reconcile || opts.ReconcileMinAge < cur.ReconcileMinAge):
+			r.queued[id] = opts
 		}
 	}
 	r.mu.Unlock()
@@ -62,21 +72,22 @@ func (r *Runner) Queued() map[int64]bool {
 
 func (r *Runner) init() {
 	if r.queued == nil {
-		r.queued = map[int64]bool{}
+		r.queued = map[int64]SyncOptions{}
 		r.wake = make(chan struct{}, 1)
 	}
 }
 
-func (r *Runner) next() (int64, bool) {
+func (r *Runner) next() (int64, SyncOptions, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if len(r.queue) == 0 {
-		return 0, false
+		return 0, SyncOptions{}, false
 	}
 	id := r.queue[0]
 	r.queue = slices.Delete(r.queue, 0, 1)
+	opts := r.queued[id]
 	delete(r.queued, id)
-	return id, true
+	return id, opts, true
 }
 
 // Run works through the queue and the schedule until ctx is cancelled.
@@ -98,8 +109,8 @@ func (r *Runner) Run(ctx context.Context) {
 				log.Error("check sync schedule", "err", err)
 			}
 		}
-		for id, ok := r.next(); ok && ctx.Err() == nil; id, ok = r.next() {
-			r.syncOne(ctx, id)
+		for id, opts, ok := r.next(); ok && ctx.Err() == nil; id, opts, ok = r.next() {
+			r.syncOne(ctx, id, opts)
 		}
 		select {
 		case <-ctx.Done():
@@ -139,7 +150,7 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) syncOne(ctx context.Context, id int64) {
+func (r *Runner) syncOne(ctx context.Context, id int64, opts SyncOptions) {
 	log := r.Syncer.logger()
 	a, err := r.Syncer.Store.GetAccount(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -150,7 +161,7 @@ func (r *Runner) syncOne(ctx context.Context, id int64) {
 		log.Error("load account for sync", "id", id, "err", err)
 		return
 	}
-	res := r.Syncer.SyncAccount(ctx, a)
+	res := r.Syncer.SyncAccountWith(ctx, a, opts)
 	if r.AfterSync != nil {
 		r.AfterSync()
 	}

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -310,8 +311,14 @@ func TestSyncHealthBackfill(t *testing.T) {
 	broken := createAccount(t, st, "broken")
 	fine := createAccount(t, st, "fine")
 	fresh := createAccount(t, st, "fresh")
-	if _, err := st.MigrateDown(ctx); err != nil {
-		t.Fatal(err)
+	for {
+		name, err := st.MigrateDown(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(name, "00014_sync_health") {
+			break
+		}
 	}
 	day := func(d int) time.Time { return time.Date(2026, 10, d, 12, 0, 0, 0, time.UTC) }
 	for _, r := range []struct {

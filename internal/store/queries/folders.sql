@@ -1,7 +1,7 @@
 -- name: GetOrCreateFolder :one
 INSERT INTO folders (account_id, name) VALUES ($1, $2)
 ON CONFLICT (account_id, name) DO UPDATE SET name = EXCLUDED.name
-RETURNING id, uidvalidity, last_uid;
+RETURNING id, uidvalidity, last_uid, last_reconciled_at;
 
 -- name: ResetFolder :execrows
 UPDATE folders SET uidvalidity = $2, last_uid = 0 WHERE id = $1;

@@ -671,7 +671,10 @@ deleted completely.`,
 }
 
 func newSyncCmd() *cobra.Command {
-	var only []string
+	var (
+		only      []string
+		reconcile bool
+	)
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Copy new messages from all enabled accounts",
@@ -680,6 +683,12 @@ func newSyncCmd() *cobra.Command {
 The server is never modified: folders are opened read-only and messages are
 fetched without setting the \Seen flag. Messages deleted on the server stay in
 the archive. Run this periodically (cron, systemd timer).
+
+After a folder's sync, it is reconciled when due: the server lists every UID
+and its flags (no message bodies), and messages it no longer lists are marked
+as gone, while flags are updated. A folder is due once a day
+(` + config.EnvReconcileInterval + `, "0" for only with --reconcile).
+--reconcile compares every selected folder now.
 
 With ` + config.EnvNotifyWebhookURL + ` set, alerts for accounts whose syncs keep
 failing, and their recovery, are sent at the end.`,
@@ -699,7 +708,10 @@ failing, and their recovery, are sent at the end.`,
 				return err
 			}
 			log := newLogger(a.cfg.LogLevel)
-			syncer := &archive.Syncer{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}
+			syncer := &archive.Syncer{
+				Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
+				ReconcileInterval: a.cfg.ReconcileInterval,
+			}
 			var owner *int64
 			if u, err := flagUser(cmd, a); err != nil {
 				return err
@@ -713,7 +725,7 @@ failing, and their recovery, are sent at the end.`,
 			if err := refuseImportAccounts(cmd, a, only, owner); err != nil {
 				return err
 			}
-			results, err := syncer.SyncAll(cmd.Context(), only, owner)
+			results, err := syncer.SyncAll(cmd.Context(), only, owner, archive.SyncOptions{Reconcile: reconcile})
 			deliverAfterSync(cmd.Context(), newNotifier(a, log), log)
 			failed := 0
 			for _, r := range results {
@@ -729,7 +741,11 @@ failing, and their recovery, are sent at the end.`,
 				if len(names) > 1 {
 					label = ownerName(names, r.OwnerID) + "/" + r.Account
 				}
-				fmt.Printf("%-20s fetched=%-6d new=%-6d %s\n", label, r.Fetched, r.New, status)
+				var rec string
+				if rc := r.Reconcile; rc.Folders > 0 {
+					rec = fmt.Sprintf("gone=%-4d back=%-4d flags=%-4d ", rc.Gone, rc.Back, rc.FlagsChanged)
+				}
+				fmt.Printf("%-20s fetched=%-6d new=%-6d %s%s\n", label, r.Fetched, r.New, rec, status)
 			}
 			if err != nil {
 				return err
@@ -745,6 +761,7 @@ failing, and their recovery, are sent at the end.`,
 	}
 	cmd.Flags().StringArrayVar(&only, "account", nil, "only sync these accounts (repeatable; also syncs disabled ones)")
 	cmd.Flags().String("user", "", "only sync this user's accounts")
+	cmd.Flags().BoolVar(&reconcile, "reconcile", false, "compare every selected folder with the server now, not only due ones")
 	return cmd
 }
 
@@ -828,7 +845,10 @@ network.`,
 				} else if n > 0 {
 					log.Info("stored passwords bound to the account ID", "accounts", n)
 				}
-				opts.Syncer = &archive.Syncer{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}
+				opts.Syncer = &archive.Syncer{
+					Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
+					ReconcileInterval: a.cfg.ReconcileInterval,
+				}
 				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Interval: a.cfg.SyncInterval, AfterSync: afterSync}
 				runnerDone := make(chan struct{})
 				go func() {
@@ -838,7 +858,7 @@ network.`,
 				// Let a running sync record its outcome before the store closes.
 				defer func() { <-runnerDone }()
 				if a.cfg.SyncInterval > 0 {
-					log.Info("sync schedule on", "interval", a.cfg.SyncInterval)
+					log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "reconcile_interval", a.cfg.ReconcileInterval)
 				} else {
 					log.Info("sync schedule off")
 				}
@@ -898,8 +918,9 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show archive statistics and the last sync per account",
 		Long: `Show per account its ID (as listed by /healthz/sync and in alerts), the
-number of folders and messages, the last sync, and in FAILED how many syncs
-in a row failed and since when.`,
+number of folders and messages, in GONE how many of its messages are no
+longer on the server (found by reconcile; "-" for import accounts), the last
+sync, and in FAILED how many syncs in a row failed and since when.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -926,7 +947,7 @@ in a row failed and since when.`,
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tACCOUNT\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tLAST SYNC\tSTATUS\tFAILED")
+			fmt.Fprintln(w, "ID\tACCOUNT\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tGONE\tLAST SYNC\tSTATUS\tFAILED")
 			for _, s := range stats {
 				last, status := "never", "-"
 				if s.LastRunAt != nil {
@@ -935,11 +956,12 @@ in a row failed and since when.`,
 				if s.LastStatus != nil {
 					status = *s.LastStatus
 				}
-				enabled := fmt.Sprint(s.Enabled)
+				enabled, gone := fmt.Sprint(s.Enabled), fmt.Sprint(s.Gone)
 				if s.Kind == store.KindImport {
-					enabled = "import"
+					enabled, gone = "import", "-"
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n", s.AccountID, s.Account, ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, last, status,
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", s.AccountID, s.Account, ownerName(names, s.OwnerID), enabled,
+					s.Folders, s.Messages, gone, last, status,
 					failedColumn(health[s.AccountID]))
 			}
 			if err := w.Flush(); err != nil {

@@ -4,10 +4,21 @@ const dateFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium" });
 const timeFmt = new Intl.DateTimeFormat(locale, { timeStyle: "short" });
 const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "short" });
 
-/** How a location reads in the message view; old locations get a note. */
-export function locationLabel(l: { account: string; folder: string; superseded: boolean }): string {
+/**
+ * How a location reads in the message view. Old locations get a note, and
+ * so do locations the server no longer lists.
+ */
+export function locationLabel(l: {
+  account: string;
+  folder: string;
+  superseded: boolean;
+  goneAt?: string | null;
+  lastSeenAt?: string;
+}): string {
   const where = `${l.account} / ${l.folder}`;
-  return l.superseded ? `${where} (${t.renumbered})` : where;
+  if (l.superseded) return `${where} (${t.renumbered})`;
+  if (l.goneAt) return `${where} (${t.goneFromServer(l.lastSeenAt ? dateFmt.format(new Date(l.lastSeenAt)) : "")})`;
+  return where;
 }
 
 /** Short date for lists: time for today, otherwise the date. */

@@ -92,9 +92,11 @@ expect "$work/out" 'account "test" added'
 
 echo "== sync"
 ./ma sync | tee "$work/out"
-expect "$work/out" "test +fetched=3 +new=3 +ok"
+# The first sync also compares the new folders with the server.
+expect "$work/out" "test +fetched=3 +new=3 +gone=0 +back=0 +flags=0 +ok"
 
 echo "== sync again"
+# Reconciled a moment ago: not due, so no reconcile counts.
 ./ma sync | tee "$work/out"
 expect "$work/out" "test +fetched=0 +new=0 +ok"
 

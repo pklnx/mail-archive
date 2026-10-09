@@ -27,6 +27,9 @@ const (
 	// (Go duration like "6h"; "0" turns the schedule off).
 	EnvSyncInterval = "MAIL_ARCHIVE_SYNC_INTERVAL"
 	EnvRequire2FA   = "MAIL_ARCHIVE_REQUIRE_2FA"
+	// EnvReconcileInterval is how often each folder is compared with the
+	// server to find deleted messages and changed flags ("0" turns it off).
+	EnvReconcileInterval = "MAIL_ARCHIVE_RECONCILE_INTERVAL"
 	// EnvPublicURL is the address users open in the browser, like
 	// https://archive.example.ts.net. Passkeys need it: they are bound to
 	// its host name.
@@ -60,6 +63,12 @@ const DefaultSyncInterval = 6 * time.Hour
 // MinSyncInterval protects mail servers from being polled too often.
 const MinSyncInterval = 5 * time.Minute
 
+// DefaultReconcileInterval is used when EnvReconcileInterval is not set.
+const DefaultReconcileInterval = 24 * time.Hour
+
+// MinReconcileInterval keeps reconciles rare: each lists every UID of a folder.
+const MinReconcileInterval = time.Hour
+
 // Config holds the application configuration.
 type Config struct {
 	DatabaseURL string
@@ -70,7 +79,10 @@ type Config struct {
 	AllowedHosts []string
 	// SyncInterval of the web server's schedule; zero means off.
 	SyncInterval time.Duration
-	Require2FA   bool
+	// ReconcileInterval: how old a folder's last reconcile may get before a
+	// sync reconciles it again; zero means only on request.
+	ReconcileInterval time.Duration
+	Require2FA        bool
 	// PublicURL is the web UI's origin (scheme, host and port, no path);
 	// empty turns passkeys off.
 	PublicURL string
@@ -114,6 +126,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.SyncInterval = interval
+	cfg.ReconcileInterval, err = parseInterval(EnvReconcileInterval, os.Getenv(EnvReconcileInterval),
+		DefaultReconcileInterval, MinReconcileInterval, "24h")
+	if err != nil {
+		return nil, err
+	}
 	cfg.Require2FA = strings.EqualFold(strings.TrimSpace(os.Getenv(EnvRequire2FA)), "true")
 	if v := strings.TrimSpace(os.Getenv(EnvPublicURL)); v != "" {
 		origin, _, err := ParsePublicURL(v)
@@ -175,16 +192,21 @@ func ParsePublicURL(v string) (origin, rpID string, err error) {
 }
 
 func parseSyncInterval(v string) (time.Duration, error) {
+	return parseInterval(EnvSyncInterval, v, DefaultSyncInterval, MinSyncInterval, "6h")
+}
+
+// parseInterval reads a duration of at least minimum, or "0" for off.
+func parseInterval(env, v string, def, minimum time.Duration, example string) (time.Duration, error) {
 	if v == "" {
-		return DefaultSyncInterval, nil
+		return def, nil
 	}
 	if v == "0" {
 		return 0, nil
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil || d < MinSyncInterval {
-		return 0, fmt.Errorf("%s: want a duration of at least %s (like 6h) or 0 to turn the schedule off, got %q",
-			EnvSyncInterval, MinSyncInterval, v)
+	if err != nil || d < minimum {
+		return 0, fmt.Errorf("%s: want a duration of at least %s (like %s) or 0 to turn it off, got %q",
+			env, minimum, example, v)
 	}
 	return d, nil
 }

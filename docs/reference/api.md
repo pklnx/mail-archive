@@ -85,7 +85,7 @@ without it these endpoints answer `503` and `GET /api/accounts` reports
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
@@ -106,12 +106,14 @@ Query parameters of `GET /api/messages`:
 | `after`, `before` | Date range. `after` is inclusive, `before` exclusive. `YYYY-MM-DD` means midnight UTC; RFC 3339 with an offset (`2024-01-01T00:00:00+01:00`) sets another midnight. |
 | `group` | `1`: one row per conversation, the newest message of it that matches all other parameters. `0` or empty: one row per message. |
 | `thread` | Only the messages of this conversation: a `thread` value from a grouped row or a message. At most 2000 bytes. |
+| `gone` | `1` or `true`: only messages no longer on any server. They have locations in the user's IMAP accounts (with `account`, in that account), and all of those are gone. Messages only in import accounts are never listed. |
 | `limit` | Page size, 1 to 200, default 50. |
 | `cursor` | The `nextCursor` of the previous page. |
 
 `from`, `to` and `attachment` take at most 200 characters each. All filters
 combine. `400` for a longer value, a `has` other than `attachment`, a
-`group` other than `0` or `1`, a longer `thread`, an invalid date, or
+`group` other than `0` or `1`, a `gone` other than `1`, `true`, `0` or
+`false`, a longer `thread`, an invalid date, or
 `after` later than `before`.
 
 The response is `{"messages": [...], "nextCursor": "..." | null}`. Each
@@ -193,7 +195,11 @@ Each account in `GET /api/accounts` has a `sync` object:
     "finishedAt": null,
     "status": "running",
     "fetched": 120,
-    "new": 87
+    "new": 87,
+    "reconciledFolders": 0,
+    "gone": 0,
+    "back": 0,
+    "flagsChanged": 0
   },
   "failureStreak": 0,
   "failingSince": null,
@@ -208,9 +214,19 @@ failed syncs in a row and `failingSince` is when the first of them started
 (`null` without a streak). `health` is `failing` when the last `alertAfter`
 syncs failed, `stale` when no sync succeeded within two sync intervals, else
 `ok`; disabled accounts are always `ok`. See [Syncing](../guide/syncing#alerts).
+`reconciledFolders` counts the folders the run compared with the server;
+`gone`, `back` and `flagsChanged` count the locations it marked as gone,
+found again, and gave new flags.
+
+Each account also has `goneMessages`, the number of its messages whose
+locations in this account are all gone from the server, and
+`lastReconciledAt`, the latest reconcile of any of its folders (`null` if
+never). Each folder has `lastReconciledAt` too.
 
 The response also has `manage` (see above), `syncInterval`, a Go duration
-such as `6h0m0s`, or empty when the schedule is off, and `alertAfter`
+such as `6h0m0s`, or empty when the schedule is off, `reconcileInterval`
+(`24h0m0s`, or empty when folders are only reconciled on request), and
+`alertAfter`
 (`MAIL_ARCHIVE_ALERT_AFTER_FAILURES`). For admins it also has
 `otherFailing`: how many accounts of other users are failing, as a number
 only.
@@ -219,9 +235,9 @@ only.
 
 | Endpoint | Description |
 |---|---|
-| `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. |
+| `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. With the body `{"reconcile": true}` the sync also reconciles every folder not reconciled in the last 5 minutes. A sync already waiting is upgraded, not queued twice. `409` for import and removed accounts. |
 | `POST /api/sync` | Queue all enabled IMAP accounts. Answers `202` with `{"queued": n}`. |
-| `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak` and `health`, like `./ma status`. |
+| `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak`, `health` and `goneMessages`, like `./ma status`. |
 
 ## Health checks
 

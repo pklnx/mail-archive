@@ -39,6 +39,24 @@ WHERE
   AND (sqlc.narg(thread)::text IS NULL OR COALESCE(m.thread_id, m.sha256) = sqlc.narg(thread)::text)
   AND (sqlc.narg(after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(after)::timestamptz)
   AND (sqlc.narg(before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(before)::timestamptz)
+  -- Only in the archive: the user's IMAP locations (of the account, if
+  -- given) are all gone from the server. Import accounts say nothing about
+  -- servers, and removed accounts are never reconciled, so they count as
+  -- present. Starts from the few gone locations (message_locations_gone_idx).
+  AND (NOT sqlc.arg(gone)::boolean OR m.sha256 IN (
+       SELECT g.message_sha256 FROM message_locations g
+       JOIN folders gf ON gf.id = g.folder_id
+       JOIN accounts ga ON ga.id = gf.account_id
+       WHERE g.gone_at IS NOT NULL
+         AND ga.owner_id = sqlc.arg(owner)::bigint AND ga.kind = 'imap'
+         AND (sqlc.narg(account)::text IS NULL OR ga.name = sqlc.narg(account)::text)
+         AND NOT EXISTS (
+             SELECT 1 FROM message_locations p
+             JOIN folders pf ON pf.id = p.folder_id
+             JOIN accounts pa ON pa.id = pf.account_id
+             WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+               AND pa.owner_id = sqlc.arg(owner)::bigint AND pa.kind = 'imap'
+               AND (sqlc.narg(account)::text IS NULL OR pa.name = sqlc.narg(account)::text))))
   -- filters:end
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
        OR (m.sort_at, m.sha256) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_sha)::text))
@@ -88,6 +106,24 @@ WHERE
   AND (sqlc.narg(thread)::text IS NULL OR COALESCE(m.thread_id, m.sha256) = sqlc.narg(thread)::text)
   AND (sqlc.narg(after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(after)::timestamptz)
   AND (sqlc.narg(before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(before)::timestamptz)
+  -- Only in the archive: the user's IMAP locations (of the account, if
+  -- given) are all gone from the server. Import accounts say nothing about
+  -- servers, and removed accounts are never reconciled, so they count as
+  -- present. Starts from the few gone locations (message_locations_gone_idx).
+  AND (NOT sqlc.arg(gone)::boolean OR m.sha256 IN (
+       SELECT g.message_sha256 FROM message_locations g
+       JOIN folders gf ON gf.id = g.folder_id
+       JOIN accounts ga ON ga.id = gf.account_id
+       WHERE g.gone_at IS NOT NULL
+         AND ga.owner_id = sqlc.arg(owner)::bigint AND ga.kind = 'imap'
+         AND (sqlc.narg(account)::text IS NULL OR ga.name = sqlc.narg(account)::text)
+         AND NOT EXISTS (
+             SELECT 1 FROM message_locations p
+             JOIN folders pf ON pf.id = p.folder_id
+             JOIN accounts pa ON pa.id = pf.account_id
+             WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+               AND pa.owner_id = sqlc.arg(owner)::bigint AND pa.kind = 'imap'
+               AND (sqlc.narg(account)::text IS NULL OR pa.name = sqlc.narg(account)::text))))
   -- filters:end
   AND NOT EXISTS (
       SELECT 1 FROM messages n
@@ -120,6 +156,24 @@ WHERE
         AND (sqlc.narg(thread)::text IS NULL OR COALESCE(n.thread_id, n.sha256) = sqlc.narg(thread)::text)
         AND (sqlc.narg(after)::timestamptz IS NULL OR n.sort_at >= sqlc.narg(after)::timestamptz)
         AND (sqlc.narg(before)::timestamptz IS NULL OR n.sort_at < sqlc.narg(before)::timestamptz)
+        -- Only in the archive: the user's IMAP locations (of the account, if
+        -- given) are all gone from the server. Import accounts say nothing about
+        -- servers, and removed accounts are never reconciled, so they count as
+        -- present. Starts from the few gone locations (message_locations_gone_idx).
+        AND (NOT sqlc.arg(gone)::boolean OR n.sha256 IN (
+             SELECT g.message_sha256 FROM message_locations g
+             JOIN folders gf ON gf.id = g.folder_id
+             JOIN accounts ga ON ga.id = gf.account_id
+             WHERE g.gone_at IS NOT NULL
+               AND ga.owner_id = sqlc.arg(owner)::bigint AND ga.kind = 'imap'
+               AND (sqlc.narg(account)::text IS NULL OR ga.name = sqlc.narg(account)::text)
+               AND NOT EXISTS (
+                   SELECT 1 FROM message_locations p
+                   JOIN folders pf ON pf.id = p.folder_id
+                   JOIN accounts pa ON pa.id = pf.account_id
+                   WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+                     AND pa.owner_id = sqlc.arg(owner)::bigint AND pa.kind = 'imap'
+                     AND (sqlc.narg(account)::text IS NULL OR pa.name = sqlc.narg(account)::text))))
         -- filters:end
   )
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
@@ -160,6 +214,24 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
   AND (sqlc.narg(thread)::text IS NULL OR COALESCE(t.thread_id, t.sha256) = sqlc.narg(thread)::text)
   AND (sqlc.narg(after)::timestamptz IS NULL OR t.sort_at >= sqlc.narg(after)::timestamptz)
   AND (sqlc.narg(before)::timestamptz IS NULL OR t.sort_at < sqlc.narg(before)::timestamptz)
+  -- Only in the archive: the user's IMAP locations (of the account, if
+  -- given) are all gone from the server. Import accounts say nothing about
+  -- servers, and removed accounts are never reconciled, so they count as
+  -- present. Starts from the few gone locations (message_locations_gone_idx).
+  AND (NOT sqlc.arg(gone)::boolean OR t.sha256 IN (
+       SELECT g.message_sha256 FROM message_locations g
+       JOIN folders gf ON gf.id = g.folder_id
+       JOIN accounts ga ON ga.id = gf.account_id
+       WHERE g.gone_at IS NOT NULL
+         AND ga.owner_id = sqlc.arg(owner)::bigint AND ga.kind = 'imap'
+         AND (sqlc.narg(account)::text IS NULL OR ga.name = sqlc.narg(account)::text)
+         AND NOT EXISTS (
+             SELECT 1 FROM message_locations p
+             JOIN folders pf ON pf.id = p.folder_id
+             JOIN accounts pa ON pa.id = pf.account_id
+             WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+               AND pa.owner_id = sqlc.arg(owner)::bigint AND pa.kind = 'imap'
+               AND (sqlc.narg(account)::text IS NULL OR pa.name = sqlc.narg(account)::text))))
   -- filters:end
 GROUP BY 1;
 
@@ -181,7 +253,11 @@ WHERE m.sha256 = @sha256
 -- server renumbered the folder, and the rescan added a new location for
 -- every message still there. Superseded locations stay as history.
 SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
-       (l.uidvalidity <> f.uidvalidity)::boolean AS superseded
+       (l.uidvalidity <> f.uidvalidity)::boolean AS superseded, l.gone_at,
+       -- A present location was seen at the folder's last reconcile.
+       (CASE WHEN l.gone_at IS NULL AND l.uidvalidity = f.uidvalidity
+             THEN GREATEST(l.last_seen_at, f.last_reconciled_at)
+             ELSE l.last_seen_at END)::timestamptz AS last_seen_at
 FROM message_locations l
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
@@ -199,7 +275,7 @@ SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS remo
        (SELECT count(*) FROM (
             SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
        )::bigint AS messages,
-       f.last_synced_at
+       f.last_synced_at, f.last_reconciled_at
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 WHERE a.owner_id = @owner::bigint
