@@ -34,10 +34,12 @@ SET body_text = @body_text::text, to_addr = NULLIF(@to_addr::text, ''), cc_addr 
 WHERE sha256 = @sha256 AND index_version < @index_version;
 
 -- name: UpsertLocation :exec
+-- A location stored again (a UIDVALIDITY that returned to an old value) is
+-- on the server again.
 INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (folder_id, uidvalidity, uid)
-DO UPDATE SET flags = EXCLUDED.flags, last_seen_at = now();
+DO UPDATE SET flags = EXCLUDED.flags, last_seen_at = now(), gone_at = NULL;
 
 -- name: GetMessage :one
 SELECT sha256, size, message_id, subject, from_addr, sent_at, stored_path

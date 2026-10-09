@@ -30,6 +30,8 @@ type statusAccount struct {
 	// FailureStreak and Health as in GET /api/accounts.
 	FailureStreak int    `json:"failureStreak"`
 	Health        string `json:"health"`
+	// GoneMessages as in GET /api/accounts.
+	GoneMessages int64 `json:"goneMessages"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +52,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		a := statusAccount{
 			Name: st.Account, Kind: string(st.Kind), Enabled: st.Enabled, Folders: st.Folders, Messages: st.Messages,
 			LastRunAt: st.LastRunAt, LastStatus: st.LastStatus, LastError: st.LastRunError, Health: store.HealthOK,
+			GoneMessages: st.Gone,
 		}
 		if h := health[st.AccountID]; h != nil {
 			a.FailureStreak, a.Health = h.FailureStreak, h.State(s.alertAfter, s.syncInterval(), now)
@@ -114,6 +117,14 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("%s must be at most %d characters", name, maxFilterLen), nil)
 			return
 		}
+	}
+	switch q.Get("gone") {
+	case "", "false", "0":
+	case "true", "1":
+		f.Gone = true
+	default:
+		s.fail(w, r, http.StatusBadRequest, `gone must be "true" or "false"`, nil)
+		return
 	}
 	switch q.Get("has") {
 	case "":
@@ -182,6 +193,11 @@ type locationJSON struct {
 	InternalDate *time.Time `json:"internalDate"`
 	// Superseded: from before the folder's UIDVALIDITY changed (renumbered).
 	Superseded bool `json:"superseded"`
+	// GoneAt: when a reconcile found the location missing on the server
+	// (null while it is there, or before the folder was ever reconciled).
+	GoneAt *time.Time `json:"goneAt"`
+	// LastSeenAt: when the server last listed the location.
+	LastSeenAt time.Time `json:"lastSeenAt"`
 }
 
 type partJSON struct {
@@ -246,6 +262,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Locations = append(out.Locations, locationJSON{
 			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
+			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, out)

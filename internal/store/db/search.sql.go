@@ -41,6 +41,24 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY($1::text[])
   AND ($11::text IS NULL OR COALESCE(t.thread_id, t.sha256) = $11::text)
   AND ($12::timestamptz IS NULL OR t.sort_at >= $12::timestamptz)
   AND ($13::timestamptz IS NULL OR t.sort_at < $13::timestamptz)
+  -- Only in the archive: the user's IMAP locations (of the account, if
+  -- given) are all gone from the server. Import accounts say nothing about
+  -- servers, and removed accounts are never reconciled, so they count as
+  -- present. Starts from the few gone locations (message_locations_gone_idx).
+  AND (NOT $14::boolean OR t.sha256 IN (
+       SELECT g.message_sha256 FROM message_locations g
+       JOIN folders gf ON gf.id = g.folder_id
+       JOIN accounts ga ON ga.id = gf.account_id
+       WHERE g.gone_at IS NOT NULL
+         AND ga.owner_id = $4::bigint AND ga.kind = 'imap'
+         AND ($5::text IS NULL OR ga.name = $5::text)
+         AND NOT EXISTS (
+             SELECT 1 FROM message_locations p
+             JOIN folders pf ON pf.id = p.folder_id
+             JOIN accounts pa ON pa.id = pf.account_id
+             WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+               AND pa.owner_id = $4::bigint AND pa.kind = 'imap'
+               AND ($5::text IS NULL OR pa.name = $5::text))))
   -- filters:end
 GROUP BY 1
 `
@@ -59,6 +77,7 @@ type CountThreadMatchesParams struct {
 	Thread            *string
 	After             *time.Time
 	Before            *time.Time
+	Gone              bool
 }
 
 type CountThreadMatchesRow struct {
@@ -83,6 +102,7 @@ func (q *Queries) CountThreadMatches(ctx context.Context, arg CountThreadMatches
 		arg.Thread,
 		arg.After,
 		arg.Before,
+		arg.Gone,
 	)
 	if err != nil {
 		return nil, err
@@ -157,7 +177,7 @@ SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS remo
        (SELECT count(*) FROM (
             SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
        )::bigint AS messages,
-       f.last_synced_at
+       f.last_synced_at, f.last_reconciled_at
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 WHERE a.owner_id = $1::bigint
@@ -165,13 +185,14 @@ ORDER BY a.name, f.name
 `
 
 type ListFolderCountsRow struct {
-	Account      string
-	Enabled      bool
-	Removed      bool
-	Kind         string
-	Folder       *string
-	Messages     int64
-	LastSyncedAt *time.Time
+	Account          string
+	Enabled          bool
+	Removed          bool
+	Kind             string
+	Folder           *string
+	Messages         int64
+	LastSyncedAt     *time.Time
+	LastReconciledAt *time.Time
 }
 
 // The number of distinct messages per folder, like the folder's message
@@ -196,6 +217,7 @@ func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFold
 			&i.Folder,
 			&i.Messages,
 			&i.LastSyncedAt,
+			&i.LastReconciledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -209,7 +231,11 @@ func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFold
 
 const listLocations = `-- name: ListLocations :many
 SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
-       (l.uidvalidity <> f.uidvalidity)::boolean AS superseded
+       (l.uidvalidity <> f.uidvalidity)::boolean AS superseded, l.gone_at,
+       -- A present location was seen at the folder's last reconcile.
+       (CASE WHEN l.gone_at IS NULL AND l.uidvalidity = f.uidvalidity
+             THEN GREATEST(l.last_seen_at, f.last_reconciled_at)
+             ELSE l.last_seen_at END)::timestamptz AS last_seen_at
 FROM message_locations l
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
@@ -229,6 +255,8 @@ type ListLocationsRow struct {
 	Flags        []string
 	InternalDate *time.Time
 	Superseded   bool
+	GoneAt       *time.Time
+	LastSeenAt   time.Time
 }
 
 // The user's own locations of a message, current ones first. A location is
@@ -251,6 +279,8 @@ func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([
 			&i.Flags,
 			&i.InternalDate,
 			&i.Superseded,
+			&i.GoneAt,
+			&i.LastSeenAt,
 		); err != nil {
 			return nil, err
 		}
@@ -301,11 +331,29 @@ WHERE
   AND ($10::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $10::text)
   AND ($11::timestamptz IS NULL OR m.sort_at >= $11::timestamptz)
   AND ($12::timestamptz IS NULL OR m.sort_at < $12::timestamptz)
+  -- Only in the archive: the user's IMAP locations (of the account, if
+  -- given) are all gone from the server. Import accounts say nothing about
+  -- servers, and removed accounts are never reconciled, so they count as
+  -- present. Starts from the few gone locations (message_locations_gone_idx).
+  AND (NOT $13::boolean OR m.sha256 IN (
+       SELECT g.message_sha256 FROM message_locations g
+       JOIN folders gf ON gf.id = g.folder_id
+       JOIN accounts ga ON ga.id = gf.account_id
+       WHERE g.gone_at IS NOT NULL
+         AND ga.owner_id = $3::bigint AND ga.kind = 'imap'
+         AND ($4::text IS NULL OR ga.name = $4::text)
+         AND NOT EXISTS (
+             SELECT 1 FROM message_locations p
+             JOIN folders pf ON pf.id = p.folder_id
+             JOIN accounts pa ON pa.id = pf.account_id
+             WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+               AND pa.owner_id = $3::bigint AND pa.kind = 'imap'
+               AND ($4::text IS NULL OR pa.name = $4::text))))
   -- filters:end
-  AND ($13::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($13::timestamptz, $14::text))
+  AND ($14::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($14::timestamptz, $15::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $15
+LIMIT $16
 `
 
 type SearchMessagesParams struct {
@@ -321,6 +369,7 @@ type SearchMessagesParams struct {
 	Thread            *string
 	After             *time.Time
 	Before            *time.Time
+	Gone              bool
 	CursorAt          *time.Time
 	CursorSha         *string
 	RowLimit          int32
@@ -353,6 +402,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 		arg.Thread,
 		arg.After,
 		arg.Before,
+		arg.Gone,
 		arg.CursorAt,
 		arg.CursorSha,
 		arg.RowLimit,
@@ -423,6 +473,24 @@ WHERE
   AND ($10::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $10::text)
   AND ($11::timestamptz IS NULL OR m.sort_at >= $11::timestamptz)
   AND ($12::timestamptz IS NULL OR m.sort_at < $12::timestamptz)
+  -- Only in the archive: the user's IMAP locations (of the account, if
+  -- given) are all gone from the server. Import accounts say nothing about
+  -- servers, and removed accounts are never reconciled, so they count as
+  -- present. Starts from the few gone locations (message_locations_gone_idx).
+  AND (NOT $13::boolean OR m.sha256 IN (
+       SELECT g.message_sha256 FROM message_locations g
+       JOIN folders gf ON gf.id = g.folder_id
+       JOIN accounts ga ON ga.id = gf.account_id
+       WHERE g.gone_at IS NOT NULL
+         AND ga.owner_id = $3::bigint AND ga.kind = 'imap'
+         AND ($4::text IS NULL OR ga.name = $4::text)
+         AND NOT EXISTS (
+             SELECT 1 FROM message_locations p
+             JOIN folders pf ON pf.id = p.folder_id
+             JOIN accounts pa ON pa.id = pf.account_id
+             WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+               AND pa.owner_id = $3::bigint AND pa.kind = 'imap'
+               AND ($4::text IS NULL OR pa.name = $4::text))))
   -- filters:end
   AND NOT EXISTS (
       SELECT 1 FROM messages n
@@ -455,12 +523,30 @@ WHERE
         AND ($10::text IS NULL OR COALESCE(n.thread_id, n.sha256) = $10::text)
         AND ($11::timestamptz IS NULL OR n.sort_at >= $11::timestamptz)
         AND ($12::timestamptz IS NULL OR n.sort_at < $12::timestamptz)
+        -- Only in the archive: the user's IMAP locations (of the account, if
+        -- given) are all gone from the server. Import accounts say nothing about
+        -- servers, and removed accounts are never reconciled, so they count as
+        -- present. Starts from the few gone locations (message_locations_gone_idx).
+        AND (NOT $13::boolean OR n.sha256 IN (
+             SELECT g.message_sha256 FROM message_locations g
+             JOIN folders gf ON gf.id = g.folder_id
+             JOIN accounts ga ON ga.id = gf.account_id
+             WHERE g.gone_at IS NOT NULL
+               AND ga.owner_id = $3::bigint AND ga.kind = 'imap'
+               AND ($4::text IS NULL OR ga.name = $4::text)
+               AND NOT EXISTS (
+                   SELECT 1 FROM message_locations p
+                   JOIN folders pf ON pf.id = p.folder_id
+                   JOIN accounts pa ON pa.id = pf.account_id
+                   WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
+                     AND pa.owner_id = $3::bigint AND pa.kind = 'imap'
+                     AND ($4::text IS NULL OR pa.name = $4::text))))
         -- filters:end
   )
-  AND ($13::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($13::timestamptz, $14::text))
+  AND ($14::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($14::timestamptz, $15::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $15
+LIMIT $16
 `
 
 type SearchThreadsParams struct {
@@ -476,6 +562,7 @@ type SearchThreadsParams struct {
 	Thread            *string
 	After             *time.Time
 	Before            *time.Time
+	Gone              bool
 	CursorAt          *time.Time
 	CursorSha         *string
 	RowLimit          int32
@@ -511,6 +598,7 @@ func (q *Queries) SearchThreads(ctx context.Context, arg SearchThreadsParams) ([
 		arg.Thread,
 		arg.After,
 		arg.Before,
+		arg.Gone,
 		arg.CursorAt,
 		arg.CursorSha,
 		arg.RowLimit,

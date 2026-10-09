@@ -23,6 +23,12 @@ type lastRunJSON struct {
 	Fetched    int        `json:"fetched"`
 	New        int        `json:"new"`
 	Error      string     `json:"error,omitempty"`
+	// What reconciling changed: folders compared with the server, locations
+	// newly gone or back, and locations whose flags changed.
+	ReconciledFolders int `json:"reconciledFolders"`
+	Gone              int `json:"gone"`
+	Back              int `json:"back"`
+	FlagsChanged      int `json:"flagsChanged"`
 }
 
 type syncJSON struct {
@@ -53,12 +59,18 @@ type accountJSON struct {
 	ExcludedFolders []string     `json:"excludedFolders"`
 	Folders         []folderJSON `json:"folders"`
 	Sync            syncJSON     `json:"sync"`
+	// GoneMessages counts messages whose locations in this account are all
+	// gone from the server; LastReconciledAt is the latest reconcile of any
+	// of its folders.
+	GoneMessages     int64      `json:"goneMessages"`
+	LastReconciledAt *time.Time `json:"lastReconciledAt"`
 }
 
 type folderJSON struct {
-	Name         string     `json:"name"`
-	Messages     int64      `json:"messages"`
-	LastSyncedAt *time.Time `json:"lastSyncedAt"`
+	Name             string     `json:"name"`
+	Messages         int64      `json:"messages"`
+	LastSyncedAt     *time.Time `json:"lastSyncedAt"`
+	LastReconciledAt *time.Time `json:"lastReconciledAt"`
 }
 
 type accountsResponse struct {
@@ -68,6 +80,9 @@ type accountsResponse struct {
 	Manage bool `json:"manage"`
 	// SyncInterval of the schedule ("6h0m0s"), empty if off.
 	SyncInterval string `json:"syncInterval"`
+	// ReconcileInterval: how often each folder is compared with the server
+	// ("24h0m0s"), empty if only on request.
+	ReconcileInterval string `json:"reconcileInterval"`
 	// AlertAfter failed syncs in a row make an account failing.
 	AlertAfter int `json:"alertAfter"`
 	// OtherFailing, for admins only, counts the failing accounts of other
@@ -103,6 +118,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	reconciled, err := s.store.ReconcileStates(ctx, me)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	var queued map[int64]bool
 	if s.runner != nil {
 		queued = s.runner.Queued()
@@ -111,7 +131,9 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
 		for _, f := range a.Folders {
-			list = append(list, folderJSON{Name: f.Name, Messages: f.Messages, LastSyncedAt: f.LastSyncedAt})
+			list = append(list, folderJSON{
+				Name: f.Name, Messages: f.Messages, LastSyncedAt: f.LastSyncedAt, LastReconciledAt: f.LastReconciledAt,
+			})
 		}
 		folders[a.Name] = list
 	}
@@ -134,12 +156,16 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if s.runner != nil && s.runner.Interval > 0 {
 		out.SyncInterval = s.runner.Interval.String()
 	}
+	if s.syncer != nil && s.syncer.ReconcileInterval > 0 {
+		out.ReconcileInterval = s.syncer.ReconcileInterval.String()
+	}
 	for _, a := range accounts {
 		aj := accountJSON{
 			Name: a.Name, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.RemovedAt != nil,
 			Host: a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
 			Folders: folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},
+			GoneMessages: reconciled[a.ID].Gone, LastReconciledAt: reconciled[a.ID].LastReconciledAt,
 		}
 		if h := health[a.ID]; h != nil {
 			aj.Sync.FailureStreak, aj.Sync.FailingSince = h.FailureStreak, h.FailingSince
@@ -167,6 +193,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			aj.Sync.LastRun = &lastRunJSON{
 				StartedAt: run.StartedAt, FinishedAt: run.FinishedAt, Status: run.Status,
 				Fetched: run.MessagesFetched, New: run.MessagesNew, Error: run.Error,
+				ReconciledFolders: run.Reconcile.Folders, Gone: run.Reconcile.Gone,
+				Back: run.Reconcile.Back, FlagsChanged: run.Reconcile.FlagsChanged,
 			}
 		}
 		out.Accounts = append(out.Accounts, aj)
@@ -513,10 +541,31 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var in struct {
+		// Reconcile also compares every folder with the server, except
+		// folders compared in the last few minutes.
+		Reconcile bool `json:"reconcile"`
+	}
+	if r.ContentLength != 0 {
+		dec := json.NewDecoder(io.LimitReader(r.Body, maxAccountBody))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			s.fail(w, r, http.StatusBadRequest, "invalid request body: "+err.Error(), nil)
+			return
+		}
+	}
 	// Like `mail-archive sync --account`, this also syncs a disabled account.
-	s.runner.Enqueue(a.ID)
+	opts := archive.SyncOptions{}
+	if in.Reconcile {
+		opts = archive.SyncOptions{Reconcile: true, ReconcileMinAge: reconcileFloor}
+	}
+	s.runner.EnqueueWith(opts, a.ID)
 	s.writeJSON(w, http.StatusAccepted, map[string]int{"queued": 1})
 }
+
+// reconcileFloor: the reconcile button skips folders compared this
+// recently, so that repeated clicks do not hammer the mail server.
+const reconcileFloor = 5 * time.Minute
 
 func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {

@@ -1,6 +1,7 @@
 package archive_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/emersion/go-imap/v2"
@@ -50,6 +52,8 @@ type fixture struct {
 	syncer  *archive.Syncer
 	host    string
 	port    int
+	srv     *imaptest.Server
+	logs    *logBuffer
 }
 
 func newFixture(t *testing.T, users ...*imapmemserver.User) *fixture {
@@ -65,15 +69,34 @@ func newFixture(t *testing.T, users ...*imapmemserver.User) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, port := imaptest.Start(t, users...)
+	srv := imaptest.StartServer(t, users...)
+	logs := &logBuffer{}
 	return &fixture{
 		t: t, ctx: context.Background(), store: st, blobs: blobs, dataDir: dataDir, sealer: sealer,
-		host: host, port: port,
+		host: srv.Host, port: srv.Port, srv: srv, logs: logs,
 		syncer: &archive.Syncer{
 			Store: st, Blobs: blobs, Sealer: sealer, BatchSize: 2,
-			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Logger: slog.New(slog.NewTextHandler(logs, nil)),
 		},
 	}
+}
+
+// logBuffer collects log output; it is written from sync goroutines.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (f *fixture) addAccount(name, user, password string, excluded ...string) {
@@ -90,7 +113,7 @@ func (f *fixture) addAccount(name, user, password string, excluded ...string) {
 
 func (f *fixture) sync() map[string]archive.AccountResult {
 	f.t.Helper()
-	results, err := f.syncer.SyncAll(f.ctx, nil, nil)
+	results, err := f.syncer.SyncAll(f.ctx, nil, nil, archive.SyncOptions{})
 	if err != nil {
 		f.t.Fatal(err)
 	}

@@ -14,20 +14,34 @@ const accountStats = `-- name: AccountStats :many
 SELECT a.id, a.name, a.enabled, a.owner_id, a.kind,
        (SELECT count(*) FROM folders f WHERE f.account_id = a.id) AS folders,
        (SELECT count(DISTINCT l.message_sha256) FROM message_locations l JOIN folders f ON f.id = l.folder_id
-        WHERE f.account_id = a.id) AS messages
+        WHERE f.account_id = a.id) AS messages,
+       -- Messages whose locations in this account are all gone from the
+       -- server. Reads the gone locations from message_locations_gone_idx.
+       (SELECT count(DISTINCT l.message_sha256) FROM message_locations l JOIN folders f ON f.id = l.folder_id
+        WHERE f.account_id = a.id AND l.gone_at IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM message_locations p JOIN folders pf ON pf.id = p.folder_id
+              WHERE p.message_sha256 = l.message_sha256 AND pf.account_id = a.id AND p.gone_at IS NULL)
+       ) AS gone,
+       -- The latest reconcile of any folder (written like this, not as max(),
+       -- so that sqlc types it as a nullable time).
+       (SELECT f.last_reconciled_at FROM folders f WHERE f.account_id = a.id AND f.last_reconciled_at IS NOT NULL
+        ORDER BY f.last_reconciled_at DESC LIMIT 1) AS last_reconciled_at
 FROM accounts a
 WHERE $1::bigint IS NULL OR a.owner_id = $1::bigint
 ORDER BY a.name, a.owner_id
 `
 
 type AccountStatsRow struct {
-	ID       int64
-	Name     string
-	Enabled  bool
-	OwnerID  *int64
-	Kind     string
-	Folders  int64
-	Messages int64
+	ID               int64
+	Name             string
+	Enabled          bool
+	OwnerID          *int64
+	Kind             string
+	Folders          int64
+	Messages         int64
+	Gone             int64
+	LastReconciledAt *time.Time
 }
 
 // All accounts, or only those of one owner.
@@ -48,6 +62,8 @@ func (q *Queries) AccountStats(ctx context.Context, owner *int64) ([]AccountStat
 			&i.Kind,
 			&i.Folders,
 			&i.Messages,
+			&i.Gone,
+			&i.LastReconciledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -77,16 +93,22 @@ func (q *Queries) FailStaleSyncRuns(ctx context.Context, accountID int64) (int64
 const finishSyncRun = `-- name: FinishSyncRun :execrows
 UPDATE sync_runs
 SET finished_at = now(), status = $1, messages_fetched = $2,
-    messages_new = $3, error = NULLIF($4::text, '')
-WHERE id = $5
+    messages_new = $3, error = NULLIF($4::text, ''),
+    reconciled_folders = $5, locations_gone = $6,
+    locations_back = $7, flags_changed = $8
+WHERE id = $9
 `
 
 type FinishSyncRunParams struct {
-	Status          string
-	MessagesFetched int32
-	MessagesNew     int32
-	Error           string
-	ID              int64
+	Status            string
+	MessagesFetched   int32
+	MessagesNew       int32
+	Error             string
+	ReconciledFolders int32
+	LocationsGone     int32
+	LocationsBack     int32
+	FlagsChanged      int32
+	ID                int64
 }
 
 func (q *Queries) FinishSyncRun(ctx context.Context, arg FinishSyncRunParams) (int64, error) {
@@ -95,6 +117,10 @@ func (q *Queries) FinishSyncRun(ctx context.Context, arg FinishSyncRunParams) (i
 		arg.MessagesFetched,
 		arg.MessagesNew,
 		arg.Error,
+		arg.ReconciledFolders,
+		arg.LocationsGone,
+		arg.LocationsBack,
+		arg.FlagsChanged,
 		arg.ID,
 	)
 	if err != nil {
@@ -105,19 +131,24 @@ func (q *Queries) FinishSyncRun(ctx context.Context, arg FinishSyncRunParams) (i
 
 const lastSyncRuns = `-- name: LastSyncRuns :many
 SELECT DISTINCT ON (account_id) account_id, started_at, finished_at, status,
-       messages_fetched, messages_new, error
+       messages_fetched, messages_new, error,
+       reconciled_folders, locations_gone, locations_back, flags_changed
 FROM sync_runs
 ORDER BY account_id, started_at DESC
 `
 
 type LastSyncRunsRow struct {
-	AccountID       int64
-	StartedAt       time.Time
-	FinishedAt      *time.Time
-	Status          string
-	MessagesFetched int32
-	MessagesNew     int32
-	Error           *string
+	AccountID         int64
+	StartedAt         time.Time
+	FinishedAt        *time.Time
+	Status            string
+	MessagesFetched   int32
+	MessagesNew       int32
+	Error             *string
+	ReconciledFolders int32
+	LocationsGone     int32
+	LocationsBack     int32
+	FlagsChanged      int32
 }
 
 // The most recent sync run per account, with counters.
@@ -138,6 +169,10 @@ func (q *Queries) LastSyncRuns(ctx context.Context) ([]LastSyncRunsRow, error) {
 			&i.MessagesFetched,
 			&i.MessagesNew,
 			&i.Error,
+			&i.ReconciledFolders,
+			&i.LocationsGone,
+			&i.LocationsBack,
+			&i.FlagsChanged,
 		); err != nil {
 			return nil, err
 		}

@@ -106,3 +106,34 @@ func waitForRun(t *testing.T, f *fixture, accountID int64, status string) {
 	}
 	t.Fatalf("no finished run for account %d", accountID)
 }
+
+// A request to reconcile upgrades a queued sync instead of adding another.
+func TestRunnerUpgradesQueuedSync(t *testing.T) {
+	u := imapmemserver.NewUser("u", "pw")
+	createMailboxes(t, u, "INBOX")
+	appendMsg(t, u, "INBOX", rawMessage("m1", "Hello"))
+	f := newFixture(t, u)
+	f.addAccount("acc", "u", "pw")
+	acc, _ := f.account("acc")
+
+	r := &archive.Runner{Syncer: f.syncer, CheckEvery: 10 * time.Millisecond}
+	r.Enqueue(acc.ID)
+	r.EnqueueWith(archive.SyncOptions{Reconcile: true}, acc.ID)
+	r.Enqueue(acc.ID) // does not downgrade it
+	if q := r.Queued(); len(q) != 1 || !q[acc.ID] {
+		t.Fatalf("queued = %v", q)
+	}
+	ctx, cancel := context.WithCancel(f.ctx)
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitForRun(t, f, acc.ID, "ok")
+	runs, _ := f.store.LastRuns(f.ctx)
+	if got := runs[acc.ID].Reconcile.Folders; got != 1 {
+		t.Fatalf("reconciled folders = %d, want 1", got)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if again, _ := f.store.LastRuns(f.ctx); !again[acc.ID].StartedAt.Equal(runs[acc.ID].StartedAt) {
+		t.Fatal("queued twice")
+	}
+}

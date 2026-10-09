@@ -43,12 +43,13 @@ type AccountSyncHealth struct {
 }
 
 type Folder struct {
-	ID           int64
-	AccountID    int64
-	Name         string
-	Uidvalidity  int64
-	LastUid      int64
-	LastSyncedAt *time.Time
+	ID               int64
+	AccountID        int64
+	Name             string
+	Uidvalidity      int64
+	LastUid          int64
+	LastSyncedAt     *time.Time
+	LastReconciledAt *time.Time
 }
 
 type Message struct {
@@ -83,6 +84,7 @@ type MessageLocation struct {
 	InternalDate  *time.Time
 	FirstSeenAt   time.Time
 	LastSeenAt    time.Time
+	GoneAt        *time.Time
 }
 
 type Passkey struct {
@@ -105,14 +107,18 @@ type Session struct {
 }
 
 type SyncRun struct {
-	ID              int64
-	AccountID       int64
-	StartedAt       time.Time
-	FinishedAt      *time.Time
-	Status          string
-	MessagesFetched int32
-	MessagesNew     int32
-	Error           *string
+	ID                int64
+	AccountID         int64
+	StartedAt         time.Time
+	FinishedAt        *time.Time
+	Status            string
+	MessagesFetched   int32
+	MessagesNew       int32
+	Error             *string
+	ReconciledFolders int32
+	LocationsGone     int32
+	LocationsBack     int32
+	FlagsChanged      int32
 }
 
 type TwoFactorChallenge struct {

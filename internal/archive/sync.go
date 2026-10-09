@@ -26,6 +26,12 @@ type Syncer struct {
 	Sealer    *crypto.Sealer
 	Logger    *slog.Logger
 	BatchSize int
+	// ReconcileInterval is how old a folder's last reconcile may get before
+	// a sync compares it with the server again. Zero: only on request.
+	ReconcileInterval time.Duration
+	// MaxReconcileMessages: larger folders are not reconciled (default
+	// DefaultMaxReconcileMessages).
+	MaxReconcileMessages uint32
 	// Dial is used to connect to IMAP servers. Defaults to imapsync.Dial.
 	Dial func(context.Context, imapsync.Config) (*imapsync.Conn, error)
 }
@@ -45,13 +51,15 @@ type AccountResult struct {
 	OwnerID *int64
 	Fetched int
 	New     int
-	Err     error
+	// Reconcile sums what comparing folders with the server changed.
+	Reconcile store.ReconcileCounts
+	Err       error
 }
 
 // SyncAll syncs every enabled account (or only the named ones, even if
 // disabled), of all users or, with owner set, of one user. Removed and
 // import accounts are skipped. A failing account does not stop the others.
-func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]AccountResult, error) {
+func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64, opts SyncOptions) ([]AccountResult, error) {
 	accounts, err := s.Store.ListAccounts(ctx)
 	if err != nil {
 		return nil, err
@@ -73,7 +81,7 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]Ac
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
-		results = append(results, s.SyncAccount(ctx, a))
+		results = append(results, s.SyncAccountWith(ctx, a, opts))
 	}
 	return results, nil
 }
@@ -81,8 +89,16 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64) ([]Ac
 // SyncAccount syncs all selected folders of one account and records a run.
 // It fails with ErrSyncRunning if the account is already being synced and
 // with ErrAccountRemoved if it was removed or deleted, and with
-// ErrImportAccount for import accounts.
+// ErrImportAccount for import accounts. Folders due by ReconcileInterval are
+// compared with the server after their sync.
 func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResult {
+	return s.SyncAccountWith(ctx, a, SyncOptions{})
+}
+
+// SyncAccountWith is SyncAccount with options. Reconciling uses the same
+// connection and lock as the sync, so it never overlaps another sync, a
+// reconcile or the deletion of the account.
+func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts SyncOptions) AccountResult {
 	log := s.logger().With("account", a.Name)
 	res := AccountResult{Account: a.Name, OwnerID: a.OwnerID}
 	if a.RemovedAt != nil {
@@ -127,6 +143,7 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 	finish := func(status string) AccountResult {
 		run.Status = status
 		run.MessagesFetched, run.MessagesNew = res.Fetched, res.New
+		run.Reconcile = res.Reconcile
 		if res.Err != nil {
 			run.Error = res.Err.Error()
 		}
@@ -161,11 +178,13 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 		res.Err = err
 		return finish("failed")
 	}
+	now := time.Now()
 	for _, f := range folders {
 		if !FolderSelected(f.Name, a.IncludedFolders, a.ExcludedFolders) {
 			log.Debug("skip folder", "folder", f.Name)
 			continue
 		}
+		flog := log.With("folder", f.Name)
 		base := res
 		progress := func(fetched, added int) {
 			run.MessagesFetched, run.MessagesNew = base.Fetched+fetched, base.New+added
@@ -173,17 +192,39 @@ func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResul
 				log.Debug("record sync progress", "err", err)
 			}
 		}
-		fetched, added, err := s.syncFolder(ctx, conn, a, f.Name, progress, log.With("folder", f.Name))
+		folder, fetched, added, err := s.syncFolder(ctx, conn, a, f.Name, progress, flog)
 		res.Fetched += fetched
 		res.New += added
+		// Only a folder that synced cleanly is reconciled: its locations are
+		// complete for the UIDVALIDITY that EXAMINE reported.
+		if err == nil && s.reconcileDue(folder.LastReconciledAt, opts, now) {
+			var r store.FolderReconcile
+			if r, err = s.reconcileFolder(ctx, conn, folder); err == nil {
+				res.Reconcile.Add(r)
+				warnOnLoss(flog, r)
+			} else {
+				err = fmt.Errorf("reconcile: %w", err)
+			}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				res.Err = ctx.Err()
 				return finish("failed")
 			}
-			log.Error("folder sync failed", "err", err)
+			flog.Error("folder sync failed", "err", err)
 			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", f.Name, err))
 		}
+	}
+	if err := s.reconcileVanished(ctx, a, folders, opts, now, &res.Reconcile, log); err != nil {
+		if ctx.Err() != nil {
+			res.Err = ctx.Err()
+			return finish("failed")
+		}
+		log.Error("reconcile vanished folders failed", "err", err)
+		folderErrs = append(folderErrs, fmt.Errorf("vanished folders: %w", err))
+	}
+	if rc := res.Reconcile; rc.Gone+rc.Back+rc.FlagsChanged > 0 {
+		log.Info("account reconciled", "folders", rc.Folders, "gone", rc.Gone, "back", rc.Back, "flags", rc.FlagsChanged)
 	}
 	if len(folderErrs) > 0 {
 		res.Err = errors.Join(folderErrs...)
@@ -232,29 +273,30 @@ type storedBody struct {
 	created bool
 }
 
-// syncFolder copies new messages of one folder. progress is called after each
-// committed batch with the folder's counts so far.
+// syncFolder copies new messages of one folder and leaves it examined.
+// progress is called after each committed batch with the folder's counts
+// so far.
 func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.Account, name string,
-	progress func(fetched, added int), log *slog.Logger) (fetched, added int, err error) {
+	progress func(fetched, added int), log *slog.Logger) (folder *store.Folder, fetched, added int, err error) {
 	status, err := conn.Examine(name)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, 0, err
 	}
-	folder, err := s.Store.GetOrCreateFolder(ctx, a.ID, name)
+	folder, err = s.Store.GetOrCreateFolder(ctx, a.ID, name)
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, 0, err
 	}
 	if folder.UIDValidity != status.UIDValidity {
 		if folder.UIDValidity != 0 {
 			log.Warn("UIDVALIDITY changed, rescanning folder", "old", folder.UIDValidity, "new", status.UIDValidity)
 		}
 		if err := s.Store.ResetFolder(ctx, folder.ID, status.UIDValidity); err != nil {
-			return 0, 0, err
+			return nil, 0, 0, err
 		}
 		folder.UIDValidity, folder.LastUID = status.UIDValidity, 0
 	}
 	if status.Messages == 0 || (status.UIDNext != 0 && folder.LastUID+1 >= status.UIDNext) {
-		return 0, 0, s.Store.TouchFolder(ctx, folder.ID)
+		return folder, 0, 0, s.Store.TouchFolder(ctx, folder.ID)
 	}
 
 	var w *folderWriter
@@ -275,17 +317,17 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 		}
 		return w.add(ctx, meta, store.Location{
 			FolderID: folder.ID, UIDValidity: folder.UIDValidity, UID: m.UID,
-			Flags: m.Flags, InternalDate: m.InternalDate,
+			Flags: storedFlags(m.Flags), InternalDate: m.InternalDate,
 		})
 	})
 	if err == nil {
 		err = w.flush(ctx)
 	}
 	if err != nil {
-		return fetched, w.added, err
+		return folder, fetched, w.added, err
 	}
 	log.Debug("folder synced", "fetched", fetched, "new", w.added)
-	return fetched, w.added, nil
+	return folder, fetched, w.added, nil
 }
 
 func (s *Syncer) logger() *slog.Logger {

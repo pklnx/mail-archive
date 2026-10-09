@@ -192,6 +192,15 @@ func (conn *Conn) Examine(name string) (FolderStatus, error) {
 	}, nil
 }
 
+// Messages returns the number of messages in the examined folder, kept up
+// to date by the server's EXISTS and EXPUNGE responses.
+func (conn *Conn) Messages() uint32 {
+	if mb := conn.c.Mailbox(); mb != nil {
+		return mb.NumMessages
+	}
+	return 0
+}
+
 // Message is a fetched message. Body holds whatever the BodySink returned.
 type Message[T any] struct {
 	UID          uint32
@@ -285,4 +294,68 @@ func readMessage[T any](msg *imapclient.FetchMessageData, sink BodySink[T]) (Mes
 		return m, false, errors.New("server returned message without UID")
 	}
 	return m, hasBody, nil
+}
+
+// ErrIncomplete is returned by ListFlags when the server listed fewer
+// messages than the folder holds.
+var ErrIncomplete = errors.New("server listed fewer messages than the folder holds")
+
+// ListFlags sends UID FETCH 1:* (UID FLAGS) in the currently examined
+// folder and calls handle for each listed UID with its flags. It reads no
+// bodies. It returns ErrIncomplete if fewer messages were listed than the
+// folder held after the command (EXISTS), so a caller never mistakes a
+// cut-off list for deleted messages. It refuses an empty folder, where
+// some servers reject 1:*; check Messages first.
+func ListFlags(conn *Conn, handle func(uid uint32, flags []imap.Flag)) error {
+	if conn.Messages() == 0 {
+		return errors.New("list flags: empty folder")
+	}
+	var set imap.UIDSet
+	set.AddRange(1, 0) // 1:*
+	cmd := conn.c.Fetch(set, &imap.FetchOptions{UID: true, Flags: true})
+	var (
+		seen     uint32
+		protoErr error
+	)
+	for {
+		msg := cmd.Next()
+		if msg == nil {
+			break
+		}
+		var (
+			uid   imap.UID
+			flags []imap.Flag
+		)
+		for {
+			item := msg.Next()
+			if item == nil {
+				break
+			}
+			switch item := item.(type) {
+			case imapclient.FetchItemDataUID:
+				uid = item.UID
+			case imapclient.FetchItemDataFlags:
+				flags = item.Flags
+			}
+		}
+		if uid == 0 {
+			if protoErr == nil {
+				protoErr = errors.New("server returned message without UID")
+			}
+			continue
+		}
+		seen++
+		handle(uint32(uid), flags)
+	}
+	if err := cmd.Close(); err != nil {
+		return fmt.Errorf("list flags: %w", err)
+	}
+	if protoErr != nil {
+		return protoErr
+	}
+	// EXISTS and EXPUNGE responses during the command update the count.
+	if want := conn.Messages(); seen < want {
+		return fmt.Errorf("%w (%d of %d)", ErrIncomplete, seen, want)
+	}
+	return nil
 }

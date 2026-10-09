@@ -368,11 +368,11 @@ func TestImportAccountsAreNeverSynced(t *testing.T) {
 	if r := f.syncer.SyncAccount(f.ctx, acc); !errors.Is(r.Err, archive.ErrImportAccount) {
 		t.Errorf("SyncAccount: %v", r.Err)
 	}
-	results, err := f.syncer.SyncAll(f.ctx, []string{"imported"}, nil)
+	results, err := f.syncer.SyncAll(f.ctx, []string{"imported"}, nil, archive.SyncOptions{})
 	if err != nil || len(results) != 0 {
 		t.Errorf("SyncAll by name: %+v %v", results, err)
 	}
-	results, err = f.syncer.SyncAll(f.ctx, nil, nil)
+	results, err = f.syncer.SyncAll(f.ctx, nil, nil, archive.SyncOptions{})
 	if err != nil || len(results) != 1 || results[0].Account != "alice" {
 		t.Errorf("SyncAll: %+v %v", results, err)
 	}

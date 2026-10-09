@@ -240,6 +240,7 @@ SELECT encode(sha256(i::text::bytea), 'hex'), 1000, 'x', 'Betreff ' || i, 'sende
 FROM generate_series(1, 50000) i;
 INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid)
 SELECT encode(sha256(i::text::bytea), 'hex'), (SELECT id FROM folders), 1, i FROM generate_series(1, 50000) i;
+UPDATE message_locations SET gone_at = now() WHERE uid % 1000 = 0;
 ANALYZE;`
 	if _, err := conn.Exec(ctx, seed); err != nil {
 		t.Fatal(err)
@@ -258,6 +259,9 @@ ANALYZE;`
 		{"to", db.SearchMessagesParams{ToPattern: str("%finanzamt%")}, "messages_rcpt_trgm_idx"},
 		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx"},
 		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx"},
+		// Only in the archive: starts from the few gone locations instead of
+		// checking every message.
+		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx"},
 	}
 	explain := func(t *testing.T, rec *explainer) string {
 		t.Helper()
@@ -278,8 +282,12 @@ ANALYZE;`
 			if _, err := db.New(&rec).SearchMessages(ctx, c.p); !errors.Is(err, errRecorded) {
 				t.Fatalf("record: %v", err)
 			}
-			if plan := explain(t, &rec); !strings.Contains(plan, c.index) {
+			plan := explain(t, &rec)
+			if !strings.Contains(plan, c.index) {
 				t.Errorf("plan does not use %s:\n%s", c.index, plan)
+			}
+			if strings.Contains(plan, "Seq Scan on message_locations") {
+				t.Errorf("plan reads every location:\n%s", plan)
 			}
 		})
 	}
