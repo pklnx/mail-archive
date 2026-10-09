@@ -90,9 +90,10 @@ program that wrote them added headers:
 These messages are stored a second time. The archive keeps these headers on
 purpose: removing them would change the bytes of what you imported.
 
-- piler stores a message as it arrived over SMTP. The copy in your IMAP
-  mailbox usually has one more `Received:` line, added by your mail server
-  when it delivered the message.
+The piler copy of a mail differs from the IMAP copy as well: piler stores
+the message as it arrived over SMTP, while the copy in your mailbox usually
+carries one more `Received:` line from your mail server. It is stored a
+second time too.
 
 Gmail labels are not turned into folders; a Takeout file becomes one folder.
 
