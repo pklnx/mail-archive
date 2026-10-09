@@ -161,3 +161,49 @@ func TestParseSize(t *testing.T) {
 }
 
 func regexpMatch(re, s string) bool { return regexp.MustCompile(re).MatchString(s) }
+
+func TestImportEMLCommand(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	key, _ := crypto.GenerateKey()
+	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	ctx := context.Background()
+	if _, err := st.CreateUser(ctx, "anna", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"1.eml": "Subject: one\n\n1\n", "2.eml": "Subject: two\n\n2\n", "empty.eml": "", "export.zip": "PK\x03\x04",
+	} {
+		if err := os.WriteFile(dir+"/"+name, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := newImportCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		err := runCmd(t, cmd, "", args...)
+		return out.String(), err
+	}
+
+	if _, err := run("piler", "--from", dir, "--format", "eml"); err == nil || !strings.Contains(err.Error(), "need --folder NAME") {
+		t.Fatalf("without --folder: %v", err)
+	}
+	if _, err := run("piler", "--from", dir+"/export.zip", "--format", "eml"); err == nil || !strings.Contains(err.Error(), "unpack it first") {
+		t.Fatalf("zip: %v", err)
+	}
+	out, err := run("piler", "--from", dir, "--format", "eml", "--folder", "piler", "--dry-run")
+	if err != nil || !strings.Contains(out, "3 message(s) in 1 folder(s); nothing was stored") ||
+		!strings.Contains(out, "skipped export.zip: compressed archive; unpack it first") {
+		t.Fatalf("dry run: %v\n%s", err, out)
+	}
+	out, err = run("piler", "--from", dir, "--format", "eml", "--folder", "piler")
+	if code := exitCodeOf(err); code != 1 || !strings.Contains(out, "partial: read 3, added 2 (2 new to the archive), 0 already there, 1 skipped") {
+		t.Fatalf("import: exit %d %v\n%s", code, err, out)
+	}
+}

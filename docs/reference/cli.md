@@ -73,7 +73,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
 | `status` | Distinct messages per account with its ID, owner and the last sync result (`--user USER` for one user). Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import accounts). `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. |
 | `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
-| `import NAME --from PATH --format mbox\|maildir` | Import mbox files or a Maildir into the import account `NAME`, created if needed. See below. |
+| `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed. See below. |
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Safe to interrupt and rerun, and to run alongside the web server and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
@@ -86,13 +86,14 @@ then removes folders from what is left. Names are matched case-insensitively.
 ./ma import old-laptop --from /import/thunderbird --format mbox
 ./ma import takeout --from "/import/All mail Including Spam and Trash.mbox" --format mbox --folder Gmail
 ./ma import old-server --from /import/Maildir --format maildir --dry-run
+./ma import piler --from /import/piler-export --format eml --folder piler
 ```
 
 | Flag | Default | |
 |---|---|---|
 | `--from PATH` | | A file or directory. With Docker Compose under `/import` (`./import` on the host, read-only). |
-| `--format` | | `mbox` or `maildir`. |
-| `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. |
+| `--format` | | `mbox`, `maildir` or `eml` (only files ending in `.eml`). |
+| `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. Required for `.eml` files directly in `--from`. |
 | `--user USER` | the only user | The owner of the import account. |
 | `--max-message-size SIZE` | `256MiB` | Larger messages are skipped; the import then exits `1` (`partial`). |
 | `--dry-run` | off | List folders and message counts, store nothing. |

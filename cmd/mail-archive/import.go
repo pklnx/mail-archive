@@ -25,17 +25,20 @@ func newImportCmd() *cobra.Command {
 		dryRun                        bool
 	)
 	cmd := &cobra.Command{
-		Use:   "import NAME --from PATH --format mbox|maildir",
-		Short: "Import mbox files or a Maildir into an import account",
-		Long: `Store the messages of mbox files or a Maildir in the archive, like a sync
+		Use:   "import NAME --from PATH --format mbox|maildir|eml",
+		Short: "Import mbox files, a Maildir or .eml files into an import account",
+		Long: `Store the messages of mbox files, a Maildir or .eml files in the archive, like a sync
 stores messages from a server, with the same deduplication. They go into the
 import account NAME, which is created if needed; an existing import account
 gets the new mail added. Import accounts have no server and are never synced.
 
 --from is a single mbox file, an Apple Mail .mbox bundle, a directory of mbox
-files (Thunderbird's local folders), or a Maildir. Folder names come from the
-files; with --folder a single folder gets that name and several get it as a
-prefix. Running the same import again adds only what is missing, so an
+files (Thunderbird's local folders), a Maildir, or with --format eml a
+directory of .eml files, one message each (an export of piler, for example).
+Folder names come from the files, or for eml from the directories; with
+--folder a single folder gets that name and several get it as a prefix.
+.eml files directly in --from need --folder. Only files ending in .eml are
+read; hidden files are skipped. Running the same import again adds only what is missing, so an
 interrupted import can simply be run again.
 
 Messages are stored as IMAP delivers them: if their first line ends in LF
@@ -46,7 +49,7 @@ only, every bare LF becomes CRLF. Nothing else changes.`,
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "", "the file or directory to import (required; with Docker Compose under /import)")
-	cmd.Flags().StringVar(&format, "format", "", "mbox or maildir (required)")
+	cmd.Flags().StringVar(&format, "format", "", "mbox, maildir or eml (required)")
 	cmd.Flags().StringVar(&folder, "folder", "", "the folder name, or a prefix when the source has several folders")
 	cmd.Flags().String("user", "", "the user who owns the import account (needed when several users exist)")
 	cmd.Flags().StringVar(&maxSize, "max-message-size", "256MiB", "skip larger messages")
@@ -90,8 +93,15 @@ func runImport(cmd *cobra.Command, name, from, format, folder, maxSize string, d
 		return err
 	}
 	log := newLogger(a.cfg.LogLevel).With("account", acc.Name)
+	archives := 0
 	for _, s := range skipped {
 		log.Debug("import skips a file", "path", s.Path, "reason", s.Reason)
+		if s.Reason == mailbox.ReasonArchive {
+			archives++
+		}
+	}
+	if archives > 0 {
+		log.Warn("the source holds compressed archives; their messages are not imported, unpack them first", "archives", archives)
 	}
 	names, err := userNames(cmd, a)
 	if err != nil {
@@ -194,8 +204,12 @@ func printDryRun(out io.Writer, folders []mailbox.SourceFolder, skipped []mailbo
 }
 
 func countMessages(f mailbox.SourceFolder) (int, error) {
-	if f.Kind == mailbox.KindMaildir {
+	switch f.Kind {
+	case mailbox.KindMaildir:
 		files, _, err := mailbox.MaildirFiles(f.Path)
+		return len(files), err
+	case mailbox.KindEML:
+		files, err := mailbox.EMLFiles(f.Path)
 		return len(files), err
 	}
 	file, err := os.Open(f.Path) //nolint:gosec // the import source given by the operator
