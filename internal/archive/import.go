@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
@@ -34,8 +35,10 @@ func ImportFolders(format, path, folder string) ([]mailbox.SourceFolder, []mailb
 		folders, skipped, err = mailbox.ListMbox(path)
 	case mailbox.KindMaildir:
 		folders, skipped, err = mailbox.ListMaildir(path)
+	case mailbox.KindEML:
+		folders, skipped, err = mailbox.ListEML(path)
 	default:
-		return nil, nil, fmt.Errorf("unknown format %q (use mbox or maildir)", format)
+		return nil, nil, fmt.Errorf("unknown format %q (use mbox, maildir or eml)", format)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -47,15 +50,20 @@ func ImportFolders(format, path, folder string) ([]mailbox.SourceFolder, []mailb
 		if err := mailbox.CheckFolderName(folder); err != nil {
 			return nil, nil, err
 		}
-		for i := range folders {
-			if len(folders) == 1 {
-				folders[i].Name = folder
-			} else {
-				folders[i].Name = folder + "/" + folders[i].Name
-			}
-			if err := mailbox.CheckFolderName(folders[i].Name); err != nil {
-				return nil, nil, err
-			}
+	}
+	for i := range folders {
+		switch {
+		case folder == "" && folders[i].Name == "":
+			// Only ListEML leaves names empty: files directly in path.
+			return nil, nil, fmt.Errorf(".eml files directly in %s need --folder NAME", path)
+		case folder == "":
+		case len(folders) == 1 || folders[i].Name == "":
+			folders[i].Name = folder
+		default:
+			folders[i].Name = folder + "/" + folders[i].Name
+		}
+		if err := mailbox.CheckFolderName(folders[i].Name); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", folders[i].Path, err)
 		}
 	}
 	return folders, skipped, nil
@@ -236,22 +244,23 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		}
 		log.Info("import progress", "read", fr.Read, "added", fr.Added)
 	})
-	store1 := func(body io.Reader, flags []string, date time.Time, index int, offset int64, mbox bool) error {
+	store1 := func(body io.Reader, m sourceMessage) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		fr.Read++
+		where := m.logAttrs()
 		src := &sourceReader{r: body, left: im.maxSize()}
 		blob, created, err := im.Blobs.Put(mailbox.NewCRLFReader(src))
 		var se *sourceError
 		switch {
 		case errors.Is(err, errTooLarge):
 			fr.Skipped++
-			log.Warn("message skipped: larger than the limit", "index", index, "offset", offset, "limit", im.maxSize())
+			log.Warn("message skipped: larger than the limit", append(where, "limit", im.maxSize())...)
 			return nil
 		case errors.As(err, &se):
 			fr.Skipped++
-			log.Warn("message skipped: cannot read it", "index", index, "offset", offset, "err", se.err)
+			log.Warn("message skipped: cannot read it", append(where, "err", se.err)...)
 			return nil
 		case err != nil:
 			return err
@@ -271,7 +280,8 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		if nextUID > math.MaxUint32 {
 			return errors.New("the folder has no UIDs left")
 		}
-		if mbox {
+		flags, date := m.flags, m.date
+		if m.kind == mailbox.KindMbox {
 			flags, err = im.statusFlags(blob)
 			if err != nil {
 				return err
@@ -280,6 +290,11 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		meta, err := BuildMeta(ctx, im.Store, im.Blobs, blob, created)
 		if err != nil {
 			return err
+		}
+		if m.kind == mailbox.KindEML {
+			if date, err = im.headerDate(meta, blob, m.date); err != nil {
+				return err
+			}
 		}
 		inBatch[blob.SHA256] = true
 		fr.Added++
@@ -291,7 +306,7 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 	switch sf.Kind {
 	case mailbox.KindMbox:
 		err = im.readMbox(sf.Path, func(m *mailbox.ScannedMessage, index int) error {
-			return store1(m.Body, nil, mailbox.ParseFromDate(m.From), index, m.Offset, true)
+			return store1(m.Body, sourceMessage{kind: mailbox.KindMbox, date: mailbox.ParseFromDate(m.From), index: index, offset: m.Offset})
 		})
 	case mailbox.KindMaildir:
 		err = im.readMaildir(sf.Path, log, func(f mailbox.MaildirFile, index int) error {
@@ -303,7 +318,26 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 				return nil
 			}
 			defer func() { _ = file.Close() }()
-			return store1(file, f.Flags, f.Date, index, 0, false)
+			return store1(file, sourceMessage{kind: mailbox.KindMaildir, flags: f.Flags, date: f.Date, index: index})
+		})
+	case mailbox.KindEML:
+		err = im.readEML(sf.Path, func(f mailbox.EMLFile, index int) error {
+			m := sourceMessage{kind: mailbox.KindEML, date: f.Date, index: index, file: filepath.Base(f.Path)}
+			if f.Size == 0 {
+				fr.Read++
+				fr.Skipped++
+				log.Warn("message skipped: empty file", m.logAttrs()...)
+				return nil
+			}
+			file, err := os.Open(f.Path) //nolint:gosec // a file of the import source
+			if err != nil {
+				fr.Read++
+				fr.Skipped++
+				log.Warn("message skipped: cannot open it", append(m.logAttrs(), "err", err)...)
+				return nil
+			}
+			defer func() { _ = file.Close() }()
+			return store1(file, m)
 		})
 	default:
 		err = fmt.Errorf("unknown source kind %q", sf.Kind)
@@ -313,6 +347,59 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 	}
 	fr.New = w.added
 	return err
+}
+
+// sourceMessage is where a message comes from and what the source says
+// about it.
+type sourceMessage struct {
+	kind   string
+	flags  []string
+	date   time.Time // the source's date; for EML the fallback
+	index  int
+	offset int64  // mbox only
+	file   string // EML only: the file name within its folder
+}
+
+// logAttrs names the message in log lines, never its content.
+func (m sourceMessage) logAttrs() []any {
+	switch m.kind {
+	case mailbox.KindMbox:
+		return []any{"index", m.index, "offset", m.offset}
+	case mailbox.KindEML:
+		return []any{"file", m.file}
+	}
+	return []any{"index", m.index}
+}
+
+func (im *Importer) readEML(dir string, fn func(mailbox.EMLFile, int) error) error {
+	files, err := mailbox.EMLFiles(dir)
+	if err != nil {
+		return err
+	}
+	for i, f := range files {
+		if err := fn(f, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// headerDate is the internal date of an EML message: its Date header, else
+// the file's time. BuildMeta parsed the headers of a message new to the
+// archive; for one the archive already holds, they are read from the blob.
+func (im *Importer) headerDate(meta store.MessageMeta, blob blobstore.Blob, fallback time.Time) (time.Time, error) {
+	if meta.SentAt != nil {
+		return *meta.SentAt, nil
+	}
+	f, err := im.Blobs.Open(blob.Path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() { _ = f.Close() }()
+	if h := ParseHeaders(io.LimitReader(f, maxHeaderBytes)); h.Date != nil {
+		return *h.Date, nil
+	}
+	return fallback, nil
 }
 
 func (im *Importer) readMbox(path string, fn func(*mailbox.ScannedMessage, int) error) error {

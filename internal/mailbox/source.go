@@ -27,12 +27,19 @@ const (
 const (
 	KindMbox    = "mbox"
 	KindMaildir = "maildir"
+	KindEML     = "eml"
 )
 
-// SourceFolder is one folder found in an import source: an mbox file or a
-// Maildir directory.
+// ReasonArchive is the Skipped reason of a ZIP or gzip file in an EML
+// directory: probably an export that was not unpacked.
+const ReasonArchive = "compressed archive; unpack it first"
+
+// SourceFolder is one folder found in an import source: an mbox file, a
+// Maildir directory or a directory of .eml files.
 type SourceFolder struct {
-	Name string // slash-separated, like an IMAP folder name
+	// Name is slash-separated, like an IMAP folder name. ListEML leaves it
+	// empty for files directly in the source directory.
+	Name string
 	Path string
 	Kind string
 }
@@ -193,6 +200,131 @@ func isMaildir(dir string) bool {
 		}
 	}
 	return true
+}
+
+// ListEML finds the directories under path that hold .eml files (in any
+// case). Each is a folder named by its slash-separated path relative to
+// path; files directly in path give a folder with an empty name, which the
+// caller must name. Hidden files and directories (a leading ".", which also
+// covers macOS "._x.eml" files) and symlinks are skipped, and so is every
+// file without the .eml suffix.
+func ListEML(path string) ([]SourceFolder, []Skipped, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !fi.IsDir() {
+		if err := checkNotCompressed(path); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", path, err)
+		}
+		return nil, nil, fmt.Errorf("%s is not a directory; --format eml reads a directory of .eml files", path)
+	}
+	var out []SourceFolder
+	var skipped []Skipped
+	seen := map[string]bool{}
+	err = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == path {
+			return nil
+		}
+		rel, err := filepath.Rel(path, p)
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(d.Name(), ".") {
+			skipped = append(skipped, Skipped{rel, "hidden"})
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		switch {
+		case !d.Type().IsRegular():
+			skipped = append(skipped, Skipped{rel, "not a regular file"})
+		case isArchiveName(d.Name()):
+			skipped = append(skipped, Skipped{rel, ReasonArchive})
+		case !isEML(d.Name()):
+			skipped = append(skipped, Skipped{rel, "not an .eml file"})
+		default:
+			dir := filepath.Dir(p)
+			if !seen[dir] {
+				seen[dir] = true
+				name := ""
+				if dir != path {
+					relDir, _ := filepath.Rel(path, dir)
+					name = filepath.ToSlash(relDir)
+				}
+				out = append(out, SourceFolder{Name: name, Path: dir, Kind: KindEML})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(out) > MaxFolders {
+		return nil, nil, fmt.Errorf("%d folders, at most %d per import", len(out), MaxFolders)
+	}
+	return out, skipped, nil
+}
+
+func isEML(name string) bool {
+	return len(name) > 4 && strings.EqualFold(name[len(name)-4:], ".eml")
+}
+
+func isArchiveName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".gz") || strings.HasSuffix(lower, ".tgz")
+}
+
+// checkNotCompressed returns ErrCompressed for a gzip or zip file.
+func checkNotCompressed(path string) error {
+	f, err := os.Open(path) //nolint:gosec // a file of the import source
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, 4)
+	n, _ := io.ReadFull(f, head)
+	if bytes.HasPrefix(head[:n], []byte{0x1f, 0x8b}) || bytes.HasPrefix(head[:n], []byte("PK\x03\x04")) {
+		return ErrCompressed
+	}
+	return nil
+}
+
+// EMLFile is a message file in an EML folder.
+type EMLFile struct {
+	Path string
+	Size int64
+	Date time.Time // the file's modification time
+}
+
+// EMLFiles lists the .eml files directly in dir, not in its
+// subdirectories, sorted by name (byte order) so that repeated imports
+// assign the same UIDs. Hidden files and symlinks are left out.
+func EMLFiles(dir string) ([]EMLFile, error) {
+	entries, err := os.ReadDir(dir) // sorted by name
+	if err != nil {
+		return nil, err
+	}
+	var out []EMLFile
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || !e.Type().IsRegular() || !isEML(name) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, EMLFile{Path: filepath.Join(dir, name), Size: info.Size(), Date: info.ModTime()})
+	}
+	return out, nil
 }
 
 // checkFolders enforces the limits on folder names and numbers.
