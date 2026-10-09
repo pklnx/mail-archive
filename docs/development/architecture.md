@@ -44,10 +44,10 @@ internal/web (JSON API, UI from web/) ──────────────
 | `users` | Login for the web UI: name, Argon2id hash, admin flag, `locked_at`. |
 | `sessions` | Login session: SHA-256 of the cookie token, user, last use, expiry. |
 | `accounts` | Account: `kind` (`imap`, or `import` for mail from files), owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. Import accounts have port 0 and are never enabled; check constraints enforce both. |
-| `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID and last sync time. |
+| `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID, last sync time and `last_reconciled_at`. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
-| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date. |
-| `sync_runs` | Sync or import of an account: start, end, status, counters, error. |
+| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. |
+| `sync_runs` | Sync or import of an account: start, end, status, counters (also of the reconcile), error. |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -140,6 +140,49 @@ looks for orphans; a sync that starts meanwhile waits. If the lock stays busy
 longer than `--lock-timeout`, `verify` skips the orphan check and exits `2`.
 Deleting an account takes only the account lock, so it never waits for
 `verify`. PostgreSQL drops both locks with the connection when a process dies.
+
+## Reconcile
+
+After a folder synced without error, `Syncer.SyncAccountWith` reconciles it
+when it is due (`folders.last_reconciled_at` older than the interval, with
+10 % slack, or a forced run). It uses the same connection, still in the
+folder's `EXAMINE`, and the same account lock as the sync.
+
+1. `imapsync.ListFlags` sends `UID FETCH 1:* (UID FLAGS)` (never for an
+   empty folder) and fails with `ErrIncomplete` if fewer messages came back
+   than the folder holds after the command (`EXISTS`, kept current by the
+   client). Folders above `MaxReconcileMessages` (2,000,000) are refused.
+2. The UIDs go into a `[]int64`; each message's flags without `\Recent`,
+   sorted and joined by spaces, into a `[]string`, with one string per flag
+   combination through a map.
+3. `Store.ReconcileFolder` locks the folder row, checks its `UIDVALIDITY`
+   and runs one statement (`ReconcileFolder` in `queries/reconcile.sql`):
+   the arrays are unnested into a materialized CTE and joined with the
+   folder's current locations up to `last_uid`. Data-modifying CTEs then
+   mark missing locations gone, clear `gone_at` on listed ones, write flags
+   that differ as a set, mark locations of older `UIDVALIDITY`s gone and set
+   `last_reconciled_at`. Each returns its row count for `sync_runs`.
+
+Any error writes nothing and ends the run `partial`, which counts as a
+success for [sync health](#sync-and-concurrency). Stored folders that the
+filters select but `LIST` no longer returns are marked gone with
+`MarkFolderVanished`.
+
+`last_seen_at` is not rewritten for every present location on every run. A
+present location was seen at its folder's `last_reconciled_at`, so the API
+reports `GREATEST(l.last_seen_at, f.last_reconciled_at)`. When a location
+becomes gone, `last_seen_at` is set to that value of the previous run;
+when it comes back, to `now()`. `UpsertLocation` clears `gone_at`, for a
+`UIDVALIDITY` that returns to an old value.
+
+A message is **gone** for a user when it has locations in the user's IMAP
+accounts and all of them have `gone_at` set. The `gone` search filter
+starts from the partial index `message_locations_gone_idx` (only gone rows)
+and checks each candidate's present locations through
+`message_locations_sha_idx`, so it never reads all locations;
+`TestSearchFilterPlans` checks the plan. `TestReconcileCost`
+(`MAIL_ARCHIVE_BENCH=1`) measures time and peak heap for 100,000 and
+500,000 messages, with the IMAP server in a child process.
 
 ## Accounts: ownership and changes
 

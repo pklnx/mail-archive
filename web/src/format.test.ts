@@ -66,4 +66,13 @@ describe("locationLabel", () => {
     expect(locationLabel({ account: "work", folder: "INBOX", superseded: false })).toBe("work / INBOX");
     expect(locationLabel({ account: "work", folder: "INBOX", superseded: true })).toBe(`work / INBOX (${t.renumbered})`);
   });
+  it("marks locations no longer on the server, with the last time seen", () => {
+    const l = { account: "work", folder: "INBOX", superseded: false, goneAt: "2026-10-09T08:00:00Z", lastSeenAt: "2026-10-08T12:00:00Z" };
+    const label = locationLabel(l);
+    expect(label.startsWith(`work / INBOX (`)).toBe(true);
+    expect(label).toContain("2026");
+    expect(locationLabel({ ...l, goneAt: null })).toBe("work / INBOX");
+    // A renumbered location is history either way.
+    expect(locationLabel({ ...l, superseded: true })).toBe(`work / INBOX (${t.renumbered})`);
+  });
 });

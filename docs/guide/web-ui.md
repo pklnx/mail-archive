@@ -11,7 +11,10 @@ and **Log out** are at the bottom of the sidebar. Admins also find
 
 - **Sidebar:** all mail, then each account with its folders and message
   counts. A count is the number of distinct messages in the folder, as in
-  its list. A spinner marks accounts that are syncing; removed accounts are
+  its list; messages no longer on the server still count. Once a
+  [reconcile](./syncing#reconcile) found messages deleted on all your
+  servers, **Only in archive** below **All mail** lists them, with their
+  number. A spinner marks accounts that are syncing; removed accounts are
   marked as such. **Manage accounts** at the bottom opens the
   [account page](./accounts).
 - **Message list:** newest first, with search at the top. More messages load
@@ -19,7 +22,9 @@ and **Log out** are at the bottom of the sidebar. Admins also find
 - **Message:** headers, where the message was found (every account and
   folder), attachments and the body. A place marked *renumbered* is from
   before the server renumbered that folder; the message is listed there
-  again under its new number if it is still on the server.
+  again under its new number if it is still on the server. A place marked
+  *no longer on the server* (in amber, with the date it was last seen) was
+  deleted there; the archive keeps the message.
 
 Everything you select is part of the URL, so the back button, reloads and
 bookmarks work. On a phone the columns become separate screens.
@@ -42,6 +47,17 @@ get a count ("2 accounts of other users keep failing") and **Show users**,
 where each user with failing accounts is marked; only the owner, or
 `./ma status` on the command line, shows which accounts they are. See
 [Syncing](./syncing#alerts) for what counts as failing.
+
+## Only in archive
+
+The [account page](./accounts) shows for each IMAP account how many of its
+messages are no longer on its server; the number links to them. **Check
+server** next to **Sync** syncs the account and compares every folder with
+the server right away; folders compared in the last 5 minutes are skipped,
+so a second click does not query the server again. Without the button, each
+folder is compared once a day. See [Reconcile](./syncing#reconcile).
+
+![A message that is only in the archive](/screenshots/only-in-archive.png)
 
 ## Reading mail
 

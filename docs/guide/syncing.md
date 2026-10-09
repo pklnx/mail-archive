@@ -20,7 +20,8 @@ For each selected folder:
    committed together with the folder's last UID, so an interrupted sync
    continues where it stopped.
 
-Messages deleted on the server stay in the archive.
+Messages deleted on the server stay in the archive. A
+[reconcile](#reconcile) finds out which ones those are.
 
 ## Starting a sync
 
@@ -28,9 +29,11 @@ Messages deleted on the server stay in the archive.
 |---|---|
 | Schedule of the web server | Every enabled account whose last sync started more than the interval ago. |
 | **Sync** button on the account page | That account, also when it is disabled. |
+| **Check server** button on the account page | That account, and then [reconciles](#reconcile) every folder not compared in the last 5 minutes. |
 | **Sync all** button | All enabled accounts. |
 | `./ma sync` | All enabled accounts. |
 | `./ma sync --account NAME` | Only that account, also when it is disabled. |
+| `./ma sync --reconcile` | Syncs and reconciles every selected folder now (combines with `--account`). |
 
 [Import accounts](./importing) are never synced, not even by name: run
 `import` again to add mail to them.
@@ -72,6 +75,109 @@ cron runs with a minimal `PATH`. If `docker` is not found, add a line such as
 `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab. `sync` exits
 with a non-zero code if any account failed.
 
+## Reconcile
+
+A sync only fetches messages with UIDs above the last archived one. It does
+not notice when a message is deleted on the server later, or when its flags
+change. A reconcile compares a folder with the server and records both:
+
+- Messages the server no longer lists are marked **no longer on the
+  server**. They stay in the archive, in search, in conversations and in
+  exports.
+- A message listed again under the same UID loses the mark.
+- Flags (`\Seen`, `\Answered`, `\Flagged`, …) are updated to the server's.
+  `\Recent` is never stored: it only describes one session.
+
+It runs right after a folder's sync, on the same connection and under the
+same [lock](#one-sync-per-account), so it never overlaps a sync, another
+reconcile or the deletion of the account.
+
+### What it costs
+
+After `EXAMINE`, a reconcile sends one command:
+`UID FETCH 1:* (UID FLAGS)`. The server answers with every UID and its
+flags, no message bodies. Nothing is written to the server: no `STORE`, no
+`EXPUNGE`, no read-write `SELECT`.
+
+Measured against a local test server:
+
+| Messages in the folder | Time | Extra memory |
+|---|---|---|
+| 100,000 | 0.6 s | 22 MB |
+| 500,000 | 4 s | 30 MB |
+
+On a real server the transfer adds roughly 40 bytes per message. Only rows
+that change are written to the database.
+
+Folders with more than 2,000,000 messages are not reconciled. The sync of
+such a folder ends `partial` with an error that says so.
+
+### When it runs
+
+A folder is reconciled when its last reconcile is older than
+`MAIL_ARCHIVE_RECONCILE_INTERVAL` (default `24h`), by the web server's
+schedule and by `./ma sync` alike. So a daily cron job reconciles daily, and
+a folder whose reconcile failed is retried with the next sync.
+
+```sh
+MAIL_ARCHIVE_RECONCILE_INTERVAL=24h   # default
+MAIL_ARCHIVE_RECONCILE_INTERVAL=1h    # the minimum
+MAIL_ARCHIVE_RECONCILE_INTERVAL=0     # only with the button or --reconcile
+```
+
+A folder is reconciled only after it synced without error in the same run.
+If the listing breaks off or holds fewer messages than the folder, nothing
+is marked: the sync ends `partial`, which does not count toward
+[alerts](#alerts).
+
+### Renumbered and vanished folders
+
+When the server renumbers a folder (`UIDVALIDITY` changes), the sync scans
+it again and stores a new location for every message still there. The
+reconcile then marks the old locations as gone. The message view shows them
+as *renumbered*, and the messages do not count as gone, because their new
+location is present.
+
+A folder that the account's folder selection includes but the server no
+longer lists has all its messages marked gone, and a warning is logged.
+Folders excluded from the selection are never checked: whether their mail
+is still on the server is unknown, not gone.
+
+Removed accounts are never reconciled, and [import accounts](./importing)
+have no server.
+
+### What "only in archive" means
+
+A message counts as **only in the archive** when it has locations in your
+IMAP accounts and all of them are gone. A message moved to another folder on
+the server is not: its new folder has it. A message also found in an import
+account still counts, because the import says nothing about a server.
+
+The sidebar entry **Only in archive** lists these messages, and the account
+page shows their number per account (`GONE` in `./ma status`). The folder
+counts in the sidebar keep counting gone messages: the archive still has
+them.
+
+Each user only sees their own accounts' state. If two users archived the
+same message and only one of them deleted it, only that user sees it as
+gone.
+
+### Log
+
+After a reconcile that changed anything, the log has one line per account
+with the number of reconciled folders and of messages gone, back and with
+new flags. A warning is logged when one folder loses at least 100 messages,
+or at least 10 % of them, in one run, and when a folder vanished. The log
+names folders and counts, never subjects or addresses.
+
+A webhook alert for such losses is not sent yet.
+
+### CONDSTORE
+
+Servers with CONDSTORE or QRESYNC could report only the changes since the
+last run. mail-archive does not use them yet; a full UID listing works with
+every server.
+
 ## One sync per account
 
 A PostgreSQL advisory lock guards each account. When the schedule, a button
@@ -89,8 +195,13 @@ and how. The page refreshes every 2 seconds while a sync is waiting or
 running, and every 30 seconds otherwise, so syncs from the schedule or the
 command line show up as well. `./ma status` prints the same per account.
 
-A sync ends as `ok`, `partial` (some folders failed; the others are archived)
-or `failed` (for example a wrong password).
+A sync ends as `ok`, `partial` (some folders failed, or could not be
+reconciled; the others are archived) or `failed` (for example a wrong
+password).
+
+Below the status, the card shows how many messages are no longer on the
+server (a link to them) and when the account was last compared with the
+server, with what the last run found.
 
 ## Alerts
 

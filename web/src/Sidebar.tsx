@@ -7,6 +7,8 @@ interface Props {
   state: ViewState;
   accounts: AccountsState;
   select: (account: string, folder: string) => void;
+  /** Lists the messages no longer on any server. */
+  selectGone: () => void;
   /** Opens a page: "accounts", "users" or "profile". */
   show: (view: string) => void;
   user: User;
@@ -17,15 +19,28 @@ const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-
 const active = "bg-blue-600 text-white";
 const idle = "hover:bg-zinc-200 dark:hover:bg-zinc-800";
 
-export function Sidebar({ state, accounts, select, show, user, logout }: Props) {
+export function Sidebar({ state, accounts, select, selectGone, show, user, logout }: Props) {
   const { data, error } = accounts;
-  const mail = state.view === "";
+  const mail = state.view === "" && state.gone !== "1";
   const all = mail && !state.account && !state.folder;
+  const gone = data?.accounts.reduce((n, a) => n + a.goneMessages, 0) ?? 0;
+  const goneOn = state.view === "" && state.gone === "1";
   return (
     <nav aria-label={t.accountsAndFolders} className="flex h-full flex-col gap-3 overflow-y-auto p-3">
       <button type="button" className={`${item} font-medium ${all ? active : idle}`} onClick={() => select("", "")}>
         {t.allMail}
       </button>
+      {(gone > 0 || goneOn) && (
+        <button
+          type="button"
+          className={`${item} -mt-2 ${goneOn ? active : idle}`}
+          title={t.onlyInArchiveHint}
+          onClick={selectGone}
+        >
+          <span className="truncate">{t.onlyInArchive}</span>
+          <span className={`text-xs tabular-nums ${goneOn ? "" : "text-zinc-500"}`}>{gone}</span>
+        </button>
+      )}
       {!data && !error && <p className="px-2 text-sm text-zinc-500">{t.loading}</p>}
       {error && !data && <p className="px-2 text-sm text-red-600">{t.loadAccountsFailed(error)}</p>}
       {data && data.accounts.length === 0 && <p className="px-2 text-sm text-zinc-500">{t.noAccounts}</p>}

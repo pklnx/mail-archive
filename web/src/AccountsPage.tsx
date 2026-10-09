@@ -18,9 +18,11 @@ interface Props {
   close: () => void;
   /** Called after an account got a new name, to update links to it. */
   renamed: (from: string, to: string) => void;
+  /** Lists an account's messages that are no longer on its server. */
+  showGone: (account: string) => void;
 }
 
-export function AccountsPage({ accounts, close, renamed }: Props) {
+export function AccountsPage({ accounts, close, renamed, showGone }: Props) {
   const { data, error, reload } = accounts;
   const [editing, setEditing] = useState<Editing>(null);
   const [actionError, setActionError] = useState("");
@@ -62,6 +64,7 @@ export function AccountsPage({ accounts, close, renamed }: Props) {
         {data && (
           <p className="text-sm text-zinc-500">
             {!manage ? t.manageOff : data.syncInterval ? t.schedule(formatInterval(data.syncInterval)) : t.scheduleOff}
+            {manage && " " + (data.reconcileInterval ? t.reconcileSchedule(formatInterval(data.reconcileInterval)) : t.reconcileOff)}
           </p>
         )}
         {error && !data && <p className="text-sm text-red-600">{t.loadAccountsFailed(error)}</p>}
@@ -103,6 +106,8 @@ export function AccountsPage({ accounts, close, renamed }: Props) {
               account={a}
               manage={manage}
               onSync={() => run(() => accountsApi.sync(a.name))}
+              onReconcile={() => run(() => accountsApi.reconcile(a.name))}
+              onShowGone={() => showGone(a.name)}
               onEdit={() => setEditing({ mode: "edit", name: a.name })}
               onToggle={() => run(() => accountsApi.update(a.name, { enabled: !a.enabled }))}
               onRemove={() => {
@@ -157,6 +162,17 @@ export function syncHealthNote(a: Account): { text: string; failing: boolean } |
   return null;
 }
 
+/** What comparing the account with its server found, for its card. */
+export function reconcileNote(a: Account): { gone: string | null; check: string } | null {
+  if (a.kind !== "imap" || a.removed) return null;
+  const gone = a.goneMessages > 0 ? t.goneMessages(a.goneMessages, formatCount(a.goneMessages)) : null;
+  if (!a.lastReconciledAt) return { gone, check: t.neverChecked };
+  let check = t.lastCheck(relativeTime(a.lastReconciledAt));
+  const run = a.sync.lastRun;
+  if (run && run.reconciledFolders > 0) check += ` · ${t.lastCheckCounts(run.gone, run.back, run.flagsChanged)}`;
+  return { gone, check };
+}
+
 export function syncStatus(a: Account): { text: string; error?: string } {
   const run = a.sync.lastRun;
   if (a.kind === "import") {
@@ -185,13 +201,16 @@ interface CardProps {
   account: Account;
   manage: boolean;
   onSync: () => void;
+  onReconcile: () => void;
+  onShowGone: () => void;
   onEdit: () => void;
   onToggle: () => void;
   onRemove: () => void;
 }
 
-function AccountCard({ account: a, manage, onSync, onEdit, onToggle, onRemove }: CardProps) {
+function AccountCard({ account: a, manage, onSync, onReconcile, onShowGone, onEdit, onToggle, onRemove }: CardProps) {
   const status = syncStatus(a);
+  const reconcile = reconcileNote(a);
   const health = syncHealthNote(a);
   const busy = a.sync.state !== "idle";
   if (a.kind === "import") {
@@ -244,10 +263,26 @@ function AccountCard({ account: a, manage, onSync, onEdit, onToggle, onRemove }:
         <p className={`text-sm ${health.failing ? "font-medium text-red-600" : "text-amber-700 dark:text-amber-500"}`}>{health.text}</p>
       )}
       {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.disabledNote}</p>}
+      {reconcile && (
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          {reconcile.gone && (
+            <>
+              <button type="button" className="font-medium text-amber-700 hover:underline dark:text-amber-500" onClick={onShowGone}>
+                {reconcile.gone}
+              </button>
+              {" · "}
+            </>
+          )}
+          {reconcile.check}
+        </p>
+      )}
       {manage && (
         <div className="flex flex-wrap gap-2">
           <button type="button" className={button} disabled={busy} onClick={onSync}>
             {t.syncNow}
+          </button>
+          <button type="button" className={button} disabled={busy} title={t.checkServerHint} onClick={onReconcile}>
+            {t.checkServer}
           </button>
           <button type="button" className={button} onClick={onEdit}>
             {t.edit}

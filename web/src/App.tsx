@@ -45,7 +45,13 @@ export function App({ user, logout }: Props) {
     return () => window.clearTimeout(t);
   }, [typed, state.q, update]);
 
-  const filter = { ...searchFilter(state.q), account: state.account, folder: state.folder, group: state.group === "1" };
+  const filter = {
+    ...searchFilter(state.q),
+    account: state.account,
+    folder: state.folder,
+    group: state.group === "1",
+    gone: state.gone === "1",
+  };
   const reading = state.m !== "";
 
   return (
@@ -69,7 +75,11 @@ export function App({ user, logout }: Props) {
             user={user}
             logout={logout}
             select={(account, folder) => {
-              update({ account, folder, m: "", view: "" });
+              update({ account, folder, gone: "", m: "", view: "" });
+              setMenuOpen(false);
+            }}
+            selectGone={() => {
+              update({ account: "", folder: "", gone: "1", m: "", view: "" });
               setMenuOpen(false);
             }}
             show={(view) => {
@@ -96,6 +106,7 @@ export function App({ user, logout }: Props) {
               renamed={(from, to) => {
                 if (state.account === from) update({ account: to }, { replace: true });
               }}
+              showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}
             />
           </main>
         ) : (
@@ -113,7 +124,9 @@ export function App({ user, logout }: Props) {
               <input
                 type="search"
                 aria-label={t.searchMail}
-                placeholder={state.account ? t.searchIn(state.folder || state.account) : t.searchAll}
+                placeholder={
+                  state.gone === "1" ? t.searchIn(t.onlyInArchive) : state.account ? t.searchIn(state.folder || state.account) : t.searchAll
+                }
                 className="w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}

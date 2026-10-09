@@ -116,6 +116,16 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // Only in archive: a message deleted on the server, open in the reader.
+  const p = await page("light");
+  await p.goto(base + "/?gone=1");
+  await p.getByRole("button", { name: /premium invoice/ }).first().click();
+  await p.getByText(/no longer on the server/).waitFor();
+  await p.screenshot({ path: `${out}/only-in-archive.png` });
+  await p.context().close();
+}
+
+{
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
   await p.getByText(/Last sync/).first().waitFor();

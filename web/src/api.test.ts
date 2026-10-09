@@ -171,4 +171,14 @@ describe("listMessages", () => {
       { q: "x", thread: "a@x", limit: "200" },
     ]);
   });
+
+  it("asks for messages only in the archive", async () => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ messages: [], nextCursor: null }), { headers: { "Content-Type": "application/json" } }));
+    await listMessages({ account: "work", gone: true }, null);
+    await listMessages({ gone: false }, null);
+    const params = fetch.mock.calls.map((c) => Object.fromEntries(new URL(String(c[0]), "http://x").searchParams));
+    expect(params).toEqual([{ account: "work", gone: "1", limit: "50" }, { limit: "50" }]);
+  });
 });

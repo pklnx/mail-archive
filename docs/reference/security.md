@@ -7,7 +7,7 @@
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail | Plain `.eml` files and PostgreSQL rows, **not encrypted**. Use an encrypted disk. |
 | Exports and backups | `export` and `backup` write unencrypted files with mode 0600 in directories with mode 0700. `BACKUP-NOTE.txt` names the secret key but never contains it, and `pg_dump` gets the database password in its environment, not on the command line. |
-| Your mail servers | Only read: `EXAMINE` and `BODY.PEEK[]`. |
+| Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
@@ -174,6 +174,16 @@ after 10 seconds and at most 4 KiB of the answer is read.
 Alerts name the account, its owner, its ID and the last sync error (up to
 200 characters). Treat the receiver like `./ma status`, which shows the same:
 on the public ntfy.sh server, use a protected topic or a long random one.
+
+## Messages no longer on the server
+
+Identical messages are stored once, even when several users archived them.
+Whether a message is gone from a server is recorded per location, and each
+user only sees their own accounts' locations: in the message view, in
+**Only in archive** (`gone=1`), and in the counts on the account page and in
+`GET /api/status`. If Alice deletes a message that Bob also archived, Bob
+cannot tell. The log reports counts and folder names, never subjects,
+addresses or UIDs.
 
 ## The secret key
 

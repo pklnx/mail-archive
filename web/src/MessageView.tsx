@@ -49,8 +49,14 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
             {msg.locations.map((l) => (
               <span
                 key={`${l.account}/${l.folder}/${l.uid}/${l.superseded}`}
-                className={`rounded px-1.5 py-0.5 text-xs ${l.superseded ? "text-zinc-500 italic" : "bg-zinc-100 dark:bg-zinc-800"}`}
-                title={l.superseded ? t.renumberedHint : undefined}
+                className={`rounded px-1.5 py-0.5 text-xs ${
+                  l.superseded
+                    ? "text-zinc-500 italic"
+                    : l.goneAt
+                      ? "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"
+                      : "bg-zinc-100 dark:bg-zinc-800"
+                }`}
+                title={l.superseded ? t.renumberedHint : l.goneAt ? t.goneFromServerHint : undefined}
               >
                 {locationLabel(l)}
               </span>

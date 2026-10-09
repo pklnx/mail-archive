@@ -6,13 +6,13 @@ import { HealthBanner } from "./HealthBanner";
 function acc(name: string, health: Account["sync"]["health"]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, host: "h", port: 993, tls: "tls", username: "u",
-    includedFolders: [], excludedFolders: [], folders: [],
+    includedFolders: [], excludedFolders: [], folders: [], goneMessages: 0, lastReconciledAt: null,
     sync: { state: "idle", lastRun: null, failureStreak: health === "failing" ? 3 : 0, failingSince: null, health },
   };
 }
 
 const data = (accounts: Account[], otherFailing?: number): AccountsResponse => ({
-  manage: true, syncInterval: "6h0m0s", alertAfter: 3, accounts, otherFailing,
+  manage: true, syncInterval: "6h0m0s", reconcileInterval: "24h0m0s", alertAfter: 3, accounts, otherFailing,
 });
 
 const noop = () => {};

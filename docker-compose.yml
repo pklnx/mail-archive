@@ -53,6 +53,8 @@ services:
       MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}
       # How often each enabled account is synced; 0 turns the schedule off.
       MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
+      # How often each folder is compared with the server; 0 = only on request.
+      MAIL_ARCHIVE_RECONCILE_INTERVAL: ${MAIL_ARCHIVE_RECONCILE_INTERVAL:-24h}
       MAIL_ARCHIVE_REQUIRE_2FA: ${MAIL_ARCHIVE_REQUIRE_2FA:-false}
       # The address you open in the browser; passkeys work only there.
       MAIL_ARCHIVE_PUBLIC_URL: ${MAIL_ARCHIVE_PUBLIC_URL:-http://localhost:${WEB_PORT:-8080}}
@@ -85,6 +87,8 @@ services:
       # `./ma sync` sends due alerts at the end; the interval decides when
       # `./ma status` and /healthz/sync call an account stale.
       MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
+      # `./ma sync` compares folders with the server when this is due.
+      MAIL_ARCHIVE_RECONCILE_INTERVAL: ${MAIL_ARCHIVE_RECONCILE_INTERVAL:-24h}
       # Alerts when syncs of an account keep failing; see the Operations guide.
       MAIL_ARCHIVE_ALERT_AFTER_FAILURES: ${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-3}
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}

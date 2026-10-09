@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 	"github.com/jackc/pgx/v5"
@@ -104,7 +105,8 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	var portNum int
 	_, _ = fmt.Sscan(port, &portNum)
 
-	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
+	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log, ReconcileInterval: 24 * time.Hour}
+	var reconcile []*store.Account
 	for _, u := range users {
 		a := &store.Account{
 			Name: u.account, Host: host, Port: portNum, TLSMode: store.TLSModeNone,
@@ -121,6 +123,18 @@ func run(dbURL, listen string, log *slog.Logger) error {
 			if _, err := st.DeleteOrRemoveAccount(ctx, a.Ref()); err != nil {
 				return err
 			}
+		} else {
+			reconcile = append(reconcile, a)
+		}
+	}
+	// The insurance invoice is deleted on the server after it was archived;
+	// the reconcile marks it as only in the archive.
+	if err := expunge(imapAddr, "alex@example.com", "demo", "Archive", 1); err != nil {
+		return err
+	}
+	for _, a := range reconcile {
+		if res := syncer.SyncAccountWith(ctx, a, archive.SyncOptions{Reconcile: true}); res.Err != nil {
+			return fmt.Errorf("reconcile %s: %w", a.Name, res.Err)
 		}
 	}
 
@@ -253,6 +267,26 @@ func startIMAP(now time.Time) (string, error) {
 	}
 	go func() { _ = srv.Serve(ln) }()
 	return ln.Addr().String(), nil
+}
+
+// expunge deletes one message on the demo server, like a mail program.
+func expunge(addr, login, password, mailbox string, uid imap.UID) error {
+	c, err := imapclient.DialInsecure(addr, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Login(login, password).Wait(); err != nil {
+		return err
+	}
+	if _, err := c.Select(mailbox, nil).Wait(); err != nil {
+		return err
+	}
+	set := imap.UIDSetNum(uid)
+	if err := c.Store(set, &imap.StoreFlags{Op: imap.StoreFlagsAdd, Silent: true, Flags: []imap.Flag{imap.FlagDeleted}}, nil).Close(); err != nil {
+		return err
+	}
+	return c.UIDExpunge(set).Close()
 }
 
 func crlf(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }

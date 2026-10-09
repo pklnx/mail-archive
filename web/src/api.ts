@@ -4,6 +4,8 @@ export interface Folder {
   name: string;
   messages: number;
   lastSyncedAt: string | null;
+  /** When the folder was last compared with the server. */
+  lastReconciledAt: string | null;
 }
 
 export type TLSMode = "tls" | "starttls" | "none";
@@ -15,6 +17,11 @@ export interface LastRun {
   fetched: number;
   new: number;
   error?: string;
+  /** Reconcile: folders compared with the server, messages newly gone or back, flag changes. */
+  reconciledFolders: number;
+  gone: number;
+  back: number;
+  flagsChanged: number;
 }
 
 export interface Account {
@@ -32,6 +39,10 @@ export interface Account {
   excludedFolders: string[];
   folders: Folder[];
   sync: SyncInfo;
+  /** Messages whose copies in this account are all gone from the server. */
+  goneMessages: number;
+  /** The latest comparison of any folder with the server. */
+  lastReconciledAt: string | null;
 }
 
 /** "failing": the last alertAfter syncs failed; "stale": no successful sync within two intervals. */
@@ -52,6 +63,8 @@ export interface AccountsResponse {
   manage: boolean;
   /** Go duration like "6h0m0s", empty if the schedule is off. */
   syncInterval: string;
+  /** Go duration like "24h0m0s", empty if folders are only compared on request. */
+  reconcileInterval: string;
   /** Failed syncs in a row that make an account failing. */
   alertAfter: number;
   /** Admins only: failing accounts of other users, as a count. */
@@ -125,6 +138,10 @@ export interface Location {
   internalDate: string | null;
   /** From before the folder's UIDVALIDITY changed: the server renumbered the folder. */
   superseded: boolean;
+  /** When a reconcile found it missing on the server; null while it is there. */
+  goneAt: string | null;
+  /** When the server last listed it. */
+  lastSeenAt: string;
 }
 
 export interface MessageDetail extends MessageSummary {
@@ -157,6 +174,8 @@ export interface Filter {
   group?: boolean;
   /** Only the messages of this conversation (a thread key). */
   thread?: string;
+  /** Only messages no longer on any server (only in the archive). */
+  gone?: boolean;
 }
 
 export type Relation = "self" | "parent" | "reply" | "thread";
@@ -247,6 +266,8 @@ export const accountsApi = {
   serverFolders: async (name: string) =>
     (await getJSON<{ folders: ServerFolder[] }>(`${accountPath(name)}/server-folders`)).folders,
   sync: (name: string) => send("POST", `${accountPath(name)}/sync`),
+  /** Sync, and compare every folder with the server. */
+  reconcile: (name: string) => send("POST", `${accountPath(name)}/sync`, { reconcile: true }),
   syncAll: () => send("POST", "/api/sync"),
 };
 
@@ -263,6 +284,7 @@ export function listMessages(filter: Filter, cursor: string | null, signal?: Abo
   if (filter.before) p.set("before", filter.before);
   if (filter.group) p.set("group", "1");
   if (filter.thread) p.set("thread", filter.thread);
+  if (filter.gone) p.set("gone", "1");
   if (cursor) p.set("cursor", cursor);
   p.set("limit", String(limit));
   return getJSON(`/api/messages?${p}`, signal);

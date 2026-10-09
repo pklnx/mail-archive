@@ -66,7 +66,7 @@ const MinSyncInterval = 5 * time.Minute
 // DefaultReconcileInterval is used when EnvReconcileInterval is not set.
 const DefaultReconcileInterval = 24 * time.Hour
 
-// MinReconcileInterval: a reconcile lists every UID of a folder.
+// MinReconcileInterval keeps reconciles rare: each lists every UID of a folder.
 const MinReconcileInterval = time.Hour
 
 // Config holds the application configuration.
