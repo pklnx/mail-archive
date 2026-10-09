@@ -140,7 +140,26 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		return res
 	}
 	var folderErrs []error
+	// Folders whose first reconcile runs now: what they find gone was
+	// deleted before, not in this run, and never alerts.
+	var baseline []int64
 	finish := func(status string) AccountResult {
+		// Also after a cancelled run: the next run's window would miss
+		// what this one marked. Lost messages never outnumber the gone
+		// locations, so a normal run skips the query.
+		if res.Reconcile.Gone >= store.LossAlertMin {
+			alert, err := s.Store.LostMessages(context.WithoutCancel(ctx), a.ID, run.ID, baseline)
+			switch {
+			case err != nil:
+				log.Error("count lost messages", "err", err)
+				if status != "failed" {
+					status, res.Err = "partial", errors.Join(res.Err, fmt.Errorf("count lost messages: %w", err))
+				}
+			case store.LossAlertDue(alert.Lost, alert.PresentBefore):
+				run.LossAlert = alert
+				log.Warn("messages deleted on the server", "lost", alert.Lost, "before", alert.PresentBefore)
+			}
+		}
 		run.Status = status
 		run.MessagesFetched, run.MessagesNew = res.Fetched, res.New
 		run.Reconcile = res.Reconcile
@@ -198,6 +217,9 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		// Only a folder that synced cleanly is reconciled: its locations are
 		// complete for the UIDVALIDITY that EXAMINE reported.
 		if err == nil && s.reconcileDue(folder.LastReconciledAt, opts, now) {
+			if folder.LastReconciledAt == nil {
+				baseline = append(baseline, folder.ID)
+			}
 			var r store.FolderReconcile
 			if r, err = s.reconcileFolder(ctx, conn, folder); err == nil {
 				res.Reconcile.Add(r)
@@ -215,7 +237,7 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", f.Name, err))
 		}
 	}
-	if err := s.reconcileVanished(ctx, a, folders, opts, now, &res.Reconcile, log); err != nil {
+	if err := s.reconcileVanished(ctx, a, folders, opts, now, &res.Reconcile, &baseline, log); err != nil {
 		if ctx.Err() != nil {
 			res.Err = ctx.Err()
 			return finish("failed")

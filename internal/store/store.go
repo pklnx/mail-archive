@@ -458,7 +458,13 @@ type SyncRun struct {
 	Reconcile       ReconcileCounts
 	// Health is how the run changes the account's failure streak.
 	Health HealthEffect
+	// LossAlert, if set, is stored for the notifier with the run.
+	LossAlert *LossAlert
 }
+
+// LossAlertMaxAge is how long a loss alert waits to be sent. Older ones are
+// given up, so that a webhook configured later never sends old losses.
+const LossAlertMaxAge = 24 * time.Hour
 
 // StartSyncRun creates a running sync record. Call it while holding the
 // account's sync lock: it closes runs left open by a process that died.
@@ -487,6 +493,16 @@ func (s *Store) FinishSyncRun(ctx context.Context, r *SyncRun) error {
 			FlagsChanged:      clampInt32(r.Reconcile.FlagsChanged),
 		}))
 		if err != nil {
+			return err
+		}
+		if r.LossAlert != nil {
+			if err := insertLossAlert(ctx, q, r.AccountID, r.ID, r.LossAlert); err != nil {
+				return err
+			}
+		}
+		// Runs happen without a webhook too: keep unsent alerts from piling
+		// up in the pending index.
+		if _, err := q.ExpireLossAlerts(ctx, LossAlertMaxAge.Seconds()); err != nil {
 			return err
 		}
 		switch r.Health {

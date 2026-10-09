@@ -1,5 +1,6 @@
 // Package notify tells the operator when syncs of an account keep failing,
-// and when they work again, through a webhook.
+// when they work again, and when many of an account's messages were
+// deleted on the server, through a webhook.
 package notify
 
 import (
@@ -34,6 +35,8 @@ const (
 	EventRecovered = "recovered"
 	EventMixed     = "mixed" // a batch with alerts and recoveries
 	EventTest      = "test"
+	// EventGone: many messages of an account were deleted on the server.
+	EventGone = "gone"
 )
 
 // AccountEvent is the part of a message about one account.
@@ -47,6 +50,18 @@ type AccountEvent struct {
 	FailureStreak int        `json:"failureStreak"`
 	FailingSince  *time.Time `json:"failingSince"`
 	LastError     string     `json:"lastError,omitempty"`
+	// For EventGone: messages now only in the archive, how many were on the
+	// server before, and the folders they were deleted from.
+	Lost          int          `json:"lost,omitempty"`
+	PresentBefore int          `json:"presentBefore,omitempty"`
+	Folders       []FolderLoss `json:"folders,omitempty"`
+	MoreFolders   int          `json:"moreFolders,omitempty"`
+}
+
+// FolderLoss is how many lost messages were deleted from a folder.
+type FolderLoss struct {
+	Name string `json:"name"`
+	Lost int    `json:"lost"`
 }
 
 // Message is one webhook request.
@@ -153,8 +168,11 @@ func (w *Webhook) Send(ctx context.Context, m *Message) (int, error) {
 	if w.cfg.Format == config.WebhookFormatNtfy {
 		req.Header.Set("Title", mime.BEncoding.Encode("UTF-8", m.Title))
 		priority, tags := "default", "white_check_mark"
-		if m.Event == EventFailing || m.Event == EventMixed {
+		switch m.Event {
+		case EventFailing, EventMixed:
 			priority, tags = "high", "warning"
+		case EventGone:
+			priority, tags = "high", "wastebasket"
 		}
 		if m.Event == EventTest {
 			tags = "test_tube"
@@ -208,6 +226,6 @@ func TestMessage(now time.Time) *Message {
 		ID:    fmt.Sprintf("test-%d", now.Unix()),
 		Event: EventTest,
 		Title: "Mail archive: test notification",
-		Body:  "This is a test from mail-archive. Alerts about failing syncs will arrive here.",
+		Body:  "This is a test from mail-archive. Alerts about failing syncs and about mail deleted on the server will arrive here.",
 	}
 }

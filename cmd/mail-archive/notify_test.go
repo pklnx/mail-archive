@@ -125,3 +125,55 @@ func TestSyncSendsOneAlert(t *testing.T) {
 		t.Fatalf("events: %v", events)
 	}
 }
+
+// `sync` reconciles the due folders and sends the loss alert at its end.
+func TestSyncSendsLossAlert(t *testing.T) {
+	user := imapmemserver.NewUser("alice", "pw")
+	imaptest.CreateMailboxes(t, user, "INBOX")
+	for i := range 20 {
+		imaptest.Append(t, user, "INBOX", fmt.Appendf(nil, "Subject: m%d\r\n\r\nbody %d\r\n", i, i))
+	}
+	host, port := imaptest.Start(t, user)
+	st, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	keyStr, _ := crypto.GenerateKey()
+	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	key, _ := crypto.ParseKey(keyStr)
+	sealer, _ := crypto.NewSealer(key)
+	acc := &store.Account{Name: "work", Host: host, Port: port, TLSMode: store.TLSModeNone, Username: "alice", Enabled: true}
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, "pw") }
+	if err := st.CreateAccountSealed(context.Background(), acc, seal); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		mu.Lock()
+		got = append(got, m)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", srv.URL)
+
+	// The first sync reconciles INBOX for the first time: no alert.
+	if err := runCmd(t, newSyncCmd(), ""); err != nil {
+		t.Fatal(err)
+	}
+	uids := make([]uint32, 15)
+	for i := range uids {
+		uids[i] = uint32(i + 1) //nolint:gosec // test UIDs
+	}
+	imaptest.Expunge(t, host, port, "alice", "pw", "INBOX", uids...)
+	if err := runCmd(t, newSyncCmd(), "", "--reconcile"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0]["event"] != "gone" || !strings.Contains(fmt.Sprint(got[0]["title"]), "15 messages deleted on the server (work)") {
+		t.Fatalf("messages: %v", got)
+	}
+}

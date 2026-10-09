@@ -52,6 +52,25 @@ type Folder struct {
 	LastReconciledAt *time.Time
 }
 
+type LossAlert struct {
+	ID               int64
+	AccountID        int64
+	SyncRunID        int64
+	CreatedAt        time.Time
+	Lost             int32
+	PresentBefore    int32
+	FolderNames      []string
+	FolderLost       []int32
+	MoreFolders      int32
+	NotifyAttempts   int32
+	NotifyNextAt     *time.Time
+	NotifyError      *string
+	NotifyLease      []byte
+	NotifyLeaseUntil *time.Time
+	SentAt           *time.Time
+	GivenUpAt        *time.Time
+}
+
 type Message struct {
 	Sha256          string
 	Size            int64

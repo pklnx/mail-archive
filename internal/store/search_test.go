@@ -292,6 +292,19 @@ ANALYZE;`
 		})
 	}
 
+	// Counting the lost messages of a run starts from the gone locations.
+	t.Run("lost messages", func(t *testing.T) {
+		var rec explainer
+		p := db.LostMessagesParams{AccountID: 1, RunID: 1, Baseline: []int64{}}
+		if _, err := db.New(&rec).LostMessages(ctx, p); !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		plan := explain(t, &rec)
+		if !strings.Contains(plan, "message_locations_gone_idx") || strings.Contains(plan, "Seq Scan on message_locations") {
+			t.Errorf("plan does not start from the gone locations:\n%s", plan)
+		}
+	})
+
 	// Each reindex batch seeks to its start in the primary key instead of
 	// reading from the first row again. Right after the upgrade, every row
 	// is pending.
