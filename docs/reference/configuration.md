@@ -46,7 +46,7 @@ The SMTP server receives copies of every message from a mail server for
 | `WEB_PORT` | `8080` | Port of the web UI. |
 | `POSTGRES_PORT` | `5432` | Port of PostgreSQL on `127.0.0.1`, for backups and development. |
 | `SMTP_BIND` | `127.0.0.1` | Address the SMTP port for journaling is published on. A mail server on another machine needs a reachable address here, and that machine in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`. |
-| `SMTP_PORT` | `2525` | Port of the SMTP server on the host. Nothing listens unless `MAIL_ARCHIVE_SMTP_LISTEN=:2525`. |
+| `SMTP_PORT` | `2525` | Port of the SMTP server on the host. Compose always binds this port on the host; the container accepts connections only when `MAIL_ARCHIVE_SMTP_LISTEN=:2525` is set. |
 
 The published ports listen on `127.0.0.1` only unless `WEB_BIND` or
 `SMTP_BIND` is set.
