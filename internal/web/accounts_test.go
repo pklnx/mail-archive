@@ -26,6 +26,7 @@ import (
 type manageFixture struct {
 	t          *testing.T
 	st         *store.Store
+	blobs      *blobstore.Store
 	srv        *httptest.Server
 	cookie     string // session token; empty means the fixture's own user
 	host       string
@@ -57,7 +58,7 @@ func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, 
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	runner := &archive.Runner{Syncer: syncer, CheckEvery: 10 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
-	f := &manageFixture{t: t, st: st, runnerDone: make(chan struct{})}
+	f := &manageFixture{t: t, st: st, blobs: blobs, runnerDone: make(chan struct{})}
 	go func() { runner.Run(ctx); close(f.runnerDone) }()
 	t.Cleanup(func() { cancel(); <-f.runnerDone })
 	if roles != nil {

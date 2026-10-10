@@ -28,7 +28,27 @@ const (
 	// newlines.
 	MaxAttachmentNames     = 100
 	MaxAttachmentNameBytes = 16 << 10
+	// MaxParts bounds the leaf parts listed; later parts are not shown or
+	// indexed. The stored message keeps them.
+	MaxParts = 1000
+	// MaxDepth bounds multipart nesting. Every level wraps the reader of
+	// the level above, so deep nesting costs time and stack for each byte.
+	MaxDepth = 20
+	// maxDecoded bounds the decoded bytes read from one message.
+	maxDecoded = 256 << 20
 )
+
+// errLimit stops a walk at one of the limits.
+var errLimit = errors.New("mime limit reached")
+
+// guard enforces MaxParts and MaxDepth during a walk. It returns errLimit
+// for a part beyond them.
+func guard(path []int, part *message.Entity, leaves int) error {
+	if leaves >= MaxParts || part.MultipartReader() != nil && len(path) >= MaxDepth {
+		return errLimit
+	}
+	return nil
+}
 
 // Message is a parsed message.
 type Message struct {
@@ -40,7 +60,9 @@ type Message struct {
 	Text    string // first text/plain body that is not an attachment
 	HTML    string // first text/html body that is not an attachment
 	Parts   []Part // all leaf parts in walk order
-	// Truncated is set when a body exceeded the in-memory limit.
+	// Truncated is set when a body exceeded the in-memory limit, or the
+	// message has more parts, deeper nesting or more decoded bytes than
+	// the limits allow: what is beyond them is not listed.
 	Truncated bool
 }
 
@@ -75,25 +97,36 @@ func Parse(r io.Reader) *Message {
 	m.Date = ent.Header.Get("Date")
 
 	index := 0
-	_ = ent.Walk(func(_ []int, part *message.Entity, _ error) error {
+	var decoded int64
+	err = ent.Walk(func(path []int, part *message.Entity, _ error) error {
+		if err := guard(path, part, index); err != nil {
+			return err
+		}
 		if part.MultipartReader() != nil {
 			return nil
 		}
 		p := describe(part, index)
 		index++
 		isBody := !p.Attachment && (p.ContentType == "text/plain" || p.ContentType == "text/html")
+		body := io.LimitReader(part.Body, maxDecoded-decoded+1)
 		switch {
 		case isBody && p.ContentType == "text/plain" && m.Text == "":
-			m.Text, p.Size = readText(part.Body, &m.Truncated)
+			m.Text, p.Size = readText(body, &m.Truncated)
 		case isBody && p.ContentType == "text/html" && m.HTML == "":
-			m.HTML, p.Size = readText(part.Body, &m.Truncated)
+			m.HTML, p.Size = readText(body, &m.Truncated)
 		default:
-			n, _ := io.Copy(io.Discard, part.Body)
+			n, _ := io.Copy(io.Discard, body)
 			p.Size = n
 		}
 		m.Parts = append(m.Parts, p)
+		if decoded += p.Size; decoded > maxDecoded {
+			return errLimit
+		}
 		return nil
 	})
+	if errors.Is(err, errLimit) {
+		m.Truncated = true
+	}
 	return m
 }
 
@@ -115,7 +148,10 @@ func OpenPart(r io.Reader, index int, maxSize int64) (Part, []byte, error) {
 		ok    bool
 	)
 	stop := errors.New("stop")
-	err := ent.Walk(func(_ []int, part *message.Entity, _ error) error {
+	err := ent.Walk(func(path []int, part *message.Entity, _ error) error {
+		if err := guard(path, part, i); err != nil {
+			return err
+		}
 		if part.MultipartReader() != nil {
 			return nil
 		}
@@ -137,7 +173,7 @@ func OpenPart(r io.Reader, index int, maxSize int64) (Part, []byte, error) {
 	if ok {
 		return found, data, nil
 	}
-	if err != nil && !errors.Is(err, stop) {
+	if err != nil && !errors.Is(err, stop) && !errors.Is(err, errLimit) {
 		return Part{}, nil, err
 	}
 	return Part{}, nil, ErrNoPart

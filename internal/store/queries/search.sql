@@ -32,8 +32,24 @@ WHERE
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
   AND (sqlc.narg(from_pattern)::text IS NULL OR m.from_addr ILIKE sqlc.narg(from_pattern)::text)
+  -- To or Cc of the message, or an envelope recipient (BCC included) of
+  -- one of the user's smtp locations. The envelope matches come as
+  -- to_shas, found first by EnvelopeMatches, so that both arms use an
+  -- index of messages. With too many of them, to_walk checks the envelopes
+  -- of each message instead.
   AND (sqlc.narg(to_pattern)::text IS NULL
-       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text
+       OR m.sha256 = ANY (sqlc.narg(to_shas)::bpchar[])
+       OR sqlc.arg(to_walk)::boolean AND EXISTS (
+           SELECT 1 FROM message_locations rl
+           JOIN envelopes re ON re.location_id = rl.id
+           JOIN folders rf ON rf.id = rl.folder_id
+           JOIN accounts ra ON ra.id = rf.account_id
+           WHERE rl.message_sha256 = m.sha256 AND ra.owner_id = sqlc.arg(owner)::bigint
+             AND re.rcpt_text ILIKE sqlc.narg(to_pattern)::text
+           -- OFFSET 0 keeps the planner from hashing all matching envelopes
+           -- up front: the check runs for each message of the walk.
+           OFFSET 0))
   AND (sqlc.narg(attachment_pattern)::text IS NULL OR m.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
   AND (NOT sqlc.arg(has_attachment)::boolean OR m.has_attachment)
   AND (sqlc.narg(thread)::text IS NULL OR COALESCE(m.thread_id, m.sha256) = sqlc.narg(thread)::text)
@@ -99,8 +115,24 @@ WHERE
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
   AND (sqlc.narg(from_pattern)::text IS NULL OR m.from_addr ILIKE sqlc.narg(from_pattern)::text)
+  -- To or Cc of the message, or an envelope recipient (BCC included) of
+  -- one of the user's smtp locations. The envelope matches come as
+  -- to_shas, found first by EnvelopeMatches, so that both arms use an
+  -- index of messages. With too many of them, to_walk checks the envelopes
+  -- of each message instead.
   AND (sqlc.narg(to_pattern)::text IS NULL
-       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text
+       OR m.sha256 = ANY (sqlc.narg(to_shas)::bpchar[])
+       OR sqlc.arg(to_walk)::boolean AND EXISTS (
+           SELECT 1 FROM message_locations rl
+           JOIN envelopes re ON re.location_id = rl.id
+           JOIN folders rf ON rf.id = rl.folder_id
+           JOIN accounts ra ON ra.id = rf.account_id
+           WHERE rl.message_sha256 = m.sha256 AND ra.owner_id = sqlc.arg(owner)::bigint
+             AND re.rcpt_text ILIKE sqlc.narg(to_pattern)::text
+           -- OFFSET 0 keeps the planner from hashing all matching envelopes
+           -- up front: the check runs for each message of the walk.
+           OFFSET 0))
   AND (sqlc.narg(attachment_pattern)::text IS NULL OR m.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
   AND (NOT sqlc.arg(has_attachment)::boolean OR m.has_attachment)
   AND (sqlc.narg(thread)::text IS NULL OR COALESCE(m.thread_id, m.sha256) = sqlc.narg(thread)::text)
@@ -149,8 +181,24 @@ WHERE
         -- Filters on single fields. Recipients and attachment names are only
         -- found here, not by the full-text query.
         AND (sqlc.narg(from_pattern)::text IS NULL OR n.from_addr ILIKE sqlc.narg(from_pattern)::text)
+        -- To or Cc of the message, or an envelope recipient (BCC included) of
+        -- one of the user's smtp locations. The envelope matches come as
+        -- to_shas, found first by EnvelopeMatches, so that both arms use an
+        -- index of messages. With too many of them, to_walk checks the envelopes
+        -- of each message instead.
         AND (sqlc.narg(to_pattern)::text IS NULL
-             OR (coalesce(n.to_addr, '') || E'\n' || coalesce(n.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+             OR (coalesce(n.to_addr, '') || E'\n' || coalesce(n.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text
+             OR n.sha256 = ANY (sqlc.narg(to_shas)::bpchar[])
+             OR sqlc.arg(to_walk)::boolean AND EXISTS (
+                 SELECT 1 FROM message_locations rl
+                 JOIN envelopes re ON re.location_id = rl.id
+                 JOIN folders rf ON rf.id = rl.folder_id
+                 JOIN accounts ra ON ra.id = rf.account_id
+                 WHERE rl.message_sha256 = n.sha256 AND ra.owner_id = sqlc.arg(owner)::bigint
+                   AND re.rcpt_text ILIKE sqlc.narg(to_pattern)::text
+                 -- OFFSET 0 keeps the planner from hashing all matching envelopes
+                 -- up front: the check runs for each message of the walk.
+                 OFFSET 0))
         AND (sqlc.narg(attachment_pattern)::text IS NULL OR n.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
         AND (NOT sqlc.arg(has_attachment)::boolean OR n.has_attachment)
         AND (sqlc.narg(thread)::text IS NULL OR COALESCE(n.thread_id, n.sha256) = sqlc.narg(thread)::text)
@@ -207,8 +255,24 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
   AND (sqlc.narg(from_pattern)::text IS NULL OR t.from_addr ILIKE sqlc.narg(from_pattern)::text)
+  -- To or Cc of the message, or an envelope recipient (BCC included) of
+  -- one of the user's smtp locations. The envelope matches come as
+  -- to_shas, found first by EnvelopeMatches, so that both arms use an
+  -- index of messages. With too many of them, to_walk checks the envelopes
+  -- of each message instead.
   AND (sqlc.narg(to_pattern)::text IS NULL
-       OR (coalesce(t.to_addr, '') || E'\n' || coalesce(t.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text)
+       OR (coalesce(t.to_addr, '') || E'\n' || coalesce(t.cc_addr, '')) ILIKE sqlc.narg(to_pattern)::text
+       OR t.sha256 = ANY (sqlc.narg(to_shas)::bpchar[])
+       OR sqlc.arg(to_walk)::boolean AND EXISTS (
+           SELECT 1 FROM message_locations rl
+           JOIN envelopes re ON re.location_id = rl.id
+           JOIN folders rf ON rf.id = rl.folder_id
+           JOIN accounts ra ON ra.id = rf.account_id
+           WHERE rl.message_sha256 = t.sha256 AND ra.owner_id = sqlc.arg(owner)::bigint
+             AND re.rcpt_text ILIKE sqlc.narg(to_pattern)::text
+           -- OFFSET 0 keeps the planner from hashing all matching envelopes
+           -- up front: the check runs for each message of the walk.
+           OFFSET 0))
   AND (sqlc.narg(attachment_pattern)::text IS NULL OR t.attachment_names ILIKE sqlc.narg(attachment_pattern)::text)
   AND (NOT sqlc.arg(has_attachment)::boolean OR t.has_attachment)
   AND (sqlc.narg(thread)::text IS NULL OR COALESCE(t.thread_id, t.sha256) = sqlc.narg(thread)::text)
@@ -257,10 +321,13 @@ SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
        -- A present location was seen at the folder's last reconcile.
        (CASE WHEN l.gone_at IS NULL AND l.uidvalidity = f.uidvalidity
              THEN GREATEST(l.last_seen_at, f.last_reconciled_at)
-             ELSE l.last_seen_at END)::timestamptz AS last_seen_at
+             ELSE l.last_seen_at END)::timestamptz AS last_seen_at,
+       -- The SMTP envelope of locations in smtp accounts.
+       e.location_id AS envelope_location, e.mail_from, e.rcpt_to, e.received_at, e.client_ip, e.helo
 FROM message_locations l
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
+LEFT JOIN envelopes e ON e.location_id = l.id
 WHERE l.message_sha256 = @sha256 AND a.owner_id = @owner::bigint
 ORDER BY superseded, a.name, f.name;
 
@@ -280,3 +347,13 @@ FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 WHERE a.owner_id = @owner::bigint
 ORDER BY a.name, f.name;
+
+-- name: EnvelopeMatches :many
+-- Messages with an envelope recipient matching the to: filter in one of
+-- the user's smtp accounts, up to row_limit; uses envelopes_rcpt_trgm_idx.
+SELECT DISTINCT rl.message_sha256 FROM envelopes re
+JOIN message_locations rl ON rl.id = re.location_id
+JOIN folders rf ON rf.id = rl.folder_id
+JOIN accounts ra ON ra.id = rf.account_id
+WHERE ra.owner_id = @owner::bigint AND re.rcpt_text ILIKE @pattern::text
+LIMIT @row_limit;

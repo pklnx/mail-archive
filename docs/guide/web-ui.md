@@ -95,7 +95,7 @@ and with the words around them, and are not case sensitive.
 | Prefix | Finds |
 |---|---|
 | `from:sam` | Messages whose sender's name or address contains `sam`. |
-| `to:taxadvisor` | Messages with `taxadvisor` in a To or Cc name or address. Bcc is not stored. |
+| `to:taxadvisor` | Messages with `taxadvisor` in a To or Cc name or address, or among the envelope recipients of your [smtp accounts](./journaling) (BCC included). Bcc headers are not stored. |
 | `to:"Jordan Lee"` | Quotes allow spaces. |
 | `attachment:lease` | Messages with an attachment whose file name contains `lease`. |
 | `has:attachment` | Messages with at least one attachment. |

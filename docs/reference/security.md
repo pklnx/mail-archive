@@ -12,6 +12,7 @@
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
+| The SMTP port | Off by default. When on, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect; see [The SMTP server](#the-smtp-server). |
 
 ## Login
 
@@ -118,6 +119,35 @@ otherwise the server's same-origin check rejects changes.
 the network who can read the traffic can take over a session. Use this only
 in a network you fully trust. Browsers offer passkeys only over HTTPS or on
 `localhost`, so they do not work this way.
+
+## The SMTP server
+
+With `MAIL_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
+[smtp accounts](../guide/journaling) from a mail server you run.
+
+- **The allowlist is the only gate.** There is no SMTP login. Clients outside
+  `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` get `554` before they can send
+  anything. Allow the mail server's address, not a whole network the
+  internet can reach. Compose publishes the port on `127.0.0.1` unless
+  `SMTP_BIND` says otherwise; never forward it from the internet.
+- **STARTTLS** is offered when a certificate is configured. Postfix on the same
+  host or Docker network does not need it.
+- **Limits:** at most 10 connections (more get `421`), 100 recipients per
+  message, `MAIL_ARCHIVE_SMTP_MAX_SIZE` per message (`50M`), lines up to 1 MiB,
+  5 minutes to send a command or a whole message, 1 minute for each answer
+  to be read. A message is acknowledged only after it is stored.
+- **The MIME parser sees mail nobody filtered.** Display and search read at
+  most 1000 parts, 20 levels of nesting, 1 MiB of top-level header and 256
+  MiB of decoded content per message; a message beyond that is stored whole,
+  but shown and indexed only up to the limit.
+- **Envelopes reveal BCC recipients.** They are visible only to the owner of
+  the smtp account, in the message view and to the `to:` filter. Another user
+  who has the same message from IMAP sees neither the envelope nor a match
+  for a BCC recipient.
+- **Every refusal is logged** at error level with client address, sender,
+  recipients and reason. Message content is never logged. A message Postfix
+  already knows to be too large never reaches the archive; only the Postfix
+  log shows it.
 
 ## Browser protections
 

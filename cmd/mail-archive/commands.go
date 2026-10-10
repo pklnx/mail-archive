@@ -174,10 +174,12 @@ func newKeygenCmd() *cobra.Command {
 func newAccountCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "account",
-		Short: "Manage IMAP accounts",
+		Short: "Manage IMAP and smtp accounts",
 	}
 	cmd.AddCommand(
 		newAccountAddCmd(),
+		newAccountAddSMTPCmd(),
+		newAccountSMTPAddressesCmd(),
 		newAccountListCmd(),
 		newAccountFoldersCmd(),
 		newAccountSetFoldersCmd(),
@@ -384,6 +386,10 @@ func newAccountListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			addresses, err := a.store.SMTPAddresses(cmd.Context())
+			if err != nil {
+				return err
+			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tOWNER\tSERVER\tLOGIN\tSTATE\tINCLUDE\tEXCLUDE")
 			for _, acc := range accounts {
@@ -399,8 +405,14 @@ func newAccountListCmd() *cobra.Command {
 				case !acc.Enabled:
 					state = "disabled"
 				}
-				if acc.Kind == store.KindImport {
+				switch acc.Kind {
+				case store.KindImport:
 					fmt.Fprintf(w, "%s\t%s\timport\t-\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID), state)
+					continue
+				case store.KindSMTP:
+					// LOGIN lists the addresses it receives for.
+					fmt.Fprintf(w, "%s\t%s\tsmtp\t%s\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID),
+						listOrDash(addresses[acc.ID], "-"), state)
 					continue
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, ownerName(names, acc.OwnerID), acc.Host, acc.Port, acc.TLSMode,
@@ -455,9 +467,28 @@ func loadIMAPAccount(cmd *cobra.Command, name string) (*app, *store.Account, err
 	if err != nil {
 		return nil, nil, err
 	}
-	if acc.Kind == store.KindImport {
+	switch acc.Kind {
+	case store.KindImport:
 		a.close()
 		return nil, nil, fmt.Errorf("%q is an import account: it has no server and is never synced; run import again to add mail", acc.Name)
+	case store.KindSMTP:
+		a.close()
+		return nil, nil, fmt.Errorf("%q is an smtp account: it has no server and is never synced; it receives mail from a mail server", acc.Name)
+	}
+	return a, acc, nil
+}
+
+// loadEnableableAccount is loadAccount for enable and disable: IMAP
+// accounts are synced only when enabled, smtp accounts receive only when
+// enabled. Import accounts are never enabled.
+func loadEnableableAccount(cmd *cobra.Command, name string) (*app, *store.Account, error) {
+	a, acc, err := loadAccount(cmd, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if acc.Kind == store.KindImport {
+		a.close()
+		return nil, nil, fmt.Errorf("%q is an import account: it is never synced, so it cannot be enabled or disabled", acc.Name)
 	}
 	return a, acc, nil
 }
@@ -613,16 +644,16 @@ func newAccountRenameCmd() *cobra.Command {
 }
 
 func newAccountEnableCmd(enable bool) *cobra.Command {
-	use, short := "disable NAME", "Exclude an account from sync (archived data is kept)"
+	use, short := "disable NAME", "Exclude an account from sync, or stop an smtp account receiving (archived data is kept)"
 	if enable {
-		use, short = "enable NAME", "Include an account in sync"
+		use, short = "enable NAME", "Include an account in sync, or let an smtp account receive"
 	}
 	return &cobra.Command{
 		Use:   use,
 		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, acc, err := loadIMAPAccount(cmd, args[0])
+			a, acc, err := loadEnableableAccount(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -766,7 +797,7 @@ failing, and their recovery, are sent at the end.`,
 }
 
 // refuseImportAccounts fails if a name given to sync --account is an import
-// account (of the owner, if set).
+// or smtp account (of the owner, if set).
 func refuseImportAccounts(cmd *cobra.Command, a *app, only []string, owner *int64) error {
 	if len(only) == 0 {
 		return nil
@@ -776,13 +807,17 @@ func refuseImportAccounts(cmd *cobra.Command, a *app, only []string, owner *int6
 		return err
 	}
 	for _, acc := range accounts {
-		if acc.Kind != store.KindImport || acc.RemovedAt != nil || owner != nil && (acc.OwnerID == nil || *acc.OwnerID != *owner) {
+		if acc.Kind.HasServer() || acc.RemovedAt != nil || owner != nil && (acc.OwnerID == nil || *acc.OwnerID != *owner) {
 			continue
 		}
 		for _, name := range only {
-			if strings.EqualFold(name, acc.Name) {
-				return fmt.Errorf("%s is an import account; run import again instead", acc.Name)
+			if !strings.EqualFold(name, acc.Name) {
+				continue
 			}
+			if acc.Kind == store.KindSMTP {
+				return fmt.Errorf("%s is an smtp account; it receives mail from a mail server and is never synced", acc.Name)
+			}
+			return fmt.Errorf("%s is an import account; run import again instead", acc.Name)
 		}
 	}
 	return nil
@@ -801,7 +836,11 @@ Everything except the login page needs a login; create users with
 ` + config.EnvAllowedHosts + ` (default: localhost, 127.0.0.1, ::1), which blocks DNS
 rebinding; state-changing requests must come from the same origin. Use HTTPS
 (a reverse proxy or tailscale serve) when the server is reachable from a
-network.`,
+network.
+
+With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
+(journaling from a mail server) from the networks in
+` + config.EnvSMTPAllowedNetworks + `.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -871,6 +910,13 @@ network.`,
 			} else if n == 0 {
 				log.Warn("no users yet; the web UI shows how to create the first admin", "command", commandName()+" user add NAME --admin")
 			}
+			if a.cfg.SMTP != nil {
+				stop, err := startSMTP(cmd.Context(), a, blobs, log)
+				if err != nil {
+					return err
+				}
+				defer stop()
+			}
 			srv := web.New(a.store, blobs, log, opts)
 			log.Info("listening", "addr", listen)
 			if err := srv.ListenAndServe(cmd.Context(), listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -917,10 +963,17 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show archive statistics and the last sync per account",
-		Long: `Show per account its ID (as listed by /healthz/sync and in alerts), the
-number of folders and messages, in GONE how many of its messages are no
-longer on the server (found by reconcile; "-" for import accounts), the last
-sync, and in FAILED how many syncs in a row failed and since when.`,
+		Long: `Show per account its ID (as listed by /healthz/sync and in alerts), its
+SOURCE, the number of folders and messages, in GONE how many of its messages
+are no longer on the server (found by reconcile; "-" for import and smtp
+accounts), the last sync, and in FAILED how many syncs in a row failed and
+since when.
+
+SOURCE tells what the account guarantees: "snapshot (IMAP)" archives what is
+in the mailbox at each sync, so mail deleted between two syncs is missed;
+"complete (SMTP)" receives a copy of every message from the mail server; for
+it, LAST SYNC is when it last received a message. "import" holds mail
+imported from files.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -946,8 +999,12 @@ sync, and in FAILED how many syncs in a row failed and since when.`,
 			if err != nil {
 				return err
 			}
+			received, err := a.store.LastReceived(cmd.Context())
+			if err != nil {
+				return err
+			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tACCOUNT\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tGONE\tLAST SYNC\tSTATUS\tFAILED")
+			fmt.Fprintln(w, "ID\tACCOUNT\tSOURCE\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tGONE\tLAST SYNC\tSTATUS\tFAILED")
 			for _, s := range stats {
 				last, status := "never", "-"
 				if s.LastRunAt != nil {
@@ -957,11 +1014,17 @@ sync, and in FAILED how many syncs in a row failed and since when.`,
 					status = *s.LastStatus
 				}
 				enabled, gone := fmt.Sprint(s.Enabled), fmt.Sprint(s.Gone)
-				if s.Kind == store.KindImport {
+				switch s.Kind {
+				case store.KindImport:
 					enabled, gone = "import", "-"
+				case store.KindSMTP:
+					gone, last, status = "-", "never", "-"
+					if t, ok := received[s.AccountID]; ok {
+						last, status = t.Local().Format(time.DateTime), "received"
+					}
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", s.AccountID, s.Account, ownerName(names, s.OwnerID), enabled,
-					s.Folders, s.Messages, gone, last, status,
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", s.AccountID, s.Account, sourceLabel(s.Kind),
+					ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, gone, last, status,
 					failedColumn(health[s.AccountID]))
 			}
 			if err := w.Flush(); err != nil {
@@ -977,4 +1040,17 @@ sync, and in FAILED how many syncs in a row failed and since when.`,
 	}
 	cmd.Flags().String("user", "", "only this user's accounts")
 	return cmd
+}
+
+// sourceLabel names where an account's mail comes from and what that
+// guarantees.
+func sourceLabel(k store.AccountKind) string {
+	switch k {
+	case store.KindSMTP:
+		return "complete (SMTP)"
+	case store.KindImport:
+		return "import"
+	default:
+		return "snapshot (IMAP)"
+	}
 }

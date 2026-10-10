@@ -61,6 +61,10 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
               <span className="text-xs font-normal opacity-70">{t.removed}</span>
             ) : a.kind === "import" ? (
               <span className="text-xs font-normal opacity-70">{t.imported}</span>
+            ) : a.kind === "smtp" && a.enabled ? (
+              <span className="text-xs font-normal opacity-70" title={t.sourceCompleteHint}>
+                {t.receiving}
+              </span>
             ) : (
               !a.enabled && <span className="text-xs font-normal opacity-70">{t.disabled}</span>
             )}

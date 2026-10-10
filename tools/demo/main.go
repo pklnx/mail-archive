@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -137,6 +138,9 @@ func run(dbURL, listen string, log *slog.Logger) error {
 			return fmt.Errorf("reconcile %s: %w", a.Name, res.Err)
 		}
 	}
+	if err := journal(ctx, st, blobs, time.Now()); err != nil {
+		return err
+	}
 
 	hash, err := auth.NewHasher(auth.DefaultParams).Hash(ctx, loginPassword)
 	if err != nil {
@@ -174,6 +178,49 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		publicURL, loginName, loginPassword, loginTOTPSecret)
 	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// journal creates an smtp account with copies the mail server delivered,
+// one of them with a BCC recipient that only the envelope shows.
+func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now time.Time) error {
+	acc := &store.Account{Name: "journal", Enabled: true}
+	if err := st.CreateSMTPAccount(ctx, acc, []string{"archive@archive.example.com"}); err != nil {
+		return err
+	}
+	for _, m := range []struct {
+		raw   string
+		from  string
+		rcpts []string
+		at    time.Time
+	}{
+		{
+			plain("Alex Morgan <alex@example.com>", "Jordan Lee <jordan@example.com>", "Lease renewal for the office",
+				now.Add(-26*time.Hour), "Hi Jordan,\n\nthe landlord sent the renewal. Can we sign by Friday?\n\nAlex"),
+			"alex@example.com", []string{"jordan@example.com", "counsel@lawfirm.example"}, now.Add(-26 * time.Hour),
+		},
+		{
+			plain("Billing <billing@printshop.example>", "Alex Morgan <alex@example.com>", "Invoice 2026-114",
+				now.Add(-50*time.Hour), "Please find the invoice for the flyers attached."),
+			"billing@printshop.example", []string{"alex@example.com"}, now.Add(-50 * time.Hour),
+		},
+	} {
+		blob, created, err := blobs.Put(strings.NewReader(m.raw))
+		if err != nil {
+			return err
+		}
+		meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
+		if err != nil {
+			return err
+		}
+		env := store.Envelope{
+			MailFrom: m.from, RcptTo: m.rcpts, ReceivedAt: m.at,
+			ClientIP: netip.MustParseAddr("172.18.0.1"), HELO: "mx.example.com",
+		}
+		if _, err := st.ReceiveMessage(ctx, acc.ID, meta, env); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -46,8 +46,9 @@ type syncJSON struct {
 
 type accountJSON struct {
 	Name string `json:"name"`
-	// Kind is "imap", or "import" for mail imported from files; import
-	// accounts have no server and are never synced.
+	// Kind is "imap", "import" for mail imported from files, or "smtp" for
+	// mail a mail server delivers over SMTP. Import and smtp accounts have
+	// no server and are never synced.
 	Kind            string       `json:"kind"`
 	Enabled         bool         `json:"enabled"`
 	Removed         bool         `json:"removed"`
@@ -64,6 +65,10 @@ type accountJSON struct {
 	// of its folders.
 	GoneMessages     int64      `json:"goneMessages"`
 	LastReconciledAt *time.Time `json:"lastReconciledAt"`
+	// Addresses an smtp account receives for, and when it last accepted a
+	// message; empty and null for other kinds.
+	Addresses      []string   `json:"addresses"`
+	LastReceivedAt *time.Time `json:"lastReceivedAt"`
 }
 
 type folderJSON struct {
@@ -127,6 +132,16 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if s.runner != nil {
 		queued = s.runner.Queued()
 	}
+	addresses, err := s.store.SMTPAddresses(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	received, err := s.store.LastReceived(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	folders := make(map[string][]folderJSON, len(counts))
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
@@ -171,8 +186,15 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			aj.Sync.FailureStreak, aj.Sync.FailingSince = h.FailureStreak, h.FailingSince
 			aj.Sync.Health = h.State(s.alertAfter, s.syncInterval(), now)
 		}
-		if a.Kind == store.KindImport {
+		if !a.Kind.HasServer() {
 			aj.TLS = ""
+		}
+		aj.Addresses = addresses[a.ID]
+		if aj.Addresses == nil {
+			aj.Addresses = []string{}
+		}
+		if t, ok := received[a.ID]; ok {
+			aj.LastReceivedAt = &t
 		}
 		if aj.Folders == nil {
 			aj.Folders = []folderJSON{}
@@ -373,8 +395,8 @@ func (s *Server) pathAccount(w http.ResponseWriter, r *http.Request) (*store.Acc
 // pathIMAPAccount is pathAccount for requests that need a server.
 func (s *Server) pathIMAPAccount(w http.ResponseWriter, r *http.Request) (*store.Account, bool) {
 	a, ok := s.pathAccount(w, r)
-	if ok && a.Kind == store.KindImport {
-		s.fail(w, r, http.StatusConflict, store.ErrImportAccount.Error(), nil)
+	if ok && !a.Kind.HasServer() {
+		s.fail(w, r, http.StatusConflict, store.ErrNoServer.Error(), nil)
 		return nil, false
 	}
 	return a, ok
@@ -398,8 +420,9 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if a.Kind == store.KindImport && (in.changesConnection() || in.ExcludedFolders != nil || in.Enabled != nil) {
-		s.fail(w, r, http.StatusConflict, store.ErrImportAccount.Error(), nil)
+	if !a.Kind.HasServer() && (in.changesConnection() || in.ExcludedFolders != nil) ||
+		a.Kind == store.KindImport && in.Enabled != nil {
+		s.fail(w, r, http.StatusConflict, store.ErrNoServer.Error(), nil)
 		return
 	}
 	ctx := r.Context()
@@ -454,7 +477,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrConflict):
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
 		return
-	case errors.Is(err, store.ErrStale), errors.Is(err, store.ErrImportAccount):
+	case errors.Is(err, store.ErrStale), errors.Is(err, store.ErrNoServer):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
 	case err != nil:

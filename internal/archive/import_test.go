@@ -365,10 +365,18 @@ func TestImportAccountsAreNeverSynced(t *testing.T) {
 	if err := f.store.CreateAccount(f.ctx, acc); err != nil {
 		t.Fatal(err)
 	}
-	if r := f.syncer.SyncAccount(f.ctx, acc); !errors.Is(r.Err, archive.ErrImportAccount) {
+	if r := f.syncer.SyncAccount(f.ctx, acc); !errors.Is(r.Err, archive.ErrNoServer) {
 		t.Errorf("SyncAccount: %v", r.Err)
 	}
-	results, err := f.syncer.SyncAll(f.ctx, []string{"imported"}, nil, archive.SyncOptions{})
+	// Neither are smtp accounts, enabled as they are.
+	journal := &store.Account{Name: "journal", Enabled: true}
+	if err := f.store.CreateSMTPAccount(f.ctx, journal, []string{"archive@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.syncer.SyncAccount(f.ctx, journal); !errors.Is(r.Err, archive.ErrNoServer) {
+		t.Errorf("SyncAccount of an smtp account: %v", r.Err)
+	}
+	results, err := f.syncer.SyncAll(f.ctx, []string{"imported", "journal"}, nil, archive.SyncOptions{})
 	if err != nil || len(results) != 0 {
 		t.Errorf("SyncAll by name: %+v %v", results, err)
 	}

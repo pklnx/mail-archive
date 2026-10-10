@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { getConversation, getMessage, messageURL, type ConversationEntry, type MessageDetail } from "./api";
 import { fileSize, locationLabel, longDate, senderName, shortDate } from "./format";
 import { useAsync } from "./useAsync";
@@ -62,6 +62,22 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
               </span>
             ))}
           </dd>
+          {msg.locations.map(
+            (l) =>
+              l.envelope && (
+                <Fragment key={`envelope/${l.account}/${l.folder}/${l.uid}`}>
+                  <dt className="text-zinc-500" title={t.envelopeHint}>
+                    {t.envelope(l.account)}
+                  </dt>
+                  <dd className="break-words">
+                    {t.envelopeSender(l.envelope.mailFrom)} · {t.envelopeRecipients(l.envelope.rcptTo.join(", "))}
+                    <span className="block text-xs text-zinc-500">
+                      {t.envelopeReceived(longDate(l.envelope.receivedAt), l.envelope.clientIp, l.envelope.helo)}
+                    </span>
+                  </dd>
+                </Fragment>
+              ),
+          )}
         </dl>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           {msg.hasHtml && (

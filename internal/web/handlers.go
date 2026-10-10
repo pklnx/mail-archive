@@ -198,6 +198,18 @@ type locationJSON struct {
 	GoneAt *time.Time `json:"goneAt"`
 	// LastSeenAt: when the server last listed the location.
 	LastSeenAt time.Time `json:"lastSeenAt"`
+	// Envelope of a location in an smtp account; null for other kinds.
+	Envelope *envelopeJSON `json:"envelope"`
+}
+
+// envelopeJSON is the SMTP envelope a message arrived with. Recipients are
+// the original ones, BCC included.
+type envelopeJSON struct {
+	MailFrom   string    `json:"mailFrom"`
+	RcptTo     []string  `json:"rcptTo"`
+	ReceivedAt time.Time `json:"receivedAt"`
+	ClientIP   string    `json:"clientIp"`
+	HELO       string    `json:"helo"`
 }
 
 type partJSON struct {
@@ -260,10 +272,20 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		if flags == nil {
 			flags = []string{}
 		}
-		out.Locations = append(out.Locations, locationJSON{
+		lj := locationJSON{
 			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt,
-		})
+		}
+		if e := l.Envelope; e != nil {
+			lj.Envelope = &envelopeJSON{MailFrom: e.MailFrom, RcptTo: e.RcptTo, ReceivedAt: e.ReceivedAt, HELO: e.HELO}
+			if e.ClientIP.IsValid() {
+				lj.Envelope.ClientIP = e.ClientIP.String()
+			}
+			if lj.Envelope.RcptTo == nil {
+				lj.Envelope.RcptTo = []string{}
+			}
+		}
+		out.Locations = append(out.Locations, lj)
 	}
 	s.writeJSON(w, http.StatusOK, out)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -43,7 +44,28 @@ const (
 	EnvNotifyWebhookFormat = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT"
 	// EnvNotifyWebhookAuthorization is sent as the Authorization header.
 	EnvNotifyWebhookAuthorization = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION"
+	// EnvSMTPListen is the address the SMTP server for smtp accounts
+	// listens on, like ":2525"; empty turns it off.
+	EnvSMTPListen = "MAIL_ARCHIVE_SMTP_LISTEN"
+	// EnvSMTPAllowedNetworks lists the networks (CIDR or single addresses,
+	// comma-separated) the SMTP server accepts clients from.
+	EnvSMTPAllowedNetworks = "MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS"
+	// EnvSMTPMaxSize is the largest message the SMTP server accepts, in
+	// bytes or with a K, M or G suffix.
+	EnvSMTPMaxSize = "MAIL_ARCHIVE_SMTP_MAX_SIZE"
+	// EnvSMTPTLSCert and EnvSMTPTLSKey are PEM files that turn STARTTLS on.
+	EnvSMTPTLSCert = "MAIL_ARCHIVE_SMTP_TLS_CERT"
+	EnvSMTPTLSKey  = "MAIL_ARCHIVE_SMTP_TLS_KEY"
+	// EnvSMTPHostname is the name in the SMTP greeting; default: the
+	// machine's host name.
+	EnvSMTPHostname = "MAIL_ARCHIVE_SMTP_HOSTNAME"
 )
+
+// DefaultSMTPMaxSize is used when EnvSMTPMaxSize is not set.
+const DefaultSMTPMaxSize = 50 << 20
+
+// MaxSMTPMaxSize is the largest accepted EnvSMTPMaxSize.
+const MaxSMTPMaxSize = 1 << 30
 
 // DefaultAlertAfterFailures is used when EnvAlertAfterFailures is not set.
 const DefaultAlertAfterFailures = 3
@@ -90,6 +112,18 @@ type Config struct {
 	AlertAfterFailures int
 	// Webhook for alerts; nil turns them off.
 	Webhook *Webhook
+	// SMTP is the server for smtp accounts; nil turns it off.
+	SMTP *SMTP
+}
+
+// SMTP configures the SMTP server for smtp accounts.
+type SMTP struct {
+	Listen          string
+	AllowedNetworks []netip.Prefix
+	MaxSize         int64
+	TLSCert         string // empty: no STARTTLS
+	TLSKey          string
+	Hostname        string
 }
 
 // Webhook is where alerts are sent. The URL and the authorization value
@@ -145,6 +179,11 @@ func Load() (*Config, error) {
 	}
 	cfg.Webhook, err = ParseWebhook(os.Getenv(EnvNotifyWebhookURL), os.Getenv(EnvNotifyWebhookFormat),
 		os.Getenv(EnvNotifyWebhookAuthorization))
+	if err != nil {
+		return nil, err
+	}
+	cfg.SMTP, err = ParseSMTP(os.Getenv(EnvSMTPListen), os.Getenv(EnvSMTPAllowedNetworks), os.Getenv(EnvSMTPMaxSize),
+		os.Getenv(EnvSMTPTLSCert), os.Getenv(EnvSMTPTLSKey), os.Getenv(EnvSMTPHostname))
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +302,89 @@ func ParseWebhook(rawURL, format, authorization string) (*Webhook, error) {
 		}
 	}
 	return &Webhook{URL: u, Format: format, Authorization: authorization}, nil
+}
+
+// ParseSMTP checks the SMTP server settings. An empty listen address
+// turns the server off; then the other settings must be empty too, so that
+// a typo in the listen variable does not go unnoticed.
+func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, error) {
+	listen, networks, maxSize = strings.TrimSpace(listen), strings.TrimSpace(networks), strings.TrimSpace(maxSize)
+	cert, key, hostname = strings.TrimSpace(cert), strings.TrimSpace(key), strings.TrimSpace(hostname)
+	if listen == "" {
+		if networks != "" || maxSize != "" || cert != "" || key != "" || hostname != "" {
+			return nil, fmt.Errorf("SMTP settings are set, but %s is not", EnvSMTPListen)
+		}
+		return nil, nil
+	}
+	if _, _, err := net.SplitHostPort(listen); err != nil {
+		return nil, fmt.Errorf("%s: want host:port or :port, got %q", EnvSMTPListen, listen)
+	}
+	c := &SMTP{Listen: listen, MaxSize: DefaultSMTPMaxSize, TLSCert: cert, TLSKey: key, Hostname: hostname}
+	for _, n := range strings.Split(networks, ",") {
+		if n = strings.TrimSpace(n); n == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(n)
+		if err != nil {
+			a, aerr := netip.ParseAddr(n)
+			if aerr != nil {
+				return nil, fmt.Errorf("%s: want CIDR networks or addresses like 172.16.0.0/12 or 192.0.2.10, got %q", EnvSMTPAllowedNetworks, n)
+			}
+			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+		}
+		c.AllowedNetworks = append(c.AllowedNetworks, netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-unmapBits(p)).Masked())
+	}
+	if len(c.AllowedNetworks) == 0 {
+		return nil, fmt.Errorf("%s is set, so %s is required: the SMTP server accepts mail only from these networks", EnvSMTPListen, EnvSMTPAllowedNetworks)
+	}
+	if maxSize != "" {
+		n, err := parseSize(maxSize)
+		if err != nil || n < 1<<20 || n > MaxSMTPMaxSize {
+			return nil, fmt.Errorf("%s: want a size from 1M to 1G (like 50M or 52428800), got %q", EnvSMTPMaxSize, maxSize)
+		}
+		c.MaxSize = n
+	}
+	if (cert == "") != (key == "") {
+		return nil, fmt.Errorf("set both %s and %s, or neither", EnvSMTPTLSCert, EnvSMTPTLSKey)
+	}
+	if c.Hostname == "" {
+		h, err := os.Hostname()
+		if err != nil || h == "" {
+			h = "localhost"
+		}
+		c.Hostname = h
+	}
+	return c, nil
+}
+
+// unmapBits is how many prefix bits an IPv4-mapped IPv6 prefix loses when
+// it is turned into an IPv4 prefix.
+func unmapBits(p netip.Prefix) int {
+	if p.Addr().Is4In6() {
+		return 96
+	}
+	return 0
+}
+
+// parseSize reads a byte count with an optional K, M or G suffix (powers
+// of 1024; a trailing "B" or "iB" is allowed).
+func parseSize(v string) (int64, error) {
+	s := strings.ToUpper(v)
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "B"), "I")
+	mult := int64(1)
+	switch {
+	case strings.HasSuffix(s, "K"):
+		mult, s = 1<<10, strings.TrimSuffix(s, "K")
+	case strings.HasSuffix(s, "M"):
+		mult, s = 1<<20, strings.TrimSuffix(s, "M")
+	case strings.HasSuffix(s, "G"):
+		mult, s = 1<<30, strings.TrimSuffix(s, "G")
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || n < 0 || n > MaxSMTPMaxSize/mult+1 {
+		return 0, fmt.Errorf("invalid size %q", v)
+	}
+	return n * mult, nil
 }
 
 // Target names the webhook's scheme and host, for logs. The path, query and

@@ -241,8 +241,22 @@ FROM generate_series(1, 50000) i;
 INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid)
 SELECT encode(sha256(i::text::bytea), 'hex'), (SELECT id FROM folders), 1, i FROM generate_series(1, 50000) i;
 UPDATE message_locations SET gone_at = now() WHERE uid % 1000 = 0;
+INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id, kind)
+VALUES ('j', '', 0, 'none', '', '\x00', (SELECT id FROM users), 'smtp');
+INSERT INTO folders (account_id, name, uidvalidity) SELECT id, 'INBOX', 1 FROM accounts WHERE kind = 'smtp';
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid)
+SELECT encode(sha256(i::text::bytea), 'hex'), (SELECT f.id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE a.kind = 'smtp'), 1, i
+FROM generate_series(1, 50000) i;
+INSERT INTO envelopes (location_id, mail_from, rcpt_to, rcpt_text)
+SELECT l.id, 'sender@example.com', ARRAY['bcc' || l.uid || '@example.com', 'kunde' || l.uid || '@example.com'],
+       'bcc' || l.uid || E'@example.com\nkunde' || l.uid || '@example.com'
+FROM message_locations l JOIN folders f ON f.id = l.folder_id JOIN accounts a ON a.id = f.account_id WHERE a.kind = 'smtp';
 ANALYZE;`
 	if _, err := conn.Exec(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	// Merge the GIN pending lists, as autovacuum does on a live archive.
+	if _, err := conn.Exec(ctx, "VACUUM ANALYZE envelopes"); err != nil {
 		t.Fatal(err)
 	}
 	var owner int64
@@ -255,13 +269,21 @@ ANALYZE;`
 		name  string
 		p     db.SearchMessagesParams
 		index string
+		also  []string
 	}{
-		{"to", db.SearchMessagesParams{ToPattern: str("%finanzamt%")}, "messages_rcpt_trgm_idx"},
-		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx"},
-		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx"},
+		// to: on To and Cc, or on the envelope matches found first by
+		// EnvelopeMatches: both arms through an index of messages.
+		{"to", db.SearchMessagesParams{ToPattern: str("%finanzamt%"), ToShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}},
+			"messages_rcpt_trgm_idx", []string{"messages_pkey"}},
+		// With too many envelope matches it checks the envelopes of each
+		// message it walks, through their keys.
+		{"to walk", db.SearchMessagesParams{ToPattern: str("%example.com%"), ToWalk: true}, "messages_sort_idx",
+			[]string{"message_locations_sha_idx", "envelopes_pkey"}},
+		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx", nil},
+		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx", nil},
 		// Only in the archive: starts from the few gone locations instead of
 		// checking every message.
-		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx"},
+		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx", nil},
 	}
 	explain := func(t *testing.T, rec *explainer) string {
 		t.Helper()
@@ -289,8 +311,29 @@ ANALYZE;`
 			if strings.Contains(plan, "Seq Scan on message_locations") {
 				t.Errorf("plan reads every location:\n%s", plan)
 			}
+			for _, index := range c.also {
+				if !strings.Contains(plan, index) {
+					t.Errorf("plan does not use %s:\n%s", index, plan)
+				}
+			}
+			if strings.HasPrefix(c.name, "to") && (strings.Contains(plan, "Seq Scan on messages") || strings.Contains(plan, "Seq Scan on envelopes")) {
+				t.Errorf("plan reads every message or envelope:\n%s", plan)
+			}
 		})
 	}
+
+	// Finding the envelope matches of a to: filter uses their trigram index.
+	t.Run("envelope matches", func(t *testing.T) {
+		var rec explainer
+		p := db.EnvelopeMatchesParams{Pattern: "%bcc4200@%", Owner: owner, RowLimit: 5001}
+		if _, err := db.New(&rec).EnvelopeMatches(ctx, p); !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		plan := explain(t, &rec)
+		if !strings.Contains(plan, "envelopes_rcpt_trgm_idx") || strings.Contains(plan, "Seq Scan on envelopes") {
+			t.Errorf("plan does not use envelopes_rcpt_trgm_idx:\n%s", plan)
+		}
+	})
 
 	// Counting the lost messages of a run starts from the gone locations.
 	t.Run("lost messages", func(t *testing.T) {

@@ -142,9 +142,14 @@ function Card({ children }: { children: ReactNode }) {
   );
 }
 
-/** Accounts "Sync all" can sync: import accounts never are. */
+/** Accounts "Sync all" can sync: import and smtp accounts never are. */
 export function syncableCount(accounts: Account[]): number {
-  return accounts.filter((a) => !a.removed && a.kind !== "import").length;
+  return accounts.filter((a) => !a.removed && a.kind === "imap").length;
+}
+
+/** When an smtp account last received a message, for its card. */
+export function receiveStatus(a: Account): string {
+  return a.lastReceivedAt ? t.lastReceived(relativeTime(a.lastReceivedAt)) : t.neverReceived;
 }
 
 function messageCount(a: Account): number {
@@ -213,6 +218,32 @@ function AccountCard({ account: a, manage, onSync, onReconcile, onShowGone, onEd
   const reconcile = reconcileNote(a);
   const health = syncHealthNote(a);
   const busy = a.sync.state !== "idle";
+  if (a.kind === "smtp") {
+    return (
+      <Card>
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <span className="font-semibold">{a.name}</span>
+          <span className="text-sm text-zinc-500" title={t.sourceCompleteHint}>
+            {t.sourceComplete}
+          </span>
+          <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+        </div>
+        <p className="text-sm break-words text-zinc-600 dark:text-zinc-400">{t.receivesFor(a.addresses.join(", "))}</p>
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">{receiveStatus(a)}</p>
+        {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.smtpDisabledNote}</p>}
+        {manage && (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={button} onClick={onToggle}>
+              {a.enabled ? t.disable : t.enable}
+            </button>
+            <button type="button" className={`${button} text-red-600`} onClick={onRemove}>
+              {t.remove}
+            </button>
+          </div>
+        )}
+      </Card>
+    );
+  }
   if (a.kind === "import") {
     return (
       <Card>
@@ -250,7 +281,8 @@ function AccountCard({ account: a, manage, onSync, onReconcile, onShowGone, onEd
       <div className="flex flex-wrap items-baseline gap-x-3">
         <span className="font-semibold">{a.name}</span>
         <span className="min-w-0 truncate text-sm text-zinc-500">
-          {a.username} · {a.host}
+          {a.username} · {a.host} ·{" "}
+          <span title={t.sourceSnapshotHint}>{t.sourceSnapshot}</span>
         </span>
         <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
       </div>

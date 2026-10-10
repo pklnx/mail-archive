@@ -126,6 +126,15 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // A copy from the mail server: the envelope shows the BCC recipient.
+  const p = await page("light");
+  await openMessage(p, "Lease renewal for the office");
+  await p.getByText(/Envelope \(journal\)/).waitFor();
+  await p.screenshot({ path: `${out}/envelope.png` });
+  await p.context().close();
+}
+
+{
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
   await p.getByText(/Last sync/).first().waitFor();

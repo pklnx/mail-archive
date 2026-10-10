@@ -42,8 +42,8 @@ var ErrSyncRunning = errors.New("a sync of this account is already running")
 // ErrAccountRemoved is returned when syncing an account that was removed.
 var ErrAccountRemoved = errors.New("account was removed")
 
-// ErrImportAccount is returned when syncing an import account.
-var ErrImportAccount = store.ErrImportAccount
+// ErrNoServer is returned when syncing an import or smtp account.
+var ErrNoServer = store.ErrNoServer
 
 // AccountResult is the outcome of syncing one account.
 type AccountResult struct {
@@ -57,8 +57,8 @@ type AccountResult struct {
 }
 
 // SyncAll syncs every enabled account (or only the named ones, even if
-// disabled), of all users or, with owner set, of one user. Removed and
-// import accounts are skipped. A failing account does not stop the others.
+// disabled), of all users or, with owner set, of one user. Removed,
+// import and smtp accounts are skipped. A failing account does not stop the others.
 func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64, opts SyncOptions) ([]AccountResult, error) {
 	accounts, err := s.Store.ListAccounts(ctx)
 	if err != nil {
@@ -66,7 +66,7 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64, opts 
 	}
 	var results []AccountResult
 	for _, a := range accounts {
-		if a.RemovedAt != nil || a.Kind == store.KindImport {
+		if a.RemovedAt != nil || !a.Kind.HasServer() {
 			continue
 		}
 		if owner != nil && (a.OwnerID == nil || *a.OwnerID != *owner) {
@@ -89,7 +89,7 @@ func (s *Syncer) SyncAll(ctx context.Context, only []string, owner *int64, opts 
 // SyncAccount syncs all selected folders of one account and records a run.
 // It fails with ErrSyncRunning if the account is already being synced and
 // with ErrAccountRemoved if it was removed or deleted, and with
-// ErrImportAccount for import accounts. Folders due by ReconcileInterval are
+// ErrNoServer for import accounts. Folders due by ReconcileInterval are
 // compared with the server after their sync.
 func (s *Syncer) SyncAccount(ctx context.Context, a *store.Account) AccountResult {
 	return s.SyncAccountWith(ctx, a, SyncOptions{})
@@ -105,8 +105,8 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		res.Err = ErrAccountRemoved
 		return res
 	}
-	if a.Kind == store.KindImport {
-		res.Err = ErrImportAccount
+	if !a.Kind.HasServer() {
+		res.Err = ErrNoServer
 		return res
 	}
 	unlock, ok, err := s.Store.TryLockSyncForWrite(ctx, a.ID)

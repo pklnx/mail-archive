@@ -85,7 +85,7 @@ without it these endpoints answer `503` and `GET /api/accounts` reports
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
@@ -100,7 +100,7 @@ Query parameters of `GET /api/messages`:
 | `q` | Full-text query over subject, sender and body; see [Search](../guide/web-ui#search). Prefixes such as `to:` are parsed by the web UI, not here. |
 | `account`, `folder` | Only messages found in this account or folder. |
 | `from` | Part of the sender's name or address, in any case. |
-| `to` | Part of a name or address in To or Cc, in any case. Bcc is not stored. |
+| `to` | Part of a name or address in To or Cc, in any case, or of an envelope recipient of the user's smtp accounts (which includes BCC recipients). Bcc headers are not stored. |
 | `attachment` | Part of an attachment's file name, in any case. Implies `has=attachment`. |
 | `has` | Only `attachment`: messages with at least one attachment. |
 | `after`, `before` | Date range. `after` is inclusive, `before` exclusive. `YYYY-MM-DD` means midnight UTC; RFC 3339 with an offset (`2024-01-01T00:00:00+01:00`) sets another midnight. |
@@ -152,15 +152,17 @@ conversations, grouped rows and `thread=` alike.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/accounts` | All accounts with `kind` (`imap`, or `import` for mail imported from files), server settings (never the password), folders with message counts, and the sync state. Import accounts have an empty `host`, `tls` and `username`, `port` 0, and `enabled` false. |
+| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts, and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. |
 | `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. A new connection or password is checked with a login first; if that fails, nothing changes. All fields are saved together or not at all. `409` when the name is taken or when the account was changed since it was loaded (reload and try again). Works while the account is being synced; the change applies from the next sync. |
 | `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced. |
 | `GET /api/accounts/{name}/server-folders` | The account's folders, live from the IMAP server: `name`, `specialUse` (role) and `selected`. |
 
-Import accounts only take a rename and a `DELETE`. These answer `409`
-`import accounts cannot be synced or changed` for them: sync,
-`server-folders`, and a `PATCH` with fields other than `name`.
+Import accounts only take a rename and a `DELETE`; smtp accounts also take
+`enabled`. These answer `409` `import and smtp accounts have no server: …`
+for them: sync, `server-folders`, and a `PATCH` with other fields (for import
+accounts, `enabled` too). The addresses of an smtp account are changed with
+`./ma account smtp-addresses`.
 
 Body of `POST` and `PATCH` (in a `PATCH`, missing fields keep their value):
 

@@ -63,7 +63,7 @@ func TestImportAccounts(t *testing.T) {
 		{PasswordEnc: []byte{1}},
 		{Connection: &store.Connection{Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u"}},
 	} {
-		if err := st.UpdateAccount(ctx, imp.Ref(), c); !errors.Is(err, store.ErrImportAccount) {
+		if err := st.UpdateAccount(ctx, imp.Ref(), c); !errors.Is(err, store.ErrNoServer) {
 			t.Errorf("change %+v: %v", c, err)
 		}
 	}
