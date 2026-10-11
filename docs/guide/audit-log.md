@@ -1,8 +1,9 @@
 # Audit log
 
 The archive records who searched, read, exported and changed what: in the
-web UI and on the command line. The log cannot be changed or shortened by
-the application, and `./ma audit` writes it out for a period.
+web UI, with API keys and on the command line. The log cannot be changed or
+shortened by the application. The **Log** page in the web UI shows it, and
+`./ma audit` writes it out for a period.
 
 ## Privacy
 
@@ -120,6 +121,35 @@ partition is created when an entry needs it.
 One entry takes about 290 bytes including its indexes (measured with a mix
 of opened messages, searches and inline images). A user with 300 entries a
 day adds about 30 MB a year.
+
+## The Log page
+
+**Log** in the sidebar shows the entries of the last 30 days, newest first.
+Everyone sees their own entries: logins (also failed attempts with their
+name), searches with their text, opened messages and downloads, changes,
+and requests with their API keys. Admins see every user's entries and the
+command line's, and can pick a user, the command line or API keys.
+
+![Log page](/screenshots/log.png)
+
+Filter by period and by a group of actions (logins, searches, reading,
+export and backup, accounts, user management, own login settings, API keys,
+manual syncs). A message shows its subject only to a user who has that
+message too; otherwise the start of its SHA-256. A click on a subject opens
+the message.
+
+Two kinds of rows are folded, so that the list reads like what happened:
+
+- the inline images of an HTML message go under its "Showed HTML" row;
+- searches typed into the search box, which writes one row per pause
+  ("inv", "invoice"), go under the last search when each is the start of
+  the next and they are less than 10 seconds apart.
+
+"+2 more" shows the folded rows. The log itself keeps every row; only the
+page groups them. Reading the log writes no entry.
+
+The same entries come from `GET /api/audit` (see the
+[JSON API](../reference/api#audit-log)).
 
 ## Writing it out
 

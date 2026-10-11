@@ -70,6 +70,9 @@ func (s *Server) routes() []route {
 		h("GET /api/api-keys", s.handleListAllAPIKeys, accessSession),
 		h("DELETE /api/api-keys/{id}", s.handleRevokeAnyAPIKey, accessSession),
 
+		// Users see their own entries, admins everyone's.
+		h("GET /api/audit", s.handleAudit, accessSession),
+
 		h("GET /api/status", s.handleStatus, accessRead),
 		h("GET /api/accounts", s.handleAccounts, accessRead),
 		h("POST /api/accounts", s.handleCreateAccount, accessSession),

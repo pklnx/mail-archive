@@ -341,6 +341,9 @@ type AuditRecord struct {
 	ClientIP   string
 	UserAgent  string
 	Details    json.RawMessage
+	// Subject of a target message, set only by ListAudit and only for a
+	// message the viewer has a location of.
+	Subject string
 }
 
 // ExportAudit calls fn for every entry of f, oldest first.
@@ -378,4 +381,62 @@ func (s *Store) ExportAudit(ctx context.Context, f AuditFilter, fn func(AuditRec
 			return nil
 		}
 	}
+}
+
+// AuditPage selects a page of the Log page, newest first.
+type AuditPage struct {
+	// Viewer is who reads the log. Without All, only the viewer's own
+	// entries are listed; with All (admins), every user's, optionally
+	// narrowed to UserID or Actor.
+	Viewer       int64
+	All          bool
+	UserID       *int64
+	Actor        string
+	Since, Until time.Time
+	Actions      []string // groups or actions; none means all
+	// After the entry (CursorAt, CursorID) of the previous page.
+	CursorAt *time.Time
+	CursorID int64
+	Limit    int
+}
+
+// ListAudit returns a page of entries, newest first.
+func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, error) {
+	patterns, err := AuditActionPatterns(p.Actions)
+	if err != nil {
+		return nil, err
+	}
+	var rows []db.ListAuditEntriesRow
+	if p.All {
+		rows, err = s.q.ListAuditEntries(ctx, db.ListAuditEntriesParams{
+			Viewer: p.Viewer, Since: p.Since, Until: p.Until, UserID: p.UserID, Actor: nullString(p.Actor),
+			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
+		})
+	} else {
+		var own []db.ListAuditEntriesForUserRow
+		own, err = s.q.ListAuditEntriesForUser(ctx, db.ListAuditEntriesForUserParams{
+			UserID: p.Viewer, Since: p.Since, Until: p.Until,
+			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
+		})
+		for _, r := range own {
+			rows = append(rows, db.ListAuditEntriesRow(r))
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AuditRecord, 0, len(rows))
+	for _, r := range rows {
+		rec := AuditRecord{
+			ID: r.ID, At: r.At, Actor: r.Actor, UserID: r.UserID, UserName: deref(r.UserName),
+			APIKeyName: deref(r.ApiKeyName), Action: r.Action, TargetType: deref(r.TargetType),
+			TargetID: deref(r.TargetID), TargetName: deref(r.TargetName), UserAgent: deref(r.UserAgent),
+			Details: r.Details, Subject: deref(r.Subject),
+		}
+		if r.ClientIp != nil {
+			rec.ClientIP = r.ClientIp.String()
+		}
+		out = append(out, rec)
+	}
+	return out, nil
 }

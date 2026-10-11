@@ -504,3 +504,45 @@ export const usersApi = {
   reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
   removePasskeys: (name: string) => send("DELETE", `${userPath(name)}/passkeys`),
 };
+
+/** One row of the audit log. */
+export interface AuditEntry {
+  id: number;
+  at: string;
+  actor: "session" | "api_key" | "cli";
+  /** The user's name at the time. */
+  user?: string;
+  /** The name of the API key, for actor api_key. */
+  apiKey?: string;
+  action: string;
+  target: { type: "message" | "account" | "user"; id: string; name?: string; subject?: string } | null;
+  clientIp?: string;
+  userAgent?: string;
+  details: Record<string, unknown>;
+}
+
+/** The filters of the Log page. who is "" (all), "cli", "api_key" or a user name (admins only). */
+export interface AuditFilter {
+  since: string;
+  until: string;
+  group: string;
+  who: string;
+}
+
+/** The query string of GET /api/audit for a filter and a page cursor. */
+export function auditQuery(f: AuditFilter, cursor = ""): string {
+  const p = new URLSearchParams();
+  if (f.since) p.set("since", f.since);
+  if (f.until) p.set("until", f.until);
+  if (f.group) p.set("action", f.group);
+  if (f.who === "cli" || f.who === "api_key") p.set("actor", f.who);
+  else if (f.who) p.set("user", f.who);
+  if (cursor) p.set("cursor", cursor);
+  return p.toString();
+}
+
+export const auditApi = {
+  list: (f: AuditFilter, cursor: string, signal?: AbortSignal) =>
+    getJSON<{ entries: AuditEntry[]; nextCursor?: string }>(`/api/audit?${auditQuery(f, cursor)}`, signal),
+};
+
