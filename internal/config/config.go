@@ -8,10 +8,12 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/attest"
 	"github.com/pklnx/mail-archive/internal/crypto"
 )
 
@@ -65,6 +67,12 @@ const (
 	// EnvOperator names who runs a command, for the audit log. The ./ma
 	// wrapper sets it to the host user; it is not verified.
 	EnvOperator = "MAIL_ARCHIVE_OPERATOR"
+	// EnvAttestKeyFile is the Ed25519 key that signs attestations; default
+	// <data dir>/attest/signing.key.
+	EnvAttestKeyFile = "MAIL_ARCHIVE_ATTEST_KEY_FILE"
+	// EnvAttestInterval is how often the web server writes an attestation
+	// ("0" turns the schedule off).
+	EnvAttestInterval = "MAIL_ARCHIVE_ATTEST_INTERVAL"
 )
 
 // DefaultSMTPMaxSize is used when EnvSMTPMaxSize is not set.
@@ -97,6 +105,13 @@ const DefaultReconcileInterval = 24 * time.Hour
 // MinReconcileInterval keeps reconciles rare: each lists every UID of a folder.
 const MinReconcileInterval = time.Hour
 
+// DefaultAttestInterval is used when EnvAttestInterval is not set.
+const DefaultAttestInterval = 24 * time.Hour
+
+// MinAttestInterval keeps the chain short: each attestation adds a line
+// and a leaves file.
+const MinAttestInterval = time.Hour
+
 // Config holds the application configuration.
 type Config struct {
 	DatabaseURL string
@@ -122,7 +137,15 @@ type Config struct {
 	SMTP *SMTP
 	// TrustedProxies may name the client in X-Forwarded-For.
 	TrustedProxies []netip.Prefix
+	// AttestKeyFile signs attestations.
+	AttestKeyFile string
+	// AttestInterval of the web server's attestations; zero means off.
+	AttestInterval time.Duration
 }
+
+// AttestDir holds the attestation file, the leaves and the public keys:
+// always <data dir>/attest, also when the key file is elsewhere.
+func (c *Config) AttestDir() string { return filepath.Join(c.DataDir, "attest") }
 
 // SMTP configures the SMTP server for smtp accounts.
 type SMTP struct {
@@ -196,6 +219,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.TrustedProxies, err = ParseNetworks(EnvTrustedProxies, os.Getenv(EnvTrustedProxies))
+	if err != nil {
+		return nil, err
+	}
+	cfg.AttestKeyFile = strings.TrimSpace(os.Getenv(EnvAttestKeyFile))
+	if cfg.AttestKeyFile == "" {
+		cfg.AttestKeyFile = filepath.Join(cfg.AttestDir(), attest.DefaultKeyFile)
+	}
+	cfg.AttestInterval, err = parseInterval(EnvAttestInterval, strings.TrimSpace(os.Getenv(EnvAttestInterval)),
+		DefaultAttestInterval, MinAttestInterval, "24h")
 	if err != nil {
 		return nil, err
 	}

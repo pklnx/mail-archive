@@ -222,17 +222,15 @@ type ReceiveResult struct {
 // fails with ErrNotReceiving if the account is disabled or removed.
 //
 // The message file is written before, without a lock. The transaction
-// takes the blob lock shared, like sync and import, and then checks with
+// takes the blob lock shared, like sync and import, and the attestation
+// fence (inWriteTx), and then checks with
 // fileExists that the file is still there, so verify can never have moved
 // it as an orphan; nor, for metadata that relied on an existing row
 // (meta.Known), the row. Otherwise it fails with ErrBlobGone.
 func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta MessageMeta, env Envelope, fileExists func() bool) (ReceiveResult, error) {
 	var res ReceiveResult
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inWriteTx(ctx, true, func(q *db.Queries) error {
 		res = ReceiveResult{}
-		if err := q.LockBlobsShared(ctx, blobLockClass); err != nil {
-			return fmt.Errorf("wait for the blob lock: %w", err)
-		}
 		if !fileExists() {
 			return ErrBlobGone
 		}

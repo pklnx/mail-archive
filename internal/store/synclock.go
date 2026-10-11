@@ -19,6 +19,19 @@ const blobLockClass = 0x6d62
 // reindex run at a time ("mc" in ASCII); the second key is always 0.
 const reindexLockClass = 0x6d63
 
+// attestFenceClass is the first key of the attestation fence ("md" in
+// ASCII); the second key is always 0. Every transaction that inserts into
+// messages or message_deletions holds it shared until it ends (inWriteTx);
+// an attestation takes it exclusively while its snapshot starts, so the
+// snapshot sees no writer in progress. Lock order: the blob lock first,
+// then the fence, then row locks.
+const attestFenceClass = 0x6d64
+
+// attestWriterClass is the first key of the advisory lock that lets only
+// one attestation be written at a time ("me" in ASCII); the second key is
+// always 0.
+const attestWriterClass = 0x6d65
+
 // TryLockSync takes the sync lock of an account, so that the CLI, the web
 // server and the schedule never sync the same account at the same time. It
 // returns false if another session holds the lock. The lock is held on a
@@ -89,6 +102,12 @@ func (s *Store) TryLockBlobs(ctx context.Context) (unlock func(), ok bool, err e
 // session runs a reindex.
 func (s *Store) TryLockReindex(ctx context.Context) (unlock func(), ok bool, err error) {
 	return s.tryLockClass(ctx, reindexLockClass)
+}
+
+// TryLockAttest takes the attestation writer lock. It returns false if
+// another session writes an attestation.
+func (s *Store) TryLockAttest(ctx context.Context) (unlock func(), ok bool, err error) {
+	return s.tryLockClass(ctx, attestWriterClass)
 }
 
 // tryLockClass takes the session lock (class, 0) on a dedicated connection.

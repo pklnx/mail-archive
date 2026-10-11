@@ -13,6 +13,7 @@
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
+| Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
 | The SMTP port | Off by default. When on, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect; see [The SMTP server](#the-smtp-server). |
 
 ## Login
@@ -233,6 +234,26 @@ archive backup's location or protect both equally. If it is lost, archived
 mail stays readable, but every account needs its password again. If it
 leaks together with the database, the IMAP passwords are exposed: change them
 at the providers.
+
+## The attestation key
+
+Attestations are signed with an Ed25519 key, by default
+`MAIL_ARCHIVE_DATA_DIR/attest/signing.key` (mode 0600; a key file that the
+group or others can read is refused). Its public key is in
+`attest/signing.pub`.
+
+The key lies in the data directory, so `backup`, every copy of the data
+directory and anyone with access to it has the private key. Someone who can
+change the database, the files and has the key can rewrite the chain on the
+host. The evidence therefore rests on copies kept elsewhere, not on the key
+staying secret: copy `attest/signing.pub` off the host once, and
+`attest/attestations.jsonl` (ideally with `attest/leaves/`) regularly, to a
+place the archive host cannot write. To keep the key out of the data
+directory, point `MAIL_ARCHIVE_ATTEST_KEY_FILE` at a separate mount.
+
+If the key is lost or may be known to others, run
+`./ma attest keygen --rotate`: older attestations stay trusted through
+`attest/retired-keys.pem`, newer ones are signed with the new key.
 
 ## Reporting a vulnerability
 

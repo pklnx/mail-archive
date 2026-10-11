@@ -11,7 +11,7 @@ With Docker Compose, run every command through the wrapper, for example
 | `migrate` (or `migrate up`) | Create or upgrade the database schema. |
 | `migrate status` | Show applied and pending migrations. |
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. |
-| `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY`. |
+| `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |
 
 ## Users
 
@@ -81,7 +81,10 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
 | `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `sync`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
-| `serve [--listen ADDR]` | Run the web server: UI, JSON API and sync schedule. Default `127.0.0.1:8080`. |
+| `attest` | Write a signed attestation over the archived messages now. See below. |
+| `attest keygen [--rotate]` | Create the key that signs attestations, or replace it. See below. |
+| `attest public-key` | Print the public key attestations are verified with. |
+| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule and attestations. Default `127.0.0.1:8080`. |
 
 Commands that change users or accounts, and `import`, `export`, `backup`
 and `audit`, write an entry to the [audit log](../guide/audit-log) first;
@@ -138,6 +141,40 @@ database. It changes no database row and no archived file.
 Exit codes: `0` nothing found, `1` findings, `2` the check is incomplete
 (orphan check skipped, unreadable files, no database connection, wrong
 flags). Progress goes to stderr every 10,000 messages.
+
+### attest
+
+An attestation records which messages the archive held, so that a message
+removed afterwards can be noticed. Each one covers the messages archived
+since the previous one, is chained to it by its hash and signed with an
+Ed25519 key. It is stored in the database and appended to
+`MAIL_ARCHIVE_DATA_DIR/attest/attestations.jsonl`, with a leaves file in
+`attest/leaves/N.txt` that lists the SHA-256 of every message it covers. The
+chain is tamper-evident, not tamper-proof: it does not stop anyone with
+access to the database or the data directory from deleting mail.
+
+```sh
+./ma attest keygen        # once: creates attest/signing.key and attest/signing.pub
+./ma attest               # write one now; the web server writes one every 24h
+./ma attest public-key    # print the public key, for a copy off the host
+```
+
+`attest keygen` refuses if a key exists. Copy `attest/signing.pub` off the
+host (password manager, printout, your auditor). `attest keygen --rotate`
+moves the current public key to `attest/retired-keys.pem`, where it stays
+trusted for older attestations, and creates a new key; use it when the key
+was lost or may be known to others.
+
+The web server writes an attestation every `MAIL_ARCHIVE_ATTEST_INTERVAL`
+(default 24h), also when nothing changed: the daily entry shows that the
+archive was checked that day. Without a key, attestations are off; the web
+server still starts and logs `attestations off`.
+
+The database and the file must agree. Entries that only the database has
+(after a crash between the two writes) are copied to the file by the next
+run. If they disagree in any other way, for example a changed line or a
+database restored from a backup older than the file, `attest` writes nothing
+and fails.
 
 ### export
 
