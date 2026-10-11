@@ -28,7 +28,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock and the blob lock. |
 | `internal/notify` | Alerts for accounts whose syncs keep failing: compares each account's failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
-| `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). |
+| `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs; `openapi.yaml` describes them, and a test fails when the two differ. |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
 | `internal/imaptest` | In-memory IMAP server for tests. |

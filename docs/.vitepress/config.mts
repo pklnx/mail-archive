@@ -42,6 +42,7 @@ export default defineConfig({
           { text: "Configuration", link: "/reference/configuration" },
           { text: "Command line", link: "/reference/cli" },
           { text: "JSON API", link: "/reference/api" },
+          { text: "OpenAPI", link: "/reference/openapi" },
           { text: "Security", link: "/reference/security" },
         ],
       },

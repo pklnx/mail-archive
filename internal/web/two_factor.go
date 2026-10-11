@@ -17,7 +17,7 @@ import (
 
 // Two-factor authentication with TOTP. Admins always need it; with
 // MAIL_ARCHIVE_REQUIRE_2FA everybody does. Users who need it but have not
-// set it up yet can only use the setup endpoints (see requireLogin). Users
+// set it up yet can only use the setup endpoints (see authenticate). Users
 // who turned it on voluntarily are asked for a code at every login too.
 
 // twoFactorChallengeTTL is how long the second login step may take.

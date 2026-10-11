@@ -38,16 +38,6 @@ const (
 	passkeyLoginFinishPath = "/api/session/passkey/finish"
 )
 
-// publicPath reports whether an API path works without a session: the
-// login endpoints.
-func publicPath(path string) bool {
-	switch path {
-	case "/api/session", "/api/session/2fa", passkeyLoginBeginPath, passkeyLoginFinishPath:
-		return true
-	}
-	return false
-}
-
 type twoFactorSetupJSON struct {
 	Error                  string `json:"error"`
 	TwoFactorSetupRequired bool   `json:"twoFactorSetupRequired"`
@@ -58,13 +48,13 @@ type passwordChangeJSON struct {
 	PasswordChangeRequired bool   `json:"passwordChangeRequired"`
 }
 
-// currentSession returns the session of a request that passed requireLogin.
+// currentSession returns the session of a request that passed authenticate.
 func currentSession(r *http.Request) *store.Session {
 	sess, _ := r.Context().Value(sessionKey{}).(*store.Session)
 	return sess
 }
 
-// userID returns the logged-in user of a request that passed requireLogin.
+// userID returns the logged-in user of a request that passed authenticate.
 // Without a session it returns 0, which matches no owner.
 func userID(r *http.Request) int64 {
 	if sess := currentSession(r); sess != nil {
@@ -134,14 +124,21 @@ func (s *Server) session(r *http.Request) (*store.Session, error) {
 	return sess, nil
 }
 
-// requireLogin lets requests under /api/ through only with a valid session,
-// except the session endpoints themselves. New endpoints are therefore
-// protected by default. /healthz and the UI code (/, /assets/) are public;
-// they contain no data.
-func (s *Server) requireLogin(next http.Handler) http.Handler {
+// authenticate lets requests under /api/ through only with a valid session,
+// except routes whose access in the route table is public or login. A path
+// without a route, or with a method no route takes, counts as session-only,
+// so it answers 401 without a login. New endpoints are protected by default
+// (accessSession is the zero value). /healthz and the UI code (/, /assets/)
+// are public; they contain no data.
+func (s *Server) authenticate(mux *http.ServeMux, accessOf map[string]access) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || publicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		_, pattern := mux.Handler(r)
+		if a := accessOf[pattern]; a == accessPublic || a == accessLogin {
+			mux.ServeHTTP(w, r)
 			return
 		}
 		sess, err := s.session(r)
@@ -165,7 +162,7 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 			s.writeJSON(w, http.StatusForbidden, twoFactorSetupJSON{Error: "set up two-factor authentication first", TwoFactorSetupRequired: true})
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess)))
+		mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, sess)))
 	})
 }
 
