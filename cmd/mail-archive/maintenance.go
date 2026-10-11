@@ -21,6 +21,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // Exit codes of verify.
@@ -187,12 +188,24 @@ several users have an account with that name). Removed accounts are included.`,
 			if err != nil {
 				return err
 			}
+			e := cliEntry("data.export")
+			e.Detail("format", format)
+			e.Detail("out", out)
+			if folder != "" {
+				e.Detail("folder", folder)
+			}
+			if err := exportTarget(cmd, a, e, account, opts); err != nil {
+				return err
+			}
 			blobs, err := blobstore.New(a.cfg.DataDir)
 			if err != nil {
 				return err
 			}
 			log := newLogger(a.cfg.LogLevel)
 			opts.Format, opts.Out, opts.Folder, opts.Logger = format, out, folder, log
+			if err := auditNow(cmd, a, e); err != nil {
+				return err
+			}
 			res, err := archive.Export(cmd.Context(), a.store, blobs, opts)
 			if err != nil {
 				return err
@@ -253,6 +266,26 @@ func exportSelection(cmd *cobra.Command, a *app, account string) (archive.Export
 	return opts, u.Name, nil
 }
 
+// exportTarget records in e what an export selected: the account, or the
+// user whose accounts are exported.
+func exportTarget(cmd *cobra.Command, a *app, e *store.AuditEntry, account string, opts archive.ExportOptions) error {
+	if account != "" {
+		acc, err := findAccount(cmd, a, account)
+		if err != nil {
+			return err
+		}
+		cliAccountTarget(e, acc)
+		return nil
+	}
+	u, err := flagUser(cmd, a)
+	if err != nil {
+		return err
+	}
+	cliUserTarget(e, u)
+	e.Detail("accounts", len(opts.AccountIDs))
+	return nil
+}
+
 func newBackupCmd() *cobra.Command {
 	var noteOnly bool
 	cmd := &cobra.Command{
@@ -283,6 +316,20 @@ the database container and writes DIR on the host.`,
 			defer a.close()
 			now := time.Now().UTC()
 			name := "mailarchive-" + now.Format("20060102T150405Z") + ".dump"
+			// A dump is an export of everything. ./ma backup runs pg_dump
+			// itself and then this command with --note-only.
+			e := cliEntry("data.backup")
+			if noteOnly {
+				if len(args) == 1 {
+					e.Detail("dump", args[0])
+				}
+			} else {
+				e.Detail("dir", args[0])
+				e.Detail("dump", name)
+			}
+			if err := auditNow(cmd, a, e); err != nil {
+				return err
+			}
 			if noteOnly {
 				// For ./ma backup: the dump is written by the database
 				// container, the note by this command.

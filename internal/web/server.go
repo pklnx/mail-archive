@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
@@ -49,6 +50,8 @@ type Server struct {
 	// alertAfter failed syncs in a row make an account failing.
 	alertAfter  int
 	healthCache syncHealthCache
+	// trustedProxies may name the client in X-Forwarded-For.
+	trustedProxies []netip.Prefix
 }
 
 // Options configure a Server.
@@ -76,6 +79,10 @@ type Options struct {
 	// AlertAfterFailures is how many failed syncs in a row make an account
 	// failing (MAIL_ARCHIVE_ALERT_AFTER_FAILURES); zero means the default.
 	AlertAfterFailures int
+	// TrustedProxies are reverse proxies whose X-Forwarded-For names the
+	// client (MAIL_ARCHIVE_TRUSTED_PROXIES), for the audit log and the
+	// login limits.
+	TrustedProxies []netip.Prefix
 }
 
 // New creates a Server.
@@ -114,7 +121,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
-		alertAfter: alertAfter,
+		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies,
 	}
 }
 
@@ -152,7 +159,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	go s.cleanSessions(ctx)
+	go s.housekeeping(ctx)
 	select {
 	case err := <-errc:
 		return err
@@ -185,6 +192,10 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg st
 }
 
 func (s *Server) failStore(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, store.ErrAuditUnavailable) {
+		s.failAudit(w, r, err)
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		s.fail(w, r, http.StatusNotFound, "not found", err)
 		return

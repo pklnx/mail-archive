@@ -290,6 +290,10 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	st := storetest.New(t)
 	ctx := context.Background()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
+	// First the audit log, which is empty here.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00018_audit_log") {
+		t.Fatalf("down the audit log: %q, %v", m, err)
+	}
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "smtp accounts exist") {
 		t.Fatalf("down with an smtp account: %v", err)
 	}

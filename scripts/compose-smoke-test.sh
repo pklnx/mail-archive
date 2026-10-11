@@ -176,4 +176,18 @@ if grep -qF "$(grep MAIL_ARCHIVE_SECRET_KEY .env | cut -d= -f2-)" "$work/backups
 	exit 1
 fi
 
+echo "== audit"
+# Every step above that reads, imports, exports or changes was recorded,
+# with the client address and the host user from ./ma.
+./ma audit --since "$(date -u +%Y-%m-%d)" --format jsonl > "$work/out"
+for action in account.add user.add auth.login message.search data.import data.export data.backup audit.export; do
+	expect "$work/out" "\"action\":\"$action\""
+done
+expect "$work/out" '"action":"auth.login".*"clientIp":"[0-9a-f.:]+"'
+expect "$work/out" "\"operator\":\"$(id -un)\""
+if grep -q '"action":"sync.start"' "$work/out"; then
+	echo "a sync from the command line was recorded" >&2
+	exit 1
+fi
+
 echo "smoke test passed"

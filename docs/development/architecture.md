@@ -49,6 +49,8 @@ internal/web (JSON API, UI from web/) ──────────────
 | `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. |
 | `sync_runs` | Sync or import of an account: start, end, status, counters (also of the reconcile), error. |
 | `loss_alerts` | Alert about messages an account lost on the server in one sync run, with its delivery state. |
+| `audit_log` | Event of the [audit log](../guide/audit-log): time, actor, user ID and name, action, target, client IP, user agent, details (JSONB). Partitioned by month; append-only by trigger. No foreign keys to users or accounts, so entries outlive them. |
+| `audit_user_agents` | Distinct user agent string, referenced from `audit_log`. |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -281,6 +283,29 @@ sqlc has no fragments, so the filter predicate exists four times in
 `search.sql`, between `filters:begin` and `filters:end` comments;
 `TestSearchFilterCopies` keeps the copies equal and
 `TestSearchThreadsParity` checks grouping against the plain list.
+
+## Audit log
+
+`internal/store/audit.go` writes the [audit log](../guide/audit-log). There
+are two ways to write an entry:
+
+- `Store.Audit` writes it on its own. Reads, searches, exports and manual
+  syncs call it after the request is checked and before any data is sent
+  or work is queued, and stop if it fails (`ErrAuditUnavailable`, `503`).
+- `store.WithAudit(ctx, entry)` hands the entry to the next transaction of
+  `inTx`, which writes it after the change succeeded and before the commit.
+  Only one transaction writes it, and the store method may complete it
+  inside (the user of a passkey login, the ID of a new account). Changes and
+  logins use this: no change without its entry.
+
+In `internal/web`, `auditEntry(r, action)` fills the actor, user, client
+address and user agent; in the CLI, `cliEntry(action)` fills the operator.
+A new event needs one of the two calls and a case in the tests that check
+exactly one entry per event (`TestAudit*`, `TestCLIAudit`).
+
+Partitions are created ahead by `audit_log_ensure_partitions` (migration,
+`serve` hourly, every command, and on a missing partition). There is no
+default partition: rows in it would block creating that month later.
 
 ## Web server
 

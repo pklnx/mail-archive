@@ -59,6 +59,12 @@ const (
 	// EnvSMTPHostname is the name in the SMTP greeting; default: the
 	// machine's host name.
 	EnvSMTPHostname = "MAIL_ARCHIVE_SMTP_HOSTNAME"
+	// EnvTrustedProxies lists the reverse proxies (CIDR or single addresses)
+	// whose X-Forwarded-For names the client; empty trusts none.
+	EnvTrustedProxies = "MAIL_ARCHIVE_TRUSTED_PROXIES"
+	// EnvOperator names who runs a command, for the audit log. The ./ma
+	// wrapper sets it to the host user; it is not verified.
+	EnvOperator = "MAIL_ARCHIVE_OPERATOR"
 )
 
 // DefaultSMTPMaxSize is used when EnvSMTPMaxSize is not set.
@@ -114,6 +120,8 @@ type Config struct {
 	Webhook *Webhook
 	// SMTP is the server for smtp accounts; nil turns it off.
 	SMTP *SMTP
+	// TrustedProxies may name the client in X-Forwarded-For.
+	TrustedProxies []netip.Prefix
 }
 
 // SMTP configures the SMTP server for smtp accounts.
@@ -184,6 +192,10 @@ func Load() (*Config, error) {
 	}
 	cfg.SMTP, err = ParseSMTP(os.Getenv(EnvSMTPListen), os.Getenv(EnvSMTPAllowedNetworks), os.Getenv(EnvSMTPMaxSize),
 		os.Getenv(EnvSMTPTLSCert), os.Getenv(EnvSMTPTLSKey), os.Getenv(EnvSMTPHostname))
+	if err != nil {
+		return nil, err
+	}
+	cfg.TrustedProxies, err = ParseNetworks(EnvTrustedProxies, os.Getenv(EnvTrustedProxies))
 	if err != nil {
 		return nil, err
 	}
@@ -320,19 +332,9 @@ func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, er
 		return nil, fmt.Errorf("%s: want host:port or :port, got %q", EnvSMTPListen, listen)
 	}
 	c := &SMTP{Listen: listen, MaxSize: DefaultSMTPMaxSize, TLSCert: cert, TLSKey: key, Hostname: hostname}
-	for _, n := range strings.Split(networks, ",") {
-		if n = strings.TrimSpace(n); n == "" {
-			continue
-		}
-		p, err := netip.ParsePrefix(n)
-		if err != nil {
-			a, aerr := netip.ParseAddr(n)
-			if aerr != nil {
-				return nil, fmt.Errorf("%s: want CIDR networks or addresses like 172.16.0.0/12 or 192.0.2.10, got %q", EnvSMTPAllowedNetworks, n)
-			}
-			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
-		}
-		c.AllowedNetworks = append(c.AllowedNetworks, netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-unmapBits(p)).Masked())
+	var err error
+	if c.AllowedNetworks, err = ParseNetworks(EnvSMTPAllowedNetworks, networks); err != nil {
+		return nil, err
 	}
 	if len(c.AllowedNetworks) == 0 {
 		return nil, fmt.Errorf("%s is set, so %s is required: the SMTP server accepts mail only from these networks", EnvSMTPListen, EnvSMTPAllowedNetworks)
@@ -355,6 +357,27 @@ func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, er
 		c.Hostname = h
 	}
 	return c, nil
+}
+
+// ParseNetworks parses a comma-separated list of CIDR networks and single
+// addresses of the variable env. IPv4-mapped IPv6 forms become IPv4.
+func ParseNetworks(env, v string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, n := range strings.Split(v, ",") {
+		if n = strings.TrimSpace(n); n == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(n)
+		if err != nil {
+			a, aerr := netip.ParseAddr(n)
+			if aerr != nil {
+				return nil, fmt.Errorf("%s: want CIDR networks or addresses like 172.16.0.0/12 or 192.0.2.10, got %q", env, n)
+			}
+			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+		}
+		out = append(out, netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-unmapBits(p)).Masked())
+	}
+	return out, nil
 }
 
 // unmapBits is how many prefix bits an IPv4-mapped IPv6 prefix loses when

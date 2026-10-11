@@ -101,6 +101,7 @@ type apiFixture struct {
 	st     *store.Store
 	blobs  *blobstore.Store
 	srv    *httptest.Server
+	dbURL  string
 	cookie string            // session token; empty means the fixture's own user
 	ids    map[string]string // name -> sha256
 	raw    map[string]string
@@ -108,13 +109,13 @@ type apiFixture struct {
 
 func newAPIFixture(t *testing.T) *apiFixture {
 	t.Helper()
-	st := storetest.New(t)
+	st, dbURL := storetest.NewWithURL(t)
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	f := &apiFixture{t: t, st: st, blobs: blobs, ids: map[string]string{}, raw: map[string]string{
+	f := &apiFixture{t: t, st: st, blobs: blobs, dbURL: dbURL, ids: map[string]string{}, raw: map[string]string{
 		"invoice": msgInvoice, "meeting": msgMeeting, "newsletter": msgNewsletter, "rich": msgRich,
 	}}
 

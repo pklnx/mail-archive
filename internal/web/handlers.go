@@ -171,6 +171,9 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	if e := s.searchEntry(r); e != nil && !s.audit(w, r, e) {
+		return
+	}
 	var next *string
 	if len(rows) > want {
 		rows = rows[:want]
@@ -244,6 +247,9 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
 	if err != nil {
 		s.failStore(w, r, err)
+		return
+	}
+	if !s.audit(w, r, s.messageEntry(r, "message.open", sha)) {
 		return
 	}
 	m, err := s.parseStored(d.StoredPath)
@@ -342,6 +348,13 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusNotFound, "message has no HTML body", nil)
 		return
 	}
+	e := s.messageEntry(r, "message.html", sha)
+	if r.URL.Query().Get("images") == "1" {
+		e.Detail("images", true)
+	}
+	if !s.audit(w, r, e) {
+		return
+	}
 	// Inline images (cid:...) are served by the parts endpoint, which is
 	// relative to this URL: /api/messages/{sha}/parts/{n}.
 	pairs := make([]string, 0, 2*len(m.Parts))
@@ -384,6 +397,9 @@ func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = f.Close() }()
+	if !s.audit(w, r, s.messageEntry(r, "message.raw", sha)) {
+		return
+	}
 	h := w.Header()
 	h.Set("Content-Type", "message/rfc822")
 	h.Set("Content-Disposition", disposition("attachment", sha[:16]+".eml"))
@@ -428,6 +444,13 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, "cannot read part", err)
 		return
 	}
+	e := s.messageEntry(r, "message.part", sha)
+	e.Detail("index", p.Index)
+	e.Detail("content_type", p.ContentType)
+	e.Detail("inline", p.Inline)
+	if !s.audit(w, r, e) {
+		return
+	}
 	name := p.Filename
 	if name == "" {
 		name = fmt.Sprintf("part-%d", p.Index)
@@ -463,4 +486,10 @@ func disposition(kind, filename string) string {
 		return v
 	}
 	return kind
+}
+
+func (s *Server) messageEntry(r *http.Request, action, sha string) *store.AuditEntry {
+	e := s.auditEntry(r, action)
+	e.SetTarget(store.TargetMessage, sha, "")
+	return e
 }

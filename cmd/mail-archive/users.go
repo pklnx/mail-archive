@@ -76,7 +76,8 @@ func newUserAddCmd() *cobra.Command {
 		Long: `Create a user who can log in to the web UI. Names are lowercase: a-z, 0-9,
 dot, hyphen and underscore. Passwords need at least 12 characters.
 
-Admins will manage users in the web UI. They do not see other users' mail.`,
+Admins will manage users in the web UI. They do not see other users' mail,
+but they see everyone's audit log: searches, opened messages, logins.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := auth.NormalizeUserName(args[0])
@@ -99,7 +100,10 @@ Admins will manage users in the web UI. They do not see other users' mail.`,
 			if err != nil {
 				return err
 			}
-			u, err := a.store.CreateUser(cmd.Context(), name, hash, admin)
+			e := cliEntry("user.add")
+			e.SetTarget(store.TargetUser, "", name) // the ID is set when it exists
+			e.Detail("admin", admin)
+			u, err := a.store.CreateUser(withCLIAudit(cmd, e), name, hash, admin)
 			if err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("user %q already exists", name)
@@ -218,7 +222,7 @@ func newUserSetPasswordCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.store.SetUserPassword(cmd.Context(), u.ID, hash, false, false); err != nil {
+			if err := a.store.SetUserPassword(withCLIAudit(cmd, cliUserTarget(cliEntry("user.password_set"), u)), u.ID, hash, false, false); err != nil {
 				return err
 			}
 			fmt.Printf("password of %q changed; existing logins ended\n", u.Name)
@@ -244,7 +248,9 @@ func newUserLockCmd(lock bool) *cobra.Command {
 				return err
 			}
 			defer a.close()
-			if err := a.store.SetUserLocked(cmd.Context(), u.ID, lock); err != nil {
+			e := cliUserTarget(cliEntry("user.change"), u)
+			e.Detail("locked", lock)
+			if err := a.store.SetUserLocked(withCLIAudit(cmd, e), u.ID, lock); err != nil {
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("user %q %s\n", u.Name, done)
@@ -264,7 +270,7 @@ func newUserRemoveCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			if err := a.store.DeleteUser(cmd.Context(), u.ID); err != nil {
+			if err := a.store.DeleteUser(withCLIAudit(cmd, cliUserTarget(cliEntry("user.remove"), u)), u.ID); err != nil {
 				if errors.Is(err, store.ErrOwnsAccounts) {
 					n := int64(0)
 					if counts, cerr := a.store.CountOwnedAccounts(cmd.Context()); cerr == nil {
@@ -307,7 +313,9 @@ a compromise, a new password alone would not lock the attacker out.`,
 			if err != nil {
 				return err
 			}
-			if err := a.store.SetUserPassword(cmd.Context(), u.ID, hash, true, !keepPasskeys); err != nil {
+			e := cliUserTarget(cliEntry("user.password_reset"), u)
+			e.Detail("passkeys_removed", !keepPasskeys)
+			if err := a.store.SetUserPassword(withCLIAudit(cmd, e), u.ID, hash, true, !keepPasskeys); err != nil {
 				return err
 			}
 			if !keepPasskeys {
@@ -332,7 +340,7 @@ func newUserRemovePasskeysCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			n, err := a.store.RemovePasskeys(cmd.Context(), u.ID)
+			n, err := a.store.RemovePasskeys(withCLIAudit(cmd, cliUserTarget(cliEntry("user.passkeys_removed"), u)), u.ID)
 			if err != nil {
 				return err
 			}
@@ -357,7 +365,9 @@ func newUserAdminCmd(admin bool) *cobra.Command {
 				return err
 			}
 			defer a.close()
-			if err := a.store.SetUserAdmin(cmd.Context(), u.ID, admin); err != nil {
+			e := cliUserTarget(cliEntry("user.change"), u)
+			e.Detail("admin", admin)
+			if err := a.store.SetUserAdmin(withCLIAudit(cmd, e), u.ID, admin); err != nil {
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("%q %s\n", u.Name, done)
@@ -377,7 +387,7 @@ func newUserReset2FACmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			if err := a.store.ResetTwoFactor(cmd.Context(), u.ID); err != nil {
+			if err := a.store.ResetTwoFactor(withCLIAudit(cmd, cliUserTarget(cliEntry("user.2fa_reset"), u)), u.ID); err != nil {
 				return err
 			}
 			fmt.Printf("2FA of %q reset; existing logins ended\n", u.Name)

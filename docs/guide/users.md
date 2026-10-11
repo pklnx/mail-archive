@@ -56,15 +56,16 @@ For every other user, admins can:
   `./ma account move NAME --user OLD --to NEW`.
 
 A user whose accounts keep failing to sync is marked with the number of
-those accounts, so you can tell them; the account names stay private to
-the user.
+those accounts, so you can tell them.
 
 The last admin who can log in can be neither locked, removed nor demoted.
 Admins cannot change their own login on this page: they use their profile,
 or another admin does it.
 
-Admins only manage logins. They see how many accounts a user has, but not
-which, and never other users' mail.
+Admins manage logins and never see other users' mail. They do see the
+[audit log](./audit-log) of every user: searches with their text, which
+messages were opened, account names, IP addresses and browsers. Tell your
+users before they use the archive.
 
 ## Your own password
 

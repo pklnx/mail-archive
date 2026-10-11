@@ -143,7 +143,14 @@ instead of the current owner. Also works for removed accounts.`,
 			if acc.OwnerID != nil && *acc.OwnerID == target.ID {
 				return fmt.Errorf("account %q already belongs to %q", acc.Name, target.Name)
 			}
-			if err := a.store.SetAccountOwner(cmd.Context(), acc.Ref(), target.ID); err != nil {
+			names, err := userNames(cmd, a)
+			if err != nil {
+				return err
+			}
+			e := cliAccountTarget(cliEntry("account.move"), acc)
+			e.Detail("from_user", ownerName(names, acc.OwnerID))
+			e.Detail("to_user", target.Name)
+			if err := a.store.SetAccountOwner(withCLIAudit(cmd, e), acc.Ref(), target.ID); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("%q already has an account named %q; rename one of them first", target.Name, acc.Name)
 				}

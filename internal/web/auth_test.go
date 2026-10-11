@@ -71,6 +71,7 @@ func sessionFor(t *testing.T, st *store.Store, name string) (*store.User, string
 type authFixture struct {
 	t            *testing.T
 	st           *store.Store
+	dbURL        string
 	srv          *httptest.Server
 	client       *http.Client
 	sealer       *crypto.Sealer
@@ -94,7 +95,7 @@ func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 // and AlertAfterFailures from opts.
 func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 	t.Helper()
-	st := storetest.New(t)
+	st, dbURL := storetest.NewWithURL(t)
 	key := bytes.Repeat([]byte{7}, 32)
 	sealer, err := crypto.NewSealer(key)
 	if err != nil {
@@ -108,7 +109,7 @@ func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &authFixture{t: t, st: st, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
+	return &authFixture{t: t, st: st, dbURL: dbURL, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
 }
 
 func (f *authFixture) addUser(name, password string, admin bool) *store.User {

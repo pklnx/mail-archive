@@ -21,6 +21,11 @@ info:
     authentication but has not set it up gets `403` with
     `"twoFactorSetupRequired": true` everywhere except the 2FA setup
     endpoints.
+
+    Searches, opened messages, downloads, logins and changes are recorded in
+    the audit log. If an entry cannot be written, the request answers `503`
+    with "the audit log cannot be written; nothing was done", and nothing
+    happens.
   license:
     name: MIT
     identifier: MIT

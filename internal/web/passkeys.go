@@ -107,7 +107,7 @@ func (s *Server) handleBeginPasskeyLogin(w http.ResponseWriter, r *http.Request)
 	if !s.passkeysReady(w, r) {
 		return
 	}
-	addr := clientAddr(r)
+	addr := s.clientAddr(r)
 	if wait := s.limiter.BlockedAddr(addr); wait > 0 {
 		s.tooMany(w, wait)
 		return
@@ -152,7 +152,7 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	if !s.passkeysReady(w, r) {
 		return
 	}
-	addr := clientAddr(r)
+	addr := s.clientAddr(r)
 	if wait := s.limiter.BlockedAddr(addr); wait > 0 {
 		s.tooMany(w, wait)
 		return
@@ -192,7 +192,9 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 		}
 		return json.Marshal(got)
 	}
-	login, err := s.store.CompletePasskeyLogin(r.Context(), in.Token, parsed.RawID, verify,
+	e := s.auditEntry(r, "auth.login")
+	e.Detail("method", "passkey")
+	login, err := s.store.CompletePasskeyLogin(withAudit(r, e), in.Token, parsed.RawID, verify,
 		hash, s.currentTime().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
 	switch {
 	case errors.Is(err, store.ErrCeremonyExpired):
@@ -201,6 +203,7 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, store.ErrPasskeyUnknown):
 		s.limiter.FailAddr(addr)
 		s.log.Info("login failed: unknown passkey", "addr", addr)
+		s.auditLoginFailed(r, "passkey", reasonUnknownPasskey, nil)
 		s.writeJSON(w, http.StatusUnauthorized, unknownPasskeyJSON{
 			Error: "this passkey is not registered", UnknownCredential: true,
 			CredentialID: base64.RawURLEncoding.EncodeToString(parsed.RawID), RPID: s.webauthn.Config.RPID,
@@ -209,9 +212,11 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, store.ErrPasskeyInvalid):
 		s.limiter.FailAddr(addr)
 		s.log.Info("login failed: passkey", "addr", addr, "err", err)
+		s.auditLoginFailed(r, "passkey", reasonPasskeyInvalid, nil)
 		s.fail(w, r, http.StatusUnauthorized, "the passkey was not accepted", nil)
 		return
 	case errors.Is(err, store.ErrUserLocked):
+		s.auditLoginFailed(r, "passkey", reasonLocked, nil)
 		s.fail(w, r, http.StatusForbidden, "this user is locked", nil)
 		return
 	case err != nil:
@@ -280,7 +285,7 @@ func validPasskeyName(name string) bool {
 // 2FA on, with the login limits. It answers the request when they fail.
 func (s *Server) checkOwnLogin(w http.ResponseWriter, r *http.Request, password, code string) bool {
 	sess := currentSession(r)
-	addr := clientAddr(r)
+	addr := s.clientAddr(r)
 	if s.blocked(w, r, sess.UserName) {
 		return false
 	}
@@ -399,7 +404,7 @@ func (s *Server) handleFinishPasskeyRegistration(w http.ResponseWriter, r *http.
 		return
 	}
 	sess := currentSession(r)
-	name, err := s.store.FinishPasskeyRegistration(r.Context(), sess.UserID, in.Token, func(handle, data []byte) ([]byte, []byte, error) {
+	name, err := s.store.FinishPasskeyRegistration(withAudit(r, s.auditEntry(r, "profile.passkey_add")), sess.UserID, in.Token, func(handle, data []byte) ([]byte, []byte, error) {
 		var session webauthn.SessionData
 		if err := json.Unmarshal(data, &session); err != nil {
 			return nil, nil, err
@@ -425,7 +430,7 @@ func (s *Server) handleRemovePasskey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := currentSession(r)
-	p, err := s.store.RemoveOwnPasskey(r.Context(), sess.UserID, id, auth.HashSessionToken(sessionToken(r)))
+	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.auditEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(sessionToken(r)))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -443,7 +448,9 @@ func (s *Server) handleRemoveUserPasskeys(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	n, err := s.store.RemovePasskeys(r.Context(), u.ID)
+	e := s.auditEntry(r, "user.passkeys_removed")
+	auditUser(e, u)
+	n, err := s.store.RemovePasskeys(withAudit(r, e), u.ID)
 	if err != nil {
 		s.failStore(w, r, err)
 		return

@@ -12,6 +12,7 @@
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
+| The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
 | The SMTP port | Off by default. When on, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect; see [The SMTP server](#the-smtp-server). |
 
 ## Login
@@ -114,6 +115,11 @@ With `MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,archive.home.example`
 and, for passkeys, `MAIL_ARCHIVE_PUBLIC_URL=https://archive.home.example`.
 The proxy must pass the original `Host` header (Caddy does by default);
 otherwise the server's same-origin check rejects changes.
+
+Without more, the audit log and the login limits see every request coming
+from the proxy. `MAIL_ARCHIVE_TRUSTED_PROXIES` names the proxies whose
+`X-Forwarded-For` header is believed; list only the proxy, and only if all
+access goes through it. See [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy).
 
 ### Plain LAN access
 

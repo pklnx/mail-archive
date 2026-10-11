@@ -105,7 +105,10 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.store.CreateUserWithGeneratedPassword(r.Context(), name, hash, in.Admin); err != nil {
+	e := s.auditEntry(r, "user.add")
+	e.SetTarget(store.TargetUser, "", name) // the ID is set when it exists
+	e.Detail("admin", in.Admin)
+	if _, err := s.store.CreateUserWithGeneratedPassword(withAudit(r, e), name, hash, in.Admin); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, fmt.Sprintf("a user named %q already exists", name), nil)
 			return
@@ -171,7 +174,10 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if err := s.store.SetUserPassword(r.Context(), u.ID, hash, true, removePasskeys); err != nil {
+	e := s.auditEntry(r, "user.password_reset")
+	auditUser(e, u)
+	e.Detail("passkeys_removed", removePasskeys)
+	if err := s.store.SetUserPassword(withAudit(r, e), u.ID, hash, true, removePasskeys); err != nil {
 		s.failStore(w, r, err)
 		return
 	}
@@ -195,11 +201,15 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
+	e := s.auditEntry(r, "user.change")
+	auditUser(e, u)
 	switch {
 	case in.Admin != nil && in.Locked == nil:
-		err = s.store.SetUserAdmin(r.Context(), u.ID, *in.Admin)
+		e.Detail("admin", *in.Admin)
+		err = s.store.SetUserAdmin(withAudit(r, e), u.ID, *in.Admin)
 	case in.Locked != nil && in.Admin == nil:
-		err = s.store.SetUserLocked(r.Context(), u.ID, *in.Locked)
+		e.Detail("locked", *in.Locked)
+		err = s.store.SetUserLocked(withAudit(r, e), u.ID, *in.Locked)
 	default:
 		s.fail(w, r, http.StatusBadRequest, "send exactly one of admin and locked", nil)
 		return
@@ -221,7 +231,9 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.store.DeleteUser(r.Context(), u.ID)
+	e := s.auditEntry(r, "user.remove")
+	auditUser(e, u)
+	err := s.store.DeleteUser(withAudit(r, e), u.ID)
 	switch {
 	case errors.Is(err, store.ErrLastAdmin):
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("%q is the last admin who can log in", u.Name), nil)
@@ -255,7 +267,7 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sess := currentSession(r)
-	addr := clientAddr(r)
+	addr := s.clientAddr(r)
 	if wait := s.limiter.Blocked(sess.UserName, addr); wait > 0 {
 		secs := int(math.Ceil(wait.Seconds()))
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
@@ -293,7 +305,7 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	if err := s.store.ChangeOwnPassword(r.Context(), u.ID, hash, auth.HashSessionToken(sessionToken(r))); err != nil {
+	if err := s.store.ChangeOwnPassword(withAudit(r, s.auditEntry(r, "profile.password_change")), u.ID, hash, auth.HashSessionToken(sessionToken(r))); err != nil {
 		s.failStore(w, r, err)
 		return
 	}

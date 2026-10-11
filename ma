@@ -22,6 +22,9 @@ compose() {
 
 compose up -d --wait postgres
 
+# Who runs the command, for the audit log (not verified).
+operator=$(id -un 2>/dev/null || echo unknown)
+
 # backup runs pg_dump in the database container, so the dump always matches
 # the server version and lands on the host; the image has no pg_dump.
 if [ "${1:-}" = backup ]; then
@@ -39,7 +42,7 @@ if [ "${1:-}" = backup ]; then
 		exit 1
 	fi
 	mv "$dir/$name.partial" "$dir/$name"
-	if ! compose run --rm --build -T -e MAIL_ARCHIVE_COMMAND=./ma mail-archive \
+	if ! compose run --rm --build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
 		backup --note-only "$name" >"$dir/BACKUP-NOTE.txt.partial"; then
 		rm -f "$dir/BACKUP-NOTE.txt.partial"
 		echo "error: could not write BACKUP-NOTE.txt; the dump $dir/$name is complete" >&2
@@ -59,4 +62,4 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 exec docker compose --progress quiet run --rm --build $tty_flag \
-	-e MAIL_ARCHIVE_COMMAND=./ma mail-archive "$@"
+	-e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive "$@"

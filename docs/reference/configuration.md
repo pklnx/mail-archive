@@ -20,6 +20,8 @@ All settings are environment variables. With Docker Compose they come from
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` | (none: no alerts) | Where alerts about failing syncs are posted. `http://` or `https://`, no `#fragment`. A secret: it often contains a topic or token, and is never logged. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT` | `json` | `json` (Gotify, Slack, Mattermost, Discord and generic receivers) or `ntfy` (plain text with `Title`, `Priority` and `Tags` headers). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
+| `MAIL_ARCHIVE_TRUSTED_PROXIES` | (none) | Reverse proxies whose `X-Forwarded-For` header names the client, comma-separated networks or addresses like `172.18.0.1` or `10.0.0.0/8`. The audit log records that client, and the login limits count per client. Every listed address may claim any client address: list only the proxy. See [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy). |
+| `MAIL_ARCHIVE_OPERATOR` | (none; `./ma` sets the host user) | Who runs a command, recorded with command line entries in the [audit log](../guide/audit-log). Not verified. |
 | `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. The `./ma` wrapper sets it to `./ma`. |
 
 ## SMTP

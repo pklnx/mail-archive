@@ -129,10 +129,18 @@ func (f *fixture) dial() *smtp.Client {
 	return c
 }
 
-// send delivers one message and returns the first error with its stage.
+// send delivers one message and returns the first error with its stage,
+// also a refused connection, so that callers can retry.
 func (f *fixture) send(from string, rcpts []string, body string) error {
 	f.t.Helper()
-	c := f.dial()
+	c, err := smtp.Dial(f.addr)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Hello("mx.example.com"); err != nil {
+		return fmt.Errorf("hello: %w", err)
+	}
 	defer func() { _ = c.Quit() }()
 	if err := c.Mail(from, nil); err != nil {
 		return fmt.Errorf("mail: %w", err)
