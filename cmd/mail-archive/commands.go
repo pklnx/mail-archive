@@ -869,6 +869,10 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
 				AlertAfterFailures: a.cfg.AlertAfterFailures, TrustedProxies: a.cfg.TrustedProxies,
 			}
+			// After a restore, attestations only the file has are imported
+			// before anything archives, so new messages are numbered past
+			// them.
+			archive.CatchUpAtStart(cmd.Context(), a.store, a.cfg.AttestDir(), log)
 			var afterSync func()
 			if n := newNotifier(a, log); n != nil {
 				ctx, cancel := context.WithCancel(cmd.Context())
@@ -1050,6 +1054,11 @@ imported from files.`,
 			} else {
 				fmt.Printf("\nunique messages in archive: %d\n", unique)
 			}
+			line, err := attestStatus(cmd.Context(), a, time.Now())
+			if err != nil {
+				return err
+			}
+			fmt.Println(line)
 			return nil
 		},
 	}

@@ -24,6 +24,7 @@ type archiveSetup struct {
 	st      *store.Store
 	blobs   *blobstore.Store
 	dataDir string
+	url     string
 	accs    map[string]*store.Account
 }
 
@@ -38,7 +39,7 @@ func newArchiveSetup(t *testing.T) *archiveSetup {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &archiveSetup{st: st, blobs: blobs, dataDir: dataDir, accs: map[string]*store.Account{}}
+	s := &archiveSetup{st: st, blobs: blobs, dataDir: dataDir, url: url, accs: map[string]*store.Account{}}
 	ctx := context.Background()
 	for _, name := range []string{"anna", "bob"} {
 		u, err := st.CreateUser(ctx, name, "h", false)

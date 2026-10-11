@@ -5,9 +5,12 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -55,7 +58,7 @@ database disagree, nothing is written and the command fails.`,
 			return nil
 		},
 	}
-	cmd.AddCommand(newAttestKeygenCmd(), newAttestPublicKeyCmd())
+	cmd.AddCommand(newAttestKeygenCmd(), newAttestPublicKeyCmd(), newAttestCheckCmd())
 	return cmd
 }
 
@@ -179,4 +182,196 @@ func startAttester(ctx context.Context, a *app, log *slog.Logger) (stop func()) 
 		cancel()
 		<-done
 	}
+}
+
+// loadPublicKeys reads the keys of --public-key: PEM files with one or more
+// public keys each. None given returns nil (signing.pub and the retired
+// keys are trusted then).
+func loadPublicKeys(files []string) (attest.Keys, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	keys := attest.Keys{}
+	for _, f := range files {
+		data, err := os.ReadFile(f) //nolint:gosec // given by the operator
+		if err != nil {
+			return nil, err
+		}
+		pubs, err := attest.ParsePublicKeys(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f, err)
+		}
+		for _, p := range pubs {
+			keys[attest.EncodeKey(p)] = true
+		}
+	}
+	return keys, nil
+}
+
+// attestKeyExists reports whether the signing key file exists. Reading it
+// is not needed, so verify and status work without access to it.
+func attestKeyExists(cfg *config.Config) bool {
+	_, err := os.Stat(cfg.AttestKeyFile)
+	return err == nil
+}
+
+// attestCheckOptions are the options of the attestation check in verify
+// and attest check.
+func attestCheckOptions(cfg *config.Config, publicKeys []string, file string) (*archive.AttestCheckOptions, error) {
+	keys, err := loadPublicKeys(publicKeys)
+	if err != nil {
+		return nil, err
+	}
+	return &archive.AttestCheckOptions{
+		Dir: cfg.AttestDir(), PublicKeys: keys, File: file,
+		KeyExists: attestKeyExists(cfg), Interval: cfg.AttestInterval,
+	}, nil
+}
+
+// attestStatus is the attestation line of status.
+func attestStatus(ctx context.Context, a *app, now time.Time) (string, error) {
+	last, err := a.store.LastAttestation(ctx)
+	if err != nil {
+		return "", err
+	}
+	key := attestKeyExists(a.cfg)
+	switch {
+	case last == nil && !key:
+		return fmt.Sprintf("attestations: off (no key at %s; run %s attest keygen)", a.cfg.AttestKeyFile, commandName()), nil
+	case last == nil:
+		return "attestations: none yet (the web server writes the first one; or run " + commandName() + " attest)", nil
+	}
+	at := last.Time.Local().Format("2006-01-02 15:04")
+	switch {
+	case !key:
+		return fmt.Sprintf("attestations: off since #%d at %s (the key at %s is missing; run %s attest keygen --rotate)",
+			last.Seq, at, a.cfg.AttestKeyFile, commandName()), nil
+	case a.cfg.AttestInterval > 0 && now.Sub(last.Time) > 2*a.cfg.AttestInterval:
+		return fmt.Sprintf("attestations: overdue (last #%d at %s; one is due every %s)", last.Seq, at, a.cfg.AttestInterval), nil
+	}
+	return fmt.Sprintf("attestations: #%d at %s, %d messages", last.Seq, at, last.Total), nil
+}
+
+func newAttestCheckCmd() *cobra.Command {
+	var publicKeys []string
+	var file string
+	var offline bool
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Check the attestations only, without reading message files",
+		Long: `Check the tamper-evidence chain: the attestations in the database, their
+signatures and keys, the attestation file against the database, and every
+attestation against today's database. This is the attestation part of
+verify; it reads no message files and is fast.
+
+--public-key trusts only the keys in the given PEM files (repeatable), for
+example the copy of signing.pub kept off this host; pass the retired keys
+too if the chain was rotated. Without it, <data dir>/attest/signing.pub and
+retired-keys.pem are trusted.
+
+--file compares another copy of attestations.jsonl, for example the one kept
+off this host, with the database: it must be a prefix of the database chain.
+
+--offline needs no database: it checks the chain, signatures and totals of
+--file (default <data dir>/attest/attestations.jsonl), and every leaves file
+in the leaves/ directory next to it against its signed digest.
+
+Exit codes: 0 nothing found, 1 findings, 2 the check is incomplete (no
+trusted key, or another error).`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			var code int
+			var err error
+			if offline {
+				code, err = runAttestCheckOffline(publicKeys, file, out)
+			} else {
+				code, err = runAttestCheck(cmd.Context(), publicKeys, file, out)
+			}
+			if err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "error:", err)
+				return &exitError{msg: err.Error(), code: exitIncomplete}
+			}
+			if code != 0 {
+				return &exitError{msg: "attest check found problems", code: code}
+			}
+			return nil
+		},
+	}
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		fmt.Fprintln(c.ErrOrStderr(), "error:", err)
+		return &exitError{msg: err.Error(), code: exitIncomplete}
+	})
+	cmd.Flags().StringArrayVar(&publicKeys, "public-key", nil, "trust only the public keys in this PEM file (repeatable)")
+	cmd.Flags().StringVar(&file, "file", "", "an attestation file to compare with the database, such as an off-host copy")
+	cmd.Flags().BoolVar(&offline, "offline", false, "check --file and its leaves alone, without the database")
+	return cmd
+}
+
+func runAttestCheck(ctx context.Context, publicKeys []string, file string, out io.Writer) (int, error) {
+	a, err := openApp(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer a.close()
+	opts, err := attestCheckOptions(a.cfg, publicKeys, file)
+	if err != nil {
+		return 0, err
+	}
+	opts.Copy = file != ""
+	opts.OnFinding = func(f archive.Finding) { fmt.Fprintln(out, formatFinding(f)) }
+	res, err := archive.CheckAttestations(ctx, a.store, *opts)
+	if err != nil {
+		return 0, err
+	}
+	for _, n := range res.Notes {
+		fmt.Fprintln(out, "note:", n)
+	}
+	fmt.Fprintf(out, "checked %d attestation(s): %s\n", res.Attestations, findingCounts(res.Findings))
+	switch {
+	case res.Unchecked:
+		return exitIncomplete, nil
+	case res.Problems() > 0:
+		return exitFindings, nil
+	}
+	return 0, nil
+}
+
+func runAttestCheckOffline(publicKeys []string, file string, out io.Writer) (int, error) {
+	if file == "" {
+		cfg, err := config.Load()
+		if err != nil {
+			return 0, err
+		}
+		file = filepath.Join(cfg.AttestDir(), attest.ChainFile)
+	}
+	dir := filepath.Dir(file)
+	trusted, err := loadPublicKeys(publicKeys)
+	if err != nil {
+		return 0, err
+	}
+	if trusted == nil {
+		if trusted, err = attest.LoadTrusted(dir); err != nil {
+			return 0, err
+		}
+	}
+	if len(trusted) == 0 {
+		return 0, fmt.Errorf("no trusted public key: %s is missing; pass --public-key", filepath.Join(dir, attest.PublicKeyFile))
+	}
+	res, err := archive.CheckAttestFile(file, dir, trusted)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range res.Problems {
+		fmt.Fprintf(out, "%-10s %s (%s)\n", archive.FindingChain, file, p)
+	}
+	for _, seq := range res.KeyChanges {
+		fmt.Fprintf(out, "note: attestation #%d is signed with a new key (key rotation)\n", seq)
+	}
+	if len(res.Problems) > 0 {
+		fmt.Fprintf(out, "checked %d attestation(s) offline: %d problem(s)\n", res.Attestations, len(res.Problems))
+		return exitFindings, nil
+	}
+	fmt.Fprintf(out, "checked %d attestation(s) offline: no problems\n", res.Attestations)
+	return 0, nil
 }

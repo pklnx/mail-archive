@@ -10,6 +10,28 @@ import (
 	"time"
 )
 
+const advanceDeletionID = `-- name: AdvanceDeletionID :exec
+SELECT setval(pg_get_serial_sequence('message_deletions', 'id'), $1::bigint)
+WHERE $1::bigint > coalesce(pg_sequence_last_value(pg_get_serial_sequence('message_deletions', 'id')::regclass), 0)
+`
+
+func (q *Queries) AdvanceDeletionID(ctx context.Context, upto int64) error {
+	_, err := q.db.Exec(ctx, advanceDeletionID, upto)
+	return err
+}
+
+const advanceMessageSeq = `-- name: AdvanceMessageSeq :exec
+SELECT setval(pg_get_serial_sequence('messages', 'seq'), $1::bigint)
+WHERE $1::bigint > coalesce(pg_sequence_last_value(pg_get_serial_sequence('messages', 'seq')::regclass), 0)
+`
+
+// After importing attestations from the file: new messages must get
+// numbers beyond every imported range.
+func (q *Queries) AdvanceMessageSeq(ctx context.Context, upto int64) error {
+	_, err := q.db.Exec(ctx, advanceMessageSeq, upto)
+	return err
+}
+
 const attestBounds = `-- name: AttestBounds :one
 SELECT coalesce((SELECT max(seq) FROM messages), 0)::bigint AS messages_upto,
        coalesce((SELECT max(id) FROM message_deletions), 0)::bigint AS deletions_upto,
@@ -37,6 +59,18 @@ SELECT count(*) FROM attestations
 
 func (q *Queries) CountAttestations(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countAttestations)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDeletionsAfter = `-- name: CountDeletionsAfter :one
+SELECT count(*) FROM message_deletions WHERE id > $1::bigint
+`
+
+// Deletions no attestation covers yet.
+func (q *Queries) CountDeletionsAfter(ctx context.Context, after int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeletionsAfter, after)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -287,6 +321,42 @@ func (q *Queries) ListAttestedRange(ctx context.Context, arg ListAttestedRangePa
 	return items, nil
 }
 
+const listMessagesInSeqRange = `-- name: ListMessagesInSeqRange :many
+SELECT seq, sha256::text AS sha256 FROM messages
+WHERE seq > $1::bigint AND seq <= $2::bigint
+ORDER BY seq
+`
+
+type ListMessagesInSeqRangeParams struct {
+	After int64
+	Upto  int64
+}
+
+type ListMessagesInSeqRangeRow struct {
+	Seq    int64
+	Sha256 string
+}
+
+func (q *Queries) ListMessagesInSeqRange(ctx context.Context, arg ListMessagesInSeqRangeParams) ([]ListMessagesInSeqRangeRow, error) {
+	rows, err := q.db.Query(ctx, listMessagesInSeqRange, arg.After, arg.Upto)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMessagesInSeqRangeRow
+	for rows.Next() {
+		var i ListMessagesInSeqRangeRow
+		if err := rows.Scan(&i.Seq, &i.Sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockFenceShared = `-- name: LockFenceShared :exec
 SELECT pg_advisory_xact_lock_shared($1::int, 0)
 `
@@ -298,4 +368,18 @@ SELECT pg_advisory_xact_lock_shared($1::int, 0)
 func (q *Queries) LockFenceShared(ctx context.Context, class int32) error {
 	_, err := q.db.Exec(ctx, lockFenceShared, class)
 	return err
+}
+
+const renumberMessages = `-- name: RenumberMessages :execrows
+UPDATE messages SET seq = DEFAULT WHERE seq = ANY($1::bigint[])
+`
+
+// Moves rows past every imported range: seq is an identity column, and
+// DEFAULT draws the next value.
+func (q *Queries) RenumberMessages(ctx context.Context, seqs []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, renumberMessages, seqs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

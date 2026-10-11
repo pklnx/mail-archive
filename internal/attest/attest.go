@@ -178,3 +178,41 @@ func isHash(s string) bool {
 
 // formatInt is strconv.FormatInt in base 10.
 func formatInt(n int64) string { return strconv.FormatInt(n, 10) }
+
+// ChainReport is what ExamineChain found.
+type ChainReport struct {
+	// Problems are broken links, bad hashes or signatures and untrusted
+	// keys, each naming the attestation.
+	Problems []string
+	// KeyChanges are the attestations signed with another key than the
+	// one before (a rotation).
+	KeyChanges []int64
+}
+
+// ExamineChain checks entries like CheckChain but goes on after a problem
+// and reports every one. A broken entry still counts as the previous one
+// for the next link, so a single changed entry is reported once for itself
+// and once for the link to it.
+func ExamineChain(entries []Entry, trusted Keys) ChainReport {
+	var r ChainReport
+	prev := Entry{Hash: ZeroHash}
+	for i := range entries {
+		e := &entries[i]
+		if err := e.Check(trusted); err != nil {
+			r.Problems = append(r.Problems, err.Error())
+		}
+		switch {
+		case e.Seq != int64(i)+1:
+			r.Problems = append(r.Problems, fmt.Sprintf("attestation #%d: expected #%d (gap or reordering)", e.Seq, i+1))
+		case e.Prev != prev.Hash:
+			r.Problems = append(r.Problems, fmt.Sprintf("attestation #%d: prev does not match the hash of #%d", e.Seq, prev.Seq))
+		case e.MessagesAfter != prev.MessagesUpto || e.DeletionsAfter != prev.DeletionsUpto:
+			r.Problems = append(r.Problems, fmt.Sprintf("attestation #%d: range does not start where #%d ended", e.Seq, prev.Seq))
+		}
+		if i > 0 && e.Key != prev.Key {
+			r.KeyChanges = append(r.KeyChanges, e.Seq)
+		}
+		prev = *e
+	}
+	return r
+}

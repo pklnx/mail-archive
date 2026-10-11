@@ -244,13 +244,20 @@ func TestAttestRefusesMismatch(t *testing.T) {
 	_ = os.WriteFile(s.chainFile(), append(good, "garbage\n"...), 0o600)
 	refused("garbage line", "line 3")
 
-	// A database restored from an older backup: the file is ahead. Here: a
-	// new database next to the same attestation directory.
+	// The file is ahead (a restore), but an entry to import has no leaves
+	// file: nothing is imported. Here: a new database next to the same
+	// attestation directory.
 	other := storetest.New(t)
+	leaves2, _ := os.ReadFile(attest.LeavesPath(s.dir, 2))
+	_ = os.Remove(attest.LeavesPath(s.dir, 2))
 	if _, err := Attest(context.Background(), other, s.dir, s.key); !errors.Is(err, ErrAttestMismatch) ||
-		!strings.Contains(err.Error(), "2 attestation(s) the database does not have") {
+		!strings.Contains(err.Error(), "cannot import attestation #2") {
 		t.Errorf("file ahead: %v", err)
 	}
+	if n, _ := other.CountAttestations(context.Background()); n != 0 {
+		t.Errorf("%d attestation(s) imported", n)
+	}
+	_ = os.WriteFile(attest.LeavesPath(s.dir, 2), leaves2, 0o600)
 
 	// A message removed while the file lagged: its leaves cannot be
 	// rebuilt, nothing is written.

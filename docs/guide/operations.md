@@ -20,6 +20,12 @@ A complete backup has three parts, made in this order:
    the note. Without it, archived mail stays readable, but every IMAP
    password and every 2FA setup has to be entered again.
 
+With an [attestation key](./tamper-evidence), `backup` first writes an
+attestation, so that the dump holds the newest one. The data directory, and
+so every backup, contains the private signing key in `data/attest/`. The
+copies of `attestations.jsonl` and `signing.pub` kept off the host are
+separate from the backup; see [Tamper evidence](./tamper-evidence#what-you-do).
+
 The `.eml` files are **not** encrypted on disk, and neither are the dumps.
 Keep both on an encrypted volume; FileVault on macOS does this by default.
 
@@ -39,9 +45,9 @@ copy them as root or with `sudo`.
 
 ### Checking the archive
 
-`./ma verify` hashes every archived file again and looks for files without a
-database row. Exit code `0` means all is well; see the
-[command reference](../reference/cli#verify) for the findings.
+`./ma verify` checks the attestations, hashes every archived file again and
+looks for files without a database row. Exit code `0` means all is well; see
+the [command reference](../reference/cli#verify) for the findings.
 
 - **`missing` or `corrupt`:** the listed messages are damaged. Restore their
   files from a backup of the data directory; the path is the same there. A
@@ -52,6 +58,12 @@ database row. Exit code `0` means all is well; see the
   sync adopts orphans that are still on the server.
   `./ma verify --fix-orphans` moves the rest to `data/orphans/<time>/`;
   delete that directory once you are sure nothing in it is needed.
+- **`removed`, `unattested`, `attestation`, `attest-file`, `chain`:** an
+  attested message is gone or the chain was changed. See [Tamper
+  evidence](./tamper-evidence#findings). After a restore, `removed` lists
+  the messages the restore lost.
+- **`attest-stale`:** the web server has not written an attestation for
+  twice `MAIL_ARCHIVE_ATTEST_INTERVAL`; look at its log.
 
 ### Restore
 
@@ -63,7 +75,10 @@ database row. Exit code `0` means all is well; see the
    docker compose exec -T postgres pg_restore --clean --if-exists --no-owner \
      -U mailarchive -d mailarchive < backups/mailarchive-<time>.dump
    ```
-3. `./ma migrate`, then `./ma sync`, then `./ma verify`.
+3. `./ma migrate`, then `./ma attest` if attestations are on (it imports
+   the attestations written after the dump, before anything archives; see
+   [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,
+   then `./ma verify`.
 
 Files newer than the dump show up as orphans. The sync adopts those still on
 the server. Others came from mail deleted on the server since the dump: they

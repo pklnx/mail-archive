@@ -36,18 +36,19 @@ if [ "${1:-}" = backup ]; then
 	umask 077
 	mkdir -p "$dir"
 	name=mailarchive-$(date -u +%Y%m%dT%H%M%SZ).dump
+	# The note first: it also writes an attestation, which the dump then holds.
+	if ! compose run --rm --build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
+		backup --note-only "$name" >"$dir/BACKUP-NOTE.txt.partial"; then
+		rm -f "$dir/BACKUP-NOTE.txt.partial"
+		echo "error: could not write BACKUP-NOTE.txt; no dump was written" >&2
+		exit 1
+	fi
 	if ! compose exec -T postgres pg_dump --format=custom -U mailarchive -d mailarchive >"$dir/$name.partial"; then
-		rm -f "$dir/$name.partial"
+		rm -f "$dir/$name.partial" "$dir/BACKUP-NOTE.txt.partial"
 		echo "error: pg_dump failed" >&2
 		exit 1
 	fi
 	mv "$dir/$name.partial" "$dir/$name"
-	if ! compose run --rm --build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
-		backup --note-only "$name" >"$dir/BACKUP-NOTE.txt.partial"; then
-		rm -f "$dir/BACKUP-NOTE.txt.partial"
-		echo "error: could not write BACKUP-NOTE.txt; the dump $dir/$name is complete" >&2
-		exit 1
-	fi
 	mv "$dir/BACKUP-NOTE.txt.partial" "$dir/BACKUP-NOTE.txt"
 	echo "wrote $dir/$name and $dir/BACKUP-NOTE.txt"
 	echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep MAIL_ARCHIVE_SECRET_KEY separately"

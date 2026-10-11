@@ -215,3 +215,91 @@ func (s *Store) RebuildLeaves(ctx context.Context, e *attest.Entry, w *attest.Le
 	}
 	return tx.Commit(ctx)
 }
+
+// CountDeletionsAfter counts the deletions with an id above after, those
+// no attestation covers yet.
+func (s *Store) CountDeletionsAfter(ctx context.Context, after int64) (int64, error) {
+	return s.q.CountDeletionsAfter(ctx, after)
+}
+
+// ImportAttestations adds attestations that only the attestation file has,
+// after the database was restored from a backup older than the file.
+// entries continue the database chain and were checked by the caller;
+// listed holds every message their leaves files list, seq to SHA-256.
+//
+// With the fence held exclusively, so that no writer draws a number
+// meanwhile, it inserts the entries and advances the sequences of
+// messages.seq and message_deletions.id beyond the imported ranges: the
+// restored sequences stand at the dump's values, and new messages would
+// otherwise get numbers inside ranges that are already attested. Rows that
+// were archived after the restore with a number inside an imported range,
+// but are not what the leaves list there, get new numbers past the ranges,
+// so the next attestation covers them. It returns how many rows it
+// renumbered.
+func (s *Store) ImportAttestations(ctx context.Context, entries []attest.Entry, listed map[int64]string) (int64, error) {
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = conn.Conn().Close(context.WithoutCancel(ctx))
+		}
+		conn.Release()
+	}()
+	if _, err := conn.Exec(ctx, "SET lock_timeout = '"+attestLockTimeout+"'"); err != nil {
+		return 0, err
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1, 0)", attestFenceClass); err != nil {
+		return 0, fmt.Errorf("wait for the attestation fence: %w", err)
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	q := s.q.WithTx(tx)
+	snap := &AttestSnapshot{q: q}
+	for i := range entries {
+		if err := snap.Insert(ctx, &entries[i]); err != nil {
+			return 0, err
+		}
+	}
+	last := entries[len(entries)-1]
+	if err := q.AdvanceMessageSeq(ctx, last.MessagesUpto); err != nil {
+		return 0, err
+	}
+	if err := q.AdvanceDeletionID(ctx, last.DeletionsUpto); err != nil {
+		return 0, err
+	}
+	rows, err := q.ListMessagesInSeqRange(ctx, db.ListMessagesInSeqRangeParams{After: entries[0].MessagesAfter, Upto: last.MessagesUpto})
+	if err != nil {
+		return 0, err
+	}
+	var move []int64
+	for _, r := range rows {
+		if listed[r.Seq] != r.Sha256 {
+			move = append(move, r.Seq)
+		}
+	}
+	var moved int64
+	if len(move) > 0 {
+		if moved, err = q.RenumberMessages(ctx, move); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_unlock($1, 0)", attestFenceClass); err != nil {
+		return 0, err
+	}
+	if _, err := conn.Exec(ctx, "RESET lock_timeout"); err != nil {
+		return 0, err
+	}
+	ok = true
+	return moved, nil
+}
