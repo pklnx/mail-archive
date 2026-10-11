@@ -112,24 +112,19 @@ func fillAuditTarget(ctx context.Context, typ string, id int64) {
 // exports and failed logins. A missing partition is created and the insert
 // tried once more.
 func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
-	err := s.insertAudit(ctx, s.q, &e)
+	ua, err := s.auditUserAgent(ctx, &e)
+	if err == nil {
+		err = insertAudit(ctx, s.q, &e, ua)
+	}
 	if missingPartition(err) {
 		if _, perr := s.EnsureAuditPartitions(ctx, 1); perr == nil {
-			err = s.insertAudit(ctx, s.q, &e)
+			err = insertAudit(ctx, s.q, &e, ua)
 		}
 	}
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
 	}
 	return nil
-}
-
-func (s *Store) insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry) error {
-	ua, err := s.auditUserAgent(ctx, e)
-	if err != nil {
-		return err
-	}
-	return s.insertAuditWith(ctx, q, e, ua)
 }
 
 // auditUserAgent returns the id of e's user agent, or nil without one. It
@@ -149,7 +144,9 @@ func (s *Store) auditUserAgent(ctx context.Context, e *AuditEntry) (*int64, erro
 	return &id, nil
 }
 
-func (s *Store) insertAuditWith(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) error {
+// insertAudit writes e with the user agent id ua through q, which may be a
+// transaction's: it never uses the pool itself.
+func insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) error {
 	details, err := json.Marshal(cleanDetail(e.Details))
 	if err != nil {
 		return err
