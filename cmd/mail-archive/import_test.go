@@ -133,7 +133,7 @@ func TestImportCommand(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if !regexpMatch(`old\s+anna\s+import\s+2\s+4\s`, status) {
+	if !regexpMatch(`old\s+import\s+anna\s+import\s+2\s+4\s`, status) {
 		t.Errorf("status:\n%s", status)
 	}
 	if err := runCmd(t, newAccountCmd(), "", "rename", "old", "older"); err != nil {

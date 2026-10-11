@@ -52,7 +52,7 @@ func TestImportAccountsInTheAPI(t *testing.T) {
 		{"PATCH", "/api/accounts/old", map[string]any{"name": "x", "host": "h"}},
 	} {
 		body := f.do(req.method, req.path, req.body, http.StatusConflict)
-		if !strings.Contains(string(body), "import accounts cannot be synced or changed") {
+		if !strings.Contains(string(body), "have no server") {
 			t.Errorf("%s %s: %s", req.method, req.path, body)
 		}
 	}

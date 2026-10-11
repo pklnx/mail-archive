@@ -12,6 +12,13 @@ Mail from files (mbox, Maildir) goes into an import account instead; see
 [Importing mail](./importing). Import accounts have no server and are never
 synced; only renaming, moving and removing apply to them.
 
+An IMAP account is a *snapshot*: it archives what is in the mailbox at each
+sync. If you run the mail server yourself, an **smtp account** receives a copy
+of every message as it passes through, so nothing deleted between two syncs
+is missed; see [Journaling with Postfix](./journaling). smtp accounts have no
+server and are never synced; they can be enabled, disabled, renamed, moved
+and removed.
+
 ## Adding an account
 
 **Web UI:** Manage accounts → Add account. Fill in:

@@ -166,7 +166,7 @@ func (r *Runner) syncOne(ctx context.Context, id int64, opts SyncOptions) {
 		r.AfterSync()
 	}
 	switch {
-	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrImportAccount):
+	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrNoServer):
 		log.Debug("sync skipped", "account", a.Name, "reason", res.Err)
 	case res.Err != nil:
 		log.Error("sync failed", "account", a.Name, "err", res.Err)

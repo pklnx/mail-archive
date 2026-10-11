@@ -22,6 +22,20 @@ All settings are environment variables. With Docker Compose they come from
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
 | `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. The `./ma` wrapper sets it to `./ma`. |
 
+## SMTP
+
+The SMTP server receives copies of every message from a mail server for
+[smtp accounts](../guide/journaling). It runs in `serve` and is off unless
+`MAIL_ARCHIVE_SMTP_LISTEN` is set; the other variables then require it.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAIL_ARCHIVE_SMTP_LISTEN` | (none: off) | Address to listen on, like `:2525` or `127.0.0.1:2525`. In Docker, `:2525`; Compose publishes it on `SMTP_BIND:SMTP_PORT`. |
+| `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` | (required with the listen address) | Networks and addresses that may connect, comma-separated: `172.16.0.0/12, 192.0.2.10`. Everyone else gets `554`. There is no SMTP login: this is the only gate. |
+| `MAIL_ARCHIVE_SMTP_MAX_SIZE` | `50M` | Largest message accepted, in bytes or with `K`, `M` or `G` (powers of 1024), from `1M` to `1G`. Must be at least Postfix's `message_size_limit`: Postfix drops a copy the archive refuses as too large. |
+| `MAIL_ARCHIVE_SMTP_HOSTNAME` | the host name | Name in the greeting. |
+| `MAIL_ARCHIVE_SMTP_TLS_CERT`, `MAIL_ARCHIVE_SMTP_TLS_KEY` | (none) | PEM certificate and key; both turn STARTTLS on. |
+
 ## Docker Compose only
 
 | Variable | Default | Description |
@@ -31,14 +45,20 @@ All settings are environment variables. With Docker Compose they come from
 | `WEB_BIND` | `127.0.0.1` | Address the web UI is published on. `0.0.0.0` for all interfaces, or a LAN or Tailscale address. See [Network access](./security#network-access). |
 | `WEB_PORT` | `8080` | Port of the web UI. |
 | `POSTGRES_PORT` | `5432` | Port of PostgreSQL on `127.0.0.1`, for backups and development. |
+| `SMTP_BIND` | `127.0.0.1` | Address the SMTP port for journaling is published on. A mail server on another machine needs a reachable address here, and that machine in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`. |
+| `SMTP_PORT` | `2525` | Port of the SMTP server on the host. Compose always binds this port on the host; the container accepts connections only when `MAIL_ARCHIVE_SMTP_LISTEN=:2525` is set. |
 
-Both published ports listen on `127.0.0.1` only unless `WEB_BIND` is set.
+The published ports listen on `127.0.0.1` only unless `WEB_BIND` or
+`SMTP_BIND` is set.
 Changes to `.env` take effect with `docker compose up -d web`.
 
 Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_RECONCILE_INTERVAL`,
 `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the three `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
 variables to both the web server and the CLI (`./ma`), so `./ma sync` from
 cron reconciles and sends alerts too.
+
+Compose passes the `MAIL_ARCHIVE_SMTP_*` variables to the CLI too, so that
+`./ma account add-smtp` can tell whether the web server receives mail.
 
 Invalid values stop the server and every command at start, with a message
 naming the variable. Messages about the webhook URL never repeat it.

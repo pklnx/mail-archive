@@ -101,8 +101,11 @@ func (s *Store) UpdateAccount(ctx context.Context, ref AccountRef, c AccountChan
 		if err != nil {
 			return err
 		}
-		if AccountKind(r.Kind) == KindImport && (c.Connection != nil || c.PasswordEnc != nil || c.Folders != nil || c.Enabled != nil) {
-			return ErrImportAccount
+		switch kind := AccountKind(r.Kind); {
+		case !kind.HasServer() && (c.Connection != nil || c.PasswordEnc != nil || c.Folders != nil):
+			return ErrNoServer
+		case kind == KindImport && c.Enabled != nil:
+			return ErrNoServer
 		}
 		p := db.WriteAccountParams{
 			ID: r.ID, Name: r.Name, Host: r.Host, Port: r.Port, TlsMode: r.TlsMode, Username: r.Username,
@@ -196,6 +199,11 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 		}
 		if n > 0 {
 			result = AccountRemoved
+			// A removed smtp account receives nothing; its addresses are
+			// free for another account.
+			if err := q.DeleteAccountSMTPAddresses(ctx, ref.ID); err != nil {
+				return err
+			}
 			return one(q.RemoveAccount(ctx, ref.ID))
 		}
 		result = AccountDeleted

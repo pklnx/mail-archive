@@ -5,6 +5,7 @@
 package db
 
 import (
+	"net/netip"
 	"time"
 )
 
@@ -40,6 +41,16 @@ type AccountSyncHealth struct {
 	NotifyFirstErrorAt *time.Time
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
+}
+
+type Envelope struct {
+	LocationID int64
+	MailFrom   string
+	RcptTo     []string
+	RcptText   string
+	ReceivedAt time.Time
+	ClientIp   *netip.Addr
+	Helo       string
 }
 
 type Folder struct {
@@ -123,6 +134,11 @@ type Session struct {
 	LastSeenAt time.Time
 	ExpiresAt  time.Time
 	UserAgent  string
+}
+
+type SmtpAddress struct {
+	Address   string
+	AccountID int64
 }
 
 type SyncRun struct {

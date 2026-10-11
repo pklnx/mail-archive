@@ -43,6 +43,11 @@ type Config struct {
 // Conn is an authenticated, read-only IMAP session.
 type Conn struct {
 	c *imapclient.Client
+	// examined is the folder last opened by Examine and its message count
+	// from EXAMINE: go-imap signals the end of the command before it
+	// records the selected mailbox, so Mailbox can lag behind.
+	examined         string
+	examinedMessages uint32
 }
 
 // Dial connects and logs in. The context cancels connection setup and,
@@ -185,6 +190,7 @@ func (conn *Conn) Examine(name string) (FolderStatus, error) {
 	if err != nil {
 		return FolderStatus{}, fmt.Errorf("examine %q: %w", name, err)
 	}
+	conn.examined, conn.examinedMessages = name, data.NumMessages
 	return FolderStatus{
 		UIDValidity: data.UIDValidity,
 		UIDNext:     uint32(data.UIDNext),
@@ -195,10 +201,10 @@ func (conn *Conn) Examine(name string) (FolderStatus, error) {
 // Messages returns the number of messages in the examined folder, kept up
 // to date by the server's EXISTS and EXPUNGE responses.
 func (conn *Conn) Messages() uint32 {
-	if mb := conn.c.Mailbox(); mb != nil {
+	if mb := conn.c.Mailbox(); mb != nil && mb.Name == conn.examined {
 		return mb.NumMessages
 	}
-	return 0
+	return conn.examinedMessages
 }
 
 // Message is a fetched message. Body holds whatever the BodySink returned.

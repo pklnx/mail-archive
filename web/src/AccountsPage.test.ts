@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Account, SyncInfo } from "./api";
-import { reconcileNote, syncableCount, syncHealthNote, syncStatus } from "./AccountsPage";
+import { receiveStatus, reconcileNote, syncableCount, syncHealthNote, syncStatus } from "./AccountsPage";
 import { bannerState } from "./HealthBanner";
 import { isActive } from "./useAccounts";
 
 function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, kind: Account["kind"] = "imap"): Account {
   return {
-    name: "a", kind, enabled: kind === "imap", removed: false, host: "h", port: 993, tls: "tls", username: "u",
+    name: "a", kind, enabled: kind !== "import", removed: false, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], folders: [], goneMessages: 0, lastReconciledAt: null,
+    addresses: [], lastReceivedAt: null,
     sync: { failureStreak: 0, failingSince: null, health: "ok", ...sync },
   };
 }
@@ -39,11 +40,19 @@ describe("syncStatus", () => {
     expect(partial.text).toMatch(/skipped messages$/);
     expect(partial.error).toBe("1 message(s) skipped");
   });
-  it("leaves import accounts out of Sync all", () => {
+  it("leaves import and smtp accounts out of Sync all", () => {
     const idle = { state: "idle" as const, lastRun: null };
     expect(syncableCount([account(idle, "import")])).toBe(0);
+    expect(syncableCount([account(idle, "smtp")])).toBe(0);
     expect(syncableCount([account(idle, "import"), account(idle)])).toBe(1);
     expect(syncableCount([{ ...account(idle), removed: true }])).toBe(0);
+  });
+  it("tells when an smtp account last received", () => {
+    const idle = { state: "idle" as const, lastRun: null };
+    expect(receiveStatus(account(idle, "smtp"))).toBe("No message received yet.");
+    expect(receiveStatus({ ...account(idle, "smtp"), lastReceivedAt: "2026-10-06T10:00:00Z" })).toMatch(/^Last message received /);
+    expect(syncHealthNote(account(idle, "smtp"))).toBeNull();
+    expect(reconcileNote(account(idle, "smtp"))).toBeNull();
   });
   it("polls fast only while a sync is pending", () => {
     const data = { manage: true, syncInterval: "", reconcileInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };

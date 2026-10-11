@@ -31,6 +31,8 @@ copy**: the servers are never modified.
   Syncs also run on a schedule. Light and dark mode, German and English.
 - **Alerts** through ntfy, Gotify, Slack or any webhook when syncs of an
   account keep failing, and `/healthz/sync` for monitoring tools.
+- **Complete archives** through SMTP journaling: Postfix sends a copy of every
+  message, envelope and BCC recipients included.
 - **Docker Compose** setup with images for amd64 and arm64 (Apple Silicon).
 - Works with mail.de, GMX, WEB.DE, Gmail, iCloud and any standard IMAP server.
 

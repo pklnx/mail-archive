@@ -70,7 +70,11 @@ type MessageSummary struct {
 // full-text query, account, folder, sender, recipient, attachment, thread
 // and date range.
 func (s *Store) SearchMessages(ctx context.Context, f SearchFilter) ([]MessageSummary, error) {
-	rows, err := s.q.SearchMessages(ctx, searchParams(f))
+	p, err := s.searchParams(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.q.SearchMessages(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +92,10 @@ func (s *Store) SearchMessages(ctx context.Context, f SearchFilter) ([]MessageSu
 // of the thread that matches the filter, with the number of matches in the
 // thread. Its cursor works like SearchMessages'.
 func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSummary, error) {
-	p := searchParams(f)
+	p, err := s.searchParams(ctx, f)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.q.SearchThreads(ctx, db.SearchThreadsParams(p))
 	if err != nil || len(rows) == 0 {
 		return []MessageSummary{}, err
@@ -99,7 +106,7 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 	}
 	counts, err := s.q.CountThreadMatches(ctx, db.CountThreadMatchesParams{
 		ThreadKeys: keys, Query: p.Query, Pattern: p.Pattern, Owner: p.Owner, Account: p.Account, Folder: p.Folder,
-		FromPattern: p.FromPattern, ToPattern: p.ToPattern, AttachmentPattern: p.AttachmentPattern,
+		FromPattern: p.FromPattern, ToPattern: p.ToPattern, ToShas: p.ToShas, ToWalk: p.ToWalk, AttachmentPattern: p.AttachmentPattern,
 		HasAttachment: p.HasAttachment, Thread: p.Thread, After: p.After, Before: p.Before,
 	})
 	if err != nil {
@@ -118,6 +125,38 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 		})
 	}
 	return out, nil
+}
+
+// maxEnvelopeMatches is how many messages a to: filter may match by their
+// envelopes for the search to take them as a list; with more, it checks
+// the envelopes of each message it walks. A variable for tests.
+var maxEnvelopeMatches = 5000
+
+// searchParams turns a filter into query parameters. The envelope
+// recipients of a to: filter are resolved first (see EnvelopeMatches).
+func (s *Store) searchParams(ctx context.Context, f SearchFilter) (db.SearchMessagesParams, error) {
+	p := searchParams(f)
+	if p.ToPattern == nil {
+		return p, nil
+	}
+	p.ToShas = []string{}
+	// Without an smtp account the user has no envelopes; looking would
+	// only scan other users' matches.
+	if owns, err := s.q.OwnsSMTPAccount(ctx, f.Owner); err != nil || !owns {
+		return p, err
+	}
+	shas, err := s.q.EnvelopeMatches(ctx, db.EnvelopeMatchesParams{
+		Pattern: *p.ToPattern, Owner: f.Owner, RowLimit: int32(maxEnvelopeMatches) + 1, //nolint:gosec // small
+	})
+	if err != nil {
+		return p, err
+	}
+	if len(shas) > maxEnvelopeMatches {
+		p.ToWalk, p.ToShas = true, nil
+	} else {
+		p.ToShas = append(p.ToShas, shas...)
+	}
+	return p, nil
 }
 
 func searchParams(f SearchFilter) db.SearchMessagesParams {
@@ -151,6 +190,8 @@ type MessageLocation struct {
 	GoneAt *time.Time
 	// LastSeenAt is when the server last listed the location.
 	LastSeenAt time.Time
+	// Envelope is the SMTP envelope of a location in an smtp account.
+	Envelope *Envelope
 }
 
 // MessageDetail is a message's stored metadata and locations.
@@ -187,10 +228,17 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 		MessageID: deref(r.MessageID), StoredPath: r.StoredPath, InReplyTo: deref(r.InReplyTo), Thread: r.ThreadKey,
 	}
 	for _, l := range locs {
-		d.Locations = append(d.Locations, MessageLocation{
+		loc := MessageLocation{
 			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt,
-		})
+		}
+		if l.EnvelopeLocation != nil {
+			loc.Envelope = &Envelope{MailFrom: deref(l.MailFrom), RcptTo: l.RcptTo, ReceivedAt: derefTime(l.ReceivedAt), HELO: deref(l.Helo)}
+			if l.ClientIp != nil {
+				loc.Envelope.ClientIP = *l.ClientIp
+			}
+		}
+		d.Locations = append(d.Locations, loc)
 	}
 	return d, nil
 }

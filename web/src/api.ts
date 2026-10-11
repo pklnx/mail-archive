@@ -26,8 +26,11 @@ export interface LastRun {
 
 export interface Account {
   name: string;
-  /** "import": mail imported from files with `import`; no server, never synced. */
-  kind: "imap" | "import";
+  /**
+   * "import": mail imported from files with `import`; "smtp": mail a mail
+   * server delivers over SMTP. Neither has a server or is ever synced.
+   */
+  kind: "imap" | "import" | "smtp";
   enabled: boolean;
   /** Removed accounts keep their mail but are never synced or changed. */
   removed: boolean;
@@ -43,6 +46,9 @@ export interface Account {
   goneMessages: number;
   /** The latest comparison of any folder with the server. */
   lastReconciledAt: string | null;
+  /** smtp accounts: the addresses they receive for, and the last accepted message. */
+  addresses: string[];
+  lastReceivedAt: string | null;
 }
 
 /** "failing": the last alertAfter syncs failed; "stale": no successful sync within two intervals. */
@@ -142,6 +148,17 @@ export interface Location {
   goneAt: string | null;
   /** When the server last listed it. */
   lastSeenAt: string;
+  /** smtp accounts: the envelope the message arrived with. */
+  envelope: Envelope | null;
+}
+
+/** The SMTP envelope of a received message; the recipients include BCC. */
+export interface Envelope {
+  mailFrom: string;
+  rcptTo: string[];
+  receivedAt: string;
+  clientIp: string;
+  helo: string;
 }
 
 export interface MessageDetail extends MessageSummary {
