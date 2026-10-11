@@ -314,6 +314,13 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 	if p != nil && p.written {
 		p = nil
 	}
+	var ua *int64
+	if p != nil {
+		var err error
+		if ua, err = s.auditUserAgent(ctx, p.entry); err != nil {
+			return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
+		}
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -324,7 +331,7 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 		return err
 	}
 	if p != nil {
-		if err := s.insertAudit(ctx, q, p.entry); err != nil {
+		if err := s.insertAuditWith(ctx, q, p.entry, ua); err != nil {
 			// A failed statement aborts the transaction, so no retry here:
 			// create the partition for the next attempt.
 			_ = tx.Rollback(ctx)
