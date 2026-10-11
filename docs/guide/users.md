@@ -45,11 +45,15 @@ For every other user, admins can:
   up again at the next login.
 - **Reset password:** generates a new password, shown once. The user is logged
   out everywhere and must change it at the next login. Their passkeys are
-  removed too, unless you untick the box: after a break-in, a new password
-  alone would not lock the intruder out.
+  removed and their [API keys](#api-keys) revoked too, unless you untick the
+  boxes: after a break-in, a new password alone would not lock the intruder
+  out.
 - **Remove passkeys:** removes all passkeys of the user and logs them out
   everywhere, for example after a lost phone.
-- **Lock / Unlock:** a locked user is logged out at once and cannot log in.
+- **API keys:** shown when the user has keys. Lists them; **Revoke** stops
+  one at once. This also works for your own keys.
+- **Lock / Unlock:** a locked user is logged out at once and cannot log in;
+  their API keys stop working until they are unlocked.
 - **Make admin / Remove admin.**
 - **Remove:** only for users without accounts. A user who still owns accounts
   (also removed ones) must hand them over first, on the command line:
@@ -121,3 +125,37 @@ and Safari are told to forget it; Firefox and some password managers keep
 offering it, and signing in with it then says it is not registered. Delete
 it there too (in Firefox: Settings, Privacy & Security, Passkeys; on a Mac:
 the Passwords app).
+
+## API keys
+
+Scripts, cron jobs and other tools use an API key instead of your login.
+This also works for admins and everyone with 2FA or passkeys: the second
+factor is checked when the key is created, not on every use.
+
+In your profile under **API keys**, enter a name (like *backup script*),
+choose the scopes and when the key expires, confirm with your password and,
+if you use 2FA, a code, then click **Create API key**. The key is shown
+once: copy it right away. It cannot be shown again; create a new one if it
+is lost.
+
+- **read** lets the key search and read your mail, download messages and
+  attachments, and see your accounts and their status.
+- **sync** lets it start syncs of your accounts.
+
+A key can do nothing else: no logins, no profile or account changes, no
+user management, also for an admin. How to use a key is described in the
+[JSON API](../reference/api#api-keys).
+
+The list shows each key with its last 4 characters, when it expires and
+when it was last used. **Revoke** stops a key at once. You can have up to 20
+active keys; revoked and expired keys stay listed for 30 days.
+
+Changing your password keeps your keys, so scripts do not break. Revoke a
+key if it may be known to others.
+
+Admins see the number of keys per user on the users page and can list and
+revoke any user's keys there. A password reset by an admin revokes the
+user's keys unless the admin unticks the box. Locking a user suspends their
+keys until the user is unlocked; removing a user deletes them. On the
+command line, `./ma user api-keys NAME` lists and `./ma user revoke-api-keys
+NAME` revokes a user's keys.

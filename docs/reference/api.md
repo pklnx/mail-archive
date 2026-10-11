@@ -7,11 +7,14 @@ The [OpenAPI description](./openapi) lists every endpoint with its
 parameters and answers. A running server serves it as `/api/openapi.json`,
 without a login.
 
-## Login
+## Authentication
 
-Every endpoint below needs a session cookie and answers `401` without one.
-All of them only see the logged-in user's accounts and the messages found in
-them; other users' accounts and messages answer `404`.
+Every endpoint below needs a session cookie or an [API key](#api-keys) and
+answers `401` without one. All of them only see the logged-in user's
+accounts and the messages found in them; other users' accounts and messages
+answer `404`.
+
+### Sessions
 
 | Endpoint | Description |
 |---|---|
@@ -31,6 +34,58 @@ curl -c cookies.txt -X POST http://localhost:8080/api/session \
 curl -b cookies.txt http://localhost:8080/api/status
 ```
 
+### API keys
+
+Scripts use an API key instead of a session. Admins and users with 2FA or
+passkeys can use the API this way too: the second factor is checked when
+the key is created, not on every request. A user creates keys in the web
+UI's profile (or with `POST /api/profile/api-keys`), with the password and,
+with 2FA on, a code. The key is shown once; the server keeps only its
+SHA-256 and the last 4 characters.
+
+A key looks like `ma_` followed by 52 characters from `a-z` and `2-7`. Send
+it as `Authorization: Bearer ma_…`:
+
+```sh
+KEY=ma_…
+# read: search, then download a message
+curl -H "Authorization: Bearer $KEY" 'http://localhost:8080/api/messages?q=invoice'
+curl -H "Authorization: Bearer $KEY" -o mail.eml http://localhost:8080/api/messages/SHA256/raw
+# sync: start a sync of all own accounts
+curl -X POST -H "Authorization: Bearer $KEY" http://localhost:8080/api/sync
+```
+
+A key has one or both scopes:
+
+| Scope | Endpoints |
+|---|---|
+| `read` | `GET /api/status`, `GET /api/accounts`, `GET /api/messages` (list and search) and every `GET /api/messages/{id}…` endpoint |
+| `sync` | `POST /api/sync`, `POST /api/accounts/{name}/sync` |
+
+`sync` does not include `read`: a cron job that only starts syncs needs no
+access to mail. Everything else (logins, the profile, users, adding and
+changing accounts, listing server folders) is for sessions only. A key does
+no more than its owner could in the web UI: an admin's key reaches only the
+admin's own accounts, like a session.
+
+| Case | Status |
+|---|---|
+| Unknown, malformed, revoked or expired key, or its owner is locked or removed | `401` `{"error": "invalid API key"}` with `WWW-Authenticate: Bearer … error="invalid_token"` |
+| Endpoint outside the key's scopes | `403` `{"error": "this API key lacks the sync scope", "scope": "sync"}` |
+| Endpoint for sessions only | `403` `{"error": "not available with an API key"}` |
+| The owner must change their password or set up 2FA | `403` with `passwordChangeRequired` or `twoFactorSetupRequired`, as for a session |
+| More than 600 requests per key and minute, or more than 30 invalid keys per client address and minute | `429` with `Retry-After` |
+
+A request with `Authorization: Bearer ma_…` never uses the session cookie,
+also when the key is invalid. Other `Authorization` headers, such as Basic
+from a reverse proxy, are ignored, and the cookie counts as usual.
+
+Locking a user suspends their keys; unlocking makes them work again. An
+admin's password reset revokes them unless asked not to; the user's own
+password change and an admin's 2FA reset keep them (after a 2FA reset they
+answer `403` until 2FA is set up again). Removing a user deletes their keys.
+Revoked and expired keys stay listed for 30 days.
+
 ## Users and profile
 
 The user endpoints are only for admins; other users get `403`. Admins cannot
@@ -38,13 +93,15 @@ change their own login with them (`403`); they use the profile endpoint.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
+| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
 | `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. |
-| `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed too, unless the body is `{"removePasskeys": false}`. |
+| `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed and their API keys revoked too, unless the body says `{"removePasskeys": false}` or `{"revokeApiKeys": false}`. |
 | `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}` or `{"locked": true\|false}`. `409` for the last admin. |
 | `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
 | `DELETE /api/users/{name}/passkeys` | Remove all passkeys of another user and end their sessions (`204`). |
-| `DELETE /api/users/{name}` | Remove a user. `409` while they own accounts, or for the last admin. |
+| `DELETE /api/users/{name}` | Remove a user, with their API keys. `409` while they own accounts, or for the last admin. |
+| `GET /api/api-keys` | Every user's API keys, like `GET /api/profile/api-keys` plus `user`. Never the keys themselves. |
+| `DELETE /api/api-keys/{id}` | Revoke any user's key, also an own one (`204`). |
 | `GET /api/profile/2fa` | `{"enabled", "required", "admin", "setupPending"}`. |
 | `POST /api/profile/2fa/setup` | Start setup: `{"secret", "otpauthUri", "qrDataUrl"}` (a PNG data URL). `409` while 2FA is on. |
 | `POST /api/profile/2fa/confirm` | Finish setup with `{"code": "..."}`. Answers `{"recoveryCodes": [...]}`, shown only here. `401` for a wrong code. |
@@ -54,6 +111,9 @@ change their own login with them (`403`); they use the profile endpoint.
 | `POST /api/profile/passkeys/begin` | Start adding a passkey: `{"name": "...", "currentPassword": "...", "code": "..."}`; `code` (TOTP or recovery code) only with 2FA on. Answers `{"token", "publicKey"}` for `navigator.credentials.create()`. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 10 passkeys. |
 | `POST /api/profile/passkeys/finish` | `{"token", "credential"}` → `201 {"name"}`. `409` for a passkey that is already registered or the limit, `400` for an expired token or a passkey that is not accepted. |
 | `DELETE /api/profile/passkeys/{id}` | Remove an own passkey; all other sessions end. Answers `{"credentialId", "rpId"}` for `PublicKeyCredential.signalUnknownCredential()`. |
+| `GET /api/profile/api-keys` | Own API keys, also revoked and expired ones for 30 days: `{"max", "keys": [{"id", "name", "hint", "scopes", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`. `hint` is the last 4 characters, `state` is `active`, `expired` or `revoked`. |
+| `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope. |
+| `DELETE /api/profile/api-keys/{id}` | Revoke an own key (`204`). No password needed. |
 | `PUT /api/profile/password` | Every user: `{"current": "...", "new": "..."}`. `401` for a wrong current password (counts like a failed login, then `429`), `400` for a new password that is too short or unchanged. Other sessions end. |
 
 After logging in with a generated password, `GET /api/session` reports
@@ -69,7 +129,7 @@ and `POST /api/profile/2fa/confirm` answers `403` with
 
 ## Write requests
 
-`POST`, `PATCH` and `DELETE` requests are only accepted with:
+`POST`, `PATCH` and `DELETE` requests with a session are only accepted with:
 
 - `Content-Type: application/json` (also for requests without a body), and
 - an `Origin` header that matches the server. Browsers send it on their own;
@@ -79,6 +139,10 @@ and `POST /api/profile/2fa/confirm` answers `403` with
 curl -b cookies.txt -X POST http://localhost:8080/api/sync \
   -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080'
 ```
+
+Requests with an API key need neither: the key is a header that a web page
+on another site cannot add, unlike a cookie, which the browser sends on its
+own. A body, where an endpoint reads one, must still be JSON.
 
 ## Audit log
 

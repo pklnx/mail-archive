@@ -25,7 +25,7 @@ Each event writes exactly one entry.
 | Action | When |
 |---|---|
 | `auth.login` | A login succeeded; `method` is `password`, `2fa` or `passkey`. With 2FA, the entry is written after the second step. |
-| `auth.login_failed` | A login was refused; `method`, and `reason`: `wrong_password`, `unknown_user`, `locked`, `second_factor`, `unknown_passkey` or `passkey_invalid`. For an unknown user, the name is kept only if it is a valid user name, so a password typed into the name field is not stored. |
+| `auth.login_failed` | A login was refused; `method`, and `reason`: `wrong_password`, `unknown_user`, `locked`, `second_factor`, `unknown_passkey` or `passkey_invalid`. For an unknown user, the name is kept only if it is a valid user name, so a password typed into the name field is not stored. A refused [API key](../reference/api#api-keys) has `method: api_key` and `reason` `invalid` (no such key), `revoked`, `expired` or `locked`, with the key's `key_id`, `key_name` and owner when the key exists. The key itself is never stored. |
 | `auth.logout` | A valid session logged out. |
 | `message.search` | A list with a search or filter: `q`, `from`, `to`, `attachment`, `after`, `before` or `has`. The details hold every parameter that was set. |
 | `message.open` | A message was opened. |
@@ -36,6 +36,7 @@ Each event writes exactly one entry.
 | `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name and the new state, never the server, login or password. `account.remove` says whether the account was `deleted` or `removed`. |
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login. |
+| `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`). |
 | `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. |
 | `audit.export` | `./ma audit` itself. |
 
@@ -48,6 +49,8 @@ Not recorded:
   expanding a conversation (the search was recorded), the conversation of a
   message;
 - reading the log;
+- requests with an API key that the web UI would not record either, such as
+  `GET /api/status`; the key's last use is in the profile instead;
 - logins refused because of too many failures (`429`), so a flood cannot
   grow the log. The login limits bound the failures that are recorded.
 
@@ -63,7 +66,7 @@ whether it was shown cannot be known.
 | Field | Content |
 |---|---|
 | Time | When the entry was written, from the database clock. |
-| Actor | `session` (the web UI, also for login attempts), `cli` (the command line), or `api_key`. |
+| Actor | `session` (the web UI, also for login attempts), `cli` (the command line), or `api_key` (a script with an [API key](../reference/api#api-keys); the entry names the key and its owner). |
 | User | ID and name as they were then. Entries stay when a user is removed. |
 | Action | One of the actions above. |
 | Target | A message (its SHA-256), an account or a user, with ID and name. |
@@ -127,7 +130,8 @@ day adds about 30 MB a year.
 
 `--since` is required, `--until` is exclusive (a plain date includes that
 day). `--action` takes a group (`login`, `search`, `read`, `export`,
-`accounts`, `users`, `profile`, `sync`) or an action, and is repeatable.
+`accounts`, `users`, `profile`, `api_keys`, `sync`) or an action, and is
+repeatable.
 `--user` selects a current user's entries. Without `--out`, the entries go
 to stdout. A file must not exist yet; it is written with mode 0600 and
 appears when it is complete. Each run is recorded as `audit.export`.

@@ -126,21 +126,38 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	return s.q.CountUsers(ctx)
 }
 
+// PasswordReset says what else SetUserPassword does.
+type PasswordReset struct {
+	// MustChange (a generated password): the user has to choose their own
+	// password at the next login.
+	MustChange bool
+	// DropPasskeys and RevokeAPIKeys remove the user's passkeys and revoke
+	// their API keys: after a compromise a new password alone would not
+	// lock the attacker out.
+	DropPasskeys  bool
+	RevokeAPIKeys bool
+	// By is the admin who resets the password, recorded as the revoker of
+	// the keys; nil for the CLI.
+	By *int64
+}
+
 // SetUserPassword stores a new password hash and ends all sessions of the
-// user. With mustChange (a generated password), the user has to choose
-// their own password at the next login. With dropPasskeys, the user's
-// passkeys go too: after a compromise a new password alone would not lock
-// the attacker out.
-func (s *Store) SetUserPassword(ctx context.Context, id int64, passwordHash string, mustChange, dropPasskeys bool) error {
+// user, and does what opts says.
+func (s *Store) SetUserPassword(ctx context.Context, id int64, passwordHash string, opts PasswordReset) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		if _, err := lockUser(ctx, q, id); err != nil {
 			return err
 		}
-		if err := one(q.SetUserPassword(ctx, db.SetUserPasswordParams{ID: id, PasswordHash: passwordHash, MustChangePassword: mustChange})); err != nil {
+		if err := one(q.SetUserPassword(ctx, db.SetUserPasswordParams{ID: id, PasswordHash: passwordHash, MustChangePassword: opts.MustChange})); err != nil {
 			return err
 		}
-		if dropPasskeys {
+		if opts.DropPasskeys {
 			if _, err := removePasskeys(ctx, q, id); err != nil {
+				return err
+			}
+		}
+		if opts.RevokeAPIKeys {
+			if _, err := revokeUserAPIKeys(ctx, q, id, opts.By); err != nil {
 				return err
 			}
 		}
@@ -204,7 +221,7 @@ func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error 
 	})
 }
 
-// DeleteUser deletes a user and their sessions. It fails with ErrLastAdmin
+// DeleteUser deletes a user, their sessions and API keys. It fails with ErrLastAdmin
 // for the last unlocked admin and with ErrOwnsAccounts while the user owns
 // accounts (also removed ones, whose mail stays in the archive).
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
@@ -219,6 +236,14 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 			return err
 		} else if owns {
 			return ErrOwnsAccounts
+		}
+		// The keys go with the user (ON DELETE CASCADE).
+		if e := auditFrom(ctx); e != nil {
+			n, err := q.CountActiveAPIKeys(ctx, id)
+			if err != nil {
+				return err
+			}
+			e.Detail("api_keys_removed", n)
 		}
 		return one(q.DeleteUser(ctx, id))
 	})

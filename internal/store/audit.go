@@ -293,6 +293,7 @@ var auditGroups = map[string][]string{
 	"accounts": {"account.%"},
 	"users":    {"user.%"},
 	"profile":  {"profile.%"},
+	"api_keys": {"api_key.%"},
 	"sync":     {"sync.%"},
 }
 

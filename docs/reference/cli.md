@@ -23,10 +23,12 @@ characters and are prompted twice, or read once from stdin with
 | Command | Purpose |
 |---|---|
 | `user add NAME` | Create a user. `--admin` for an admin (admins manage users in the web UI; they do not see other users' mail, but they see everyone's [audit log](../guide/audit-log)). |
-| `user list` | List users with role, state (active, locked, must change password), number of accounts and passkeys, and last login. |
+| `user list` | List users with role, state (active, locked, must change password), number of accounts, passkeys and active API keys, and last login. |
 | `user set-password NAME` | Set a new password. Ends the user's sessions. |
-| `user reset-password NAME` | Generate a password, print it once; the user must change it at the next login. Ends the user's sessions and removes their passkeys (`--keep-passkeys` keeps them). |
+| `user reset-password NAME` | Generate a password, print it once; the user must change it at the next login. Ends the user's sessions, removes their passkeys and revokes their [API keys](./api#api-keys) (`--keep-passkeys` and `--keep-api-keys` keep them). |
 | `user remove-passkeys NAME` | Remove all passkeys of a user, for example after a lost device. Ends the user's sessions. |
+| `user api-keys NAME` | List a user's API keys: name, last characters, scopes, created, expires, last used, state. Keys are created in the web UI's profile, never on the command line: that needs the second factor. |
+| `user revoke-api-keys NAME` | Revoke all API keys of a user, for example when no admin can log in. |
 | `user reset-2fa NAME` | Turn off the user's 2FA, for example after a lost phone. Ends the user's sessions; admins set it up again at the next login. |
 | `user promote NAME`, `user demote NAME` | Grant or take away the admin role. |
 | `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
@@ -80,7 +82,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
-| `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `sync`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
+| `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `attest` | Write a signed attestation over the archived messages now. See below. |
 | `attest keygen [--rotate]` | Create the key that signs attestations, or replace it. See below. |
 | `attest public-key` | Print the public key attestations are verified with. |

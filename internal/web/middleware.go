@@ -19,6 +19,7 @@ import (
 //     attack uses the attacker's domain as Host, so it is rejected.
 //   - State-changing requests must come from the same origin and carry a
 //     JSON body, which a cross-site form or simple request cannot send.
+//     Requests with an API key are exempt: they carry no cookie.
 
 // hostAllowed reports whether the request's Host (without port) is allowed.
 func (s *Server) hostAllowed(r *http.Request) bool {
@@ -47,9 +48,16 @@ func (s *Server) protect(next http.Handler) http.Handler {
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
 		}
+		// An API key request carries its credential in a header that a
+		// cross-site page cannot set, never in a cookie (see bearerKey), so
+		// it needs neither Origin nor a JSON content type.
+		_, keyRequest := bearerKey(r)
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 		default:
+			if keyRequest {
+				break
+			}
 			if !sameOrigin(r) {
 				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
 				return

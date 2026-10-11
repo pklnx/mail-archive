@@ -38,8 +38,10 @@ func TestAttestMigration(t *testing.T) {
 	ctx := context.Background()
 	st, url := storetest.NewWithURL(t)
 	conn := connect(t, url)
-	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00019_attestations") {
-		t.Fatalf("down: %q %v", m, err)
+	for _, want := range []string{"00020_api_keys", "00019_attestations"} {
+		if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, want) {
+			t.Fatalf("down: %q %v", m, err)
+		}
 	}
 	if _, err := conn.Exec(ctx, "INSERT INTO messages (sha256, size, stored_path) SELECT lpad(to_hex(i), 64, '0'), 1, 'x' FROM generate_series(1, 5) i"); err != nil {
 		t.Fatal(err)
@@ -76,6 +78,9 @@ func TestAttestMigration(t *testing.T) {
 		if _, err := conn.Exec(ctx, sql); err == nil || !strings.Contains(err.Error(), "append-only") {
 			t.Errorf("%s: %v", sql, err)
 		}
+	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00020_api_keys") {
+		t.Fatalf("down the API keys: %q %v", m, err)
 	}
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "attestations exist") {
 		t.Errorf("down with attestations: %v", err)

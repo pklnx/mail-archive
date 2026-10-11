@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { usersApi, type GeneratedPassword, type ManagedUser } from "./api";
+import { ApiKeyItems } from "./ApiKeys";
+import { apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
 import { relativeTime } from "./format";
 import { t } from "./i18n";
 
@@ -19,6 +20,9 @@ export function UsersPage({ close }: { close: () => void }) {
   const [generated, setGenerated] = useState<GeneratedPassword | null>(null);
   // The user whose password reset waits for confirmation.
   const [resetting, setResetting] = useState<ManagedUser | null>(null);
+  // The user whose API keys are shown, and every user's keys.
+  const [showKeys, setShowKeys] = useState("");
+  const [keys, setKeys] = useState<ApiKey[]>([]);
 
   const reload = useCallback(() => {
     usersApi.list().then(
@@ -28,6 +32,7 @@ export function UsersPage({ close }: { close: () => void }) {
       },
       (err: unknown) => setError(message(err)),
     );
+    apiKeyApi.listAll().then(setKeys, () => setKeys([]));
   }, []);
   useEffect(reload, [reload]);
 
@@ -86,11 +91,20 @@ export function UsersPage({ close }: { close: () => void }) {
               </span>
               <span className="text-sm text-zinc-500">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
               {u.passkeys > 0 && <span className="text-sm text-zinc-500">{t.passkeyCount(u.passkeys)}</span>}
+              {u.apiKeys > 0 && <span className="text-sm text-zinc-500">{t.apiKeyCount(u.apiKeys)}</span>}
               {u.failingAccounts > 0 && <span className="text-sm font-medium text-red-600">{t.failingCount(u.failingAccounts)}</span>}
               <span className="ml-auto text-sm text-zinc-500">
                 {t.colAccounts}: {u.accounts} · {t.colLastLogin}: {u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}
               </span>
             </div>
+            {keys.some((k) => k.user === u.name) && (
+              <button type="button" className={`${button} self-start`} onClick={() => setShowKeys(showKeys === u.name ? "" : u.name)}>
+                {showKeys === u.name ? t.hideApiKeys : t.showApiKeys}
+              </button>
+            )}
+            {showKeys === u.name && (
+              <ApiKeyItems keys={keys.filter((k) => k.user === u.name)} revoke={(k) => void run(() => apiKeyApi.revokeAny(k.id))} />
+            )}
             {u.self ? (
               <p className="text-sm text-zinc-500">{t.selfHint}</p>
             ) : (
@@ -139,9 +153,9 @@ export function UsersPage({ close }: { close: () => void }) {
               <ResetPasswordConfirm
                 user={u}
                 cancel={() => setResetting(null)}
-                confirm={(removePasskeys) => {
+                confirm={(removePasskeys, revokeApiKeys) => {
                   setResetting(null);
-                  void run(async () => setGenerated(await usersApi.resetPassword(u.name, removePasskeys)));
+                  void run(async () => setGenerated(await usersApi.resetPassword(u.name, removePasskeys, revokeApiKeys)));
                 }}
               />
             )}
@@ -153,11 +167,21 @@ export function UsersPage({ close }: { close: () => void }) {
 }
 
 /**
- * Asks before a password reset. Passkeys are removed by default: after a
- * compromise, a new password alone would not lock the attacker out.
+ * Asks before a password reset. Passkeys are removed and API keys revoked
+ * by default: after a compromise, a new password alone would not lock the
+ * attacker out.
  */
-function ResetPasswordConfirm({ user, cancel, confirm }: { user: ManagedUser; cancel: () => void; confirm: (removePasskeys: boolean) => void }) {
+function ResetPasswordConfirm({
+  user,
+  cancel,
+  confirm,
+}: {
+  user: ManagedUser;
+  cancel: () => void;
+  confirm: (removePasskeys: boolean, revokeApiKeys: boolean) => void;
+}) {
   const [removePasskeys, setRemovePasskeys] = useState(true);
+  const [revokeApiKeys, setRevokeApiKeys] = useState(true);
   return (
     <div role="group" className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
       <p>{t.confirmResetPassword(user.name)}</p>
@@ -167,8 +191,14 @@ function ResetPasswordConfirm({ user, cancel, confirm }: { user: ManagedUser; ca
           {t.resetAlsoPasskeys(user.passkeys)}
         </label>
       )}
+      {user.apiKeys > 0 && (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={revokeApiKeys} onChange={(e) => setRevokeApiKeys(e.target.checked)} />
+          {t.resetAlsoApiKeys(user.apiKeys)}
+        </label>
+      )}
       <div className="flex gap-2">
-        <button type="button" className={primary} onClick={() => confirm(user.passkeys > 0 && removePasskeys)}>
+        <button type="button" className={primary} onClick={() => confirm(user.passkeys > 0 && removePasskeys, revokeApiKeys)}>
           {t.confirmReset}
         </button>
         <button type="button" className={button} onClick={cancel}>

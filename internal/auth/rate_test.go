@@ -27,6 +27,31 @@ func TestRate(t *testing.T) {
 	}
 }
 
+func TestRateBlocked(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	r := NewRate(2, time.Minute)
+	r.now = func() time.Time { return now }
+	if r.Blocked("a") != 0 {
+		t.Fatal("blocked without events")
+	}
+	r.Allow("a")
+	if r.Blocked("a") != 0 {
+		t.Fatal("blocked below the limit")
+	}
+	r.Allow("a")
+	now = now.Add(20 * time.Second)
+	if wait := r.Blocked("a"); wait != 40*time.Second {
+		t.Fatalf("wait %v", wait)
+	}
+	if wait := r.Blocked("a"); wait != 40*time.Second {
+		t.Fatal("Blocked counted an event")
+	}
+	now = now.Add(40 * time.Second)
+	if r.Blocked("a") != 0 {
+		t.Fatal("blocked in the next window")
+	}
+}
+
 func TestLimiterAddressOnly(t *testing.T) {
 	l := NewLimiter()
 	for range addrFailures {
