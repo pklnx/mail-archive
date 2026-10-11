@@ -356,7 +356,7 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 		return err
 	}
 	if p != nil {
-		if err := s.insertAuditWith(ctx, q, p.entry, ua); err != nil {
+		if err := insertAudit(ctx, q, p.entry, ua); err != nil {
 			// A failed statement aborts the transaction, so no retry here:
 			// create the partition for the next attempt.
 			_ = tx.Rollback(ctx)
