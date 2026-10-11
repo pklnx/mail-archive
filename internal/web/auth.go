@@ -123,12 +123,13 @@ func (s *Server) session(r *http.Request) (*store.Session, error) {
 	return sess, nil
 }
 
-// authenticate lets requests under /api/ through only with a valid session,
-// except routes whose access in the route table is public or login. A path
-// without a route, or with a method no route takes, counts as session-only,
-// so it answers 401 without a login. New endpoints are protected by default
-// (accessSession is the zero value). /healthz and the UI code (/, /assets/)
-// are public; they contain no data.
+// authenticate lets requests under /api/ through only with a valid session
+// or API key, except routes whose access in the route table is public, and
+// login routes for requests without a key. A path without a route, or with
+// a method no route takes, counts as session-only, so it answers 401
+// without a login. New endpoints are protected by default (accessSession
+// is the zero value). /healthz and the UI code (/, /assets/) are public;
+// they contain no data.
 func (s *Server) authenticate(mux *http.ServeMux, accessOf map[string]access) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -136,7 +137,19 @@ func (s *Server) authenticate(mux *http.ServeMux, accessOf map[string]access) ht
 			return
 		}
 		_, pattern := mux.Handler(r)
-		if a := accessOf[pattern]; a == accessPublic || a == accessLogin {
+		a := accessOf[pattern]
+		if a == accessPublic {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		// A key request never falls back to the session cookie.
+		if key, ok := bearerKey(r); ok {
+			if r = s.authenticateKey(w, r, key, a); r != nil {
+				mux.ServeHTTP(w, r)
+			}
+			return
+		}
+		if a == accessLogin {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -347,7 +360,7 @@ const auditMonthsAhead = 3
 
 // housekeeping runs at start and then every hour until ctx ends: it creates
 // the audit log partitions ahead and deletes expired sessions, challenges
-// and ceremonies.
+// and ceremonies, and API keys revoked or expired 30 days ago.
 func (s *Server) housekeeping(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -364,6 +377,13 @@ func (s *Server) housekeeping(ctx context.Context) {
 		}
 		if err := s.store.DeleteExpiredWebAuthnCeremonies(ctx); err != nil && ctx.Err() == nil {
 			s.log.Warn("delete expired passkey ceremonies", "err", err)
+		}
+		if n, err := s.store.DeleteOldAPIKeys(ctx); err != nil {
+			if ctx.Err() == nil {
+				s.log.Warn("delete old API keys", "err", err)
+			}
+		} else if n > 0 {
+			s.log.Debug("deleted API keys revoked or expired 30 days ago", "count", n)
 		}
 		if n, err := s.store.DeleteExpiredSessions(ctx, time.Now().Add(-auth.IdleTimeout)); err != nil {
 			if ctx.Err() == nil {

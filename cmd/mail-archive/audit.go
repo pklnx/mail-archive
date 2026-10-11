@@ -107,8 +107,9 @@ func newAuditCmd() *cobra.Command {
 
 DATE is YYYY-MM-DD (midnight UTC) or RFC 3339. --until is exclusive; a plain
 date includes that day. --action takes a group (login, search, read,
-export, accounts, users, profile, sync) or an action such as message.open,
-and is repeatable. --user selects the entries of a current user.
+export, accounts, users, profile, api_keys, sync) or an action such as
+message.open, and is repeatable. --user selects the entries of a current
+user.
 
 The export itself is recorded as audit.export. FILE must not exist; it is
 written with mode 0600 and appears when it is complete. In CSV, a cell that

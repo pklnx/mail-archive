@@ -47,6 +47,12 @@ type Server struct {
 	webauthn      *webauthn.WebAuthn
 	publicOrigin  string
 	passkeyBegins *auth.Rate
+	// apiKeyRate limits requests per key, badKeyRate invalid keys per
+	// client address. Not the login limiter: behind a reverse proxy all
+	// clients may share an address, and a broken script must not block
+	// everyone's password logins.
+	apiKeyRate *auth.Rate
+	badKeyRate *auth.Rate
 	// alertAfter failed syncs in a row make an account failing.
 	alertAfter  int
 	healthCache syncHealthCache
@@ -121,6 +127,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
+		apiKeyRate: auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
 		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies,
 	}
 }

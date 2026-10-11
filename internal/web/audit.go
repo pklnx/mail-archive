@@ -20,11 +20,15 @@ import (
 
 const errAuditUnavailable = "the audit log cannot be written; nothing was done"
 
-// auditEntry starts an entry for r: the logged-in user and the client.
+// auditEntry starts an entry for r: the logged-in user, the API key if the
+// request used one, and the client.
 func (s *Server) auditEntry(r *http.Request, action string) *store.AuditEntry {
 	e := &store.AuditEntry{Actor: store.ActorSession, Action: action, ClientIP: s.clientIP(r), UserAgent: r.UserAgent()}
 	if sess := currentSession(r); sess != nil {
 		e.SetUser(sess.UserID, sess.UserName)
+	}
+	if k := currentAPIKey(r); k != nil {
+		e.Actor, e.APIKeyID, e.APIKeyName = store.ActorAPIKey, &k.ID, k.Name
 	}
 	return e
 }

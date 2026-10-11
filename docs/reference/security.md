@@ -12,14 +12,15 @@
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
+| API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A key reaches only the read and sync endpoints of its owner. See [Login](#login). |
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
 | The SMTP port | Off by default. When on, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect; see [The SMTP server](#the-smtp-server). |
 
 ## Login
 
-Every API request needs a login, except the login itself, `/healthz` and the
-API description `/api/openapi.json`. The page code (`/`, `/assets/`) is
+Every API request needs a login or an API key, except the login itself,
+`/healthz` and the API description `/api/openapi.json`. The page code (`/`, `/assets/`) is
 public; it contains no data. Which route needs what is set in one table
 (`internal/web/routes.go`); a route not listed there, or a new one without
 an access level, needs a login.
@@ -49,6 +50,21 @@ an access level, needs a login.
   until then. Starting a passkey login needs no session; it is limited to 30
   per minute per address and 1000 open logins in total. Passwords stay: an
   account never depends on passkeys alone.
+- **API keys** let scripts read mail (`read`) or start syncs (`sync`), and
+  nothing else: logins, the profile, users and account changes stay with
+  the session and the command line. Creating a key needs the password and,
+  with 2FA on, a code; using it needs nothing else. A key is 256 random bits
+  (`ma_` and 52 base32 characters), shown once; the database stores its
+  SHA-256 and the last 4 characters, so a database copy contains no usable
+  keys. A key never does more than a session of its owner: the owner's role,
+  lock and gates (a password to change, 2FA to set up) are checked on every
+  request. Locking a user suspends their keys, an admin's password reset
+  revokes them (unless the admin keeps them), removing the user deletes
+  them. The user's own password change keeps them: scripts should not break
+  on a routine change; the profile lists them for revocation. Each key may
+  make 600 requests per minute; more than 30 invalid keys per client address
+  and minute answer `429`, without touching the password login limits. Keys
+  never appear in logs or in the audit log.
 - **Failed logins:** after 5 failures for a user name within 15 minutes, the
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
   further failure. 20 failures from one address within 15 minutes block that
@@ -178,6 +194,15 @@ A website can send requests to `localhost` (but not read the answers).
 State-changing requests (`POST`, `PATCH`, `DELETE`) must have an `Origin`
 header matching the server and a JSON content type. Plain HTML forms and
 simple cross-site requests can do neither.
+
+Requests with an API key (`Authorization: Bearer ma_…`) are exempt. The
+check protects the cookie, which the browser adds on its own to a request
+another site starts. A key request carries its credential in the header
+itself and never reads the cookie, also when the key is invalid. A page on
+another site cannot add an `Authorization` header without a CORS preflight,
+which the server never answers with permission, and a page that already
+knows a key gains nothing from a visitor's browser. The `Host` check still
+applies.
 
 ### HTML mail
 

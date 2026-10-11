@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -29,6 +30,8 @@ Create the first admin with:  user add NAME --admin`,
 		newUserResetPasswordCmd(),
 		newUserReset2FACmd(),
 		newUserRemovePasskeysCmd(),
+		newUserAPIKeysCmd(),
+		newUserRevokeAPIKeysCmd(),
 		newUserAdminCmd(true),
 		newUserAdminCmd(false),
 		newUserLockCmd(true),
@@ -150,12 +153,16 @@ func newUserListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			apiKeys, err := a.store.APIKeyCounts(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if len(users) == 0 {
 				fmt.Printf("No users yet. Create the first admin with: %s user add NAME --admin\n", commandName())
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tROLE\tSTATE\tACCOUNTS\tPASSKEYS\tCREATED\tLAST LOGIN")
+			fmt.Fprintln(w, "NAME\tROLE\tSTATE\tACCOUNTS\tPASSKEYS\tAPI KEYS\tCREATED\tLAST LOGIN")
 			// STATE says "must change password" for generated passwords.
 			for _, u := range users {
 				role, state, last := "user", "active", "never"
@@ -171,7 +178,7 @@ func newUserListCmd() *cobra.Command {
 				if u.LastLoginAt != nil {
 					last = u.LastLoginAt.Local().Format(time.DateTime)
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\t%s\n", u.Name, role, state, owned[u.ID], passkeys[u.ID], u.CreatedAt.Local().Format(time.DateOnly), last)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%s\t%s\n", u.Name, role, state, owned[u.ID], passkeys[u.ID], apiKeys[u.ID], u.CreatedAt.Local().Format(time.DateOnly), last)
 			}
 			return w.Flush()
 		},
@@ -222,7 +229,7 @@ func newUserSetPasswordCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.store.SetUserPassword(withCLIAudit(cmd, cliUserTarget(cliEntry("user.password_set"), u)), u.ID, hash, false, false); err != nil {
+			if err := a.store.SetUserPassword(withCLIAudit(cmd, cliUserTarget(cliEntry("user.password_set"), u)), u.ID, hash, store.PasswordReset{}); err != nil {
 				return err
 			}
 			fmt.Printf("password of %q changed; existing logins ended\n", u.Name)
@@ -288,7 +295,7 @@ func newUserRemoveCmd() *cobra.Command {
 }
 
 func newUserResetPasswordCmd() *cobra.Command {
-	var keepPasskeys bool
+	var keepPasskeys, keepAPIKeys bool
 	cmd := &cobra.Command{
 		Use:   "reset-password NAME",
 		Short: "Generate a new password the user must change at the next login",
@@ -296,8 +303,9 @@ func newUserResetPasswordCmd() *cobra.Command {
 next login they must choose their own password. The user is logged out
 everywhere.
 
-The user's passkeys are removed too, unless --keep-passkeys is given: after
-a compromise, a new password alone would not lock the attacker out.`,
+The user's passkeys are removed and their API keys revoked too, unless
+--keep-passkeys or --keep-api-keys is given: after a compromise, a new
+password alone would not lock the attacker out.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, u, err := loadUser(cmd, args[0])
@@ -315,17 +323,22 @@ a compromise, a new password alone would not lock the attacker out.`,
 			}
 			e := cliUserTarget(cliEntry("user.password_reset"), u)
 			e.Detail("passkeys_removed", !keepPasskeys)
-			if err := a.store.SetUserPassword(withCLIAudit(cmd, e), u.ID, hash, true, !keepPasskeys); err != nil {
+			opts := store.PasswordReset{MustChange: true, DropPasskeys: !keepPasskeys, RevokeAPIKeys: !keepAPIKeys}
+			if err := a.store.SetUserPassword(withCLIAudit(cmd, e), u.ID, hash, opts); err != nil {
 				return err
 			}
 			if !keepPasskeys {
 				fmt.Printf("passkeys of %q removed\n", u.Name)
+			}
+			if !keepAPIKeys {
+				fmt.Printf("%v API key(s) of %q revoked\n", e.Details["api_keys_revoked"], u.Name)
 			}
 			fmt.Printf("new password for %q (shown only now; to be changed at the next login):\n%s\n", u.Name, pw)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&keepPasskeys, "keep-passkeys", false, "do not remove the user's passkeys")
+	cmd.Flags().BoolVar(&keepAPIKeys, "keep-api-keys", false, "do not revoke the user's API keys")
 	return cmd
 }
 
@@ -345,6 +358,71 @@ func newUserRemovePasskeysCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("%d passkey(s) of %q removed; existing logins ended\n", n, u.Name)
+			return nil
+		},
+	}
+}
+
+func newUserAPIKeysCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "api-keys NAME",
+		Short: "List a user's API keys",
+		Long: `List a user's API keys: name, the last characters of the key, scopes,
+when it was created, when it expires, when it was last used, and its state.
+Revoked and expired keys stay listed for 30 days. Keys are created in the
+web UI's profile, with the password and the second factor.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, u, err := loadUser(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			keys, err := a.store.ListAPIKeys(cmd.Context(), u.ID)
+			if err != nil {
+				return err
+			}
+			if len(keys) == 0 {
+				fmt.Printf("%q has no API keys\n", u.Name)
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tKEY\tSCOPES\tCREATED\tEXPIRES\tLAST USED\tSTATE")
+			now := time.Now()
+			for _, k := range keys {
+				expires, used := "never", "never"
+				if k.ExpiresAt != nil {
+					expires = k.ExpiresAt.Local().Format(time.DateOnly)
+				}
+				if k.LastUsedAt != nil {
+					used = k.LastUsedAt.Local().Format(time.DateTime)
+				}
+				fmt.Fprintf(w, "%s\t%s…%s\t%s\t%s\t%s\t%s\t%s\n", k.Name, auth.APIKeyPrefix, k.Hint, strings.Join(k.Scopes, ","),
+					k.CreatedAt.Local().Format(time.DateOnly), expires, used, k.State(now))
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func newUserRevokeAPIKeysCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "revoke-api-keys NAME",
+		Short: "Revoke all API keys of a user",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, u, err := loadUser(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			defer a.close()
+			e := cliUserTarget(cliEntry("api_key.revoke"), u)
+			e.Detail("reason", "cli")
+			n, err := a.store.RevokeUserAPIKeys(withCLIAudit(cmd, e), u.ID, nil)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%d API key(s) of %q revoked\n", n, u.Name)
 			return nil
 		},
 	}

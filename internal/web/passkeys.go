@@ -36,7 +36,9 @@ const (
 	passkeyBeginWindow = time.Minute
 )
 
-const maxPasskeyName = 64
+// maxCredentialName is the longest name of a passkey or an API key, in
+// characters.
+const maxCredentialName = 64
 
 // newWebAuthn configures the relying party for publicURL; nil turns
 // passkeys off.
@@ -269,8 +271,9 @@ type passkeyRegistrationInput struct {
 	Code string `json:"code"`
 }
 
-func validPasskeyName(name string) bool {
-	if name == "" || utf8.RuneCountInString(name) > maxPasskeyName {
+// validCredentialName checks the name of a passkey or an API key.
+func validCredentialName(name string) bool {
+	if name == "" || utf8.RuneCountInString(name) > maxCredentialName {
 		return false
 	}
 	for _, c := range name {
@@ -334,8 +337,8 @@ func (s *Server) handleBeginPasskeyRegistration(w http.ResponseWriter, r *http.R
 		return
 	}
 	in.Name = strings.TrimSpace(in.Name)
-	if !validPasskeyName(in.Name) {
-		s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("give the passkey a name of 1 to %d characters", maxPasskeyName), nil)
+	if !validCredentialName(in.Name) {
+		s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("give the passkey a name of 1 to %d characters", maxCredentialName), nil)
 		return
 	}
 	if !s.checkOwnLogin(w, r, in.CurrentPassword, in.Code) {

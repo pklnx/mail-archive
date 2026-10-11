@@ -24,7 +24,9 @@ type adminUserJSON struct {
 	MustChangePassword bool   `json:"mustChangePassword"`
 	TwoFactorEnabled   bool   `json:"twoFactorEnabled"`
 	Passkeys           int64  `json:"passkeys"`
-	Accounts           int64  `json:"accounts"`
+	// APIKeys counts the user's keys that are neither revoked nor expired.
+	APIKeys  int64 `json:"apiKeys"`
+	Accounts int64 `json:"accounts"`
 	// FailingAccounts counts the user's accounts whose syncs keep failing.
 	FailingAccounts int64      `json:"failingAccounts"`
 	CreatedAt       time.Time  `json:"createdAt"`
@@ -61,6 +63,11 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	apiKeys, err := s.store.APIKeyCounts(r.Context())
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	failing, err := s.store.CountFailingByOwner(r.Context(), s.alertAfter)
 	if err != nil {
 		s.failStore(w, r, err)
@@ -70,7 +77,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	for _, u := range users {
 		out = append(out, adminUserJSON{
 			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TwoFactorEnabled,
-			Passkeys: passkeys[u.ID], Accounts: owned[u.ID], FailingAccounts: failing[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
+			Passkeys: passkeys[u.ID], APIKeys: apiKeys[u.ID], Accounts: owned[u.ID], FailingAccounts: failing[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
 		})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"users": out})
@@ -151,10 +158,12 @@ func (s *Server) pathUser(w http.ResponseWriter, r *http.Request) (*store.User, 
 }
 
 // passwordResetInput is the optional body of a password reset. Passkeys
-// are removed unless removePasskeys is false: after a compromise a new
-// password alone would not lock the attacker out.
+// are removed and API keys revoked unless removePasskeys or revokeApiKeys
+// is false: after a compromise a new password alone would not lock the
+// attacker out.
 type passwordResetInput struct {
 	RemovePasskeys *bool `json:"removePasskeys"`
+	RevokeAPIKeys  *bool `json:"revokeApiKeys"`
 }
 
 func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +179,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	removePasskeys := in.RemovePasskeys == nil || *in.RemovePasskeys
+	revokeKeys := in.RevokeAPIKeys == nil || *in.RevokeAPIKeys
 	pw, hash, ok := s.generatePassword(w, r)
 	if !ok {
 		return
@@ -177,11 +187,14 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 	e := s.auditEntry(r, "user.password_reset")
 	auditUser(e, u)
 	e.Detail("passkeys_removed", removePasskeys)
-	if err := s.store.SetUserPassword(withAudit(r, e), u.ID, hash, true, removePasskeys); err != nil {
+	by := userID(r)
+	opts := store.PasswordReset{MustChange: true, DropPasskeys: removePasskeys, RevokeAPIKeys: revokeKeys, By: &by}
+	if err := s.store.SetUserPassword(withAudit(r, e), u.ID, hash, opts); err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	s.log.Info("password reset", "user", u.Name, "passkeysRemoved", removePasskeys, "by", currentSession(r).UserName)
+	s.log.Info("password reset", "user", u.Name, "passkeysRemoved", removePasskeys, "apiKeysRevoked", e.Details["api_keys_revoked"],
+		"by", currentSession(r).UserName)
 	s.writeJSON(w, http.StatusOK, generatedPasswordJSON{Name: u.Name, Password: pw})
 }
 

@@ -243,13 +243,13 @@ func TestPasskeyRemovalAndPasswordReset(t *testing.T) {
 	if err := registerFake(t, st, alice.ID, "Phone", "cred-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetUserPassword(ctx, alice.ID, "h2", true, false); err != nil {
+	if err := st.SetUserPassword(ctx, alice.ID, "h2", store.PasswordReset{MustChange: true}); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := st.PasskeyCounts(ctx); n[alice.ID] != 1 {
 		t.Fatalf("passkeys after reset with keep: %v", n)
 	}
-	if err := st.SetUserPassword(ctx, alice.ID, "h3", true, true); err != nil {
+	if err := st.SetUserPassword(ctx, alice.ID, "h3", store.PasswordReset{MustChange: true, DropPasskeys: true}); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := st.PasskeyCounts(ctx); n[alice.ID] != 0 {

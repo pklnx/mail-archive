@@ -20,13 +20,16 @@ var specMethods = []string{"get", "put", "post", "delete", "options", "head", "p
 var pathParam = regexp.MustCompile(`\{([^}]+)\}`)
 
 // expectedSecurity is the security an operation must declare for a route's
-// access. API keys (#67) will add their scopes to read and sync routes.
+// access: read and sync routes name the API key scope they need.
 func expectedSecurity(a access) any {
+	session := map[string]any{"session": []any{}}
 	switch a {
 	case accessPublic, accessLogin:
 		return []any{}
+	case accessRead, accessSync:
+		return []any{session, map[string]any{"apiKey": []any{requiredScope(a)}}}
 	default:
-		return []any{map[string]any{"session": []any{}}}
+		return []any{session}
 	}
 }
 

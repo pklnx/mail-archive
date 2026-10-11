@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetupState } from "./api";
 import { t } from "./i18n";
+import { ApiKeySection } from "./ApiKeys";
 import { PasskeySection } from "./Passkeys";
 
 const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
@@ -91,6 +92,8 @@ export function ProfilePage({ name, close }: { name: string; close: () => void }
       <TwoFactorSetup />
       <h2 className="font-semibold">{t.passkeys}</h2>
       <PasskeySection />
+      <h2 className="font-semibold">{t.apiKeys}</h2>
+      <ApiKeySection />
     </div>
   );
 }

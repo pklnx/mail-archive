@@ -13,10 +13,10 @@ type access int
 
 const (
 	accessSession access = iota // a session only; the zero value, so a forgotten field is the strictest
-	accessLogin                 // the login endpoints: no session needed
+	accessLogin                 // the login endpoints: no session needed, refused with a key
 	accessPublic                // no login: health checks, UI code, the spec
-	accessRead                  // a session (later also an API key with "read")
-	accessSync                  // a session (later also an API key with "sync")
+	accessRead                  // a session or an API key with "read"
+	accessSync                  // a session or an API key with "sync"
 )
 
 type route struct {
@@ -56,6 +56,9 @@ func (s *Server) routes() []route {
 		h("POST /api/profile/passkeys/begin", s.handleBeginPasskeyRegistration, accessSession),
 		h("POST /api/profile/passkeys/finish", s.handleFinishPasskeyRegistration, accessSession),
 		h("DELETE /api/profile/passkeys/{id}", s.handleRemovePasskey, accessSession),
+		h("GET /api/profile/api-keys", s.handleListAPIKeys, accessSession),
+		h("POST /api/profile/api-keys", s.handleCreateAPIKey, accessSession),
+		h("DELETE /api/profile/api-keys/{id}", s.handleRevokeOwnAPIKey, accessSession),
 
 		h("GET /api/users", s.handleListUsers, accessSession),
 		h("POST /api/users", s.handleCreateUser, accessSession),
@@ -64,6 +67,8 @@ func (s *Server) routes() []route {
 		h("POST /api/users/{name}/password", s.handleResetUserPassword, accessSession),
 		h("POST /api/users/{name}/2fa/reset", s.handleResetUserTwoFactor, accessSession),
 		h("DELETE /api/users/{name}/passkeys", s.handleRemoveUserPasskeys, accessSession),
+		h("GET /api/api-keys", s.handleListAllAPIKeys, accessSession),
+		h("DELETE /api/api-keys/{id}", s.handleRevokeAnyAPIKey, accessSession),
 
 		h("GET /api/status", s.handleStatus, accessRead),
 		h("GET /api/accounts", s.handleAccounts, accessRead),

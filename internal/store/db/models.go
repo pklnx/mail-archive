@@ -43,6 +43,20 @@ type AccountSyncHealth struct {
 	NotifyLeaseUntil   *time.Time
 }
 
+type ApiKey struct {
+	ID         int64
+	UserID     int64
+	KeyHash    []byte
+	Hint       string
+	Name       string
+	Scopes     []string
+	CreatedAt  time.Time
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	RevokedBy  *int64
+}
+
 type Attestation struct {
 	Seq            int64
 	CreatedAt      time.Time

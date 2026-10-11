@@ -11,9 +11,17 @@ info:
     only sees their own accounts and the messages found in them; other
     users' accounts and messages answer `404`.
 
-    Write requests (`POST`, `PUT`, `PATCH`, `DELETE`) need
+    Requests authenticate with the session cookie of the web UI or with an
+    API key: `Authorization: Bearer ma_…`. A key is created in the profile
+    and has the scope `read` (messages, search, accounts, status), `sync`
+    (starting syncs) or both; every other route is for sessions only. A key
+    request never reads cookies. An invalid, revoked or expired key, or one
+    whose owner is locked, answers `401`; a route outside the key's scopes
+    `403`; more than 600 requests per key and minute `429`.
+
+    Write requests (`POST`, `PUT`, `PATCH`, `DELETE`) with a session need
     `Content-Type: application/json`, also without a body, and an `Origin`
-    header that matches the server.
+    header that matches the server. Requests with an API key need neither.
 
     A user who logged in with a generated password gets `403` with
     `"passwordChangeRequired": true` everywhere except
@@ -46,7 +54,7 @@ tags:
   - name: session
     description: Login and logout.
   - name: profile
-    description: The logged-in user's password, 2FA and passkeys.
+    description: The logged-in user's password, 2FA, passkeys and API keys.
   - name: users
     description: User management, for admins only.
   - name: accounts
@@ -620,6 +628,113 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/profile/api-keys:
+    get:
+      tags: [profile]
+      operationId: listAPIKeys
+      summary: The own API keys
+      description: Also revoked and expired keys, for 30 days.
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [max, keys]
+                properties:
+                  max:
+                    type: integer
+                    description: How many active keys a user can have.
+                  keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [profile]
+      operationId: createAPIKey
+      summary: Create an API key
+      description: |
+        Needs the password and, with 2FA on, a TOTP or recovery code. The key
+        is in the answer and shown only there; only its SHA-256 is stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes, currentPassword]
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                scopes:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: "#/components/schemas/APIKeyScope"
+                expiresInDays:
+                  type: [integer, "null"]
+                  minimum: 1
+                  maximum: 3650
+                  description: Days until the key expires; null or missing for never.
+                currentPassword:
+                  type: string
+                code:
+                  type: string
+                  description: A TOTP code or a recovery code; only with 2FA on.
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIKey"
+                  - type: object
+                    required: [key]
+                    properties:
+                      key:
+                        type: string
+                        pattern: "^ma_[a-z2-7]{52}$"
+                        description: The key, shown only here.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong password or code (counts like a failed login), or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The name is in use, or the user has the maximum number of keys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/profile/api-keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/apiKeyID"
+    delete:
+      tags: [profile]
+      operationId: revokeAPIKey
+      summary: Revoke an own API key
+      description: Needs no password. Another user's key answers `404`.
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/users:
     get:
       tags: [users]
@@ -748,8 +863,9 @@ paths:
       summary: Generate a new password for a user
       description: |
         The user is logged out and must change the password at the next
-        login. Their passkeys are removed too, unless `removePasskeys` is
-        false. The body may be empty.
+        login. Their passkeys are removed and their API keys revoked too,
+        unless `removePasskeys` or `revokeApiKeys` is false. The body may be
+        empty.
       requestBody:
         content:
           application/json:
@@ -758,6 +874,9 @@ paths:
               additionalProperties: false
               properties:
                 removePasskeys:
+                  type: boolean
+                  default: true
+                revokeApiKeys:
                   type: boolean
                   default: true
       responses:
@@ -812,10 +931,60 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/api-keys:
+    get:
+      tags: [users]
+      operationId: listAllAPIKeys
+      summary: Every user's API keys
+      description: Names and metadata, never the keys.
+      responses:
+        "200":
+          description: The keys, by user.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/APIKey"
+                        - type: object
+                          required: [user]
+                          properties:
+                            user:
+                              type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+
+  /api/api-keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/apiKeyID"
+    delete:
+      tags: [users]
+      operationId: revokeAnyAPIKey
+      summary: Revoke any user's API key
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/status:
     get:
       tags: [accounts]
       operationId: getStatus
+      security:
+        - session: []
+        - apiKey: [read]
       summary: Messages per account and the last sync
       description: Like `mail-archive status`.
       responses:
@@ -836,11 +1005,18 @@ paths:
                       $ref: "#/components/schemas/AccountStatus"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /api/accounts:
     get:
       tags: [accounts]
       operationId: listAccounts
+      security:
+        - session: []
+        - apiKey: [read]
       summary: The own accounts
       description: Server settings (never the password), folders and the sync state.
       responses:
@@ -852,6 +1028,10 @@ paths:
                 $ref: "#/components/schemas/Accounts"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     post:
       tags: [accounts]
       operationId: createAccount
@@ -1016,6 +1196,9 @@ paths:
     post:
       tags: [accounts]
       operationId: syncAccount
+      security:
+        - session: []
+        - apiKey: [sync]
       summary: Queue a sync of one account
       description: |
         Also a disabled account. A sync already waiting is upgraded, not
@@ -1044,6 +1227,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -1055,6 +1242,9 @@ paths:
     post:
       tags: [accounts]
       operationId: syncAll
+      security:
+        - session: []
+        - apiKey: [sync]
       summary: Queue a sync of all own enabled IMAP accounts
       responses:
         "202":
@@ -1065,6 +1255,10 @@ paths:
                 $ref: "#/components/schemas/Queued"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -1072,6 +1266,9 @@ paths:
     get:
       tags: [messages]
       operationId: listMessages
+      security:
+        - session: []
+        - apiKey: [read]
       summary: List or search messages
       description: Newest first. All filters combine.
       parameters:
@@ -1175,6 +1372,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /api/messages/{sha}:
     parameters:
@@ -1182,6 +1383,9 @@ paths:
     get:
       tags: [messages]
       operationId: getMessage
+      security:
+        - session: []
+        - apiKey: [read]
       summary: One message
       description: Headers, plain text, attachment list and every location.
       responses:
@@ -1195,6 +1399,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1204,6 +1412,9 @@ paths:
     get:
       tags: [messages]
       operationId: getConversation
+      security:
+        - session: []
+        - apiKey: [read]
       summary: The conversation of a message
       description: Oldest first, at most the newest 200.
       responses:
@@ -1228,6 +1439,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1237,6 +1452,9 @@ paths:
     get:
       tags: [messages]
       operationId: getMessageHTML
+      security:
+        - session: []
+        - apiKey: [read]
       summary: The HTML body
       description: |
         For a sandboxed iframe. The Content-Security-Policy blocks scripts and
@@ -1258,6 +1476,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "404":
           description: No such message, or it has no HTML body.
           content:
@@ -1271,6 +1493,9 @@ paths:
     get:
       tags: [messages]
       operationId: getMessageRaw
+      security:
+        - session: []
+        - apiKey: [read]
       summary: The original message file
       responses:
         "200":
@@ -1284,6 +1509,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1300,6 +1529,9 @@ paths:
     get:
       tags: [messages]
       operationId: getMessagePart
+      security:
+        - session: []
+        - apiKey: [read]
       summary: One attachment
       description: |
         PNG, JPEG, GIF and WebP are shown inline; everything else is a
@@ -1319,6 +1551,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1331,8 +1567,22 @@ components:
       description: |
         The session cookie set by the login endpoints. Over HTTPS it is
         named `__Host-mail_archive_session`.
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: ma_…
+      description: |
+        An API key from the profile, as `Authorization: Bearer ma_…`. The
+        scope list of an operation names the key scope it needs.
 
   parameters:
+    apiKeyID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
     sha:
       name: sha
       in: path
@@ -1418,6 +1668,15 @@ components:
             $ref: "#/components/schemas/Retry"
     PasskeysOff:
       description: Passkeys need `MAIL_ARCHIVE_PUBLIC_URL` on the server.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    APIKeyScope:
+      description: |
+        With an API key: the key lacks the scope this route needs (`scope`
+        names it), or the key's owner must change the password or set up
+        2FA first (as for a session).
       content:
         application/json:
           schema:
@@ -1578,9 +1837,47 @@ components:
           type: [string, "null"]
           format: date-time
 
+    APIKeyScope:
+      type: string
+      enum: [read, sync]
+      description: |
+        `read`: messages, search, conversations, downloads, accounts and
+        status. `sync`: starting syncs. Neither implies the other.
+    APIKey:
+      type: object
+      required: [id, name, hint, scopes, createdAt, expiresAt, lastUsedAt, revokedAt, state]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        hint:
+          type: string
+          description: The last 4 characters of the key.
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKeyScope"
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+        state:
+          type: string
+          enum: [active, expired, revoked]
+
     AdminUser:
       type: object
-      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, accounts, failingAccounts, createdAt, lastLoginAt, self]
+      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, apiKeys, accounts, failingAccounts, createdAt, lastLoginAt, self]
       properties:
         name:
           type: string
@@ -1594,6 +1891,9 @@ components:
           type: boolean
         passkeys:
           type: integer
+        apiKeys:
+          type: integer
+          description: API keys that are neither revoked nor expired.
         accounts:
           type: integer
         failingAccounts:

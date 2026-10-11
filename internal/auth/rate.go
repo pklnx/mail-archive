@@ -50,3 +50,16 @@ func (r *Rate) Allow(key string) (bool, time.Duration) {
 	w.n++
 	return true, 0
 }
+
+// Blocked returns how long until key may have an event again, without
+// counting one; zero means now.
+func (r *Rate) Blocked(key string) time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	w := r.counts[key]
+	if w == nil || now.Sub(w.start) >= r.window || w.n < r.limit {
+		return 0
+	}
+	return w.start.Add(r.window).Sub(now)
+}
