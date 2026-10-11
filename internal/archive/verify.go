@@ -19,6 +19,12 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
+// StaleTempAge is how long a file in tmp/ must be untouched before verify
+// reports it as left by an unfinished write. A younger one may belong to a
+// write in progress: the SMTP receiver writes its files outside the blob
+// lock and takes the lock only to commit.
+const StaleTempAge = time.Hour
+
 // Kinds of verify findings.
 const (
 	FindingMissing    = "missing"    // a messages row without its file
@@ -270,6 +276,9 @@ func (v *verifier) checkFiles(ctx context.Context) error {
 				return flush()
 			}
 		case blobstore.EntryTemp:
+			if time.Since(e.ModTime) < StaleTempAge {
+				return nil // a write in progress
+			}
 			f := Finding{Kind: FindingStaleTemp, Path: e.Path, Size: e.Size}
 			v.report(f)
 			if v.opts.FixOrphans {
@@ -369,6 +378,11 @@ func (v *verifier) move(f Finding) error {
 		return fmt.Errorf("%s already exists", dst)
 	}
 	if err := os.Rename(src, dst); err != nil {
+		if errors.Is(err, fs.ErrNotExist) && f.Kind == FindingStaleTemp {
+			// Its write finished after all, or another verify moved it.
+			v.opts.Logger.Info("verify skipped a temp file that is gone", "path", f.Path)
+			return nil
+		}
 		return err
 	}
 	v.res.Moved++

@@ -41,7 +41,7 @@ func TestSMTPAccountsInTheAPI(t *testing.T) {
 	}
 	env := store.Envelope{MailFrom: "a@example.com", RcptTo: []string{"bcc@example.com"}, ReceivedAt: time.Now(),
 		ClientIP: netip.MustParseAddr("192.0.2.1"), HELO: "mx"}
-	if _, err := f.st.ReceiveMessage(ctx, acc.ID, meta, env); err != nil {
+	if _, err := f.st.ReceiveMessage(ctx, acc.ID, meta, env, func() bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	if a := f.account("journal"); a.LastReceivedAt == nil {

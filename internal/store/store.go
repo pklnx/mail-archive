@@ -379,6 +379,10 @@ type MessageMeta struct {
 	From       string
 	SentAt     *time.Time
 	StoredPath string
+	// Known is set when the metadata was not extracted because the
+	// database already had the message; only SHA256, Size and StoredPath
+	// are set then.
+	Known bool
 	IndexData
 }
 

@@ -21,6 +21,11 @@ const SMTPFolder = "INBOX"
 // receives for.
 var ErrAddressTaken = errors.New("another smtp account receives for this address")
 
+// ErrBlobGone is returned by ReceiveMessage when the message file, or the
+// row its metadata relied on, disappeared before the transaction took the
+// blob lock: verify moved it as an orphan. Delivering again stores it anew.
+var ErrBlobGone = errors.New("the message file or row disappeared before it was committed")
+
 // ErrNotReceiving is returned when a message arrives for an smtp account
 // that is disabled or was removed meanwhile.
 var ErrNotReceiving = errors.New("the account does not receive mail")
@@ -215,10 +220,31 @@ type ReceiveResult struct {
 // (a retry, or a delivery Postfix split into several transactions) gets
 // no second location: its envelope gains the new recipients instead. It
 // fails with ErrNotReceiving if the account is disabled or removed.
-func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta MessageMeta, env Envelope) (ReceiveResult, error) {
+//
+// The message file is written before, without a lock. The transaction
+// takes the blob lock shared, like sync and import, and then checks with
+// fileExists that the file is still there, so verify can never have moved
+// it as an orphan; nor, for metadata that relied on an existing row
+// (meta.Known), the row. Otherwise it fails with ErrBlobGone.
+func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta MessageMeta, env Envelope, fileExists func() bool) (ReceiveResult, error) {
 	var res ReceiveResult
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		res = ReceiveResult{}
+		if err := q.LockBlobsShared(ctx, blobLockClass); err != nil {
+			return fmt.Errorf("wait for the blob lock: %w", err)
+		}
+		if !fileExists() {
+			return ErrBlobGone
+		}
+		if meta.Known {
+			exists, err := q.MessageExists(ctx, meta.SHA256)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				return ErrBlobGone
+			}
+		}
 		acc, err := q.ShareAccount(ctx, accountID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotReceiving

@@ -38,7 +38,8 @@ func newVerifyCmd() *cobra.Command {
 and hashed again, which reports missing and corrupt files with the users,
 accounts and folders they belong to. Then every file in the data directory's
 messages/ and tmp/ is checked against the database, which reports orphans
-(files without a database row), files left by an interrupted sync, and
+(files without a database row), files left by an interrupted sync (only
+after an hour: younger ones may belong to a delivery in progress), and
 anything that does not belong there.
 
 verify never changes a database row or an archived file. With --fix-orphans
@@ -46,7 +47,8 @@ it moves orphans and leftover temporary files to orphans/<time>/ in the data
 directory; delete that directory yourself once you are sure.
 
 The orphan check waits up to --lock-timeout while a sync writes files, then
-is skipped. Exit codes: 0 nothing found, 1 findings, 2 the check is
+is skipped. While it runs, SMTP deliveries wait to commit; a delivery whose
+new file it moved is answered with 451, and the mail server delivers again. Exit codes: 0 nothing found, 1 findings, 2 the check is
 incomplete (orphan check skipped, unreadable files, or another error).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

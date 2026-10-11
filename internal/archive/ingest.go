@@ -27,6 +27,7 @@ func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blo
 			return meta, err
 		}
 		if exists {
+			meta.Known = true
 			return meta, nil // metadata is already stored; ON CONFLICT ignores this row
 		}
 	}
