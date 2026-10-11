@@ -4,6 +4,7 @@ import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
 import { UsersPage } from "./UsersPage";
 import { MessageList } from "./MessageList";
+import { LogPage } from "./LogPage";
 import { MessageView } from "./MessageView";
 import { SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
@@ -97,6 +98,10 @@ export function App({ user, logout }: Props) {
         ) : state.view === "users" && user.admin ? (
           <main className="min-h-0 md:col-span-2">
             <UsersPage close={() => update({ view: "" })} />
+          </main>
+        ) : state.view === "log" ? (
+          <main className="min-h-0 md:col-span-2">
+            <LogPage admin={user.admin} close={() => update({ view: "" })} open={(m) => update({ view: "", m })} />
           </main>
         ) : state.view === "accounts" ? (
           <main className="min-h-0 md:col-span-2">

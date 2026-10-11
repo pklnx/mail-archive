@@ -114,6 +114,20 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
           </span>
         </button>
       )}
+      <button
+        type="button"
+        className={`${item} ${state.view === "log" ? active : idle}`}
+        aria-current={state.view === "log" ? "page" : undefined}
+        onClick={() => show("log")}
+      >
+        <span className="flex items-center gap-2">
+          <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+            <path d="M14 3v6h6M8 13h8M8 17h5" />
+          </svg>
+          {t.log}
+        </span>
+      </button>
       <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-2 pt-2 text-sm dark:border-zinc-800">
         <button
           type="button"

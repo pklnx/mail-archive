@@ -152,6 +152,10 @@ answers `503` with `{"error": "the audit log cannot be written; nothing was
 done"}` and nothing happens: no message data is sent, no change is saved, no
 session is created. A logout always works.
 
+| Endpoint | Description |
+|---|---|
+| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details"}], "nextCursor"}`. A user gets their own entries; admins every user's. `subject` is the subject of a target message, only if the viewer has that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339, `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, or an action such as `message.open`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`); from other users `403`. Sessions only, not with an API key. Reading the log writes no entry. |
+
 Account management and sync need `MAIL_ARCHIVE_SECRET_KEY` on the server;
 without it these endpoints answer `503` and `GET /api/accounts` reports
 `"manage": false`. See [Security](./security) for why.

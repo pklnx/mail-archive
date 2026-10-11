@@ -159,6 +159,15 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The log: the demo's own login and the messages opened above.
+  const p = await page("light");
+  await p.goto(base + "/?view=log");
+  await p.getByText("Opened message").first().waitFor();
+  await p.screenshot({ path: `${out}/log.png` });
+  await p.context().close();
+}
+
+{
   const p = await page("light", { width: 390, height: 780 });
   await openMessage(p, "Photos from the weekend");
   await p.screenshot({ path: `${out}/mail-phone.png` });

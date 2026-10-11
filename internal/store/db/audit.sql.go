@@ -171,3 +171,198 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 	)
 	return err
 }
+
+const listAuditEntries = `-- name: ListAuditEntries :many
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
+       s.subject
+FROM audit_log l
+LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
+LEFT JOIN LATERAL (
+    SELECT m.subject FROM messages m
+    WHERE l.target_type = 'message' AND m.sha256 = l.target_id::bpchar
+      AND EXISTS (SELECT 1 FROM message_locations ml
+                  JOIN folders f ON f.id = ml.folder_id
+                  JOIN accounts a ON a.id = f.account_id
+                  WHERE ml.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
+) s ON true
+WHERE l.at >= $2 AND l.at < $3
+  AND ($4::bigint IS NULL OR l.user_id = $4)
+  AND ($5::text IS NULL OR l.actor = $5)
+  AND l.action LIKE ANY ($6::text[])
+  AND ($7::timestamptz IS NULL OR (l.at, l.id) < ($7, $8::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT $9
+`
+
+type ListAuditEntriesParams struct {
+	Viewer   int64
+	Since    time.Time
+	Until    time.Time
+	UserID   *int64
+	Actor    *string
+	Patterns []string
+	CursorAt *time.Time
+	CursorID int64
+	Lim      int32
+}
+
+type ListAuditEntriesRow struct {
+	ID         int64
+	At         time.Time
+	Actor      string
+	UserID     *int64
+	UserName   *string
+	ApiKeyName *string
+	Action     string
+	TargetType *string
+	TargetID   *string
+	TargetName *string
+	ClientIp   *netip.Addr
+	UserAgent  *string
+	Details    []byte
+	Subject    *string
+}
+
+// A page of every user's entries in [since, until), newest first, for
+// admins; optionally one user's or one actor's. subject is the message's
+// subject only if the viewer has a location of it.
+func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]ListAuditEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listAuditEntries,
+		arg.Viewer,
+		arg.Since,
+		arg.Until,
+		arg.UserID,
+		arg.Actor,
+		arg.Patterns,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditEntriesRow
+	for rows.Next() {
+		var i ListAuditEntriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Actor,
+			&i.UserID,
+			&i.UserName,
+			&i.ApiKeyName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.TargetName,
+			&i.ClientIp,
+			&i.UserAgent,
+			&i.Details,
+			&i.Subject,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntriesForUser = `-- name: ListAuditEntriesForUser :many
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
+       s.subject
+FROM audit_log l
+LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
+LEFT JOIN LATERAL (
+    SELECT m.subject FROM messages m
+    WHERE l.target_type = 'message' AND m.sha256 = l.target_id::bpchar
+      AND EXISTS (SELECT 1 FROM message_locations ml
+                  JOIN folders f ON f.id = ml.folder_id
+                  JOIN accounts a ON a.id = f.account_id
+                  WHERE ml.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
+) s ON true
+WHERE l.user_id = $1::bigint
+  AND l.at >= $2 AND l.at < $3
+  AND l.action LIKE ANY ($4::text[])
+  AND ($5::timestamptz IS NULL OR (l.at, l.id) < ($5, $6::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT $7
+`
+
+type ListAuditEntriesForUserParams struct {
+	UserID   int64
+	Since    time.Time
+	Until    time.Time
+	Patterns []string
+	CursorAt *time.Time
+	CursorID int64
+	Lim      int32
+}
+
+type ListAuditEntriesForUserRow struct {
+	ID         int64
+	At         time.Time
+	Actor      string
+	UserID     *int64
+	UserName   *string
+	ApiKeyName *string
+	Action     string
+	TargetType *string
+	TargetID   *string
+	TargetName *string
+	ClientIp   *netip.Addr
+	UserAgent  *string
+	Details    []byte
+	Subject    *string
+}
+
+// A page of one user's own entries, newest first. A separate query rather
+// than "user_id IS NULL OR", so that a cached generic plan still uses
+// audit_log_user_idx.
+func (q *Queries) ListAuditEntriesForUser(ctx context.Context, arg ListAuditEntriesForUserParams) ([]ListAuditEntriesForUserRow, error) {
+	rows, err := q.db.Query(ctx, listAuditEntriesForUser,
+		arg.UserID,
+		arg.Since,
+		arg.Until,
+		arg.Patterns,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditEntriesForUserRow
+	for rows.Next() {
+		var i ListAuditEntriesForUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Actor,
+			&i.UserID,
+			&i.UserName,
+			&i.ApiKeyName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.TargetName,
+			&i.ClientIp,
+			&i.UserAgent,
+			&i.Details,
+			&i.Subject,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

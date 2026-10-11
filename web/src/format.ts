@@ -3,6 +3,7 @@ import { locale, t } from "./i18n";
 const dateFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium" });
 const timeFmt = new Intl.DateTimeFormat(locale, { timeStyle: "short" });
 const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "short" });
+const stampFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" });
 
 /**
  * How a location reads in the message view. Old locations get a note, and
@@ -35,6 +36,12 @@ export function longDate(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : fullFmt.format(d);
+}
+
+/** Date and time to the second, for lists of events. */
+export function timestamp(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : stampFmt.format(d);
 }
 
 export function fileSize(bytes: number): string {

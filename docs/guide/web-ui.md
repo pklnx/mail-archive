@@ -2,8 +2,9 @@
 
 `docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
 with your user; your name (which opens your [profile](./users#your-own-password))
-and **Log out** are at the bottom of the sidebar. Admins also find
-[Users](./users) there.
+and **Log out** are at the bottom of the sidebar, next to **Log**, the
+[audit log](./audit-log) of what you did. Admins also find [Users](./users)
+there, and see everyone's entries in the log.
 
 ![The three-column mail view](/screenshots/mail-light.png)
 

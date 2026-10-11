@@ -61,6 +61,8 @@ tags:
     description: Mail accounts and syncing.
   - name: messages
     description: Listing, searching and reading messages.
+  - name: audit
+    description: The audit log.
 
 paths:
   /healthz:
@@ -978,6 +980,94 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/audit:
+    get:
+      tags: [audit]
+      operationId: listAuditEntries
+      summary: The audit log, newest first
+      description: |
+        A user gets their own entries; admins get every user's, with the
+        search text, account names and message hashes. Reading the log
+        writes no entry.
+      parameters:
+        - name: since
+          in: query
+          description: Start, inclusive; `YYYY-MM-DD` (midnight UTC) or RFC 3339. Default 30 days ago.
+          schema:
+            type: string
+        - name: until
+          in: query
+          description: End, exclusive; a plain date includes that day. Default now.
+          schema:
+            type: string
+        - name: action
+          in: query
+          description: |
+            A group (`login`, `search`, `read`, `export`, `accounts`, `users`,
+            `profile`, `api_keys`, `sync`) or an exact action such as
+            `message.open`. Repeatable; none means all.
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: user
+          in: query
+          description: Admins only; a current user's name.
+          schema:
+            type: string
+        - name: actor
+          in: query
+          description: Admins only.
+          schema:
+            type: string
+            enum: [session, api_key, cli]
+        - name: cursor
+          in: query
+          description: "`nextCursor` of the previous page."
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: A page of entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEntry"
+                  nextCursor:
+                    type: string
+                    description: Missing on the last page.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: "`user` or `actor` from a user who is not an admin."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: "`user` names no user."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/status:
     get:
       tags: [accounts]
@@ -1701,6 +1791,50 @@ components:
         twoFactorSetupRequired:
           type: boolean
           description: In a `403`, the user must set up 2FA first.
+    AuditEntry:
+      type: object
+      required: [id, at, actor, action, target, details]
+      properties:
+        id:
+          type: integer
+          format: int64
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          enum: [session, api_key, cli]
+        user:
+          type: string
+          description: The user's name at the time; missing for command line entries and unknown users.
+        apiKey:
+          type: string
+          description: The name of the API key, for entries with actor `api_key`.
+        action:
+          type: string
+          examples: [message.search, auth.login]
+        target:
+          type: [object, "null"]
+          required: [type, id]
+          properties:
+            type:
+              type: string
+              enum: [message, account, user]
+            id:
+              type: string
+            name:
+              type: string
+            subject:
+              type: string
+              description: The subject of a message, only if the viewer has the message too.
+        clientIp:
+          type: string
+        userAgent:
+          type: string
+        details:
+          type: object
+          description: The search parameters, the login method and reason, and the other values named in the docs.
+
     Retry:
       type: object
       required: [error, retryAfter]

@@ -2,12 +2,18 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -160,4 +166,160 @@ func (s *Server) clientAddr(r *http.Request) string {
 		return a.String()
 	}
 	return r.RemoteAddr
+}
+
+// Paging of GET /api/audit.
+const (
+	auditPageDefault = 100
+	auditPageMax     = 500
+	auditDefaultDays = 30
+)
+
+type auditTargetJSON struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	// Subject of a message, only if the viewer has it too.
+	Subject string `json:"subject,omitempty"`
+}
+
+type auditEntryJSON struct {
+	ID        int64            `json:"id"`
+	At        time.Time        `json:"at"`
+	Actor     string           `json:"actor"`
+	User      string           `json:"user,omitempty"`
+	APIKey    string           `json:"apiKey,omitempty"` // the name of the API key
+	Action    string           `json:"action"`
+	Target    *auditTargetJSON `json:"target"`
+	ClientIP  string           `json:"clientIp,omitempty"`
+	UserAgent string           `json:"userAgent,omitempty"`
+	Details   json.RawMessage  `json:"details"`
+}
+
+type auditPageJSON struct {
+	Entries    []auditEntryJSON `json:"entries"`
+	NextCursor string           `json:"nextCursor,omitempty"`
+}
+
+// handleAudit lists audit entries, newest first: a user's own, or for
+// admins everyone's. Reading the log writes no entry.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	sess := currentSession(r)
+	now := s.currentTime()
+	p := store.AuditPage{Viewer: sess.UserID, All: sess.IsAdmin, Actions: q["action"], Since: now.AddDate(0, 0, -auditDefaultDays), Until: now.Add(time.Minute)}
+	var err error
+	if v := q.Get("since"); v != "" {
+		if p.Since, err = parseAuditBound(v, false); err != nil {
+			s.fail(w, r, http.StatusBadRequest, "since: "+err.Error(), nil)
+			return
+		}
+	}
+	if v := q.Get("until"); v != "" {
+		if p.Until, err = parseAuditBound(v, true); err != nil {
+			s.fail(w, r, http.StatusBadRequest, "until: "+err.Error(), nil)
+			return
+		}
+	}
+	if !p.Since.Before(p.Until) {
+		s.fail(w, r, http.StatusBadRequest, "since must be before until", nil)
+		return
+	}
+	if _, err := store.AuditActionPatterns(p.Actions); err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	userName, actor := q.Get("user"), q.Get("actor")
+	if !sess.IsAdmin && (userName != "" || actor != "") {
+		s.fail(w, r, http.StatusForbidden, "only admins can see other users' entries", nil)
+		return
+	}
+	switch actor {
+	case "", store.ActorSession, store.ActorAPIKey, store.ActorCLI:
+		p.Actor = actor
+	default:
+		s.fail(w, r, http.StatusBadRequest, "actor must be session, api_key or cli", nil)
+		return
+	}
+	if userName != "" {
+		u, err := s.store.GetUserByName(r.Context(), auth.NormalizeUserName(userName))
+		if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		p.UserID = &u.ID
+	}
+	if c := q.Get("cursor"); c != "" {
+		at, id, err := decodeAuditCursor(c)
+		if err != nil {
+			s.fail(w, r, http.StatusBadRequest, "invalid cursor", nil)
+			return
+		}
+		p.CursorAt, p.CursorID = &at, id
+	}
+	limit, err := parseLimit(q.Get("limit"), auditPageDefault, auditPageMax)
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	p.Limit = limit + 1 // one more tells whether there is a next page
+	recs, err := s.store.ListAudit(r.Context(), p)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	out := auditPageJSON{Entries: make([]auditEntryJSON, 0, min(len(recs), limit))}
+	if len(recs) > limit {
+		last := recs[limit-1]
+		out.NextCursor = encodeAuditCursor(last.At, last.ID)
+		recs = recs[:limit]
+	}
+	for _, rec := range recs {
+		e := auditEntryJSON{
+			ID: rec.ID, At: rec.At.UTC(), Actor: rec.Actor, User: rec.UserName, APIKey: rec.APIKeyName, Action: rec.Action,
+			ClientIP: rec.ClientIP, UserAgent: rec.UserAgent, Details: rec.Details,
+		}
+		if rec.TargetType != "" {
+			e.Target = &auditTargetJSON{Type: rec.TargetType, ID: rec.TargetID, Name: rec.TargetName, Subject: rec.Subject}
+		}
+		out.Entries = append(out.Entries, e)
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+// parseAuditBound reads YYYY-MM-DD (midnight UTC) or RFC 3339. A plain date
+// as the end includes that day.
+func parseAuditBound(v string, end bool) (time.Time, error) {
+	if t, err := time.Parse(time.DateOnly, v); err == nil {
+		if end {
+			t = t.AddDate(0, 0, 1)
+		}
+		return t, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("want YYYY-MM-DD or RFC 3339, got %q", v)
+	}
+	return t, nil
+}
+
+func encodeAuditCursor(at time.Time, id int64) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(at.UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(id, 10)))
+}
+
+func decodeAuditCursor(c string) (time.Time, int64, error) {
+	b, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	ts, idText, ok := strings.Cut(string(b), "|")
+	if !ok {
+		return time.Time{}, 0, errors.New("malformed cursor")
+	}
+	at, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	id, err := strconv.ParseInt(idText, 10, 64)
+	return at, id, err
 }

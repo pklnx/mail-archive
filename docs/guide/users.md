@@ -67,9 +67,10 @@ Admins cannot change their own login on this page: they use their profile,
 or another admin does it.
 
 Admins manage logins and never see other users' mail. They do see the
-[audit log](./audit-log) of every user: searches with their text, which
-messages were opened, account names, IP addresses and browsers. Tell your
-users before they use the archive.
+[audit log](./audit-log) of every user on the **Log** page: searches with
+their text, which messages were opened, account names, IP addresses and
+browsers. Tell your users before they use the archive. Every user sees
+their own entries there too.
 
 ## Your own password
 
