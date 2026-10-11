@@ -68,6 +68,7 @@ func (s *Store) createUser(ctx context.Context, name, passwordHash string, admin
 			return err
 		}
 		u = userFromDB(r)
+		fillAuditTarget(ctx, TargetUser, u.ID)
 		n, err := q.CountUsers(ctx)
 		if err != nil {
 			return err
@@ -181,11 +182,6 @@ func (s *Store) RehashUserPassword(ctx context.Context, id int64, passwordHash s
 	return one(s.q.RehashUserPassword(ctx, db.RehashUserPasswordParams{ID: id, PasswordHash: passwordHash}))
 }
 
-// RecordLogin sets the time of the last successful login.
-func (s *Store) RecordLogin(ctx context.Context, id int64) error {
-	return s.q.RecordLogin(ctx, id)
-}
-
 // SetUserLocked locks or unlocks a user. Locking ends all sessions of the
 // user and fails with ErrLastAdmin for the last unlocked admin.
 func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error {
@@ -259,6 +255,24 @@ type Session struct {
 	LastSeenAt         time.Time
 }
 
+// StartSession stores a new session after a password login and records the
+// login time, together with the audit entry of ctx.
+func (s *Store) StartSession(ctx context.Context, idHash []byte, userID int64, expiresAt time.Time, userAgent string) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.CreateSession(ctx, db.CreateSessionParams{ID: idHash, UserID: userID, ExpiresAt: expiresAt, UserAgent: userAgent}); err != nil {
+			return err
+		}
+		return q.RecordLogin(ctx, userID)
+	})
+}
+
+// EndSession deletes a session, together with the audit entry of ctx.
+func (s *Store) EndSession(ctx context.Context, idHash []byte) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return q.DeleteSession(ctx, idHash)
+	})
+}
+
 // CreateSession stores a session under the hash of its token.
 func (s *Store) CreateSession(ctx context.Context, idHash []byte, userID int64, expiresAt time.Time, userAgent string) error {
 	return s.q.CreateSession(ctx, db.CreateSessionParams{ID: idHash, UserID: userID, ExpiresAt: expiresAt, UserAgent: userAgent})
@@ -293,17 +307,43 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, idleCutoff time.Time)
 	return s.q.DeleteExpiredSessions(ctx, idleCutoff)
 }
 
+// inTx runs fn in a transaction. With an entry from WithAudit in ctx, the
+// entry is written after fn succeeded, in the same transaction.
 func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
+	p, _ := ctx.Value(auditKey{}).(*pendingAudit)
+	if p != nil && p.written {
+		p = nil
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := fn(s.q.WithTx(tx)); err != nil {
+	q := s.q.WithTx(tx)
+	if err := fn(q); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if p != nil {
+		if err := s.insertAudit(ctx, q, p.entry); err != nil {
+			// A failed statement aborts the transaction, so no retry here:
+			// create the partition for the next attempt.
+			_ = tx.Rollback(ctx)
+			if missingPartition(err) {
+				_, _ = s.EnsureAuditPartitions(ctx, 1)
+			}
+			return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if p != nil {
+		p.written = true
+	}
+	return nil
 }
+
+func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 
 func keepUsableAdmin(ctx context.Context, q *db.Queries, id int64) error {
 	admins, err := q.LockUsableAdmins(ctx)

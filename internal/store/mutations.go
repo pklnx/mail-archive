@@ -197,8 +197,12 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 		if err != nil {
 			return err
 		}
+		e := auditFrom(ctx)
 		if n > 0 {
 			result = AccountRemoved
+			if e != nil {
+				e.Detail("result", string(result))
+			}
 			// A removed smtp account receives nothing; its addresses are
 			// free for another account.
 			if err := q.DeleteAccountSMTPAddresses(ctx, ref.ID); err != nil {
@@ -207,6 +211,9 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 			return one(q.RemoveAccount(ctx, ref.ID))
 		}
 		result = AccountDeleted
+		if e != nil {
+			e.Detail("result", string(result))
+		}
 		if err := q.DeleteAccountFolders(ctx, ref.ID); err != nil {
 			return err
 		}

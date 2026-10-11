@@ -22,7 +22,7 @@ characters and are prompted twice, or read once from stdin with
 
 | Command | Purpose |
 |---|---|
-| `user add NAME` | Create a user. `--admin` for an admin (admins will manage users in the web UI; they do not see other users' mail). |
+| `user add NAME` | Create a user. `--admin` for an admin (admins manage users in the web UI; they do not see other users' mail, but they see everyone's [audit log](../guide/audit-log)). |
 | `user list` | List users with role, state (active, locked, must change password), number of accounts and passkeys, and last login. |
 | `user set-password NAME` | Set a new password. Ends the user's sessions. |
 | `user reset-password NAME` | Generate a password, print it once; the user must change it at the next login. Ends the user's sessions and removes their passkeys (`--keep-passkeys` keeps them). |
@@ -80,7 +80,13 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
+| `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `sync`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API and sync schedule. Default `127.0.0.1:8080`. |
+
+Commands that change users or accounts, and `import`, `export`, `backup`
+and `audit`, write an entry to the [audit log](../guide/audit-log) first;
+if it cannot be written they do nothing. `sync`, `status`, `verify` and the
+list commands are not recorded.
 
 ### import
 

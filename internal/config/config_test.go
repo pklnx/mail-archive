@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -154,5 +155,22 @@ func TestParseSMTP(t *testing.T) {
 		if _, err := ParseSMTP(bad[0], bad[1], bad[2], bad[3], bad[4], bad[5]); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestParseNetworks(t *testing.T) {
+	got, err := ParseNetworks(EnvTrustedProxies, " 172.16.0.0/12, 192.0.2.10 ,::ffff:10.0.0.1, fd00::/8,")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[172.16.0.0/12 192.0.2.10/32 10.0.0.1/32 fd00::/8]"
+	if fmt.Sprint(got) != want {
+		t.Errorf("got %v, want %s", got, want)
+	}
+	if got, err := ParseNetworks(EnvTrustedProxies, ""); err != nil || got != nil {
+		t.Errorf("empty: %v, %v", got, err)
+	}
+	if _, err := ParseNetworks(EnvTrustedProxies, "proxy.local"); err == nil || !strings.Contains(err.Error(), EnvTrustedProxies) {
+		t.Errorf("host name: %v", err)
 	}
 }

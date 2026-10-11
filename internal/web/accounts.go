@@ -248,6 +248,37 @@ type folderConfirmation struct {
 	SuggestedExclusions []string `json:"suggestedExclusions"`
 }
 
+// changedFields names the fields a change sets, never their values.
+func (in *accountInput) changedFields() []string {
+	var out []string
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"name", in.Name != nil}, {"host", in.Host != nil}, {"port", in.Port != nil}, {"tls", in.TLS != nil},
+		{"username", in.Username != nil}, {"password", in.Password != nil}, {"enabled", in.Enabled != nil},
+		{"excluded_folders", in.ExcludedFolders != nil},
+	} {
+		if f.set {
+			out = append(out, f.name)
+		}
+	}
+	return out
+}
+
+// auditAccountChange records what an account change sets: the field names,
+// the new name and the new state. Host, user name and password are only
+// named, never recorded.
+func auditAccountChange(e *store.AuditEntry, oldName string, newName *string, fields []string, enabled *bool) {
+	e.Detail("fields", fields)
+	if newName != nil {
+		e.Detail("name", map[string]any{"from": oldName, "to": *newName})
+	}
+	if enabled != nil {
+		e.Detail("enabled", *enabled)
+	}
+}
+
 func (in *accountInput) changesConnection() bool {
 	return in.Host != nil || in.Port != nil || in.TLS != nil || in.Username != nil || in.Password != nil
 }
@@ -361,7 +392,10 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seal := func(id int64) ([]byte, error) { return archive.SealPassword(s.syncer.Sealer, id, *in.Password) }
-	if err := s.store.CreateAccountSealed(r.Context(), a, seal); err != nil {
+	e := s.auditEntry(r, "account.add")
+	e.SetTarget(store.TargetAccount, "", a.Name) // the ID is set when it exists
+	e.Detail("kind", string(store.KindIMAP))
+	if err := s.store.CreateAccountSealed(withAudit(r, e), a, seal); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists", a.Name), nil)
 			return
@@ -472,7 +506,10 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	change.Enabled = in.Enabled
 
-	err := s.store.UpdateAccount(ctx, a.Ref(), change)
+	e := s.auditEntry(r, "account.change")
+	auditAccount(e, a)
+	auditAccountChange(e, a.Name, change.Name, in.changedFields(), in.Enabled)
+	err := s.store.UpdateAccount(withAudit(r, e), a.Ref(), change)
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
@@ -512,7 +549,9 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
-	res, err := s.store.DeleteOrRemoveAccount(r.Context(), a.Ref())
+	e := s.auditEntry(r, "account.remove")
+	auditAccount(e, a)
+	res, err := s.store.DeleteOrRemoveAccount(withAudit(r, e), a.Ref())
 	if errors.Is(err, store.ErrStale) {
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
@@ -582,6 +621,12 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	if in.Reconcile {
 		opts = archive.SyncOptions{Reconcile: true, ReconcileMinAge: reconcileFloor}
 	}
+	e := s.auditEntry(r, "sync.start")
+	auditAccount(e, a)
+	e.Detail("reconcile", in.Reconcile)
+	if !s.audit(w, r, e) {
+		return
+	}
 	s.runner.EnqueueWith(opts, a.ID)
 	s.writeJSON(w, http.StatusAccepted, map[string]int{"queued": 1})
 }
@@ -604,6 +649,11 @@ func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 		if a.Enabled && a.RemovedAt == nil && a.Kind == store.KindIMAP {
 			ids = append(ids, a.ID)
 		}
+	}
+	e := s.auditEntry(r, "sync.start")
+	e.Detail("accounts", len(ids))
+	if !s.audit(w, r, e) {
+		return
 	}
 	s.runner.Enqueue(ids...)
 	s.writeJSON(w, http.StatusAccepted, map[string]int{"queued": len(ids)})

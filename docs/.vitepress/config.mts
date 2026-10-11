@@ -33,6 +33,7 @@ export default defineConfig({
           { text: "Journaling with Postfix", link: "/guide/journaling" },
           { text: "Web UI and search", link: "/guide/web-ui" },
           { text: "Users", link: "/guide/users" },
+          { text: "Audit log", link: "/guide/audit-log" },
           { text: "Backups and upgrades", link: "/guide/operations" },
         ],
       },

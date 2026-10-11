@@ -80,6 +80,14 @@ curl -b cookies.txt -X POST http://localhost:8080/api/sync \
   -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080'
 ```
 
+## Audit log
+
+Searches, opened messages, downloads, logins and changes are recorded in the
+[audit log](../guide/audit-log). If an entry cannot be written, the request
+answers `503` with `{"error": "the audit log cannot be written; nothing was
+done"}` and nothing happens: no message data is sent, no change is saved, no
+session is created. A logout always works.
+
 Account management and sync need `MAIL_ARCHIVE_SECRET_KEY` on the server;
 without it these endpoints answer `503` and `GET /api/accounts` reports
 `"manage": false`. See [Security](./security) for why.

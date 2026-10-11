@@ -51,6 +51,9 @@ services:
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # Reverse proxies whose X-Forwarded-For names the client (audit log,
+      # login limits). Empty: the direct peer counts.
+      MAIL_ARCHIVE_TRUSTED_PROXIES: ${MAIL_ARCHIVE_TRUSTED_PROXIES:-}
       # How often each enabled account is synced; 0 turns the schedule off.
       MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
       # How often each folder is compared with the server; 0 = only on request.

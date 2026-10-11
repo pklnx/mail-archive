@@ -85,7 +85,10 @@ stores alice@example.com as the recipient.`,
 			if acc.OwnerID, err = newOwner(cmd, a); err != nil {
 				return err
 			}
-			if err := a.store.CreateSMTPAccount(cmd.Context(), &acc, addresses); err != nil {
+			e := cliEntry("account.add")
+			e.SetTarget(store.TargetAccount, "", acc.Name) // the ID is set when it exists
+			e.Detail("kind", string(store.KindSMTP))
+			if err := a.store.CreateSMTPAccount(withCLIAudit(cmd, e), &acc, addresses); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("an account named %q already exists for this user (removed accounts keep their name)", acc.Name)
 				}
@@ -124,7 +127,11 @@ server drops it without telling anyone.`,
 				return fmt.Errorf("%q is not an smtp account", acc.Name)
 			}
 			if len(add)+len(remove) > 0 {
-				if err := a.store.ChangeSMTPAddresses(cmd.Context(), acc.Ref(), add, remove); err != nil {
+				e := cliAccountTarget(cliEntry("account.change"), acc)
+				e.Detail("fields", []string{"addresses"})
+				e.Detail("added", add)
+				e.Detail("removed", remove)
+				if err := a.store.ChangeSMTPAddresses(withCLIAudit(cmd, e), acc.Ref(), add, remove); err != nil {
 					return staleError(err)
 				}
 			}

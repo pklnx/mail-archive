@@ -114,6 +114,13 @@ func runImport(cmd *cobra.Command, name, from, format, folder, maxSize string, d
 			fmt.Fprintf(cmd.ErrOrStderr(), "%s: read %d, added %d\n", f.Folder, f.Read, f.Added)
 		},
 	}
+	e := cliAccountTarget(cliEntry("data.import"), acc)
+	e.Detail("format", format)
+	e.Detail("source", from)
+	e.Detail("folders", len(folders))
+	if err := auditNow(cmd, a, e); err != nil {
+		return err
+	}
 	res, err := im.Import(ctx, acc, folders)
 	if errors.Is(err, archive.ErrSyncRunning) {
 		return fmt.Errorf("an import into %q is already running", acc.Name)
@@ -153,7 +160,10 @@ func importAccount(cmd *cobra.Command, a *app, name string) (*store.Account, err
 			return acc, nil
 		}
 		acc = &store.Account{Kind: store.KindImport, Name: name, OwnerID: owner}
-		err = a.store.CreateAccount(ctx, acc)
+		e := cliEntry("account.add")
+		e.SetTarget(store.TargetAccount, "", name) // the ID is set when it exists
+		e.Detail("kind", string(store.KindImport))
+		err = a.store.CreateAccount(store.WithAudit(ctx, e), acc)
 		if errors.Is(err, store.ErrConflict) && attempt == 0 {
 			continue // created meanwhile: read it again
 		}

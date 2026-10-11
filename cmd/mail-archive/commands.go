@@ -39,6 +39,7 @@ func openApp(ctx context.Context) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
+	ensureAuditPartitions(ctx, st)
 	return &app{cfg: cfg, store: st}, nil
 }
 
@@ -256,7 +257,10 @@ The login is verified before the account is saved unless --skip-check is set.`,
 				return err
 			}
 			seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, password) }
-			if err := a.store.CreateAccountSealed(cmd.Context(), &acc, seal); err != nil {
+			e := cliEntry("account.add")
+			e.SetTarget(store.TargetAccount, "", acc.Name) // the ID is set when it exists
+			e.Detail("kind", string(store.KindIMAP))
+			if err := a.store.CreateAccountSealed(withCLIAudit(cmd, e), &acc, seal); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("an account named %q already exists for this user (removed accounts keep their name)", acc.Name)
 				}
@@ -433,7 +437,15 @@ func listOrDash(l []string, empty string) string {
 // updateAccount saves a change to an account loaded with loadAccount, only
 // if nobody changed it in between.
 func updateAccount(cmd *cobra.Command, a *app, acc *store.Account, change store.AccountChange) error {
-	return staleError(a.store.UpdateAccount(cmd.Context(), acc.Ref(), change))
+	e := cliAccountTarget(cliEntry("account.change"), acc)
+	e.Detail("fields", accountChangeFields(change))
+	if change.Name != nil {
+		e.Detail("name", map[string]any{"from": acc.Name, "to": *change.Name})
+	}
+	if change.Enabled != nil {
+		e.Detail("enabled", *change.Enabled)
+	}
+	return staleError(a.store.UpdateAccount(withCLIAudit(cmd, e), acc.Ref(), change))
 }
 
 func staleError(err error) error {
@@ -687,7 +699,7 @@ deleted completely.`,
 				return archive.ErrSyncRunning
 			}
 			defer unlock()
-			res, err := a.store.DeleteOrRemoveAccount(cmd.Context(), acc.Ref())
+			res, err := a.store.DeleteOrRemoveAccount(withCLIAudit(cmd, cliAccountTarget(cliEntry("account.remove"), acc)), acc.Ref())
 			if err != nil {
 				return staleError(err)
 			}
@@ -855,7 +867,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 			log := newLogger(a.cfg.LogLevel)
 			opts := web.Options{
 				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
-				AlertAfterFailures: a.cfg.AlertAfterFailures,
+				AlertAfterFailures: a.cfg.AlertAfterFailures, TrustedProxies: a.cfg.TrustedProxies,
 			}
 			var afterSync func()
 			if n := newNotifier(a, log); n != nil {

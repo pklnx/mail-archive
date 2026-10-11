@@ -43,6 +43,28 @@ type AccountSyncHealth struct {
 	NotifyLeaseUntil   *time.Time
 }
 
+type AuditLog struct {
+	ID          int64
+	At          time.Time
+	Actor       string
+	UserID      *int64
+	UserName    *string
+	ApiKeyID    *int64
+	ApiKeyName  *string
+	Action      string
+	TargetType  *string
+	TargetID    *string
+	TargetName  *string
+	ClientIp    *netip.Addr
+	UserAgentID *int64
+	Details     []byte
+}
+
+type AuditUserAgent struct {
+	ID        int64
+	UserAgent string
+}
+
 type Envelope struct {
 	LocationID int64
 	MailFrom   string

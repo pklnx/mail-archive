@@ -39,6 +39,7 @@ func main() {
 		newExportCmd(),
 		newImportCmd(),
 		newBackupCmd(),
+		newAuditCmd(),
 		newNotifyCmd(),
 		newServeCmd(),
 	)

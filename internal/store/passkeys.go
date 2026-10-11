@@ -173,6 +173,9 @@ func (s *Store) FinishPasskeyRegistration(ctx context.Context, userID int64, tok
 		if err != nil {
 			return errors.Join(ErrPasskeyInvalid, err)
 		}
+		if e := auditFrom(ctx); e != nil {
+			e.Detail("name", *c.Name)
+		}
 		err = q.InsertPasskey(ctx, db.InsertPasskeyParams{UserID: userID, CredentialID: id, Name: *c.Name, Credential: cred})
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -275,6 +278,9 @@ func (s *Store) CompletePasskeyLogin(ctx context.Context, token string, credenti
 			return err
 		}
 		out = &PasskeyLogin{User: userFromDB(u), PasskeyName: p.Name}
+		if e := auditFrom(ctx); e != nil {
+			e.SetUser(u.ID, u.Name)
+		}
 		return nil
 	})
 	return out, err
@@ -297,6 +303,9 @@ func (s *Store) RemoveOwnPasskey(ctx context.Context, userID, passkeyID int64, k
 			return err
 		}
 		out = &Passkey{ID: passkeyID, Name: r.Name, CredentialID: r.CredentialID}
+		if e := auditFrom(ctx); e != nil {
+			e.Detail("name", r.Name)
+		}
 		return q.DeleteOtherSessions(ctx, db.DeleteOtherSessionsParams{UserID: userID, ID: keepSession})
 	})
 	return out, err
@@ -313,6 +322,9 @@ func (s *Store) RemovePasskeys(ctx context.Context, userID int64) (int64, error)
 		var err error
 		if n, err = removePasskeys(ctx, q, userID); err != nil {
 			return err
+		}
+		if e := auditFrom(ctx); e != nil {
+			e.Detail("count", n)
 		}
 		return q.DeleteUserSessions(ctx, userID)
 	})

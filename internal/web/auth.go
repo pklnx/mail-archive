@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -226,7 +225,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := auth.NormalizeUserName(in.Username)
-	addr := clientAddr(r)
+	addr := s.clientAddr(r)
 	if wait := s.limiter.Blocked(name, addr); wait > 0 {
 		secs := int(math.Ceil(wait.Seconds()))
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
@@ -236,6 +235,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if len(in.Password) > auth.MaxPasswordLength {
 		// No stored password is that long; skip the hashing work.
 		s.limiter.Fail(name, addr)
+		s.auditUnknownLogin(r, name, reasonWrongPassword)
 		s.fail(w, r, http.StatusUnauthorized, errWrongLogin, nil)
 		return
 	}
@@ -259,10 +259,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		s.limiter.Fail(name, addr)
 		s.log.Info("login failed", "user", name, "addr", addr)
+		if u == nil {
+			s.auditUnknownLogin(r, name, reasonUnknownUser)
+		} else {
+			s.auditLoginFailed(r, "password", reasonWrongPassword, u)
+		}
 		s.fail(w, r, http.StatusUnauthorized, errWrongLogin, nil)
 		return
 	}
 	if u.LockedAt != nil {
+		s.auditLoginFailed(r, "password", reasonLocked, u)
 		s.fail(w, r, http.StatusForbidden, "this user is locked", nil)
 		return
 	}
@@ -292,16 +298,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	ua := r.UserAgent()
-	if len(ua) > 256 {
-		ua = ua[:256]
-	}
-	if err := s.store.CreateSession(ctx, hash, u.ID, s.currentTime().Add(auth.MaxSessionAge), ua); err != nil {
-		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
+	e := s.auditEntry(r, "auth.login")
+	e.SetUser(u.ID, u.Name)
+	e.Detail("method", "password")
+	if err := s.store.StartSession(withAudit(r, e), hash, u.ID, s.currentTime().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent())); err != nil {
+		s.failStore(w, r, err)
 		return
-	}
-	if err := s.store.RecordLogin(ctx, u.ID); err != nil {
-		s.log.Warn("record login", "user", u.Name, "err", err)
 	}
 	s.log.Info("login", "user", u.Name, "addr", addr)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
@@ -313,9 +315,24 @@ type retryJSON struct {
 	RetryAfter int    `json:"retryAfter"` // seconds
 }
 
+// handleLogout ends the session. A logout never fails because of the audit
+// log: without its entry the session is deleted anyway.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := sessionToken(r); token != "" {
-		if err := s.store.DeleteSession(r.Context(), auth.HashSessionToken(token)); err != nil {
+		hash := auth.HashSessionToken(token)
+		ctx := r.Context()
+		// Only a valid session writes a logout entry.
+		if sess, err := s.session(r); err == nil && sess != nil {
+			e := s.auditEntry(r, "auth.logout")
+			e.SetUser(sess.UserID, sess.UserName)
+			ctx = withAudit(r, e)
+		}
+		err := s.store.EndSession(ctx, hash)
+		if errors.Is(err, store.ErrAuditUnavailable) {
+			s.log.Error("audit log entry lost", "action", "auth.logout", "err", err)
+			err = s.store.DeleteSession(r.Context(), hash)
+		}
+		if err != nil {
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
@@ -324,22 +341,24 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// clientAddr is the direct peer address. Proxy headers are not trusted:
-// behind a reverse proxy all clients share its address, and the limit per
-// user name still applies.
-func clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+// auditMonthsAhead is how many months of audit log partitions serve keeps
+// ready beyond the current one.
+const auditMonthsAhead = 3
 
-// cleanSessions deletes expired sessions every hour until ctx ends.
-func (s *Server) cleanSessions(ctx context.Context) {
+// housekeeping runs at start and then every hour until ctx ends: it creates
+// the audit log partitions ahead and deletes expired sessions, challenges
+// and ceremonies.
+func (s *Server) housekeeping(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
+		if n, err := s.store.EnsureAuditPartitions(ctx, auditMonthsAhead); err != nil {
+			if ctx.Err() == nil {
+				s.log.Error("create audit log partitions", "err", err)
+			}
+		} else if n > 0 {
+			s.log.Info("created audit log partitions", "count", n)
+		}
 		if err := s.store.DeleteExpiredTwoFactorChallenges(ctx); err != nil && ctx.Err() == nil {
 			s.log.Warn("delete expired two-factor challenges", "err", err)
 		}
@@ -359,4 +378,17 @@ func (s *Server) cleanSessions(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// auditUnknownLogin records a failed password login without a known user.
+// The name is kept only if it is a valid user name, so that a password
+// typed into the name field is not stored.
+func (s *Server) auditUnknownLogin(r *http.Request, name, reason string) {
+	e := s.auditEntry(r, "auth.login_failed")
+	e.Detail("method", "password")
+	e.Detail("reason", reason)
+	if auth.ValidateUserName(name) == nil {
+		e.Detail("name", name)
+	}
+	s.auditBestEffort(r, e)
 }

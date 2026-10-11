@@ -333,6 +333,9 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 			return err
 		}
 		out = userFromDB(u)
+		if e := auditFrom(ctx); e != nil {
+			e.SetUser(u.ID, u.Name)
+		}
 		return nil
 	})
 	return out, err
