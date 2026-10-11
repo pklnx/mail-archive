@@ -174,3 +174,33 @@ func TestParseNetworks(t *testing.T) {
 		t.Errorf("host name: %v", err)
 	}
 }
+
+func TestLoadAttest(t *testing.T) {
+	t.Setenv(EnvDatabaseURL, "postgres://localhost/x")
+	t.Setenv(EnvDataDir, "/data")
+	t.Setenv(EnvAttestKeyFile, "")
+	t.Setenv(EnvAttestInterval, "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AttestKeyFile != "/data/attest/signing.key" || cfg.AttestDir() != "/data/attest" || cfg.AttestInterval != 24*time.Hour {
+		t.Errorf("defaults: %q %q %v", cfg.AttestKeyFile, cfg.AttestDir(), cfg.AttestInterval)
+	}
+
+	t.Setenv(EnvAttestKeyFile, "/keys/attest.key")
+	t.Setenv(EnvAttestInterval, "0")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AttestKeyFile != "/keys/attest.key" || cfg.AttestDir() != "/data/attest" || cfg.AttestInterval != 0 {
+		t.Errorf("set: %q %q %v", cfg.AttestKeyFile, cfg.AttestDir(), cfg.AttestInterval)
+	}
+
+	for _, v := range []string{"30m", "daily"} {
+		t.Setenv(EnvAttestInterval, v)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), EnvAttestInterval) {
+			t.Errorf("%s: %v, want an error naming the variable", v, err)
+		}
+	}
+}

@@ -43,6 +43,23 @@ type AccountSyncHealth struct {
 	NotifyLeaseUntil   *time.Time
 }
 
+type Attestation struct {
+	Seq            int64
+	CreatedAt      time.Time
+	MessagesAfter  int64
+	MessagesUpto   int64
+	MessagesCount  int64
+	DeletionsAfter int64
+	DeletionsUpto  int64
+	DeletionsCount int64
+	Total          int64
+	LeavesSha256   string
+	PrevHash       string
+	PublicKey      string
+	Hash           string
+	Signature      string
+}
+
 type AuditLog struct {
 	ID          int64
 	At          time.Time
@@ -124,6 +141,15 @@ type Message struct {
 	InReplyTo       *string
 	ReferenceIds    []string
 	ThreadID        *string
+	Seq             int64
+}
+
+type MessageDeletion struct {
+	ID         int64
+	MessageSeq int64
+	Sha256     string
+	Reason     string
+	DeletedAt  time.Time
 }
 
 type MessageLocation struct {

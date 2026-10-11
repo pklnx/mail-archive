@@ -343,6 +343,25 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 	return nil
 }
 
+// inWriteTx is inTx for every transaction that inserts into messages or
+// message_deletions. It takes the attestation fence shared before fn runs,
+// and with blobs the blob lock shared before that: the lock order is blob
+// lock, fence, row locks, so a writer never waits for the fence while it
+// holds a row lock. A test checks that every such insert runs in fn.
+func (s *Store) inWriteTx(ctx context.Context, blobs bool, fn func(*db.Queries) error) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if blobs {
+			if err := q.LockBlobsShared(ctx, blobLockClass); err != nil {
+				return fmt.Errorf("wait for the blob lock: %w", err)
+			}
+		}
+		if err := q.LockFenceShared(ctx, attestFenceClass); err != nil {
+			return fmt.Errorf("wait for the attestation fence: %w", err)
+		}
+		return fn(q)
+	})
+}
+
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 
 func keepUsableAdmin(ctx context.Context, q *db.Queries, id int64) error {

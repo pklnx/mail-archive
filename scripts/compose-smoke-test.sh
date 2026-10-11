@@ -155,6 +155,14 @@ echo "== verify"
 ./ma verify | tee "$work/out"
 expect "$work/out" 'checked 7 message\(s\): no problems'
 
+echo "== attest"
+./ma attest keygen | tee "$work/out"
+expect "$work/out" 'public key [A-Za-z0-9+/]{43}='
+./ma attest | tee "$work/out"
+expect "$work/out" 'attestation #1: 7 new message\(s\), 0 deletion\(s\), 7 message\(s\) in total'
+in_data 'wc -l < /data/attest/attestations.jsonl && test -s /data/attest/leaves/1.txt' > "$work/out"
+expect "$work/out" '^ *1$'
+
 echo "== export"
 ./ma export --user smoke --format mbox --out /data/export/smoke | tee "$work/out"
 expect "$work/out" "exported 7 message\(s\)"

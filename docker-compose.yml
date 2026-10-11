@@ -73,6 +73,11 @@ services:
       MAIL_ARCHIVE_SMTP_HOSTNAME: ${MAIL_ARCHIVE_SMTP_HOSTNAME:-}
       MAIL_ARCHIVE_SMTP_TLS_CERT: ${MAIL_ARCHIVE_SMTP_TLS_CERT:-}
       MAIL_ARCHIVE_SMTP_TLS_KEY: ${MAIL_ARCHIVE_SMTP_TLS_KEY:-}
+      # Tamper evidence: the key that signs attestations (default
+      # /data/attest/signing.key, create with `./ma attest keygen`) and how
+      # often one is written; 0 turns the schedule off.
+      MAIL_ARCHIVE_ATTEST_KEY_FILE: ${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}
+      MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:
@@ -113,6 +118,9 @@ services:
       MAIL_ARCHIVE_SMTP_HOSTNAME: ${MAIL_ARCHIVE_SMTP_HOSTNAME:-}
       MAIL_ARCHIVE_SMTP_TLS_CERT: ${MAIL_ARCHIVE_SMTP_TLS_CERT:-}
       MAIL_ARCHIVE_SMTP_TLS_KEY: ${MAIL_ARCHIVE_SMTP_TLS_KEY:-}
+      # Read by `./ma attest` and `./ma attest keygen`.
+      MAIL_ARCHIVE_ATTEST_KEY_FILE: ${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}
+      MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
     volumes:
       # Raw .eml files. A bind mount keeps them visible on the host for backups.
       - ${ARCHIVE_DIR:-./data}:/data

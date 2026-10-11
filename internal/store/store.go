@@ -412,46 +412,45 @@ func (s *Store) MessageExists(ctx context.Context, sha256 string) (bool, error) 
 
 // SaveBatch stores message metadata and locations for a batch and advances
 // the folder's last UID, all in one transaction. It returns how many messages
-// were new to the archive.
+// were new to the archive. The caller holds the blob lock (sync and import
+// take it for the whole run), so the transaction takes only the
+// attestation fence.
 func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location) (int, error) {
-	tx, err := s.pool.Begin(ctx)
+	newCount := 0
+	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
+		newCount = 0
+		for i := range metas {
+			m := &metas[i]
+			n, err := q.InsertMessage(ctx, insertMessageParams(m))
+			if err != nil {
+				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
+			}
+			newCount += int(n)
+
+			l := locs[i]
+			flags := l.Flags
+			if flags == nil {
+				flags = []string{}
+			}
+			var internal *time.Time
+			if !l.InternalDate.IsZero() {
+				internal = &l.InternalDate
+			}
+			err = q.UpsertLocation(ctx, db.UpsertLocationParams{
+				MessageSha256: m.SHA256, FolderID: l.FolderID,
+				Uidvalidity: int64(l.UIDValidity), Uid: int64(l.UID),
+				Flags: flags, InternalDate: internal,
+			})
+			if err != nil {
+				return fmt.Errorf("insert location: %w", err)
+			}
+		}
+		return q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)})
+	})
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	q := s.q.WithTx(tx)
-
-	newCount := 0
-	for i := range metas {
-		m := &metas[i]
-		n, err := q.InsertMessage(ctx, insertMessageParams(m))
-		if err != nil {
-			return 0, fmt.Errorf("insert message %s: %w", m.SHA256, err)
-		}
-		newCount += int(n)
-
-		l := locs[i]
-		flags := l.Flags
-		if flags == nil {
-			flags = []string{}
-		}
-		var internal *time.Time
-		if !l.InternalDate.IsZero() {
-			internal = &l.InternalDate
-		}
-		err = q.UpsertLocation(ctx, db.UpsertLocationParams{
-			MessageSha256: m.SHA256, FolderID: l.FolderID,
-			Uidvalidity: int64(l.UIDValidity), Uid: int64(l.UID),
-			Flags: flags, InternalDate: internal,
-		})
-		if err != nil {
-			return 0, fmt.Errorf("insert location: %w", err)
-		}
-	}
-	if err := q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)}); err != nil {
-		return 0, err
-	}
-	return newCount, tx.Commit(ctx)
+	return newCount, nil
 }
 
 func insertMessageParams(m *MessageMeta) db.InsertMessageParams {

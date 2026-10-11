@@ -159,7 +159,7 @@ func newMigrateStatusCmd() *cobra.Command {
 func newKeygenCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "keygen",
-		Short: "Generate a random secret key for " + config.EnvSecretKey,
+		Short: "Generate a random secret key for " + config.EnvSecretKey + " (not the attestation key, see attest keygen)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			key, err := crypto.GenerateKey()
@@ -922,6 +922,9 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 			} else if n == 0 {
 				log.Warn("no users yet; the web UI shows how to create the first admin", "command", commandName()+" user add NAME --admin")
 			}
+			// The first attestation of a large archive takes minutes; it runs
+			// in the background. Stopped before the store closes.
+			defer startAttester(cmd.Context(), a, log)()
 			if a.cfg.SMTP != nil {
 				stop, err := startSMTP(cmd.Context(), a, blobs, log)
 				if err != nil {

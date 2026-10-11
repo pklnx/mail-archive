@@ -26,7 +26,8 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/imapsync` | Read-only IMAP client on top of go-imap v2. |
 | `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and written atomically. |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
-| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock and the blob lock. |
+| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock and the attestation fence. |
+| `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files. No database. |
 | `internal/notify` | Alerts for accounts whose syncs keep failing: compares each account's failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs; `openapi.yaml` describes them, and a test fails when the two differ. |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
@@ -143,6 +144,40 @@ looks for orphans; a sync that starts meanwhile waits. If the lock stays busy
 longer than `--lock-timeout`, `verify` skips the orphan check and exits `2`.
 Deleting an account takes only the account lock, so it never waits for
 `verify`. PostgreSQL drops both locks with the connection when a process dies.
+
+## Attestations
+
+An attestation (`archive.Attest`) covers the `messages` rows with
+`after < seq <= upto`, where `after` is the previous attestation's `upto`,
+and the `message_deletions` rows in the same way. `messages.seq` is an
+identity column with `CACHE 1`. A sequence value is drawn at `INSERT` and
+becomes visible at commit, so `max(seq)` alone is not a safe upper bound:
+a transaction holding seq 100 may commit after one with 105 is visible.
+
+The **attestation fence** (advisory lock class `0x6d64`, key 0) orders the
+two. Every transaction that inserts into `messages` or `message_deletions`
+runs through `Store.inWriteTx`, which takes the fence shared as a
+transaction lock, after the blob lock where the transaction takes that
+itself (`ReceiveMessage`) and before any row lock. The attestation takes
+the fence exclusively as a session lock on its own connection, which waits
+for every writer that already drew a value and makes new ones queue. It
+then starts a repeatable read transaction, whose first query (the bounds)
+takes the snapshot, and releases the fence at once. All rows with
+`seq <= upto` are in that snapshot, and none can appear later. Writers wait
+only that long; `lock_timeout` (30 s) bounds the wait for running batches.
+A test in `internal/store` parses the package and fails if an insert into
+either table runs outside a function passed to `inWriteTx`, or if the locks
+are taken in another order.
+
+A second advisory lock (`0x6d65`) lets one attestation be written at a
+time. The leaves are streamed in seq order into a temp file in
+`attest/leaves/` and hashed; the row is inserted in the snapshot's
+transaction; after the commit the leaves file is renamed into place and the
+line appended to `attest/attestations.jsonl` with `fsync`. Before writing,
+`catchUp` checks the database chain and compares the file with it: entries
+only in the database (a crash after the commit) are appended, with their
+leaves rebuilt from the database (`ListAttestedRange`); any other
+difference stops the run.
 
 ## Reconcile
 

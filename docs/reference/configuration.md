@@ -21,6 +21,8 @@ All settings are environment variables. With Docker Compose they come from
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT` | `json` | `json` (Gotify, Slack, Mattermost, Discord and generic receivers) or `ntfy` (plain text with `Title`, `Priority` and `Tags` headers). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
 | `MAIL_ARCHIVE_TRUSTED_PROXIES` | (none) | Reverse proxies whose `X-Forwarded-For` header names the client, comma-separated networks or addresses like `172.18.0.1` or `10.0.0.0/8`. The audit log records that client, and the login limits count per client. Every listed address may claim any client address: list only the proxy. See [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy). |
+| `MAIL_ARCHIVE_ATTEST_KEY_FILE` | `MAIL_ARCHIVE_DATA_DIR/attest/signing.key` | The Ed25519 key that signs [attestations](./cli#attest). Created by `attest keygen`; must have mode 0600. The attestation file, the leaves and the public keys always stay in `MAIL_ARCHIVE_DATA_DIR/attest/`, also when the key is elsewhere. Without the key, attestations are off and the web server logs it. |
+| `MAIL_ARCHIVE_ATTEST_INTERVAL` | `24h` | How often the web server writes an attestation. At least `1h`; `0` turns the schedule off (`attest` still works by hand). |
 | `MAIL_ARCHIVE_OPERATOR` | (none; `./ma` sets the host user) | Who runs a command, recorded with command line entries in the [audit log](../guide/audit-log). Not verified. |
 | `MAIL_ARCHIVE_COMMAND` | `mail-archive` | Command name used in copy-paste hints. The `./ma` wrapper sets it to `./ma`. |
 
@@ -58,6 +60,9 @@ Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_RECONCILE_INTERVAL`,
 `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the three `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
 variables to both the web server and the CLI (`./ma`), so `./ma sync` from
 cron reconciles and sends alerts too.
+
+Compose passes the two `MAIL_ARCHIVE_ATTEST_*` variables to both as well, so
+`./ma attest` uses the same key as the web server.
 
 Compose passes the `MAIL_ARCHIVE_SMTP_*` variables to the CLI too, so that
 `./ma account add-smtp` can tell whether the web server receives mail.
