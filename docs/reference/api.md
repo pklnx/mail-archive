@@ -3,6 +3,10 @@
 The web UI is a client of this API; scripts can use it too. All responses
 are JSON unless noted. Errors look like `{"error": "message"}`.
 
+The [OpenAPI description](./openapi) lists every endpoint with its
+parameters and answers. A running server serves it as `/api/openapi.json`,
+without a login.
+
 ## Login
 
 Every endpoint below needs a session cookie and answers `401` without one.

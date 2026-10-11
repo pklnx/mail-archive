@@ -1,0 +1,1998 @@
+# The JSON API of mail-archive, served as /api/openapi.json. Written by hand:
+# TestOpenAPIRoutes compares it with the route table in routes.go, so every
+# route needs an operation here, with the security its access requires.
+openapi: 3.1.0
+info:
+  title: mail-archive
+  version: "1"
+  summary: A read-only, deduplicated archive of IMAP mailboxes.
+  description: |
+    The web UI is a client of this API; scripts can use it too. Every user
+    only sees their own accounts and the messages found in them; other
+    users' accounts and messages answer `404`.
+
+    Write requests (`POST`, `PUT`, `PATCH`, `DELETE`) need
+    `Content-Type: application/json`, also without a body, and an `Origin`
+    header that matches the server.
+
+    A user who logged in with a generated password gets `403` with
+    `"passwordChangeRequired": true` everywhere except
+    `PUT /api/profile/password`. A user who must use two-factor
+    authentication but has not set it up gets `403` with
+    `"twoFactorSetupRequired": true` everywhere except the 2FA setup
+    endpoints.
+  license:
+    name: MIT
+    identifier: MIT
+externalDocs:
+  description: Documentation
+  url: https://pklnx.github.io/mail-archive/reference/api
+
+servers:
+  - url: http://localhost:8080
+    description: The default address; use your server's.
+
+security:
+  - session: []
+
+tags:
+  - name: health
+    description: Health checks; no login needed.
+  - name: session
+    description: Login and logout.
+  - name: profile
+    description: The logged-in user's password, 2FA and passkeys.
+  - name: users
+    description: User management, for admins only.
+  - name: accounts
+    description: Mail accounts and syncing.
+  - name: messages
+    description: Listing, searching and reading messages.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Server is running
+      security: []
+      responses:
+        "200":
+          description: The server runs.
+          content:
+            text/plain:
+              schema:
+                type: string
+                const: "ok\n"
+
+  /healthz/sync:
+    get:
+      tags: [health]
+      operationId: getSyncHealth
+      summary: Sync health of all accounts
+      description: |
+        Whether every enabled IMAP account syncs. Names no accounts, users or
+        mail, only account IDs. Cached for 15 seconds.
+      security: []
+      responses:
+        "200":
+          description: Every enabled account syncs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncHealth"
+        "503":
+          description: Some accounts fail or are stale, or the database is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncHealth"
+
+  /api/openapi.json:
+    get:
+      tags: [health]
+      operationId: getOpenAPI
+      summary: This description
+      description: Answers `If-None-Match` with `304`.
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI description of the API.
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+        "304":
+          description: Unchanged since the ETag in `If-None-Match`.
+
+  /api/session:
+    get:
+      tags: [session]
+      operationId: getSession
+      summary: The logged-in user
+      security: []
+      responses:
+        "200":
+          description: A valid session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          description: No valid session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NoSession"
+    post:
+      tags: [session]
+      operationId: login
+      summary: Log in with a password
+      description: |
+        Sets the session cookie. For a user with 2FA it sets no cookie and
+        answers with a challenge for `POST /api/session/2fa` instead, valid
+        for 5 minutes and once.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              additionalProperties: false
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Logged in, or the second step is needed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Session"
+                  - $ref: "#/components/schemas/TwoFactorChallenge"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong user name or password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The user is locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    delete:
+      tags: [session]
+      operationId: logout
+      summary: Log out
+      security: []
+      responses:
+        "204":
+          description: Logged out; the cookie is cleared.
+
+  /api/session/2fa:
+    post:
+      tags: [session]
+      operationId: loginTwoFactor
+      summary: Second login step
+      description: Finishes a login of a user with 2FA and sets the session cookie.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, code]
+              additionalProperties: false
+              properties:
+                challenge:
+                  type: string
+                  description: From `POST /api/session`.
+                code:
+                  type: string
+                  description: A TOTP code or a recovery code.
+      responses:
+        "200":
+          description: Logged in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong code, or the challenge expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/session/passkey/begin:
+    post:
+      tags: [session]
+      operationId: beginPasskeyLogin
+      summary: Start a passkey login
+      security: []
+      responses:
+        "200":
+          description: Options for `navigator.credentials.get()`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ceremony"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/PasskeysOff"
+
+  /api/session/passkey/finish:
+    post:
+      tags: [session]
+      operationId: finishPasskeyLogin
+      summary: Finish a passkey login
+      description: Sets the session cookie.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CeremonyResult"
+      responses:
+        "200":
+          description: Logged in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: |
+            The passkey was not accepted or the token expired. For an unknown
+            passkey also `unknownCredential` with `credentialId` and `rpId`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnknownPasskey"
+        "403":
+          description: The user is locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/PasskeysOff"
+
+  /api/profile/password:
+    put:
+      tags: [profile]
+      operationId: changeOwnPassword
+      summary: Change the own password
+      description: Other sessions of the user end.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current, new]
+              additionalProperties: false
+              properties:
+                current:
+                  type: string
+                new:
+                  type: string
+      responses:
+        "204":
+          description: Changed.
+        "400":
+          description: The new password is too short or unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: The current password is wrong (counts like a failed login), or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/profile/2fa:
+    get:
+      tags: [profile]
+      operationId: getTwoFactor
+      summary: The own 2FA state
+      responses:
+        "200":
+          description: The state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [profile]
+      operationId: disableTwoFactor
+      summary: Turn 2FA off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, code]
+              additionalProperties: false
+              properties:
+                currentPassword:
+                  type: string
+                code:
+                  type: string
+                  description: A TOTP code or a recovery code.
+      responses:
+        "204":
+          description: 2FA is off.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong password or code, or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: 2FA is required for this user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/profile/2fa/setup:
+    post:
+      tags: [profile]
+      operationId: beginTwoFactorSetup
+      summary: Start the 2FA setup
+      description: Creates a new TOTP secret and returns it once.
+      responses:
+        "200":
+          description: The secret, as text, URI and QR code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactor"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: 2FA is already on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/profile/2fa/confirm:
+    post:
+      tags: [profile]
+      operationId: confirmTwoFactorSetup
+      summary: Finish the 2FA setup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodeInput"
+      responses:
+        "200":
+          description: 2FA is on. The recovery codes are shown only here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong code, or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/profile/2fa/recovery-codes:
+    post:
+      tags: [profile]
+      operationId: regenerateRecoveryCodes
+      summary: New recovery codes
+      description: The old recovery codes stop working.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodeInput"
+      responses:
+        "200":
+          description: The new recovery codes, shown only here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong code, or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/profile/passkeys:
+    get:
+      tags: [profile]
+      operationId: listPasskeys
+      summary: The own passkeys
+      responses:
+        "200":
+          description: The passkeys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [available, max, passkeys]
+                properties:
+                  available:
+                    type: boolean
+                    description: False without `MAIL_ARCHIVE_PUBLIC_URL`.
+                  origin:
+                    type: string
+                    description: Where passkeys work; missing when they are off.
+                  max:
+                    type: integer
+                  passkeys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Passkey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/profile/passkeys/begin:
+    post:
+      tags: [profile]
+      operationId: beginPasskeyRegistration
+      summary: Start adding a passkey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, currentPassword]
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 64
+                currentPassword:
+                  type: string
+                code:
+                  type: string
+                  description: A TOTP code or a recovery code; only with 2FA on.
+      responses:
+        "200":
+          description: Options for `navigator.credentials.create()`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ceremony"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong password or code (counts like a failed login), or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The name is in use, or the user has the maximum number of passkeys.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/PasskeysOff"
+
+  /api/profile/passkeys/finish:
+    post:
+      tags: [profile]
+      operationId: finishPasskeyRegistration
+      summary: Finish adding a passkey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CeremonyResult"
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name]
+                properties:
+                  name:
+                    type: string
+        "400":
+          description: An expired token, or a passkey that is not accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The passkey is already registered, or the limit is reached.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/PasskeysOff"
+
+  /api/profile/passkeys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    delete:
+      tags: [profile]
+      operationId: removePasskey
+      summary: Remove an own passkey
+      description: All other sessions of the user end.
+      responses:
+        "200":
+          description: |
+            Removed. The answer is meant for
+            `PublicKeyCredential.signalUnknownCredential()`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentialId, rpId]
+                properties:
+                  credentialId:
+                    type: string
+                  rpId:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: All users
+      responses:
+        "200":
+          description: The users.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AdminUser"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Add a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                admin:
+                  type: boolean
+                  default: false
+      responses:
+        "201":
+          description: Added. The generated password is shown only here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratedPassword"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: The name is taken.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/users/{name}:
+    parameters:
+      - $ref: "#/components/parameters/userName"
+    patch:
+      tags: [users]
+      operationId: updateUser
+      summary: Change a user's role or lock state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              description: Exactly one of the two fields.
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              maxProperties: 1
+              properties:
+                admin:
+                  type: boolean
+                locked:
+                  type: boolean
+      responses:
+        "204":
+          description: Changed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnlyNotSelf"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The user is the last admin who can log in.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [users]
+      operationId: deleteUser
+      summary: Remove a user
+      responses:
+        "204":
+          description: Removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnlyNotSelf"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The user still owns accounts, or is the last admin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/users/{name}/password:
+    parameters:
+      - $ref: "#/components/parameters/userName"
+    post:
+      tags: [users]
+      operationId: resetUserPassword
+      summary: Generate a new password for a user
+      description: |
+        The user is logged out and must change the password at the next
+        login. Their passkeys are removed too, unless `removePasskeys` is
+        false. The body may be empty.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                removePasskeys:
+                  type: boolean
+                  default: true
+      responses:
+        "200":
+          description: The generated password, shown only here.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneratedPassword"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnlyNotSelf"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/users/{name}/2fa/reset:
+    parameters:
+      - $ref: "#/components/parameters/userName"
+    post:
+      tags: [users]
+      operationId: resetUserTwoFactor
+      summary: Turn off a user's 2FA
+      description: The user's sessions end.
+      responses:
+        "204":
+          description: 2FA is off.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnlyNotSelf"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/users/{name}/passkeys:
+    parameters:
+      - $ref: "#/components/parameters/userName"
+    delete:
+      tags: [users]
+      operationId: removeUserPasskeys
+      summary: Remove all passkeys of a user
+      description: The user's sessions end.
+      responses:
+        "204":
+          description: Removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnlyNotSelf"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/status:
+    get:
+      tags: [accounts]
+      operationId: getStatus
+      summary: Messages per account and the last sync
+      description: Like `mail-archive status`.
+      responses:
+        "200":
+          description: The status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [uniqueMessages, accounts]
+                properties:
+                  uniqueMessages:
+                    type: integer
+                    format: int64
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AccountStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/accounts:
+    get:
+      tags: [accounts]
+      operationId: listAccounts
+      summary: The own accounts
+      description: Server settings (never the password), folders and the sync state.
+      responses:
+        "200":
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Accounts"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [accounts]
+      operationId: createAccount
+      summary: Add an IMAP account
+      description: |
+        The login is checked first; the first sync starts right away. If the
+        server marks folders as trash or spam and they would be archived, the
+        account is not saved: the answer is `409` with `suggestedExclusions`.
+        Send the request again with `"confirmFolders": true`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/AccountInput"
+                - type: object
+                  required: [name, host, username, password]
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name]
+                properties:
+                  name:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The name is taken, or folders need confirming.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderConfirmation"
+        "422":
+          $ref: "#/components/responses/LoginFailed"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    patch:
+      tags: [accounts]
+      operationId: updateAccount
+      summary: Change an account
+      description: |
+        Missing fields keep their value; `name` renames the account. A new
+        connection or password is checked with a login first. Import accounts
+        take only `name`, smtp accounts also `enabled`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountInput"
+      responses:
+        "204":
+          description: Changed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The name is taken, the account was changed since it was loaded,
+            it was removed, or the field does not apply to its kind.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/LoginFailed"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+    delete:
+      tags: [accounts]
+      operationId: deleteAccount
+      summary: Remove an account
+      responses:
+        "200":
+          description: |
+            `removed` if archived mail was kept, `deleted` if the account had
+            none.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result:
+                    type: string
+                    enum: [removed, deleted]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The account is being synced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/server-folders:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    get:
+      tags: [accounts]
+      operationId: listServerFolders
+      summary: The account's folders on the IMAP server
+      responses:
+        "200":
+          description: The folders, live from the server.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [folders]
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, selected]
+                      properties:
+                        name:
+                          type: string
+                        specialUse:
+                          type: string
+                          description: The role the server gives it, such as `\Trash`.
+                        selected:
+                          type: boolean
+                          description: Whether the folder is archived.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/NoServer"
+        "502":
+          description: The server could not be reached or refused the login.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/sync:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    post:
+      tags: [accounts]
+      operationId: syncAccount
+      summary: Queue a sync of one account
+      description: |
+        Also a disabled account. A sync already waiting is upgraded, not
+        queued twice. The body may be empty.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reconcile:
+                  type: boolean
+                  default: false
+                  description: |
+                    Also compare every folder with the server, except folders
+                    compared in the last 5 minutes.
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Queued"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/NoServer"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/sync:
+    post:
+      tags: [accounts]
+      operationId: syncAll
+      summary: Queue a sync of all own enabled IMAP accounts
+      responses:
+        "202":
+          description: Queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Queued"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/messages:
+    get:
+      tags: [messages]
+      operationId: listMessages
+      summary: List or search messages
+      description: Newest first. All filters combine.
+      parameters:
+        - name: q
+          in: query
+          description: Full-text query over subject, sender and body.
+          schema:
+            type: string
+        - name: account
+          in: query
+          description: Only messages found in this account.
+          schema:
+            type: string
+        - name: folder
+          in: query
+          description: Only messages found in this folder.
+          schema:
+            type: string
+        - name: from
+          in: query
+          description: Part of the sender's name or address, in any case.
+          schema:
+            type: string
+            maxLength: 200
+        - name: to
+          in: query
+          description: |
+            Part of a name or address in To or Cc, in any case, or of an
+            envelope recipient of the user's smtp accounts.
+          schema:
+            type: string
+            maxLength: 200
+        - name: attachment
+          in: query
+          description: Part of an attachment's file name, in any case. Implies `has=attachment`.
+          schema:
+            type: string
+            maxLength: 200
+        - name: has
+          in: query
+          description: Only messages with at least one attachment.
+          schema:
+            type: string
+            enum: [attachment]
+        - name: after
+          in: query
+          description: Inclusive. `YYYY-MM-DD` (midnight UTC) or RFC 3339.
+          schema:
+            type: string
+        - name: before
+          in: query
+          description: Exclusive. `YYYY-MM-DD` (midnight UTC) or RFC 3339.
+          schema:
+            type: string
+        - name: group
+          in: query
+          description: "`1`: one row per conversation, the newest message of it that matches."
+          schema:
+            type: string
+            enum: ["0", "1"]
+        - name: thread
+          in: query
+          description: Only the messages of this conversation (a `thread` value).
+          schema:
+            type: string
+            maxLength: 2000
+        - name: gone
+          in: query
+          description: Only messages no longer on any server.
+          schema:
+            type: string
+            enum: ["1", "true", "0", "false"]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          description: The `nextCursor` of the previous page.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: One page of messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, nextCursor]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MessageSummary"
+                  nextCursor:
+                    type: [string, "null"]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/messages/{sha}:
+    parameters:
+      - $ref: "#/components/parameters/sha"
+    get:
+      tags: [messages]
+      operationId: getMessage
+      summary: One message
+      description: Headers, plain text, attachment list and every location.
+      responses:
+        "200":
+          description: The message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/messages/{sha}/conversation:
+    parameters:
+      - $ref: "#/components/parameters/sha"
+    get:
+      tags: [messages]
+      operationId: getConversation
+      summary: The conversation of a message
+      description: Oldest first, at most the newest 200.
+      responses:
+        "200":
+          description: The conversation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages, total, truncated]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConversationEntry"
+                  total:
+                    type: integer
+                  truncated:
+                    type: boolean
+                    description: Older messages were left out.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/messages/{sha}/html:
+    parameters:
+      - $ref: "#/components/parameters/sha"
+    get:
+      tags: [messages]
+      operationId: getMessageHTML
+      summary: The HTML body
+      description: |
+        For a sandboxed iframe. The Content-Security-Policy blocks scripts and
+        remote content; remote images only with `images=1`.
+      parameters:
+        - name: images
+          in: query
+          schema:
+            type: string
+            enum: ["1"]
+      responses:
+        "200":
+          description: The HTML body.
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No such message, or it has no HTML body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/messages/{sha}/raw:
+    parameters:
+      - $ref: "#/components/parameters/sha"
+    get:
+      tags: [messages]
+      operationId: getMessageRaw
+      summary: The original message file
+      responses:
+        "200":
+          description: The `.eml` file, as a download.
+          content:
+            message/rfc822:
+              schema:
+                type: string
+                contentMediaType: message/rfc822
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/messages/{sha}/parts/{n}:
+    parameters:
+      - $ref: "#/components/parameters/sha"
+      - name: n
+        in: path
+        required: true
+        description: The `index` of a part in `GET /api/messages/{sha}`.
+        schema:
+          type: integer
+          minimum: 0
+    get:
+      tags: [messages]
+      operationId: getMessagePart
+      summary: One attachment
+      description: |
+        PNG, JPEG, GIF and WebP are shown inline; everything else is a
+        download as `application/octet-stream`.
+      responses:
+        "200":
+          description: The attachment.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                contentMediaType: application/octet-stream
+            image/*:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: mail_archive_session
+      description: |
+        The session cookie set by the login endpoints. Over HTTPS it is
+        named `__Host-mail_archive_session`.
+
+  parameters:
+    sha:
+      name: sha
+      in: path
+      required: true
+      description: The SHA-256 of the message file.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
+    accountName:
+      name: name
+      in: path
+      required: true
+      description: The account name.
+      schema:
+        type: string
+    userName:
+      name: name
+      in: path
+      required: true
+      description: The user name.
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Invalid input.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: No valid session.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    AdminOnly:
+      description: The user is not an admin.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    AdminOnlyNotSelf:
+      description: The user is not an admin, or the target is the admin themselves.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found, or not the user's.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Changed meanwhile; reload and try again.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoServer:
+      description: The account is an import or smtp account, or was removed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    LoginFailed:
+      description: The IMAP server refused the login.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: Too many attempts.
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Retry"
+    PasskeysOff:
+      description: Passkeys need `MAIL_ARCHIVE_PUBLIC_URL` on the server.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    SecretKeyMissing:
+      description: This needs `MAIL_ARCHIVE_SECRET_KEY` on the server.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        passwordChangeRequired:
+          type: boolean
+          description: In a `403`, the user must change the generated password first.
+        twoFactorSetupRequired:
+          type: boolean
+          description: In a `403`, the user must set up 2FA first.
+    Retry:
+      type: object
+      required: [error, retryAfter]
+      properties:
+        error:
+          type: string
+        retryAfter:
+          type: integer
+          description: Seconds.
+
+    User:
+      type: object
+      required: [name, admin, mustChangePassword, twoFactorEnabled, twoFactorRequired]
+      properties:
+        name:
+          type: string
+        admin:
+          type: boolean
+        mustChangePassword:
+          type: boolean
+          description: The user logged in with a generated password and must choose their own.
+        twoFactorEnabled:
+          type: boolean
+        twoFactorRequired:
+          type: boolean
+    Session:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+    NoSession:
+      type: object
+      required: [error, setupRequired]
+      properties:
+        error:
+          type: string
+        setupRequired:
+          type: boolean
+          description: No user exists yet.
+        passkeyOrigin:
+          type: string
+          description: Where passkey logins work; missing when they are off.
+    TwoFactorChallenge:
+      type: object
+      required: [twoFactorRequired, challenge]
+      properties:
+        twoFactorRequired:
+          type: boolean
+          const: true
+        challenge:
+          type: string
+    Ceremony:
+      type: object
+      required: [token, publicKey]
+      properties:
+        token:
+          type: string
+        publicKey:
+          type: object
+          description: WebAuthn options; binary values in base64url.
+    CeremonyResult:
+      type: object
+      required: [token, credential]
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+        credential:
+          type: object
+          description: The browser's answer, in JSON.
+    UnknownPasskey:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        unknownCredential:
+          type: boolean
+        credentialId:
+          type: string
+        rpId:
+          type: string
+
+    TwoFactor:
+      type: object
+      required: [enabled, required, admin, setupPending]
+      properties:
+        enabled:
+          type: boolean
+        required:
+          type: boolean
+        admin:
+          type: boolean
+        setupPending:
+          type: boolean
+        secret:
+          type: string
+          description: Only in the answer of the setup.
+        otpauthUri:
+          type: string
+          description: Only in the answer of the setup.
+        qrDataUrl:
+          type: string
+          description: A PNG data URL; only in the answer of the setup.
+    CodeInput:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+    RecoveryCodes:
+      type: object
+      required: [recoveryCodes]
+      properties:
+        recoveryCodes:
+          type: array
+          items:
+            type: string
+    Passkey:
+      type: object
+      required: [id, name, createdAt, lastUsedAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+
+    AdminUser:
+      type: object
+      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, accounts, failingAccounts, createdAt, lastLoginAt, self]
+      properties:
+        name:
+          type: string
+        admin:
+          type: boolean
+        locked:
+          type: boolean
+        mustChangePassword:
+          type: boolean
+        twoFactorEnabled:
+          type: boolean
+        passkeys:
+          type: integer
+        accounts:
+          type: integer
+        failingAccounts:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        lastLoginAt:
+          type: [string, "null"]
+          format: date-time
+        self:
+          type: boolean
+          description: The logged-in admin, whose own row cannot be changed here.
+    GeneratedPassword:
+      type: object
+      required: [name, password]
+      properties:
+        name:
+          type: string
+        password:
+          type: string
+
+    AccountKind:
+      type: string
+      enum: [imap, import, smtp]
+      description: "`import` for mail imported from files, `smtp` for mail a mail server delivers over SMTP."
+    Health:
+      type: string
+      enum: [ok, failing, stale]
+    AccountStatus:
+      type: object
+      required: [name, kind, enabled, folders, messages, lastRunAt, lastStatus, lastError, failureStreak, health, goneMessages]
+      properties:
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/AccountKind"
+        enabled:
+          type: boolean
+        folders:
+          type: integer
+        messages:
+          type: integer
+          format: int64
+        lastRunAt:
+          type: [string, "null"]
+          format: date-time
+        lastStatus:
+          type: [string, "null"]
+        lastError:
+          type: [string, "null"]
+        failureStreak:
+          type: integer
+        health:
+          $ref: "#/components/schemas/Health"
+        goneMessages:
+          type: integer
+          format: int64
+    Accounts:
+      type: object
+      required: [accounts, manage, syncInterval, reconcileInterval, alertAfter]
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Account"
+        manage:
+          type: boolean
+          description: False without `MAIL_ARCHIVE_SECRET_KEY`; accounts can then only be browsed.
+        syncInterval:
+          type: string
+          description: A Go duration such as `6h0m0s`; empty when the schedule is off.
+        reconcileInterval:
+          type: string
+          description: A Go duration; empty when folders are only reconciled on request.
+        alertAfter:
+          type: integer
+          description: Failed syncs in a row that make an account failing.
+        otherFailing:
+          type: integer
+          description: For admins only, the number of failing accounts of other users.
+    Account:
+      type: object
+      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt]
+      properties:
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/AccountKind"
+        enabled:
+          type: boolean
+        removed:
+          type: boolean
+        host:
+          type: string
+        port:
+          type: integer
+        tls:
+          type: string
+          description: "`tls`, `starttls` or `none`; empty for import and smtp accounts."
+        username:
+          type: string
+        includedFolders:
+          type: array
+          items:
+            type: string
+        excludedFolders:
+          type: array
+          items:
+            type: string
+        folders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Folder"
+        sync:
+          $ref: "#/components/schemas/SyncState"
+        goneMessages:
+          type: integer
+          format: int64
+          description: Messages whose locations in this account are all gone from the server.
+        lastReconciledAt:
+          type: [string, "null"]
+          format: date-time
+        addresses:
+          type: array
+          description: The addresses an smtp account receives for.
+          items:
+            type: string
+        lastReceivedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When an smtp account last accepted a message.
+    Folder:
+      type: object
+      required: [name, messages, lastSyncedAt, lastReconciledAt]
+      properties:
+        name:
+          type: string
+        messages:
+          type: integer
+          format: int64
+        lastSyncedAt:
+          type: [string, "null"]
+          format: date-time
+        lastReconciledAt:
+          type: [string, "null"]
+          format: date-time
+    SyncState:
+      type: object
+      required: [state, lastRun, failureStreak, failingSince, health]
+      properties:
+        state:
+          type: string
+          enum: [idle, queued, running]
+        lastRun:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/SyncRun"
+        failureStreak:
+          type: integer
+        failingSince:
+          type: [string, "null"]
+          format: date-time
+        health:
+          $ref: "#/components/schemas/Health"
+    SyncRun:
+      type: object
+      required: [startedAt, finishedAt, status, fetched, new, reconciledFolders, gone, back, flagsChanged]
+      properties:
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        status:
+          type: string
+          enum: [running, ok, partial, failed]
+        fetched:
+          type: integer
+        new:
+          type: integer
+        error:
+          type: string
+        reconciledFolders:
+          type: integer
+        gone:
+          type: integer
+        back:
+          type: integer
+        flagsChanged:
+          type: integer
+    AccountInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+          description: Default 993 with `tls`, else 143.
+        tls:
+          type: string
+          enum: [tls, starttls, none]
+        username:
+          type: string
+        password:
+          type: string
+        enabled:
+          type: boolean
+        excludedFolders:
+          type: array
+          description: Replaces the folder selection; everything except these folders is archived.
+          items:
+            type: string
+        confirmFolders:
+          type: boolean
+          description: "`POST` only: save even if trash or spam folders would be archived."
+    FolderConfirmation:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        suggestedExclusions:
+          type: array
+          items:
+            type: string
+    Queued:
+      type: object
+      required: [queued]
+      properties:
+        queued:
+          type: integer
+    SyncHealth:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        failing:
+          type: array
+          description: IDs of failing accounts.
+          items:
+            type: integer
+            format: int64
+        stale:
+          type: array
+          description: IDs of stale accounts.
+          items:
+            type: integer
+            format: int64
+
+    MessageSummary:
+      type: object
+      required: [id, size, subject, from, sentAt, sortAt, hasAttachment]
+      properties:
+        id:
+          type: string
+          description: The SHA-256 of the message file.
+        size:
+          type: integer
+          format: int64
+        subject:
+          type: string
+        from:
+          type: string
+        sentAt:
+          type: [string, "null"]
+          format: date-time
+        sortAt:
+          type: string
+          format: date-time
+        snippet:
+          type: string
+          description: For searches. Matches are marked with U+E000 (start) and U+E001 (end).
+        hasAttachment:
+          type: boolean
+        thread:
+          type: string
+          description: The conversation key, for `thread=`. In grouped rows and messages.
+        count:
+          type: integer
+          description: In grouped rows, the number of matching messages of the conversation.
+    Message:
+      allOf:
+        - $ref: "#/components/schemas/MessageSummary"
+        - type: object
+          required: [messageId, to, cc, dateHeader, text, hasHtml, truncated, parts, locations]
+          properties:
+            messageId:
+              type: string
+            inReplyTo:
+              type: string
+              description: The Message-ID it answers, without angle brackets.
+            to:
+              type: string
+            cc:
+              type: string
+            dateHeader:
+              type: string
+            text:
+              type: string
+            hasHtml:
+              type: boolean
+            truncated:
+              type: boolean
+            parts:
+              type: array
+              items:
+                $ref: "#/components/schemas/Part"
+            locations:
+              type: array
+              items:
+                $ref: "#/components/schemas/Location"
+    Part:
+      type: object
+      required: [index, contentType, size, attachment, inline]
+      properties:
+        index:
+          type: integer
+        contentType:
+          type: string
+        filename:
+          type: string
+        contentId:
+          type: string
+        size:
+          type: integer
+          format: int64
+        attachment:
+          type: boolean
+        inline:
+          type: boolean
+    Location:
+      type: object
+      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope]
+      properties:
+        account:
+          type: string
+        folder:
+          type: string
+        uid:
+          type: integer
+          format: int64
+        flags:
+          type: array
+          items:
+            type: string
+        internalDate:
+          type: [string, "null"]
+          format: date-time
+        superseded:
+          type: boolean
+          description: From before the folder's UIDVALIDITY changed.
+        goneAt:
+          type: [string, "null"]
+          format: date-time
+          description: When a reconcile found the location missing on the server.
+        lastSeenAt:
+          type: string
+          format: date-time
+        envelope:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/Envelope"
+    Envelope:
+      type: object
+      description: The SMTP envelope of a message in an smtp account.
+      required: [mailFrom, rcptTo, receivedAt, clientIp, helo]
+      properties:
+        mailFrom:
+          type: string
+        rcptTo:
+          type: array
+          description: The original recipients, BCC included.
+          items:
+            type: string
+        receivedAt:
+          type: string
+          format: date-time
+        clientIp:
+          type: string
+        helo:
+          type: string
+    ConversationEntry:
+      type: object
+      required: [id, subject, from, sentAt, sortAt, relation]
+      properties:
+        id:
+          type: string
+        subject:
+          type: string
+        from:
+          type: string
+        sentAt:
+          type: [string, "null"]
+          format: date-time
+        sortAt:
+          type: string
+          format: date-time
+        relation:
+          type: string
+          enum: [self, parent, reply, thread]

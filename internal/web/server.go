@@ -23,7 +23,6 @@ import (
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/web/ui"
 )
 
 // DefaultAllowedHosts are the host names accepted without configuration.
@@ -130,55 +129,19 @@ func (s *Server) currentTime() time.Time {
 // Handler returns the HTTP handler with all routes and protections.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok\n"))
-	})
-	mux.HandleFunc("GET /healthz/sync", s.handleSyncHealth)
-	mux.HandleFunc("GET /api/session", s.handleGetSession)
-	mux.HandleFunc("POST /api/session", s.handleLogin)
-	mux.HandleFunc("POST /api/session/2fa", s.handleTwoFactorLogin)
-	mux.HandleFunc("POST "+passkeyLoginBeginPath, s.handleBeginPasskeyLogin)
-	mux.HandleFunc("POST "+passkeyLoginFinishPath, s.handleFinishPasskeyLogin)
-	mux.HandleFunc("DELETE /api/session", s.handleLogout)
-	mux.HandleFunc("PUT "+profilePasswordPath, s.handleChangeOwnPassword)
-	mux.HandleFunc("GET /api/profile/2fa", s.handleGetTwoFactor)
-	mux.HandleFunc("POST /api/profile/2fa/setup", s.handleBeginTwoFactor)
-	mux.HandleFunc("POST /api/profile/2fa/confirm", s.handleConfirmTwoFactor)
-	mux.HandleFunc("DELETE /api/profile/2fa", s.handleDisableTwoFactor)
-	mux.HandleFunc("POST /api/profile/2fa/recovery-codes", s.handleRegenerateRecoveryCodes)
-	mux.HandleFunc("GET /api/profile/passkeys", s.handleListPasskeys)
-	mux.HandleFunc("POST /api/profile/passkeys/begin", s.handleBeginPasskeyRegistration)
-	mux.HandleFunc("POST /api/profile/passkeys/finish", s.handleFinishPasskeyRegistration)
-	mux.HandleFunc("DELETE /api/profile/passkeys/{id}", s.handleRemovePasskey)
-	mux.HandleFunc("GET /api/users", s.handleListUsers)
-	mux.HandleFunc("POST /api/users", s.handleCreateUser)
-	mux.HandleFunc("PATCH /api/users/{name}", s.handleUpdateUser)
-	mux.HandleFunc("DELETE /api/users/{name}", s.handleDeleteUser)
-	mux.HandleFunc("POST /api/users/{name}/password", s.handleResetUserPassword)
-	mux.HandleFunc("POST /api/users/{name}/2fa/reset", s.handleResetUserTwoFactor)
-	mux.HandleFunc("DELETE /api/users/{name}/passkeys", s.handleRemoveUserPasskeys)
-	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("GET /api/accounts", s.handleAccounts)
-	mux.HandleFunc("POST /api/accounts", s.handleCreateAccount)
-	mux.HandleFunc("PATCH /api/accounts/{name}", s.handleUpdateAccount)
-	mux.HandleFunc("DELETE /api/accounts/{name}", s.handleDeleteAccount)
-	mux.HandleFunc("GET /api/accounts/{name}/server-folders", s.handleServerFolders)
-	mux.HandleFunc("POST /api/accounts/{name}/sync", s.handleSyncAccount)
-	mux.HandleFunc("POST /api/sync", s.handleSyncAll)
-	mux.HandleFunc("GET /api/messages", s.handleListMessages)
-	mux.HandleFunc("GET /api/messages/{sha}", s.handleMessage)
-	mux.HandleFunc("GET /api/messages/{sha}/conversation", s.handleConversation)
-	mux.HandleFunc("GET /api/messages/{sha}/html", s.handleMessageHTML)
-	mux.HandleFunc("GET /api/messages/{sha}/raw", s.handleMessageRaw)
-	mux.HandleFunc("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart)
-	app := ui.Handler()
-	mux.Handle("GET /{$}", app)
-	mux.Handle("GET /assets/", app)
-	return s.protect(s.requireLogin(mux))
+	accessOf := make(map[string]access)
+	for _, rt := range s.routes() {
+		mux.Handle(rt.pattern, rt.handler)
+		accessOf[rt.pattern] = rt.access
+	}
+	return s.protect(s.authenticate(mux, accessOf))
 }
 
 // ListenAndServe serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	if _, err := openAPI(); err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           s.Handler(),
