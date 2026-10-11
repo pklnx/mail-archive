@@ -383,6 +383,36 @@ func TestAuditUserAgentRace(t *testing.T) {
 	}
 }
 
+// TestAuditUserAgentFewConnections runs more transactions than the pool has
+// connections, all waiting for one row lock, each with an audit entry
+// whose user agent is new. The user agent must be looked up before the
+// transaction starts: the lock holder would otherwise wait for a
+// connection that only the transactions waiting for its lock hold.
+func TestAuditUserAgentFewConnections(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	u, err := st.CreateUser(context.Background(), "alice", "h", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	small, err := store.Open(context.Background(), url+"&pool_max_conns=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer small.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Go(func() {
+			e := &store.AuditEntry{Actor: store.ActorSession, Action: "user.reset_2fa", UserAgent: fmt.Sprintf("agent %d", i)}
+			if err := small.ResetTwoFactor(store.WithAudit(ctx, e), u.ID); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
 func TestExportAudit(t *testing.T) {
 	st := storetest.New(t)
 	ctx := context.Background()

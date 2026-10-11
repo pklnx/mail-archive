@@ -125,14 +125,31 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
 }
 
 func (s *Store) insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry) error {
-	var ua *int64
-	if v := cleanUserAgent(e.UserAgent); v != "" {
-		id, err := s.userAgentID(ctx, v)
-		if err != nil {
-			return err
-		}
-		ua = &id
+	ua, err := s.auditUserAgent(ctx, e)
+	if err != nil {
+		return err
 	}
+	return s.insertAuditWith(ctx, q, e, ua)
+}
+
+// auditUserAgent returns the id of e's user agent, or nil without one. It
+// may insert on a pool connection of its own, so inTx calls it before the
+// transaction starts: called with the transaction's connection held, it
+// can wait for a free connection while every other one waits for a row
+// lock that transaction holds.
+func (s *Store) auditUserAgent(ctx context.Context, e *AuditEntry) (*int64, error) {
+	v := cleanUserAgent(e.UserAgent)
+	if v == "" {
+		return nil, nil
+	}
+	id, err := s.userAgentID(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
+func (s *Store) insertAuditWith(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) error {
 	details, err := json.Marshal(cleanDetail(e.Details))
 	if err != nil {
 		return err
