@@ -32,6 +32,7 @@ const (
 
 func newVerifyCmd() *cobra.Command {
 	var opts archive.VerifyOptions
+	var publicKeys []string
 	cmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Check that every archived message file is present and intact",
@@ -43,6 +44,14 @@ messages/ and tmp/ is checked against the database, which reports orphans
 after an hour: younger ones may belong to a delivery in progress), and
 anything that does not belong there.
 
+Before that, it checks the attestations (see attest check): the chain and its
+signatures, the attestation file, and every attestation against the
+database, which reports attested messages that were removed, rows inserted
+into attested ranges, and an attestation job that stopped. --public-key
+trusts only the keys in the given PEM files, such as an off-host copy of
+signing.pub. Without a key and without attestations it prints "tamper
+evidence off" and checks the rest as before.
+
 verify never changes a database row or an archived file. With --fix-orphans
 it moves orphans and leftover temporary files to orphans/<time>/ in the data
 directory; delete that directory yourself once you are sure.
@@ -50,10 +59,11 @@ directory; delete that directory yourself once you are sure.
 The orphan check waits up to --lock-timeout while a sync writes files, then
 is skipped. While it runs, SMTP deliveries wait to commit; a delivery whose
 new file it moved is answered with 451, and the mail server delivers again. Exit codes: 0 nothing found, 1 findings, 2 the check is
-incomplete (orphan check skipped, unreadable files, or another error).`,
+incomplete (orphan check skipped, unreadable files, attestations without a
+trusted key, or another error).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			code, err := runVerify(cmd.Context(), opts, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			code, err := runVerify(cmd.Context(), opts, publicKeys, cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), "error:", err)
 				return &exitError{msg: err.Error(), code: exitIncomplete}
@@ -72,10 +82,11 @@ incomplete (orphan check skipped, unreadable files, or another error).`,
 	cmd.Flags().IntVar(&opts.Jobs, "jobs", 4, "files hashed in parallel (1 to 16)")
 	cmd.Flags().DurationVar(&opts.LockTimeout, "lock-timeout", time.Minute, "how long to wait for running syncs before the orphan check")
 	cmd.Flags().BoolVar(&opts.FixOrphans, "fix-orphans", false, "move orphans and leftover temporary files to orphans/<time>/ in the data directory")
+	cmd.Flags().StringArrayVar(&publicKeys, "public-key", nil, "trust only the attestation public keys in this PEM file (repeatable)")
 	return cmd
 }
 
-func runVerify(ctx context.Context, opts archive.VerifyOptions, stdout, stderr io.Writer) (int, error) {
+func runVerify(ctx context.Context, opts archive.VerifyOptions, publicKeys []string, stdout, stderr io.Writer) (int, error) {
 	if opts.Jobs < 1 || opts.Jobs > 16 {
 		return 0, fmt.Errorf("--jobs must be between 1 and 16, got %d", opts.Jobs)
 	}
@@ -91,12 +102,18 @@ func runVerify(ctx context.Context, opts archive.VerifyOptions, stdout, stderr i
 	if err != nil {
 		return 0, err
 	}
+	if opts.Attest, err = attestCheckOptions(a.cfg, publicKeys, ""); err != nil {
+		return 0, err
+	}
 	opts.Logger = newLogger(a.cfg.LogLevel)
 	opts.OnFinding = func(f archive.Finding) { fmt.Fprintln(stdout, formatFinding(f)) }
 	opts.Progress = func(n int) { fmt.Fprintf(stderr, "checked %d messages\n", n) }
 	res, err := archive.Verify(ctx, a.store, blobs, opts)
 	if err != nil {
 		return 0, err
+	}
+	for _, n := range res.Notes {
+		fmt.Fprintln(stdout, "note:", n)
 	}
 	fmt.Fprintln(stdout, verifySummary(res))
 	if res.OrphansSkipped {
@@ -143,17 +160,34 @@ func formatFinding(f archive.Finding) string {
 }
 
 func verifySummary(res *archive.VerifyResult) string {
+	what := fmt.Sprintf("%d message(s)", res.Checked)
+	if res.Attestations > 0 {
+		what += fmt.Sprintf(" and %d attestation(s)", res.Attestations)
+	}
+	return fmt.Sprintf("checked %s: %s", what, findingCounts(res.Findings))
+}
+
+// findingKinds is the order findings are counted in summaries.
+var findingKinds = []string{
+	archive.FindingMissing, archive.FindingCorrupt, archive.FindingBadPath, archive.FindingOrphan,
+	archive.FindingStaleTemp, archive.FindingUnexpected,
+	archive.FindingRemoved, archive.FindingUnattested, archive.FindingAttestation, archive.FindingAttestFile,
+	archive.FindingChain, archive.FindingAttestStale,
+	archive.FindingIOError,
+}
+
+// findingCounts lists the number of findings per kind, or "no problems".
+func findingCounts(findings map[string]int) string {
 	parts := []string{}
-	for _, k := range []string{archive.FindingMissing, archive.FindingCorrupt, archive.FindingBadPath, archive.FindingOrphan,
-		archive.FindingStaleTemp, archive.FindingUnexpected, archive.FindingIOError} {
-		if n := res.Findings[k]; n > 0 {
+	for _, k := range findingKinds {
+		if n := findings[k]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, k))
 		}
 	}
 	if len(parts) == 0 {
-		parts = []string{"no problems"}
+		return "no problems"
 	}
-	return fmt.Sprintf("checked %d message(s): %s", res.Checked, strings.Join(parts, ", "))
+	return strings.Join(parts, ", ")
 }
 
 func newExportCmd() *cobra.Command {
@@ -297,7 +331,8 @@ else belongs to a complete backup and how to restore it.
 
 A complete backup is the dump, then a copy of the data directory, in this
 order, and ` + config.EnvSecretKey + `, kept separately. The note never
-contains the key.
+contains the key. With an attestation key, an attestation is written first,
+so that the dump holds the newest one.
 
 Needs pg_dump in PATH, at least the server's major version. The Docker image
 has none: with Docker Compose use "./ma backup DIR", which runs pg_dump in
@@ -317,7 +352,7 @@ the database container and writes DIR on the host.`,
 			now := time.Now().UTC()
 			name := "mailarchive-" + now.Format("20060102T150405Z") + ".dump"
 			// A dump is an export of everything. ./ma backup runs pg_dump
-			// itself and then this command with --note-only.
+			// itself, after this command with --note-only.
 			e := cliEntry("data.backup")
 			if noteOnly {
 				if len(args) == 1 {
@@ -336,6 +371,7 @@ the database container and writes DIR on the host.`,
 				if len(args) == 1 {
 					name = args[0]
 				}
+				attestBeforeBackup(cmd.Context(), a, cmd.ErrOrStderr())
 				note, err := backupNote(cmd.Context(), a, name, now)
 				if err != nil {
 					return err
@@ -351,6 +387,7 @@ the database container and writes DIR on the host.`,
 			if err != nil {
 				return err
 			}
+			attestBeforeBackup(cmd.Context(), a, cmd.OutOrStdout())
 			note, err := backupNote(cmd.Context(), a, name, now)
 			if err != nil {
 				return err
@@ -525,7 +562,26 @@ func backupNote(ctx context.Context, a *app, dumpName string, now time.Time) (st
 	}
 	return formatBackupNote(backupNoteData{
 		Time: now, Version: version, Migration: migration, Dump: dumpName, DataDir: dataDir, Compose: compose,
+		Attest: attestKeyExists(a.cfg),
 	}), nil
+}
+
+// attestBeforeBackup writes an attestation before the dump when a key
+// exists, so that the dump holds the newest one. A failure is reported on
+// w and does not stop the backup.
+func attestBeforeBackup(ctx context.Context, a *app, w io.Writer) {
+	if !attestKeyExists(a.cfg) {
+		return
+	}
+	key, err := loadAttestKey(a.cfg)
+	if err == nil {
+		var res archive.AttestResult
+		if res, err = archive.Attest(ctx, a.store, a.cfg.AttestDir(), key); err == nil {
+			fmt.Fprintf(w, "attestation #%d written before the dump\n", res.Entry.Seq)
+			return
+		}
+	}
+	fmt.Fprintf(w, "warning: no attestation before the dump: %v\n", err)
 }
 
 type backupNoteData struct {
@@ -535,6 +591,7 @@ type backupNoteData struct {
 	Dump      string
 	DataDir   string
 	Compose   bool
+	Attest    bool // attestations are on
 }
 
 func formatBackupNote(d backupNoteData) string {
@@ -567,6 +624,22 @@ Restore:
 2. Load the dump:
    pg_restore --clean --if-exists --no-owner -d "$DATABASE_URL" %s
 `, d.Dump)
+	}
+	if d.Attest {
+		b.WriteString(`3. Run "migrate", then "attest" before anything archives: it imports the
+   attestations written after the dump from the data directory. Then
+   "sync", then "verify". verify lists every attested message the restore
+   lost as "removed"; files newer than the dump show up as orphans; sync
+   adopts those still on the server, "import --format eml" the others. Move
+   the rest aside with "verify --fix-orphans" only after checking them.
+
+Attestations (tamper evidence): the data directory holds attest/, with the
+private signing key unless ` + config.EnvAttestKeyFile + ` points elsewhere.
+Whoever has this backup can sign attestations. The evidence rests on the
+copies kept off this host: attest/attestations.jsonl with attest/leaves/,
+and signing.pub. They are not part of this backup; keep updating them.
+`)
+		return b.String()
 	}
 	b.WriteString(`3. Run "migrate", then "sync", then "verify". Files newer than the dump
    show up as orphans; sync adopts those still on the server. Move the rest

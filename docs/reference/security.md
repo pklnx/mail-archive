@@ -280,6 +280,11 @@ If the key is lost or may be known to others, run
 `./ma attest keygen --rotate`: older attestations stay trusted through
 `attest/retired-keys.pem`, newer ones are signed with the new key.
 
+Check against the copies with `./ma attest check --file COPY --public-key
+COPY-OF-signing.pub`; `--public-key` trusts only the keys given, not the
+ones on the host. What this proves and what not, and the operator steps, are
+in [Tamper evidence](../guide/tamper-evidence).
+
 ## Reporting a vulnerability
 
 Please use GitHub's private vulnerability reporting on the

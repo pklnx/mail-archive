@@ -54,10 +54,13 @@ type VerifyOptions struct {
 	// FixOrphans moves orphans and stale temp files to orphans/<time>/ in
 	// the data directory, after reporting them.
 	FixOrphans bool
-	OnFinding  func(Finding)
-	Progress   func(checked int) // every 10,000 messages
-	Logger     *slog.Logger
-	Now        func() time.Time
+	// Attest, if set, checks the attestations first (CheckAttestations);
+	// its OnFinding and Now are taken from these options.
+	Attest    *AttestCheckOptions
+	OnFinding func(Finding)
+	Progress  func(checked int) // every 10,000 messages
+	Logger    *slog.Logger
+	Now       func() time.Time
 
 	beforeMove func() // for tests: runs between the check and the move
 }
@@ -71,6 +74,12 @@ type VerifyResult struct {
 	MovedBytes     int64
 	MovedTo        string   // the directory they went to, relative to the data directory
 	OldOrphanDirs  []string // orphans/ directories from earlier runs
+	// Attestations is the number of attestations checked.
+	Attestations int
+	// AttestationsUnchecked: attestations exist but no trusted key, so
+	// their signatures were not checked.
+	AttestationsUnchecked bool
+	Notes                 []string // from the attestation check
 }
 
 // Problems is the number of findings, without I/O errors.
@@ -86,7 +95,7 @@ func (r *VerifyResult) Problems() int {
 
 // Complete reports whether every file was checked.
 func (r *VerifyResult) Complete() bool {
-	return !r.OrphansSkipped && r.Findings[FindingIOError] == 0
+	return !r.OrphansSkipped && !r.AttestationsUnchecked && r.Findings[FindingIOError] == 0
 }
 
 const verifyPage = 1000
@@ -112,6 +121,18 @@ func Verify(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts V
 		opts.Now = time.Now
 	}
 	v := &verifier{st: st, blobs: blobs, opts: opts, res: &VerifyResult{Findings: map[string]int{}}}
+	if opts.Attest != nil {
+		// It reads no message files and is fast, so it comes first.
+		ao := *opts.Attest
+		ao.OnFinding, ao.Now = v.report, opts.Now
+		ar, err := CheckAttestations(ctx, st, ao)
+		if ar != nil {
+			v.res.Attestations, v.res.AttestationsUnchecked, v.res.Notes = ar.Attestations, ar.Unchecked, ar.Notes
+		}
+		if err != nil {
+			return v.res, err
+		}
+	}
 	if err := v.checkRows(ctx); err != nil {
 		return v.res, err
 	}

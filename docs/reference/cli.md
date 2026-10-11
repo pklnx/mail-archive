@@ -75,17 +75,18 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
-| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. |
+| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A last line shows the newest [attestation](#attest), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. |
 | `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed. See below. |
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Safe to interrupt and rerun, and to run alongside the web server and syncs; a second `reindex` at the same time exits with `reindex already running`. |
-| `verify` | Check the whole archive: every message file is present and matches its hash, and no files lie around without a database row. See below. |
+| `verify` | Check the whole archive: the attestations, every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
 | `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `attest` | Write a signed attestation over the archived messages now. See below. |
 | `attest keygen [--rotate]` | Create the key that signs attestations, or replace it. See below. |
 | `attest public-key` | Print the public key attestations are verified with. |
+| `attest check [--file FILE] [--public-key FILE] [--offline]` | Check only the attestations, fast. See below. |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule and attestations. Default `127.0.0.1:8080`. |
 
 Commands that change users or accounts, and `import`, `export`, `backup`
@@ -120,9 +121,12 @@ and `remove` work. See [Importing mail](../guide/importing).
 
 ### verify
 
-`verify` reads every archived message from disk and hashes it again, then
-checks every file in the data directory's `messages/` and `tmp/` against the
-database. It changes no database row and no archived file.
+`verify` first checks the [attestations](#attest), then reads every
+archived message from disk and hashes it again, then checks every file in
+the data directory's `messages/` and `tmp/` against the database. It
+changes no database row and no archived file. Without an attestation key
+and without attestations it prints `note: tamper evidence off` and works as
+before.
 
 | Finding | Meaning |
 |---|---|
@@ -133,16 +137,28 @@ database. It changes no database row and no archived file.
 | `stale-temp` | A file in `tmp/` left by an interrupted sync, untouched for an hour. Younger files may belong to a delivery in progress and are skipped. |
 | `unexpected` | Anything else in `messages/` or `tmp/`: symlinks, other names. Never moved. |
 | `io-error` | A file that could not be read. |
+| `removed` | An attested message is gone and no deletion was recorded. Listed with its hash and `attested by #N on DATE`. |
+| `unattested` | A row inside an attested range that the attestation does not list (inserted afterwards). |
+| `attestation` | An attestation no longer matches the database: another message at the same number, changed deletion records, or only the counts when its leaves file is gone. |
+| `attest-file` | The attestation file differs from the database or does not parse, or a leaves file is missing or does not match its signed digest. |
+| `chain` | A broken chain, a bad hash or signature, or an untrusted key. |
+| `attest-stale` | A key exists and the newest attestation is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. |
+
+Lines starting with `note:` are no findings: the attestation file lags
+behind the database, deletions not yet signed, a key rotation, a message
+archived again after a restore (`re-archived`). See [Tamper
+evidence](../guide/tamper-evidence#findings).
 
 | Flag | Default | |
 |---|---|---|
 | `--jobs N` | 4 | Files hashed in parallel, 1 to 16. |
 | `--lock-timeout D` | `1m` | The orphan check waits this long while a sync writes files, then is skipped. |
 | `--fix-orphans` | off | Move orphans and `stale-temp` files to `orphans/<UTC time>/` in the data directory. Delete that directory yourself once you are sure. |
+| `--public-key FILE` | | Trust only the attestation public keys in this PEM file, for example an off-host copy of `signing.pub` (repeatable). Default: `attest/signing.pub` and `attest/retired-keys.pem`. |
 
 Exit codes: `0` nothing found, `1` findings, `2` the check is incomplete
-(orphan check skipped, unreadable files, no database connection, wrong
-flags). Progress goes to stderr every 10,000 messages.
+(orphan check skipped, unreadable files, attestations but no trusted public
+key, no database connection, wrong flags). Progress goes to stderr every 10,000 messages.
 
 ### attest
 
@@ -174,9 +190,23 @@ server still starts and logs `attestations off`.
 
 The database and the file must agree. Entries that only the database has
 (after a crash between the two writes) are copied to the file by the next
-run. If they disagree in any other way, for example a changed line or a
-database restored from a backup older than the file, `attest` writes nothing
-and fails.
+run. Entries that only the file has (a database restored from a backup older
+than the file) are checked and imported, and messages archived since the
+restore inside an imported range get new numbers; the web server does this
+at its start too. See [Restore](../guide/tamper-evidence#restore-from-a-backup).
+If they disagree in any other way, for example a changed line, `attest`
+writes nothing and fails.
+
+`attest check` runs only the attestation part of `verify`, without reading
+message files:
+
+| Flag | |
+|---|---|
+| `--public-key FILE` | Trust only the public keys in this PEM file (repeatable), such as the copy kept off the host. Pass the retired keys too after a rotation. |
+| `--file FILE` | Compare another copy of `attestations.jsonl`, such as the off-host one, with the database. It must be a prefix of the database chain. Its leaves are read from `attest/leaves/`. |
+| `--offline` | No database: check `--file` (default `attest/attestations.jsonl`) alone: chain, signatures, totals, and every leaves file in the `leaves/` directory next to it. Without `--public-key`, `signing.pub` and `retired-keys.pem` next to the file are trusted. |
+
+Exit codes as for `verify`. See [Tamper evidence](../guide/tamper-evidence).
 
 ### export
 

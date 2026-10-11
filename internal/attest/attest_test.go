@@ -158,6 +158,76 @@ func TestCheckChain(t *testing.T) {
 	}
 }
 
+func TestExamineChain(t *testing.T) {
+	key, other := testKey(), ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, ed25519.SeedSize))
+	pub := EncodeKey(key.Public().(ed25519.PublicKey))
+	trusted := Keys{pub: true}
+	chain := chainOf(t, key, 4)
+	if r := ExamineChain(chain, trusted); len(r.Problems) != 0 || len(r.KeyChanges) != 0 {
+		t.Fatalf("clean: %+v", r)
+	}
+
+	// Every problem is reported, not only the first.
+	bad := append([]Entry(nil), chain...)
+	bad[0].Sig, bad[1].Sig = bad[1].Sig, bad[0].Sig // swapped signatures
+	bad = append(bad[:2], bad[3])                   // a gap
+	r := ExamineChain(bad, trusted)
+	want := []string{"#1: bad signature", "#2: bad signature", "#4: expected #3"}
+	if len(r.Problems) != len(want) {
+		t.Fatalf("problems: %q", r.Problems)
+	}
+	for i, w := range want {
+		if !strings.Contains(r.Problems[i], w) {
+			t.Errorf("problem %d: %q, want %q", i, r.Problems[i], w)
+		}
+	}
+
+	// A rotation: trusted while both keys are, reported as a key change.
+	rotated := append([]Entry(nil), chain...)
+	for i := 2; i < len(rotated); i++ {
+		rotated[i].Prev = rotated[i-1].Hash
+		rotated[i].Sign(other)
+	}
+	trusted[EncodeKey(other.Public().(ed25519.PublicKey))] = true
+	if r := ExamineChain(rotated, trusted); len(r.Problems) != 0 || len(r.KeyChanges) != 1 || r.KeyChanges[0] != 3 {
+		t.Fatalf("rotation: %+v", r)
+	}
+	// Without the retired key, the old entries are untrusted.
+	r = ExamineChain(rotated, Keys{EncodeKey(other.Public().(ed25519.PublicKey)): true})
+	if len(r.Problems) != 2 || !strings.Contains(r.Problems[0], "#1: signed with a key that is not trusted") {
+		t.Fatalf("untrusted: %q", r.Problems)
+	}
+}
+
+func TestParseLeaves(t *testing.T) {
+	a, b := hashOf("a"), hashOf("b")
+	data := "mail-archive leaves v1\n+ 3 " + a + "\n+ 7 " + b + "\n- 1 2 " + a + " retention\n"
+	l, err := ParseLeaves([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Messages) != 2 || l.Messages[1] != (Leaf{Seq: 7, SHA256: b}) ||
+		len(l.Deletions) != 1 || l.Deletions[0] != (Deletion{ID: 1, MessageSeq: 2, SHA256: a, Reason: "retention"}) {
+		t.Fatalf("parsed: %+v", l)
+	}
+	if l, err := ParseLeaves([]byte("mail-archive leaves v1\n")); err != nil || len(l.Messages)+len(l.Deletions) != 0 {
+		t.Fatalf("empty: %+v %v", l, err)
+	}
+	for name, bad := range map[string]string{
+		"no header":    "+ 3 " + a + "\n",
+		"out of order": "mail-archive leaves v1\n+ 7 " + a + "\n+ 3 " + b + "\n",
+		"no newline":   "mail-archive leaves v1\n+ 3 " + a,
+		"extra space":  "mail-archive leaves v1\n+  3 " + a + "\n",
+		"bad hash":     "mail-archive leaves v1\n+ 3 " + strings.ToUpper(a) + "\n",
+		"unknown line": "mail-archive leaves v1\n* 3 " + a + "\n",
+		"bad number":   "mail-archive leaves v1\n+ x " + a + "\n",
+	} {
+		if _, err := ParseLeaves([]byte(bad)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
 func TestLeavesGolden(t *testing.T) {
 	var buf bytes.Buffer
 	w, err := NewLeavesWriter(&buf)

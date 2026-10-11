@@ -51,3 +51,27 @@ SELECT * FROM attestations ORDER BY seq DESC LIMIT 1;
 
 -- name: CountAttestations :one
 SELECT count(*) FROM attestations;
+
+-- name: CountDeletionsAfter :one
+-- Deletions no attestation covers yet.
+SELECT count(*) FROM message_deletions WHERE id > @after::bigint;
+
+-- name: AdvanceMessageSeq :exec
+-- After importing attestations from the file: new messages must get
+-- numbers beyond every imported range.
+SELECT setval(pg_get_serial_sequence('messages', 'seq'), @upto::bigint)
+WHERE @upto::bigint > coalesce(pg_sequence_last_value(pg_get_serial_sequence('messages', 'seq')::regclass), 0);
+
+-- name: AdvanceDeletionID :exec
+SELECT setval(pg_get_serial_sequence('message_deletions', 'id'), @upto::bigint)
+WHERE @upto::bigint > coalesce(pg_sequence_last_value(pg_get_serial_sequence('message_deletions', 'id')::regclass), 0);
+
+-- name: ListMessagesInSeqRange :many
+SELECT seq, sha256::text AS sha256 FROM messages
+WHERE seq > @after::bigint AND seq <= @upto::bigint
+ORDER BY seq;
+
+-- name: RenumberMessages :execrows
+-- Moves rows past every imported range: seq is an identity column, and
+-- DEFAULT draws the next value.
+UPDATE messages SET seq = DEFAULT WHERE seq = ANY(@seqs::bigint[]);
