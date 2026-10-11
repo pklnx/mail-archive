@@ -11,11 +11,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/emersion/go-smtp"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -324,11 +326,11 @@ func TestReceiveRefusesClients(t *testing.T) {
 func TestReceiveCommitFailure(t *testing.T) {
 	var fail sync.Map // account ID -> true
 	f := newFixture(t, func(s *Server) {
-		s.receive = func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope) (store.ReceiveResult, error) {
+		s.receive = func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error) {
 			if _, ok := fail.Load(account); ok {
 				return store.ReceiveResult{}, errors.New("commit failed")
 			}
-			return s.Store.ReceiveMessage(ctx, account, meta, env)
+			return s.Store.ReceiveMessage(ctx, account, meta, env, fileExists)
 		}
 	})
 	other := f.account("other", "other@archive.test")
@@ -350,5 +352,98 @@ func TestReceiveCommitFailure(t *testing.T) {
 	}
 	if !strings.Contains(f.logs.String(), `msg="smtp message not stored"`) {
 		t.Errorf("failure not logged:\n%s", f.logs)
+	}
+}
+
+// verify --fix-orphans runs between Put and the commit: it finds the new
+// file without a row and moves it. The delivery must not acknowledge a
+// message whose file is gone; the retry stores it once, with its file.
+func TestReceiveVerifyBetweenPutAndCommit(t *testing.T) {
+	var verified atomic.Bool
+	f := newFixture(t, func(s *Server) {
+		s.receive = func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error) {
+			if !verified.Swap(true) {
+				res, err := archive.Verify(ctx, s.Store, s.Blobs, archive.VerifyOptions{FixOrphans: true, Logger: s.Logger})
+				if err != nil || res.Moved != 1 {
+					t.Errorf("verify: %+v, %v", res, err)
+				}
+			}
+			return s.Store.ReceiveMessage(ctx, account, meta, env, fileExists)
+		}
+	})
+	rcpts := []string{"archive+alice=example.com@archive.test"}
+	if err := f.send("sender@example.com", rcpts, message("platypus")); code(err) != 451 {
+		t.Fatalf("delivery after verify moved the file: %v", err)
+	}
+	if err := f.send("sender@example.com", rcpts, message("platypus")); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.envelopes("platypus"); !slices.Equal(got["journal"], []string{"alice@example.com"}) {
+		t.Fatalf("after retry %v", got)
+	}
+	f.assertFilesPresent()
+}
+
+// verify --fix-orphans running again and again next to deliveries never
+// moves the file of a committed message.
+func TestReceiveAlongsideVerify(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	// Stop verify before the test's directories go, also on failure.
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var n atomic.Int64
+		for ctx.Err() == nil {
+			// verify runs again and again, but not without a pause: back to
+			// back, it could catch every retry between Put and commit.
+			time.Sleep(20 * time.Millisecond)
+			// A new orphans/ directory per run: runs within one second
+			// would otherwise share it.
+			now := time.Unix(1_800_000_000+n.Add(1), 0)
+			_, err := archive.Verify(ctx, f.st, f.srv.Blobs, archive.VerifyOptions{
+				FixOrphans: true, LockTimeout: time.Second, Logger: f.srv.Logger, Now: func() time.Time { return now },
+			})
+			if err != nil && ctx.Err() == nil {
+				t.Errorf("verify: %v", err)
+				return
+			}
+		}
+	}()
+	for i := range 30 {
+		subject := fmt.Sprintf("wallaby%d", i)
+		for attempt := 0; ; attempt++ {
+			err := f.send("sender@example.com", []string{"archive@archive.test"}, message(subject))
+			if err == nil {
+				break
+			}
+			// Like Postfix: a 451 is delivered again.
+			if code(err) != 451 || attempt == 10 {
+				t.Fatalf("delivery %d: %v", i, err)
+			}
+		}
+	}
+	cancel()
+	wg.Wait()
+	f.assertFilesPresent()
+}
+
+// assertFilesPresent checks that every message row has its file.
+func (f *fixture) assertFilesPresent() {
+	f.t.Helper()
+	res, err := archive.Verify(context.Background(), f.st, f.srv.Blobs, archive.VerifyOptions{Logger: f.srv.Logger})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if n := res.Findings[archive.FindingMissing]; n != 0 {
+		f.t.Errorf("%d committed messages lost their file: %+v", n, res.Findings)
+	}
+	if res.Checked == 0 {
+		f.t.Error("verify checked no messages")
 	}
 }

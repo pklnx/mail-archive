@@ -119,7 +119,7 @@ database. It changes no database row and no archived file.
 | `corrupt` | The file's content or size no longer matches its SHA-256. Listed like `missing`. |
 | `bad-path` | The database points to a different path than the hash gives. |
 | `orphan` | A message file without a database row, for example after an interrupted sync or a restore from an older dump. |
-| `stale-temp` | A file in `tmp/` left by an interrupted sync. |
+| `stale-temp` | A file in `tmp/` left by an interrupted sync, untouched for an hour. Younger files may belong to a delivery in progress and are skipped. |
 | `unexpected` | Anything else in `messages/` or `tmp/`: symlinks, other names. Never moved. |
 | `io-error` | A file that could not be read. |
 

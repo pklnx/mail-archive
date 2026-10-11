@@ -63,7 +63,7 @@ type Server struct {
 	Now           func() time.Time
 
 	// receive stores a message for one account; tests replace it.
-	receive func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope) (store.ReceiveResult, error)
+	receive func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error)
 	// inflight counts messages being stored, so that Serve can wait for
 	// them after closing the connections.
 	inflight sync.WaitGroup
@@ -237,7 +237,7 @@ func (ss *session) Data(r io.Reader) error {
 				env.RcptTo = append(env.RcptTo, rc.original)
 			}
 		}
-		res, err := ss.s.receive(ctx, account, meta, env)
+		res, err := ss.s.receive(ctx, account, meta, env, func() bool { return ss.s.Blobs.Exists(blob.SHA256) })
 		if err != nil {
 			log.Error("smtp message not stored", "code", 451, "account_id", account, "err", err)
 			return tempFail()

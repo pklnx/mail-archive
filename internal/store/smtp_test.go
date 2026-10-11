@@ -26,6 +26,9 @@ func createSMTPAccount(t *testing.T, st *store.Store, owner *int64, name string,
 	return a
 }
 
+// present stands in for the message file check of ReceiveMessage.
+func present() bool { return true }
+
 func receivedMeta(sha byte) store.MessageMeta {
 	h := strings.Repeat(fmt.Sprintf("%02x", sha), 32)
 	return store.MessageMeta{SHA256: h, Size: 10, StoredPath: h[:2] + "/" + h}
@@ -106,7 +109,7 @@ func TestSMTPAccounts(t *testing.T) {
 			t.Errorf("change %+v: %v", c, err)
 		}
 	}
-	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope("x@example.com")); !errors.Is(err, store.ErrNotReceiving) {
+	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope("x@example.com"), present); !errors.Is(err, store.ErrNotReceiving) {
 		t.Errorf("receive while disabled: %v", err)
 	}
 
@@ -151,7 +154,7 @@ func TestSMTPAccounts(t *testing.T) {
 	if err := st.UpdateAccount(ctx, a.Ref(), store.AccountChange{Enabled: &on}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(2), envelope("x@example.com")); err != nil {
+	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(2), envelope("x@example.com"), present); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(ctx, `UPDATE envelopes SET rcpt_text = 'x'`); err == nil {
@@ -161,7 +164,7 @@ func TestSMTPAccounts(t *testing.T) {
 	if res, err := st.DeleteOrRemoveAccount(ctx, a.Ref()); err != nil || res != store.AccountRemoved {
 		t.Fatalf("remove: %v, %v", res, err)
 	}
-	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(3), envelope("x@example.com")); !errors.Is(err, store.ErrNotReceiving) {
+	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(3), envelope("x@example.com"), present); !errors.Is(err, store.ErrNotReceiving) {
 		t.Errorf("receive after removal: %v", err)
 	}
 	if _, err := st.LookupSMTPAddress(ctx, "archive@example.com"); !errors.Is(err, store.ErrNotFound) {
@@ -188,7 +191,7 @@ func TestReceiveMessageMergesEnvelopes(t *testing.T) {
 	b := createSMTPAccount(t, st, &u.ID, "other", "other@example.com")
 	meta := receivedMeta(7)
 
-	first, err := st.ReceiveMessage(ctx, a.ID, meta, envelope("alice@example.com", "bob@example.com", "Alice@example.com"))
+	first, err := st.ReceiveMessage(ctx, a.ID, meta, envelope("alice@example.com", "bob@example.com", "Alice@example.com"), present)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +199,7 @@ func TestReceiveMessageMergesEnvelopes(t *testing.T) {
 		t.Fatalf("first delivery %+v", first)
 	}
 	// Postfix split the recipients, or retried some: same bytes, more recipients.
-	second, err := st.ReceiveMessage(ctx, a.ID, meta, envelope("bob@example.com", "carol@example.com"))
+	second, err := st.ReceiveMessage(ctx, a.ID, meta, envelope("bob@example.com", "carol@example.com"), present)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,12 +207,12 @@ func TestReceiveMessageMergesEnvelopes(t *testing.T) {
 		t.Fatalf("second delivery %+v", second)
 	}
 	// A plain retry changes nothing.
-	third, err := st.ReceiveMessage(ctx, a.ID, meta, envelope("carol@example.com"))
+	third, err := st.ReceiveMessage(ctx, a.ID, meta, envelope("carol@example.com"), present)
 	if err != nil || third.New || third.AddedRecipients != 0 {
 		t.Fatalf("retry %+v, %v", third, err)
 	}
 	// Another account gets its own location of the same message.
-	other, err := st.ReceiveMessage(ctx, b.ID, meta, envelope("dave@example.com"))
+	other, err := st.ReceiveMessage(ctx, b.ID, meta, envelope("dave@example.com"), present)
 	if err != nil || !other.New || other.NewMessage || other.UID != 1 {
 		t.Fatalf("other account %+v, %v", other, err)
 	}
@@ -257,12 +260,12 @@ func TestReceiveMessageConcurrent(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(byte(100+i)), envelope("x@example.com"))
+			_, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(byte(100+i)), envelope("x@example.com"), present)
 			errs <- err
 		}()
 		go func() {
 			defer wg.Done()
-			_, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope(fmt.Sprintf("r%02d@example.com", i)))
+			_, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope(fmt.Sprintf("r%02d@example.com", i)), present)
 			errs <- err
 		}()
 	}
@@ -273,7 +276,7 @@ func TestReceiveMessageConcurrent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	res, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(250), envelope("x@example.com"))
+	res, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(250), envelope("x@example.com"), present)
 	if err != nil || res.UID != 22 {
 		t.Fatalf("next UID %+v, %v", res, err)
 	}
@@ -312,7 +315,7 @@ func TestSearchEnvelopeRecipients(t *testing.T) {
 	journal := createSMTPAccount(t, st, &alice.ID, "journal", "archive@example.com")
 	meta := receivedMeta(9)
 	meta.To = "visible@example.com"
-	if _, err := st.ReceiveMessage(ctx, journal.ID, meta, envelope("hidden-bcc@example.com")); err != nil {
+	if _, err := st.ReceiveMessage(ctx, journal.ID, meta, envelope("hidden-bcc@example.com"), present); err != nil {
 		t.Fatal(err)
 	}
 	// Bob has the same message from an import, without the envelope.
@@ -360,5 +363,68 @@ func TestSearchEnvelopeRecipients(t *testing.T) {
 				t.Errorf("few=%v owner %d to:%s: %d threads, want %d", few, c.owner, c.to, len(threads), c.want)
 			}
 		}
+	}
+}
+
+func TestReceiveMessageBlobLock(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
+
+	// verify holds the blob lock exclusive: the delivery waits for it.
+	unlock, ok, err := st.TryLockBlobs(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock blobs: %v %v", ok, err)
+	}
+	// Release it before the store closes, also when the test fails early.
+	var once sync.Once
+	t.Cleanup(func() { once.Do(unlock) })
+	done := make(chan error, 1)
+	go func() {
+		_, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope("x@example.com"), present)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("delivered while verify held the lock: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	once.Do(unlock)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("delivery still waits after the lock was released")
+	}
+	// After the commit, verify gets the lock again.
+	unlock, ok, err = st.TryLockBlobs(ctx)
+	if err != nil || !ok {
+		t.Fatalf("lock after the delivery committed: %v %v", ok, err)
+	}
+	unlock()
+}
+
+func TestReceiveMessageBlobGone(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
+	gone := func() bool { return false }
+	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope("x@example.com"), gone); !errors.Is(err, store.ErrBlobGone) {
+		t.Fatalf("file gone: %v", err)
+	}
+	// Metadata that relied on a row the database no longer has.
+	known := receivedMeta(2)
+	known.Known = true
+	if _, err := st.ReceiveMessage(ctx, a.ID, known, envelope("x@example.com"), present); !errors.Is(err, store.ErrBlobGone) {
+		t.Fatalf("row gone: %v", err)
+	}
+	// Nothing was stored.
+	if _, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope("x@example.com"), present); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(3), envelope("x@example.com"), present); err != nil || res.UID != 2 {
+		t.Fatalf("next delivery %+v, %v", res, err)
 	}
 }

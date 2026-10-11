@@ -250,6 +250,17 @@ func (q *Queries) ListSMTPAddresses(ctx context.Context) ([]SmtpAddress, error) 
 	return items, nil
 }
 
+const lockBlobsShared = `-- name: LockBlobsShared :exec
+SELECT pg_advisory_xact_lock_shared($1::int, 0)
+`
+
+// The blob lock, shared, until the transaction ends: verify, which holds it
+// exclusive while it moves orphans, waits for the commit.
+func (q *Queries) LockBlobsShared(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobsShared, class)
+	return err
+}
+
 const lockFolder = `-- name: LockFolder :one
 SELECT id, uidvalidity FROM folders WHERE account_id = $1 AND name = $2 FOR UPDATE
 `

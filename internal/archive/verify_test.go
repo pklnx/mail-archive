@@ -102,6 +102,11 @@ func (e *archiveEnv) write(rel, content string) {
 	if err := os.WriteFile(e.path(rel), []byte(content), 0o600); err != nil {
 		e.t.Fatal(err)
 	}
+	// Old enough that verify takes a file in tmp/ for a stale write.
+	old := time.Now().Add(-2 * archive.StaleTempAge)
+	if err := os.Chtimes(e.path(rel), old, old); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 func (e *archiveEnv) verify(opts archive.VerifyOptions) (*archive.VerifyResult, map[string][]archive.Finding) {
@@ -202,11 +207,18 @@ func TestVerifyFixOrphansMovesOnlyOrphans(t *testing.T) {
 	orphan, _, _ := e.blobs.Put(strings.NewReader(msg(2)))
 	e.write("tmp/put-1", "half")
 	e.write("messages/ab/notes.txt", "x")
+	// A write in progress, like an SMTP delivery's: left alone.
+	if err := os.WriteFile(e.path("tmp/put-2"), []byte("arriving"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	now := time.Date(2026, 10, 7, 19, 1, 2, 0, time.UTC)
 	res, _ := e.verify(archive.VerifyOptions{FixOrphans: true, Now: func() time.Time { return now }})
 	if res.Moved != 2 || res.MovedBytes != orphan.Size+4 || res.MovedTo != "orphans/20261007T190102Z" {
 		t.Fatalf("result %+v", res)
+	}
+	if _, err := os.Stat(e.path("tmp/put-2")); err != nil {
+		t.Errorf("fresh temp file moved: %v", err)
 	}
 	for _, p := range []string{orphan.Path, "tmp/put-1"} {
 		if _, err := os.Stat(e.path(p)); !os.IsNotExist(err) {

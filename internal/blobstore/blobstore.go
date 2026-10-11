@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Store is a content-addressed file store rooted at a directory.
@@ -128,6 +129,8 @@ type Entry struct {
 	SHA256 string // for EntryBlob
 	Size   int64  // for regular files
 	Reason string // for EntryUnexpected
+	// ModTime is the last write of a file in tmp/, for EntryTemp.
+	ModTime time.Time
 }
 
 // Walk calls fn for every entry below messages/ and tmp/. Symlinks are
@@ -197,10 +200,12 @@ func (s *Store) walkTemp(fn func(Entry) error) error {
 		e := Entry{Kind: EntryTemp, Path: "tmp/" + d.Name()}
 		if !d.Type().IsRegular() {
 			e.Kind, e.Reason = EntryUnexpected, "not a regular file"
-		} else if info, err := d.Info(); err != nil {
+		} else if info, err := d.Info(); errors.Is(err, fs.ErrNotExist) {
+			continue // a write finished meanwhile: Put renamed or removed it
+		} else if err != nil {
 			return err
 		} else {
-			e.Size = info.Size()
+			e.Size, e.ModTime = info.Size(), info.ModTime()
 		}
 		if err := fn(e); err != nil {
 			return err

@@ -218,7 +218,7 @@ func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now t
 			MailFrom: m.from, RcptTo: m.rcpts, ReceivedAt: m.at,
 			ClientIP: netip.MustParseAddr("172.18.0.1"), HELO: "mx.example.com",
 		}
-		if _, err := st.ReceiveMessage(ctx, acc.ID, meta, env); err != nil {
+		if _, err := st.ReceiveMessage(ctx, acc.ID, meta, env, func() bool { return blobs.Exists(blob.SHA256) }); err != nil {
 			return err
 		}
 	}
