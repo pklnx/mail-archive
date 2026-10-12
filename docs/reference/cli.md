@@ -221,7 +221,9 @@ than when the archive stored the message, so an mbox from 2015 imported in
 2026 counts from 2015. Without a rule, mail is kept for ever. When several
 rules match a message, the longest wins, also across other users' accounts
 that hold the same message. **Rules alone delete nothing**; deletion is a
-separate, reviewed step, see [Deletion](#deletion).
+separate, reviewed step, see [Deletion](#deletion). The background, GoBD and
+a template for the procedure documentation are in
+[Retention and legal hold](../guide/retention).
 
 ```sh
 ./ma retention rule add --account work --years 8 --note "§147 AO, invoices by mail"

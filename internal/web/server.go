@@ -58,6 +58,9 @@ type Server struct {
 	healthCache syncHealthCache
 	// trustedProxies may name the client in X-Forwarded-For.
 	trustedProxies []netip.Prefix
+	// retention executes confirmed deletion runs; nil leaves them to the
+	// next start of serve or to the command line.
+	retention interface{ Wake() }
 }
 
 // Options configure a Server.
@@ -89,6 +92,8 @@ type Options struct {
 	// client (MAIL_ARCHIVE_TRUSTED_PROXIES), for the audit log and the
 	// login limits.
 	TrustedProxies []netip.Prefix
+	// Retention executes deletion runs confirmed in the web UI.
+	Retention *archive.Retention
 }
 
 // New creates a Server.
@@ -123,13 +128,17 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	if wa != nil && !slices.Contains(hosts, wa.Config.RPID) {
 		hosts = append(hosts, wa.Config.RPID)
 	}
-	return &Server{
+	srv := &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
 		apiKeyRate: auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
 		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies,
 	}
+	if opts.Retention != nil {
+		srv.retention = opts.Retention
+	}
+	return srv
 }
 
 // currentTime returns the server clock, or the wall clock if none is set.

@@ -318,3 +318,194 @@ func (s *Server) handleReleaseLegalHold(w http.ResponseWriter, r *http.Request) 
 	s.log.Info("legal hold released", "id", id, "by", currentSession(r).UserName)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// Deletion runs: proposed here, reviewed with counts and hashes (no
+// subjects: admins do not read other users' mail), confirmed by typing
+// the number of messages, executed by the retention job of serve.
+
+type deletionRunJSON struct {
+	ID          int64      `json:"id"`
+	State       string     `json:"state"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	CreatedBy   string     `json:"createdBy"`
+	Candidates  int        `json:"candidates"`
+	Bytes       int64      `json:"bytes"`
+	ConfirmedAt *time.Time `json:"confirmedAt"`
+	ConfirmedBy string     `json:"confirmedBy"`
+	FinishedAt  *time.Time `json:"finishedAt"`
+	Deleted     int        `json:"deleted"`
+	Kept        int        `json:"kept"`
+}
+
+func toRunJSON(r *store.DeletionRun) deletionRunJSON {
+	return deletionRunJSON{
+		ID: r.ID, State: r.State, CreatedAt: r.CreatedAt, CreatedBy: r.CreatedBy, Candidates: r.Candidates, Bytes: r.Bytes,
+		ConfirmedAt: r.ConfirmedAt, ConfirmedBy: r.ConfirmedBy, FinishedAt: r.FinishedAt, Deleted: r.Deleted, Kept: r.Kept,
+	}
+}
+
+func (s *Server) handleListDeletionRuns(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	runs, err := s.store.DeletionRuns(r.Context(), 50)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	out := make([]deletionRunJSON, 0, len(runs))
+	for i := range runs {
+		out = append(out, toRunJSON(&runs[i]))
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"runs": out})
+}
+
+func (s *Server) handleCreateDeletionRun(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	by := userID(r)
+	run, err := s.store.ProposeDeletion(withAudit(r, s.auditEntry(r, "retention.preview")), &by)
+	if errors.Is(err, store.ErrRunOpen) {
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	}
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	s.log.Info("deletion run proposed", "run", run.ID, "candidates", run.Candidates, "by", currentSession(r).UserName)
+	s.writeJSON(w, http.StatusCreated, toRunJSON(run))
+}
+
+// maxReviewCandidates is how many candidates the review lists; the counts
+// cover all of them.
+const maxReviewCandidates = 1000
+
+type deletionGroupJSON struct {
+	Owner    string `json:"owner"`
+	Account  string `json:"account"`
+	Folder   string `json:"folder"`
+	Year     int    `json:"year"`
+	Messages int64  `json:"messages"`
+}
+
+type deletionCandidateJSON struct {
+	SHA256      string    `json:"sha256"`
+	Size        int64     `json:"size"`
+	RetainUntil time.Time `json:"retainUntil"`
+	State       string    `json:"state"`
+}
+
+func (s *Server) pathRunID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.fail(w, r, http.StatusNotFound, "not found", nil)
+		return 0, false
+	}
+	return id, true
+}
+
+func (s *Server) handleGetDeletionRun(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id, ok := s.pathRunID(w, r)
+	if !ok {
+		return
+	}
+	run, err := s.store.DeletionRun(r.Context(), id)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	groups, err := s.store.DeletionRunSummary(r.Context(), id)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	candidates, err := s.store.DeletionCandidates(r.Context(), id)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	out := struct {
+		Run        deletionRunJSON         `json:"run"`
+		Groups     []deletionGroupJSON     `json:"groups"`
+		Candidates []deletionCandidateJSON `json:"candidates"`
+		Listed     int                     `json:"listed"`
+	}{Run: toRunJSON(run), Groups: make([]deletionGroupJSON, 0, len(groups)), Candidates: []deletionCandidateJSON{}}
+	for _, g := range groups {
+		out.Groups = append(out.Groups, deletionGroupJSON{Owner: g.Owner, Account: g.Account, Folder: g.Folder, Year: g.Year, Messages: g.Messages})
+	}
+	for i, c := range candidates {
+		if i == maxReviewCandidates {
+			break
+		}
+		out.Candidates = append(out.Candidates, deletionCandidateJSON{SHA256: c.SHA256, Size: c.Size, RetainUntil: c.RetainUntil, State: c.State})
+	}
+	out.Listed = len(out.Candidates)
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleConfirmDeletionRun(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id, ok := s.pathRunID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		// Count must be the run's number of candidates, typed by the admin.
+		Count int `json:"count"`
+	}
+	if !s.decode(w, r, &in) {
+		return
+	}
+	run, err := s.store.DeletionRun(r.Context(), id)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	if in.Count != run.Candidates {
+		s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("type the number of messages (%d) to confirm", run.Candidates), nil)
+		return
+	}
+	by := userID(r)
+	err = s.store.ConfirmDeletionRun(withAudit(r, s.auditEntry(r, "retention.confirm")), id, &by)
+	if errors.Is(err, store.ErrRunState) {
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	}
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	s.log.Info("deletion run confirmed", "run", id, "by", currentSession(r).UserName)
+	if s.retention != nil {
+		s.retention.Wake()
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) handleCancelDeletionRun(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id, ok := s.pathRunID(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.CancelDeletionRun(withAudit(r, s.auditEntry(r, "retention.cancel")), id)
+	if errors.Is(err, store.ErrRunState) {
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	}
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	s.log.Info("deletion run cancelled", "run", id, "by", currentSession(r).UserName)
+	w.WriteHeader(http.StatusNoContent)
+}

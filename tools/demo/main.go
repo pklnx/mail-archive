@@ -141,6 +141,15 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	if err := journal(ctx, st, blobs, time.Now()); err != nil {
 		return err
 	}
+	// A retention rule for the business account, for the retention page
+	// and the message view.
+	for _, a := range reconcile {
+		if a.Name == "work" {
+			if _, err := st.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: a.ID, Years: 8, Note: "§147 AO: business letters and invoices"}); err != nil {
+				return err
+			}
+		}
+	}
 
 	hash, err := auth.NewHasher(auth.DefaultParams).Hash(ctx, loginPassword)
 	if err != nil {

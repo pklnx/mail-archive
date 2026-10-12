@@ -76,6 +76,11 @@ func (s *Server) routes() []route {
 		h("GET /api/legal-holds", s.handleListLegalHolds, accessSession),
 		h("POST /api/legal-holds", s.handleCreateLegalHold, accessSession),
 		h("POST /api/legal-holds/{id}/release", s.handleReleaseLegalHold, accessSession),
+		h("GET /api/retention/runs", s.handleListDeletionRuns, accessSession),
+		h("POST /api/retention/runs", s.handleCreateDeletionRun, accessSession),
+		h("GET /api/retention/runs/{id}", s.handleGetDeletionRun, accessSession),
+		h("POST /api/retention/runs/{id}/confirm", s.handleConfirmDeletionRun, accessSession),
+		h("POST /api/retention/runs/{id}/cancel", s.handleCancelDeletionRun, accessSession),
 
 		// Users see their own entries, admins everyone's.
 		h("GET /api/audit", s.handleAudit, accessSession),

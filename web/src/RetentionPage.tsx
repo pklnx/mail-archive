@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   retentionApi,
   usersApi,
+  type DeletionReview,
+  type DeletionRun,
   type LegalHold,
   type ManagedUser,
   type RetentionAccount,
   type RetentionRules,
 } from "./api";
-import { day } from "./format";
+import { day, fileSize } from "./format";
 import { t } from "./i18n";
 import { parseQuery } from "./searchSyntax";
 
@@ -43,7 +45,7 @@ export function holdScope(h: LegalHold): string {
 
 /** Retention rules and legal holds, for admins. */
 export function RetentionPage({ close }: { close: () => void }) {
-  const [view, setView] = useState<"rules" | "holds">("rules");
+  const [view, setView] = useState<"rules" | "holds" | "runs">("rules");
   const [data, setData] = useState<RetentionRules | null>(null);
   const [error, setError] = useState("");
 
@@ -65,7 +67,7 @@ export function RetentionPage({ close }: { close: () => void }) {
       </button>
       <h1 className="text-xl font-semibold">{t.retentionTitle}</h1>
       <div role="tablist" className="flex gap-1">
-        {(["rules", "holds"] as const).map((v) => (
+        {(["rules", "holds", "runs"] as const).map((v) => (
           <button
             key={v}
             type="button"
@@ -74,7 +76,7 @@ export function RetentionPage({ close }: { close: () => void }) {
             className={`${tab} ${view === v ? "bg-zinc-200 font-medium dark:bg-zinc-800" : "hover:bg-zinc-100 dark:hover:bg-zinc-900"}`}
             onClick={() => setView(v)}
           >
-            {v === "rules" ? t.retentionRulesTab : t.retentionHoldsTab}
+            {v === "rules" ? t.retentionRulesTab : v === "holds" ? t.retentionHoldsTab : t.runsTab}
           </button>
         ))}
       </div>
@@ -86,6 +88,7 @@ export function RetentionPage({ close }: { close: () => void }) {
       {!data && !error && <p className="text-sm text-zinc-500">{t.loading}</p>}
       {data && view === "rules" && <RulesTab data={data} reload={reload} />}
       {data && view === "holds" && <HoldsTab accounts={data.accounts} />}
+      {view === "runs" && <RunsTab />}
     </div>
   );
 }
@@ -380,5 +383,200 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
         {t.holdAdd}
       </button>
     </form>
+  );
+}
+
+/** Whether a run is still open: proposed, or confirmed and being deleted. */
+export function runOpen(r: Pick<DeletionRun, "state">): boolean {
+  return r.state === "proposed" || r.state === "confirmed";
+}
+
+function RunsTab() {
+  const [runs, setRuns] = useState<DeletionRun[] | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(() => {
+    retentionApi.runs().then(
+      (r) => {
+        setRuns(r);
+        setError("");
+        setSelected((cur) => cur ?? r.find(runOpen)?.id ?? null);
+      },
+      (err: unknown) => setError(message(err)),
+    );
+  }, []);
+  useEffect(reload, [reload]);
+  // A confirmed run deletes in the background: poll until it is done.
+  const deleting = runs?.some((r) => r.state === "confirmed") ?? false;
+  useEffect(() => {
+    if (!deleting) return;
+    const id = setInterval(reload, 3000);
+    return () => clearInterval(id);
+  }, [deleting, reload]);
+
+  const propose = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const run = await retentionApi.propose();
+      setSelected(run.id);
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setBusy(false);
+    }
+    reload();
+  };
+
+  const open = runs?.find(runOpen);
+  return (
+    <section className="flex flex-col gap-4">
+      <p className="text-sm text-zinc-500">{t.runsNote}</p>
+      <p className="text-sm text-zinc-500">{t.runsCLI}</p>
+      {!open && (
+        <button type="button" className={`${primary} self-start`} disabled={busy || !runs} onClick={() => void propose()}>
+          {t.runPropose}
+        </button>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-red-600">
+          {error}
+        </p>
+      )}
+      {runs && runs.length === 0 && <p className="text-sm">{t.runNone}</p>}
+      {runs && runs.length > 0 && (
+        <ul className="flex flex-col divide-y divide-zinc-200 rounded-lg border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
+          {runs.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="font-medium">{t.runLine(r.id, r.candidates, fileSize(r.bytes))}</span>
+                <span className="text-zinc-500"> · {t.runState(r.state)}</span>
+                {(r.state === "done" || r.deleted + r.kept > 0) && (
+                  <span className="text-zinc-500"> · {t.runResult(r.deleted, r.kept)}</span>
+                )}
+                <span className="block text-xs text-zinc-500">{t.runProposedBy(r.createdBy, day(r.createdAt))}</span>
+              </span>
+              {selected !== r.id && (
+                <button type="button" className={button} onClick={() => setSelected(r.id)}>
+                  {t.runShow}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {selected !== null && <RunReview key={`${selected}-${runs?.find((r) => r.id === selected)?.state}`} id={selected} changed={reload} />}
+    </section>
+  );
+}
+
+function RunReview({ id, changed }: { id: number; changed: () => void }) {
+  const [review, setReview] = useState<DeletionReview | null>(null);
+  const [count, setCount] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    retentionApi.run(id).then(setReview, (err: unknown) => setError(message(err)));
+  }, [id]);
+
+  const act = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setBusy(false);
+    }
+    changed();
+  };
+
+  if (error && !review) {
+    return (
+      <p role="alert" className="text-sm text-red-600">
+        {error}
+      </p>
+    );
+  }
+  if (!review) return <p className="text-sm text-zinc-500">{t.loading}</p>;
+  const { run } = review;
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+      <p className="font-medium">
+        {t.runLine(run.id, run.candidates, fileSize(run.bytes))} · {t.runState(run.state)}
+      </p>
+      {review.groups.length > 0 && (
+        <table className="w-full text-left">
+          <thead className="text-zinc-500">
+            <tr>
+              <th className="py-1 font-normal">{t.runGroupsHead}</th>
+              <th className="py-1 font-normal">{t.runYear}</th>
+              <th className="py-1 text-right font-normal">{t.runMessages}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {review.groups.map((g) => (
+              <tr key={`${g.owner}/${g.account}/${g.folder}/${g.year}`} className="border-t border-zinc-100 dark:border-zinc-800">
+                <td className="py-1">
+                  {g.owner || "-"} / {g.account} / {g.folder}
+                </td>
+                <td className="py-1 tabular-nums">{g.year}</td>
+                <td className="py-1 text-right tabular-nums">{g.messages}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {review.candidates.length > 0 && (
+        <details>
+          <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">{t.runHashes(review.listed, run.candidates)}</summary>
+          <ul className="mt-2 max-h-64 overflow-y-auto font-mono text-xs">
+            {review.candidates.map((c) => (
+              <li key={c.sha256} className={c.state === "kept" ? "text-zinc-400" : ""}>
+                {c.sha256} {c.state !== "pending" && `(${c.state})`}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {run.state === "proposed" && run.candidates === 0 && <p>{t.runEmpty}</p>}
+      {run.state === "proposed" && (
+        <div className="flex flex-wrap items-end gap-2">
+          {run.candidates > 0 && (
+            <form
+              className="flex flex-wrap items-end gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void act(() => retentionApi.confirm(run.id, Number(count)));
+              }}
+            >
+              <label className="flex flex-col gap-1">
+                {t.runConfirmPrompt(run.candidates)}
+                <input className={`${input} w-32`} inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} />
+              </label>
+              <button
+                type="submit"
+                className="rounded-md bg-red-600 px-3 py-1 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                disabled={busy || Number(count) !== run.candidates}
+              >
+                {t.runConfirm}
+              </button>
+            </form>
+          )}
+          <button type="button" className={button} disabled={busy} onClick={() => void act(() => retentionApi.cancel(run.id))}>
+            {t.runCancel}
+          </button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-red-600">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
