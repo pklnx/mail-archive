@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/mime"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -30,6 +31,10 @@ type statusAccount struct {
 	// FailureStreak and Health as in GET /api/accounts.
 	FailureStreak int    `json:"failureStreak"`
 	Health        string `json:"health"`
+	// SyncEvery and NextAt as in GET /api/accounts (sync.syncEvery,
+	// sync.nextAt).
+	SyncEvery *string    `json:"syncEvery"`
+	NextAt    *time.Time `json:"nextAt"`
 	// GoneMessages as in GET /api/accounts.
 	GoneMessages int64 `json:"goneMessages"`
 }
@@ -46,6 +51,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	busy, err := s.loadBusy(r.Context())
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	now := s.currentTime()
 	accounts := make([]statusAccount, 0, len(stats))
 	for _, st := range stats {
@@ -55,8 +65,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			GoneMessages: st.Gone,
 		}
 		if h := health[st.AccountID]; h != nil {
-			a.FailureStreak, a.Health = h.FailureStreak, h.State(s.alertAfter, s.syncInterval(), now)
+			a.FailureStreak, a.Health = h.FailureStreak, s.healthState(h, busy, now)
 		}
+		a.SyncEvery, a.NextAt = s.scheduleFields(archive.ScheduledStats(st))
 		accounts = append(accounts, a)
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"uniqueMessages": unique, "accounts": accounts})

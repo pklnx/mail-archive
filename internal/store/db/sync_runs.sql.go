@@ -11,7 +11,7 @@ import (
 )
 
 const accountStats = `-- name: AccountStats :many
-SELECT a.id, a.name, a.enabled, a.owner_id, a.kind,
+SELECT a.id, a.name, a.enabled, a.owner_id, a.kind, a.created_at, a.removed_at, a.sync_interval_seconds,
        (SELECT count(*) FROM folders f WHERE f.account_id = a.id) AS folders,
        (SELECT count(DISTINCT l.message_sha256) FROM message_locations l JOIN folders f ON f.id = l.folder_id
         WHERE f.account_id = a.id) AS messages,
@@ -33,15 +33,18 @@ ORDER BY a.name, a.owner_id
 `
 
 type AccountStatsRow struct {
-	ID               int64
-	Name             string
-	Enabled          bool
-	OwnerID          *int64
-	Kind             string
-	Folders          int64
-	Messages         int64
-	Gone             int64
-	LastReconciledAt *time.Time
+	ID                  int64
+	Name                string
+	Enabled             bool
+	OwnerID             *int64
+	Kind                string
+	CreatedAt           time.Time
+	RemovedAt           *time.Time
+	SyncIntervalSeconds *int32
+	Folders             int64
+	Messages            int64
+	Gone                int64
+	LastReconciledAt    *time.Time
 }
 
 // All accounts, or only those of one owner.
@@ -60,6 +63,9 @@ func (q *Queries) AccountStats(ctx context.Context, owner *int64) ([]AccountStat
 			&i.Enabled,
 			&i.OwnerID,
 			&i.Kind,
+			&i.CreatedAt,
+			&i.RemovedAt,
+			&i.SyncIntervalSeconds,
 			&i.Folders,
 			&i.Messages,
 			&i.Gone,

@@ -1,6 +1,7 @@
 -- name: CreateAccount :one
-INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, owner_id, kind)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, owner_id, kind,
+                      sync_interval_seconds)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, created_at, version;
 
 -- name: UpdatePassword :execrows
@@ -21,6 +22,7 @@ UPDATE accounts
 SET name = @name, host = @host, port = @port, tls_mode = @tls_mode, username = @username,
     password_enc = @password_enc, included_folders = @included_folders,
     excluded_folders = @excluded_folders, enabled = @enabled,
+    sync_interval_seconds = @sync_interval_seconds,
     version = version + 1, updated_at = now()
 WHERE id = @id;
 

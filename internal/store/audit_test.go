@@ -211,7 +211,10 @@ func TestAuditMigrationDown(t *testing.T) {
 	if err := st.Audit(ctx, store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}); err != nil {
 		t.Fatal(err)
 	}
-	// First the folder delimiters and the attestations, of which there are none.
+	// First the sync intervals, the folder delimiters and the attestations, of which there are none.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00024_account_sync_interval") {
+		t.Fatalf("down the sync interval: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00023_folder_delimiter") {
 		t.Fatalf("down the folder delimiter: %q, %v", m, err)
 	}
@@ -231,6 +234,9 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatalf("down with entries: %v", err)
 	}
 	empty := storetest.New(t)
+	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00024_account_sync_interval") {
+		t.Fatalf("down the sync interval: %q, %v", m, err)
+	}
 	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00023_folder_delimiter") {
 		t.Fatalf("down the folder delimiter: %q, %v", m, err)
 	}

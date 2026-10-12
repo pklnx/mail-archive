@@ -105,6 +105,21 @@ and password. Leave the password empty to keep the current one. Any change to th
 connection is checked with a real login before it is saved. On the command
 line, use `./ma account set-password NAME`.
 
+### Schedule
+
+Under **Edit**, **Schedule** sets how often the web server syncs the
+account: the server's default, every 15 minutes to every day, or **Not on
+the schedule**. On the command line:
+
+```sh
+./ma account set-schedule work --sync-interval 30m
+./ma account set-schedule work --sync-interval manual
+./ma account set-schedule work --sync-interval default
+```
+
+See [The schedule](./syncing#per-account) for the server's minimum and what
+**Not on the schedule** does.
+
 ### Renaming
 
 Change the name in the edit form, or on the command line:
@@ -121,7 +136,9 @@ taken, and removed accounts cannot be renamed.
 ## Disabling and removing
 
 **Disable** keeps everything and only stops the automatic sync. A sync started
-by hand (button or `./ma sync --account NAME`) still runs.
+by hand (button or `./ma sync --account NAME`) still runs. To keep only the
+web server's schedule away from an account, use **Not on the schedule**
+instead; see the [comparison](./syncing#per-account).
 
 **Remove** keeps the archived mail. The mail stays searchable and still shows
 the account and folder it came from; in the sidebar the account is marked

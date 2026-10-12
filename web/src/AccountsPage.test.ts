@@ -7,9 +7,9 @@ import { isActive } from "./useAccounts";
 function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, kind: Account["kind"] = "imap"): Account {
   return {
     name: "a", kind, enabled: kind !== "import", removed: false, host: "h", port: 993, tls: "tls", username: "u",
-    includedFolders: [], excludedFolders: [], folders: [], goneMessages: 0, lastReconciledAt: null,
+    includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
     addresses: [], lastReceivedAt: null,
-    sync: { failureStreak: 0, failingSince: null, health: "ok", ...sync },
+    sync: { failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null, ...sync },
   };
 }
 
@@ -55,7 +55,7 @@ describe("syncStatus", () => {
     expect(reconcileNote(account(idle, "smtp"))).toBeNull();
   });
   it("polls fast only while a sync is pending", () => {
-    const data = { manage: true, syncInterval: "", reconcileInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };
+    const data = { manage: true, syncInterval: "", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };
     expect(isActive(data)).toBe(false);
     expect(isActive({ ...data, accounts: [account({ state: "queued", lastRun: null })] })).toBe(true);
     expect(isActive(null)).toBe(false);
@@ -68,7 +68,7 @@ describe("syncStatus", () => {
     expect(failing?.text).toMatch(/^Failed 4 times in a row since /);
     expect(failing?.failing).toBe(true);
     expect(syncHealthNote(account({ ...idle, failureStreak: 2, failingSince: "2026-10-01T12:00:00Z" }))?.failing).toBe(false);
-    expect(syncHealthNote(account({ ...idle, health: "stale" }))?.text).toMatch(/two sync intervals/);
+    expect(syncHealthNote(account({ ...idle, health: "stale" }))?.text).toMatch(/two of its sync intervals/);
     expect(syncHealthNote(account(idle, "import"))).toBeNull();
   });
 });
@@ -98,7 +98,7 @@ describe("bannerState", () => {
   const named = (name: string, sync: Partial<SyncInfo>, over: Partial<Account> = {}) => ({ ...account({ ...idle, ...sync }), name, ...over });
   it("lists own failing and stale accounts", () => {
     const data = {
-      manage: true, syncInterval: "6h0m0s", reconcileInterval: "24h0m0s", alertAfter: 3,
+      manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3,
       accounts: [
         named("work", { health: "failing", failureStreak: 3 }),
         named("old", { health: "stale" }),

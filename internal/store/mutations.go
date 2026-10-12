@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -64,7 +65,13 @@ type AccountChange struct {
 	PasswordEnc []byte // a new encrypted password; ignored with Connection
 	Folders     *FolderFilters
 	Enabled     *bool
+	// SyncInterval sets the account's own sync interval; nil keeps it.
+	SyncInterval *OwnInterval
 }
+
+// OwnInterval is an account's own sync interval: D nil uses the server's,
+// 0 keeps the account off the schedule.
+type OwnInterval struct{ D *time.Duration }
 
 // lockAccount locks the account row and checks it against ref.
 func lockAccount(ctx context.Context, q *db.Queries, ref AccountRef) (db.Account, error) {
@@ -102,7 +109,7 @@ func (s *Store) UpdateAccount(ctx context.Context, ref AccountRef, c AccountChan
 			return err
 		}
 		switch kind := AccountKind(r.Kind); {
-		case !kind.HasServer() && (c.Connection != nil || c.PasswordEnc != nil || c.Folders != nil):
+		case !kind.HasServer() && (c.Connection != nil || c.PasswordEnc != nil || c.Folders != nil || c.SyncInterval != nil):
 			return ErrNoServer
 		case kind == KindImport && c.Enabled != nil:
 			return ErrNoServer
@@ -110,7 +117,7 @@ func (s *Store) UpdateAccount(ctx context.Context, ref AccountRef, c AccountChan
 		p := db.WriteAccountParams{
 			ID: r.ID, Name: r.Name, Host: r.Host, Port: r.Port, TlsMode: r.TlsMode, Username: r.Username,
 			PasswordEnc: r.PasswordEnc, IncludedFolders: r.IncludedFolders, ExcludedFolders: r.ExcludedFolders,
-			Enabled: r.Enabled,
+			Enabled: r.Enabled, SyncIntervalSeconds: r.SyncIntervalSeconds,
 		}
 		if c.Name != nil {
 			p.Name = *c.Name
@@ -130,6 +137,9 @@ func (s *Store) UpdateAccount(ctx context.Context, ref AccountRef, c AccountChan
 		}
 		if c.Enabled != nil {
 			p.Enabled = *c.Enabled
+		}
+		if c.SyncInterval != nil {
+			p.SyncIntervalSeconds = intervalToSeconds(c.SyncInterval.D)
 		}
 		err = q.WriteAccount(ctx, p)
 		var pgErr *pgconn.PgError

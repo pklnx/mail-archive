@@ -10,22 +10,23 @@ import (
 )
 
 type Account struct {
-	ID              int64
-	Name            string
-	Host            string
-	Port            int32
-	TlsMode         string
-	Username        string
-	PasswordEnc     []byte
-	IncludedFolders []string
-	ExcludedFolders []string
-	Enabled         bool
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	RemovedAt       *time.Time
-	OwnerID         *int64
-	Version         int64
-	Kind            string
+	ID                  int64
+	Name                string
+	Host                string
+	Port                int32
+	TlsMode             string
+	Username            string
+	PasswordEnc         []byte
+	IncludedFolders     []string
+	ExcludedFolders     []string
+	Enabled             bool
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	RemovedAt           *time.Time
+	OwnerID             *int64
+	Version             int64
+	Kind                string
+	SyncIntervalSeconds *int32
 }
 
 type AccountSyncHealth struct {

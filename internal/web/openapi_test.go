@@ -311,3 +311,110 @@ func TestAuthenticateByRoute(t *testing.T) {
 		}
 	}
 }
+
+// compareSchema lists the differences between the JSON fields of a struct
+// type and the properties of an OpenAPI schema. With required set, every
+// field without omitempty must be in the schema's required list.
+func compareSchema(typ reflect.Type, schema map[string]any, required bool) []string {
+	var problems []string
+	props, _ := schema["properties"].(map[string]any)
+	req := map[string]bool{}
+	if list, ok := schema["required"].([]any); ok {
+		for _, r := range list {
+			name, _ := r.(string)
+			req[name] = true
+		}
+	}
+	fields := map[string]bool{}
+	for f := range typ.Fields() {
+		tag := f.Tag.Get("json")
+		name, opts, _ := strings.Cut(tag, ",")
+		if name == "-" || !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		fields[name] = true
+		if _, ok := props[name]; !ok {
+			problems = append(problems, fmt.Sprintf("field %q is not in the schema", name))
+		}
+		if required && !strings.Contains(opts, "omitempty") && !req[name] {
+			problems = append(problems, fmt.Sprintf("field %q is always sent but not required", name))
+		}
+	}
+	for name := range props {
+		if !fields[name] {
+			problems = append(problems, fmt.Sprintf("property %q has no field", name))
+		}
+	}
+	for name := range req {
+		if !fields[name] {
+			problems = append(problems, fmt.Sprintf("required %q has no field", name))
+		}
+	}
+	slices.Sort(problems)
+	return problems
+}
+
+// TestSchemasMatchStructs checks that the schemas of the account and status
+// answers have exactly the fields of the structs the handlers encode.
+func TestSchemasMatchStructs(t *testing.T) {
+	schemas, _ := servedSpec(t)["components"].(map[string]any)["schemas"].(map[string]any)
+	for _, c := range []struct {
+		value    any
+		schema   string
+		required bool
+	}{
+		{accountsResponse{}, "Accounts", true},
+		{accountJSON{}, "Account", true},
+		{syncJSON{}, "SyncState", true},
+		{statusAccount{}, "AccountStatus", true},
+		{accountInput{}, "AccountInput", false},
+	} {
+		s, ok := schemas[c.schema].(map[string]any)
+		if !ok {
+			t.Errorf("no schema %s", c.schema)
+			continue
+		}
+		for _, p := range compareSchema(reflect.TypeOf(c.value), s, c.required) {
+			t.Errorf("%s: %s", c.schema, p)
+		}
+	}
+}
+
+func TestCompareSchema(t *testing.T) {
+	type thing struct {
+		A string `json:"a"`
+		B string `json:"b,omitempty"`
+		C string `json:"-"`
+	}
+	schema := func(props []string, req ...string) map[string]any {
+		p := map[string]any{}
+		for _, n := range props {
+			p[n] = map[string]any{}
+		}
+		r := []any{}
+		for _, n := range req {
+			r = append(r, n)
+		}
+		return map[string]any{"properties": p, "required": r}
+	}
+	typ := reflect.TypeOf(thing{})
+	for _, c := range []struct {
+		name   string
+		schema map[string]any
+		want   string
+	}{
+		{"match", schema([]string{"a", "b"}, "a"), ""},
+		{"missing property", schema([]string{"a"}, "a"), `field "b" is not in the schema`},
+		{"extra property", schema([]string{"a", "b", "c"}, "a"), `property "c" has no field`},
+		{"not required", schema([]string{"a", "b"}), `field "a" is always sent but not required`},
+		{"required without field", schema([]string{"a", "b"}, "a", "x"), `required "x" has no field`},
+	} {
+		got := strings.Join(compareSchema(typ, c.schema, true), "\n")
+		if c.want == "" && got != "" || !strings.Contains(got, c.want) {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}

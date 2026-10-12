@@ -286,6 +286,14 @@ again with `"confirmFolders": true`, with or without those folders in
 `excludedFolders`. `excludedFolders` replaces the folder
 selection: everything except these folders is archived.
 
+`syncInterval` sets an IMAP account's own sync interval: `default`, `manual`
+or a Go duration of whole minutes such as `30m` or `1h30m`, from `5m` (or
+`syncIntervalMin`, if higher) to `720h`. Other values answer `400`; import and
+smtp accounts `409`. A value equal to the stored one is accepted and changes
+nothing, so a value stored before `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` was raised
+can be sent back. A change needs no login check and applies at the next
+minute's check of the schedule.
+
 Each account in `GET /api/accounts` has a `sync` object:
 
 ```json
@@ -313,19 +321,32 @@ the account). `status` of the last run is `running`, `ok`, `partial` or
 `failed`, with `error` set for the latter two. `failureStreak` counts the
 failed syncs in a row and `failingSince` is when the first of them started
 (`null` without a streak). `health` is `failing` when the last `alertAfter`
-syncs failed, `stale` when no sync succeeded within two sync intervals, else
-`ok`; disabled accounts are always `ok`. See [Syncing](../guide/syncing#alerts).
+syncs failed, `stale` when no sync succeeded within two of the account's
+sync intervals (at least one plus an hour; never while it is running or
+queued, a running sync counts from its start), else `ok`; disabled accounts
+and accounts the schedule does not sync are always `ok`. See
+[Syncing](../guide/syncing#alerts). `syncEvery` is how often the schedule
+syncs the account after the default and the floor (`1h0m0s`), `null` when it
+does not (not on the schedule, schedule off, removed, import or smtp);
+`nextAt` is when it syncs next, in the past while it waits for its turn, and
+`null` without `syncEvery` or when the account is disabled.
 `reconciledFolders` counts the folders the run compared with the server;
 `gone`, `back` and `flagsChanged` count the locations it marked as gone,
 found again, and gave new flags.
 
-Each account also has `goneMessages`, the number of its messages whose
+Each account also has `syncInterval`, its own sync interval: `default`
+(the server's), `manual` (not on the schedule) or a Go duration such as
+`30m0s`; always `default` for import and smtp accounts. Each account also
+has `goneMessages`, the number of its messages whose
 locations in this account are all gone from the server, and
 `lastReconciledAt`, the latest reconcile of any of its folders (`null` if
 never). Each folder has `lastReconciledAt` too.
 
-The response also has `manage` (see above), `syncInterval`, a Go duration
-such as `6h0m0s`, or empty when the schedule is off, `reconcileInterval`
+The response also has `manage` (see above), `syncInterval`, the server's
+`MAIL_ARCHIVE_SYNC_INTERVAL` (the default for accounts without their own) as
+a Go duration such as `6h0m0s`, or empty when the schedule is off,
+`syncIntervalMin`, the floor for every account (`5m0s`; empty when the
+server cannot sync), `reconcileInterval`
 (`24h0m0s`, or empty when folders are only reconciled on request), and
 `alertAfter`
 (`MAIL_ARCHIVE_ALERT_AFTER_FAILURES`). For admins it also has

@@ -183,6 +183,7 @@ func newAccountCmd() *cobra.Command {
 		newAccountListCmd(),
 		newAccountFoldersCmd(),
 		newAccountSetFoldersCmd(),
+		newAccountSetScheduleCmd(),
 		newAccountSetPasswordCmd(),
 		newAccountRenameCmd(),
 		newAccountEnableCmd(true),
@@ -443,6 +444,9 @@ func updateAccount(cmd *cobra.Command, a *app, acc *store.Account, change store.
 	}
 	if change.Enabled != nil {
 		e.Detail("enabled", *change.Enabled)
+	}
+	if change.SyncInterval != nil {
+		e.Detail("sync_interval", archive.FormatOwnInterval(change.SyncInterval.D))
 	}
 	return staleError(a.store.UpdateAccount(withCLIAudit(cmd, e), acc.Ref(), change))
 }
@@ -907,7 +911,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 					Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
 					ReconcileInterval: a.cfg.ReconcileInterval,
 				}
-				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Interval: a.cfg.SyncInterval, AfterSync: afterSync}
+				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Schedule: scheduleOf(a.cfg), AfterSync: afterSync}
 				runnerDone := make(chan struct{})
 				go func() {
 					opts.Runner.Run(cmd.Context())
@@ -916,7 +920,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				// Let a running sync record its outcome before the store closes.
 				defer func() { <-runnerDone }()
 				if a.cfg.SyncInterval > 0 {
-					log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "reconcile_interval", a.cfg.ReconcileInterval)
+					log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "min", a.cfg.SyncIntervalMin, "reconcile_interval", a.cfg.ReconcileInterval)
 				} else {
 					log.Info("sync schedule off")
 				}
@@ -998,7 +1002,16 @@ SOURCE tells what the account guarantees: "snapshot (IMAP)" archives what is
 in the mailbox at each sync, so mail deleted between two syncs is missed;
 "complete (SMTP)" receives a copy of every message from the mail server; for
 it, LAST SYNC is when it last received a message. "import" holds mail
-imported from files.`,
+imported from files.
+
+For IMAP accounts, EVERY is how often the web server's schedule syncs it:
+"(default)" for MAIL_ARCHIVE_SYNC_INTERVAL, "(min)" when the account's own
+interval is below MAIL_ARCHIVE_SYNC_INTERVAL_MIN, "manual" when it is not on
+the schedule, "off" when the schedule is off. NEXT SYNC is when the
+schedule syncs it next ("due" when that has passed). HEALTH is "ok",
+"failing" or "stale", as in /healthz/sync; this command cannot see the web
+server's queue, so an account waiting there may show "stale" here while the
+web UI shows it as queued.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -1028,8 +1041,17 @@ imported from files.`,
 			if err != nil {
 				return err
 			}
+			running, err := a.store.SyncingAccounts(cmd.Context())
+			if err != nil {
+				return err
+			}
+			runs, err := a.store.LastRuns(cmd.Context())
+			if err != nil {
+				return err
+			}
+			sched, now := scheduleOf(a.cfg), time.Now()
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tACCOUNT\tSOURCE\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tGONE\tLAST SYNC\tSTATUS\tFAILED")
+			fmt.Fprintln(w, "ID\tACCOUNT\tSOURCE\tOWNER\tENABLED\tFOLDERS\tMESSAGES\tGONE\tLAST SYNC\tEVERY\tNEXT SYNC\tHEALTH\tSTATUS\tFAILED")
 			for _, s := range stats {
 				last, status := "never", "-"
 				if s.LastRunAt != nil {
@@ -1048,9 +1070,10 @@ imported from files.`,
 						last, status = t.Local().Format(time.DateTime), "received"
 					}
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", s.AccountID, s.Account, sourceLabel(s.Kind),
-					ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, gone, last, status,
-					failedColumn(health[s.AccountID]))
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", s.AccountID, s.Account, sourceLabel(s.Kind),
+					ownerName(names, s.OwnerID), enabled, s.Folders, s.Messages, gone, last,
+					everyColumn(sched, s), nextColumn(sched, s, now), healthColumn(a.cfg, sched, s, health[s.AccountID], running, runs, now),
+					status, failedColumn(health[s.AccountID]))
 			}
 			if err := w.Flush(); err != nil {
 				return err

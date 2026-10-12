@@ -116,6 +116,22 @@ export function formatInterval(goDuration: string): string {
   return parts.join(" ") || goDuration;
 }
 
+/** Whole minutes of a Go duration like "1h30m0s", or null if it is not one. */
+export function durationMinutes(goDuration: string): number | null {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(goDuration);
+  if (!goDuration || !m || (!m[1] && !m[2])) return null;
+  return Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0);
+}
+
+/** A Go duration as a frequency: "every hour", "every 30 minutes", "every day". */
+export function formatEvery(goDuration: string, m = t): string {
+  const min = durationMinutes(goDuration);
+  if (min === null) return goDuration;
+  if (min % (24 * 60) === 0) return min === 24 * 60 ? m.everyDay : m.everyDays(min / (24 * 60));
+  if (min % 60 === 0) return min === 60 ? m.everyHour : m.everyHours(min / 60);
+  return m.everyMinutes(min);
+}
+
 export function formatCount(n: number): string {
   return n.toLocaleString(locale);
 }

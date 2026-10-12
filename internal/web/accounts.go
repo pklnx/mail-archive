@@ -40,8 +40,16 @@ type syncJSON struct {
 	FailureStreak int        `json:"failureStreak"`
 	FailingSince  *time.Time `json:"failingSince"`
 	// Health is "ok", "failing" (the last alertAfter syncs failed) or
-	// "stale" (no successful sync within two intervals).
+	// "stale" (no successful sync within two of the account's intervals, at
+	// least one plus an hour; never while it is running or queued).
 	Health string `json:"health"`
+	// SyncEvery is how often the schedule syncs the account, after the
+	// default and the floor ("1h0m0s"); null when it does not (not on the
+	// schedule, schedule off, removed, or no server).
+	SyncEvery *string `json:"syncEvery"`
+	// NextAt is when the schedule syncs it next; in the past while it waits
+	// for its turn. Null without SyncEvery or when disabled.
+	NextAt *time.Time `json:"nextAt"`
 }
 
 type accountJSON struct {
@@ -49,17 +57,21 @@ type accountJSON struct {
 	// Kind is "imap", "import" for mail imported from files, or "smtp" for
 	// mail a mail server delivers over SMTP. Import and smtp accounts have
 	// no server and are never synced.
-	Kind            string       `json:"kind"`
-	Enabled         bool         `json:"enabled"`
-	Removed         bool         `json:"removed"`
-	Host            string       `json:"host"`
-	Port            int          `json:"port"`
-	TLS             string       `json:"tls"`
-	Username        string       `json:"username"`
-	IncludedFolders []string     `json:"includedFolders"`
-	ExcludedFolders []string     `json:"excludedFolders"`
-	Folders         []folderJSON `json:"folders"`
-	Sync            syncJSON     `json:"sync"`
+	Kind            string   `json:"kind"`
+	Enabled         bool     `json:"enabled"`
+	Removed         bool     `json:"removed"`
+	Host            string   `json:"host"`
+	Port            int      `json:"port"`
+	TLS             string   `json:"tls"`
+	Username        string   `json:"username"`
+	IncludedFolders []string `json:"includedFolders"`
+	ExcludedFolders []string `json:"excludedFolders"`
+	// SyncInterval is the account's own sync interval: "default" (the
+	// server's), "manual" (not on the schedule) or a duration ("30m0s").
+	// Always "default" for import and smtp accounts.
+	SyncInterval string       `json:"syncInterval"`
+	Folders      []folderJSON `json:"folders"`
+	Sync         syncJSON     `json:"sync"`
 	// GoneMessages counts messages whose locations in this account are all
 	// gone from the server; LastReconciledAt is the latest reconcile of any
 	// of its folders.
@@ -87,8 +99,13 @@ type accountsResponse struct {
 	// Manage is false when the server has no secret key: accounts can then
 	// be browsed but not added, changed or synced.
 	Manage bool `json:"manage"`
-	// SyncInterval of the schedule ("6h0m0s"), empty if off.
+	// SyncInterval is the server's MAIL_ARCHIVE_SYNC_INTERVAL ("6h0m0s"),
+	// the default for accounts without their own; empty when the schedule
+	// is off. Not the same as an account's syncInterval.
 	SyncInterval string `json:"syncInterval"`
+	// SyncIntervalMin is the floor for every account's interval ("5m0s");
+	// empty when the server cannot sync.
+	SyncIntervalMin string `json:"syncIntervalMin"`
 	// ReconcileInterval: how often each folder is compared with the server
 	// ("24h0m0s"), empty if only on request.
 	ReconcileInterval string `json:"reconcileInterval"`
@@ -111,16 +128,12 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	runs, err := s.store.LastRuns(ctx)
+	busy, err := s.loadBusy(ctx)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	running, err := s.store.SyncingAccounts(ctx)
-	if err != nil {
-		s.failStore(w, r, err)
-		return
-	}
+	runs, running, queued := busy.runs, busy.running, busy.queued
 	me := userID(r)
 	health, err := s.store.SyncHealth(ctx, &me)
 	if err != nil {
@@ -131,10 +144,6 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.failStore(w, r, err)
 		return
-	}
-	var queued map[int64]bool
-	if s.runner != nil {
-		queued = s.runner.Queued()
 	}
 	addresses, err := s.store.SMTPAddresses(ctx)
 	if err != nil {
@@ -180,8 +189,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		out.OtherFailing = &others
 	}
 	now := s.currentTime()
-	if s.runner != nil && s.runner.Interval > 0 {
-		out.SyncInterval = s.runner.Interval.String()
+	if sched := s.schedule(); sched.Sync > 0 {
+		out.SyncInterval = sched.Sync.String()
+	}
+	if s.runner != nil {
+		out.SyncIntervalMin = s.runner.Schedule.SyncMin.String()
 	}
 	if s.syncer != nil && s.syncer.ReconcileInterval > 0 {
 		out.ReconcileInterval = s.syncer.ReconcileInterval.String()
@@ -191,13 +203,19 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			Name: a.Name, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.RemovedAt != nil,
 			Host: a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
-			Folders: folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},
+			SyncInterval: archive.FormatOwnInterval(a.SyncInterval),
+			Folders:      folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},
 			GoneMessages: reconciled[a.ID].Gone, LastReconciledAt: reconciled[a.ID].LastReconciledAt,
 		}
 		if h := health[a.ID]; h != nil {
 			aj.Sync.FailureStreak, aj.Sync.FailingSince = h.FailureStreak, h.FailingSince
-			aj.Sync.Health = h.State(s.alertAfter, s.syncInterval(), now)
+			aj.Sync.Health = s.healthState(h, busy, now)
 		}
+		var last *store.LastRun
+		if run, ok := runs[a.ID]; ok {
+			last = &run
+		}
+		aj.Sync.SyncEvery, aj.Sync.NextAt = s.scheduleFields(archive.ScheduledAccount(a, last))
 		if !a.Kind.HasServer() {
 			aj.TLS = ""
 		}
@@ -236,6 +254,20 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, out)
 }
 
+// scheduleFields are syncEvery and nextAt of an account.
+func (s *Server) scheduleFields(a archive.Scheduled) (*string, *time.Time) {
+	sched := s.schedule()
+	every := sched.EveryFor(a)
+	if every == 0 {
+		return nil, nil
+	}
+	e := every.String()
+	if next, ok := sched.Next(a); ok {
+		return &e, &next
+	}
+	return &e, nil
+}
+
 // accountInput is the body of POST and PATCH /api/accounts. In a PATCH,
 // missing fields keep their value.
 type accountInput struct {
@@ -248,6 +280,9 @@ type accountInput struct {
 	Enabled  *bool   `json:"enabled"`
 	// ExcludedFolders replaces the folder selection: everything except these.
 	ExcludedFolders *[]string `json:"excludedFolders"`
+	// SyncInterval is the account's own sync interval: "default",
+	// "manual" or a duration of whole minutes (IMAP accounts only).
+	SyncInterval *string `json:"syncInterval"`
 	// ConfirmFolders (POST only) saves the account even if the server marks
 	// folders that would be archived as trash or junk.
 	ConfirmFolders bool `json:"confirmFolders"`
@@ -279,9 +314,13 @@ func (in *accountInput) changedFields() []string {
 }
 
 // auditAccountChange records what an account change sets: the field names,
-// the new name and the new state. Host, user name and password are only
-// named, never recorded.
-func auditAccountChange(e *store.AuditEntry, oldName string, newName *string, fields []string, enabled *bool) {
+// the new name, the new state and the new sync interval. Host, user name
+// and password are only named, never recorded.
+func auditAccountChange(e *store.AuditEntry, oldName string, newName *string, fields []string, enabled *bool, interval *store.OwnInterval) {
+	if interval != nil {
+		fields = append(fields, "sync_interval")
+		e.Detail("sync_interval", archive.FormatOwnInterval(interval.D))
+	}
 	e.Detail("fields", fields)
 	if newName != nil {
 		e.Detail("name", map[string]any{"from": oldName, "to": *newName})
@@ -289,6 +328,26 @@ func auditAccountChange(e *store.AuditEntry, oldName string, newName *string, fi
 	if enabled != nil {
 		e.Detail("enabled", *enabled)
 	}
+}
+
+// ownIntervalChange reads in.SyncInterval: nil when it is missing or equal
+// to the stored value, which is kept even below a raised floor.
+func (s *Server) ownIntervalChange(in *accountInput, stored *time.Duration) (*store.OwnInterval, error) {
+	if in.SyncInterval == nil {
+		return nil, nil
+	}
+	sched := s.schedule()
+	own, err := archive.ParseOwnInterval(*in.SyncInterval)
+	if err == nil && archive.SameOwnInterval(own, stored) {
+		return nil, nil
+	}
+	if err == nil {
+		err = sched.CheckFloor(own)
+	}
+	if err != nil {
+		return nil, errors.New("syncInterval: " + sched.OwnIntervalRule())
+	}
+	return &store.OwnInterval{D: own}, nil
 }
 
 func (in *accountInput) changesConnection() bool {
@@ -374,6 +433,13 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if err := applyConnection(a, &in); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
+	}
+	// Before the login check, so a bad value costs no IMAP login.
+	if own, err := s.ownIntervalChange(&in, nil); err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	} else if own != nil {
+		a.SyncInterval = own.D
 	}
 	if in.Password == nil || *in.Password == "" {
 		s.fail(w, r, http.StatusBadRequest, "password is required", nil)
@@ -466,12 +532,17 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !a.Kind.HasServer() && (in.changesConnection() || in.ExcludedFolders != nil) ||
+	if !a.Kind.HasServer() && (in.changesConnection() || in.ExcludedFolders != nil || in.SyncInterval != nil) ||
 		a.Kind == store.KindImport && in.Enabled != nil {
 		s.fail(w, r, http.StatusConflict, store.ErrNoServer.Error(), nil)
 		return
 	}
 	ctx := r.Context()
+	own, err := s.ownIntervalChange(&in, a.SyncInterval)
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
 
 	// Everything that needs the network or the key happens before the
 	// transaction: the login check and encrypting the password. The change
@@ -517,11 +588,12 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		change.Folders = &store.FolderFilters{Excluded: *in.ExcludedFolders}
 	}
 	change.Enabled = in.Enabled
+	change.SyncInterval = own
 
 	e := s.auditEntry(r, "account.change")
 	auditAccount(e, a)
-	auditAccountChange(e, a.Name, change.Name, in.changedFields(), in.Enabled)
-	err := s.store.UpdateAccount(withAudit(r, e), a.Ref(), change)
+	auditAccountChange(e, a.Name, change.Name, in.changedFields(), in.Enabled, change.SyncInterval)
+	err = s.store.UpdateAccount(withAudit(r, e), a.Ref(), change)
 	switch {
 	case errors.Is(err, store.ErrConflict):
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)

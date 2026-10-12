@@ -18,7 +18,7 @@ import (
 // default threshold of 3.
 func newHealthFixture(t *testing.T) *authFixture {
 	t.Helper()
-	return newAuthFixtureOpts(t, Options{Runner: &archive.Runner{Interval: 6 * time.Hour}})
+	return newAuthFixtureOpts(t, Options{Runner: &archive.Runner{Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}})
 }
 
 func (f *authFixture) imapAccount(name string, owner *store.User) *store.Account {

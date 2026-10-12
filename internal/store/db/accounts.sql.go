@@ -65,23 +65,25 @@ func (q *Queries) CountOwnedAccounts(ctx context.Context) ([]CountOwnedAccountsR
 }
 
 const createAccount = `-- name: CreateAccount :one
-INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, owner_id, kind)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, owner_id, kind,
+                      sync_interval_seconds)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, created_at, version
 `
 
 type CreateAccountParams struct {
-	Name            string
-	Host            string
-	Port            int32
-	TlsMode         string
-	Username        string
-	PasswordEnc     []byte
-	IncludedFolders []string
-	ExcludedFolders []string
-	Enabled         bool
-	OwnerID         *int64
-	Kind            string
+	Name                string
+	Host                string
+	Port                int32
+	TlsMode             string
+	Username            string
+	PasswordEnc         []byte
+	IncludedFolders     []string
+	ExcludedFolders     []string
+	Enabled             bool
+	OwnerID             *int64
+	Kind                string
+	SyncIntervalSeconds *int32
 }
 
 type CreateAccountRow struct {
@@ -103,6 +105,7 @@ func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (C
 		arg.Enabled,
 		arg.OwnerID,
 		arg.Kind,
+		arg.SyncIntervalSeconds,
 	)
 	var i CreateAccountRow
 	err := row.Scan(&i.ID, &i.CreatedAt, &i.Version)
@@ -131,7 +134,7 @@ func (q *Queries) DeleteAccountFolders(ctx context.Context, accountID int64) err
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind FROM accounts WHERE id = $1
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE id = $1
 `
 
 func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
@@ -154,12 +157,13 @@ func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
 		&i.OwnerID,
 		&i.Version,
 		&i.Kind,
+		&i.SyncIntervalSeconds,
 	)
 	return i, err
 }
 
 const getOwnedAccount = `-- name: GetOwnedAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind FROM accounts WHERE owner_id = $1 AND name = $2
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE owner_id = $1 AND name = $2
 `
 
 type GetOwnedAccountParams struct {
@@ -187,12 +191,13 @@ func (q *Queries) GetOwnedAccount(ctx context.Context, arg GetOwnedAccountParams
 		&i.OwnerID,
 		&i.Version,
 		&i.Kind,
+		&i.SyncIntervalSeconds,
 	)
 	return i, err
 }
 
 const listAccounts = `-- name: ListAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind FROM accounts ORDER BY name
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts ORDER BY name
 `
 
 func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
@@ -221,6 +226,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 			&i.OwnerID,
 			&i.Version,
 			&i.Kind,
+			&i.SyncIntervalSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -233,7 +239,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 }
 
 const listAccountsByName = `-- name: ListAccountsByName :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST
 `
 
 // Accounts of all users with this name, for the CLI.
@@ -263,6 +269,7 @@ func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]Accoun
 			&i.OwnerID,
 			&i.Version,
 			&i.Kind,
+			&i.SyncIntervalSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -275,7 +282,7 @@ func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]Accoun
 }
 
 const listOwnedAccounts = `-- name: ListOwnedAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind FROM accounts WHERE owner_id = $1 ORDER BY name
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE owner_id = $1 ORDER BY name
 `
 
 func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Account, error) {
@@ -304,6 +311,7 @@ func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Acco
 			&i.OwnerID,
 			&i.Version,
 			&i.Kind,
+			&i.SyncIntervalSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -316,7 +324,7 @@ func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Acco
 }
 
 const lockAccount = `-- name: LockAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind FROM accounts WHERE id = $1 FOR UPDATE
+SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE id = $1 FOR UPDATE
 `
 
 // The row stays locked until the transaction ends.
@@ -340,6 +348,7 @@ func (q *Queries) LockAccount(ctx context.Context, id int64) (Account, error) {
 		&i.OwnerID,
 		&i.Version,
 		&i.Kind,
+		&i.SyncIntervalSeconds,
 	)
 	return i, err
 }
@@ -430,21 +439,23 @@ UPDATE accounts
 SET name = $1, host = $2, port = $3, tls_mode = $4, username = $5,
     password_enc = $6, included_folders = $7,
     excluded_folders = $8, enabled = $9,
+    sync_interval_seconds = $10,
     version = version + 1, updated_at = now()
-WHERE id = $10
+WHERE id = $11
 `
 
 type WriteAccountParams struct {
-	Name            string
-	Host            string
-	Port            int32
-	TlsMode         string
-	Username        string
-	PasswordEnc     []byte
-	IncludedFolders []string
-	ExcludedFolders []string
-	Enabled         bool
-	ID              int64
+	Name                string
+	Host                string
+	Port                int32
+	TlsMode             string
+	Username            string
+	PasswordEnc         []byte
+	IncludedFolders     []string
+	ExcludedFolders     []string
+	Enabled             bool
+	SyncIntervalSeconds *int32
+	ID                  int64
 }
 
 func (q *Queries) WriteAccount(ctx context.Context, arg WriteAccountParams) error {
@@ -458,6 +469,7 @@ func (q *Queries) WriteAccount(ctx context.Context, arg WriteAccountParams) erro
 		arg.IncludedFolders,
 		arg.ExcludedFolders,
 		arg.Enabled,
+		arg.SyncIntervalSeconds,
 		arg.ID,
 	)
 	return err

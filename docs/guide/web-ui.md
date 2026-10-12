@@ -35,7 +35,7 @@ bookmarks work. On a phone the columns become separate screens.
 ## Sync problems
 
 When one of your accounts keeps failing to sync (by default three syncs in a
-row) or has not synced successfully for two sync intervals, a banner above
+row) or has not synced successfully for two of its sync intervals, a banner above
 the mail names it: red for failing, amber for not synced for a while.
 **Open accounts** leads to the account page, where the card says how often
 in a row and since when the sync failed, with the last error. The banner

@@ -1594,6 +1594,11 @@ paths:
         Missing fields keep their value; `name` renames the account. A new
         connection or password is checked with a login first. Import accounts
         take only `name`, smtp accounts also `enabled`.
+
+        `syncInterval` sets how often the web server's schedule syncs the
+        account, without a login check. A new value below `syncIntervalMin`
+        is a `400`; the stored value is accepted unchanged. Import and smtp
+        accounts answer `409`.
       requestBody:
         required: true
         content:
@@ -2481,9 +2486,16 @@ components:
     Health:
       type: string
       enum: [ok, failing, stale]
+      description: >-
+        `failing` when the last `alertAfter` syncs failed; `stale` when no
+        sync succeeded within two of the account's sync intervals (at least
+        one interval plus an hour), counted from the last success or the
+        account's creation, but never while the account is running or
+        queued (a running sync counts from its start). Accounts the schedule
+        does not sync are never stale.
     AccountStatus:
       type: object
-      required: [name, kind, enabled, folders, messages, lastRunAt, lastStatus, lastError, failureStreak, health, goneMessages]
+      required: [name, kind, enabled, folders, messages, lastRunAt, lastStatus, lastError, failureStreak, health, syncEvery, nextAt, goneMessages]
       properties:
         name:
           type: string
@@ -2507,12 +2519,29 @@ components:
           type: integer
         health:
           $ref: "#/components/schemas/Health"
+        syncEvery:
+          $ref: "#/components/schemas/SyncEvery"
+        nextAt:
+          $ref: "#/components/schemas/NextAt"
         goneMessages:
           type: integer
           format: int64
+    SyncEvery:
+      type: [string, "null"]
+      description: >-
+        How often the schedule syncs the account, a Go duration such as
+        `1h0m0s`: its own interval or the server's default, at least
+        `syncIntervalMin`. Null when the schedule does not sync it: not on
+        the schedule (`manual`), the schedule off, removed, import or smtp.
+    NextAt:
+      type: [string, "null"]
+      format: date-time
+      description: >-
+        When the schedule syncs the account next. In the past while it waits
+        for its turn. Null without `syncEvery` or when disabled.
     Accounts:
       type: object
-      required: [accounts, manage, syncInterval, reconcileInterval, alertAfter]
+      required: [accounts, manage, syncInterval, syncIntervalMin, reconcileInterval, alertAfter]
       properties:
         accounts:
           type: array
@@ -2523,7 +2552,17 @@ components:
           description: False without `MAIL_ARCHIVE_SECRET_KEY`; accounts can then only be browsed.
         syncInterval:
           type: string
-          description: A Go duration such as `6h0m0s`; empty when the schedule is off.
+          description: >-
+            The server's `MAIL_ARCHIVE_SYNC_INTERVAL`, a Go duration such as
+            `6h0m0s`: the default for accounts without their own interval.
+            Empty when the schedule is off. Not the same as an account's
+            `syncInterval`.
+        syncIntervalMin:
+          type: string
+          description: >-
+            The server's `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`, such as `5m0s`: the
+            floor for every account's interval. Empty when the server cannot
+            sync (no `MAIL_ARCHIVE_SECRET_KEY`).
         reconcileInterval:
           type: string
           description: A Go duration; empty when folders are only reconciled on request.
@@ -2535,7 +2574,7 @@ components:
           description: For admins only, the number of failing accounts of other users.
     Account:
       type: object
-      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt]
+      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt]
       properties:
         name:
           type: string
@@ -2562,6 +2601,8 @@ components:
           type: array
           items:
             type: string
+        syncInterval:
+          $ref: "#/components/schemas/OwnSyncInterval"
         folders:
           type: array
           items:
@@ -2606,9 +2647,18 @@ components:
             The IMAP hierarchy delimiter of the folder ("/" or "."), "" if the
             server has none, null until the folder's first sync since the
             upgrade. Always "/" for import and smtp accounts.
+    OwnSyncInterval:
+      type: string
+      description: >-
+        The account's own sync interval: `default` (the server's
+        `syncInterval`), `manual` (not on the schedule; the Sync button,
+        Sync all and a plain `sync` still sync it) or a Go duration of whole
+        minutes from 5 minutes to 720 hours, such as `30m0s`. Always
+        `default` for import and smtp accounts.
+      examples: [default, manual, 30m0s]
     SyncState:
       type: object
-      required: [state, lastRun, failureStreak, failingSince, health]
+      required: [state, lastRun, failureStreak, failingSince, health, syncEvery, nextAt]
       properties:
         state:
           type: string
@@ -2624,6 +2674,10 @@ components:
           format: date-time
         health:
           $ref: "#/components/schemas/Health"
+        syncEvery:
+          $ref: "#/components/schemas/SyncEvery"
+        nextAt:
+          $ref: "#/components/schemas/NextAt"
     SyncRun:
       type: object
       required: [startedAt, finishedAt, status, fetched, new, reconciledFolders, gone, back, flagsChanged]
@@ -2676,6 +2730,14 @@ components:
           description: Replaces the folder selection; everything except these folders is archived.
           items:
             type: string
+        syncInterval:
+          type: string
+          description: >-
+            IMAP accounts only: `default`, `manual` or a Go duration of whole
+            minutes such as `30m` or `1h30m`, from 5 minutes (or
+            `syncIntervalMin`, if higher) to 720 hours. A value equal to the
+            stored one is accepted and changes nothing, even below a raised
+            `syncIntervalMin`.
         confirmFolders:
           type: boolean
           description: "`POST` only: save even if trash or spam folders would be archived."

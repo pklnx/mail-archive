@@ -67,6 +67,8 @@ func TestCLIAudit(t *testing.T) {
 		// of the setup do not have; the web test covers renames.
 		{newAccountCmd, "", []string{"disable", "work", "--user", "anna"}, "account.change", "account:work", map[string]any{"enabled": false}},
 		{newAccountCmd, "", []string{"set-folders", "work", "--exclude", "Spam", "--user", "anna"}, "account.change", "account:work", nil},
+		{newAccountCmd, "", []string{"set-schedule", "work", "--sync-interval", "30m", "--user", "anna"}, "account.change", "account:work",
+			map[string]any{"fields": []any{"sync_interval"}, "sync_interval": "30m0s"}},
 		{newAccountCmd, "other\n", []string{"set-password", "work", "--password-stdin", "--user", "anna"}, "account.change", "account:work",
 			map[string]any{"fields": []any{"password"}}},
 		{newAccountCmd, "", []string{"add-smtp", "journal", "--address", "archive@example.com", "--user", "anna"}, "account.add", "account:journal",

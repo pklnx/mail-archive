@@ -342,6 +342,9 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 func TestRetentionMigrationDown(t *testing.T) {
 	f := newRetentionFixture(t)
 	f.hold(store.NewLegalHold{OwnerID: &f.alice.ID})
+	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00024_account_sync_interval") {
+		t.Fatalf("down the sync interval: %q %v", m, err)
+	}
 	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00023_folder_delimiter") {
 		t.Fatalf("down the folder delimiter: %q %v", m, err)
 	}

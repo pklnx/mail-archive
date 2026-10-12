@@ -29,7 +29,10 @@ const (
 	// EnvSyncInterval is how often the web server syncs each enabled account
 	// (Go duration like "6h"; "0" turns the schedule off).
 	EnvSyncInterval = "MAIL_ARCHIVE_SYNC_INTERVAL"
-	EnvRequire2FA   = "MAIL_ARCHIVE_REQUIRE_2FA"
+	// EnvSyncIntervalMin is the shortest interval the schedule syncs an
+	// account at, also for accounts with a shorter own interval.
+	EnvSyncIntervalMin = "MAIL_ARCHIVE_SYNC_INTERVAL_MIN"
+	EnvRequire2FA      = "MAIL_ARCHIVE_REQUIRE_2FA"
 	// EnvReconcileInterval is how often each folder is compared with the
 	// server to find deleted messages and changed flags ("0" turns it off).
 	EnvReconcileInterval = "MAIL_ARCHIVE_RECONCILE_INTERVAL"
@@ -128,8 +131,11 @@ type Config struct {
 	LogLevel    string
 	// AllowedHosts for the web server; empty means the server's defaults.
 	AllowedHosts []string
-	// SyncInterval of the web server's schedule; zero means off.
+	// SyncInterval of the web server's schedule, the default for accounts
+	// without their own; zero turns the schedule off.
 	SyncInterval time.Duration
+	// SyncIntervalMin is the floor for every account's interval.
+	SyncIntervalMin time.Duration
 	// ReconcileInterval: how old a folder's last reconcile may get before a
 	// sync reconciles it again; zero means only on request.
 	ReconcileInterval time.Duration
@@ -206,6 +212,13 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.SyncInterval = interval
+	if cfg.SyncIntervalMin, err = parseSyncIntervalMin(os.Getenv(EnvSyncIntervalMin)); err != nil {
+		return nil, err
+	}
+	if cfg.SyncInterval > 0 && cfg.SyncInterval < cfg.SyncIntervalMin {
+		return nil, fmt.Errorf("%s: %s is below %s (%s)", EnvSyncInterval,
+			FormatDuration(cfg.SyncInterval), EnvSyncIntervalMin, FormatDuration(cfg.SyncIntervalMin))
+	}
 	cfg.ReconcileInterval, err = parseInterval(EnvReconcileInterval, os.Getenv(EnvReconcileInterval),
 		DefaultReconcileInterval, MinReconcileInterval, "24h")
 	if err != nil {
@@ -296,6 +309,32 @@ func ParsePublicURL(v string) (origin, rpID string, err error) {
 
 func parseSyncInterval(v string) (time.Duration, error) {
 	return parseInterval(EnvSyncInterval, v, DefaultSyncInterval, MinSyncInterval, "6h")
+}
+
+// FormatDuration shows d without trailing zero units: "30m", "1h30m", "6h".
+func FormatDuration(d time.Duration) string {
+	s := d.String()
+	for _, suffix := range []string{"0s", "0m"} {
+		if len(s) > len(suffix)+1 && s[len(s)-len(suffix):] == suffix && s[len(s)-len(suffix)-1] >= 'a' {
+			s = s[:len(s)-len(suffix)]
+		}
+	}
+	return s
+}
+
+// MaxSyncIntervalMin is the largest floor: the longest own interval.
+const MaxSyncIntervalMin = 720 * time.Hour
+
+func parseSyncIntervalMin(v string) (time.Duration, error) {
+	if v == "" {
+		return MinSyncInterval, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < MinSyncInterval || d > MaxSyncIntervalMin {
+		return 0, fmt.Errorf("%s: want a duration from %s to %s (like 15m), got %q",
+			EnvSyncIntervalMin, MinSyncInterval, MaxSyncIntervalMin, v)
+	}
+	return d, nil
 }
 
 // parseInterval reads a duration of at least minimum, or "0" for off.
