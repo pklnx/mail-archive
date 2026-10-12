@@ -1,7 +1,7 @@
 # Web UI and search
 
 `docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
-with your user; your name (which opens your [profile](./users#your-own-password))
+with your user; your name (which opens your [profile](./users#your-profile))
 and **Log out** are at the bottom of the sidebar, next to **Log**, the
 [audit log](./audit-log) of what you did. Admins also find [Users](./users)
 there, and see everyone's entries in the log.
@@ -158,6 +158,18 @@ field overrides it; the choice is remembered in the browser.
 
 ![Dark mode](/screenshots/mail-dark.png)
 
-The UI is in German or English, chosen from the browser's language
-preferences (English for anything else). Dates and numbers follow the same
-setting. Error messages from the server are always in English.
+The UI is in German or English. Each user chooses the language and the
+format of dates and numbers in their profile, under **Language and
+formats**. The choice is stored on the server, so it follows you to other
+browsers and devices.
+
+- **Automatic (browser)**, the default, takes the language from the
+  browser's preferences: German if German comes first, otherwise English.
+- **Dates and numbers** offers German (Germany, Austria, Switzerland) and
+  English (UK, Ireland, US) formats. Month and day names follow this setting
+  too. On Automatic, it uses the browser's format for the chosen language,
+  for example `de-AT` for an Austrian browser, and plain German or English
+  when the browser has none.
+
+The login page of a browser shows the settings of the last user who logged
+in there. Error messages from the server are always in English.

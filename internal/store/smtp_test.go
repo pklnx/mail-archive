@@ -291,6 +291,9 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	ctx := context.Background()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
 	// First the attestations and the audit log, which are empty here.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00025_user_settings") {
+		t.Fatalf("down the user settings: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00024_account_sync_interval") {
 		t.Fatalf("down the sync interval: %q, %v", m, err)
 	}

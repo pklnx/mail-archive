@@ -47,6 +47,7 @@ func (s *Server) routes() []route {
 		h("DELETE /api/session", s.handleLogout, accessLogin),
 
 		h("PUT "+profilePasswordPath, s.handleChangeOwnPassword, accessSession),
+		h("PATCH /api/profile", s.handleUpdateProfile, accessSession),
 		h("GET /api/profile/2fa", s.handleGetTwoFactor, accessSession),
 		h("POST /api/profile/2fa/setup", s.handleBeginTwoFactor, accessSession),
 		h("POST /api/profile/2fa/confirm", s.handleConfirmTwoFactor, accessSession),

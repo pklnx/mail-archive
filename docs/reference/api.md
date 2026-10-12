@@ -18,7 +18,7 @@ answer `404`.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists, `passkeyOrigin` says where passkeys work (missing when they are off). |
+| `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true, "language": "auto", "locale": "auto"}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists, `passkeyOrigin` says where passkeys work (missing when they are off). |
 | `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user, `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
 | `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge, `429` like the password step. |
 | `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` after 30 starts per minute from one address. |
@@ -114,6 +114,7 @@ change their own login with them (`403`); they use the profile endpoint.
 | `GET /api/profile/api-keys` | Own API keys, also revoked and expired ones for 30 days: `{"max", "keys": [{"id", "name", "hint", "scopes", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`. `hint` is the last 4 characters, `state` is `active`, `expired` or `revoked`. |
 | `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope. |
 | `DELETE /api/profile/api-keys/{id}` | Revoke an own key (`204`). No password needed. |
+| `PATCH /api/profile` | Change the own web UI settings: `{"language": "de", "locale": "de-AT"}`, one or both. `language` is `auto` or a language code (`de`, `pt-BR`), `locale` is `auto` or a BCP 47 tag for dates and numbers. The UI treats values it has no use for like `auto`. Answers `204`, also when nothing changed; `400` for an empty body, an unknown field or an invalid value. The settings are read from `user` in `GET /api/session`. |
 | `PUT /api/profile/password` | Every user: `{"current": "...", "new": "..."}`. `401` for a wrong current password (counts like a failed login, then `429`), `400` for a new password that is too short or unchanged. Other sessions end. |
 
 After logging in with a generated password, `GET /api/session` reports

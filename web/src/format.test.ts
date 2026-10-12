@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { fileSize, formatInterval, locationLabel, relativeTime, senderName, shortDate, splitHighlights } from "./format";
-import { t } from "./i18n";
+import { afterEach, describe, expect, it } from "vitest";
+import { day, fileSize, formatCount, formatInterval, locationLabel, relativeTime, senderName, shortDate, splitHighlights } from "./format";
+import { applySettings, t } from "./i18n";
 
 describe("splitHighlights", () => {
   it("splits on the server's markers", () => {
@@ -74,5 +74,19 @@ describe("locationLabel", () => {
     expect(locationLabel({ ...l, goneAt: null })).toBe("work / INBOX");
     // A renumbered location is history either way.
     expect(locationLabel({ ...l, superseded: true })).toBe(`work / INBOX (${t.renumbered})`);
+  });
+});
+
+describe("formats after a settings change", () => {
+  afterEach(() => applySettings({ language: "auto", locale: "auto" }));
+  it("follows the new locale", () => {
+    applySettings({ language: "auto", locale: "en-US" });
+    expect(formatCount(1234)).toBe("1,234");
+    expect(day("2026-10-12T12:00:00Z")).toBe("Oct 12, 2026");
+    applySettings({ language: "auto", locale: "de-DE" });
+    expect(formatCount(1234)).toBe("1.234");
+    expect(day("2026-10-12T12:00:00Z")).toBe("12.10.2026");
+    expect(shortDate("2026-10-12T12:00:00Z", new Date("2027-01-01T00:00:00Z"))).toBe("12.10.2026");
+    expect(relativeTime("2026-10-11T12:00:00Z", new Date("2026-10-12T12:00:00Z"))).toBe("gestern");
   });
 });

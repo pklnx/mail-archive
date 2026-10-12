@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type SessionState, type User } from "./api";
 import { PasswordForm, TwoFactorSetup } from "./Profile";
 import { ThemeToggle } from "./ThemeToggle";
-import { t } from "./i18n";
+import { applySettings, t } from "./i18n";
 import logo from "./logo.svg";
 import { autofillSupported, browserError, credentialJSON, forgetPasskey, passkeysSupported, requestOptions } from "./webauthn";
 
@@ -24,11 +24,18 @@ interface Props {
  * to the same view after logging in.
  */
 export function AuthGate({ children }: Props) {
-  const [state, setState] = useState<GateState>({ loading: true });
+  const [state, setGateState] = useState<GateState>({ loading: true });
+
+  // The user's settings apply before the app renders: until then only
+  // "Loading…" or the login page is on screen.
+  const setState = useCallback((s: GateState) => {
+    if ("user" in s && s.user) applySettings({ language: s.user.language, locale: s.user.locale });
+    setGateState(s);
+  }, []);
 
   const check = useCallback(() => {
     sessionApi.get().then(setState, (err: unknown) => setState({ error: err instanceof Error ? err.message : String(err) }));
-  }, []);
+  }, [setState]);
 
   useEffect(() => {
     check();

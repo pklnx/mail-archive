@@ -414,6 +414,17 @@ func TestAuditProfile(t *testing.T) {
 	one("2fa off", "profile.2fa_disable", func() {
 		f.expect("DELETE", "/api/profile/2fa", map[string]string{"currentPassword": "correct horse battery", "code": f.code(secret)}, 204)
 	})
+	d := one("settings", "profile.change", func() {
+		f.expect("PATCH", "/api/profile", map[string]string{"language": "de"}, 204)
+	})
+	if fmt.Sprint(d["fields"]) != "[language]" || fmt.Sprint(d["language"]) != "map[from:auto to:de]" || d["locale"] != nil {
+		t.Errorf("profile.change details %v", d)
+	}
+	n := len(auditLog(t, f.st))
+	f.expect("PATCH", "/api/profile", map[string]string{"language": "de"}, 204)
+	if got := newEntries(t, f.st, n); len(got) != 0 {
+		t.Errorf("unchanged settings logged: %+v", got)
+	}
 	k := newSoftKey(t)
 	if d := one("passkey added", "profile.passkey_add", func() { f.addPasskey(k, "Phone", "correct horse battery", "") }); d["name"] != "Phone" {
 		t.Errorf("passkey_add details %v", d)
@@ -422,7 +433,7 @@ func TestAuditProfile(t *testing.T) {
 	if d := one("passkey login", "auth.login", func() { other.passkeyLogin(k, 200) }); d["method"] != "passkey" {
 		t.Errorf("login details %v", d)
 	}
-	n := len(auditLog(t, f.st))
+	n = len(auditLog(t, f.st))
 	f.as().passkeyLogin(newSoftKey(t), 401)
 	if got := newEntries(t, f.st, n); len(got) != 1 || got[0].Action != "auth.login_failed" || got[0].UserID != nil ||
 		details(t, got[0])["reason"] != "unknown_passkey" {

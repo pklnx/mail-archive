@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetupState } from "./api";
-import { t } from "./i18n";
+import { applySettings, canonical, languages, lang, messagesFor, needsReload, settings, t, type Settings } from "./i18n";
 import { ApiKeySection } from "./ApiKeys";
 import { PasskeySection } from "./Passkeys";
 import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
@@ -75,6 +75,94 @@ export function PasswordForm({ done }: { done: () => void }) {
   );
 }
 
+/** The formats offered besides "auto"; a stored tag outside the list is shown too. */
+export const formatChoices = ["de-DE", "de-AT", "de-CH", "en-GB", "en-IE", "en-US"];
+
+const sampleDate = new Date(2026, 9, 12);
+
+/** A format option: its name in the UI language, a date and a number. */
+export function formatLabel(tag: string, uiLang: string = lang): string {
+  let name = tag;
+  try {
+    name = new Intl.DisplayNames([uiLang], { type: "language" }).of(tag) ?? tag;
+  } catch {
+    // no Intl.DisplayNames in some older WebViews: the tag will do
+  }
+  const date = new Intl.DateTimeFormat(tag, { dateStyle: "medium" }).format(sampleDate);
+  const number = (1234.5).toLocaleString(tag);
+  return `${name} · ${date} · ${number}`;
+}
+
+/** The setting as the selects show it: a value the UI cannot use shows as "auto". */
+function shown(s: Settings): Settings {
+  return {
+    language: languages.some((l) => l === s.language) ? s.language : "auto",
+    locale: (s.locale !== "auto" && canonical(s.locale)) || "auto",
+  };
+}
+
+/**
+ * The language and formats of the UI, stored for the user on the server.
+ * A change that alters the texts or formats on screen reloads the page.
+ */
+export function DisplaySettings({ reload = () => location.reload() }: { reload?: () => void }) {
+  const [current, setCurrent] = useState<Settings>(settings);
+  const [pending, setPending] = useState<Settings | null>(null);
+  const [error, setError] = useState("");
+  const value = shown(pending ?? current);
+  const formats = value.locale === "auto" || formatChoices.includes(value.locale) ? formatChoices : [...formatChoices, value.locale];
+
+  const change = async (field: keyof Settings, v: string) => {
+    const next = { ...current, [field]: v };
+    setError("");
+    setPending(next);
+    try {
+      await profileApi.update({ [field]: v });
+      const reloading = needsReload(next, current);
+      applySettings(next);
+      setCurrent(next);
+      if (reloading) reload();
+    } catch (err) {
+      setError(t.failed(err instanceof Error ? err.message : String(err)));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <label className="flex flex-col gap-1">
+        {t.language}
+        <select className={input} value={value.language} disabled={pending !== null} onChange={(e) => void change("language", e.target.value)}>
+          <option value="auto">{t.settingAuto}</option>
+          {languages.map((l) => (
+            <option key={l} value={l} lang={l}>
+              {messagesFor(l).languageName}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        {t.formats}
+        <select className={input} value={value.locale} disabled={pending !== null} onChange={(e) => void change("locale", e.target.value)}>
+          <option value="auto">{t.settingAuto}</option>
+          {formats.map((f) => (
+            <option key={f} value={f}>
+              {formatLabel(f)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-zinc-500">{t.formatsHint}</p>
+      {error && (
+        <p role="alert" className="text-red-600">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ProfilePage({ name, close }: { name: string; close: () => void }) {
   const [changed, setChanged] = useState(false);
   return (
@@ -84,6 +172,8 @@ export function ProfilePage({ name, close }: { name: string; close: () => void }
       </button>
       <h1 className="text-xl font-semibold">{t.profile}</h1>
       <p className="text-sm text-zinc-500">{t.loggedInAs(name)}</p>
+      <h2 className="font-semibold">{t.displaySettings}</h2>
+      <DisplaySettings />
       <h2 className="font-semibold">{t.changePassword}</h2>
       {changed && (
         <p role="status" className="text-sm text-green-700 dark:text-green-400">

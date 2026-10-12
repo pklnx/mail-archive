@@ -235,7 +235,7 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	s.limiter.Succeed(u.Name)
 	s.log.Info("login", "user", user.Name, "addr", addr, "2fa", true)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(user.Name, user.IsAdmin, user.MustChangePassword, true)})
+	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(user.Name, user.IsAdmin, user.MustChangePassword, true, user.Language, user.Locale)})
 }
 
 // truncateUserAgent makes a user agent storable for a session: valid UTF-8

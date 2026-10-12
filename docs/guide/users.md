@@ -72,11 +72,12 @@ their text, which messages were opened, account names, IP addresses and
 browsers. Tell your users before they use the archive. Every user sees
 their own entries there too.
 
-## Your own password
+## Your profile
 
-Click your name at the bottom of the sidebar to open your profile and change
-your password. You need the current one. Other devices are logged out; the
-one you use stays logged in.
+Click your name at the bottom of the sidebar to open your profile. There you
+choose the [language and formats](./web-ui#appearance-and-language) of the
+web UI and change your password. For the password you need the current one.
+Other devices are logged out; the one you use stays logged in.
 
 ![Profile page](/screenshots/profile.png)
 

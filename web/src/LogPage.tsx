@@ -27,7 +27,7 @@ export function targetLabel(e: AuditEntry): string {
   return e.target.type === "message" ? `${e.target.id.slice(0, 12)}…` : e.target.id;
 }
 
-/** The detail worth a glance: the search text, a login's method and reason. */
+/** The detail worth a glance: the search text, a login's method and reason, changed settings. */
 export function entryDetail(e: AuditEntry): string {
   const d = e.details;
   if (e.action === "message.search") {
@@ -38,6 +38,15 @@ export function entryDetail(e: AuditEntry): string {
     return [q ? `“${q}”` : "", ...rest].filter(Boolean).join(" ");
   }
   if (e.action.startsWith("auth.")) return [d.method, d.reason].filter((v) => typeof v === "string").join(", ");
+  if (e.action === "profile.change" && Array.isArray(d.fields)) {
+    return d.fields
+      .filter((f): f is string => typeof f === "string")
+      .map((f) => {
+        const c = d[f] as { from?: unknown; to?: unknown } | undefined;
+        return `${f}: ${String(c?.from ?? "")} → ${String(c?.to ?? "")}`;
+      })
+      .join(", ");
+  }
   return "";
 }
 

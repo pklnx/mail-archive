@@ -232,7 +232,7 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	}
 	s.log.Info("login", "user", u.Name, "addr", addr, "passkey", login.PasskeyName)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, u.TwoFactorEnabled)})
+	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, u.TwoFactorEnabled, u.Language, u.Locale)})
 }
 
 type passkeyJSON struct {

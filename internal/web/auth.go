@@ -188,10 +188,16 @@ type userJSON struct {
 	// has not set it up can only do that until it is on.
 	TwoFactorEnabled  bool `json:"twoFactorEnabled"`
 	TwoFactorRequired bool `json:"twoFactorRequired"`
+	// Language and Locale are the user's web UI settings, "auto" or a tag.
+	Language string `json:"language"`
+	Locale   string `json:"locale"`
 }
 
-func (s *Server) userJSON(name string, admin, mustChange, twoFactor bool) userJSON {
-	return userJSON{Name: name, Admin: admin, MustChangePassword: mustChange, TwoFactorEnabled: twoFactor, TwoFactorRequired: s.twoFactorRequired(admin)}
+func (s *Server) userJSON(name string, admin, mustChange, twoFactor bool, language, locale string) userJSON {
+	return userJSON{
+		Name: name, Admin: admin, MustChangePassword: mustChange, TwoFactorEnabled: twoFactor, TwoFactorRequired: s.twoFactorRequired(admin),
+		Language: language, Locale: locale,
+	}
 }
 
 type sessionJSON struct {
@@ -214,7 +220,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess != nil {
-		s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(sess.UserName, sess.IsAdmin, sess.MustChangePassword, sess.TwoFactorEnabled)})
+		s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(sess.UserName, sess.IsAdmin, sess.MustChangePassword, sess.TwoFactorEnabled, sess.Language, sess.Locale)})
 		return
 	}
 	n, err := s.store.CountUsers(r.Context())
@@ -320,7 +326,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("login", "user", u.Name, "addr", addr)
 	setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, false)})
+	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, false, u.Language, u.Locale)})
 }
 
 type retryJSON struct {

@@ -1,9 +1,26 @@
 import { locale, t } from "./i18n";
 
-const dateFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium" });
-const timeFmt = new Intl.DateTimeFormat(locale, { timeStyle: "short" });
-const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "short" });
-const stampFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" });
+// The formatters are made on first use for the current locale, which the
+// user's settings can change after this module loaded.
+const formatters = new Map<string, Intl.DateTimeFormat | Intl.RelativeTimeFormat>();
+
+function cached<F extends Intl.DateTimeFormat | Intl.RelativeTimeFormat>(kind: string, make: (loc: string) => F): () => F {
+  return () => {
+    const key = `${kind} ${locale}`;
+    let f = formatters.get(key);
+    if (!f) {
+      f = make(locale);
+      formatters.set(key, f);
+    }
+    return f as F;
+  };
+}
+
+const dateFmt = cached("date", (l) => new Intl.DateTimeFormat(l, { dateStyle: "medium" }));
+const timeFmt = cached("time", (l) => new Intl.DateTimeFormat(l, { timeStyle: "short" }));
+const fullFmt = cached("full", (l) => new Intl.DateTimeFormat(l, { dateStyle: "full", timeStyle: "short" }));
+const stampFmt = cached("stamp", (l) => new Intl.DateTimeFormat(l, { dateStyle: "medium", timeStyle: "medium" }));
+const relFmt = cached("relative", (l) => new Intl.RelativeTimeFormat(l, { numeric: "auto" }));
 
 /**
  * How a location reads in the message view. Old locations get a note, and
@@ -18,7 +35,7 @@ export function locationLabel(l: {
 }): string {
   const where = `${l.account} / ${l.folder}`;
   if (l.superseded) return `${where} (${t.renumbered})`;
-  if (l.goneAt) return `${where} (${t.goneFromServer(l.lastSeenAt ? dateFmt.format(new Date(l.lastSeenAt)) : "")})`;
+  if (l.goneAt) return `${where} (${t.goneFromServer(l.lastSeenAt ? dateFmt().format(new Date(l.lastSeenAt)) : "")})`;
   return where;
 }
 
@@ -29,19 +46,19 @@ export function shortDate(iso: string | null, now = new Date()): string {
   if (Number.isNaN(d.getTime())) return "";
   const sameDay =
     d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-  return sameDay ? timeFmt.format(d) : dateFmt.format(d);
+  return sameDay ? timeFmt().format(d) : dateFmt().format(d);
 }
 
 export function longDate(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : fullFmt.format(d);
+  return Number.isNaN(d.getTime()) ? "" : fullFmt().format(d);
 }
 
 /** Date and time to the second, for lists of events. */
 export function timestamp(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : stampFmt.format(d);
+  return Number.isNaN(d.getTime()) ? "" : stampFmt().format(d);
 }
 
 export function fileSize(bytes: number): string {
@@ -83,8 +100,6 @@ export function splitHighlights(snippet: string): Segment[] {
   return out;
 }
 
-const relFmt = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-
 /** "5 minutes ago", "yesterday", … */
 export function relativeTime(iso: string, now = new Date()): string {
   const secs = (new Date(iso).getTime() - now.getTime()) / 1000;
@@ -98,10 +113,10 @@ export function relativeTime(iso: string, now = new Date()): string {
   ];
   let v = secs;
   for (const [unit, size] of steps) {
-    if (Math.abs(v) < size) return relFmt.format(Math.round(v), unit);
+    if (Math.abs(v) < size) return relFmt().format(Math.round(v), unit);
     v /= size;
   }
-  return relFmt.format(Math.round(v), "year");
+  return relFmt().format(Math.round(v), "year");
 }
 
 /** A Go duration like "6h0m0s" or "1h30m0s" in words: "6 hours". */
@@ -139,12 +154,12 @@ export function formatCount(n: number): string {
 /** The last day of a retention period, from its end (the first instant after it). */
 export function retentionDay(iso: string): string {
   const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? "" : dateFmt.format(new Date(ms - 1));
+  return Number.isNaN(ms) ? "" : dateFmt().format(new Date(ms - 1));
 }
 
 /** A date for lists: the day only. */
 export function day(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : dateFmt.format(d);
+  return Number.isNaN(d.getTime()) ? "" : dateFmt().format(d);
 }

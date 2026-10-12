@@ -324,6 +324,8 @@ type User struct {
 	TwoFactorLastCounter   *int64
 	TwoFactorVersion       int64
 	WebauthnHandle         []byte
+	Language               string
+	Locale                 string
 }
 
 type WebauthnCeremony struct {

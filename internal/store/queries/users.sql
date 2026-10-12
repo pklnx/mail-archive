@@ -45,6 +45,13 @@ UPDATE users SET locked_at = CASE WHEN @locked::boolean THEN coalesce(locked_at,
 -- name: RecordLogin :exec
 UPDATE users SET last_login_at = now() WHERE id = $1;
 
+-- name: LockUserSettings :one
+-- The current settings, locked, so concurrent changes record the right old value.
+SELECT language, locale FROM users WHERE id = $1 FOR UPDATE;
+
+-- name: SetUserSettings :exec
+UPDATE users SET language = @language, locale = @locale WHERE id = @id;
+
 -- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1;
 
@@ -55,7 +62,8 @@ VALUES ($1, $2, $3, $4);
 -- name: GetSession :one
 -- A session is valid while it has not expired, was used after the idle
 -- cutoff and its user is not locked.
-SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled
+SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled,
+       u.language, u.locale
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1

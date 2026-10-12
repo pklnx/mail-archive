@@ -33,6 +33,8 @@ type User struct {
 	MustChangePassword bool
 	TwoFactorEnabled   bool
 	TwoFactorVersion   int64
+	// Language and Locale are the web UI settings: "auto" or a tag.
+	Language, Locale string
 }
 
 func userFromDB(r db.User) *User {
@@ -40,6 +42,7 @@ func userFromDB(r db.User) *User {
 		ID: r.ID, Name: r.Name, PasswordHash: r.PasswordHash, IsAdmin: r.IsAdmin,
 		LockedAt: r.LockedAt, CreatedAt: r.CreatedAt, PasswordChangedAt: r.PasswordChangedAt,
 		LastLoginAt: r.LastLoginAt, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, TwoFactorVersion: r.TwoFactorVersion,
+		Language: r.Language, Locale: r.Locale,
 	}
 }
 
@@ -284,6 +287,10 @@ type Session struct {
 	MustChangePassword bool
 	TwoFactorEnabled   bool
 	LastSeenAt         time.Time
+	// Language and Locale are the user's web UI settings. Sessions from
+	// APIKeyLogin leave them empty: only session routes read them, and API
+	// keys are refused there.
+	Language, Locale string
 }
 
 // StartSession stores a new session after a password login and records the
@@ -319,7 +326,68 @@ func (s *Store) GetSession(ctx context.Context, idHash []byte, idleCutoff time.T
 	if err != nil {
 		return nil, err
 	}
-	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, LastSeenAt: r.LastSeenAt}, nil
+	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, LastSeenAt: r.LastSeenAt,
+		Language: r.Language, Locale: r.Locale,
+	}, nil
+}
+
+// ProfileChange holds the settings to change; nil keeps a setting.
+type ProfileChange struct{ Language, Locale *string }
+
+// errUnchanged rolls back a change that would change nothing.
+var errUnchanged = errors.New("unchanged")
+
+// UpdateProfile changes the user's UI settings, together with the audit
+// entry of ctx, which gets the changed fields with their old and new
+// values. It reports false, and writes no audit entry, when nothing differs
+// from the stored values. The row is locked first, so concurrent changes
+// record the right old value.
+func (s *Store) UpdateProfile(ctx context.Context, userID int64, c ProfileChange) (bool, error) {
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		old, err := q.LockUserSettings(ctx, userID)
+		if isNoRows(err) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		next := db.SetUserSettingsParams{ID: userID, Language: old.Language, Locale: old.Locale}
+		var fields []string
+		changes := map[string]map[string]any{}
+		for _, f := range []struct {
+			name     string
+			from     string
+			to       *string
+			assignTo *string
+		}{
+			{"language", old.Language, c.Language, &next.Language},
+			{"locale", old.Locale, c.Locale, &next.Locale},
+		} {
+			if f.to == nil || *f.to == f.from {
+				continue
+			}
+			*f.assignTo = *f.to
+			fields = append(fields, f.name)
+			changes[f.name] = map[string]any{"from": f.from, "to": *f.to}
+		}
+		if len(fields) == 0 {
+			return errUnchanged
+		}
+		if err := q.SetUserSettings(ctx, next); err != nil {
+			return err
+		}
+		if e := auditFrom(ctx); e != nil {
+			e.Detail("fields", fields)
+			for _, f := range fields {
+				e.Detail(f, changes[f])
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errUnchanged) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // TouchSession records that a session was used now.
