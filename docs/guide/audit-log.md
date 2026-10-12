@@ -37,6 +37,7 @@ Each event writes exactly one entry.
 | `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name and the new state, never the server, login or password. `account.remove` says whether the account was `deleted` or `removed`. |
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login. |
+| `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. Group `retention`. |
 | `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`). |
 | `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. |
 | `audit.export` | `./ma audit` itself. |
@@ -160,7 +161,7 @@ The same entries come from `GET /api/audit` (see the
 
 `--since` is required, `--until` is exclusive (a plain date includes that
 day). `--action` takes a group (`login`, `search`, `read`, `export`,
-`accounts`, `users`, `profile`, `api_keys`, `sync`) or an action, and is
+`accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, and is
 repeatable.
 `--user` selects a current user's entries. Without `--out`, the entries go
 to stdout. A file must not exist yet; it is written with mode 0600 and

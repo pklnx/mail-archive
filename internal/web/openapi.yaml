@@ -63,6 +63,8 @@ tags:
     description: Listing, searching and reading messages.
   - name: audit
     description: The audit log.
+  - name: retention
+    description: Retention rules and legal holds, for admins only.
 
 paths:
   /healthz:
@@ -980,6 +982,248 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/retention/rules:
+    get:
+      tags: [retention]
+      operationId: listRetentionRules
+      summary: Retention rules, with the accounts to choose from
+      responses:
+        "200":
+          description: The rules, by owner, account and folder.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rules, accounts, minYears, defaultTimeZone]
+                properties:
+                  rules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RetentionRule"
+                  accounts:
+                    type: array
+                    description: Every account with its owner and folders.
+                    items:
+                      $ref: "#/components/schemas/RetentionAccount"
+                  minYears:
+                    type: integer
+                    description: Rules shorter than this (business letters, §147 AO) need `force`.
+                  defaultTimeZone:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    post:
+      tags: [retention]
+      operationId: createRetentionRule
+      summary: Add a retention rule
+      description: |
+        Keeps the mail of an account, or of one folder of it, for `years`
+        after the end of the year it was received or sent in. One rule per
+        account and one per folder; the longest matching rule wins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accountId, years]
+              properties:
+                accountId:
+                  type: integer
+                  format: int64
+                folder:
+                  type: string
+                  description: Matched exactly; empty for every folder.
+                years:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                timeZone:
+                  type: string
+                  description: Of the year end; default `Europe/Berlin`.
+                note:
+                  type: string
+                  maxLength: 500
+                force:
+                  type: boolean
+                  description: Allows fewer years than `minYears`.
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: The account or folder already has a rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/retention/rules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    delete:
+      tags: [retention]
+      operationId: deleteRetentionRule
+      summary: Remove a retention rule
+      responses:
+        "204":
+          description: Removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/legal-holds:
+    get:
+      tags: [retention]
+      operationId: listLegalHolds
+      summary: Legal holds
+      parameters:
+        - name: released
+          in: query
+          description: "`1` lists released holds too."
+          schema:
+            type: string
+            enum: ["1"]
+      responses:
+        "200":
+          description: The holds, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [holds]
+                properties:
+                  holds:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LegalHold"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    post:
+      tags: [retention]
+      operationId: createLegalHold
+      summary: Add a legal hold
+      description: |
+        Every condition that is set must match. A filter is matched at once
+        by search, as the owner of the mail sees it; until then the hold
+        covers its whole scope. Without any condition the hold covers the
+        whole archive, which needs `all`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, reason]
+              properties:
+                name:
+                  type: string
+                  maxLength: 200
+                reason:
+                  type: string
+                  maxLength: 2000
+                user:
+                  type: string
+                  description: Only mail in this user's accounts.
+                accountId:
+                  type: [integer, "null"]
+                  format: int64
+                filter:
+                  oneOf:
+                    - type: "null"
+                    - $ref: "#/components/schemas/HoldFilter"
+                since:
+                  type: [string, "null"]
+                  format: date-time
+                until:
+                  type: [string, "null"]
+                  format: date-time
+                  description: Exclusive.
+                all:
+                  type: boolean
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+                  matched:
+                    type: integer
+                    format: int64
+                    description: Messages the filter matched; only with a filter.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+
+  /api/legal-holds/{id}/release:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    post:
+      tags: [retention]
+      operationId: releaseLegalHold
+      summary: Release a legal hold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [note]
+              properties:
+                note:
+                  type: string
+                  maxLength: 2000
+      responses:
+        "204":
+          description: Released.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Released already.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/audit:
     get:
       tags: [audit]
@@ -1004,7 +1248,7 @@ paths:
           in: query
           description: |
             A group (`login`, `search`, `read`, `export`, `accounts`, `users`,
-            `profile`, `api_keys`, `sync`) or an exact action such as
+            `profile`, `api_keys`, `sync`, `retention`) or an exact action such as
             `message.open`. Repeatable; none means all.
           schema:
             type: array
@@ -1666,6 +1910,13 @@ components:
         scope list of an operation names the key scope it needs.
 
   parameters:
+    numericID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
     apiKeyID:
       name: id
       in: path
@@ -2346,6 +2597,15 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Location"
+            retainUntil:
+              type: [string, "null"]
+              format: date-time
+              description: |
+                The latest end of the retention period over the user's
+                locations; null when one of them has no rule (kept for ever).
+            onHold:
+              type: boolean
+              description: One of the locations is on legal hold. Only for admins.
     Part:
       type: object
       required: [index, contentType, size, attachment, inline]
@@ -2367,7 +2627,7 @@ components:
           type: boolean
     Location:
       type: object
-      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope]
+      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, retainUntil]
       properties:
         account:
           type: string
@@ -2397,6 +2657,133 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/Envelope"
+        retainUntil:
+          type: [string, "null"]
+          format: date-time
+          description: When the retention period ends; null without a rule (kept for ever).
+        onHold:
+          type: boolean
+          description: An active legal hold covers it. Only for admins.
+    RetentionRule:
+      type: object
+      required: [id, accountId, account, accountKind, accountRemoved, owner, folder, years, timeZone, note, createdAt, createdBy]
+      properties:
+        id:
+          type: integer
+          format: int64
+        accountId:
+          type: integer
+          format: int64
+        account:
+          type: string
+        accountKind:
+          type: string
+          enum: [imap, import, smtp]
+        accountRemoved:
+          type: boolean
+        owner:
+          type: string
+        folder:
+          type: string
+          description: Empty for every folder of the account.
+        years:
+          type: integer
+        timeZone:
+          type: string
+        note:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          description: Empty for the command line.
+    RetentionAccount:
+      type: object
+      required: [id, name, kind, removed, owner, folders]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [imap, import, smtp]
+        removed:
+          type: boolean
+        owner:
+          type: string
+        folders:
+          type: array
+          items:
+            type: string
+    HoldFilter:
+      type: object
+      additionalProperties: false
+      description: A search filter; the messages search finds with it are held.
+      properties:
+        q:
+          type: string
+        from:
+          type: string
+        to:
+          type: string
+        attachment:
+          type: string
+        hasAttachment:
+          type: boolean
+    LegalHold:
+      type: object
+      required: [id, name, reason, user, accountId, account, accountOwner, filter, since, until, matchedAt, matched,
+                 createdAt, createdBy, releasedAt, releasedBy, releaseNote]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        reason:
+          type: string
+        user:
+          type: string
+          description: The user whose mail is held; empty for none.
+        accountId:
+          type: [integer, "null"]
+          format: int64
+        account:
+          type: string
+        accountOwner:
+          type: string
+        filter:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/HoldFilter"
+        since:
+          type: [string, "null"]
+          format: date-time
+        until:
+          type: [string, "null"]
+          format: date-time
+        matchedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the filter's matches were last stored; until then the hold covers its whole scope.
+        matched:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        releasedAt:
+          type: [string, "null"]
+          format: date-time
+        releasedBy:
+          type: string
+        releaseNote:
+          type: string
     Envelope:
       type: object
       description: The SMTP envelope of a message in an smtp account.

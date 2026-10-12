@@ -9,7 +9,7 @@ interface Props {
   select: (account: string, folder: string) => void;
   /** Lists the messages no longer on any server. */
   selectGone: () => void;
-  /** Opens a page: "accounts", "users" or "profile". */
+  /** Opens a page: "accounts", "users", "retention", "log" or "profile". */
   show: (view: string) => void;
   user: User;
   logout: () => void;
@@ -111,6 +111,22 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
               <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14a6 6 0 0 1 3 6" />
             </svg>
             {t.users}
+          </span>
+        </button>
+      )}
+      {user.admin && (
+        <button
+          type="button"
+          className={`${item} ${state.view === "retention" ? active : idle}`}
+          aria-current={state.view === "retention" ? "page" : undefined}
+          onClick={() => show("retention")}
+        >
+          <span className="flex items-center gap-2">
+            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="5" rx="1" />
+              <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
+            </svg>
+            {t.retention}
           </span>
         </button>
       )}

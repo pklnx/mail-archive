@@ -150,6 +150,10 @@ export interface Location {
   lastSeenAt: string;
   /** smtp accounts: the envelope the message arrived with. */
   envelope: Envelope | null;
+  /** When the retention period ends; null without a rule (kept for ever). */
+  retainUntil: string | null;
+  /** On legal hold; only sent to admins. */
+  onHold?: boolean;
 }
 
 /** The SMTP envelope of a received message; the recipients include BCC. */
@@ -173,6 +177,10 @@ export interface MessageDetail extends MessageSummary {
   truncated: boolean;
   parts: Part[];
   locations: Location[];
+  /** The latest retention end over the locations; null if one is kept for ever. */
+  retainUntil: string | null;
+  /** One of the locations is on legal hold; only sent to admins. */
+  onHold?: boolean;
 }
 
 export interface Filter {
@@ -546,3 +554,96 @@ export const auditApi = {
     getJSON<{ entries: AuditEntry[]; nextCursor?: string }>(`/api/audit?${auditQuery(f, cursor)}`, signal),
 };
 
+
+/** A retention rule: an account's (or folder's) mail is kept for years after the end of its year. */
+export interface RetentionRule {
+  id: number;
+  accountId: number;
+  account: string;
+  accountKind: string;
+  accountRemoved: boolean;
+  owner: string;
+  /** Empty for every folder of the account. */
+  folder: string;
+  years: number;
+  timeZone: string;
+  note: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+/** An account to choose for a rule or a hold. */
+export interface RetentionAccount {
+  id: number;
+  name: string;
+  kind: string;
+  removed: boolean;
+  owner: string;
+  folders: string[];
+}
+
+export interface RetentionRules {
+  rules: RetentionRule[];
+  accounts: RetentionAccount[];
+  /** Rules shorter than this need force. */
+  minYears: number;
+  defaultTimeZone: string;
+}
+
+export interface RetentionRuleInput {
+  accountId: number;
+  folder: string;
+  years: number;
+  timeZone: string;
+  note: string;
+  force: boolean;
+}
+
+export interface HoldFilter {
+  q?: string;
+  from?: string;
+  to?: string;
+  attachment?: string;
+  hasAttachment?: boolean;
+}
+
+export interface LegalHold {
+  id: number;
+  name: string;
+  reason: string;
+  user: string;
+  accountId: number | null;
+  account: string;
+  accountOwner: string;
+  filter: HoldFilter | null;
+  since: string | null;
+  until: string | null;
+  matchedAt: string | null;
+  matched: number;
+  createdAt: string;
+  createdBy: string;
+  releasedAt: string | null;
+  releasedBy: string;
+  releaseNote: string;
+}
+
+export interface LegalHoldInput {
+  name: string;
+  reason: string;
+  user: string;
+  accountId: number | null;
+  filter: HoldFilter | null;
+  since: string | null;
+  until: string | null;
+  all: boolean;
+}
+
+export const retentionApi = {
+  rules: (signal?: AbortSignal) => getJSON<RetentionRules>("/api/retention/rules", signal),
+  addRule: async (r: RetentionRuleInput) => (await send<{ id: number }>("POST", "/api/retention/rules", r))!,
+  removeRule: (id: number) => send("DELETE", `/api/retention/rules/${id}`),
+  holds: async (released: boolean, signal?: AbortSignal) =>
+    (await getJSON<{ holds: LegalHold[] }>(`/api/legal-holds${released ? "?released=1" : ""}`, signal)).holds,
+  addHold: async (h: LegalHoldInput) => (await send<{ id: number; matched?: number }>("POST", "/api/legal-holds", h))!,
+  releaseHold: (id: number, note: string) => send("POST", `/api/legal-holds/${id}/release`, { note }),
+};

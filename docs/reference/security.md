@@ -14,6 +14,7 @@
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
 | API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A key reaches only the read and sync endpoints of its owner. See [Login](#login). |
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
+| Retention and deletion | Nothing is deleted without a [retention rule](./cli#retention); rules, legal holds and (later) deletion are admin-only and recorded in the audit log. A message stays while any location of it, in any user's account, has no rule or an unexpired one, or is on legal hold. |
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
 | The SMTP port | Off by default. When on, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect; see [The SMTP server](#the-smtp-server). |
 

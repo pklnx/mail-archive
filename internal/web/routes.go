@@ -70,6 +70,13 @@ func (s *Server) routes() []route {
 		h("GET /api/api-keys", s.handleListAllAPIKeys, accessSession),
 		h("DELETE /api/api-keys/{id}", s.handleRevokeAnyAPIKey, accessSession),
 
+		h("GET /api/retention/rules", s.handleListRetentionRules, accessSession),
+		h("POST /api/retention/rules", s.handleCreateRetentionRule, accessSession),
+		h("DELETE /api/retention/rules/{id}", s.handleDeleteRetentionRule, accessSession),
+		h("GET /api/legal-holds", s.handleListLegalHolds, accessSession),
+		h("POST /api/legal-holds", s.handleCreateLegalHold, accessSession),
+		h("POST /api/legal-holds/{id}/release", s.handleReleaseLegalHold, accessSession),
+
 		// Users see their own entries, admins everyone's.
 		h("GET /api/audit", s.handleAudit, accessSession),
 

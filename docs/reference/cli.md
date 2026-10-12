@@ -75,17 +75,19 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
-| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A last line shows the newest [attestation](#attest), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. |
+| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. |
 | `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed. See below. |
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Safe to interrupt and rerun, and to run alongside the web server and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: the attestations, every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
-| `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
+| `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `attest` | Write a signed attestation over the archived messages now. See below. |
 | `attest keygen [--rotate]` | Create the key that signs attestations, or replace it. See below. |
 | `attest public-key` | Print the public key attestations are verified with. |
+| `retention rule add\|list\|remove` | Retention rules: how long the mail of an account or folder must be kept. See below. |
+| `hold add\|list\|release` | Legal holds: no deletion of what they cover. See below. |
 | `attest check [--file FILE] [--public-key FILE] [--offline]` | Check only the attestations, fast. See below. |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule and attestations. Default `127.0.0.1:8080`. |
 
@@ -207,6 +209,64 @@ message files:
 | `--offline` | No database: check `--file` (default `attest/attestations.jsonl`) alone: chain, signatures, totals, and every leaves file in the `leaves/` directory next to it. Without `--public-key`, `signing.pub` and `retired-keys.pem` next to the file are trusted. |
 
 Exit codes as for `verify`. See [Tamper evidence](../guide/tamper-evidence).
+
+### retention
+
+A retention rule keeps the mail of an account, or of one folder of it, for a
+number of years after the end of the year it was received or sent in. The
+date is the later of the Date header and the received date, but never later
+than when the archive stored the message, so an mbox from 2015 imported in
+2026 counts from 2015. Without a rule, mail is kept for ever. When several
+rules match a message, the longest wins, also across other users' accounts
+that hold the same message. **Rules alone delete nothing**; deletion is a
+separate, reviewed step that comes in a later release.
+
+```sh
+./ma retention rule add --account work --years 8 --note "§147 AO, invoices by mail"
+./ma retention rule add --account work --folder Newsletter --years 1 --force
+./ma retention rule list
+./ma retention rule remove 2
+```
+
+| Flag of `rule add` | Default | |
+|---|---|---|
+| `--account NAME` | | The account; `--user` when several users have one with that name. Removed accounts work too. |
+| `--folder NAME` | all folders | One folder, matched exactly. An account has one rule for all folders and at most one per folder. |
+| `--years N` | | 1 to 100. Under 6 (business letters, §147 AO) only with `--force`. |
+| `--time-zone TZ` | `Europe/Berlin` | Where the year ends. |
+| `--note TEXT` | | For example the legal basis. |
+
+Rules are not changed: remove one and add another. Which period applies is a
+legal question (GoBD: 6 years for business letters, 8 for accounting
+vouchers such as invoices, 10 for books); check with your tax adviser. The
+message view in the web UI shows when a message's period ends. `status`
+shows the number of rules and active holds.
+
+### hold
+
+A legal hold stops the deletion of the mail it covers while it is active,
+whatever the rules say: during a tax audit, a lawsuit or an investigation.
+
+```sh
+./ma hold add "Tax audit 2026" --reason "Betriebsprüfung, letter of 2026-09-01" --account work --until 2024-01-01
+./ma hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon
+./ma hold list [--released]
+./ma hold release 1 --note "audit closed on 2026-12-01"
+```
+
+Every condition given must match: `--user`, `--account`, `--since` and
+`--until` (the Date header or received date; mail without dates counts as
+inside), and a search filter (`--query`, `--sender`, `--recipient`,
+`--attachment`, `--has-attachment`). A filter is matched by search, as the
+mail's owner sees it, when the hold is added and again before every
+deletion; matches are only ever added. Until the first match, a filter hold
+covers its whole scope. Without any condition the hold covers the whole
+archive and needs `--all`.
+
+Holds are released with a note, never deleted. A user named by a hold can
+therefore not be removed (lock them instead), an account whose owner is on
+hold cannot be moved to another user, and an empty account named by a hold
+is kept as removed instead of being deleted.
 
 ### export
 

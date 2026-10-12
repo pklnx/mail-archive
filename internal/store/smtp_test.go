@@ -287,10 +287,13 @@ func TestReceiveMessageConcurrent(t *testing.T) {
 }
 
 func TestSMTPMigrationDownRefused(t *testing.T) {
-	st := storetest.New(t)
+	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
 	// First the attestations and the audit log, which are empty here.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00021_retention_rules") {
+		t.Fatalf("down the retention rules: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00020_api_keys") {
 		t.Fatalf("down the API keys: %q, %v", m, err)
 	}
@@ -303,8 +306,12 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "smtp accounts exist") {
 		t.Fatalf("down with an smtp account: %v", err)
 	}
-	if res, err := st.DeleteOrRemoveAccount(ctx, a.Ref()); err != nil || res != store.AccountDeleted {
-		t.Fatalf("delete: %v, %v", res, err)
+	// The store expects the current schema; delete by hand.
+	conn := connect(t, url)
+	for _, sql := range []string{"DELETE FROM folders WHERE account_id = $1", "DELETE FROM accounts WHERE id = $1"} {
+		if _, err := conn.Exec(ctx, sql, a.ID); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
 	}
 	if _, err := st.MigrateDown(ctx); err != nil {
 		t.Fatalf("down without smtp accounts: %v", err)
