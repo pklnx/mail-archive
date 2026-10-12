@@ -3,8 +3,11 @@ import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetup
 import { t } from "./i18n";
 import { ApiKeySection } from "./ApiKeys";
 import { PasskeySection } from "./Passkeys";
+import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
 
 const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+const secondary =
+  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800";
 const input =
   "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
 
@@ -89,7 +92,7 @@ export function ProfilePage({ name, close }: { name: string; close: () => void }
       )}
       <PasswordForm done={() => setChanged(true)} />
       <h2 className="font-semibold">{t.twoFactor}</h2>
-      <TwoFactorSetup />
+      <TwoFactorSetup user={name} />
       <h2 className="font-semibold">{t.passkeys}</h2>
       <PasskeySection />
       <h2 className="font-semibold">{t.apiKeys}</h2>
@@ -106,14 +109,42 @@ function twoFactorError(err: unknown): string {
   return t.failed(err instanceof Error ? err.message : String(err));
 }
 
-export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
+/**
+ * The new recovery codes, shown once, with downloads made in the browser.
+ * Only "I have saved the codes" leaves the view.
+ */
+export function RecoveryCodes({ sheet, done }: { sheet: RecoverySheet; done: () => void }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <h3 className="font-semibold">{t.twoFactorRecovery}</h3>
+      <p className="text-sm text-zinc-500">{t.twoFactorRecoveryText}</p>
+      <pre className="rounded-md bg-zinc-100 p-3 text-xs dark:bg-zinc-800">{sheet.codes.join("\n")}</pre>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={secondary}
+          onClick={() => saveFile(recoveryPdf(sheet), recoveryFileName(sheet.user, sheet.createdAt, "pdf"), "application/pdf")}>
+          {t.twoFactorDownloadPdf}
+        </button>
+        <button type="button" className={secondary}
+          onClick={() => saveFile(recoveryText(sheet), recoveryFileName(sheet.user, sheet.createdAt, "txt"), "text/plain;charset=utf-8")}>
+          {t.twoFactorDownloadTxt}
+        </button>
+      </div>
+      <button type="button" className={`${primary} self-start`} onClick={done}>{t.twoFactorCodesSaved}</button>
+    </div>
+  );
+}
+
+export function TwoFactorSetup({ user, onDone }: { user: string; onDone?: () => void }) {
   const [state, setState] = useState<TwoFactorSetupState | null>(null);
   const [setup, setSetup] = useState<TwoFactorSetupState | null>(null);
-  const [recovery, setRecovery] = useState<string[] | null>(null);
+  const [recovery, setRecovery] = useState<RecoverySheet | null>(null);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Dated when the codes arrive, so every download shows the same time.
+  const sheetFor = (codes: string[]): RecoverySheet => ({ user, origin: window.location.origin, createdAt: new Date(), codes });
 
   const load = async () => {
     try { setState(await profileApi.twoFactor.get()); }
@@ -133,7 +164,7 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
     try {
       const result = await profileApi.twoFactor.confirm(code);
       // onDone only after the recovery codes were shown (see below).
-      setRecovery(result!.recoveryCodes);
+      setRecovery(sheetFor(result!.recoveryCodes));
       setSetup(null); setCode(""); setState((s) => s ? { ...s, enabled: true, setupPending: false } : s);
     } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
@@ -152,20 +183,13 @@ export function TwoFactorSetup({ onDone }: { onDone?: () => void }) {
     e.preventDefault(); setBusy(true); setError("");
     try {
       const result = await profileApi.twoFactor.regenerateRecoveryCodes(code);
-      setRecovery(result!.recoveryCodes); setCode("");
+      setRecovery(sheetFor(result!.recoveryCodes)); setCode("");
     } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };
 
   if (!state) return <p className="text-sm text-zinc-500">{t.loading}</p>;
-  if (recovery) return (
-    <div className="flex flex-col gap-3">
-      <h3 className="font-semibold">{t.twoFactorRecovery}</h3>
-      <p className="text-sm text-zinc-500">{t.twoFactorRecoveryText}</p>
-      <pre className="rounded-md bg-zinc-100 p-3 text-xs dark:bg-zinc-800">{recovery.join("\n")}</pre>
-      <button type="button" className={`${primary} self-start`} onClick={() => { setRecovery(null); onDone?.(); }}>{t.twoFactorCodesSaved}</button>
-    </div>
-  );
+  if (recovery) return <RecoveryCodes sheet={recovery} done={() => { setRecovery(null); onDone?.(); }} />;
   if (!state.enabled) {
     if (!setup) return (
       <div className="flex flex-col gap-3">

@@ -19,7 +19,13 @@ describe("messages", () => {
     const de = messagesFor("de");
     expect(Object.keys(de).sort()).toEqual(Object.keys(en).sort());
     for (const key of Object.keys(en) as (keyof typeof en)[]) {
-      if (typeof en[key] === "string") expect(de[key], key).not.toBe("");
+      const v = en[key];
+      if (typeof v === "string") expect(de[key], key).not.toBe("");
+      if (Array.isArray(v)) {
+        const d = de[key] as readonly string[];
+        expect(d, key).toHaveLength(v.length);
+        for (const s of [...v, ...d]) expect(s, key).not.toBe("");
+      }
     }
     expect(de.searchIn("Inbox")).toBe("In Inbox suchen (from:, to:)");
     expect(de.switchTheme("dark")).toBe("Zum dunklen Modus wechseln");

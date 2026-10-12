@@ -71,7 +71,7 @@ export function AuthGate({ children }: Props) {
           <Brand />
           <h2 className="font-semibold">{t.twoFactorSetup}</h2>
           <p>{t.twoFactorRequired}</p>
-          <TwoFactorSetup onDone={() => check()} />
+          <TwoFactorSetup user={state.user.name} onDone={() => check()} />
           <button type="button" className="self-start text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>{t.logOut}</button>
         </Centered>
       );
