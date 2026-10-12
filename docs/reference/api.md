@@ -154,18 +154,32 @@ session is created. A logout always works.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details"}], "nextCursor"}`. A user gets their own entries; admins every user's. `subject` is the subject of a target message, only if the viewer has that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339, `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, or an action such as `message.open`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`); from other users `403`. Sessions only, not with an API key. Reading the log writes no entry. |
+| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details"}], "nextCursor"}`. A user gets their own entries; admins every user's. `subject` is the subject of a target message, only if the viewer has that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339, `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`, or an action such as `message.open`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`); from other users `403`. Sessions only, not with an API key. Reading the log writes no entry. |
 
 Account management and sync need `MAIL_ARCHIVE_SECRET_KEY` on the server;
 without it these endpoints answer `503` and `GET /api/accounts` reports
 `"manage": false`. See [Security](./security) for why.
+
+## Retention and legal holds
+
+Admins only (`403` otherwise), sessions only. Rules alone delete nothing.
+See [`retention` and `hold`](./cli#retention) on the command line.
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/retention/rules` | `{"rules": [{"id", "accountId", "account", "accountKind", "accountRemoved", "owner", "folder", "years", "timeZone", "note", "createdAt", "createdBy"}], "accounts": [{"id", "name", "kind", "removed", "owner", "folders"}], "minYears", "defaultTimeZone"}`. `folder` is empty for every folder; `createdBy` is empty for the command line. `accounts` lists every account to choose from. |
+| `POST /api/retention/rules` | `{"accountId", "folder", "years", "timeZone", "note", "force"}`: `201 {"id"}`. `years` from 1 to 100; under `minYears` (6) only with `force: true`. `timeZone` defaults to `Europe/Berlin`. `409` if the account (or folder) has a rule, `400` for an unknown account or time zone. |
+| `DELETE /api/retention/rules/{id}` | Remove a rule (`204`). |
+| `GET /api/legal-holds[?released=1]` | `{"holds": [{"id", "name", "reason", "user", "accountId", "account", "accountOwner", "filter", "since", "until", "matchedAt", "matched", "createdAt", "createdBy", "releasedAt", "releasedBy", "releaseNote"}]}`, active ones, and released ones too with `released=1`. |
+| `POST /api/legal-holds` | `{"name", "reason", "user", "accountId", "filter": {"q", "from", "to", "attachment", "hasAttachment"}, "since", "until", "all"}`: `201 {"id", "matched"}`. Every condition that is set must match; `until` is exclusive. A filter is matched at once (`matched`); until then the hold covers its whole scope. Without any condition the hold covers the whole archive and needs `all: true`. |
+| `POST /api/legal-holds/{id}/release` | `{"note"}` (required): `204`. `409` if it is released already. |
 
 ## Messages
 
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |

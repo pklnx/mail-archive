@@ -40,6 +40,8 @@ func main() {
 		newImportCmd(),
 		newBackupCmd(),
 		newAttestCmd(),
+		newRetentionCmd(),
+		newHoldCmd(),
 		newAuditCmd(),
 		newNotifyCmd(),
 		newServeCmd(),

@@ -163,6 +163,17 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		if r.Version != ref.Version {
 			return ErrStale
 		}
+		// A hold on the current owner would no longer cover the account's
+		// mail once it belongs to someone else.
+		if r.OwnerID != nil && *r.OwnerID != owner {
+			holds, err := q.ActiveHoldsOnOwner(ctx, db.ActiveHoldsOnOwnerParams{OwnerID: *r.OwnerID, AccountID: ref.ID})
+			if err != nil {
+				return err
+			}
+			if len(holds) > 0 {
+				return fmt.Errorf("%w: the account's owner is on legal hold %s", ErrOnHold, holdIDs(holds))
+			}
+		}
 		err = one(q.SetAccountOwner(ctx, db.SetAccountOwnerParams{ID: ref.ID, OwnerID: &owner}))
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -198,7 +209,13 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 			return err
 		}
 		e := auditFrom(ctx)
-		if n > 0 {
+		// A legal hold names the account: it stays, as a removed account,
+		// so the hold's record keeps pointing at it.
+		holds, err := q.HoldsNamingAccount(ctx, ref.ID)
+		if err != nil {
+			return err
+		}
+		if n > 0 || len(holds) > 0 {
 			result = AccountRemoved
 			if e != nil {
 				e.Detail("result", string(result))

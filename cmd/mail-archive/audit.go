@@ -107,7 +107,7 @@ func newAuditCmd() *cobra.Command {
 
 DATE is YYYY-MM-DD (midnight UTC) or RFC 3339. --until is exclusive; a plain
 date includes that day. --action takes a group (login, search, read,
-export, accounts, users, profile, api_keys, sync) or an action such as
+export, accounts, users, profile, api_keys, sync, retention) or an action such as
 message.open, and is repeatable. --user selects the entries of a current
 user.
 

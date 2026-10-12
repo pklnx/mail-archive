@@ -38,7 +38,7 @@ func TestAttestMigration(t *testing.T) {
 	ctx := context.Background()
 	st, url := storetest.NewWithURL(t)
 	conn := connect(t, url)
-	for _, want := range []string{"00020_api_keys", "00019_attestations"} {
+	for _, want := range []string{"00021_retention_rules", "00020_api_keys", "00019_attestations"} {
 		if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, want) {
 			t.Fatalf("down: %q %v", m, err)
 		}
@@ -79,8 +79,10 @@ func TestAttestMigration(t *testing.T) {
 			t.Errorf("%s: %v", sql, err)
 		}
 	}
-	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00020_api_keys") {
-		t.Fatalf("down the API keys: %q %v", m, err)
+	for _, want := range []string{"00021_retention_rules", "00020_api_keys"} {
+		if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, want) {
+			t.Fatalf("down: %q %v", m, err)
+		}
 	}
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "attestations exist") {
 		t.Errorf("down with attestations: %v", err)

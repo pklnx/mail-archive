@@ -283,15 +283,16 @@ func nullString(s string) *string {
 
 // The action groups a filter may name instead of exact actions.
 var auditGroups = map[string][]string{
-	"login":    {"auth.%"},
-	"search":   {"message.search"},
-	"read":     {"message.open", "message.html", "message.raw", "message.part"},
-	"export":   {"data.%", "audit.export"},
-	"accounts": {"account.%"},
-	"users":    {"user.%"},
-	"profile":  {"profile.%"},
-	"api_keys": {"api_key.%"},
-	"sync":     {"sync.%"},
+	"login":     {"auth.%"},
+	"search":    {"message.search"},
+	"read":      {"message.open", "message.html", "message.raw", "message.part"},
+	"export":    {"data.%", "audit.export"},
+	"accounts":  {"account.%"},
+	"users":     {"user.%"},
+	"profile":   {"profile.%"},
+	"api_keys":  {"api_key.%"},
+	"sync":      {"sync.%"},
+	"retention": {"retention.%", "hold.%"},
 }
 
 var auditActionPattern = regexp.MustCompile(`^[a-z0-9_]+\.[a-z0-9_]+$`)

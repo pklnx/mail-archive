@@ -207,6 +207,10 @@ func (s *Server) failStore(w http.ResponseWriter, r *http.Request, err error) {
 		s.fail(w, r, http.StatusNotFound, "not found", err)
 		return
 	}
+	if errors.Is(err, store.ErrOnHold) || errors.Is(err, store.ErrConflict) {
+		s.fail(w, r, http.StatusConflict, err.Error(), err)
+		return
+	}
 	s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 }
 

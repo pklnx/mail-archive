@@ -192,6 +192,11 @@ type MessageLocation struct {
 	LastSeenAt time.Time
 	// Envelope is the SMTP envelope of a location in an smtp account.
 	Envelope *Envelope
+	// RetainUntil is when the location's retention period ends (#55); nil
+	// when no rule covers it, so it is kept for ever.
+	RetainUntil *time.Time
+	// OnHold: an active legal hold covers the location. Admins only.
+	OnHold bool
 }
 
 // MessageDetail is a message's stored metadata and locations.
@@ -204,6 +209,11 @@ type MessageDetail struct {
 	InReplyTo string
 	Thread    string
 	Locations []MessageLocation
+	// RetainUntil is the latest end of the retention period over the
+	// locations; nil when one of them has no rule, so the message is kept
+	// for ever. A message is only deleted once every location (also other
+	// users') has ended.
+	RetainUntil *time.Time
 }
 
 // GetMessageDetail returns metadata and the user's own locations of one
@@ -230,7 +240,11 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 	for _, l := range locs {
 		loc := MessageLocation{
 			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
-			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt,
+			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, OnHold: l.OnHold,
+		}
+		if !l.KeptForever {
+			until := l.RetainUntil
+			loc.RetainUntil = &until
 		}
 		if l.EnvelopeLocation != nil {
 			loc.Envelope = &Envelope{MailFrom: deref(l.MailFrom), RcptTo: l.RcptTo, ReceivedAt: derefTime(l.ReceivedAt), HELO: deref(l.Helo)}
@@ -240,6 +254,7 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 		}
 		d.Locations = append(d.Locations, loc)
 	}
+	d.RetainUntil = latestRetention(d.Locations)
 	return d, nil
 }
 
@@ -460,4 +475,19 @@ func likePattern(s string) *string {
 // escapeLike escapes LIKE wildcards so user input matches literally.
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// latestRetention is the latest end over locations, nil if one is kept for
+// ever or there are none.
+func latestRetention(locs []MessageLocation) *time.Time {
+	var latest *time.Time
+	for _, l := range locs {
+		if l.RetainUntil == nil {
+			return nil
+		}
+		if latest == nil || l.RetainUntil.After(*latest) {
+			latest = l.RetainUntil
+		}
+	}
+	return latest
 }

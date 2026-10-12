@@ -1059,6 +1059,10 @@ imported from files.`,
 				return err
 			}
 			fmt.Println(line)
+			if line, err = retentionStatus(cmd, a); err != nil {
+				return err
+			}
+			fmt.Println(line)
 			return nil
 		},
 	}

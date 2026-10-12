@@ -237,6 +237,12 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		} else if owns {
 			return ErrOwnsAccounts
 		}
+		// Holds are a record and never deleted, so a user they name stays.
+		if holds, err := q.HoldsNamingUser(ctx, id); err != nil {
+			return err
+		} else if len(holds) > 0 {
+			return fmt.Errorf("%w %s; lock the user instead", ErrOnHold, holdIDs(holds))
+		}
 		// The keys go with the user (ON DELETE CASCADE).
 		if e := auditFrom(ctx); e != nil {
 			n, err := q.CountActiveAPIKeys(ctx, id)

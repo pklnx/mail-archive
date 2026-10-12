@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { getConversation, getMessage, messageURL, type ConversationEntry, type MessageDetail } from "./api";
-import { fileSize, locationLabel, longDate, senderName, shortDate } from "./format";
+import { fileSize, locationLabel, longDate, retentionDay, senderName, shortDate } from "./format";
 import { useAsync } from "./useAsync";
 import { t } from "./i18n";
 
@@ -62,6 +62,19 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
               </span>
             ))}
           </dd>
+          {msg.locations.length > 0 && (
+            <>
+              <dt className="text-zinc-500">{t.retentionEnds}</dt>
+              <dd>
+                {msg.retainUntil ? t.retentionEndsOn(retentionDay(msg.retainUntil)) : t.retentionKeptForever}
+                {msg.onHold && (
+                  <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                    {t.onLegalHold}
+                  </span>
+                )}
+              </dd>
+            </>
+          )}
           {msg.locations.map(
             (l) =>
               l.envelope && (

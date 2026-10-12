@@ -212,6 +212,9 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// First the attestations, of which there are none.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00021_retention_rules") {
+		t.Fatalf("down the retention rules: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00020_api_keys") {
 		t.Fatalf("down the API keys: %q, %v", m, err)
 	}
@@ -222,6 +225,9 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatalf("down with entries: %v", err)
 	}
 	empty := storetest.New(t)
+	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00021_retention_rules") {
+		t.Fatalf("down the retention rules: %q, %v", m, err)
+	}
 	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00020_api_keys") {
 		t.Fatalf("down the API keys: %q, %v", m, err)
 	}

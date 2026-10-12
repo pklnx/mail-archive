@@ -323,11 +323,18 @@ SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
              THEN GREATEST(l.last_seen_at, f.last_reconciled_at)
              ELSE l.last_seen_at END)::timestamptz AS last_seen_at,
        -- The SMTP envelope of locations in smtp accounts.
-       e.location_id AS envelope_location, e.mail_from, e.rcpt_to, e.received_at, e.client_ip, e.helo
+       e.location_id AS envelope_location, e.mail_from, e.rcpt_to, e.received_at, e.client_ip, e.helo,
+       -- The end of the retention period (#55); pgx cannot scan infinity
+       -- into a time, so "no rule" is a flag.
+       (r.until = 'infinity')::boolean AS kept_forever,
+       LEAST(r.until, '9999-12-31')::timestamptz AS retain_until,
+       location_held(l.message_sha256, l.folder_id, m.sent_at, l.internal_date)::boolean AS on_hold
 FROM message_locations l
+JOIN messages m ON m.sha256 = l.message_sha256
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
 LEFT JOIN envelopes e ON e.location_id = l.id
+CROSS JOIN LATERAL (SELECT location_retain_until(l.folder_id, m.sent_at, l.internal_date, m.created_at) AS until) r
 WHERE l.message_sha256 = @sha256 AND a.owner_id = @owner::bigint
 ORDER BY superseded, a.name, f.name;
 

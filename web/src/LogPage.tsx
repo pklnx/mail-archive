@@ -10,7 +10,7 @@ const input =
   "rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
 
 /** The action groups of the filter, as the API names them. */
-export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync"];
+export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"];
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 

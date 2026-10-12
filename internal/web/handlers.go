@@ -203,6 +203,11 @@ type locationJSON struct {
 	LastSeenAt time.Time `json:"lastSeenAt"`
 	// Envelope of a location in an smtp account; null for other kinds.
 	Envelope *envelopeJSON `json:"envelope"`
+	// RetainUntil: when the location's retention period ends; null when no
+	// rule covers it (kept for ever).
+	RetainUntil *time.Time `json:"retainUntil"`
+	// OnHold: an active legal hold covers it. Only for admins.
+	OnHold *bool `json:"onHold,omitempty"`
 }
 
 // envelopeJSON is the SMTP envelope a message arrived with. Recipients are
@@ -237,6 +242,11 @@ type messageJSON struct {
 	Truncated bool           `json:"truncated"`
 	Parts     []partJSON     `json:"parts"`
 	Locations []locationJSON `json:"locations"`
+	// RetainUntil: the latest end of the retention period over the user's
+	// locations; null when one of them is kept for ever.
+	RetainUntil *time.Time `json:"retainUntil"`
+	// OnHold: one of the locations is on legal hold. Only for admins.
+	OnHold *bool `json:"onHold,omitempty"`
 }
 
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +272,12 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		MessageID:   d.MessageID, InReplyTo: d.InReplyTo, To: m.To, Cc: m.Cc, DateRaw: m.Date,
 		Text: m.Text, HasHTML: m.HTML != "", Truncated: m.Truncated,
 		Parts: make([]partJSON, 0, len(m.Parts)), Locations: make([]locationJSON, 0, len(d.Locations)),
+		RetainUntil: d.RetainUntil,
+	}
+	admin := currentSession(r) != nil && currentSession(r).IsAdmin
+	if admin {
+		held := false
+		out.OnHold = &held
 	}
 	out.Thread = d.Thread
 	if out.Text == "" && m.HTML != "" {
@@ -280,7 +296,12 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		lj := locationJSON{
 			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
-			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt,
+			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, RetainUntil: l.RetainUntil,
+		}
+		if admin {
+			held := l.OnHold
+			lj.OnHold = &held
+			*out.OnHold = *out.OnHold || held
 		}
 		if e := l.Envelope; e != nil {
 			lj.Envelope = &envelopeJSON{MailFrom: e.MailFrom, RcptTo: e.RcptTo, ReceivedAt: e.ReceivedAt, HELO: e.HELO}

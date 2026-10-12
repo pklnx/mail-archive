@@ -116,6 +116,29 @@ type Folder struct {
 	LastReconciledAt *time.Time
 }
 
+type LegalHold struct {
+	ID          int64
+	Name        string
+	Reason      string
+	OwnerID     *int64
+	AccountID   *int64
+	Filter      []byte
+	PeriodStart *time.Time
+	PeriodEnd   *time.Time
+	MatchedAt   *time.Time
+	CreatedAt   time.Time
+	CreatedBy   *int64
+	ReleasedAt  *time.Time
+	ReleasedBy  *int64
+	ReleaseNote *string
+}
+
+type LegalHoldMessage struct {
+	HoldID        int64
+	MessageSha256 string
+	AddedAt       time.Time
+}
+
 type LossAlert struct {
 	ID               int64
 	AccountID        int64
@@ -187,6 +210,17 @@ type Passkey struct {
 	Credential   []byte
 	CreatedAt    time.Time
 	LastUsedAt   *time.Time
+}
+
+type RetentionRule struct {
+	ID        int64
+	AccountID int64
+	Folder    *string
+	Years     int32
+	TimeZone  string
+	Note      string
+	CreatedAt time.Time
+	CreatedBy *int64
 }
 
 type Session struct {

@@ -119,3 +119,16 @@ export function formatInterval(goDuration: string): string {
 export function formatCount(n: number): string {
   return n.toLocaleString(locale);
 }
+
+/** The last day of a retention period, from its end (the first instant after it). */
+export function retentionDay(iso: string): string {
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? "" : dateFmt.format(new Date(ms - 1));
+}
+
+/** A date for lists: the day only. */
+export function day(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : dateFmt.format(d);
+}
