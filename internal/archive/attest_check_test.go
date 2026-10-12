@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/pklnx/mail-archive/internal/attest"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -30,9 +32,25 @@ func (s *attestSetup) check(t *testing.T, st *store.Store, opts AttestCheckOptio
 	return found, res
 }
 
-func (s *attestSetup) removeMessage(t *testing.T, i int) {
+// tamper returns a connection on which the deletion guards of retention
+// (#55) are off, as for someone with owner rights on the database.
+func (s *attestSetup) tamper(t *testing.T) *pgx.Conn {
 	t.Helper()
 	c := s.conn(t)
+	for _, sql := range []string{
+		"ALTER TABLE message_locations DISABLE TRIGGER message_locations_retention_guard",
+		"ALTER TABLE messages DISABLE TRIGGER messages_tombstone_guard",
+	} {
+		if _, err := c.Exec(context.Background(), sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return c
+}
+
+func (s *attestSetup) removeMessage(t *testing.T, i int) {
+	t.Helper()
+	c := s.tamper(t)
 	for _, sql := range []string{
 		"DELETE FROM message_locations WHERE message_sha256 = $1",
 		"DELETE FROM messages WHERE sha256 = $1",
@@ -134,7 +152,7 @@ func TestCheckAttestationsFileAndRows(t *testing.T) {
 	}
 
 	// A row inserted into the attested range afterwards.
-	c := s.conn(t)
+	c := s.tamper(t)
 	if _, err := c.Exec(context.Background(), `INSERT INTO messages (seq, sha256, size, stored_path)
 		OVERRIDING SYSTEM VALUE VALUES ($1, $2, 1, 'x')`, seq1+1, attestSHA(9)); err != nil {
 		t.Fatal(err)
@@ -193,13 +211,13 @@ func TestCheckAttestationsFileAndRows(t *testing.T) {
 	}
 }
 
-// Deletions recorded with the delete (as retention will do) are not
-// findings; a delete without a record is.
+// Deletions recorded with the delete (as retention does; here by hand,
+// past its guards) are not findings; a delete without a record is.
 func TestCheckAttestationsDeletions(t *testing.T) {
 	s := newAttestSetup(t)
 	s.save(t, 1, 2, 3)
 	s.attest(t)
-	c := s.conn(t)
+	c := s.tamper(t)
 	tx, err := c.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)

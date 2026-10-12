@@ -258,7 +258,7 @@ func (e *exporter) folder(ctx context.Context, f store.ExportFolder, path string
 				continue
 			}
 			seen[loc.SHA256] = true
-			reason, err := e.message(s, loc)
+			reason, err := e.message(ctx, s, loc)
 			if err != nil {
 				return n, bytes, err
 			}
@@ -276,12 +276,17 @@ func (e *exporter) folder(ctx context.Context, f store.ExportFolder, path string
 
 // message writes one message. A missing or corrupt file gives a reason and
 // leaves nothing behind; other errors end the export.
-func (e *exporter) message(s sink, loc store.ExportLocation) (skipped string, err error) {
+func (e *exporter) message(ctx context.Context, s sink, loc store.ExportLocation) (skipped string, err error) {
 	if !blobstore.IsHash(loc.SHA256) {
 		return "invalid hash", nil
 	}
 	f, err := e.blobs.Open(blobstore.RelPath(loc.SHA256))
 	if errors.Is(err, fs.ErrNotExist) {
+		// A row without its file after restoring a dump older than a
+		// deletion run.
+		if deleted, terr := e.st.IsTombstoned(ctx, loc.SHA256); terr == nil && deleted {
+			return "deleted by retention", nil
+		}
 		return "file missing", nil
 	}
 	if err != nil {

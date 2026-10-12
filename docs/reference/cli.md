@@ -88,6 +88,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `attest public-key` | Print the public key attestations are verified with. |
 | `retention rule add\|list\|remove` | Retention rules: how long the mail of an account or folder must be kept. See below. |
 | `hold add\|list\|release` | Legal holds: no deletion of what they cover. See below. |
+| `retention preview\|show\|confirm\|cancel\|runs\|sweep` | Delete mail whose retention period has ended, in a reviewed run. See below. |
 | `attest check [--file FILE] [--public-key FILE] [--offline]` | Check only the attestations, fast. See below. |
 | `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule and attestations. Default `127.0.0.1:8080`. |
 
@@ -139,6 +140,7 @@ before.
 | `stale-temp` | A file in `tmp/` left by an interrupted sync, untouched for an hour. Younger files may belong to a delivery in progress and are skipped. |
 | `unexpected` | Anything else in `messages/` or `tmp/`: symlinks, other names. Never moved. |
 | `io-error` | A file that could not be read. |
+| `deleted` | The file of a message deleted by [retention](#deletion) that is not scheduled for removal. `--fix-orphans` schedules it for the next sweep instead of moving it aside. Files waiting out their grace period are only a note. |
 | `removed` | An attested message is gone and no deletion was recorded. Listed with its hash and `attested by #N on DATE`. |
 | `unattested` | A row inside an attested range that the attestation does not list (inserted afterwards). |
 | `attestation` | An attestation no longer matches the database: another message at the same number, changed deletion records, or only the counts when its leaves file is gone. |
@@ -219,7 +221,7 @@ than when the archive stored the message, so an mbox from 2015 imported in
 2026 counts from 2015. Without a rule, mail is kept for ever. When several
 rules match a message, the longest wins, also across other users' accounts
 that hold the same message. **Rules alone delete nothing**; deletion is a
-separate, reviewed step that comes in a later release.
+separate, reviewed step, see [Deletion](#deletion).
 
 ```sh
 ./ma retention rule add --account work --years 8 --note "§147 AO, invoices by mail"
@@ -267,6 +269,50 @@ Holds are released with a note, never deleted. A user named by a hold can
 therefore not be removed (lock them instead), an account whose owner is on
 hold cannot be moved to another user, and an empty account named by a hold
 is kept as removed instead of being deleted.
+
+### deletion
+
+Deletion is a reviewed run, never a silent job:
+
+```sh
+./ma retention preview          # create run 3: what may be deleted now, by account, folder and year
+./ma retention show 3           # every message: date, sender, subject, places, end of its period
+./ma retention show 3 --format csv > run-3.csv
+./ma retention confirm 3        # asks for the number of messages, then deletes
+./ma retention cancel 3         # or drop the run; nothing is deleted
+./ma retention runs             # past runs and their counts
+```
+
+A message is a candidate only if **every** location of it, in every user's
+accounts, has a retention rule whose period has ended and no active legal
+hold. A location without a rule keeps the message for ever. Only one run can
+be open at a time.
+
+`confirm` deletes in batches of 500. Each batch waits for the blob lock
+(`--lock-timeout`, default 10 minutes, while syncs and imports write files)
+and checks every candidate again: a rule removed, a legal hold added or a new
+location since the preview keeps it (`kept`). For every deleted message it
+writes a record (hash, size, dates, number of locations; no subject, sender
+or recipients) and a deletion entry that the next
+[attestation](#attest) signs, and deletes its locations and row. An
+interrupted run resumes with `confirm` again, or when the web server starts.
+
+The message files stay for `MAIL_ARCHIVE_RETENTION_FILE_GRACE` (default 7
+days), so a backup made meanwhile has every file its dump needs and
+restoring the last dump undoes a wrong deletion. The web server removes due
+files every hour; `retention sweep` does it by hand. A file whose message
+was archived again stays.
+
+A deleted message is not archived again where it would already be expired:
+a sync after a `UIDVALIDITY` change, a copy in another selected folder, an
+import or an SMTP delivery skips it (`sync` prints `deleted=N`, `import` a
+line, and SMTP answers 250). In an account without a rule, or with a longer
+one, it is archived again, as if that location had existed at deletion.
+
+After restoring a dump older than a run, its messages come back as rows;
+once their files are removed, `verify` reports them as `missing` and
+`export` skips them as "deleted by retention". Run `retention preview`
+again.
 
 ### export
 

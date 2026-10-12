@@ -78,6 +78,8 @@ services:
       # often one is written; 0 turns the schedule off.
       MAIL_ARCHIVE_ATTEST_KEY_FILE: ${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}
       MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
+      # How long the files of messages deleted by retention stay (backups).
+      MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:
@@ -121,6 +123,8 @@ services:
       # Read by `./ma attest` and `./ma attest keygen`.
       MAIL_ARCHIVE_ATTEST_KEY_FILE: ${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}
       MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
+      # How long the files of messages deleted by retention stay (backups).
+      MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}
     volumes:
       # Raw .eml files. A bind mount keeps them visible on the host for backups.
       - ${ARCHIVE_DIR:-./data}:/data

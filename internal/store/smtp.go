@@ -213,6 +213,9 @@ type ReceiveResult struct {
 	AddedRecipients int
 	// NewMessage is set when the message was new to the archive.
 	NewMessage bool
+	// Skipped: the message was deleted by retention and would already be
+	// expired here, so it was not stored again.
+	Skipped bool
 }
 
 // ReceiveMessage stores a message received over SMTP for an smtp account,
@@ -275,6 +278,15 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 		case !errors.Is(err, pgx.ErrNoRows):
 			return err
 		}
+		received := env.ReceivedAt
+		skip, err := skipDeleted(ctx, q, folder.ID, []MessageMeta{meta}, []Location{{InternalDate: received}})
+		if err != nil {
+			return err
+		}
+		if skip[meta.SHA256] {
+			res.Skipped = true
+			return nil
+		}
 		n, err := q.InsertMessage(ctx, insertMessageParams(&meta))
 		if err != nil {
 			return fmt.Errorf("insert message %s: %w", meta.SHA256, err)
@@ -284,7 +296,6 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 		if err != nil {
 			return err
 		}
-		received := env.ReceivedAt
 		locID, err := q.InsertReceivedLocation(ctx, db.InsertReceivedLocationParams{
 			MessageSha256: meta.SHA256, FolderID: folder.ID, Uidvalidity: folder.Uidvalidity, Uid: uid,
 			InternalDate: &received,

@@ -72,6 +72,7 @@ type folderWriter struct {
 	locs      []store.Location
 	maxUID    uint32
 	added     int // messages new to the archive, over all batches
+	skipped   int // deleted by retention and not archived again
 	// flushed is called after each committed batch.
 	flushed func(batch int)
 }
@@ -99,11 +100,12 @@ func (w *folderWriter) flush(ctx context.Context) error {
 	if len(w.metas) == 0 {
 		return nil
 	}
-	n, err := w.st.SaveBatch(ctx, w.folderID, w.maxUID, w.metas, w.locs)
+	res, err := w.st.SaveBatch(ctx, w.folderID, w.maxUID, w.metas, w.locs)
 	if err != nil {
 		return err
 	}
-	w.added += n
+	w.added += res.New
+	w.skipped += res.Skipped
 	batch := len(w.metas)
 	w.metas, w.locs = w.metas[:0], w.locs[:0]
 	if w.flushed != nil {

@@ -410,22 +410,39 @@ func (s *Store) MessageExists(ctx context.Context, sha256 string) (bool, error) 
 	return s.q.MessageExists(ctx, sha256)
 }
 
+// SaveResult tells what SaveBatch stored.
+type SaveResult struct {
+	New int // messages new to the archive
+	// Skipped counts messages deleted by retention that were not archived
+	// again, because they would already be expired in this folder.
+	Skipped int
+}
+
 // SaveBatch stores message metadata and locations for a batch and advances
-// the folder's last UID, all in one transaction. It returns how many messages
-// were new to the archive. The caller holds the blob lock (sync and import
-// take it for the whole run), so the transaction takes only the
-// attestation fence.
-func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location) (int, error) {
-	newCount := 0
+// the folder's last UID, all in one transaction. A message deleted by
+// retention is stored again only where it would not already be expired;
+// otherwise it is skipped and its file scheduled for removal. The caller
+// holds the blob lock (sync and import take it for the whole run), so the
+// transaction takes only the attestation fence.
+func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location) (SaveResult, error) {
+	var res SaveResult
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
-		newCount = 0
+		res = SaveResult{}
+		skip, err := skipDeleted(ctx, q, folderID, metas, locs)
+		if err != nil {
+			return err
+		}
 		for i := range metas {
 			m := &metas[i]
+			if skip[m.SHA256] {
+				res.Skipped++
+				continue
+			}
 			n, err := q.InsertMessage(ctx, insertMessageParams(m))
 			if err != nil {
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
-			newCount += int(n)
+			res.New += int(n)
 
 			l := locs[i]
 			flags := l.Flags
@@ -448,9 +465,55 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		return q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)})
 	})
 	if err != nil {
-		return 0, err
+		return SaveResult{}, err
 	}
-	return newCount, nil
+	return res, nil
+}
+
+// skipDeleted returns the hashes of a batch to skip: messages deleted by
+// retention (a tombstone and no row) that would already be expired in the
+// folder, and that no hold covers there. Their files are scheduled for
+// removal at once. A message not skipped is archived again, as if this
+// location had existed when it was deleted.
+func skipDeleted(ctx context.Context, q *db.Queries, folderID int64, metas []MessageMeta, locs []Location) (map[string]bool, error) {
+	shas := make([]string, len(metas))
+	for i := range metas {
+		shas[i] = metas[i].SHA256
+	}
+	deleted, err := q.TombstonedOf(ctx, shas)
+	if err != nil || len(deleted) == 0 {
+		return nil, err
+	}
+	archivedAt := make(map[string]time.Time, len(deleted))
+	for _, d := range deleted {
+		archivedAt[d.Sha256] = d.ArchivedAt
+	}
+	skip := map[string]bool{}
+	var remove []string
+	for i := range metas {
+		at, ok := archivedAt[metas[i].SHA256]
+		if !ok {
+			continue
+		}
+		var internal *time.Time
+		if !locs[i].InternalDate.IsZero() {
+			internal = &locs[i].InternalDate
+		}
+		yes, err := q.SkipRearchive(ctx, db.SkipRearchiveParams{FolderID: folderID, SentAt: metas[i].SentAt, InternalDate: internal, ArchivedAt: at})
+		if err != nil {
+			return nil, err
+		}
+		if yes && !skip[metas[i].SHA256] {
+			skip[metas[i].SHA256] = true
+			remove = append(remove, metas[i].SHA256)
+		}
+	}
+	if len(remove) > 0 {
+		if err := q.ScheduleBlobRemovals(ctx, db.ScheduleBlobRemovalsParams{Shas: remove, DueAt: time.Now()}); err != nil {
+			return nil, err
+		}
+	}
+	return skip, nil
 }
 
 func insertMessageParams(m *MessageMeta) db.InsertMessageParams {

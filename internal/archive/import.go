@@ -87,9 +87,12 @@ type ImportFolderResult struct {
 	Folder  string
 	Read    int // messages read from the source
 	New     int // messages new to the archive
-	Added   int // new locations in the folder
+	Added   int // new locations in the folder (without Deleted)
 	Present int // already in the folder from an earlier import
 	Skipped int // too large or unreadable
+	// Deleted counts messages deleted by retention that were not archived
+	// again (see store.SaveBatch).
+	Deleted int
 }
 
 // ImportResult is the outcome of an import.
@@ -107,6 +110,7 @@ func (r *ImportResult) Total() ImportFolderResult {
 		t.Added += f.Added
 		t.Present += f.Present
 		t.Skipped += f.Skipped
+		t.Deleted += f.Deleted
 	}
 	return t
 }
@@ -237,7 +241,8 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 	var w *folderWriter
 	w = newFolderWriter(im.Store, folder.ID, im.BatchSize, func(int) {
 		clear(inBatch)
-		fr.New = w.added
+		fr.Added -= w.skipped - fr.Deleted
+		fr.New, fr.Deleted = w.added, w.skipped
 		progress()
 		if im.Progress != nil {
 			im.Progress(*fr)
@@ -345,7 +350,8 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 	if err == nil {
 		err = w.flush(ctx)
 	}
-	fr.New = w.added
+	fr.Added -= w.skipped - fr.Deleted
+	fr.New, fr.Deleted = w.added, w.skipped
 	return err
 }
 
