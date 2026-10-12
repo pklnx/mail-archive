@@ -36,6 +36,7 @@ export default defineConfig({
           { text: "Audit log", link: "/guide/audit-log" },
           { text: "Backups and upgrades", link: "/guide/operations" },
           { text: "Tamper evidence", link: "/guide/tamper-evidence" },
+          { text: "Retention and legal hold", link: "/guide/retention" },
         ],
       },
       {

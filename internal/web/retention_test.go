@@ -132,3 +132,58 @@ func TestLegalHoldsAPI(t *testing.T) {
 		t.Fatalf("remove held user: %v", body)
 	}
 }
+
+func TestDeletionRunsAPI(t *testing.T) {
+	f := newAuthFixture(t)
+	ctx := context.Background()
+	f.addUser("admin", keyPassword, true)
+	alice := f.addUser("alice", keyPassword, false)
+	acc := f.imapAccount("work", alice)
+	folder, err := f.st.GetOrCreateFolder(ctx, acc.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)
+	sha := strings.Repeat("a", 64)
+	if _, err := f.st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{{SHA256: sha, Size: 5, StoredPath: "x", Subject: "secret", SentAt: &sent}},
+		[]store.Location{{FolderID: folder.ID, UID: 1, InternalDate: sent}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: acc.ID, Years: 1}); err != nil {
+		t.Fatal(err)
+	}
+	k := f.as()
+	k.loginOK("alice", keyPassword)
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/retention/runs"}, {"POST", "/api/retention/runs"}, {"GET", "/api/retention/runs/1"},
+		{"POST", "/api/retention/runs/1/confirm"}, {"POST", "/api/retention/runs/1/cancel"},
+	} {
+		k.expect(c.method, c.path, map[string]any{}, 403)
+	}
+	f.loginOK("admin", keyPassword)
+
+	run := f.expect("POST", "/api/retention/runs", nil, 201)
+	if run["state"] != "proposed" || run["candidates"] != float64(1) || run["createdBy"] != "admin" {
+		t.Fatalf("proposed %v", run)
+	}
+	f.expect("POST", "/api/retention/runs", nil, 409)
+	id := itoa(int64(run["id"].(float64)))
+	review := toJSON(f.expect("GET", "/api/retention/runs/"+id, nil, 200))
+	if !strings.Contains(review, `"account":"work"`) || !strings.Contains(review, `"year":2011`) || !strings.Contains(review, sha) ||
+		strings.Contains(review, "secret") {
+		t.Fatalf("review %s", review)
+	}
+	f.expect("POST", "/api/retention/runs/"+id+"/confirm", map[string]any{"count": 2}, 400)
+	f.expect("POST", "/api/retention/runs/"+id+"/confirm", map[string]any{"count": 1}, 202)
+	f.expect("POST", "/api/retention/runs/"+id+"/cancel", nil, 409)
+	f.expect("GET", "/api/retention/runs/999", nil, 404)
+	if s := toJSON(f.expect("GET", "/api/retention/runs", nil, 200)); !strings.Contains(s, `"state":"confirmed"`) || !strings.Contains(s, `"confirmedBy":"admin"`) {
+		t.Fatalf("list %s", s)
+	}
+	entries, err := f.st.ListAudit(ctx, store.AuditPage{
+		All: true, Actions: []string{"retention"}, Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour), Limit: 10,
+	})
+	if err != nil || len(entries) != 2 || entries[0].Action != "retention.confirm" || entries[1].Action != "retention.preview" {
+		t.Fatalf("audit %+v %v", entries, err)
+	}
+}

@@ -453,15 +453,15 @@ func retentionStatus(cmd *cobra.Command, a *app) (string, error) {
 // startRetention starts the retention job of serve (resuming confirmed
 // deletion runs, removing the files of deleted messages) and returns a
 // function that stops it.
-func startRetention(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (stop func()) {
+func startRetention(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (r *archive.Retention, stop func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	r := &archive.Retention{Store: a.store, Blobs: blobs, Grace: a.cfg.RetentionFileGrace, Logger: log}
+	r = &archive.Retention{Store: a.store, Blobs: blobs, Grace: a.cfg.RetentionFileGrace, Logger: log}
 	go func() {
 		r.Run(ctx)
 		close(done)
 	}()
-	return func() {
+	return r, func() {
 		cancel()
 		<-done
 	}

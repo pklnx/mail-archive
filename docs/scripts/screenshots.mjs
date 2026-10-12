@@ -152,6 +152,9 @@ for (const scheme of ["light", "dark"]) {
   await p.goto(base + "/?view=users");
   await p.getByText("sam").first().waitFor();
   await p.screenshot({ path: `${out}/users.png` });
+  await p.goto(base + "/?view=retention");
+  await p.getByText("§147 AO: business letters and invoices").waitFor();
+  await p.screenshot({ path: `${out}/retention.png` });
   await p.goto(base + "/?view=profile");
   await p.getByRole("heading", { name: "Profile" }).waitFor();
   await p.screenshot({ path: `${out}/profile.png` });

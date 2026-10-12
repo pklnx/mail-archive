@@ -646,4 +646,34 @@ export const retentionApi = {
     (await getJSON<{ holds: LegalHold[] }>(`/api/legal-holds${released ? "?released=1" : ""}`, signal)).holds,
   addHold: async (h: LegalHoldInput) => (await send<{ id: number; matched?: number }>("POST", "/api/legal-holds", h))!,
   releaseHold: (id: number, note: string) => send("POST", `/api/legal-holds/${id}/release`, { note }),
+  runs: async (signal?: AbortSignal) => (await getJSON<{ runs: DeletionRun[] }>("/api/retention/runs", signal)).runs,
+  propose: async () => (await send<DeletionRun>("POST", "/api/retention/runs"))!,
+  run: (id: number, signal?: AbortSignal) => getJSON<DeletionReview>(`/api/retention/runs/${id}`, signal),
+  confirm: (id: number, count: number) => send("POST", `/api/retention/runs/${id}/confirm`, { count }),
+  cancel: (id: number) => send("POST", `/api/retention/runs/${id}/cancel`),
 };
+
+export type DeletionRunState = "proposed" | "confirmed" | "done" | "cancelled";
+
+export interface DeletionRun {
+  id: number;
+  state: DeletionRunState;
+  createdAt: string;
+  createdBy: string;
+  candidates: number;
+  bytes: number;
+  confirmedAt: string | null;
+  confirmedBy: string;
+  finishedAt: string | null;
+  deleted: number;
+  kept: number;
+}
+
+/** A run for review: counts by place and year, and candidates by hash only. */
+export interface DeletionReview {
+  run: DeletionRun;
+  groups: { owner: string; account: string; folder: string; year: number; messages: number }[];
+  candidates: { sha256: string; size: number; retainUntil: string; state: "pending" | "deleted" | "kept" }[];
+  /** How many candidates are listed; at most 1000. */
+  listed: number;
+}

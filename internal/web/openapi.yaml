@@ -1224,6 +1224,179 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/retention/runs:
+    get:
+      tags: [retention]
+      operationId: listDeletionRuns
+      summary: Deletion runs, newest first
+      responses:
+        "200":
+          description: The last 50 runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DeletionRun"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    post:
+      tags: [retention]
+      operationId: createDeletionRun
+      summary: Propose a deletion run
+      description: |
+        Matches the filter holds and lists every message whose locations, in
+        every user's accounts, all have an ended retention period and no
+        legal hold. Deletes nothing.
+      responses:
+        "201":
+          description: The proposed run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeletionRun"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: Another run is open.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/retention/runs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    get:
+      tags: [retention]
+      operationId: getDeletionRun
+      summary: A deletion run for review
+      description: |
+        Counts of the pending candidates by owner, account, folder and the
+        year their period ended, and up to 1000 candidates by hash. No
+        subjects or senders: the command line shows those.
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run, groups, candidates, listed]
+                properties:
+                  run:
+                    $ref: "#/components/schemas/DeletionRun"
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      required: [owner, account, folder, year, messages]
+                      properties:
+                        owner:
+                          type: string
+                        account:
+                          type: string
+                        folder:
+                          type: string
+                        year:
+                          type: integer
+                        messages:
+                          type: integer
+                          format: int64
+                  candidates:
+                    type: array
+                    items:
+                      type: object
+                      required: [sha256, size, retainUntil, state]
+                      properties:
+                        sha256:
+                          type: string
+                        size:
+                          type: integer
+                          format: int64
+                        retainUntil:
+                          type: string
+                          format: date-time
+                        state:
+                          type: string
+                          enum: [pending, deleted, kept]
+                  listed:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/retention/runs/{id}/confirm:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    post:
+      tags: [retention]
+      operationId: confirmDeletionRun
+      summary: Confirm a proposed run; the web server then deletes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [count]
+              properties:
+                count:
+                  type: integer
+                  description: The run's number of candidates, typed by the admin.
+      responses:
+        "202":
+          description: Confirmed; the deletion runs in the background. Poll the run.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The run is not proposed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/retention/runs/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    post:
+      tags: [retention]
+      operationId: cancelDeletionRun
+      summary: Drop a proposed run
+      responses:
+        "204":
+          description: Cancelled.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The run is not proposed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/audit:
     get:
       tags: [audit]
@@ -2664,6 +2837,39 @@ components:
         onHold:
           type: boolean
           description: An active legal hold covers it. Only for admins.
+    DeletionRun:
+      type: object
+      required: [id, state, createdAt, createdBy, candidates, bytes, confirmedAt, confirmedBy, finishedAt, deleted, kept]
+      properties:
+        id:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [proposed, confirmed, done, cancelled]
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          description: Empty for the command line.
+        candidates:
+          type: integer
+        bytes:
+          type: integer
+          format: int64
+        confirmedAt:
+          type: [string, "null"]
+          format: date-time
+        confirmedBy:
+          type: string
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        deleted:
+          type: integer
+        kept:
+          type: integer
     RetentionRule:
       type: object
       required: [id, accountId, account, accountKind, accountRemoved, owner, folder, years, timeZone, note, createdAt, createdBy]

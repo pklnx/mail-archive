@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { LegalHold } from "./api";
 import { retentionDay } from "./format";
 import { t } from "./i18n";
-import { accountLabel, holdScope } from "./RetentionPage";
+import { accountLabel, holdScope, runOpen } from "./RetentionPage";
 
 const hold = (h: Partial<LegalHold>): LegalHold => ({
   id: 1,
@@ -55,5 +55,14 @@ describe("retentionDay", () => {
     expect(shown).toMatch(/2025/);
     expect(shown).not.toMatch(/2026/);
     expect(retentionDay("nonsense")).toBe("");
+  });
+});
+
+describe("runOpen", () => {
+  it("is open while proposed or deleting", () => {
+    expect(runOpen({ state: "proposed" })).toBe(true);
+    expect(runOpen({ state: "confirmed" })).toBe(true);
+    expect(runOpen({ state: "done" })).toBe(false);
+    expect(runOpen({ state: "cancelled" })).toBe(false);
   });
 });

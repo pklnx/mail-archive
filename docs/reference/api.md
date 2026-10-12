@@ -173,6 +173,11 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | `GET /api/legal-holds[?released=1]` | `{"holds": [{"id", "name", "reason", "user", "accountId", "account", "accountOwner", "filter", "since", "until", "matchedAt", "matched", "createdAt", "createdBy", "releasedAt", "releasedBy", "releaseNote"}]}`, active ones, and released ones too with `released=1`. |
 | `POST /api/legal-holds` | `{"name", "reason", "user", "accountId", "filter": {"q", "from", "to", "attachment", "hasAttachment"}, "since", "until", "all"}`: `201 {"id", "matched"}`. Every condition that is set must match; `until` is exclusive. A filter is matched at once (`matched`); until then the hold covers its whole scope. Without any condition the hold covers the whole archive and needs `all: true`. |
 | `POST /api/legal-holds/{id}/release` | `{"note"}` (required): `204`. `409` if it is released already. |
+| `GET /api/retention/runs` | The last 50 [deletion runs](./cli#deletion), newest first: `{"runs": [{"id", "state", "createdAt", "createdBy", "candidates", "bytes", "confirmedAt", "confirmedBy", "finishedAt", "deleted", "kept"}]}`. `state` is `proposed`, `confirmed` (deleting), `done` or `cancelled`. |
+| `POST /api/retention/runs` | Propose a run (`201`, the run). Deletes nothing. `409` while another run is open. |
+| `GET /api/retention/runs/{id}` | `{"run", "groups": [{"owner", "account", "folder", "year", "messages"}], "candidates": [{"sha256", "size", "retainUntil", "state"}], "listed"}`: the pending candidates by place and the year their period ended, and up to 1000 candidates by hash. No subjects or senders; `retention show` on the command line has them. |
+| `POST /api/retention/runs/{id}/confirm` | `{"count"}`, the run's number of candidates: `202`, and the web server deletes in the background; poll the run. `400` for another number, `409` if the run is not proposed. |
+| `POST /api/retention/runs/{id}/cancel` | Drop a proposed run (`204`). |
 
 ## Messages
 

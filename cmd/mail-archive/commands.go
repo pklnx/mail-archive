@@ -933,7 +933,9 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 			// The first attestation of a large archive takes minutes; it runs
 			// in the background. Stopped before the store closes.
 			defer startAttester(cmd.Context(), a, log)()
-			defer startRetention(cmd.Context(), a, blobs, log)()
+			retention, stopRetention := startRetention(cmd.Context(), a, blobs, log)
+			defer stopRetention()
+			opts.Retention = retention
 			if a.cfg.SMTP != nil {
 				stop, err := startSMTP(cmd.Context(), a, blobs, log)
 				if err != nil {
