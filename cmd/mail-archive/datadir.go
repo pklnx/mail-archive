@@ -82,7 +82,7 @@ func systemDataDirEnv() dataDirEnv {
 // container user. It changes nothing else and only warns: never a
 // recursive chown, never an error.
 func prepareDataDir(dir string, stdout, stderr io.Writer, env dataDirEnv) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		fmt.Fprintf(stderr, "warning: could not create the data directory %s: %v\n", dir, err)
 		return
 	}
@@ -164,7 +164,7 @@ func checkAsContainerUser(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	cmd := exec.Command(exe, "prepare-data", "--check")
+	cmd := exec.Command(exe, "prepare-data", "--check") //nolint:gosec // this binary itself
 	cmd.Env = append(os.Environ(), config.EnvDataDir+"="+dir)
 	if err := runAs(cmd, containerUID, containerGID); err != nil {
 		return false, err

@@ -9,9 +9,9 @@ import (
 )
 
 // runAs makes cmd run as uid and gid, without supplementary groups.
-func runAs(cmd *exec.Cmd, uid, gid int) error {
+func runAs(cmd *exec.Cmd, uid, gid uint32) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), NoSetGroups: true},
+		Credential: &syscall.Credential{Uid: uid, Gid: gid, NoSetGroups: true},
 	}
 	return nil
 }
