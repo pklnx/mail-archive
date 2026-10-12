@@ -7,14 +7,19 @@
 #   ./ma backup ./backups
 #
 # Starts PostgreSQL if needed, rebuilds the image when the code changed (fast
-# when cached) and hides Docker Compose's progress output.
+# when cached) and hides Docker Compose's progress output. In a release
+# bundle, which has no source, it uses the released image instead.
 set -eu
 
 cd "$(dirname "$0")"
 
-# The version shown by `mail-archive --version`, baked into the image.
-MAIL_ARCHIVE_VERSION=${MAIL_ARCHIVE_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
-export MAIL_ARCHIVE_VERSION
+build=
+if [ -f Dockerfile ]; then
+	build=--build
+	# The version shown by `mail-archive --version`, baked into the image.
+	MAIL_ARCHIVE_VERSION=${MAIL_ARCHIVE_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
+	export MAIL_ARCHIVE_VERSION
+fi
 
 compose() {
 	docker compose --progress quiet "$@"
@@ -37,7 +42,7 @@ if [ "${1:-}" = backup ]; then
 	mkdir -p "$dir"
 	name=mailarchive-$(date -u +%Y%m%dT%H%M%SZ).dump
 	# The note first: it also writes an attestation, which the dump then holds.
-	if ! compose run --rm --build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
+	if ! compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
 		backup --note-only "$name" >"$dir/BACKUP-NOTE.txt.partial"; then
 		rm -f "$dir/BACKUP-NOTE.txt.partial"
 		echo "error: could not write BACKUP-NOTE.txt; no dump was written" >&2
@@ -62,5 +67,5 @@ if [ -t 0 ] && [ -t 1 ]; then
 	tty_flag=
 fi
 
-exec docker compose --progress quiet run --rm --build $tty_flag \
+exec docker compose --progress quiet run --rm $build $tty_flag \
 	-e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive "$@"

@@ -106,15 +106,46 @@ Delete them once imported. `verify` ignores the `export/` directory.
 
 ## Upgrades
 
+Back up first (see [Backups](#backups)) and read the release notes of every
+version you skip: they list database migrations and manual steps. Then, in
+the directory that holds your `mail-archive/` directory:
+
 ```sh
-git pull
-./ma migrate              # rebuild the image, apply new database migrations
+curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
+cd mail-archive
+./ma migrate              # apply new database migrations with the new image
 docker compose up -d web  # restart the web server with the new image
 ./ma --version            # the version you are running
 ```
 
-`./ma migrate` rebuilds the image for every service, so the web server and
-a cron job that uses `docker compose run` both run the new version afterwards.
+The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
+`README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
+`.env` for new settings. A specific version instead of the latest:
+`https://github.com/pklnx/mail-archive/releases/download/v26.10-1/mail-archive.tar.gz`.
+
+With a clone of the repository (see [From source](./getting-started#install)),
+`git pull` replaces the download, and `./ma migrate` rebuilds the image for
+every service, so the web server and a cron job that uses `docker compose
+run` both run the new version afterwards.
+
+### Versions
+
+Versions are named after the year and month of the release, plus a build
+number that starts at 1 each month: `26.10-1` is the first release of
+October 2026, `26.10-2` the second, `26.11-1` the first of November. They
+are tagged `v26.10-1` in the repository. Each release publishes
+`ghcr.io/pklnx/mail-archive` for `linux/amd64` and `linux/arm64` with three
+tags:
+
+| Tag | Points to |
+|---|---|
+| `26.10-1` | Exactly this build. The bundle's `docker-compose.yml` uses it. |
+| `26.10` | The newest build of that month. |
+| `latest` | The newest release. |
+
+Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build;
+pinning an exact version is safer than `latest`, because migrations only run
+with `./ma migrate`. The images carry a provenance attestation and an SBOM.
 
 Pull requests that change the database schema carry the label
 `db-migration`. Back up the database before you upgrade past one of them.
