@@ -98,6 +98,8 @@ jobs:
       - name: Release bundle
         run: |
           scripts/release-bundle.sh 99.01-1 "$RUNNER_TEMP/dist"
+          # No entry may carry the runner's UID.
+          tar -tvzf "$RUNNER_TEMP/dist/mail-archive.tar.gz" | awk '$2 != "0/0" { print; bad = 1 } END { exit bad }'
           tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/dist/mail-archive.tar.gz"
           SMOKE_DIR="$RUNNER_TEMP/mail-archive" MAIL_ARCHIVE_IMAGE=mail-archive:smoke scripts/compose-smoke-test.sh
       - name: Release version numbers

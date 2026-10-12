@@ -59,7 +59,7 @@ Release: https://github.com/pklnx/mail-archive/releases/tag/v$version
 
 First start:
   cp .env.example .env     # set POSTGRES_PASSWORD and MAIL_ARCHIVE_SECRET_KEY
-  ./ma migrate
+  ./ma migrate             # also makes data/ writable for the container
   ./ma user add NAME --admin
   docker compose up -d web # http://localhost:8080
 
@@ -70,6 +70,7 @@ and data/:
   docker compose up -d web
 EOF
 
-tar -C "$stage" -czf "$out/mail-archive.tar.gz" mail-archive
+# Numeric owner 0/0, not the build machine's user.
+tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$out/mail-archive.tar.gz" mail-archive
 (cd "$out" && sha256sum mail-archive.tar.gz > SHA256SUMS)
 echo "$out/mail-archive.tar.gz"

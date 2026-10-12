@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/mailbox"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -88,7 +87,7 @@ func runImport(cmd *cobra.Command, name, from, format, folder, maxSize string, d
 	if err != nil {
 		return err
 	}
-	blobs, err := blobstore.New(a.cfg.DataDir)
+	blobs, err := openBlobs(a.cfg.DataDir)
 	if err != nil {
 		return err
 	}

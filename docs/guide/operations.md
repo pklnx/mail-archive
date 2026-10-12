@@ -74,7 +74,9 @@ the [command reference](../reference/cli#verify) for the findings.
 ### Restore
 
 1. Put `MAIL_ARCHIVE_SECRET_KEY` back into `.env` and copy the data directory
-   back to `data/` (or `ARCHIVE_DIR`).
+   back to `data/` (or `ARCHIVE_DIR`). On Linux the files must belong to UID
+   65532 again: `sudo chown -R 65532:65532 data` (for rootless Docker, see
+   [Linux hosts](./getting-started#linux-hosts)).
 2. Load the dump into the database, which replaces what is there:
    ```sh
    docker compose up -d --wait postgres

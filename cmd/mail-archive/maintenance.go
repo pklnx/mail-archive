@@ -19,7 +19,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -98,7 +97,7 @@ func runVerify(ctx context.Context, opts archive.VerifyOptions, publicKeys []str
 		return 0, err
 	}
 	defer a.close()
-	blobs, err := blobstore.New(a.cfg.DataDir)
+	blobs, err := openBlobs(a.cfg.DataDir)
 	if err != nil {
 		return 0, err
 	}
@@ -237,7 +236,7 @@ several users have an account with that name). Removed accounts are included.`,
 			if err := exportTarget(cmd, a, e, account, opts); err != nil {
 				return err
 			}
-			blobs, err := blobstore.New(a.cfg.DataDir)
+			blobs, err := openBlobs(a.cfg.DataDir)
 			if err != nil {
 				return err
 			}

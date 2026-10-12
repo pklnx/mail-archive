@@ -17,7 +17,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
@@ -746,7 +745,7 @@ failing, and their recovery, are sent at the end.`,
 			if err != nil {
 				return err
 			}
-			blobs, err := blobstore.New(a.cfg.DataDir)
+			blobs, err := openBlobs(a.cfg.DataDir)
 			if err != nil {
 				return err
 			}
@@ -864,7 +863,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				return err
 			}
 			defer a.close()
-			blobs, err := blobstore.New(a.cfg.DataDir)
+			blobs, err := openBlobs(a.cfg.DataDir)
 			if err != nil {
 				return err
 			}
@@ -971,7 +970,7 @@ interrupt and rerun, and to run while the web server and syncs run.`,
 				return err
 			}
 			defer a.close()
-			blobs, err := blobstore.New(a.cfg.DataDir)
+			blobs, err := openBlobs(a.cfg.DataDir)
 			if err != nil {
 				return err
 			}

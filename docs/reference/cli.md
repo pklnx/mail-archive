@@ -8,7 +8,7 @@ With Docker Compose, run every command through the wrapper, for example
 
 | Command | Purpose |
 |---|---|
-| `migrate` (or `migrate up`) | Create or upgrade the database schema. |
+| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. |
 | `migrate status` | Show applied and pending migrations. |
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. |
 | `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |

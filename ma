@@ -8,7 +8,8 @@
 #
 # Starts PostgreSQL if needed, rebuilds the image when the code changed (fast
 # when cached) and hides Docker Compose's progress output. In a release
-# bundle, which has no source, it uses the released image instead.
+# bundle, which has no source, it uses the released image instead. `migrate`
+# also makes a fresh data directory writable for the container user.
 set -eu
 
 cd "$(dirname "$0")"
@@ -26,6 +27,14 @@ compose() {
 }
 
 compose up -d --wait postgres
+
+# The first start: Docker creates a missing data directory as root, but the
+# container runs as UID 65532. Make it writable (no-op when it already is).
+# Only warns, so the schema upgrade below always runs.
+if [ "${1:-}" = migrate ]; then
+	compose run --rm --no-deps $build -T --user 0:0 mail-archive prepare-data ||
+		echo "warning: could not prepare the data directory (ARCHIVE_DIR in .env, default ./data)" >&2
+fi
 
 # Who runs the command, for the audit log (not verified).
 operator=$(id -un 2>/dev/null || echo unknown)

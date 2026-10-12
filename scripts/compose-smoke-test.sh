@@ -55,11 +55,10 @@ trap cleanup EXIT
 # Test IMAP server, run as a container on the Compose network.
 (cd "$repo" && CGO_ENABLED=0 go build -o "$work/imap-testserver" ./tools/imap-testserver)
 
-mkdir -p "$work/data" "$work/import"
+# No data directory: the first ./ma migrate creates it, as on a real first start.
+mkdir -p "$work/import"
 cp -R "$repo/internal/archive/testdata/import/thunderbird" "$work/import/"
 chmod -R a+rX "$work/import"
-# The app container runs as UID 65532; on Docker Desktop this is a no-op.
-chmod 0777 "$work/data"
 cat > .env <<ENV
 POSTGRES_PASSWORD=smoke-test
 MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
@@ -85,6 +84,25 @@ expect() { # expect <file> <extended regex>
 echo "== migrate"
 ./ma migrate | tee "$work/out"
 expect "$work/out" "applied 00001_initial.sql"
+if [ "$(uname -s)" = Linux ]; then
+	owner=$(in_data 'stat -c %u:%g /data' | tr -d '\r')
+	if [ "$owner" != 65532:65532 ]; then
+		echo "expected the data directory to belong to 65532:65532, got $owner" >&2
+		exit 1
+	fi
+fi
+
+echo "== first start, as in README.txt"
+docker compose --progress quiet up -d --wait web
+WEB_PORT=$(docker compose port web 8080 | sed 's/.*://')
+status=$(curl -s -o /dev/null -w '%{http_code}' --retry 10 --retry-delay 1 --retry-all-errors "http://localhost:$WEB_PORT/api/status")
+if [ "$status" != 401 ]; then
+	echo "expected 401 without a login, got $status" >&2
+	exit 1
+fi
+# Stop it again: its scheduler would sync the test account on its own and
+# race ./ma sync below. The web API step starts it again.
+docker compose --progress quiet stop web
 
 docker run -d --rm --name "$imap" --network "${COMPOSE_PROJECT_NAME}_default" \
 	-v "$work/imap-testserver:/imap-testserver:ro" \
