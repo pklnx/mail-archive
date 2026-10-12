@@ -89,6 +89,29 @@ func (q *Queries) ResetFolder(ctx context.Context, arg ResetFolderParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const setFolderDelimiters = `-- name: SetFolderDelimiters :execrows
+UPDATE folders f SET delimiter = v.delimiter
+FROM (SELECT unnest($2::text[]) AS name, unnest($3::text[]) AS delimiter) v
+WHERE f.account_id = $1 AND f.name = v.name AND f.delimiter IS DISTINCT FROM v.delimiter
+`
+
+type SetFolderDelimitersParams struct {
+	AccountID  int64
+	Names      []string
+	Delimiters []string
+}
+
+// Records the hierarchy delimiters from a LIST answer for the account's
+// folders that have a row, also those the sync skips; writes only changes.
+// Two unnests in the select list are zipped (same length, from Go).
+func (q *Queries) SetFolderDelimiters(ctx context.Context, arg SetFolderDelimitersParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setFolderDelimiters, arg.AccountID, arg.Names, arg.Delimiters)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const touchFolder = `-- name: TouchFolder :execrows
 UPDATE folders SET last_synced_at = now() WHERE id = $1
 `

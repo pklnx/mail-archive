@@ -2586,7 +2586,7 @@ components:
           description: When an smtp account last accepted a message.
     Folder:
       type: object
-      required: [name, messages, lastSyncedAt, lastReconciledAt]
+      required: [name, messages, lastSyncedAt, lastReconciledAt, delimiter]
       properties:
         name:
           type: string
@@ -2599,6 +2599,13 @@ components:
         lastReconciledAt:
           type: [string, "null"]
           format: date-time
+        delimiter:
+          type: [string, "null"]
+          maxLength: 1
+          description: >-
+            The IMAP hierarchy delimiter of the folder ("/" or "."), "" if the
+            server has none, null until the folder's first sync since the
+            upgrade. Always "/" for import and smtp accounts.
     SyncState:
       type: object
       required: [state, lastRun, failureStreak, failingSince, health]

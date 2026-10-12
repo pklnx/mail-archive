@@ -369,6 +369,18 @@ func (s *Store) GetOrCreateFolder(ctx context.Context, accountID int64, name str
 	}, nil
 }
 
+// SetFolderDelimiters records the hierarchy delimiters from a LIST answer,
+// by folder name, for the account's folders that have a row. It returns
+// how many changed.
+func (s *Store) SetFolderDelimiters(ctx context.Context, accountID int64, delimiters map[string]string) (int64, error) {
+	p := db.SetFolderDelimitersParams{AccountID: accountID}
+	for name, d := range delimiters {
+		p.Names = append(p.Names, name)
+		p.Delimiters = append(p.Delimiters, d)
+	}
+	return s.q.SetFolderDelimiters(ctx, p)
+}
+
 // ResetFolder records a new UIDVALIDITY and restarts the folder from UID 0.
 func (s *Store) ResetFolder(ctx context.Context, folderID int64, uidValidity uint32) error {
 	return one(s.q.ResetFolder(ctx, db.ResetFolderParams{ID: folderID, Uidvalidity: int64(uidValidity)}))

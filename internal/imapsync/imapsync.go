@@ -123,6 +123,8 @@ func (conn *Conn) Close() error {
 type Folder struct {
 	Name  string
 	Attrs []string
+	// Delim is the hierarchy delimiter, "" if the server has none (NIL).
+	Delim string
 }
 
 // Special-use roles (RFC 6154) as returned by Folder.SpecialUse.
@@ -171,7 +173,11 @@ func (conn *Conn) ListFolders() ([]Folder, error) {
 			attrs = append(attrs, string(a))
 		}
 		if selectable {
-			out = append(out, Folder{Name: mb.Mailbox, Attrs: attrs})
+			f := Folder{Name: mb.Mailbox, Attrs: attrs}
+			if mb.Delim != 0 {
+				f.Delim = string(mb.Delim)
+			}
+			out = append(out, f)
 		}
 	}
 	return out, nil

@@ -349,7 +349,7 @@ SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS remo
        (SELECT count(*) FROM (
             SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
        )::bigint AS messages,
-       f.last_synced_at, f.last_reconciled_at
+       f.last_synced_at, f.last_reconciled_at, f.delimiter
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 WHERE a.owner_id = @owner::bigint
