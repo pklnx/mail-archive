@@ -143,3 +143,32 @@ func TestFirstUserAdoptsAccounts(t *testing.T) {
 		t.Fatalf("counts: %v", counts)
 	}
 }
+
+func TestFolderDelimiterMigration(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	if _, err := conn.Exec(ctx, `INSERT INTO accounts (name, host, port, tls_mode, username, password_enc) VALUES ('a', 'h', 993, 'tls', 'u', '\x01')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO folders (account_id, name, delimiter) SELECT id, 'INBOX', '.' FROM accounts`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE folders SET delimiter = '//'`); err == nil {
+		t.Error("a delimiter of two characters was accepted")
+	}
+	if err := migrateDownThrough(st, "00023_folder_delimiter.sql"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var d *string
+	if err := conn.QueryRow(ctx, `SELECT delimiter FROM folders`).Scan(&d); err != nil || d != nil {
+		t.Errorf("after down and up: %v, %v; want NULL", d, err)
+	}
+}

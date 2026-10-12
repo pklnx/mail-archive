@@ -323,6 +323,9 @@ type FolderCount struct {
 	LastSyncedAt *time.Time
 	// LastReconciledAt is when the folder was last compared with the server.
 	LastReconciledAt *time.Time
+	// Delimiter is the IMAP hierarchy delimiter, "" if the server has none,
+	// nil while unknown and for import and smtp folders.
+	Delimiter *string
 }
 
 // AccountFolders is an account with its folders, for navigation.
@@ -349,6 +352,7 @@ func (s *Store) ListAccountFolders(ctx context.Context, owner int64) ([]AccountF
 			a := &out[len(out)-1]
 			a.Folders = append(a.Folders, FolderCount{
 				Name: *r.Folder, Messages: r.Messages, LastSyncedAt: r.LastSyncedAt, LastReconciledAt: r.LastReconciledAt,
+				Delimiter: r.Delimiter,
 			})
 		}
 	}

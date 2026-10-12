@@ -23,7 +23,7 @@ import (
 // Connect without TLS.
 func Start(t testing.TB, users ...*imapmemserver.User) (host string, port int) {
 	t.Helper()
-	return start(t, nil, users...)
+	return start(t, nil, '/', users...)
 }
 
 // Server is a test server that records the commands it receives and can
@@ -267,14 +267,21 @@ func uidSet(uids []uint32) imap.UIDSet {
 // mailboxes for the users so that they can be selected.
 func StartWithRoles(t testing.TB, mailboxes map[string]imap.MailboxAttr, users ...*imapmemserver.User) (host string, port int) {
 	t.Helper()
-	return start(t, mailboxes, users...)
+	return start(t, mailboxes, '/', users...)
 }
 
-func start(t testing.TB, roles map[string]imap.MailboxAttr, users ...*imapmemserver.User) (string, int) {
+// StartWithDelimiter is like StartWithRoles, but LIST reports delim as the
+// hierarchy delimiter (0 for NIL), as servers that use "." do.
+func StartWithDelimiter(t testing.TB, delim rune, mailboxes map[string]imap.MailboxAttr, users ...*imapmemserver.User) (host string, port int) {
+	t.Helper()
+	return start(t, mailboxes, delim, users...)
+}
+
+func start(t testing.TB, roles map[string]imap.MailboxAttr, delim rune, users ...*imapmemserver.User) (string, int) {
 	t.Helper()
 	return serve(t, func(mem *imapmemserver.Server) imapserver.Session {
 		if roles != nil {
-			return &rolesSession{Session: mem.NewSession(), roles: roles}
+			return &rolesSession{Session: mem.NewSession(), roles: roles, delim: delim}
 		}
 		return mem.NewSession()
 	}, users...)
@@ -308,6 +315,7 @@ func serve(t testing.TB, session func(*imapmemserver.Server) imapserver.Session,
 type rolesSession struct {
 	imapserver.Session
 	roles map[string]imap.MailboxAttr
+	delim rune
 }
 
 func (s *rolesSession) List(w *imapserver.ListWriter, _ string, patterns []string, _ *imap.ListOptions) error {
@@ -320,7 +328,7 @@ func (s *rolesSession) List(w *imapserver.ListWriter, _ string, patterns []strin
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		data := &imap.ListData{Mailbox: name, Delim: '/'}
+		data := &imap.ListData{Mailbox: name, Delim: s.delim}
 		if role := s.roles[name]; role != "" {
 			data.Attrs = []imap.MailboxAttr{role}
 		}

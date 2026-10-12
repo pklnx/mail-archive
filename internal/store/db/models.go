@@ -153,6 +153,7 @@ type Folder struct {
 	LastUid          int64
 	LastSyncedAt     *time.Time
 	LastReconciledAt *time.Time
+	Delimiter        *string
 }
 
 type LegalHold struct {

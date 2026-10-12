@@ -41,6 +41,29 @@ func TestImportAccountsInTheAPI(t *testing.T) {
 		t.Errorf("IMAP account kind %q", p.Kind)
 	}
 
+	// Delimiters: from the server for IMAP folders, null before a folder's
+	// first sync since #91, always "/" for import folders.
+	if d := a.Folders[0].Delimiter; d == nil || *d != "/" {
+		t.Errorf("import folder delimiter %v, want /", d)
+	}
+	priv, _ := f.st.ListAccountsByName(ctx, "private")
+	if _, err := f.st.GetOrCreateFolder(ctx, priv[0].ID, "Old"); err != nil {
+		t.Fatal(err)
+	}
+	delims := map[string]*string{}
+	for _, fo := range f.account("private").Folders {
+		delims[fo.Name] = fo.Delimiter
+	}
+	if d := delims["INBOX"]; d == nil || *d != "/" {
+		t.Errorf("synced IMAP folder delimiter %v, want /", d)
+	}
+	if d, ok := delims["Old"]; !ok || d != nil {
+		t.Errorf("unsynced IMAP folder delimiter %v, %v; want null", d, ok)
+	}
+	if raw := f.do("GET", "/api/accounts", nil, 200); !strings.Contains(string(raw), `"name":"Old","messages":0,"lastSyncedAt":null,"lastReconciledAt":null,"delimiter":null`) {
+		t.Errorf("null delimiter not in JSON: %s", raw)
+	}
+
 	for _, req := range []struct {
 		method, path string
 		body         any

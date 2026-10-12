@@ -76,6 +76,10 @@ type folderJSON struct {
 	Messages         int64      `json:"messages"`
 	LastSyncedAt     *time.Time `json:"lastSyncedAt"`
 	LastReconciledAt *time.Time `json:"lastReconciledAt"`
+	// Delimiter is the folder hierarchy delimiter ("/" or "."), "" if the
+	// server has none, null while unknown (before the folder's first sync
+	// since #91). Import and smtp folders always use "/".
+	Delimiter *string `json:"delimiter"`
 }
 
 type accountsResponse struct {
@@ -146,8 +150,16 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
 		for _, f := range a.Folders {
+			delim := f.Delimiter
+			if !a.Kind.HasServer() {
+				// Import folder names are joined with "/" (mbox directories,
+				// Maildir++, --folder); smtp accounts only have INBOX.
+				slash := "/"
+				delim = &slash
+			}
 			list = append(list, folderJSON{
 				Name: f.Name, Messages: f.Messages, LastSyncedAt: f.LastSyncedAt, LastReconciledAt: f.LastReconciledAt,
+				Delimiter: delim,
 			})
 		}
 		folders[a.Name] = list

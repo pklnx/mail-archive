@@ -291,6 +291,9 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	ctx := context.Background()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
 	// First the attestations and the audit log, which are empty here.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00023_folder_delimiter") {
+		t.Fatalf("down the folder delimiter: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00022_deletion_runs") {
 		t.Fatalf("down the deletion runs: %q, %v", m, err)
 	}

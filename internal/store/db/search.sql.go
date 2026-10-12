@@ -235,7 +235,7 @@ SELECT a.name AS account, a.enabled, (a.removed_at IS NOT NULL)::boolean AS remo
        (SELECT count(*) FROM (
             SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
        )::bigint AS messages,
-       f.last_synced_at, f.last_reconciled_at
+       f.last_synced_at, f.last_reconciled_at, f.delimiter
 FROM accounts a
 LEFT JOIN folders f ON f.account_id = a.id
 WHERE a.owner_id = $1::bigint
@@ -251,6 +251,7 @@ type ListFolderCountsRow struct {
 	Messages         int64
 	LastSyncedAt     *time.Time
 	LastReconciledAt *time.Time
+	Delimiter        *string
 }
 
 // The number of distinct messages per folder, like the folder's message
@@ -276,6 +277,7 @@ func (q *Queries) ListFolderCounts(ctx context.Context, owner int64) ([]ListFold
 			&i.Messages,
 			&i.LastSyncedAt,
 			&i.LastReconciledAt,
+			&i.Delimiter,
 		); err != nil {
 			return nil, err
 		}

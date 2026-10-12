@@ -241,6 +241,12 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", f.Name, err))
 		}
 	}
+	// After the loop, so folders created in this run get theirs too. Also for
+	// folders the filters skip that have a row from before. Only the sidebar
+	// needs it, so a failure does not make the run partial.
+	if err := s.recordDelimiters(ctx, a.ID, folders); err != nil && ctx.Err() == nil {
+		log.Warn("record folder delimiters", "err", err)
+	}
 	if err := s.reconcileVanished(ctx, a, folders, opts, now, &res.Reconcile, &baseline, log); err != nil {
 		if ctx.Err() != nil {
 			res.Err = ctx.Err()
@@ -258,6 +264,16 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 	}
 	log.Info("account synced", "fetched", res.Fetched, "new", res.New)
 	return finish("ok")
+}
+
+// recordDelimiters stores the hierarchy delimiter of each listed folder.
+func (s *Syncer) recordDelimiters(ctx context.Context, accountID int64, folders []imapsync.Folder) error {
+	delims := make(map[string]string, len(folders))
+	for _, f := range folders {
+		delims[f.Name] = f.Delim
+	}
+	_, err := s.Store.SetFolderDelimiters(ctx, accountID, delims)
+	return err
 }
 
 func (s *Syncer) dial(ctx context.Context, a *store.Account, password string) (*imapsync.Conn, error) {
