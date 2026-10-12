@@ -263,7 +263,7 @@ func TestAttestRefusesMismatch(t *testing.T) {
 	// rebuilt, nothing is written.
 	dropLastLine(t, s.chainFile())
 	good, _ = os.ReadFile(s.chainFile())
-	c := s.conn(t)
+	c := s.tamper(t)
 	for _, sql := range []string{
 		"DELETE FROM message_locations WHERE message_sha256 = $1",
 		"DELETE FROM messages WHERE sha256 = $1",

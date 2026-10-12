@@ -51,6 +51,9 @@ type AccountResult struct {
 	OwnerID *int64
 	Fetched int
 	New     int
+	// Skipped counts messages deleted by retention that were not archived
+	// again (see store.SaveBatch).
+	Skipped int
 	// Reconcile sums what comparing folders with the server changed.
 	Reconcile store.ReconcileCounts
 	Err       error
@@ -211,9 +214,10 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 				log.Debug("record sync progress", "err", err)
 			}
 		}
-		folder, fetched, added, err := s.syncFolder(ctx, conn, a, f.Name, progress, flog)
+		folder, fetched, added, skipped, err := s.syncFolder(ctx, conn, a, f.Name, progress, flog)
 		res.Fetched += fetched
 		res.New += added
+		res.Skipped += skipped
 		// Only a folder that synced cleanly is reconciled: its locations are
 		// complete for the UIDVALIDITY that EXAMINE reported.
 		if err == nil && s.reconcileDue(folder.LastReconciledAt, opts, now) {
@@ -299,26 +303,26 @@ type storedBody struct {
 // progress is called after each committed batch with the folder's counts
 // so far.
 func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.Account, name string,
-	progress func(fetched, added int), log *slog.Logger) (folder *store.Folder, fetched, added int, err error) {
+	progress func(fetched, added int), log *slog.Logger) (folder *store.Folder, fetched, added, skipped int, err error) {
 	status, err := conn.Examine(name)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	folder, err = s.Store.GetOrCreateFolder(ctx, a.ID, name)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	if folder.UIDValidity != status.UIDValidity {
 		if folder.UIDValidity != 0 {
 			log.Warn("UIDVALIDITY changed, rescanning folder", "old", folder.UIDValidity, "new", status.UIDValidity)
 		}
 		if err := s.Store.ResetFolder(ctx, folder.ID, status.UIDValidity); err != nil {
-			return nil, 0, 0, err
+			return nil, 0, 0, 0, err
 		}
 		folder.UIDValidity, folder.LastUID = status.UIDValidity, 0
 	}
 	if status.Messages == 0 || (status.UIDNext != 0 && folder.LastUID+1 >= status.UIDNext) {
-		return folder, 0, 0, s.Store.TouchFolder(ctx, folder.ID)
+		return folder, 0, 0, 0, s.Store.TouchFolder(ctx, folder.ID)
 	}
 
 	var w *folderWriter
@@ -345,11 +349,14 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 	if err == nil {
 		err = w.flush(ctx)
 	}
+	if w.skipped > 0 {
+		log.Info("deleted by retention, not archived again", "messages", w.skipped)
+	}
 	if err != nil {
-		return folder, fetched, w.added, err
+		return folder, fetched, w.added, w.skipped, err
 	}
 	log.Debug("folder synced", "fetched", fetched, "new", w.added)
-	return folder, fetched, w.added, nil
+	return folder, fetched, w.added, w.skipped, nil
 }
 
 func (s *Syncer) logger() *slog.Logger {

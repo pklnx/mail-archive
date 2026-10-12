@@ -34,6 +34,10 @@ const (
 	FindingStaleTemp  = "stale-temp" // a file left in tmp/ by an unfinished write
 	FindingUnexpected = "unexpected" // anything else in messages/ or tmp/
 	FindingIOError    = "io-error"   // a file that could not be checked
+	// FindingDeleted is the file of a message deleted by retention that is
+	// not scheduled for removal (#55). Files waiting out their grace
+	// period are no finding.
+	FindingDeleted = "deleted"
 )
 
 // Finding is one problem verify found.
@@ -74,6 +78,10 @@ type VerifyResult struct {
 	MovedBytes     int64
 	MovedTo        string   // the directory they went to, relative to the data directory
 	OldOrphanDirs  []string // orphans/ directories from earlier runs
+	// PendingRemovals counts files of deleted messages waiting out their
+	// grace period; Scheduled those FixOrphans scheduled for removal.
+	PendingRemovals int
+	Scheduled       int
 	// Attestations is the number of attestations checked.
 	Attestations int
 	// AttestationsUnchecked: attestations exist but no trusted key, so
@@ -325,25 +333,7 @@ func (v *verifier) checkFiles(ctx context.Context) error {
 // lockBlobs takes the exclusive blob lock, retrying until LockTimeout. It
 // returns a nil unlock when the lock stayed busy.
 func (v *verifier) lockBlobs(ctx context.Context) (func(), error) {
-	deadline := time.Now().Add(v.opts.LockTimeout)
-	for {
-		unlock, ok, err := v.st.TryLockBlobs(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return unlock, nil
-		}
-		wait := min(time.Second, time.Until(deadline))
-		if wait <= 0 {
-			return nil, nil
-		}
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
+	return waitBlobLock(ctx, v.st, v.opts.LockTimeout)
 }
 
 // checkOrphans reports the blobs of a batch that have no row and, with
@@ -353,11 +343,42 @@ func (v *verifier) checkOrphans(ctx context.Context, batch []blobstore.Entry) er
 	if err != nil {
 		return err
 	}
-	var orphans []blobstore.Entry
+	var missing []string
 	for _, e := range batch {
 		if !exist[e.SHA256] {
+			missing = append(missing, e.SHA256)
+		}
+	}
+	// Files of messages deleted by retention: removed by the sweep once
+	// their grace period ends.
+	deleted, err := v.st.DeletedFiles(ctx, missing)
+	if err != nil {
+		return err
+	}
+	var orphans, unscheduled []blobstore.Entry
+	for _, e := range batch {
+		scheduled, isDeleted := deleted[e.SHA256]
+		switch {
+		case exist[e.SHA256]:
+		case isDeleted && scheduled:
+			v.res.PendingRemovals++
+		case isDeleted:
+			unscheduled = append(unscheduled, e)
+			v.report(Finding{Kind: FindingDeleted, SHA256: e.SHA256, Path: e.Path, Size: e.Size,
+				Detail: "deleted by retention, but not scheduled for removal"})
+		default:
 			orphans = append(orphans, e)
 			v.report(Finding{Kind: FindingOrphan, SHA256: e.SHA256, Path: e.Path, Size: e.Size})
+		}
+	}
+	if v.opts.FixOrphans {
+		// Moving them to orphans/ would keep deleted mail; the sweep
+		// removes them instead.
+		for _, e := range unscheduled {
+			if err := v.st.ScheduleBlobRemoval(ctx, e.SHA256, v.opts.Now()); err != nil {
+				return err
+			}
+			v.res.Scheduled++
 		}
 	}
 	if !v.opts.FixOrphans || len(orphans) == 0 {

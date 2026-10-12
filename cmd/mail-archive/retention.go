@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -23,11 +27,17 @@ or sent in (§147 Abs. 4 AO). Without a rule, mail is kept for ever. When
 several rules match a message, the longest wins, also across the accounts
 of other users that hold the same message.
 
-Rules alone delete nothing: deletion is a separate, reviewed step.`,
+Rules alone delete nothing. Deletion is a reviewed run: "retention preview"
+lists what may be deleted now, "retention show" shows it, "retention confirm"
+deletes it. A message goes only when every location of it, in every user's
+account, has a rule whose period ended and no legal hold. Its file is
+removed after MAIL_ARCHIVE_RETENTION_FILE_GRACE (default 7 days), by the web
+server or "retention sweep".`,
 	}
 	rule := &cobra.Command{Use: "rule", Short: "Add, list and remove retention rules"}
 	rule.AddCommand(newRetentionRuleAddCmd(), newRetentionRuleListCmd(), newRetentionRuleRemoveCmd())
-	cmd.AddCommand(rule)
+	cmd.AddCommand(rule, newRetentionPreviewCmd(), newRetentionShowCmd(), newRetentionConfirmCmd(),
+		newRetentionCancelCmd(), newRetentionRunsCmd(), newRetentionSweepCmd())
 	return cmd
 }
 
@@ -423,8 +433,36 @@ func retentionStatus(cmd *cobra.Command, a *app) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c.Rules == 0 && c.ActiveHolds == 0 {
-		return "retention: no rules (all mail is kept for ever)", nil
+	d, err := a.store.DeletionCounts(cmd.Context())
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("retention: %d rule(s), %d active legal hold(s)", c.Rules, c.ActiveHolds), nil
+	line := fmt.Sprintf("retention: %d rule(s), %d active legal hold(s)", c.Rules, c.ActiveHolds)
+	if c.Rules == 0 && c.ActiveHolds == 0 {
+		line = "retention: no rules (all mail is kept for ever)"
+	}
+	if d.OpenRun != 0 {
+		line += fmt.Sprintf(", deletion run %d open", d.OpenRun)
+	}
+	if d.PendingFiles > 0 {
+		line += fmt.Sprintf(", %d file(s) of deleted messages to remove", d.PendingFiles)
+	}
+	return line, nil
+}
+
+// startRetention starts the retention job of serve (resuming confirmed
+// deletion runs, removing the files of deleted messages) and returns a
+// function that stops it.
+func startRetention(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r := &archive.Retention{Store: a.store, Blobs: blobs, Grace: a.cfg.RetentionFileGrace, Logger: log}
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }

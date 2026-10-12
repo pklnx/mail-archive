@@ -96,6 +96,45 @@ type AuditUserAgent struct {
 	UserAgent string
 }
 
+type BlobRemoval struct {
+	Sha256 string
+	DueAt  time.Time
+}
+
+type DeletedMessage struct {
+	ID          int64
+	Sha256      string
+	Size        int64
+	MessageSeq  int64
+	ArchivedAt  time.Time
+	RetainUntil time.Time
+	Locations   int32
+	RunID       int64
+	DeletedAt   time.Time
+}
+
+type DeletionCandidate struct {
+	RunID         int64
+	MessageSha256 string
+	Size          int64
+	RetainUntil   time.Time
+	State         string
+}
+
+type DeletionRun struct {
+	ID          int64
+	State       string
+	CreatedAt   time.Time
+	CreatedBy   *int64
+	Candidates  int32
+	Bytes       int64
+	ConfirmedAt *time.Time
+	ConfirmedBy *int64
+	FinishedAt  *time.Time
+	Deleted     int32
+	Kept        int32
+}
+
 type Envelope struct {
 	LocationID int64
 	MailFrom   string

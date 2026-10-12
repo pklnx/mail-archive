@@ -26,6 +26,12 @@ so every backup, contains the private signing key in `data/attest/`. The
 copies of `attestations.jsonl` and `signing.pub` kept off the host are
 separate from the backup; see [Tamper evidence](./tamper-evidence#what-you-do).
 
+Files are only added, with one exception: the files of messages deleted by
+[retention](../reference/cli#deletion) are removed after a grace period
+(`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, default 7 days). A backup made within
+it is complete; keep the period longer than the time between a dump and the
+copy of the data directory.
+
 The `.eml` files are **not** encrypted on disk, and neither are the dumps.
 Keep both on an encrypted volume; FileVault on macOS does this by default.
 

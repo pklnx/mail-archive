@@ -251,6 +251,9 @@ func printImportResult(out io.Writer, res *archive.ImportResult) {
 	t := res.Total()
 	fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the archive), %d already there, %d skipped\n",
 		res.Status, t.Read, t.Added, t.New, t.Present, t.Skipped)
+	if t.Deleted > 0 {
+		fmt.Fprintf(out, "%d message(s) deleted by retention were not archived again\n", t.Deleted)
+	}
 }
 
 // parseSize reads a size like 256MiB, 100MB, 10M or 1048576.

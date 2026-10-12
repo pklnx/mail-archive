@@ -102,6 +102,20 @@ func (s *Store) Exists(hash string) bool {
 	return err == nil
 }
 
+// Remove deletes the blob for hash. A missing file is no error. The
+// caller holds the blob lock exclusively and has checked that no row
+// refers to it.
+func (s *Store) Remove(hash string) error {
+	if !IsHash(hash) {
+		return fmt.Errorf("not a SHA-256: %q", hash)
+	}
+	err := os.Remove(s.abs(RelPath(hash)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func (s *Store) abs(relPath string) string {
 	return filepath.Join(s.root, filepath.FromSlash(relPath))
 }

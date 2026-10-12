@@ -242,6 +242,12 @@ func (ss *session) Data(r io.Reader) error {
 			log.Error("smtp message not stored", "code", 451, "account_id", account, "err", err)
 			return tempFail()
 		}
+		if res.Skipped {
+			// 250 all the same: a 5xx would make the mail server drop it
+			// silently anyway, and a 4xx would retry it for days.
+			log.Info("smtp message deleted by retention, not archived again", "account_id", account, "sha256", blob.SHA256)
+			continue
+		}
 		log.Info("smtp message received", "account_id", account, "uid", res.UID, "size", blob.Size,
 			"new_location", res.New, "added_recipients", res.AddedRecipients)
 	}

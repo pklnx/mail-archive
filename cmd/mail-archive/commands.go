@@ -788,6 +788,10 @@ failing, and their recovery, are sent at the end.`,
 				if rc := r.Reconcile; rc.Folders > 0 {
 					rec = fmt.Sprintf("gone=%-4d back=%-4d flags=%-4d ", rc.Gone, rc.Back, rc.FlagsChanged)
 				}
+				if r.Skipped > 0 {
+					// Deleted by retention and expired here: not archived again.
+					rec += fmt.Sprintf("deleted=%d ", r.Skipped)
+				}
 				fmt.Printf("%-20s fetched=%-6d new=%-6d %s%s\n", label, r.Fetched, r.New, rec, status)
 			}
 			if err != nil {
@@ -929,6 +933,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 			// The first attestation of a large archive takes minutes; it runs
 			// in the background. Stopped before the store closes.
 			defer startAttester(cmd.Context(), a, log)()
+			defer startRetention(cmd.Context(), a, blobs, log)()
 			if a.cfg.SMTP != nil {
 				stop, err := startSMTP(cmd.Context(), a, blobs, log)
 				if err != nil {

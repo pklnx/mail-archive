@@ -73,6 +73,9 @@ const (
 	// EnvAttestInterval is how often the web server writes an attestation
 	// ("0" turns the schedule off).
 	EnvAttestInterval = "MAIL_ARCHIVE_ATTEST_INTERVAL"
+	// EnvRetentionFileGrace is how long the files of messages deleted by
+	// retention outlive their rows ("0" removes them at the next sweep).
+	EnvRetentionFileGrace = "MAIL_ARCHIVE_RETENTION_FILE_GRACE"
 )
 
 // DefaultSMTPMaxSize is used when EnvSMTPMaxSize is not set.
@@ -112,6 +115,11 @@ const DefaultAttestInterval = 24 * time.Hour
 // and a leaves file.
 const MinAttestInterval = time.Hour
 
+// DefaultRetentionFileGrace keeps the files of deleted messages for a week:
+// a backup made meanwhile (dump first, then the files) is complete, and
+// restoring the last dump undoes a wrong deletion.
+const DefaultRetentionFileGrace = 7 * 24 * time.Hour
+
 // Config holds the application configuration.
 type Config struct {
 	DatabaseURL string
@@ -141,6 +149,8 @@ type Config struct {
 	AttestKeyFile string
 	// AttestInterval of the web server's attestations; zero means off.
 	AttestInterval time.Duration
+	// RetentionFileGrace is how long the files of deleted messages stay.
+	RetentionFileGrace time.Duration
 }
 
 // AttestDir holds the attestation file, the leaves and the public keys:
@@ -228,6 +238,11 @@ func Load() (*Config, error) {
 	}
 	cfg.AttestInterval, err = parseInterval(EnvAttestInterval, strings.TrimSpace(os.Getenv(EnvAttestInterval)),
 		DefaultAttestInterval, MinAttestInterval, "24h")
+	if err != nil {
+		return nil, err
+	}
+	cfg.RetentionFileGrace, err = parseInterval(EnvRetentionFileGrace, strings.TrimSpace(os.Getenv(EnvRetentionFileGrace)),
+		DefaultRetentionFileGrace, time.Hour, "168h")
 	if err != nil {
 		return nil, err
 	}

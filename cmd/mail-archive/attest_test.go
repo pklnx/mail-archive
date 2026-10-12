@@ -214,6 +214,16 @@ func TestAttestCheckAndVerify(t *testing.T) {
 	if err := c.QueryRow(ctx, "SELECT sha256 FROM messages ORDER BY seq LIMIT 1").Scan(&sha); err != nil {
 		t.Fatal(err)
 	}
+	// As someone with owner rights on the database, past the guards of
+	// retention.
+	for _, sql := range []string{
+		"ALTER TABLE message_locations DISABLE TRIGGER message_locations_retention_guard",
+		"ALTER TABLE messages DISABLE TRIGGER messages_tombstone_guard",
+	} {
+		if _, err := c.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, sql := range []string{
 		"DELETE FROM message_locations WHERE message_sha256 = $1",
 		"DELETE FROM messages WHERE sha256 = $1",

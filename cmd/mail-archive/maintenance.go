@@ -125,13 +125,19 @@ func runVerify(ctx context.Context, opts archive.VerifyOptions, publicKeys []str
 	if res.Moved > 0 {
 		fmt.Fprintf(stdout, "moved %d file(s), %d bytes, to %s in the data directory\n", res.Moved, res.MovedBytes, res.MovedTo)
 	}
+	if res.PendingRemovals > 0 {
+		fmt.Fprintf(stdout, "note: %d file(s) of messages deleted by retention wait for their removal after the grace period\n", res.PendingRemovals)
+	}
+	if res.Scheduled > 0 {
+		fmt.Fprintf(stdout, "scheduled %d file(s) of deleted messages for removal by the next sweep\n", res.Scheduled)
+	}
 	for _, d := range res.OldOrphanDirs {
 		fmt.Fprintf(stdout, "note: %s holds files moved by an earlier --fix-orphans; delete it once you are sure\n", d)
 	}
 	switch {
 	case !res.Complete():
 		return exitIncomplete, nil
-	case res.Problems()-res.Moved > 0:
+	case res.Problems()-res.Moved-res.Scheduled > 0:
 		return exitFindings, nil
 	}
 	return 0, nil
@@ -170,7 +176,7 @@ func verifySummary(res *archive.VerifyResult) string {
 // findingKinds is the order findings are counted in summaries.
 var findingKinds = []string{
 	archive.FindingMissing, archive.FindingCorrupt, archive.FindingBadPath, archive.FindingOrphan,
-	archive.FindingStaleTemp, archive.FindingUnexpected,
+	archive.FindingStaleTemp, archive.FindingUnexpected, archive.FindingDeleted,
 	archive.FindingRemoved, archive.FindingUnattested, archive.FindingAttestation, archive.FindingAttestFile,
 	archive.FindingChain, archive.FindingAttestStale,
 	archive.FindingIOError,
