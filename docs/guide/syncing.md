@@ -27,11 +27,11 @@ Messages deleted on the server stay in the archive. A
 
 | How | What it syncs |
 |---|---|
-| Schedule of the web server | Every enabled account whose last sync started more than the interval ago. |
+| Schedule of the web server | Every enabled account whose last sync started more than its interval ago, except accounts not on the schedule. |
 | **Sync** button on the account page | That account, also when it is disabled. |
 | **Check server** button on the account page | That account, and then [reconciles](#reconcile) every folder not compared in the last 5 minutes. |
-| **Sync all** button | All enabled accounts. |
-| `./ma sync` | All enabled accounts. |
+| **Sync all** button | All enabled accounts, also those not on the schedule. |
+| `./ma sync` | All enabled accounts, also those not on the schedule. It ignores the intervals: cron decides when it runs. |
 | `./ma sync --account NAME` | Only that account, also when it is disabled. |
 | `./ma sync --reconcile` | Syncs and reconciles every selected folder now (combines with `--account`). |
 
@@ -43,16 +43,51 @@ first sync does not open many connections at once.
 
 ## The schedule
 
-The web server checks every minute which accounts are due. The interval is
-set with `MAIL_ARCHIVE_SYNC_INTERVAL` in `.env`:
+The web server checks every minute which accounts are due. An enabled
+account is due when its last sync, of any kind, started at least its
+interval ago; one that never synced is due at once.
+
+The default interval is set with `MAIL_ARCHIVE_SYNC_INTERVAL` in `.env`:
 
 ```sh
 MAIL_ARCHIVE_SYNC_INTERVAL=6h    # default
 MAIL_ARCHIVE_SYNC_INTERVAL=30m   # at least 5m
-MAIL_ARCHIVE_SYNC_INTERVAL=0     # off: sync only by hand
+MAIL_ARCHIVE_SYNC_INTERVAL=0     # off for every account: sync only by hand
 ```
 
 Apply a change with `docker compose up -d web`.
+
+### Per account
+
+Each IMAP account can have its own interval, in the web UI under **Edit** →
+**Schedule** or with
+[`./ma account set-schedule`](../reference/cli#accounts):
+
+- **Default**: `MAIL_ARCHIVE_SYNC_INTERVAL`.
+- **Every 15 minutes** to **every day**, or on the command line any whole
+  number of minutes from `5m` to `720h`.
+- **Not on the schedule** (`manual`): the schedule skips the account.
+
+`MAIL_ARCHIVE_SYNC_INTERVAL_MIN` (default `5m`) is the shortest interval the
+server syncs any account at. Raising it makes accounts with a shorter
+interval sync at the floor; their own value stays stored and applies again
+if the floor is lowered. The web UI then hides the shorter choices. With
+`MAIL_ARCHIVE_SYNC_INTERVAL=0` no account is synced on a schedule, whatever
+its own interval.
+
+**Not on the schedule** is not the same as **Disable**:
+
+| | Disabled | Not on the schedule |
+|---|---|---|
+| Web server schedule | skipped | skipped |
+| **Sync** button, `./ma sync --account NAME` | syncs | syncs |
+| **Sync all**, plain `./ma sync` (cron) | skipped | syncs |
+| Failure streak and alerts | never (always `ok`) | yes, after failed syncs |
+| Stale | never | never |
+
+A short interval reaches `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed syncs
+sooner, and an account with a wrong password tries to log in at every
+interval. `./ma status` shows each account's interval and next sync.
 
 ## Do you need cron?
 
@@ -237,8 +272,11 @@ server, with what the last run found.
 An account counts as **failing** when its last
 `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs (default 3) failed in a row, from
 the schedule, a button or `./ma sync` alike. It counts as **stale** when no
-sync succeeded within two sync intervals (counted from when it was added, if
-it never did). Both show in the web UI and in
+sync succeeded within two of its sync intervals, at least one interval plus
+an hour (counted from when it was added, if it never did). A sync that is
+running or waiting in the queue makes no account stale; a running one counts
+from its start, so a sync that hangs is still reported. Accounts the
+schedule does not sync are never stale. Both show in the web UI and in
 [`/healthz/sync`](./operations#healthz-sync); a failing account also sends an
 alert if a [webhook](./operations#webhook-alerts) is set up.
 

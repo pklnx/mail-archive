@@ -15,10 +15,13 @@ import (
 // does not open many IMAP connections at once.
 type Runner struct {
 	Syncer *Syncer
-	// Interval is how often each enabled account is synced. An account is due
-	// when its last run started at least Interval ago. Zero disables the
-	// schedule; syncs then only run on request.
-	Interval time.Duration
+	// Schedule says how often each enabled IMAP account is synced. An
+	// account is due when its last run started at least its interval ago
+	// (Schedule.Every). A zero Schedule.Sync disables the schedule; syncs
+	// then only run on request.
+	Schedule Schedule
+	// Now returns the current time (default time.Now), for tests.
+	Now func() time.Time
 	// CheckEvery is how often the schedule is checked (default one minute).
 	CheckEvery time.Duration
 	// AfterSync, if set, is called after each sync, for example to deliver
@@ -104,7 +107,7 @@ func (r *Runner) Run(ctx context.Context) {
 	defer tick.Stop()
 	log := r.Syncer.logger()
 	for {
-		if r.Interval > 0 {
+		if r.Schedule.Sync > 0 {
 			if err := r.enqueueDue(ctx); err != nil && ctx.Err() == nil {
 				log.Error("check sync schedule", "err", err)
 			}
@@ -121,8 +124,7 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 
-// enqueueDue queues every enabled account whose last run is older than the
-// interval, or that was never synced.
+// enqueueDue queues every account that is due (see dueAccounts).
 func (r *Runner) enqueueDue(ctx context.Context) error {
 	st := r.Syncer.Store
 	accounts, err := st.ListAccounts(ctx)
@@ -133,21 +135,30 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	var due []int64
-	for _, a := range accounts {
-		if !a.Enabled || a.RemovedAt != nil || a.Kind != store.KindIMAP {
-			continue
-		}
-		if run, ok := runs[a.ID]; ok && now.Sub(run.StartedAt) < r.Interval {
-			continue
-		}
-		due = append(due, a.ID)
+	now := time.Now
+	if r.Now != nil {
+		now = r.Now
 	}
-	if len(due) > 0 {
+	if due := dueAccounts(accounts, runs, r.Schedule, now()); len(due) > 0 {
 		r.Enqueue(due...)
 	}
 	return nil
+}
+
+// dueAccounts returns the enabled IMAP accounts whose last run of any kind
+// started at least their interval ago, or that never ran.
+func dueAccounts(accounts []*store.Account, runs map[int64]store.LastRun, s Schedule, now time.Time) []int64 {
+	var due []int64
+	for _, a := range accounts {
+		var last *store.LastRun
+		if run, ok := runs[a.ID]; ok {
+			last = &run
+		}
+		if next, ok := s.Next(ScheduledAccount(a, last)); ok && !now.Before(next) {
+			due = append(due, a.ID)
+		}
+	}
+	return due
 }
 
 func (r *Runner) syncOne(ctx context.Context, id int64, opts SyncOptions) {

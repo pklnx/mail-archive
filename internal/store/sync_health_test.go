@@ -101,13 +101,39 @@ func TestSyncHealthState(t *testing.T) {
 		{"new", store.SyncHealth{Enabled: true, CreatedAt: recent}, store.HealthOK},
 		{"disabled", store.SyncHealth{CreatedAt: created, FailureStreak: 9}, store.HealthOK},
 	} {
-		if got := c.h.State(3, 6*time.Hour, now); got != c.want {
+		if got := c.h.State(3, 6*time.Hour, nil, now); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
 	never := store.SyncHealth{Enabled: true, CreatedAt: created}
-	if got := never.State(3, 0, now); got != store.HealthOK {
-		t.Errorf("schedule off: %s", got)
+	if got := never.State(3, 0, nil, now); got != store.HealthOK {
+		t.Errorf("schedule off or not on it: %s", got)
+	}
+
+	// Short intervals get an hour of slack: 15 minutes is stale after 75.
+	at := func(ago time.Duration) *time.Time { t := now.Add(-ago); return &t }
+	quarter := 15 * time.Minute
+	for _, c := range []struct {
+		name    string
+		success time.Duration
+		busy    *time.Time
+		want    string
+	}{
+		{"31 minutes", 31 * time.Minute, nil, store.HealthOK},
+		{"74 minutes", 74 * time.Minute, nil, store.HealthOK},
+		{"76 minutes", 76 * time.Minute, nil, store.HealthStale},
+		{"queued", 5 * time.Hour, &now, store.HealthOK},
+		{"running for an hour", 5 * time.Hour, at(time.Hour), store.HealthOK},
+		{"running for three hours", 5 * time.Hour, at(3 * time.Hour), store.HealthStale},
+		{"running, success after the start", 76 * time.Minute, at(3 * time.Hour), store.HealthStale},
+	} {
+		h := store.SyncHealth{Enabled: true, CreatedAt: created, LastSuccessAt: at(c.success)}
+		if got := h.State(3, quarter, c.busy, now); got != c.want {
+			t.Errorf("15m, %s: %s, want %s", c.name, got, c.want)
+		}
+	}
+	if store.StaleAfter(6*time.Hour) != 12*time.Hour || store.StaleAfter(15*time.Minute) != 75*time.Minute {
+		t.Error("StaleAfter")
 	}
 }
 

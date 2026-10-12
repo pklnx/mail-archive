@@ -21,6 +21,45 @@ func TestParseSyncInterval(t *testing.T) {
 	}
 }
 
+func TestSyncIntervalMin(t *testing.T) {
+	for in, want := range map[string]time.Duration{"": MinSyncInterval, "5m": 5 * time.Minute, "1h": time.Hour, "720h": 720 * time.Hour} {
+		if got, err := parseSyncIntervalMin(in); err != nil || got != want {
+			t.Errorf("parseSyncIntervalMin(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"4m", "0", "721h", "abc"} {
+		if _, err := parseSyncIntervalMin(in); err == nil || !strings.Contains(err.Error(), EnvSyncIntervalMin) {
+			t.Errorf("parseSyncIntervalMin(%q) = %v, want an error naming the variable", in, err)
+		}
+	}
+	load := func(interval, floor string) (*Config, error) {
+		t.Setenv(EnvDatabaseURL, "postgres://x")
+		t.Setenv(EnvSyncInterval, interval)
+		t.Setenv(EnvSyncIntervalMin, floor)
+		return Load()
+	}
+	if _, err := load("30m", "1h"); err == nil || err.Error() != "MAIL_ARCHIVE_SYNC_INTERVAL: 30m is below MAIL_ARCHIVE_SYNC_INTERVAL_MIN (1h)" {
+		t.Errorf("default below the floor: %v", err)
+	}
+	if cfg, err := load("0", "1h"); err != nil || cfg.SyncInterval != 0 || cfg.SyncIntervalMin != time.Hour {
+		t.Errorf("schedule off with a floor: %+v, %v", cfg, err)
+	}
+	if cfg, err := load("", ""); err != nil || cfg.SyncIntervalMin != MinSyncInterval {
+		t.Errorf("defaults: %+v, %v", cfg, err)
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		30 * time.Minute: "30m", time.Hour: "1h", 90 * time.Minute: "1h30m", 720 * time.Hour: "720h",
+		10 * time.Second: "10s", 5*time.Minute + 30*time.Second: "5m30s", 10 * time.Hour: "10h", 20 * time.Minute: "20m",
+	} {
+		if got := FormatDuration(d); got != want {
+			t.Errorf("FormatDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
 func TestParseReconcileInterval(t *testing.T) {
 	parse := func(v string) (time.Duration, error) {
 		return parseInterval(EnvReconcileInterval, v, DefaultReconcileInterval, MinReconcileInterval, "24h")

@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { accountsApi, folderQuestion, type Account, type AccountInput, type ServerFolder, type TLSMode } from "./api";
+import { accountsApi, folderQuestion, type Account, type AccountInput, type AccountsResponse, type ServerFolder, type TLSMode } from "./api";
 import { suggestName } from "./accountName";
-import { formatCount, formatInterval, relativeTime, shortDate } from "./format";
+import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 import type { AccountsState } from "./useAccounts";
 
@@ -63,7 +63,7 @@ export function AccountsPage({ accounts, close, renamed, showGone }: Props) {
         </header>
         {data && (
           <p className="text-sm text-zinc-500">
-            {!manage ? t.manageOff : data.syncInterval ? t.schedule(formatInterval(data.syncInterval)) : t.scheduleOff}
+            {!manage ? t.manageOff : data.syncInterval ? t.schedule(formatEvery(data.syncInterval)) : t.scheduleOff}
             {manage && " " + (data.reconcileInterval ? t.reconcileSchedule(formatInterval(data.reconcileInterval)) : t.reconcileOff)}
           </p>
         )}
@@ -98,12 +98,14 @@ export function AccountsPage({ accounts, close, renamed, showGone }: Props) {
                   reload();
                 }}
               />
+              {data && <SchedulePicker account={a} data={data} onSaved={reload} />}
               <FolderPicker account={a} onSaved={reload} />
             </Card>
           ) : (
             <AccountCard
               key={a.name}
               account={a}
+              data={data!}
               manage={manage}
               onSync={() => run(() => accountsApi.sync(a.name))}
               onReconcile={() => run(() => accountsApi.reconcile(a.name))}
@@ -167,6 +169,51 @@ export function syncHealthNote(a: Account): { text: string; failing: boolean } |
   return null;
 }
 
+function capitalize(s: string): string {
+  return s.charAt(0).toLocaleUpperCase() + s.slice(1);
+}
+
+/**
+ * How often the schedule syncs an IMAP account and when next, for its card:
+ * "Every 30 minutes · next in 12 minutes". Null when it is disabled or the
+ * schedule is off (the page header says so).
+ */
+export function scheduleNote(a: Account, data: Pick<AccountsResponse, "syncInterval">, now = new Date()): string | null {
+  if (a.kind !== "imap" || a.removed || !a.enabled || !data.syncInterval) return null;
+  if (a.syncInterval === "manual") return t.intervalManual;
+  const every = a.sync.syncEvery;
+  if (!every) return null;
+  let text = capitalize(formatEvery(every));
+  const own = durationMinutes(a.syncInterval);
+  const effective = durationMinutes(every);
+  if (a.syncInterval === "default") text += " " + t.defaultMark;
+  else if (own !== null && effective !== null && own < effective) text += " " + t.raisedTo(formatInterval(a.syncInterval));
+  if (a.sync.nextAt && a.sync.state === "idle") {
+    text += " · " + (Date.parse(a.sync.nextAt) <= now.getTime() ? t.dueNow : t.nextSync(relativeTime(a.sync.nextAt, now)));
+  }
+  return text;
+}
+
+/** Presets of the schedule picker, as Go durations. */
+const intervalPresets = ["15m0s", "30m0s", "1h0m0s", "6h0m0s", "12h0m0s", "24h0m0s"];
+
+/**
+ * The choices of the schedule picker: the default, the presets at or above
+ * the server's floor, a stored value that is no preset, and manual.
+ */
+export function scheduleOptions(a: Account, data: Pick<AccountsResponse, "syncInterval" | "syncIntervalMin">): { value: string; label: string }[] {
+  const floor = durationMinutes(data.syncIntervalMin) ?? 0;
+  const options = [{ value: "default", label: t.intervalDefault(data.syncInterval ? formatEvery(data.syncInterval) : t.intervalManual) }];
+  for (const p of intervalPresets) {
+    if ((durationMinutes(p) ?? 0) >= floor) options.push({ value: p, label: capitalize(formatEvery(p)) });
+  }
+  if (a.syncInterval !== "default" && a.syncInterval !== "manual" && !options.some((o) => o.value === a.syncInterval)) {
+    options.push({ value: a.syncInterval, label: t.intervalOther(formatEvery(a.syncInterval)) });
+  }
+  options.push({ value: "manual", label: t.intervalManual });
+  return options;
+}
+
 /** What comparing the account with its server found, for its card. */
 export function reconcileNote(a: Account): { gone: string | null; check: string } | null {
   if (a.kind !== "imap" || a.removed) return null;
@@ -204,6 +251,7 @@ export function syncStatus(a: Account): { text: string; error?: string } {
 
 interface CardProps {
   account: Account;
+  data: AccountsResponse;
   manage: boolean;
   onSync: () => void;
   onReconcile: () => void;
@@ -213,8 +261,9 @@ interface CardProps {
   onRemove: () => void;
 }
 
-function AccountCard({ account: a, manage, onSync, onReconcile, onShowGone, onEdit, onToggle, onRemove }: CardProps) {
+function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone, onEdit, onToggle, onRemove }: CardProps) {
   const status = syncStatus(a);
+  const schedule = scheduleNote(a, data);
   const reconcile = reconcileNote(a);
   const health = syncHealthNote(a);
   const busy = a.sync.state !== "idle";
@@ -295,6 +344,7 @@ function AccountCard({ account: a, manage, onSync, onReconcile, onShowGone, onEd
         <p className={`text-sm ${health.failing ? "font-medium text-red-600" : "text-amber-700 dark:text-amber-500"}`}>{health.text}</p>
       )}
       {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.disabledNote}</p>}
+      {schedule && <p className="text-sm text-zinc-600 dark:text-zinc-400">{schedule}</p>}
       {reconcile && (
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           {reconcile.gone && (
@@ -479,6 +529,55 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
         {busy && <span className="text-sm text-zinc-500">{t.checkingLogin}</span>}
       </div>
     </form>
+  );
+}
+
+/**
+ * Sets how often the schedule syncs the account. It sends only a changed
+ * choice, so a value stored before the server's floor was raised is kept.
+ */
+export function SchedulePicker({ account, data, onSaved }: { account: Account; data: AccountsResponse; onSaved: () => void }) {
+  const [choice, setChoice] = useState(account.syncInterval);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const id = useId();
+  const off = !data.syncInterval;
+
+  const save = async () => {
+    if (choice === account.syncInterval) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await accountsApi.update(account.name, { syncInterval: choice });
+      setMessage(t.saved);
+      onSaved();
+    } catch (err) {
+      setMessage(t.failed(err instanceof Error ? err.message : String(err)));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <section className="flex flex-col gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+      <label htmlFor={id} className="text-sm font-semibold">
+        {t.scheduleTitle}
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <select id={id} className={`${input} w-auto`} value={choice} disabled={off || busy} onChange={(e) => setChoice(e.target.value)}>
+          {scheduleOptions(account, data).map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button type="button" className={button} disabled={off || busy || choice === account.syncInterval} onClick={save}>
+          {t.saveSchedule}
+        </button>
+      </div>
+      {off && <p className="text-xs text-zinc-500">{t.scheduleOffHint}</p>}
+      {!off && choice === "manual" && <p className="text-xs text-zinc-500">{t.intervalManualHint}</p>}
+      {message && <p className="text-sm">{message}</p>}
+    </section>
   );
 }
 

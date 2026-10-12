@@ -40,6 +40,12 @@ export interface Account {
   username: string;
   includedFolders: string[];
   excludedFolders: string[];
+  /**
+   * The account's own sync interval: "default" (the server's), "manual"
+   * (not on the schedule) or a Go duration like "30m0s". Always "default"
+   * for import and smtp accounts.
+   */
+  syncInterval: string;
   folders: Folder[];
   sync: SyncInfo;
   /** Messages whose copies in this account are all gone from the server. */
@@ -51,7 +57,11 @@ export interface Account {
   lastReceivedAt: string | null;
 }
 
-/** "failing": the last alertAfter syncs failed; "stale": no successful sync within two intervals. */
+/**
+ * "failing": the last alertAfter syncs failed; "stale": no successful sync
+ * within two of the account's intervals (at least one plus an hour), never
+ * while it is running or queued.
+ */
 export type Health = "ok" | "failing" | "stale";
 
 export interface SyncInfo {
@@ -61,14 +71,20 @@ export interface SyncInfo {
   failureStreak: number;
   failingSince: string | null;
   health: Health;
+  /** How often the schedule syncs the account (Go duration), null when it does not. */
+  syncEvery: string | null;
+  /** When the schedule syncs it next; in the past while it waits. Null without syncEvery or when disabled. */
+  nextAt: string | null;
 }
 
 export interface AccountsResponse {
   accounts: Account[];
   /** False when the server has no secret key: browse only. */
   manage: boolean;
-  /** Go duration like "6h0m0s", empty if the schedule is off. */
+  /** The server's default interval, Go duration like "6h0m0s"; empty if the schedule is off. */
   syncInterval: string;
+  /** The floor for every account's interval, like "5m0s"; empty when the server cannot sync. */
+  syncIntervalMin: string;
   /** Go duration like "24h0m0s", empty if folders are only compared on request. */
   reconcileInterval: string;
   /** Failed syncs in a row that make an account failing. */
@@ -86,6 +102,8 @@ export interface AccountInput {
   password?: string;
   enabled?: boolean;
   excludedFolders?: string[];
+  /** "default", "manual" or a Go duration of whole minutes. */
+  syncInterval?: string;
   /** POST only: save even if trash or spam folders would be archived. */
   confirmFolders?: boolean;
 }

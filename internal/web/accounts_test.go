@@ -43,6 +43,12 @@ func newManageFixture(t *testing.T, users ...*imapmemserver.User) *manageFixture
 // attributes (see imaptest.StartWithRoles); nil serves the users' mailboxes.
 func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, users ...*imapmemserver.User) *manageFixture {
 	t.Helper()
+	return newManageFixtureOpts(t, roles, archive.Schedule{}, users...)
+}
+
+// newManageFixtureOpts also sets the runner's schedule.
+func newManageFixtureOpts(t *testing.T, roles map[string]imap.MailboxAttr, sched archive.Schedule, users ...*imapmemserver.User) *manageFixture {
+	t.Helper()
 	st := storetest.New(t)
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
@@ -56,7 +62,7 @@ func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, 
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
-	runner := &archive.Runner{Syncer: syncer, CheckEvery: 10 * time.Millisecond}
+	runner := &archive.Runner{Syncer: syncer, Schedule: sched, CheckEvery: 10 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &manageFixture{t: t, st: st, blobs: blobs, runnerDone: make(chan struct{})}
 	go func() { runner.Run(ctx); close(f.runnerDone) }()

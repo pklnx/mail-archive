@@ -174,7 +174,7 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		return err
 	}
 
-	runner := &archive.Runner{Syncer: syncer, Interval: 6 * time.Hour}
+	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
 	// Passkeys need a host name: the demo is meant for localhost.
 	_, webPort, err := net.SplitHostPort(listen)

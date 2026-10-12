@@ -81,6 +81,9 @@ func accountChangeFields(c store.AccountChange) []string {
 	if c.Enabled != nil {
 		out = append(out, "enabled")
 	}
+	if c.SyncInterval != nil {
+		out = append(out, "sync_interval")
+	}
 	return out
 }
 

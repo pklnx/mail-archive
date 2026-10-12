@@ -288,13 +288,15 @@ message; failed attempts name only the scheme and host.
 | Status | Body | Meaning |
 |---|---|---|
 | `200` | `{"status":"ok"}` | Every enabled account syncs. |
-| `503` | `{"status":"degraded","failing":[3,7],"stale":[5]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two `MAIL_ARCHIVE_SYNC_INTERVAL`s. |
+| `503` | `{"status":"degraded","failing":[3,7],"stale":[5]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). |
 | `503` | `{"status":"unavailable"}` | The database cannot be reached. |
 
 Disabled, removed and import accounts are left out; with the schedule off
-(`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts as stale. The answer is
-cached for 15 seconds. `./ma status` shows each account's ID next to its
-name, and in `FAILED` how many syncs in a row failed.
+(`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts as stale, nor does an account
+not on the schedule, or one that is syncing or waiting in the queue. The
+answer is cached for 15 seconds. `./ma status` shows each account's ID next
+to its name, in `HEALTH` the same state, and in `FAILED` how many syncs in a
+row failed.
 
 The request must use an allowed host name (`MAIL_ARCHIVE_ALLOWED_HOSTS`),
 like every request. For Uptime Kuma, add an HTTP monitor for

@@ -181,6 +181,27 @@ type Account struct {
 	OwnerID *int64
 	// Version increases with every change; see UpdateAccount.
 	Version int64
+	// SyncInterval is the account's own sync interval: nil uses the
+	// server's, 0 keeps it off the schedule. Only IMAP accounts have one.
+	SyncInterval *time.Duration
+}
+
+// secondsToInterval and intervalToSeconds convert the stored own sync
+// interval (whole seconds, NULL for the server's).
+func secondsToInterval(s *int32) *time.Duration {
+	if s == nil {
+		return nil
+	}
+	d := time.Duration(*s) * time.Second
+	return &d
+}
+
+func intervalToSeconds(d *time.Duration) *int32 {
+	if d == nil {
+		return nil
+	}
+	s := int32(min(*d/time.Second, 1<<31-1)) //nolint:gosec // clamped
+	return &s
 }
 
 func accountFromDB(r db.Account) *Account {
@@ -200,6 +221,7 @@ func accountFromDB(r db.Account) *Account {
 		RemovedAt:       r.RemovedAt,
 		OwnerID:         r.OwnerID,
 		Version:         r.Version,
+		SyncInterval:    secondsToInterval(r.SyncIntervalSeconds),
 	}
 }
 
@@ -247,6 +269,8 @@ func createAccount(ctx context.Context, q *db.Queries, a *Account) error {
 		return errors.New("an smtp account has no server")
 	case a.Kind != KindIMAP && a.Kind != KindImport && a.Kind != KindSMTP:
 		return fmt.Errorf("invalid account kind %q", a.Kind)
+	case !a.Kind.HasServer() && a.SyncInterval != nil:
+		return ErrNoServer
 	}
 	if !a.Kind.HasServer() {
 		a.TLSMode = TLSModeNone // unused; the column needs a valid value
@@ -255,17 +279,18 @@ func createAccount(ctx context.Context, q *db.Queries, a *Account) error {
 		a.PasswordEnc = []byte{}
 	}
 	row, err := q.CreateAccount(ctx, db.CreateAccountParams{
-		Name:            a.Name,
-		Host:            a.Host,
-		Port:            int32(a.Port), //nolint:gosec // range checked above
-		TlsMode:         string(a.TLSMode),
-		Username:        a.Username,
-		PasswordEnc:     a.PasswordEnc,
-		IncludedFolders: a.IncludedFolders,
-		ExcludedFolders: a.ExcludedFolders,
-		Enabled:         a.Enabled,
-		OwnerID:         a.OwnerID,
-		Kind:            string(a.Kind),
+		Name:                a.Name,
+		Host:                a.Host,
+		Port:                int32(a.Port), //nolint:gosec // range checked above
+		TlsMode:             string(a.TLSMode),
+		Username:            a.Username,
+		PasswordEnc:         a.PasswordEnc,
+		IncludedFolders:     a.IncludedFolders,
+		ExcludedFolders:     a.ExcludedFolders,
+		Enabled:             a.Enabled,
+		OwnerID:             a.OwnerID,
+		Kind:                string(a.Kind),
+		SyncIntervalSeconds: intervalToSeconds(a.SyncInterval),
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -655,7 +680,11 @@ type AccountStats struct {
 	Kind      AccountKind
 	OwnerID   *int64
 	Enabled   bool
-	Folders   int
+	CreatedAt time.Time
+	RemovedAt *time.Time
+	// SyncInterval is the account's own sync interval, as in Account.
+	SyncInterval *time.Duration
+	Folders      int
 	// Messages counts distinct messages; one found in two folders of the
 	// account counts once.
 	Messages int64
@@ -681,8 +710,9 @@ func (s *Store) Stats(ctx context.Context, owner *int64) ([]AccountStats, int64,
 	}
 	out := make([]AccountStats, 0, len(rows))
 	for _, r := range rows {
-		st := AccountStats{AccountID: r.ID, Account: r.Name, Kind: AccountKind(r.Kind), OwnerID: r.OwnerID, Enabled: r.Enabled, Folders: int(r.Folders), Messages: r.Messages,
-			Gone: r.Gone, LastReconciledAt: r.LastReconciledAt}
+		st := AccountStats{AccountID: r.ID, Account: r.Name, Kind: AccountKind(r.Kind), OwnerID: r.OwnerID, Enabled: r.Enabled,
+			CreatedAt: r.CreatedAt, RemovedAt: r.RemovedAt, SyncInterval: secondsToInterval(r.SyncIntervalSeconds),
+			Folders: int(r.Folders), Messages: r.Messages, Gone: r.Gone, LastReconciledAt: r.LastReconciledAt}
 		if run, ok := lastRun[r.ID]; ok {
 			st.LastRunAt, st.LastStatus = &run.StartedAt, &run.Status
 			if run.Error != "" {

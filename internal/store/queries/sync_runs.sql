@@ -11,7 +11,7 @@ WHERE id = @id;
 
 -- name: AccountStats :many
 -- All accounts, or only those of one owner.
-SELECT a.id, a.name, a.enabled, a.owner_id, a.kind,
+SELECT a.id, a.name, a.enabled, a.owner_id, a.kind, a.created_at, a.removed_at, a.sync_interval_seconds,
        (SELECT count(*) FROM folders f WHERE f.account_id = a.id) AS folders,
        (SELECT count(DISTINCT l.message_sha256) FROM message_locations l JOIN folders f ON f.id = l.folder_id
         WHERE f.account_id = a.id) AS messages,

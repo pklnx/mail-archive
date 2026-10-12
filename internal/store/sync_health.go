@@ -36,11 +36,13 @@ const (
 
 // SyncHealth is the failure streak of one IMAP account.
 type SyncHealth struct {
-	AccountID     int64
-	Name          string
-	OwnerID       *int64
-	Enabled       bool
-	CreatedAt     time.Time
+	AccountID int64
+	Name      string
+	OwnerID   *int64
+	Enabled   bool
+	CreatedAt time.Time
+	// SyncInterval is the account's own sync interval, as in Account.
+	SyncInterval  *time.Duration
 	FailureStreak int
 	// FailingSince is the start of the current streak; nil without one.
 	FailingSince  *time.Time
@@ -49,25 +51,40 @@ type SyncHealth struct {
 }
 
 // State is the account's health: failing when the last alertAfter syncs
-// failed, stale when no sync succeeded within two intervals (counted from
-// the account's creation if none ever did; not checked when interval is
-// zero), else ok. Disabled accounts are always ok: they are not synced.
-func (h *SyncHealth) State(alertAfter int, interval time.Duration, now time.Time) string {
+// failed, stale when no sync succeeded within StaleAfter(every), else ok.
+// every is the account's effective sync interval, 0 when the schedule does
+// not sync it (then it is never stale). The time counts from the last
+// success, or the account's creation if none ever did, but not from before
+// busySince: the start of the running sync, or now while the account is
+// queued. So a long sync does not make its own account stale, nor the
+// accounts waiting behind it, but a hung one still does. Disabled accounts
+// are always ok: they are not synced.
+func (h *SyncHealth) State(alertAfter int, every time.Duration, busySince *time.Time, now time.Time) string {
 	switch {
 	case !h.Enabled:
 		return HealthOK
 	case h.FailureStreak >= alertAfter:
 		return HealthFailing
-	case interval > 0:
+	case every > 0:
 		since := h.CreatedAt
 		if h.LastSuccessAt != nil {
 			since = *h.LastSuccessAt
 		}
-		if now.Sub(since) > 2*interval {
+		if busySince != nil && busySince.After(since) {
+			since = *busySince
+		}
+		if now.Sub(since) > StaleAfter(every) {
 			return HealthStale
 		}
 	}
 	return HealthOK
+}
+
+// StaleAfter is how long an account synced every interval may go without a
+// successful sync before it is stale: two intervals, at least one interval
+// plus an hour, so that short intervals leave room for a slow sync.
+func StaleAfter(every time.Duration) time.Duration {
+	return max(2*every, every+time.Hour)
 }
 
 // SyncHealth returns the health of the IMAP accounts that are not removed,
@@ -81,6 +98,7 @@ func (s *Store) SyncHealth(ctx context.Context, owner *int64) (map[int64]*SyncHe
 	for _, r := range rows {
 		h := &SyncHealth{
 			AccountID: r.ID, Name: r.Name, OwnerID: r.OwnerID, Enabled: r.Enabled, CreatedAt: r.CreatedAt,
+			SyncInterval:  secondsToInterval(r.SyncIntervalSeconds),
 			FailureStreak: int(r.FailureStreak), LastSuccessAt: r.LastSuccessAt, NotifiedState: r.NotifiedState,
 		}
 		if h.FailureStreak > 0 {

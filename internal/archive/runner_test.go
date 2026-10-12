@@ -3,6 +3,7 @@ package archive_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,13 +55,34 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	f := newFixture(t, u)
 	f.addAccount("on", "u", "pw")
 	f.addAccount("off", "u", "pw")
+	f.addAccount("manual", "u", "pw")
+	f.addAccount("fast", "u", "pw")
 	off, _ := f.account("off")
 	disabled := false
 	if err := f.store.UpdateAccount(f.ctx, off.Ref(), store.AccountChange{Enabled: &disabled}); err != nil {
 		t.Fatal(err)
 	}
+	manual, _ := f.account("manual")
+	zero, fifteen := time.Duration(0), 15*time.Minute
+	if err := f.store.UpdateAccount(f.ctx, manual.Ref(), store.AccountChange{SyncInterval: &store.OwnInterval{D: &zero}}); err != nil {
+		t.Fatal(err)
+	}
+	fast, _ := f.account("fast")
+	if err := f.store.UpdateAccount(f.ctx, fast.Ref(), store.AccountChange{SyncInterval: &store.OwnInterval{D: &fifteen}}); err != nil {
+		t.Fatal(err)
+	}
 
-	r := &archive.Runner{Syncer: f.syncer, Interval: time.Hour, CheckEvery: 10 * time.Millisecond}
+	// The clock jumps 20 minutes once the first syncs are done: then the
+	// 15-minute account is due again, the hourly one is not.
+	var later atomic.Bool
+	now := func() time.Time {
+		if later.Load() {
+			return time.Now().Add(20 * time.Minute)
+		}
+		return time.Now()
+	}
+	r := &archive.Runner{Syncer: f.syncer, Schedule: archive.Schedule{Sync: time.Hour, SyncMin: 5 * time.Minute},
+		CheckEvery: 10 * time.Millisecond, Now: now}
 	ctx, cancel := context.WithCancel(f.ctx)
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
@@ -79,7 +101,29 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	if _, ok := again[off.ID]; ok {
 		t.Fatal("disabled account synced by the schedule")
 	}
-	if r := first[on.ID]; r.MessagesFetched != 3 || r.MessagesNew != 3 {
+	if _, ok := again[manual.ID]; ok {
+		t.Fatal("account not on the schedule synced by the schedule")
+	}
+	waitForRun(t, f, fast.ID, "ok")
+	fastFirst, _ := f.store.LastRuns(f.ctx)
+	later.Store(true)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runs, _ := f.store.LastRuns(f.ctx)
+		if runs[fast.ID].StartedAt.After(fastFirst[fast.ID].StartedAt) && runs[fast.ID].FinishedAt != nil {
+			if !runs[on.ID].StartedAt.Equal(first[on.ID].StartedAt) {
+				t.Fatal("hourly account synced again after 20 minutes")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("15-minute account not synced again after 20 minutes")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The other accounts read the same mailbox, so "on" may find the
+	// messages already archived.
+	if r := first[on.ID]; r.MessagesFetched != 3 {
 		t.Fatalf("run counters: %+v", r)
 	}
 
