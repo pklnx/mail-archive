@@ -4,9 +4,14 @@
 # the results. Uses a throwaway .env and data directory and cleans up after.
 #
 # Usage: scripts/compose-smoke-test.sh   (from anywhere; needs Docker and Go)
+#
+# With SMOKE_DIR set to an extracted release bundle (scripts/release-bundle.sh),
+# it tests the bundle instead: its docker-compose.yml and ./ma, with the image
+# in MAIL_ARCHIVE_IMAGE, which must exist locally (the bundle builds nothing).
 set -eu
 
-cd "$(dirname "$0")/.."
+repo=$(cd "$(dirname "$0")/.." && pwd)
+cd "${SMOKE_DIR:-$repo}"
 
 if [ -e .env ]; then
 	echo "refusing to run: .env exists and would be overwritten" >&2
@@ -18,7 +23,7 @@ work=$(mktemp -d)
 # Own Compose project, image tag, test container and random host ports, so
 # the test does not touch a local mail-archive installation.
 COMPOSE_PROJECT_NAME=mail-archive-smoke
-MAIL_ARCHIVE_IMAGE=mail-archive:smoke
+MAIL_ARCHIVE_IMAGE=${MAIL_ARCHIVE_IMAGE:-mail-archive:smoke}
 export COMPOSE_PROJECT_NAME MAIL_ARCHIVE_IMAGE
 imap=mail-archive-smoke-imap
 
@@ -48,10 +53,10 @@ cleanup() {
 trap cleanup EXIT
 
 # Test IMAP server, run as a container on the Compose network.
-CGO_ENABLED=0 go build -o "$work/imap-testserver" ./tools/imap-testserver
+(cd "$repo" && CGO_ENABLED=0 go build -o "$work/imap-testserver" ./tools/imap-testserver)
 
 mkdir -p "$work/data" "$work/import"
-cp -R internal/archive/testdata/import/thunderbird "$work/import/"
+cp -R "$repo/internal/archive/testdata/import/thunderbird" "$work/import/"
 chmod -R a+rX "$work/import"
 # The app container runs as UID 65532; on Docker Desktop this is a no-op.
 chmod 0777 "$work/data"

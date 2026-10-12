@@ -1,0 +1,97 @@
+name: Release
+
+# Publishes a release from main, started by hand (Actions → Release → Run
+# workflow). The version is YY.MM-N: year and month (UTC) and a build number
+# that starts at 1 each month (scripts/next-version.sh). It builds and pushes
+# the image for linux/amd64 and linux/arm64 to ghcr.io with the tags YY.MM-N,
+# YY.MM and latest, then creates the tag vYY.MM-N and a GitHub release with
+# notes grouped by label (.github/release.yml) and the Docker Compose bundle
+# (scripts/release-bundle.sh). Run it after CI on main is green.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build everything, but push no image and create no release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the release
+      packages: write # the image on ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tags, for the build number
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        run: |
+          version=$(scripts/next-version.sh)
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "version=$version"
+            echo "image=$image"
+            echo "tags=$image:$version,$image:${version%-*},$image:latest"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $version as $image" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compose bundle
+        run: scripts/release-bundle.sh "${{ steps.version.outputs.version }}" dist "${{ steps.version.outputs.image }}"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        if: ${{ !inputs.dry_run }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push amd64 and arm64 images
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ !inputs.dry_run }}
+          tags: ${{ steps.version.outputs.tags }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.title=mail-archive
+            org.opencontainers.image.description=Read-only archive of IMAP mailboxes with search, export and a web UI
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://pklnx.github.io/mail-archive/
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Create the release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          cat > notes.md <<EOF
+          Image: \`$IMAGE:$VERSION\` (linux/amd64, linux/arm64), also tagged \`${VERSION%-*}\` and \`latest\`.
+
+          **New installation:** download \`mail-archive.tar.gz\` below, extract it and follow \`README.txt\` or the [getting started guide](https://pklnx.github.io/mail-archive/guide/getting-started).
+
+          **Upgrade:** back up, extract \`mail-archive.tar.gz\` in the directory above your \`mail-archive/\` directory (it keeps \`.env\` and \`data/\`), then \`./ma migrate\` and \`docker compose up -d web\`. Read the database migrations and breaking changes below first; see [Upgrades](https://pklnx.github.io/mail-archive/guide/operations#upgrades).
+          EOF
+          gh release create "v$VERSION" dist/mail-archive.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "mail-archive $VERSION" --notes-file notes.md --generate-notes

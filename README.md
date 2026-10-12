@@ -39,7 +39,8 @@ copy**: the servers are never modified.
 ## Quick start
 
 ```sh
-git clone https://github.com/pklnx/mail-archive.git && cd mail-archive
+curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
+cd mail-archive
 cp .env.example .env    # set POSTGRES_PASSWORD and MAIL_ARCHIVE_SECRET_KEY
 ./ma migrate
 ./ma user add NAME --admin   # your login for the web UI

@@ -5,19 +5,27 @@ the web server, and a one-shot container for commands.
 
 ## Requirements
 
-- Docker with a current Docker Compose plugin. Images are built for
-  `linux/amd64` and `linux/arm64`, so Apple Silicon Macs run them natively.
-- Git, to get the code.
+- Docker with a current Docker Compose plugin. Images are published for
+  `linux/amd64` and `linux/arm64`, so Apple Silicon Macs and a Raspberry Pi
+  with a 64-bit system run them natively.
 - IMAP access to your mailboxes. Some providers need it enabled first or an
   app password; see [Accounts and providers](./accounts#providers).
 
 ## Install
 
+Download the Docker Compose bundle of the latest
+[release](https://github.com/pklnx/mail-archive/releases) and extract it:
+
 ```sh
-git clone https://github.com/pklnx/mail-archive.git
+curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
 cd mail-archive
 cp .env.example .env
 ```
+
+The bundle holds `docker-compose.yml`, the `./ma` wrapper, `.env.example`
+and a `README.txt`. Its `docker-compose.yml` uses the image of that release,
+`ghcr.io/pklnx/mail-archive:<version>`; nothing is built. See
+[Versions](./operations#versions) for the version numbers.
 
 Edit `.env`:
 
@@ -27,8 +35,7 @@ Edit `.env`:
   [Backups](./operations#backups)).
 
 Then create the database schema, your user for the web UI and start the web
-server. `./ma` builds the image on its first run (a few minutes),
-`docker compose up` reuses it:
+server. The first `./ma` command downloads the images:
 
 ```sh
 ./ma migrate
@@ -43,9 +50,23 @@ docker compose up -d web
 
 ::: tip The `./ma` wrapper
 `./ma` runs `docker compose run --rm mail-archive …`. It starts PostgreSQL
-when needed, rebuilds the image after code changes (about a second when
-nothing changed) and hides Docker Compose's progress output. Every `./ma`
+when needed and hides Docker Compose's progress output. Every `./ma`
 command also works as `docker compose run --rm mail-archive …`.
+:::
+
+::: details From source instead
+To run the code of a branch, or to change it, clone the repository; its
+`docker-compose.yml` builds the image locally, and `./ma` rebuilds it after
+code changes (about a second when nothing changed):
+
+```sh
+git clone https://github.com/pklnx/mail-archive.git
+cd mail-archive
+cp .env.example .env
+```
+
+The rest is the same. Upgrades then start with `git pull`; see
+[Upgrades](./operations#upgrades).
 :::
 
 ::: info Linux hosts
