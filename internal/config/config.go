@@ -175,18 +175,23 @@ type Webhook struct {
 	Authorization string
 }
 
+// DataDirFromEnv returns the data directory, ./data unless set.
+func DataDirFromEnv() string {
+	if d := os.Getenv(EnvDataDir); d != "" {
+		return d
+	}
+	return "./data"
+}
+
 // Load reads the configuration from the environment.
 func Load() (*Config, error) {
 	cfg := &Config{
 		DatabaseURL: os.Getenv(EnvDatabaseURL),
-		DataDir:     os.Getenv(EnvDataDir),
+		DataDir:     DataDirFromEnv(),
 		LogLevel:    os.Getenv(EnvLogLevel),
 	}
 	if cfg.DatabaseURL == "" {
 		return nil, errors.New(EnvDatabaseURL + " is not set")
-	}
-	if cfg.DataDir == "" {
-		cfg.DataDir = "./data"
 	}
 	for _, h := range strings.Split(os.Getenv(EnvAllowedHosts), ",") {
 		if h = strings.TrimSpace(h); h != "" {

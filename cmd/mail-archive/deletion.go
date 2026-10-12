@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/archive"
-	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -342,7 +341,7 @@ hour. A file whose message was archived again stays.`,
 				return err
 			}
 			defer a.close()
-			blobs, err := blobstore.New(a.cfg.DataDir)
+			blobs, err := openBlobs(a.cfg.DataDir)
 			if err != nil {
 				return err
 			}

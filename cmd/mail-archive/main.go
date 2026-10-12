@@ -29,6 +29,7 @@ func main() {
 	}
 	root.AddCommand(
 		newMigrateCmd(),
+		newPrepareDataCmd(),
 		newKeygenCmd(),
 		newAccountCmd(),
 		newUserCmd(),

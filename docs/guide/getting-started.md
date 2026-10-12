@@ -51,7 +51,8 @@ docker compose up -d web
 ::: tip The `./ma` wrapper
 `./ma` runs `docker compose run --rm mail-archive …`. It starts PostgreSQL
 when needed and hides Docker Compose's progress output. Every `./ma`
-command also works as `docker compose run --rm mail-archive …`.
+command also works as `docker compose run --rm mail-archive …`, except that
+only `./ma migrate` makes the data directory writable for the container.
 :::
 
 ::: details From source instead
@@ -69,10 +70,20 @@ The rest is the same. Upgrades then start with `git pull`; see
 [Upgrades](./operations#upgrades).
 :::
 
+<a id="linux-hosts"></a>
+
 ::: info Linux hosts
-The containers run as UID 65532. Make the archive directory writable for it:
-`sudo chown 65532:65532 data`. Docker Desktop on macOS handles this
-automatically.
+The containers run as UID 65532. `./ma migrate` creates `data/` (or
+`ARCHIVE_DIR`) and makes it writable for that user. Docker Desktop on macOS
+needs nothing.
+
+Only a directory that already holds files, for example after a restore,
+needs a fix by hand. `./ma migrate` then prints a warning with the command:
+
+- Docker: `sudo chown -R 65532:65532 data`
+- Rootless Docker, where UID 65532 in the container is another UID on the
+  host: `docker run --rm --user 0 -v "$PWD/data:/data" alpine chown -R 65532:65532 /data`
+- Podman (untested): `podman unshare chown -R 65532:65532 data`
 :::
 
 ## Add your first account
