@@ -91,8 +91,14 @@ the key below it, then enter the 6-digit code from the app.
 
 You then get 10 recovery codes, shown **once**. Keep them somewhere safe:
 each one replaces a code from the app a single time, for example when the
-phone is lost. You can generate new ones in your profile; the old ones stop
-working.
+phone is lost. **Download PDF** and **Download .txt** save them with your
+user name, the server address and the date, to print or to keep offline or
+in a password manager. The browser makes the file from the codes on screen;
+the server does not send them again.
+
+Users who are not admins can generate new codes in their profile, and
+download them the same way. The old codes stop working, so throw away the
+old sheet.
 
 From then on, the login asks for a code after the password. A code works
 only once and only for about 30 seconds before or after its time.

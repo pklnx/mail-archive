@@ -38,7 +38,7 @@ an access level, needs a login.
   browser only gets a random token in an `HttpOnly`, `SameSite=Strict` cookie;
   the database stores its SHA-256, so a database copy contains no usable
   sessions.
-- **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes.
+- **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes. The PDF and text downloads are made in the browser from the codes on screen; the server does not send the codes again.
 - **Passkeys** (WebAuthn) replace password and TOTP at the login. They are
   bound to the host of `MAIL_ARCHIVE_PUBLIC_URL`, so a look-alike site cannot
   use them. Every passkey login needs user verification (Face ID, Touch ID,
