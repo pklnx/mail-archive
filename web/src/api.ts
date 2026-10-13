@@ -60,6 +60,61 @@ export interface Account {
   /** smtp accounts: the addresses they receive for, and the last accepted message. */
   addresses: string[];
   lastReceivedAt: string | null;
+  /** smtp accounts: the latest fill from IMAP, null without one. */
+  fill: Fill | null;
+  /** smtp accounts: the first message received over SMTP that is still stored. */
+  firstReceived: { at: string; subject: string } | null;
+}
+
+/** A one-time copy of an IMAP mailbox into an smtp account. */
+export interface Fill {
+  id: number;
+  /** "partial": some folders failed (see their error). */
+  status: "running" | "ok" | "partial" | "failed" | "cancelled";
+  host: string;
+  port: number;
+  tls: TLSMode;
+  username: string;
+  includedFolders: string[];
+  excludedFolders: string[];
+  folderPrefix: string;
+  /** The cut-off: messages from an hour after it on are left to journaling. */
+  before: string;
+  error: string;
+  createdAt: string;
+  finishedAt: string | null;
+  /** The folders started so far. */
+  folders: FillFolder[];
+}
+
+export interface FillFolder {
+  /** The IMAP folder, and the archive folder it fills ("prefix/source"). */
+  source: string;
+  folder: string;
+  done: boolean;
+  error: string;
+  scanned: number;
+  imported: number;
+  new: number;
+  afterCutoff: number;
+  journaled: number;
+  present: number;
+  deleted: number;
+}
+
+export interface FillInput {
+  host: string;
+  port?: number;
+  tls: TLSMode;
+  username: string;
+  password: string;
+  includedFolders?: string[];
+  excludedFolders?: string[];
+  /** Default: the user name. */
+  folderPrefix?: string;
+  /** The cut-off as RFC 3339; default: now. */
+  before?: string;
+  confirmFolders?: boolean;
 }
 
 /**
@@ -179,6 +234,8 @@ export interface Location {
   lastSeenAt: string;
   /** smtp accounts: the envelope the message arrived with. */
   envelope: Envelope | null;
+  /** smtp accounts: copied from IMAP by a fill, so there is no envelope. */
+  filled: boolean;
   /** When the retention period ends; null without a rule (kept for ever). */
   retainUntil: string | null;
   /** On legal hold; only sent to admins. */
@@ -323,6 +380,12 @@ export const accountsApi = {
   /** Sync, and compare every folder with the server. */
   reconcile: (name: string) => send("POST", `${accountPath(name)}/sync`, { reconcile: true }),
   syncAll: () => send("POST", "/api/sync"),
+  /** The folders of a fill's IMAP server and those it marks as trash or spam. */
+  fillFolders: async (name: string, server: Pick<FillInput, "host" | "port" | "tls" | "username" | "password">) =>
+    (await send<{ folders: ServerFolder[]; suggestedExclusions: string[] }>("POST", `${accountPath(name)}/fills/folders`, server))!,
+  startFill: (name: string, f: FillInput) => send("POST", `${accountPath(name)}/fills`, f),
+  resumeFill: (name: string, id: number, password: string) => send("POST", `${accountPath(name)}/fills/${id}/resume`, { password }),
+  cancelFill: (name: string, id: number) => send("POST", `${accountPath(name)}/fills/${id}/cancel`),
 };
 
 export function listMessages(filter: Filter, cursor: string | null, signal?: AbortSignal, limit = 50): Promise<MessagePage> {

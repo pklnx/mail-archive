@@ -12,7 +12,7 @@ function account(name: string, folders: Folder[]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders, goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null,
+    addresses: [], lastReceivedAt: null, fill: null, firstReceived: null,
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
   };
 }
@@ -116,5 +116,16 @@ describe("Sidebar tree", () => {
     expect(document.activeElement).toBe(chevron);
     expect(chevron.tagName).toBe("BUTTON");
     expect(chevron.getAttribute("type")).toBe("button");
+  });
+});
+
+describe("Sidebar account state", () => {
+  it("says importing for a running fill, syncing for IMAP", () => {
+    const d = data();
+    const smtp = { ...account("journal", [f("INBOX"), f("alice/INBOX")]), kind: "smtp" as const, sync: { ...d.accounts[0]!.sync, state: "running" as const } };
+    d.accounts = [{ ...d.accounts[0]!, sync: { ...d.accounts[0]!.sync, state: "running" } }, smtp];
+    render(<Harness state={view()} d={d} select={() => {}} />);
+    expect(screen.getAllByTitle(t.importing)).toHaveLength(1);
+    expect(screen.getAllByTitle(t.syncing)).toHaveLength(1);
   });
 });

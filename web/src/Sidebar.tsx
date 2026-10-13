@@ -215,9 +215,9 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
 function AccountState({ a }: { a: Account }) {
   if (a.sync.state !== "idle") {
     return (
-      <span className="text-xs font-normal opacity-70" title={a.kind === "import" ? t.importing : t.syncing}>
+      <span className="text-xs font-normal opacity-70" title={a.kind !== "imap" ? t.importing : t.syncing}>
         <span aria-hidden className="inline-block animate-spin">↻</span>
-        <span className="sr-only">{a.kind === "import" ? t.importing : t.syncing}</span>
+        <span className="sr-only">{a.kind !== "imap" ? t.importing : t.syncing}</span>
       </span>
     );
   }
