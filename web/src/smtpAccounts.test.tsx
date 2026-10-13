@@ -8,7 +8,7 @@ function smtpAccount(more: Partial<Account> = {}): Account {
   return {
     name: "journal", kind: "smtp", enabled: true, removed: false, host: "", port: 0, tls: "tls", username: "",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: ["archive@archive.local"], lastReceivedAt: null,
+    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: null, firstReceived: null,
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
     ...more,
   };

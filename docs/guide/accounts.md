@@ -19,7 +19,9 @@ is missed; see [Journaling with Postfix](./journaling). smtp accounts have no
 server and are never synced; they can be enabled, disabled, renamed, moved
 and removed. Admins add them in the web UI (Add account → **SMTP journaling**)
 or with `./ma account add-smtp`; only admins change their addresses, because
-an address decides who receives the copies of every message.
+an address decides who receives the copies of every message. The owner can
+bring in the mail from before journaling with **Import existing mail from
+IMAP** on the card; see [Journaling](./journaling#bring-in-the-mail-from-before-journaling).
 
 ## Adding an account
 

@@ -138,8 +138,22 @@ func run(dbURL, listen string, log *slog.Logger) error {
 			return fmt.Errorf("reconcile %s: %w", a.Name, res.Err)
 		}
 	}
-	if err := journal(ctx, st, blobs, time.Now()); err != nil {
+	journalAcc, err := journal(ctx, st, blobs, time.Now())
+	if err != nil {
 		return err
+	}
+	// The work mailbox's mail from before journaling, copied into the
+	// journal account once, as "Import existing mail from IMAP" does.
+	filler := &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
+	fill := &store.Fill{
+		AccountID: journalAcc.ID, Host: host, Port: portNum, TLSMode: store.TLSModeNone,
+		Username: "alex.morgan@work.example", FolderPrefix: "alex.morgan@work.example", Cutoff: time.Now(),
+	}
+	if err := st.CreateFill(ctx, fill, func(id int64) ([]byte, error) { return archive.SealFillPassword(sealer, id, "demo") }); err != nil {
+		return err
+	}
+	if _, err := filler.Run(ctx, fill.ID); err != nil {
+		return fmt.Errorf("fill: %w", err)
 	}
 	// A retention rule for the business account, for the retention page
 	// and the message view.
@@ -176,6 +190,8 @@ func run(dbURL, listen string, log *slog.Logger) error {
 
 	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
+	fills := &archive.FillRunner{Filler: filler}
+	go fills.Run(ctx)
 	// Passkeys need a host name: the demo is meant for localhost.
 	_, webPort, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -183,7 +199,7 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	}
 	publicURL := "http://localhost:" + webPort
 	srv := web.New(st, blobs, log, web.Options{
-		Syncer: syncer, Runner: runner, Sealer: sealer, SecretKey: key, PublicURL: publicURL,
+		Syncer: syncer, Runner: runner, Fills: fills, Sealer: sealer, SecretKey: key, PublicURL: publicURL,
 		// The demo stores its journal messages directly; the UI shows the
 		// SMTP server as on, as in a real journaling setup.
 		SMTPListen: ":2525",
@@ -198,10 +214,10 @@ func run(dbURL, listen string, log *slog.Logger) error {
 
 // journal creates an smtp account with copies the mail server delivered,
 // one of them with a BCC recipient that only the envelope shows.
-func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now time.Time) error {
+func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now time.Time) (*store.Account, error) {
 	acc := &store.Account{Name: "journal", Enabled: true}
 	if err := st.CreateSMTPAccount(ctx, acc, []string{"archive@archive.example.com"}); err != nil {
-		return err
+		return nil, err
 	}
 	for _, m := range []struct {
 		raw   string
@@ -222,21 +238,21 @@ func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now t
 	} {
 		blob, created, err := blobs.Put(strings.NewReader(m.raw))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		env := store.Envelope{
 			MailFrom: m.from, RcptTo: m.rcpts, ReceivedAt: m.at,
 			ClientIP: netip.MustParseAddr("172.18.0.1"), HELO: "mx.example.com",
 		}
 		if _, err := st.ReceiveMessage(ctx, acc.ID, meta, env, func() bool { return blobs.Exists(blob.SHA256) }); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return acc, nil
 }
 
 // createDatabase creates a uniquely named database on the server of base

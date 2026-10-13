@@ -149,6 +149,27 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The import of earlier mail from IMAP into the smtp account "journal".
+  const p = await page("light");
+  await p.goto(base + "/?view=accounts");
+  await p.getByRole("button", { name: "Import existing mail from IMAP" }).click();
+  await p.getByLabel("IMAP server").fill("imap.example.com");
+  await p.getByLabel("Username").fill("alex@example.com");
+  await p.getByLabel("Cut-off (optional)").waitFor();
+  await p.screenshot({ path: `${out}/fill-form.png` });
+  await p.context().close();
+}
+
+{
+  // A message the import copied: no envelope, so the origin says so.
+  const p = await page("light");
+  await openMessage(p, "Invoice 2026-10");
+  await p.getByText(/Origin \(journal\)/).waitFor();
+  await p.screenshot({ path: `${out}/fill-origin.png` });
+  await p.context().close();
+}
+
+{
   const p = await page("light");
   await p.goto(base + "/?view=users");
   await p.getByText("sam").first().waitFor();

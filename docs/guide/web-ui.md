@@ -81,6 +81,12 @@ HTML mail is shown in a sandboxed frame: no scripts, no forms, no plugins.
 the message (tracking pixels). Click **Load remote images** for one message
 to allow them. Images embedded in the message are always shown.
 
+**Found in** lists every folder that holds the message. For a copy an smtp
+account received, an **Envelope** row shows the sender and recipients the mail
+server delivered it to, BCC included; for a copy it imported from IMAP
+([fill](./journaling#bring-in-the-mail-from-before-journaling)), an **Origin**
+row says that there is no envelope.
+
 **Show text** switches to the plain-text version. **Download .eml** saves the
 original message, which any mail client opens. Attachments are downloads;
 only PNG, JPEG, GIF and WebP images open in the browser.

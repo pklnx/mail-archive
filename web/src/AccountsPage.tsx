@@ -3,16 +3,13 @@ import { accountsApi, folderQuestion, type Account, type AccountInput, type Acco
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
+import { button, input, primary } from "./formStyles";
+import { FillForm, FillSection } from "./FillPanel";
 import { postfixSetup } from "./journalSetup";
 import type { AccountsState } from "./useAccounts";
 
-const button =
-  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800";
-const primary = "rounded-md bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
-const input =
-  "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
-
-type Editing = { mode: "new" } | { mode: "edit"; name: string } | null;
+/** "fill": the form that imports existing mail from IMAP into an smtp account. */
+type Editing = { mode: "new" } | { mode: "edit" | "fill"; name: string } | null;
 
 interface Props {
   accounts: AccountsState;
@@ -44,6 +41,11 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
   const active = data?.accounts.filter((a) => !a.removed) ?? [];
   const removed = data?.accounts.filter((a) => a.removed) ?? [];
   const editAccount = editing?.mode === "edit" ? active.find((a) => a.name === editing.name) : undefined;
+  const fillAccount = editing?.mode === "fill" ? active.find((a) => a.name === editing.name && a.kind === "smtp") : undefined;
+  const done = () => {
+    setEditing(null);
+    reload();
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -83,8 +85,9 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
             smtpOn={data?.smtp != null}
             onCancel={() => setEditing(null)}
             onCreated={reload}
-            onSaved={() => {
-              setEditing(null);
+            onSaved={done}
+            onFill={(name) => {
+              setEditing({ mode: "fill", name });
               reload();
             }}
           />
@@ -93,7 +96,11 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
         {data && active.length === 0 && editing === null && <p className="text-sm text-zinc-500">{t.noAccounts}</p>}
 
         {active.map((a) =>
-          editAccount?.name === a.name && a.kind === "smtp" ? (
+          fillAccount?.name === a.name ? (
+            <Card key={a.name}>
+              <FillForm account={a} onCancel={() => setEditing(null)} onStarted={done} />
+            </Card>
+          ) : editAccount?.name === a.name && a.kind === "smtp" ? (
             <Card key={a.name}>
               <SMTPAccountForm
                 account={a}
@@ -131,6 +138,8 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
               onReconcile={() => run(() => accountsApi.reconcile(a.name))}
               onShowGone={() => showGone(a.name)}
               onEdit={() => setEditing({ mode: "edit", name: a.name })}
+              onFill={() => setEditing({ mode: "fill", name: a.name })}
+              onChanged={reload}
               onToggle={() => run(() => accountsApi.update(a.name, { enabled: !a.enabled }))}
               onRemove={() => {
                 if (window.confirm(t.confirmRemove(a.name))) void run(() => accountsApi.remove(a.name));
@@ -277,11 +286,15 @@ interface CardProps {
   onReconcile: () => void;
   onShowGone: () => void;
   onEdit: () => void;
+  /** smtp accounts: open the form that imports existing mail from IMAP. */
+  onFill: () => void;
+  /** After a fill was cancelled or resumed. */
+  onChanged: () => void;
   onToggle: () => void;
   onRemove: () => void;
 }
 
-function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone, onEdit, onToggle, onRemove }: CardProps) {
+function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone, onEdit, onFill, onChanged, onToggle, onRemove }: CardProps) {
   const status = syncStatus(a);
   const schedule = scheduleNote(a, data);
   const reconcile = reconcileNote(a);
@@ -308,6 +321,9 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
           </button>
           {manage && (
             <>
+              <button type="button" className={button} disabled={busy || a.fill?.status === "running"} onClick={onFill}>
+                {t.importFromIMAP}
+              </button>
               <button type="button" className={button} onClick={onEdit}>
                 {t.edit}
               </button>
@@ -321,6 +337,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
           )}
         </div>
         {showSetup && <PostfixPanel addresses={a.addresses} />}
+        <FillSection account={a} manage={manage} onChanged={onChanged} />
       </Card>
     );
   }
@@ -571,13 +588,15 @@ const guideURL = "https://pklnx.github.io/mail-archive/guide/journaling";
  * The "Add account" form: admins first choose where the mail comes from,
  * an IMAP mailbox or SMTP journaling; everyone else adds an IMAP account.
  */
-function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved }: {
+function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved, onFill }: {
   admin: boolean;
   smtpOn: boolean;
   onCancel: () => void;
   /** An smtp account exists; its form still shows the mail server setup. */
   onCreated: () => void;
   onSaved: () => void;
+  /** Opens the import from IMAP for the new smtp account. */
+  onFill: (name: string) => void;
 }) {
   const [source, setSource] = useState<"imap" | "smtp">("imap");
   const [created, setCreated] = useState(false);
@@ -611,6 +630,7 @@ function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved }: {
             onCreated();
           }}
           onSaved={onSaved}
+          onFill={onFill}
         />
       )}
     </section>
@@ -627,7 +647,7 @@ export function addressList(values: string[]): string[] {
  * addresses (addresses: admins only). A new account shows the mail server
  * setup before the form closes.
  */
-export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, onSaved }: {
+export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, onSaved, onFill }: {
   account?: Account;
   admin: boolean;
   smtpOn: boolean;
@@ -635,6 +655,8 @@ export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, o
   onCreated?: () => void;
   /** Called with the saved account's name. */
   onSaved: (name: string) => void;
+  /** After creating: offers the import of existing mail from IMAP. */
+  onFill?: (name: string) => void;
 }) {
   const [name, setName] = useState(account?.name ?? "");
   const [addresses, setAddresses] = useState<string[]>(account ? account.addresses : [""]);
@@ -675,9 +697,16 @@ export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, o
           {t.smtpAccountAdded(name.trim())}
         </p>
         <PostfixPanel addresses={created} />
-        <button type="button" className={`${primary} self-start`} onClick={() => onSaved(name.trim())}>
-          {t.done}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={primary} onClick={() => onSaved(name.trim())}>
+            {t.done}
+          </button>
+          {onFill && (
+            <button type="button" className={button} onClick={() => onFill(name.trim())}>
+              {t.importFromIMAP}
+            </button>
+          )}
+        </div>
       </div>
     );
   }

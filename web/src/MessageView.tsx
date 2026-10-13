@@ -91,6 +91,15 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
                 </Fragment>
               ),
           )}
+          {msg.locations.map(
+            (l) =>
+              l.filled && (
+                <Fragment key={`origin/${l.account}/${l.folder}/${l.uid}`}>
+                  <dt className="text-zinc-500">{t.origin(l.account)}</dt>
+                  <dd>{t.originFilled}</dd>
+                </Fragment>
+              ),
+          )}
         </dl>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           {msg.hasHtml && (

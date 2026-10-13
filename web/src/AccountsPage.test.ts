@@ -8,7 +8,7 @@ function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, 
   return {
     name: "a", kind, enabled: kind !== "import", removed: false, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null,
+    addresses: [], lastReceivedAt: null, fill: null, firstReceived: null,
     sync: { failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null, ...sync },
   };
 }

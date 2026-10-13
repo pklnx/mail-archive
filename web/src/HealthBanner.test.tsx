@@ -7,7 +7,7 @@ function acc(name: string, health: Account["sync"]["health"]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null,
+    addresses: [], lastReceivedAt: null, fill: null, firstReceived: null,
     sync: { state: "idle", lastRun: null, failureStreak: health === "failing" ? 3 : 0, failingSince: null, health, syncEvery: null, nextAt: null },
   };
 }

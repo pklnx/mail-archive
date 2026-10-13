@@ -219,7 +219,17 @@ received a message, and the web server logs every refusal at error level.
 ## Bring in the mail from before journaling
 
 Journaling covers mail from the moment it is switched on. What the mailbox
-already holds comes into the same account with a one-time **fill** from IMAP:
+already holds comes into the same account with a one-time **fill** from IMAP.
+In the web UI, the smtp account's card has **Import existing mail from IMAP**
+(also offered right after creating the account). The form takes the IMAP
+server and login, checks the login and lists the folders: trash and spam
+folders start unticked. The prefix and the cut-off are optional. The form
+shows the first message the account received over SMTP, as a check that
+journaling works.
+
+![The import form of the smtp account "journal": IMAP server, login, folder prefix and cut-off](/screenshots/fill-form.png)
+
+On the command line:
 
 ```sh
 ./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk
@@ -227,15 +237,17 @@ already holds comes into the same account with a one-time **fill** from IMAP:
 
 The password is asked for (or read with `--password-stdin`) and kept,
 encrypted, only while the fill runs. The command prints the first message the
-account received over SMTP, as a check that journaling works, and then the
-progress per folder. It is not a sync: nothing is fetched again afterwards,
-and the account stays *complete (SMTP)*.
+account received over SMTP and then the progress per folder. It is not a sync:
+nothing is fetched again afterwards, and the account stays *complete (SMTP)*.
 
 **Where the mail goes.** Into folders of their own, `PREFIX/<IMAP folder>`,
 such as `alice@example.com/INBOX` and `alice@example.com/Sent`; the prefix is
 the user name unless `--prefix` sets another. The journal `INBOX` stays
 exactly what arrived over SMTP, with an envelope on every message. Imported
-messages have no envelope: BCC recipients are unknown for them.
+messages have no envelope: BCC recipients are unknown for them, and the
+message view says so in an **Origin** row.
+
+![A message the fill copied: found in the journal's fill folder and in the work account; the origin row says it was imported from IMAP](/screenshots/fill-origin.png)
 
 **Which messages.** The journal copy and the mailbox copy of a message differ
 in their `Received:` lines, so the archive cannot match them by content. The
@@ -269,12 +281,15 @@ process runs. `./ma account fill journal` lists the fills with their counts:
 scanned, imported, after the cut-off, journaled, already there and deleted by
 retention.
 
-**From the web server.** The [API](../reference/api#fills) starts, resumes
-and cancels fills too; the web server runs them in the background, one at a
-time and apart from the scheduled syncs. A fill it was running when it
-stopped keeps its encrypted password and continues at the next start. So does
-a fill whose command-line process died without Ctrl-C: the web server picks it
-up within a minute.
+**From the web server.** A fill started in the web UI (or the
+[API](../reference/api#fills)) runs in the web server's background, one at a
+time and apart from the scheduled syncs. The card shows its progress per
+folder with **Cancel import**; after a failed, partly failed or cancelled fill
+it shows the error and **Resume import**, which asks for the password again.
+The sidebar marks the account as importing meanwhile. A fill the web server
+was running when it stopped keeps its encrypted password and continues at the
+next start. So does a fill whose command-line process died without Ctrl-C:
+the web server picks it up within a minute.
 
 **Retention.** An account-wide rule covers the fill folders. A rule on the
 folder `INBOX` covers the journal only. See [Retention](./retention#rules).
