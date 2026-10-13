@@ -1,7 +1,7 @@
-// UI texts in English and German. The language follows the browser: German
-// if the first supported preference is German, English otherwise.
-
-export type Lang = "en" | "de";
+// UI texts in English and German. The language and the formats of dates
+// and numbers are settings of each user (profile page); "auto" follows the
+// browser: German if the first supported preference is German, English
+// otherwise.
 
 const en = {
   showMenu: "Show accounts and folders",
@@ -458,6 +458,7 @@ const en = {
       "profile.recovery_codes": "New recovery codes",
       "profile.passkey_add": "Added passkey",
       "profile.passkey_remove": "Removed passkey",
+      "profile.change": "Changed settings",
       "api_key.create": "Created API key",
       "api_key.revoke": "Revoked API key",
       "retention.rule_add": "Added retention rule",
@@ -475,6 +476,12 @@ const en = {
       "data.backup": "Backup",
       "audit.export": "Exported log",
     })[a] ?? a,
+  languageName: "English",
+  displaySettings: "Language and formats",
+  language: "Language",
+  formats: "Dates and numbers",
+  settingAuto: "Automatic (browser)",
+  formatsHint: "Month and day names follow this setting too. Automatic uses your browser's format for the chosen language.",
   role: (r: string): string =>
     ({ trash: "Trash", junk: "Spam", drafts: "Drafts", sent: "Sent", archive: "Archive", all: "All mail", flagged: "Flagged" })[r] ?? r,
 };
@@ -874,6 +881,7 @@ const de: Messages = {
       "profile.recovery_codes": "Neue Wiederherstellungscodes",
       "profile.passkey_add": "Passkey hinzugefügt",
       "profile.passkey_remove": "Passkey entfernt",
+      "profile.change": "Einstellungen geändert",
       "api_key.create": "API-Schlüssel erstellt",
       "api_key.revoke": "API-Schlüssel widerrufen",
       "retention.rule_add": "Aufbewahrungsregel angelegt",
@@ -950,33 +958,135 @@ const de: Messages = {
   hideApiKeys: "API-Schlüssel ausblenden",
   resetAlsoApiKeys: (n) => `Auch die ${n} API-Schlüssel widerrufen (empfohlen nach einer Kompromittierung)`,
   confirmReset: "Zurücksetzen",
+  languageName: "Deutsch",
+  displaySettings: "Sprache und Formate",
+  language: "Sprache",
+  formats: "Datum und Zahlen",
+  settingAuto: "Automatisch (Browser)",
+  formatsHint: "Monats- und Tagesnamen folgen auch dieser Einstellung. Automatisch nimmt das Format deines Browsers für die gewählte Sprache.",
   role: (r) =>
     ({ trash: "Papierkorb", junk: "Spam", drafts: "Entwürfe", sent: "Gesendet", archive: "Archiv", all: "Alle Nachrichten", flagged: "Markiert" })[r] ?? r,
 };
 
-const dictionaries: Record<Lang, Messages> = { en, de };
+const dictionaries = { en, de } satisfies Record<string, Messages>;
+
+/** A UI language: one per dictionary. */
+export type Lang = keyof typeof dictionaries;
+
+/** The UI languages, in the order of the language choice. */
+export const languages = Object.keys(dictionaries) as Lang[];
+
+/** The language of a browser preference like "de-AT", if there is a dictionary. */
+function langOf(pref: string): Lang | undefined {
+  const p = pref.toLowerCase();
+  return languages.find((l) => p === l.toLowerCase() || p.startsWith(`${l.toLowerCase()}-`));
+}
+
+/** The canonical form of a BCP 47 tag, or undefined if it is not one. */
+export function canonical(tag: string): string | undefined {
+  try {
+    return Intl.getCanonicalLocales(tag)[0];
+  } catch {
+    return undefined;
+  }
+}
+
+function browserPrefs(): readonly string[] {
+  return navigator.languages ?? [navigator.language];
+}
 
 /**
  * The first supported language in the browser's preferences, with the full
  * tag as locale for dates and numbers (en-GB keeps day-month order).
  */
-export function detectLocale(prefs: readonly string[] = navigator.languages ?? [navigator.language]): { lang: Lang; locale: string } {
+export function detectLocale(prefs: readonly string[] = browserPrefs()): { lang: Lang; locale: string } {
   for (const p of prefs) {
-    const base = p.toLowerCase().split("-")[0];
-    if (base !== "de" && base !== "en") continue;
-    try {
-      return { lang: base, locale: Intl.getCanonicalLocales(p)[0] ?? base };
-    } catch {
-      return { lang: base, locale: base };
-    }
+    const l = langOf(p);
+    if (l) return { lang: l, locale: canonical(p) ?? l };
   }
   return { lang: "en", locale: "en" };
 }
 
-export const { lang, locale } = detectLocale();
+/**
+ * A user's UI settings as the server stores them: "auto" (follow the
+ * browser) or a tag. Values the UI cannot use count as "auto".
+ */
+export type Settings = { language: string; locale: string };
 
-/** The UI texts in the browser's language. */
-export const t: Messages = dictionaries[lang];
+const automatic: Settings = { language: "auto", locale: "auto" };
+
+/**
+ * The language and locale for settings and browser preferences. A chosen
+ * language with automatic formats takes the first browser preference in
+ * that language, else the bare language: Deutsch on an en-GB browser gives
+ * "de", not English month names inside German text.
+ */
+export function resolve(s: Settings, prefs: readonly string[]): { lang: Lang; locale: string } {
+  const detected = detectLocale(prefs);
+  const chosen = languages.find((l) => l === s.language);
+  const lang = chosen ?? detected.lang;
+  let loc = s.locale === "auto" ? undefined : canonical(s.locale);
+  if (!loc && chosen) {
+    const pref = prefs.find((p) => langOf(p) === chosen);
+    loc = (pref && canonical(pref)) ?? chosen;
+  }
+  return { lang, locale: loc ?? detected.locale };
+}
+
+/** Whether the page must reload to show next instead of current. */
+export function needsReload(next: Settings, current: Settings, prefs: readonly string[] = browserPrefs()): boolean {
+  const a = resolve(next, prefs);
+  const b = resolve(current, prefs);
+  return a.lang !== b.lang || a.locale !== b.locale;
+}
+
+const KEY = "mail-archive.language";
+
+/**
+ * The settings of the last user in this browser, for the screens shown
+ * before login. Missing, invalid or blocked storage gives "auto".
+ */
+export function storedSettings(): Settings {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(KEY) ?? "null");
+    if (v && typeof v === "object" && "language" in v && "locale" in v) {
+      const { language, locale } = v;
+      if (typeof language === "string" && typeof locale === "string") return { language, locale };
+    }
+  } catch {
+    // invalid or blocked storage
+  }
+  return automatic;
+}
+
+/** The UI texts in the chosen language. */
+export let t: Messages = en;
+/** The UI language. */
+export let lang: Lang = "en";
+/** The locale for dates and numbers. */
+export let locale = "en";
+/** The applied settings. */
+export let settings: Settings = automatic;
+
+/**
+ * Applies settings to t, lang, locale and <html lang>, and remembers them
+ * in this browser. Other modules import t, lang and locale as live
+ * bindings, so what renders afterwards uses the new values; what is on
+ * screen already does not change.
+ */
+export function applySettings(s: Settings, prefs: readonly string[] = browserPrefs()) {
+  ({ lang, locale } = resolve(s, prefs));
+  t = dictionaries[lang];
+  settings = s;
+  document.documentElement.lang = lang;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(s));
+  } catch {
+    // not persisted; still applied for this page
+  }
+}
+
+applySettings(storedSettings());
 
 export function messagesFor(l: Lang): Messages {
   return dictionaries[l];

@@ -152,11 +152,9 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
   );
 }
 
-const relationLabel: Partial<Record<ConversationEntry["relation"], string>> = {
-  self: t.thisMessage,
-  parent: t.inReplyTo,
-  reply: t.replyLabel,
-};
+function relationLabel(r: ConversationEntry["relation"]): string | undefined {
+  return ({ self: t.thisMessage, parent: t.inReplyTo, reply: t.replyLabel } as Partial<Record<ConversationEntry["relation"], string>>)[r];
+}
 
 /**
  * The other messages of the conversation, oldest first. It loads on its own,
@@ -178,7 +176,7 @@ function ConversationSection({ id, open }: { id: string; open: (id: string) => v
       <ol className="mt-1 text-sm">
         {c.messages.map((m) => {
           const self = m.relation === "self";
-          const label = relationLabel[m.relation];
+          const label = relationLabel(m.relation);
           const line = (
             <>
               <time className="w-20 shrink-0 text-xs text-zinc-500" dateTime={m.sortAt}>

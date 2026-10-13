@@ -77,6 +77,13 @@ describe("entry texts", () => {
     expect(targetLabel(entry("message.open", "00:00", { target: msg("b".repeat(64)) }))).toBe("bbbbbbbbbbbb…");
     expect(targetLabel(entry("account.add", "00:00", { target: { type: "account", id: "3", name: "work" } }))).toBe("work");
     expect(entryDetail(entry("message.search", "00:00", { details: { q: "tax", from: "bob" } }))).toBe("“tax” from:bob");
+    expect(
+      entryDetail(
+        entry("profile.change", "00:00", {
+          details: { fields: ["language", "locale"], language: { from: "auto", to: "de" }, locale: { from: "auto", to: "de-AT" } },
+        }),
+      ),
+    ).toBe("language: auto → de, locale: auto → de-AT");
     expect(entryDetail(entry("auth.login_failed", "00:00", { details: { method: "password", reason: "wrong_password" } }))).toBe("password, wrong_password");
   });
   it("words every action and falls back to the name", () => {

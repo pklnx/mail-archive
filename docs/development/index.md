@@ -39,7 +39,10 @@ pnpm test
 
 UI texts are in `web/src/i18n.ts`, in English and German. The German
 dictionary has the type of the English one, so a missing translation fails
-the type check.
+the type check. A new language is one more dictionary with its
+`languageName`; the profile offers it without a server change. A new format
+for dates and numbers is one more entry in `formatChoices`
+(`web/src/Profile.tsx`).
 
 pnpm refuses packages released less than a day ago (supply-chain protection).
 Keep it that way instead of adding exceptions.

@@ -46,7 +46,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (name, password_hash, is_admin, must_change_password)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle
+RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale
 `
 
 type CreateUserParams struct {
@@ -80,6 +80,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
 		&i.WebauthnHandle,
+		&i.Language,
+		&i.Locale,
 	)
 	return i, err
 }
@@ -142,7 +144,8 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled
+SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled,
+       u.language, u.locale
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1
@@ -164,6 +167,8 @@ type GetSessionRow struct {
 	IsAdmin            bool
 	MustChangePassword bool
 	TwoFactorEnabled   bool
+	Language           string
+	Locale             string
 }
 
 // A session is valid while it has not expired, was used after the idle
@@ -179,12 +184,14 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.IsAdmin,
 		&i.MustChangePassword,
 		&i.TwoFactorEnabled,
+		&i.Language,
+		&i.Locale,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle FROM users WHERE id = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -206,12 +213,14 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
 		&i.WebauthnHandle,
+		&i.Language,
+		&i.Locale,
 	)
 	return i, err
 }
 
 const getUserByName = `-- name: GetUserByName :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle FROM users WHERE name = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale FROM users WHERE name = $1
 `
 
 func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) {
@@ -233,12 +242,14 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 		&i.TwoFactorLastCounter,
 		&i.TwoFactorVersion,
 		&i.WebauthnHandle,
+		&i.Language,
+		&i.Locale,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle FROM users ORDER BY name
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale FROM users ORDER BY name
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -266,6 +277,8 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.TwoFactorLastCounter,
 			&i.TwoFactorVersion,
 			&i.WebauthnHandle,
+			&i.Language,
+			&i.Locale,
 		); err != nil {
 			return nil, err
 		}
@@ -326,6 +339,23 @@ func (q *Queries) LockUsableAdmins(ctx context.Context) ([]int64, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockUserSettings = `-- name: LockUserSettings :one
+SELECT language, locale FROM users WHERE id = $1 FOR UPDATE
+`
+
+type LockUserSettingsRow struct {
+	Language string
+	Locale   string
+}
+
+// The current settings, locked, so concurrent changes record the right old value.
+func (q *Queries) LockUserSettings(ctx context.Context, id int64) (LockUserSettingsRow, error) {
+	row := q.db.QueryRow(ctx, lockUserSettings, id)
+	var i LockUserSettingsRow
+	err := row.Scan(&i.Language, &i.Locale)
+	return i, err
 }
 
 const recordLogin = `-- name: RecordLogin :exec
@@ -406,6 +436,21 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setUserSettings = `-- name: SetUserSettings :exec
+UPDATE users SET language = $1, locale = $2 WHERE id = $3
+`
+
+type SetUserSettingsParams struct {
+	Language string
+	Locale   string
+	ID       int64
+}
+
+func (q *Queries) SetUserSettings(ctx context.Context, arg SetUserSettingsParams) error {
+	_, err := q.db.Exec(ctx, setUserSettings, arg.Language, arg.Locale, arg.ID)
+	return err
 }
 
 const touchSession = `-- name: TouchSession :exec

@@ -300,6 +300,36 @@ paths:
         "503":
           $ref: "#/components/responses/PasskeysOff"
 
+  /api/profile:
+    patch:
+      tags: [profile]
+      operationId: updateProfile
+      summary: Change the own web UI settings
+      description: |
+        Changes the language and the formats of dates and numbers. The
+        settings are read from the user in the session (`GET /api/session`).
+        An unchanged value is no change and is not logged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                language:
+                  $ref: "#/components/schemas/Language"
+                locale:
+                  $ref: "#/components/schemas/Locale"
+      responses:
+        "204":
+          description: Changed, or nothing to change.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/profile/password:
     put:
       tags: [profile]
@@ -2276,7 +2306,7 @@ components:
 
     User:
       type: object
-      required: [name, admin, mustChangePassword, twoFactorEnabled, twoFactorRequired]
+      required: [name, admin, mustChangePassword, twoFactorEnabled, twoFactorRequired, language, locale]
       properties:
         name:
           type: string
@@ -2289,6 +2319,24 @@ components:
           type: boolean
         twoFactorRequired:
           type: boolean
+        language:
+          $ref: "#/components/schemas/Language"
+        locale:
+          $ref: "#/components/schemas/Locale"
+    Language:
+      type: string
+      maxLength: 35
+      pattern: "^(auto|[a-z]{2,3}(-[A-Za-z0-9]{2,8})*)$"
+      description: |
+        The language of the web UI. `auto` follows the browser. The UI has
+        `en` and `de` today and treats other values like `auto`.
+    Locale:
+      type: string
+      maxLength: 35
+      pattern: "^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*)$"
+      description: |
+        A BCP 47 tag for dates and numbers, or `auto` for the browser's. The
+        UI treats a tag it cannot use like `auto`.
     Session:
       type: object
       required: [user]

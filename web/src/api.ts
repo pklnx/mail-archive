@@ -354,6 +354,9 @@ export interface User {
   mustChangePassword: boolean;
   twoFactorEnabled: boolean;
   twoFactorRequired: boolean;
+  /** Web UI settings: "auto" (follow the browser) or a tag. */
+  language: string;
+  locale: string;
 }
 
 /**
@@ -483,6 +486,7 @@ export interface TwoFactorSetup {
 
 export const profileApi = {
   changePassword: (current: string, next: string) => send("PUT", "/api/profile/password", { current, new: next }),
+  update: (p: { language?: string; locale?: string }) => send("PATCH", "/api/profile", p),
   twoFactor: {
     get: () => getJSON<TwoFactorSetup>("/api/profile/2fa"),
     setup: () => send<TwoFactorSetup>("POST", "/api/profile/2fa/setup"),

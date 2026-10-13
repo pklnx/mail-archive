@@ -192,3 +192,58 @@ func toJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+func TestProfileSettings(t *testing.T) {
+	f := newAuthFixture(t)
+	f.addUser("admin", "correct horse battery", true)
+	f.addUser("kim", "kims own passphrase", false)
+	f.loginOK("kim", "kims own passphrase")
+	settings := func(g *authFixture) (any, any) {
+		t.Helper()
+		u := g.expect("GET", "/api/session", nil, 200)["user"].(map[string]any)
+		return u["language"], u["locale"]
+	}
+	if l, c := settings(f); l != "auto" || c != "auto" {
+		t.Fatalf("new user: %v %v", l, c)
+	}
+	f.expect("PATCH", "/api/profile", map[string]string{"language": "de"}, 204)
+	f.expect("PATCH", "/api/profile", map[string]string{"locale": "de-AT"}, 204)
+	if l, c := settings(f); l != "de" || c != "de-AT" {
+		t.Fatalf("after change: %v %v", l, c)
+	}
+	// A new login returns them too.
+	other := f.as()
+	resp, out := other.do("POST", "/api/session", map[string]string{"username": "kim", "password": "kims own passphrase"})
+	if u, _ := out["user"].(map[string]any); resp.StatusCode != 200 || u["language"] != "de" || u["locale"] != "de-AT" {
+		t.Fatalf("login: %d %v", resp.StatusCode, out)
+	}
+	// A language without a dictionary is still a valid choice.
+	f.expect("PATCH", "/api/profile", map[string]string{"language": "pt-BR"}, 204)
+	for _, body := range []map[string]any{
+		{},
+		{"language": "DE"},
+		{"language": "german"},
+		{"language": ""},
+		{"locale": "de_AT"},
+		{"locale": ""},
+		{"locale": strings.Repeat("a-", 20) + "b"},
+		{"language": "de", "theme": "dark"},
+	} {
+		f.expect("PATCH", "/api/profile", body, 400)
+	}
+	if l, c := settings(f); l != "pt-BR" || c != "de-AT" {
+		t.Fatalf("after bad requests: %v %v", l, c)
+	}
+
+	// A user who must change the password can only do that.
+	h, err := cheapHasher.Hash(context.Background(), "a generated password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.CreateUserWithGeneratedPassword(context.Background(), "lee", h, false); err != nil {
+		t.Fatal(err)
+	}
+	lee := f.as()
+	lee.loginOK("lee", "a generated password")
+	lee.expect("PATCH", "/api/profile", map[string]string{"language": "de"}, 403)
+}
