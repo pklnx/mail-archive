@@ -61,6 +61,9 @@ type Server struct {
 	// retention executes confirmed deletion runs; nil leaves them to the
 	// next start of serve or to the command line.
 	retention interface{ Wake() }
+	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
+	// is off.
+	smtpListen string
 }
 
 // Options configure a Server.
@@ -94,6 +97,9 @@ type Options struct {
 	TrustedProxies []netip.Prefix
 	// Retention executes deletion runs confirmed in the web UI.
 	Retention *archive.Retention
+	// SMTPListen is where the SMTP server receives mail for smtp accounts
+	// (MAIL_ARCHIVE_SMTP_LISTEN); empty when it is off.
+	SMTPListen string
 }
 
 // New creates a Server.
@@ -133,7 +139,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
 		apiKeyRate: auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
-		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies,
+		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen,
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention

@@ -14,7 +14,7 @@ function account(name: string, folders: string[]): Account {
 }
 
 const data = (...accounts: Account[]): AccountsResponse => ({
-  accounts, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3,
+  accounts, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 });
 
 afterEach(() => {

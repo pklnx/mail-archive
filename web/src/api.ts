@@ -96,6 +96,8 @@ export interface AccountsResponse {
   alertAfter: number;
   /** Admins only: failing accounts of other users, as a count. */
   otherFailing?: number;
+  /** Null when the SMTP server is off: smtp accounts then receive nothing. */
+  smtp: Record<string, never> | null;
 }
 
 export interface AccountInput {
@@ -111,6 +113,10 @@ export interface AccountInput {
   syncInterval?: string;
   /** POST only: save even if trash or spam folders would be archived. */
   confirmFolders?: boolean;
+  /** POST only: "imap" (default) or "smtp" (admins). */
+  kind?: "imap" | "smtp";
+  /** smtp accounts, admins only: the addresses; in an update the complete new list. */
+  addresses?: string[];
 }
 
 /**

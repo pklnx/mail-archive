@@ -21,7 +21,7 @@ function account(syncInterval: string, sync: Partial<Account["sync"]> = {}, more
 }
 
 const data = (more: Partial<AccountsResponse> = {}): AccountsResponse => ({
-  accounts: [], manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, ...more,
+  accounts: [], manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null, ...more,
 });
 
 describe("formatEvery", () => {

@@ -55,7 +55,7 @@ describe("syncStatus", () => {
     expect(reconcileNote(account(idle, "smtp"))).toBeNull();
   });
   it("polls fast only while a sync is pending", () => {
-    const data = { manage: true, syncInterval: "", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, accounts: [account({ state: "idle", lastRun: null })] };
+    const data = { manage: true, syncInterval: "", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null, accounts: [account({ state: "idle", lastRun: null })] };
     expect(isActive(data)).toBe(false);
     expect(isActive({ ...data, accounts: [account({ state: "queued", lastRun: null })] })).toBe(true);
     expect(isActive(null)).toBe(false);
@@ -98,7 +98,7 @@ describe("bannerState", () => {
   const named = (name: string, sync: Partial<SyncInfo>, over: Partial<Account> = {}) => ({ ...account({ ...idle, ...sync }), name, ...over });
   it("lists own failing and stale accounts", () => {
     const data = {
-      manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3,
+      manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: null,
       accounts: [
         named("work", { health: "failing", failureStreak: 3 }),
         named("old", { health: "stale" }),

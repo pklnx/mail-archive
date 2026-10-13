@@ -37,8 +37,13 @@ type adminUserJSON struct {
 
 // requireAdmin rejects requests from users who are not admins.
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	return s.requireAdminFor(w, r, "only admins can manage users")
+}
+
+// requireAdminFor is requireAdmin with the reason in the 403 answer.
+func (s *Server) requireAdminFor(w http.ResponseWriter, r *http.Request, msg string) bool {
 	if sess := currentSession(r); sess == nil || !sess.IsAdmin {
-		s.fail(w, r, http.StatusForbidden, "only admins can manage users", nil)
+		s.fail(w, r, http.StatusForbidden, msg, nil)
 		return false
 	}
 	return true

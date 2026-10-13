@@ -17,7 +17,9 @@ sync. If you run the mail server yourself, an **smtp account** receives a copy
 of every message as it passes through, so nothing deleted between two syncs
 is missed; see [Journaling with Postfix](./journaling). smtp accounts have no
 server and are never synced; they can be enabled, disabled, renamed, moved
-and removed.
+and removed. Admins add them in the web UI (Add account → **SMTP journaling**)
+or with `./ma account add-smtp`; only admins change their addresses, because
+an address decides who receives the copies of every message.
 
 ## Adding an account
 

@@ -457,3 +457,60 @@ func TestReceiveMessageBlobGone(t *testing.T) {
 		t.Fatalf("next delivery %+v, %v", res, err)
 	}
 }
+
+func TestUpdateAccountSMTPAddresses(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com", "old@example.com")
+	createSMTPAccount(t, st, nil, "other", "taken@example.com")
+
+	// One change: a new name and a new list, with what was added and removed in the entry.
+	name := "journal2"
+	list := []string{"Archive@Example.com", "new@example.com"}
+	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.change"}
+	if err := st.UpdateAccount(store.WithAudit(ctx, e), a.Ref(), store.AccountChange{Name: &name, SMTPAddresses: &list}); err != nil {
+		t.Fatal(err)
+	}
+	addrs, _ := st.SMTPAddresses(ctx)
+	if !slices.Equal(addrs[a.ID], []string{"archive@example.com", "new@example.com"}) {
+		t.Fatalf("addresses %v", addrs[a.ID])
+	}
+	rows := auditRows(t, conn)
+	if d := rows[len(rows)-1].Details; fmt.Sprint(d["added"]) != "[new@example.com]" || fmt.Sprint(d["removed"]) != "[old@example.com]" {
+		t.Errorf("audit details %v", d)
+	}
+
+	// The old version is stale; nothing changes on an error.
+	if err := st.UpdateAccount(ctx, a.Ref(), store.AccountChange{SMTPAddresses: &list}); !errors.Is(err, store.ErrStale) {
+		t.Errorf("stale: %v", err)
+	}
+	a, _ = st.GetAccount(ctx, a.ID)
+	for _, c := range []struct {
+		list []string
+		want error
+	}{
+		{[]string{}, store.ErrNoAddresses},
+		{[]string{"archive@example.com", "taken@example.com"}, store.ErrAddressTaken},
+	} {
+		if err := st.UpdateAccount(ctx, a.Ref(), store.AccountChange{SMTPAddresses: &c.list}); !errors.Is(err, c.want) {
+			t.Errorf("%v: %v", c.list, err)
+		}
+	}
+	if err := st.UpdateAccount(ctx, a.Ref(), store.AccountChange{SMTPAddresses: &[]string{"a+b@example.com"}}); err == nil {
+		t.Error("accepted an address with +")
+	}
+	addrs, _ = st.SMTPAddresses(ctx)
+	if !slices.Equal(addrs[a.ID], []string{"archive@example.com", "new@example.com"}) {
+		t.Errorf("addresses after failed changes %v", addrs[a.ID])
+	}
+
+	// Other kinds have no addresses.
+	imap := &store.Account{Name: "mail", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", Enabled: true}
+	if err := st.CreateAccount(ctx, imap); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateAccount(ctx, imap.Ref(), store.AccountChange{SMTPAddresses: &list}); !errors.Is(err, store.ErrNotSMTP) {
+		t.Errorf("imap account: %v", err)
+	}
+}

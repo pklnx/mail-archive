@@ -67,6 +67,10 @@ type AccountChange struct {
 	Enabled     *bool
 	// SyncInterval sets the account's own sync interval; nil keeps it.
 	SyncInterval *OwnInterval
+	// SMTPAddresses replaces the addresses of an smtp account with this
+	// complete list; ErrNotSMTP for other kinds. The audit entry of ctx gets
+	// what was added and removed.
+	SMTPAddresses *[]string
 }
 
 // OwnInterval is an account's own sync interval: D nil uses the server's,
@@ -113,6 +117,18 @@ func (s *Store) UpdateAccount(ctx context.Context, ref AccountRef, c AccountChan
 			return ErrNoServer
 		case kind == KindImport && c.Enabled != nil:
 			return ErrNoServer
+		case kind != KindSMTP && c.SMTPAddresses != nil:
+			return ErrNotSMTP
+		}
+		if c.SMTPAddresses != nil {
+			added, removed, err := setSMTPAddresses(ctx, q, r.ID, *c.SMTPAddresses)
+			if err != nil {
+				return err
+			}
+			if e := auditFrom(ctx); e != nil {
+				e.Detail("added", nonNil(added))
+				e.Detail("removed", nonNil(removed))
+			}
 		}
 		p := db.WriteAccountParams{
 			ID: r.ID, Name: r.Name, Host: r.Host, Port: r.Port, TlsMode: r.TlsMode, Username: r.Username,
