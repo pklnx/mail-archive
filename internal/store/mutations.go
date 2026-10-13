@@ -251,6 +251,10 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 			if err := q.DeleteAccountSMTPAddresses(ctx, ref.ID); err != nil {
 				return err
 			}
+			// A fill left running by a process that died keeps no password.
+			if err := q.CancelAccountFills(ctx, ref.ID); err != nil {
+				return err
+			}
 			return one(q.RemoveAccount(ctx, ref.ID))
 		}
 		result = AccountDeleted

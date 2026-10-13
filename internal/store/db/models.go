@@ -278,6 +278,42 @@ type SmtpAddress struct {
 	AccountID int64
 }
 
+type SmtpFill struct {
+	ID              int64
+	AccountID       int64
+	Host            string
+	Port            int32
+	TlsMode         string
+	Username        string
+	PasswordEnc     []byte
+	IncludedFolders []string
+	ExcludedFolders []string
+	FolderPrefix    string
+	Cutoff          time.Time
+	Status          string
+	Error           *string
+	CreatedBy       *int64
+	CreatedAt       time.Time
+	FinishedAt      *time.Time
+}
+
+type SmtpFillFolder struct {
+	FillID            int64
+	SourceName        string
+	FolderID          int64
+	SourceUidvalidity int64
+	LastUid           int64
+	Done              bool
+	Scanned           int32
+	Imported          int32
+	NewMessages       int32
+	AfterCutoff       int32
+	Journaled         int32
+	Present           int32
+	Deleted           int32
+	Error             *string
+}
+
 type SyncRun struct {
 	ID                int64
 	AccountID         int64

@@ -216,9 +216,66 @@ server. Two checks cover both kinds of failure:
 On the archive's side, `./ma status` shows for each smtp account when it last
 received a message, and the web server logs every refusal at error level.
 
+## Bring in the mail from before journaling
+
+Journaling covers mail from the moment it is switched on. What the mailbox
+already holds comes into the same account with a one-time **fill** from IMAP:
+
+```sh
+./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk
+```
+
+The password is asked for (or read with `--password-stdin`) and kept,
+encrypted, only while the fill runs. The command prints the first message the
+account received over SMTP, as a check that journaling works, and then the
+progress per folder. It is not a sync: nothing is fetched again afterwards,
+and the account stays *complete (SMTP)*.
+
+**Where the mail goes.** Into folders of their own, `PREFIX/<IMAP folder>`,
+such as `alice@example.com/INBOX` and `alice@example.com/Sent`; the prefix is
+the user name unless `--prefix` sets another. The journal `INBOX` stays
+exactly what arrived over SMTP, with an envelope on every message. Imported
+messages have no envelope: BCC recipients are unknown for them.
+
+**Which messages.** The journal copy and the mailbox copy of a message differ
+in their `Received:` lines, so the archive cannot match them by content. The
+fill decides by the time the mailbox received a message (its INTERNALDATE)
+and by its Message-ID. `C` is the cut-off, now by default; `--before` sets an
+earlier one (`2026-06-01` for midnight UTC, or RFC 3339 with an offset).
+
+| INTERNALDATE | Fill |
+|---|---|
+| before `C` plus one hour | imported, unless the account received a message with the same Message-ID over SMTP |
+| from `C` plus one hour on | left to journaling |
+
+- The hour covers clocks that differ and mail that was delivered late.
+- The Message-ID check runs on every message, so a test message, copies the
+  archive refused or a late start of journaling cause neither gaps nor two
+  copies.
+- **Still stored twice:** a message without a `Message-ID` header that was
+  journaled too. It is imported anyway; a duplicate is better than a gap.
+- **Not stored:** mail that arrives after an earlier `--before` while
+  journaling is not set up yet. With the default cut-off, nothing.
+- Trash and spam folders are refused unless excluded, or confirmed with
+  `--confirm-folders`.
+
+**Several mailboxes** journaled into one account get one fill each, one after
+another, each with its own prefix.
+
+**Interrupted or failed.** Ctrl-C stops the fill; `./ma account fill journal
+--resume` continues it where it stopped (the password is asked again), and so
+does a fill whose folders partly failed. `--cancel` stops a fill that another
+process runs. `./ma account fill journal` lists the fills with their counts:
+scanned, imported, after the cut-off, journaled, already there and deleted by
+retention.
+
+**Retention.** An account-wide rule covers the fill folders. A rule on the
+folder `INBOX` covers the journal only. See [Retention](./retention#rules).
+
 ## Two copies of one message
 
 A message that is also in an IMAP account is usually stored twice: the copy
 in the mailbox carries one more `Received:` line, added by the server that
 delivered it there, so its bytes differ. Search finds both. The same is true
-for mail imported from piler.
+for mail imported from piler. A [fill](#bring-in-the-mail-from-before-journaling)
+avoids this inside an smtp account by checking the Message-ID.

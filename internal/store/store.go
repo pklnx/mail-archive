@@ -462,6 +462,13 @@ type SaveResult struct {
 // holds the blob lock (sync and import take it for the whole run), so the
 // transaction takes only the attestation fence.
 func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location) (SaveResult, error) {
+	return s.saveBatch(ctx, folderID, lastUID, metas, locs, nil)
+}
+
+// saveBatch is SaveBatch; after, if set, runs last in the same transaction
+// with what the batch stored.
+func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location,
+	after func(*db.Queries, SaveResult) error) (SaveResult, error) {
 	var res SaveResult
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
 		res = SaveResult{}
@@ -499,7 +506,13 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 				return fmt.Errorf("insert location: %w", err)
 			}
 		}
-		return q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)})
+		if err := q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)}); err != nil {
+			return err
+		}
+		if after != nil {
+			return after(q, res)
+		}
+		return nil
 	})
 	if err != nil {
 		return SaveResult{}, err

@@ -196,7 +196,7 @@ func (q *Queries) InsertSMTPAddress(ctx context.Context, arg InsertSMTPAddressPa
 const lastReceived = `-- name: LastReceived :many
 SELECT f.account_id, f.last_synced_at
 FROM folders f JOIN accounts a ON a.id = f.account_id
-WHERE a.kind = 'smtp' AND f.last_synced_at IS NOT NULL
+WHERE a.kind = 'smtp' AND f.name = 'INBOX' AND f.last_synced_at IS NOT NULL
 `
 
 type LastReceivedRow struct {
@@ -204,8 +204,9 @@ type LastReceivedRow struct {
 	LastSyncedAt *time.Time
 }
 
-// When each SMTP account last accepted a message: its only folder is
-// touched on every accepted transaction.
+// When each SMTP account last accepted a message: its journal folder is
+// touched on every accepted transaction. A fill touches its own folders
+// (prefix/name), never INBOX.
 func (q *Queries) LastReceived(ctx context.Context) ([]LastReceivedRow, error) {
 	rows, err := q.db.Query(ctx, lastReceived)
 	if err != nil {
