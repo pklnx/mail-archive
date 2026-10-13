@@ -920,6 +920,14 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				}()
 				// Let a running sync record its outcome before the store closes.
 				defer func() { <-runnerDone }()
+				opts.Fills = &archive.FillRunner{Filler: &archive.Filler{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}}
+				fillsDone := make(chan struct{})
+				go func() {
+					opts.Fills.Run(cmd.Context())
+					close(fillsDone)
+				}()
+				// A fill records its last batch before the store closes.
+				defer func() { <-fillsDone }()
 				if a.cfg.SyncInterval > 0 {
 					log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "min", a.cfg.SyncIntervalMin, "reconcile_interval", a.cfg.ReconcileInterval)
 				} else {

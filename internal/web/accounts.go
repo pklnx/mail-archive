@@ -81,6 +81,11 @@ type accountJSON struct {
 	// message; empty and null for other kinds.
 	Addresses      []string   `json:"addresses"`
 	LastReceivedAt *time.Time `json:"lastReceivedAt"`
+	// Fill is the latest fill of an smtp account, null without one;
+	// FirstReceived its first message still stored, null without one.
+	// Both null for other kinds.
+	Fill          *fillJSON          `json:"fill"`
+	FirstReceived *firstReceivedJSON `json:"firstReceived"`
 }
 
 type folderJSON struct {
@@ -162,6 +167,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	fills, err := s.store.LatestFills(ctx, me)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	folders := make(map[string][]folderJSON, len(counts))
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
@@ -235,6 +245,19 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		if t, ok := received[a.ID]; ok {
 			aj.LastReceivedAt = &t
+		}
+		if f := fills[a.ID]; f != nil {
+			aj.Fill = newFillJSON(f)
+		}
+		if a.Kind == store.KindSMTP {
+			first, err := s.store.FirstReceived(ctx, a.ID)
+			if err != nil {
+				s.failStore(w, r, err)
+				return
+			}
+			if first != nil {
+				aj.FirstReceived = &firstReceivedJSON{At: first.ReceivedAt, Subject: first.Subject}
+			}
 		}
 		if aj.Folders == nil {
 			aj.Folders = []folderJSON{}
@@ -750,7 +773,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.fail(w, r, http.StatusConflict, "the account is being synced; try again when the sync has finished", nil)
+		s.fail(w, r, http.StatusConflict, "the account is being synced or filled; try again when that has finished", nil)
 		return
 	}
 	defer unlock()

@@ -185,7 +185,7 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account that a [fill](#fills) copied from IMAP: it has no envelope, so BCC recipients are unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
@@ -252,10 +252,10 @@ conversations, grouped rows and `thread=` alike.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. |
+| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null` for both. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. With `{"kind": "smtp", "name": "journal", "addresses": ["archive@archive.local"]}` (admins only, otherwise `403`) it adds an smtp account: no server fields, no login check; `409` names an address another account receives for. |
 | `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. `addresses` replaces an smtp account's list (admins only; `409` on other kinds). A new connection or password is checked with a login first; if that fails, nothing changes. All fields are saved together or not at all. `409` when the name is taken or when the account was changed since it was loaded (reload and try again). Works while the account is being synced; the change applies from the next sync. |
-| `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced. |
+| `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced or filled. |
 | `GET /api/accounts/{name}/server-folders` | The account's folders, live from the IMAP server: `name`, `specialUse` (role) and `selected`. |
 
 Import accounts only take a rename and a `DELETE`; smtp accounts also take
@@ -294,6 +294,81 @@ smtp accounts `409`. A value equal to the stored one is accepted and changes
 nothing, so a value stored before `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` was raised
 can be sent back. A change needs no login check and applies at the next
 minute's check of the schedule.
+
+### Fills
+
+A fill copies an IMAP mailbox once into an smtp account: the mail from
+before [journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
+started. These endpoints need a session (not an API key), only work on the
+user's own smtp accounts (`409` on other kinds) and answer `503` without
+`MAIL_ARCHIVE_SECRET_KEY`.
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/accounts/{name}/fills/folders` | The folders of the IMAP mailbox, before a fill: body `{"host", "port", "tls", "username", "password"}`. Answers `{"folders": [{"name", "specialUse", "selected"}], "suggestedExclusions": [...]}` with the folders the server marks as trash or spam. `422` when the login fails. |
+| `POST /api/accounts/{name}/fills` | Start a fill. The login is checked first (`422`). Answers `202` with `{"id"}`; the web server runs it in the background, one fill at a time. `409` when a fill of the account runs, another fill uses the prefix, or folders need confirming (as for `POST /api/accounts`: `suggestedExclusions`, then again with `"confirmFolders": true`). Also for a disabled account. |
+| `POST /api/accounts/{name}/fills/{id}/resume` | Continue a fill that failed, partly failed or was cancelled, with `{"password"}` (checked first, `422`). `202`; `409` when it runs or ended well. |
+| `POST /api/accounts/{name}/fills/{id}/cancel` | Stop a running fill after its current batch and wipe its password. `204`; `409` when it is not running. What it copied stays. |
+
+Body of `POST /api/accounts/{name}/fills`:
+
+```json
+{
+  "host": "imap.example.com",
+  "port": 993,
+  "tls": "tls",
+  "username": "alice@example.com",
+  "password": "…",
+  "excludedFolders": ["Spam"],
+  "folderPrefix": "alice@example.com",
+  "before": "2026-10-01T00:00:00Z",
+  "confirmFolders": true
+}
+```
+
+`port` defaults to 993 with `tls`, else 143; `tls` to `tls`. `includedFolders`
+limits the fill to these folders. `folderPrefix` names the archive folders,
+`PREFIX/<IMAP folder>`; it defaults to the user name and must not be `INBOX`,
+start or end with `/`, or be longer than 200 bytes. `before` is the cut-off,
+by default now: a message is copied when its INTERNALDATE is before the
+cut-off plus one hour, unless the account received a message with the same
+Message-ID over SMTP. The password is kept, encrypted, only while the fill
+runs.
+
+While a fill waits or runs, the account's `sync.state` is `queued` or
+`running`. `fill` in `GET /api/accounts` shows the latest fill (never its
+password):
+
+```json
+{
+  "id": 3,
+  "status": "running",
+  "host": "imap.example.com",
+  "port": 993,
+  "tls": "tls",
+  "username": "alice@example.com",
+  "includedFolders": [],
+  "excludedFolders": ["Spam"],
+  "folderPrefix": "alice@example.com",
+  "before": "2026-10-13T08:00:00Z",
+  "error": "",
+  "createdAt": "2026-10-13T08:00:00Z",
+  "finishedAt": null,
+  "folders": [
+    {"source": "INBOX", "folder": "alice@example.com/INBOX", "done": true, "error": "",
+     "scanned": 1200, "imported": 1150, "new": 1150, "afterCutoff": 12, "journaled": 38, "present": 0, "deleted": 0}
+  ]
+}
+```
+
+`status` is `running`, `ok`, `partial` (some folders failed; see their
+`error`), `failed` or `cancelled`. `folders` lists the folders started so far.
+The counters: `scanned` headers read, `imported` messages copied (`new` of
+them new to the archive), `afterCutoff` left to journaling, `journaled`
+skipped because the account received them over SMTP, `present` already in the
+folder (a resumed fill), `deleted` deleted by retention before.
+
+### Sync state
 
 Each account in `GET /api/accounts` has a `sync` object:
 

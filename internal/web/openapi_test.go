@@ -371,6 +371,12 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{syncJSON{}, "SyncState", true},
 		{statusAccount{}, "AccountStatus", true},
 		{accountInput{}, "AccountInput", false},
+		{fillInput{}, "FillInput", false},
+		{fillServerInput{}, "FillServer", false},
+		{fillJSON{}, "Fill", true},
+		{fillFolderJSON{}, "FillFolder", true},
+		{firstReceivedJSON{}, "FirstReceived", true},
+		{locationJSON{}, "Location", true},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {

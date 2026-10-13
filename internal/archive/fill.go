@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
@@ -361,4 +363,16 @@ func (f *Filler) logger() *slog.Logger {
 		return f.Logger
 	}
 	return slog.Default()
+}
+
+// DefaultFillPrefix is the folder prefix of a fill without one: the IMAP
+// user name, cleaned up to a valid prefix.
+func DefaultFillPrefix(username string) string {
+	p := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(username))
+	return strings.Trim(p, "/")
 }

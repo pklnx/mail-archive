@@ -269,6 +269,13 @@ process runs. `./ma account fill journal` lists the fills with their counts:
 scanned, imported, after the cut-off, journaled, already there and deleted by
 retention.
 
+**From the web server.** The [API](../reference/api#fills) starts, resumes
+and cancels fills too; the web server runs them in the background, one at a
+time and apart from the scheduled syncs. A fill it was running when it
+stopped keeps its encrypted password and continues at the next start. So does
+a fill whose command-line process died without Ctrl-C: the web server picks it
+up within a minute.
+
 **Retention.** An account-wide rule covers the fill folders. A rule on the
 folder `INBOX` covers the journal only. See [Retention](./retention#rules).
 

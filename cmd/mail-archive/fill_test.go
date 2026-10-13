@@ -12,6 +12,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -36,7 +37,7 @@ func TestParseCutoff(t *testing.T) {
 	if _, err := parseCutoff("June 1", now); err == nil {
 		t.Error("accepted June 1")
 	}
-	if p := defaultFillPrefix(" /alice@example.com/\n"); p != "alice@example.com" {
+	if p := archive.DefaultFillPrefix(" /alice@example.com/\n"); p != "alice@example.com" {
 		t.Errorf("prefix %q", p)
 	}
 }

@@ -37,6 +37,7 @@ type Server struct {
 	allowedHosts []string
 	syncer       *archive.Syncer
 	runner       *archive.Runner
+	fills        *archive.FillRunner
 	hasher       *auth.Hasher
 	sealer       *crypto.Sealer
 	secretKey    []byte
@@ -75,6 +76,8 @@ type Options struct {
 	// (no secret key configured) the archive can only be browsed.
 	Syncer *archive.Syncer
 	Runner *archive.Runner
+	// Fills runs the fills of smtp accounts; set together with Syncer.
+	Fills *archive.FillRunner
 	// Hasher verifies passwords; nil means auth.DefaultParams.
 	Hasher *auth.Hasher
 	// Sealer protects TOTP secrets; nil keeps the existing browse-only mode.
@@ -135,7 +138,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		hosts = append(hosts, wa.Config.RPID)
 	}
 	srv := &Server{
-		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner,
+		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner, fills: opts.Fills,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
 		apiKeyRate: auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),

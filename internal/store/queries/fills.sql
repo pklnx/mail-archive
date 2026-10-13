@@ -15,6 +15,13 @@ SELECT * FROM smtp_fills WHERE id = $1;
 -- The fills of an account, newest first.
 SELECT * FROM smtp_fills WHERE account_id = $1 ORDER BY id DESC;
 
+-- name: LatestFills :many
+-- The newest fill of each account of the owner.
+SELECT DISTINCT ON (sf.account_id) sf.*
+FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id
+WHERE a.owner_id = $1
+ORDER BY sf.account_id, sf.id DESC;
+
 -- name: RunningFills :many
 SELECT * FROM smtp_fills WHERE status = 'running' ORDER BY id;
 

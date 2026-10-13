@@ -214,6 +214,9 @@ type locationJSON struct {
 	LastSeenAt time.Time `json:"lastSeenAt"`
 	// Envelope of a location in an smtp account; null for other kinds.
 	Envelope *envelopeJSON `json:"envelope"`
+	// Filled: a location in an smtp account copied from IMAP by a fill, not
+	// received over SMTP; it has no envelope, so BCC recipients are unknown.
+	Filled bool `json:"filled"`
 	// RetainUntil: when the location's retention period ends; null when no
 	// rule covers it (kept for ever).
 	RetainUntil *time.Time `json:"retainUntil"`
@@ -307,7 +310,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		lj := locationJSON{
 			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
-			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, RetainUntil: l.RetainUntil,
+			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, RetainUntil: l.RetainUntil, Filled: l.Filled,
 		}
 		if admin {
 			held := l.OnHold
