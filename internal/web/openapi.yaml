@@ -1809,6 +1809,193 @@ paths:
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
+  /api/accounts/{name}/fills:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    post:
+      tags: [accounts]
+      operationId: startFill
+      summary: Copy an IMAP mailbox once into an smtp account
+      description: |
+        A fill brings in the mail from before journaling: the messages of
+        the IMAP mailbox go into folders `PREFIX/<IMAP folder>` of the smtp
+        account, never into its journal `INBOX`. A message is copied when
+        its INTERNALDATE is before the cut-off (`before`) plus one hour,
+        unless the account received a message with the same Message-ID over
+        SMTP. It is not a sync: nothing is fetched again afterwards.
+
+        The login is checked first. If the server marks folders as trash or
+        spam and the fill would copy them, nothing is saved: the answer is
+        `409` with `suggestedExclusions`; send the request again with
+        `"confirmFolders": true`. The web server then runs the fill in the
+        background, one at a time; `GET /api/accounts` shows its progress
+        under `fill`, and the account's `sync.state` is `queued` or
+        `running` meanwhile. The password is kept, encrypted, only while the
+        fill runs. Also for a disabled account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FillInput"
+      responses:
+        "202":
+          description: Started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FillID"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >-
+            Not an smtp account, a fill of it is running, another fill
+            uses the prefix, or folders need confirming.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderConfirmation"
+        "422":
+          $ref: "#/components/responses/LoginFailed"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/fills/folders:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    post:
+      tags: [accounts]
+      operationId: listFillFolders
+      summary: The folders of a fill's IMAP server
+      description: |
+        Before a fill: the folders of the IMAP mailbox, live from the server,
+        and those it marks as trash or spam, to exclude or confirm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FillServer"
+      responses:
+        "200":
+          description: The folders.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [folders, suggestedExclusions]
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, selected]
+                      properties:
+                        name:
+                          type: string
+                        specialUse:
+                          type: string
+                          description: The role the server gives it, such as `\Junk`.
+                        selected:
+                          type: boolean
+                          description: Always true; a new fill copies every folder by default.
+                  suggestedExclusions:
+                    type: array
+                    description: The folders the server marks as trash or spam.
+                    items:
+                      type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/LoginFailed"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/fills/{id}/resume:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+      - $ref: "#/components/parameters/numericID"
+    post:
+      tags: [accounts]
+      operationId: resumeFill
+      summary: Continue a fill
+      description: |
+        A fill that failed, partly failed or was cancelled continues where it
+        stopped. Its password was wiped when it ended, so it is given again
+        and checked.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password:
+                  type: string
+                  writeOnly: true
+      responses:
+        "202":
+          description: Resumed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FillID"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not an smtp account, the fill is running or ended well, or another fill of the account runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/LoginFailed"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/fills/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+      - $ref: "#/components/parameters/numericID"
+    post:
+      tags: [accounts]
+      operationId: cancelFill
+      summary: Stop a running fill
+      description: |
+        The fill stops after its current batch and its password is wiped.
+        What it copied stays; `resume` continues it.
+      responses:
+        "204":
+          description: Cancelled.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not an smtp account, or the fill is not running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
   /api/sync:
     post:
       tags: [accounts]
@@ -2658,7 +2845,7 @@ components:
             it is on.
     Account:
       type: object
-      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt]
+      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, firstReceived]
       properties:
         name:
           type: string
@@ -2709,6 +2896,19 @@ components:
           type: [string, "null"]
           format: date-time
           description: When an smtp account last accepted a message.
+        fill:
+          description: The latest fill of an smtp account; null without one and for other kinds.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/Fill"
+        firstReceived:
+          description: >-
+            The first message an smtp account received that is still
+            stored, a check for a fill's cut-off; null without one and for
+            other kinds.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/FirstReceived"
     Folder:
       type: object
       required: [name, messages, lastSyncedAt, lastReconciledAt, delimiter]
@@ -2847,6 +3047,170 @@ components:
           type: array
           items:
             type: string
+    FillServer:
+      type: object
+      additionalProperties: false
+      required: [host, username, password]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+          description: Default 993 with `tls`, else 143.
+        tls:
+          type: string
+          enum: [tls, starttls, none]
+          default: tls
+        username:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+    FillInput:
+      type: object
+      additionalProperties: false
+      required: [host, username, password]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+          description: Default 993 with `tls`, else 143.
+        tls:
+          type: string
+          enum: [tls, starttls, none]
+          default: tls
+        username:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+          description: Kept, encrypted, only while the fill runs.
+        includedFolders:
+          type: array
+          description: Only copy these folders; empty copies all.
+          items:
+            type: string
+        excludedFolders:
+          type: array
+          description: Skip these folders.
+          items:
+            type: string
+        folderPrefix:
+          type: string
+          description: >-
+            The fill's folders are `PREFIX/<IMAP folder>`. Default: the user
+            name. Not `INBOX`, no leading or trailing `/`, at most 200
+            bytes, and not used by another fill of the account.
+        before:
+          type: string
+          format: date-time
+          description: >-
+            The cut-off; default now. Messages from an hour after it on are
+            left to journaling.
+        confirmFolders:
+          type: boolean
+          default: false
+          description: Copy trash and spam folders too, if the filters select them.
+    FillID:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: integer
+          format: int64
+    Fill:
+      type: object
+      description: A copy of an IMAP mailbox into an smtp account. Never carries the password.
+      required: [id, status, host, port, tls, username, includedFolders, excludedFolders, folderPrefix, before, error, createdAt, finishedAt, folders]
+      properties:
+        id:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [running, ok, partial, failed, cancelled]
+          description: "`partial`: some folders failed (see their `error`)."
+        host:
+          type: string
+        port:
+          type: integer
+        tls:
+          type: string
+        username:
+          type: string
+        includedFolders:
+          type: array
+          items:
+            type: string
+        excludedFolders:
+          type: array
+          items:
+            type: string
+        folderPrefix:
+          type: string
+        before:
+          type: string
+          format: date-time
+          description: The cut-off.
+        error:
+          type: string
+          description: Why the fill failed; empty otherwise.
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        folders:
+          type: array
+          description: The folders started so far.
+          items:
+            $ref: "#/components/schemas/FillFolder"
+    FillFolder:
+      type: object
+      required: [source, folder, done, error, scanned, imported, new, afterCutoff, journaled, present, deleted]
+      properties:
+        source:
+          type: string
+          description: The IMAP folder.
+        folder:
+          type: string
+          description: The archive folder, `PREFIX/<source>`.
+        done:
+          type: boolean
+        error:
+          type: string
+        scanned:
+          type: integer
+          description: Messages whose header was read.
+        imported:
+          type: integer
+          description: Messages copied.
+        new:
+          type: integer
+          description: Of those, messages new to the archive.
+        afterCutoff:
+          type: integer
+          description: Left to journaling (from an hour after the cut-off on).
+        journaled:
+          type: integer
+          description: Skipped; the account received the same Message-ID over SMTP.
+        present:
+          type: integer
+          description: Already in the archive folder (a resumed fill).
+        deleted:
+          type: integer
+          description: Deleted by retention before; not stored again.
+    FirstReceived:
+      type: object
+      required: [at, subject]
+      properties:
+        at:
+          type: string
+          format: date-time
+        subject:
+          type: string
     Queued:
       type: object
       required: [queued]
@@ -2965,7 +3329,7 @@ components:
           type: boolean
     Location:
       type: object
-      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, retainUntil]
+      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, filled, retainUntil]
       properties:
         account:
           type: string
@@ -2995,6 +3359,11 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/Envelope"
+        filled:
+          type: boolean
+          description: >-
+            A location in an smtp account that a fill copied from IMAP. It
+            has no envelope, so BCC recipients are unknown.
         retainUntil:
           type: [string, "null"]
           format: date-time

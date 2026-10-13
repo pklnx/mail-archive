@@ -192,6 +192,9 @@ type MessageLocation struct {
 	LastSeenAt time.Time
 	// Envelope is the SMTP envelope of a location in an smtp account.
 	Envelope *Envelope
+	// Filled: a location in an smtp account that a fill copied from IMAP,
+	// not received over SMTP; it has no envelope.
+	Filled bool
 	// RetainUntil is when the location's retention period ends (#55); nil
 	// when no rule covers it, so it is kept for ever.
 	RetainUntil *time.Time
@@ -240,7 +243,7 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 	for _, l := range locs {
 		loc := MessageLocation{
 			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
-			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, OnHold: l.OnHold,
+			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, OnHold: l.OnHold, Filled: l.Filled,
 		}
 		if !l.KeptForever {
 			until := l.RetainUntil

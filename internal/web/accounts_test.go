@@ -63,16 +63,19 @@ func newManageFixtureOpts(t *testing.T, roles map[string]imap.MailboxAttr, sched
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	runner := &archive.Runner{Syncer: syncer, Schedule: sched, CheckEvery: 10 * time.Millisecond}
+	fills := &archive.FillRunner{Filler: &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}, CheckEvery: 10 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &manageFixture{t: t, st: st, blobs: blobs, runnerDone: make(chan struct{})}
+	fillsDone := make(chan struct{})
 	go func() { runner.Run(ctx); close(f.runnerDone) }()
-	t.Cleanup(func() { cancel(); <-f.runnerDone })
+	go func() { fills.Run(ctx); close(fillsDone) }()
+	t.Cleanup(func() { cancel(); <-f.runnerDone; <-fillsDone })
 	if roles != nil {
 		f.host, f.port = imaptest.StartWithRoles(t, roles, users...)
 	} else {
 		f.host, f.port = imaptest.Start(t, users...)
 	}
-	s := New(st, blobs, log, Options{AllowedHosts: []string{"127.0.0.1"}, Syncer: syncer, Runner: runner})
+	s := New(st, blobs, log, Options{AllowedHosts: []string{"127.0.0.1"}, Syncer: syncer, Runner: runner, Fills: fills})
 	f.srv = httptest.NewServer(loggedIn(t, st, s.Handler()))
 	t.Cleanup(f.srv.Close)
 	return f

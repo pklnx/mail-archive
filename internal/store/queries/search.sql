@@ -324,6 +324,9 @@ SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
              ELSE l.last_seen_at END)::timestamptz AS last_seen_at,
        -- The SMTP envelope of locations in smtp accounts.
        e.location_id AS envelope_location, e.mail_from, e.rcpt_to, e.received_at, e.client_ip, e.helo,
+       -- A location in an smtp account without an envelope came from a
+       -- fill: ReceiveMessage always writes one.
+       (a.kind = 'smtp' AND e.location_id IS NULL)::boolean AS filled,
        -- The end of the retention period (#55); pgx cannot scan infinity
        -- into a time, so "no rule" is a flag.
        (r.until = 'infinity')::boolean AS kept_forever,

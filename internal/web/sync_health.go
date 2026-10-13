@@ -112,6 +112,15 @@ func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 	if s.runner != nil {
 		b.queued = s.runner.Queued()
 	}
+	if s.fills != nil {
+		// A queued fill shows as a queued sync of its smtp account.
+		if b.queued == nil {
+			b.queued = map[int64]bool{}
+		}
+		for id := range s.fills.Queued() {
+			b.queued[id] = true
+		}
+	}
 	return b, nil
 }
 

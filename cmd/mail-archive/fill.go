@@ -9,7 +9,6 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
-	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -100,17 +99,6 @@ Without flags, the command lists the account's fills.`,
 	return cmd
 }
 
-// defaultFillPrefix is the user name, cleaned up to a valid prefix.
-func defaultFillPrefix(username string) string {
-	p := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.TrimSpace(username))
-	return strings.Trim(p, "/")
-}
-
 // parseCutoff reads --before: RFC 3339, or a date for midnight UTC.
 func parseCutoff(v string, now time.Time) (time.Time, error) {
 	if v == "" {
@@ -140,7 +128,7 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 	}
 	prefix := fl.prefix
 	if prefix == "" {
-		prefix = defaultFillPrefix(fl.username)
+		prefix = archive.DefaultFillPrefix(fl.username)
 	}
 	if err := store.ValidFillPrefix(prefix); err != nil {
 		return fmt.Errorf("--prefix: %w", err)
@@ -298,18 +286,8 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 		return err
 	}
 	printFill(cmd.OutOrStdout(), fill)
-	var total store.FillCounts
-	for _, ff := range fill.Folders {
-		total.Add(ff.Counts)
-	}
 	e := cliAccountTarget(cliEntry("data.fill_done"), acc)
-	e.Detail("fill", fill.ID)
-	e.Detail("status", fill.Status)
-	e.Detail("scanned", total.Scanned)
-	e.Detail("imported", total.Imported)
-	e.Detail("new", total.New)
-	e.Detail("after_cutoff", total.AfterCutoff)
-	e.Detail("journaled", total.Journaled)
+	archive.AuditFillDone(e, fill)
 	if err := a.store.Audit(bg, *e); err != nil {
 		return fmt.Errorf("the fill ended (%s), but the audit log was not written: %w", fill.Status, err)
 	}

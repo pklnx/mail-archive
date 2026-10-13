@@ -259,6 +259,24 @@ func (s *Store) AccountFills(ctx context.Context, accountID int64) ([]Fill, erro
 	return out, nil
 }
 
+// LatestFills returns the newest fill of each account of the owner, with
+// its folders, by account ID.
+func (s *Store) LatestFills(ctx context.Context, owner int64) (map[int64]*Fill, error) {
+	rows, err := s.q.LatestFills(ctx, &owner)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]*Fill, len(rows))
+	for _, r := range rows {
+		f := fillFromDB(r)
+		if f.Folders, err = s.fillFolders(ctx, f.ID); err != nil {
+			return nil, err
+		}
+		out[f.AccountID] = f
+	}
+	return out, nil
+}
+
 // RunningFills returns the fills in state running, without folders.
 func (s *Store) RunningFills(ctx context.Context) ([]Fill, error) {
 	rows, err := s.q.RunningFills(ctx)

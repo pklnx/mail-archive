@@ -287,6 +287,51 @@ func (q *Queries) JournaledMessageIDs(ctx context.Context, arg JournaledMessageI
 	return items, nil
 }
 
+const latestFills = `-- name: LatestFills :many
+SELECT DISTINCT ON (sf.account_id) sf.id, sf.account_id, sf.host, sf.port, sf.tls_mode, sf.username, sf.password_enc, sf.included_folders, sf.excluded_folders, sf.folder_prefix, sf.cutoff, sf.status, sf.error, sf.created_by, sf.created_at, sf.finished_at
+FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id
+WHERE a.owner_id = $1
+ORDER BY sf.account_id, sf.id DESC
+`
+
+// The newest fill of each account of the owner.
+func (q *Queries) LatestFills(ctx context.Context, ownerID *int64) ([]SmtpFill, error) {
+	rows, err := q.db.Query(ctx, latestFills, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SmtpFill
+	for rows.Next() {
+		var i SmtpFill
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Host,
+			&i.Port,
+			&i.TlsMode,
+			&i.Username,
+			&i.PasswordEnc,
+			&i.IncludedFolders,
+			&i.ExcludedFolders,
+			&i.FolderPrefix,
+			&i.Cutoff,
+			&i.Status,
+			&i.Error,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAccountFills = `-- name: ListAccountFills :many
 SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at FROM smtp_fills WHERE account_id = $1 ORDER BY id DESC
 `
