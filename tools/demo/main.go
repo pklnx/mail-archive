@@ -182,7 +182,12 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		return err
 	}
 	publicURL := "http://localhost:" + webPort
-	srv := web.New(st, blobs, log, web.Options{Syncer: syncer, Runner: runner, Sealer: sealer, SecretKey: key, PublicURL: publicURL})
+	srv := web.New(st, blobs, log, web.Options{
+		Syncer: syncer, Runner: runner, Sealer: sealer, SecretKey: key, PublicURL: publicURL,
+		// The demo stores its journal messages directly; the UI shows the
+		// SMTP server as on, as in a real journaling setup.
+		SMTPListen: ":2525",
+	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
 		publicURL, loginName, loginPassword, loginTOTPSecret)
 	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -26,6 +26,14 @@ var ErrAddressTaken = errors.New("another smtp account receives for this address
 // blob lock: verify moved it as an orphan. Delivering again stores it anew.
 var ErrBlobGone = errors.New("the message file or row disappeared before it was committed")
 
+// ErrNoAddresses is returned when an smtp account would be left without
+// an address.
+var ErrNoAddresses = errors.New("an smtp account needs at least one address")
+
+// ErrNotSMTP is returned when addresses are set on an account of another
+// kind.
+var ErrNotSMTP = errors.New("only smtp accounts have addresses")
+
 // ErrNotReceiving is returned when a message arrives for an smtp account
 // that is disabled or was removed meanwhile.
 var ErrNotReceiving = errors.New("the account does not receive mail")
@@ -69,7 +77,7 @@ func (s *Store) CreateSMTPAccount(ctx context.Context, a *Account, addresses []s
 		return err
 	}
 	if len(addrs) == 0 {
-		return errors.New("an smtp account needs at least one address")
+		return ErrNoAddresses
 	}
 	a.Kind = KindSMTP
 	return s.inTx(ctx, func(q *db.Queries) error {
@@ -142,10 +150,45 @@ func (s *Store) ChangeSMTPAddresses(ctx context.Context, ref AccountRef, add, re
 			return err
 		}
 		if len(existing)+len(fresh) == 0 {
-			return errors.New("an smtp account needs at least one address")
+			return ErrNoAddresses
 		}
 		return one(q.BumpAccountVersion(ctx, r.ID))
 	})
+}
+
+// setSMTPAddresses replaces the addresses of an smtp account with list and
+// returns what it added and removed. An address of another account fails
+// with ErrAddressTaken, an empty list with ErrNoAddresses.
+func setSMTPAddresses(ctx context.Context, q *db.Queries, accountID int64, list []string) (added, removed []string, err error) {
+	want, err := normalizeSMTPAddresses(list)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(want) == 0 {
+		return nil, nil, ErrNoAddresses
+	}
+	existing, err := q.AccountSMTPAddresses(ctx, accountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, addr := range existing {
+		if slices.Contains(want, addr) {
+			continue
+		}
+		if _, err := q.DeleteSMTPAddress(ctx, db.DeleteSMTPAddressParams{Address: addr, AccountID: accountID}); err != nil {
+			return nil, nil, err
+		}
+		removed = append(removed, addr)
+	}
+	for _, addr := range want {
+		if !slices.Contains(existing, addr) {
+			added = append(added, addr)
+		}
+	}
+	if err := insertSMTPAddresses(ctx, q, accountID, added); err != nil {
+		return nil, nil, err
+	}
+	return added, removed, nil
 }
 
 // SMTPAddresses returns the addresses of all smtp accounts by account ID.

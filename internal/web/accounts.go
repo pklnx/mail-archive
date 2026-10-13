@@ -94,6 +94,10 @@ type folderJSON struct {
 	Delimiter *string `json:"delimiter"`
 }
 
+// smtpServerJSON says the SMTP server is on. Where Postfix reaches it (host
+// and published port) only the admin knows, so it carries no address.
+type smtpServerJSON struct{}
+
 type accountsResponse struct {
 	Accounts []accountJSON `json:"accounts"`
 	// Manage is false when the server has no secret key: accounts can then
@@ -111,6 +115,9 @@ type accountsResponse struct {
 	ReconcileInterval string `json:"reconcileInterval"`
 	// AlertAfter failed syncs in a row make an account failing.
 	AlertAfter int `json:"alertAfter"`
+	// SMTP is null when the SMTP server is off (MAIL_ARCHIVE_SMTP_LISTEN
+	// empty): smtp accounts then receive nothing.
+	SMTP *smtpServerJSON `json:"smtp"`
 	// OtherFailing, for admins only, counts the failing accounts of other
 	// users. Admins never see their names.
 	OtherFailing *int64 `json:"otherFailing,omitempty"`
@@ -174,6 +181,9 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		folders[a.Name] = list
 	}
 	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
+	if s.smtpListen != "" {
+		out.SMTP = &smtpServerJSON{}
+	}
 	if sess := currentSession(r); sess != nil && sess.IsAdmin {
 		failing, err := s.store.CountFailingByOwner(ctx, s.alertAfter)
 		if err != nil {
@@ -271,6 +281,8 @@ func (s *Server) scheduleFields(a archive.Scheduled) (*string, *time.Time) {
 // accountInput is the body of POST and PATCH /api/accounts. In a PATCH,
 // missing fields keep their value.
 type accountInput struct {
+	// Kind (POST only) is "imap" (the default) or "smtp".
+	Kind     *string `json:"kind"`
 	Name     *string `json:"name"`
 	Host     *string `json:"host"`
 	Port     *int    `json:"port"`
@@ -286,6 +298,9 @@ type accountInput struct {
 	// ConfirmFolders (POST only) saves the account even if the server marks
 	// folders that would be archived as trash or junk.
 	ConfirmFolders bool `json:"confirmFolders"`
+	// Addresses an smtp account receives for: in a POST at least one, in a
+	// PATCH the complete new list. Admins only.
+	Addresses *[]string `json:"addresses"`
 }
 
 // folderConfirmation is the 409 answer of POST /api/accounts when trash or
@@ -304,7 +319,7 @@ func (in *accountInput) changedFields() []string {
 	}{
 		{"name", in.Name != nil}, {"host", in.Host != nil}, {"port", in.Port != nil}, {"tls", in.TLS != nil},
 		{"username", in.Username != nil}, {"password", in.Password != nil}, {"enabled", in.Enabled != nil},
-		{"excluded_folders", in.ExcludedFolders != nil},
+		{"excluded_folders", in.ExcludedFolders != nil}, {"addresses", in.Addresses != nil},
 	} {
 		if f.set {
 			out = append(out, f.name)
@@ -413,12 +428,44 @@ func applyConnection(a *store.Account, in *accountInput) error {
 	return nil
 }
 
+// adminOnlyAddresses is the 403 answer for smtp addresses: an address
+// decides who receives the journal copies of the whole mail server.
+const adminOnlyAddresses = "only admins can set the addresses of smtp accounts"
+
+// normalizeAddresses checks a list of smtp addresses as the store does, so
+// a bad one answers 400 before anything is written.
+func normalizeAddresses(list []string) ([]string, error) {
+	if len(list) == 0 {
+		return nil, store.ErrNoAddresses
+	}
+	out := make([]string, 0, len(list))
+	for _, addr := range list {
+		a, err := store.NormalizeSMTPAddress(addr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.requireManage(w, r) {
 		return
 	}
 	var in accountInput
 	if !s.decode(w, r, &in) {
+		return
+	}
+	switch {
+	case in.Kind != nil && *in.Kind == string(store.KindSMTP):
+		s.createSMTPAccount(w, r, &in)
+		return
+	case in.Kind != nil && *in.Kind != string(store.KindIMAP):
+		s.fail(w, r, http.StatusBadRequest, `kind must be "imap" or "smtp"`, nil)
+		return
+	case in.Addresses != nil:
+		s.fail(w, r, http.StatusBadRequest, store.ErrNotSMTP.Error(), nil)
 		return
 	}
 	owner := userID(r)
@@ -488,6 +535,57 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusCreated, map[string]string{"name": a.Name})
 }
 
+// createSMTPAccount handles POST /api/accounts with kind "smtp": a name and
+// addresses, no server and no login check. Admins only.
+func (s *Server) createSMTPAccount(w http.ResponseWriter, r *http.Request, in *accountInput) {
+	if !s.requireAdminFor(w, r, "only admins can add smtp accounts") {
+		return
+	}
+	if in.changesConnection() || in.ExcludedFolders != nil || in.SyncInterval != nil || in.ConfirmFolders {
+		s.fail(w, r, http.StatusBadRequest, "an smtp account has no server", nil)
+		return
+	}
+	owner := userID(r)
+	a := &store.Account{Enabled: true, OwnerID: &owner}
+	if in.Name != nil {
+		a.Name = *in.Name
+	}
+	if err := archive.ValidateAccountName(a.Name); err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if in.Addresses == nil {
+		s.fail(w, r, http.StatusBadRequest, store.ErrNoAddresses.Error(), nil)
+		return
+	}
+	addrs, err := normalizeAddresses(*in.Addresses)
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if in.Enabled != nil {
+		a.Enabled = *in.Enabled
+	}
+	e := s.auditEntry(r, "account.add")
+	e.SetTarget(store.TargetAccount, "", a.Name) // the ID is set when it exists
+	e.Detail("kind", string(store.KindSMTP))
+	e.Detail("addresses", addrs)
+	err = s.store.CreateSMTPAccount(withAudit(r, e), a, addrs)
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", a.Name), nil)
+		return
+	case errors.Is(err, store.ErrAddressTaken):
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	case err != nil:
+		s.failStore(w, r, err)
+		return
+	}
+	s.log.Info("smtp account added", "account", a.Name, "addresses", addrs)
+	s.writeJSON(w, http.StatusCreated, map[string]string{"name": a.Name})
+}
+
 // pathAccount loads the account named in the URL. Removed accounts are
 // rejected: they cannot be changed or synced.
 func (s *Server) pathAccount(w http.ResponseWriter, r *http.Request) (*store.Account, bool) {
@@ -528,8 +626,27 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.Kind != nil {
+		s.fail(w, r, http.StatusBadRequest, "the kind of an account cannot change", nil)
+		return
+	}
+	var addrs []string
+	if in.Addresses != nil {
+		if !s.requireAdminFor(w, r, adminOnlyAddresses) {
+			return
+		}
+		var err error
+		if addrs, err = normalizeAddresses(*in.Addresses); err != nil {
+			s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+			return
+		}
+	}
 	a, ok := s.pathAccount(w, r)
 	if !ok {
+		return
+	}
+	if in.Addresses != nil && a.Kind != store.KindSMTP {
+		s.fail(w, r, http.StatusConflict, store.ErrNotSMTP.Error(), nil)
 		return
 	}
 	if !a.Kind.HasServer() && (in.changesConnection() || in.ExcludedFolders != nil || in.SyncInterval != nil) ||
@@ -589,6 +706,9 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	change.Enabled = in.Enabled
 	change.SyncInterval = own
+	if in.Addresses != nil {
+		change.SMTPAddresses = &addrs
+	}
 
 	e := s.auditEntry(r, "account.change")
 	auditAccount(e, a)
@@ -598,7 +718,8 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrConflict):
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", *in.Name), nil)
 		return
-	case errors.Is(err, store.ErrStale), errors.Is(err, store.ErrNoServer):
+	case errors.Is(err, store.ErrStale), errors.Is(err, store.ErrNoServer), errors.Is(err, store.ErrNotSMTP),
+		errors.Is(err, store.ErrAddressTaken):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
 	case err != nil:

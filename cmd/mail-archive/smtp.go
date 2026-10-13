@@ -88,6 +88,7 @@ stores alice@example.com as the recipient.`,
 			e := cliEntry("account.add")
 			e.SetTarget(store.TargetAccount, "", acc.Name) // the ID is set when it exists
 			e.Detail("kind", string(store.KindSMTP))
+			e.Detail("addresses", addresses)
 			if err := a.store.CreateSMTPAccount(withCLIAudit(cmd, e), &acc, addresses); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("an account named %q already exists for this user (removed accounts keep their name)", acc.Name)

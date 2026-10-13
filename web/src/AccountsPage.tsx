@@ -3,6 +3,7 @@ import { accountsApi, folderQuestion, type Account, type AccountInput, type Acco
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
+import { postfixSetup } from "./journalSetup";
 import type { AccountsState } from "./useAccounts";
 
 const button =
@@ -15,6 +16,8 @@ type Editing = { mode: "new" } | { mode: "edit"; name: string } | null;
 
 interface Props {
   accounts: AccountsState;
+  /** Admins can add smtp accounts and change their addresses. */
+  admin: boolean;
   close: () => void;
   /** Called after an account got a new name, to update links to it. */
   renamed: (from: string, to: string) => void;
@@ -22,7 +25,7 @@ interface Props {
   showGone: (account: string) => void;
 }
 
-export function AccountsPage({ accounts, close, renamed, showGone }: Props) {
+export function AccountsPage({ accounts, admin, close, renamed, showGone }: Props) {
   const { data, error, reload } = accounts;
   const [editing, setEditing] = useState<Editing>(null);
   const [actionError, setActionError] = useState("");
@@ -75,8 +78,11 @@ export function AccountsPage({ accounts, close, renamed, showGone }: Props) {
         )}
 
         {editing?.mode === "new" && (
-          <AccountForm
+          <NewAccount
+            admin={admin}
+            smtpOn={data?.smtp != null}
             onCancel={() => setEditing(null)}
+            onCreated={reload}
             onSaved={() => {
               setEditing(null);
               reload();
@@ -87,7 +93,21 @@ export function AccountsPage({ accounts, close, renamed, showGone }: Props) {
         {data && active.length === 0 && editing === null && <p className="text-sm text-zinc-500">{t.noAccounts}</p>}
 
         {active.map((a) =>
-          editAccount?.name === a.name ? (
+          editAccount?.name === a.name && a.kind === "smtp" ? (
+            <Card key={a.name}>
+              <SMTPAccountForm
+                account={a}
+                admin={admin}
+                smtpOn={data?.smtp != null}
+                onCancel={() => setEditing(null)}
+                onSaved={(name) => {
+                  setEditing(null);
+                  if (name !== a.name) renamed(a.name, name);
+                  reload();
+                }}
+              />
+            </Card>
+          ) : editAccount?.name === a.name ? (
             <Card key={a.name}>
               <AccountForm
                 account={a}
@@ -267,6 +287,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
   const reconcile = reconcileNote(a);
   const health = syncHealthNote(a);
   const busy = a.sync.state !== "idle";
+  const [showSetup, setShowSetup] = useState(false);
   if (a.kind === "smtp") {
     return (
       <Card>
@@ -280,16 +301,26 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
         <p className="text-sm break-words text-zinc-600 dark:text-zinc-400">{t.receivesFor(a.addresses.join(", "))}</p>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">{receiveStatus(a)}</p>
         {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.smtpDisabledNote}</p>}
-        {manage && (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={button} onClick={onToggle}>
-              {a.enabled ? t.disable : t.enable}
-            </button>
-            <button type="button" className={`${button} text-red-600`} onClick={onRemove}>
-              {t.remove}
-            </button>
-          </div>
-        )}
+        {!data.smtp && <p className="text-sm text-amber-700 dark:text-amber-500">{t.smtpServerOffCard}</p>}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={button} aria-expanded={showSetup} onClick={() => setShowSetup(!showSetup)}>
+            {showSetup ? t.hideMailServerSetup : t.mailServerSetup}
+          </button>
+          {manage && (
+            <>
+              <button type="button" className={button} onClick={onEdit}>
+                {t.edit}
+              </button>
+              <button type="button" className={button} onClick={onToggle}>
+                {a.enabled ? t.disable : t.enable}
+              </button>
+              <button type="button" className={`${button} text-red-600`} disabled={busy} onClick={onRemove}>
+                {t.remove}
+              </button>
+            </>
+          )}
+        </div>
+        {showSetup && <PostfixPanel addresses={a.addresses} />}
       </Card>
     );
   }
@@ -386,12 +417,14 @@ const defaultPort: Record<TLSMode, number> = { tls: 993, starttls: 143, none: 14
 interface FormProps {
   /** Editing an existing account; otherwise a new one. */
   account?: Account;
+  /** Inside NewAccount, which draws the frame and the heading. */
+  bare?: boolean;
   onCancel: () => void;
   /** Called with the saved account's name. */
   onSaved: (name: string) => void;
 }
 
-function AccountForm({ account, onCancel, onSaved }: FormProps) {
+function AccountForm({ account, bare, onCancel, onSaved }: FormProps) {
   const [name, setName] = useState(account?.name ?? "");
   // Until the user types a name, a new account gets one suggested from the
   // login or the server.
@@ -437,8 +470,8 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
 
   const field = "flex flex-col gap-1 text-sm";
   return (
-    <form onSubmit={submit} className={account ? "flex flex-col gap-3" : "flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"}>
-      <h2 className="font-semibold">{account ? account.name : t.addAccount}</h2>
+    <form onSubmit={submit} className={account || bare ? "flex flex-col gap-3" : "flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"}>
+      {!bare && <h2 className="font-semibold">{account ? account.name : t.addAccount}</h2>}
       <div className={field}>
         <label className={field}>
           {t.fieldName}
@@ -529,6 +562,213 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
         {busy && <span className="text-sm text-zinc-500">{t.checkingLogin}</span>}
       </div>
     </form>
+  );
+}
+
+const guideURL = "https://pklnx.github.io/mail-archive/guide/journaling";
+
+/**
+ * The "Add account" form: admins first choose where the mail comes from,
+ * an IMAP mailbox or SMTP journaling; everyone else adds an IMAP account.
+ */
+function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved }: {
+  admin: boolean;
+  smtpOn: boolean;
+  onCancel: () => void;
+  /** An smtp account exists; its form still shows the mail server setup. */
+  onCreated: () => void;
+  onSaved: () => void;
+}) {
+  const [source, setSource] = useState<"imap" | "smtp">("imap");
+  const [created, setCreated] = useState(false);
+  const name = useId();
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <h2 className="font-semibold">{t.addAccount}</h2>
+      {admin && !created && (
+        <fieldset className="flex flex-col gap-1 text-sm">
+          <legend className="mb-1">{t.sourceChoice}</legend>
+          {(["imap", "smtp"] as const).map((k) => (
+            <label key={k} className="flex items-start gap-2">
+              <input type="radio" name={name} className="mt-1" checked={source === k} onChange={() => setSource(k)} />
+              <span>
+                {k === "imap" ? t.sourceIMAP : t.sourceSMTP}
+                <span className="block text-xs text-zinc-500">{k === "imap" ? t.sourceSnapshotHint : t.sourceCompleteHint}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {source === "imap" ? (
+        <AccountForm bare onCancel={onCancel} onSaved={onSaved} />
+      ) : (
+        <SMTPAccountForm
+          admin={admin}
+          smtpOn={smtpOn}
+          onCancel={onCancel}
+          onCreated={() => {
+            setCreated(true);
+            onCreated();
+          }}
+          onSaved={onSaved}
+        />
+      )}
+    </section>
+  );
+}
+
+/** Addresses without empty entries, as typed. */
+export function addressList(values: string[]): string[] {
+  return values.map((v) => v.trim()).filter((v) => v !== "");
+}
+
+/**
+ * Creates an smtp account (admins), or renames one and changes its
+ * addresses (addresses: admins only). A new account shows the mail server
+ * setup before the form closes.
+ */
+export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, onSaved }: {
+  account?: Account;
+  admin: boolean;
+  smtpOn: boolean;
+  onCancel: () => void;
+  onCreated?: () => void;
+  /** Called with the saved account's name. */
+  onSaved: (name: string) => void;
+}) {
+  const [name, setName] = useState(account?.name ?? "");
+  const [addresses, setAddresses] = useState<string[]>(account ? account.addresses : [""]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [created, setCreated] = useState<string[] | null>(null);
+  const hintId = useId();
+  const canAddresses = admin;
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    const list = addressList(addresses);
+    const newName = name.trim();
+    try {
+      if (account) {
+        const body: AccountInput = {};
+        if (newName !== account.name) body.name = newName;
+        if (canAddresses && list.join("\n") !== account.addresses.join("\n")) body.addresses = list;
+        if (Object.keys(body).length > 0) await accountsApi.update(account.name, body);
+        onSaved(newName);
+      } else {
+        await accountsApi.create({ kind: "smtp", name: newName, addresses: list });
+        setCreated(list.map((a) => a.toLowerCase()));
+        onCreated?.();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy(false);
+  };
+
+  if (created) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p role="status" className="text-sm">
+          {t.smtpAccountAdded(name.trim())}
+        </p>
+        <PostfixPanel addresses={created} />
+        <button type="button" className={`${primary} self-start`} onClick={() => onSaved(name.trim())}>
+          {t.done}
+        </button>
+      </div>
+    );
+  }
+
+  const field = "flex flex-col gap-1 text-sm";
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      {account && <h2 className="font-semibold">{account.name}</h2>}
+      {!smtpOn && (
+        <p className="text-sm text-amber-700 dark:text-amber-500">
+          {t.smtpServerOff}{" "}
+          <a className="text-blue-600 hover:underline dark:text-blue-400" href={guideURL} target="_blank" rel="noreferrer">
+            {t.journalingGuide}
+          </a>
+        </p>
+      )}
+      <label className={field}>
+        {t.fieldName}
+        <input className={input} required maxLength={64} value={name} onChange={(e) => setName(e.target.value)} placeholder="journal" />
+      </label>
+      <fieldset className={field} aria-describedby={`${hintId}-addresses`}>
+        <legend className="mb-1">{t.fieldAddresses}</legend>
+        {addresses.map((addr, i) => (
+          <div key={i} className="flex gap-2">
+            <input
+              className={input}
+              type="email"
+              required={i === 0}
+              disabled={!canAddresses}
+              value={addr}
+              onChange={(e) => setAddresses(addresses.map((a, j) => (i === j ? e.target.value : a)))}
+              placeholder="archive@archive.local"
+              aria-label={`${t.fieldAddresses} ${i + 1}`}
+              autoComplete="off"
+            />
+            {canAddresses && addresses.length > 1 && (
+              <button type="button" className={button} aria-label={t.removeAddress(addr)} onClick={() => setAddresses(addresses.filter((_, j) => j !== i))}>
+                ×
+              </button>
+            )}
+          </div>
+        ))}
+        {canAddresses && (
+          <button type="button" className={`${button} self-start`} onClick={() => setAddresses([...addresses, ""])}>
+            {t.addAddress}
+          </button>
+        )}
+        <span id={`${hintId}-addresses`} className="text-xs text-zinc-500">
+          {canAddresses ? t.addressHint : t.addressesAdminOnly}
+        </span>
+      </fieldset>
+      {error && (
+        <p role="alert" className="text-sm break-words text-red-600">
+          {error}
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <button type="submit" className={primary} disabled={busy}>
+          {t.save}
+        </button>
+        <button type="button" className={button} onClick={onCancel} disabled={busy}>
+          {t.cancel}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** What Postfix needs to send an smtp account its copies, with a copy button. */
+export function PostfixPanel({ addresses }: { addresses: string[] }) {
+  const setup = postfixSetup(addresses);
+  const [copied, setCopied] = useState(false);
+  return (
+    <section className="flex flex-col gap-2 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+      {!setup.dedicated && <p className="text-amber-700 dark:text-amber-500">{t.setupNotDedicated(setup.address)}</p>}
+      <p>{t.setupIntro}</p>
+      <pre className="overflow-x-auto rounded bg-zinc-100 p-2 text-xs dark:bg-zinc-900">{setup.text}</pre>
+      <p className="text-xs text-zinc-500">
+        {t.setupTarget}{" "}
+        <a className="text-blue-600 hover:underline dark:text-blue-400" href={guideURL} target="_blank" rel="noreferrer">
+          {t.journalingGuide}
+        </a>
+      </p>
+      <button
+        type="button"
+        className={`${button} self-start`}
+        onClick={() => navigator.clipboard?.writeText(setup.text).then(() => setCopied(true), () => setCopied(false))}
+      >
+        {copied ? t.copied : t.copy}
+      </button>
+    </section>
   );
 }
 

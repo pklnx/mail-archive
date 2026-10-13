@@ -945,6 +945,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 					return err
 				}
 				defer stop()
+				opts.SMTPListen = a.cfg.SMTP.Listen
 			}
 			srv := web.New(a.store, blobs, log, opts)
 			log.Info("listening", "addr", listen)

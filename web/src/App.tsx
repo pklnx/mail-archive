@@ -114,6 +114,7 @@ export function App({ user, logout }: Props) {
         ) : state.view === "accounts" ? (
           <main className="min-h-0 md:col-span-2">
             <AccountsPage
+              admin={user.admin}
               accounts={accounts}
               close={() => update({ view: "" })}
               renamed={(from, to) => {

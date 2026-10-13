@@ -13,7 +13,7 @@ function acc(name: string, health: Account["sync"]["health"]): Account {
 }
 
 const data = (accounts: Account[], otherFailing?: number): AccountsResponse => ({
-  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, accounts, otherFailing,
+  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: null, accounts, otherFailing,
 });
 
 const noop = () => {};

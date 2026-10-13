@@ -46,11 +46,22 @@ message.
    size limit. Compose publishes the port on `127.0.0.1:2525`; `SMTP_BIND` and
    `SMTP_PORT` change that. See [Configuration](../reference/configuration#smtp).
 
-2. Create the account and the address it receives for:
+2. Create the account and the address it receives for. In the web UI, as
+   an admin: **Manage accounts → Add account → SMTP journaling**, with a name
+   and the address. On the command line:
 
    ```sh
    ./ma account add-smtp journal --address archive@archive.local
    ```
+
+   After creating the account, the web UI shows the Postfix lines below,
+   filled in with its address; **Mail server setup** on the account's card
+   shows them again. It only routes a domain that looks like it belongs to
+   the archive alone (`archive.local`, or a name ending in `.local`,
+   `.internal`, `.test` or `.invalid`): for an address like
+   `journal@example.com` it warns and uses `archive@archive.local`, because a
+   transport for `example.com` would send all of that domain's mail to the
+   archive. **Edit** on the card changes the addresses (admins only).
 
    The address is only a name for the archive: `archive.local` needs no DNS
    and no MX record, because Postfix delivers to it with a transport (below).

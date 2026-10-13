@@ -140,7 +140,8 @@ for (const scheme of ["light", "dark"]) {
   await p.getByText(/Last sync/).first().waitFor();
   await p.screenshot({ path: `${out}/accounts.png` });
 
-  await p.getByRole("button", { name: "Edit" }).first().click();
+  // The first card is the smtp account "journal"; the IMAP account "personal" is next.
+  await p.getByRole("button", { name: "Edit" }).nth(1).click();
   await p.getByRole("button", { name: "Choose folders" }).click();
   await p.getByRole("checkbox").first().waitFor();
   await p.screenshot({ path: `${out}/account-edit.png` });

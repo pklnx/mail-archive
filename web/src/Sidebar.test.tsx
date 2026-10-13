@@ -19,7 +19,7 @@ function account(name: string, folders: Folder[]): Account {
 
 const data = (): AccountsResponse => ({
   accounts: [account("work", [f("INBOX", 5), f("Archive", 2), f("Archive/2024", 3), f("Lists/dev", 4)])],
-  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3,
+  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 });
 
 const view = (account = "", folder = ""): ViewState => ({ q: "", account, folder, group: "", gone: "", m: "", view: "" });
