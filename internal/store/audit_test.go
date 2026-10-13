@@ -211,7 +211,10 @@ func TestAuditMigrationDown(t *testing.T) {
 	if err := st.Audit(ctx, store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}); err != nil {
 		t.Fatal(err)
 	}
-	// First the user settings, the sync intervals, the folder delimiters and the attestations, of which there are none.
+	// First the smtp fills, the user settings, the sync intervals, the folder delimiters and the attestations, of which there are none.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00026_smtp_fills") {
+		t.Fatalf("down the smtp fills: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00025_user_settings") {
 		t.Fatalf("down the user settings: %q, %v", m, err)
 	}
@@ -237,6 +240,9 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatalf("down with entries: %v", err)
 	}
 	empty := storetest.New(t)
+	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00026_smtp_fills") {
+		t.Fatalf("down the smtp fills: %q, %v", m, err)
+	}
 	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00025_user_settings") {
 		t.Fatalf("down the user settings: %q, %v", m, err)
 	}

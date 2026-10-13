@@ -38,7 +38,7 @@ func TestAttestMigration(t *testing.T) {
 	ctx := context.Background()
 	st, url := storetest.NewWithURL(t)
 	conn := connect(t, url)
-	for _, want := range []string{"00025_user_settings", "00024_account_sync_interval", "00023_folder_delimiter", "00022_deletion_runs", "00021_retention_rules", "00020_api_keys", "00019_attestations"} {
+	for _, want := range []string{"00026_smtp_fills", "00025_user_settings", "00024_account_sync_interval", "00023_folder_delimiter", "00022_deletion_runs", "00021_retention_rules", "00020_api_keys", "00019_attestations"} {
 		if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, want) {
 			t.Fatalf("down: %q %v", m, err)
 		}
@@ -79,7 +79,7 @@ func TestAttestMigration(t *testing.T) {
 			t.Errorf("%s: %v", sql, err)
 		}
 	}
-	for _, want := range []string{"00025_user_settings", "00024_account_sync_interval", "00023_folder_delimiter", "00022_deletion_runs", "00021_retention_rules", "00020_api_keys"} {
+	for _, want := range []string{"00026_smtp_fills", "00025_user_settings", "00024_account_sync_interval", "00023_folder_delimiter", "00022_deletion_runs", "00021_retention_rules", "00020_api_keys"} {
 		if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, want) {
 			t.Fatalf("down: %q %v", m, err)
 		}

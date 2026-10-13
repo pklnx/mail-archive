@@ -35,8 +35,10 @@ type Server struct {
 
 	mu       sync.Mutex
 	commands []string
-	hidden   map[string][]imap.UID // mailbox -> sorted UIDs
-	failFlag map[string]bool
+	// bodyFetches are the UID sets of the body fetches.
+	bodyFetches []string
+	hidden      map[string][]imap.UID // mailbox -> sorted UIDs
+	failFlag    map[string]bool
 }
 
 // StartServer serves the users like Start and returns the Server.
@@ -82,7 +84,15 @@ func (s *Server) FailFlagFetch(mailbox string, fail bool) {
 func (s *Server) ResetCommands() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.commands = nil
+	s.commands, s.bodyFetches = nil, nil
+}
+
+// BodyFetches returns the UID sets of the body fetches so far, like "3:*"
+// or "2,5".
+func (s *Server) BodyFetches() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.bodyFetches)
 }
 
 // Commands returns the commands received so far, like "EXAMINE INBOX",
@@ -131,14 +141,23 @@ func (s *recordingSession) Select(mailbox string, options *imap.SelectOptions) (
 func (s *recordingSession) Fetch(w *imapserver.FetchWriter, numSet imap.NumSet, options *imap.FetchOptions) error {
 	what := "FLAGS"
 	for _, b := range options.BodySection {
-		what = "BODY"
-		if b.Peek {
+		switch {
+		case b.Specifier == imap.PartSpecifierHeader:
+			what = "HEADER"
+		case b.Peek:
 			what = "BODY.PEEK"
+		default:
+			what = "BODY"
 		}
 	}
 	uids, isUID := numSet.(imap.UIDSet)
 	if isUID {
 		s.srv.record("UID FETCH " + what)
+		if what == "BODY.PEEK" || what == "BODY" {
+			s.srv.mu.Lock()
+			s.srv.bodyFetches = append(s.srv.bodyFetches, uids.String())
+			s.srv.mu.Unlock()
+		}
 		numSet = without(uids, s.srv.hiddenIn(s.selected))
 	} else {
 		s.srv.record("FETCH " + what)
@@ -352,8 +371,14 @@ func CreateMailboxes(t testing.TB, u *imapmemserver.User, names ...string) {
 // Append stores a raw message in a mailbox of u.
 func Append(t testing.TB, u *imapmemserver.User, mailbox string, raw []byte) {
 	t.Helper()
+	AppendAt(t, u, mailbox, raw, time.Now())
+}
+
+// AppendAt adds a message with the given INTERNALDATE.
+func AppendAt(t testing.TB, u *imapmemserver.User, mailbox string, raw []byte, at time.Time) {
+	t.Helper()
 	// bytes.Reader implements imap.LiteralReader (Read + Size).
-	if _, err := u.Append(mailbox, bytes.NewReader(raw), &imap.AppendOptions{Time: time.Now()}); err != nil {
+	if _, err := u.Append(mailbox, bytes.NewReader(raw), &imap.AppendOptions{Time: at}); err != nil {
 		t.Fatalf("append to %s: %v", mailbox, err)
 	}
 }

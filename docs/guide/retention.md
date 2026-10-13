@@ -107,6 +107,14 @@ each folder its own.
 Rules are added and removed, not changed. Removing a rule keeps its mail for
 ever again, unless another rule covers it.
 
+**smtp accounts with a fill.** A rule matches the folder name exactly. A
+rule on `INBOX` covers the journal, not the folders a
+[fill](./journaling#bring-in-the-mail-from-before-journaling) wrote
+(`alice@example.com/INBOX`); an account-wide rule covers both. A journal copy
+that retention deleted no longer counts as received over SMTP, so a later
+fill imports the mailbox's copy of it; with only an `INBOX` rule, that copy
+is kept for ever.
+
 ## Legal holds
 
 A hold stops the deletion of the mail it covers, whatever the rules say:
@@ -143,6 +151,10 @@ background; the page shows the progress.
 Every message is checked again when it is deleted: a rule removed, a hold
 added or a new place since the preview keeps it. An interrupted run resumes.
 See [Deletion](../reference/cli#deletion) for the details.
+
+A long first sync of a large mailbox, and a fill, hold a lock that deletion
+waits for; each batch waits up to 10 minutes and the run goes on afterwards.
+Each running sync and fill also keeps one database connection.
 
 **The files stay for a grace period** (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`,
 default 7 days) after their rows are gone. A backup made meanwhile has every

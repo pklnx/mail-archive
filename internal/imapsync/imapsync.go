@@ -371,3 +371,127 @@ func ListFlags(conn *Conn, handle func(uid uint32, flags []imap.Flag)) error {
 	}
 	return nil
 }
+
+// Header is a message's UID, INTERNALDATE and its Message-ID header field
+// as the server sent it ("Message-ID: <...>\r\n\r\n"), for the caller to
+// parse.
+type Header struct {
+	UID          uint32
+	InternalDate time.Time
+	MessageID    []byte
+}
+
+// maxHeaderField bounds the bytes read of a header section.
+const maxHeaderField = 64 << 10
+
+// ListHeaders sends UID FETCH after+1:* (UID INTERNALDATE
+// BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]) in the examined folder and calls
+// handle for each message. It reads no bodies, and it skips the last
+// message that "n:*" returns even if its UID is lower. An empty folder
+// sends nothing: some servers reject "1:*" there.
+func ListHeaders(conn *Conn, after uint32, handle func(Header) error) error {
+	if conn.Messages() == 0 {
+		return nil
+	}
+	var set imap.UIDSet
+	set.AddRange(imap.UID(after+1), 0) // after+1:*
+	section := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, HeaderFields: []string{"Message-ID"}, Peek: true}
+	cmd := conn.c.Fetch(set, &imap.FetchOptions{UID: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{section}})
+	var handleErr error
+	for {
+		msg := cmd.Next()
+		if msg == nil {
+			break
+		}
+		var h Header
+		for {
+			item := msg.Next()
+			if item == nil {
+				break
+			}
+			switch item := item.(type) {
+			case imapclient.FetchItemDataUID:
+				h.UID = uint32(item.UID)
+			case imapclient.FetchItemDataInternalDate:
+				h.InternalDate = item.Time
+			case imapclient.FetchItemDataBodySection:
+				if item.Literal != nil {
+					b, err := io.ReadAll(io.LimitReader(item.Literal, maxHeaderField))
+					_, _ = io.Copy(io.Discard, item.Literal)
+					if err != nil && handleErr == nil {
+						handleErr = fmt.Errorf("read header: %w", err)
+					}
+					h.MessageID = b
+				}
+			}
+		}
+		if handleErr != nil {
+			continue // drain; Close does the rest
+		}
+		if h.UID == 0 {
+			handleErr = errors.New("server returned message without UID")
+			continue
+		}
+		if h.UID <= after {
+			continue
+		}
+		if err := handle(h); err != nil {
+			handleErr = err
+		}
+	}
+	closeErr := cmd.Close()
+	if handleErr != nil {
+		return handleErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("fetch headers: %w", closeErr)
+	}
+	return nil
+}
+
+// fetchChunk is how many UIDs FetchUIDs asks for in one command.
+const fetchChunk = 500
+
+// FetchUIDs is FetchAfter for the given UIDs of the examined folder, sent
+// in chunks of 500. A UID the server no longer has is left out.
+func FetchUIDs[T any](conn *Conn, uids []uint32, sink BodySink[T], handle func(Message[T]) error) error {
+	for start := 0; start < len(uids); start += fetchChunk {
+		var set imap.UIDSet
+		for _, u := range uids[start:min(start+fetchChunk, len(uids))] {
+			set.AddNum(imap.UID(u))
+		}
+		cmd := conn.c.Fetch(set, &imap.FetchOptions{
+			UID: true, Flags: true, InternalDate: true,
+			BodySection: []*imap.FetchItemBodySection{{Peek: true}},
+		})
+		var handleErr error
+		for {
+			msg := cmd.Next()
+			if msg == nil {
+				break
+			}
+			if handleErr != nil {
+				continue
+			}
+			m, hasBody, err := readMessage(msg, sink)
+			if err != nil {
+				handleErr = err
+				continue
+			}
+			if !hasBody {
+				continue
+			}
+			if err := handle(m); err != nil {
+				handleErr = err
+			}
+		}
+		closeErr := cmd.Close()
+		if handleErr != nil {
+			return handleErr
+		}
+		if closeErr != nil {
+			return fmt.Errorf("fetch: %w", closeErr)
+		}
+	}
+	return nil
+}

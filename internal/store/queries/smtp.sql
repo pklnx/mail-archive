@@ -62,11 +62,12 @@ VALUES (@location_id, @mail_from, @rcpt_to::text[], @rcpt_text, @received_at, @c
 UPDATE envelopes SET rcpt_to = @rcpt_to::text[], rcpt_text = @rcpt_text WHERE location_id = @location_id;
 
 -- name: LastReceived :many
--- When each SMTP account last accepted a message: its only folder is
--- touched on every accepted transaction.
+-- When each SMTP account last accepted a message: its journal folder is
+-- touched on every accepted transaction. A fill touches its own folders
+-- (prefix/name), never INBOX.
 SELECT f.account_id, f.last_synced_at
 FROM folders f JOIN accounts a ON a.id = f.account_id
-WHERE a.kind = 'smtp' AND f.last_synced_at IS NOT NULL;
+WHERE a.kind = 'smtp' AND f.name = 'INBOX' AND f.last_synced_at IS NOT NULL;
 
 -- name: BumpAccountVersion :execrows
 UPDATE accounts SET version = version + 1, updated_at = now() WHERE id = $1;

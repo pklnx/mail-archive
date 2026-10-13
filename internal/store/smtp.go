@@ -14,7 +14,8 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
-// SMTPFolder is the only folder of an smtp account.
+// SMTPFolder is the journal folder of an smtp account: what arrives over
+// SMTP. A fill from IMAP writes into folders of its own ("<prefix>/...").
 const SMTPFolder = "INBOX"
 
 // ErrAddressTaken is returned for an address another smtp account

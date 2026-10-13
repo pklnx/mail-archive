@@ -180,6 +180,7 @@ func newAccountCmd() *cobra.Command {
 		newAccountAddCmd(),
 		newAccountAddSMTPCmd(),
 		newAccountSMTPAddressesCmd(),
+		newAccountFillCmd(),
 		newAccountListCmd(),
 		newAccountFoldersCmd(),
 		newAccountSetFoldersCmd(),
