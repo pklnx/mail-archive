@@ -18,6 +18,20 @@ there, and see everyone's entries in the log.
   number. A spinner marks accounts that are syncing; removed accounts are
   marked as such. **Manage accounts** at the bottom opens the
   [account page](./accounts).
+
+  Folders form a tree, split at the server's hierarchy delimiter (`/` or
+  `.`): `Archive/2024` shows as `2024` under `Archive`, with the full name as
+  tooltip. A parent that is only part of a path, not a folder of its own, is
+  shown without a count. The arrow next to an account or a parent folder
+  collapses or expands it; clicking the name still selects it.
+  **Collapse all** and **Expand all** do this for the whole sidebar. A
+  collapsed parent shows, in italics, the sum of the counts below it: a
+  message in two of those folders counts twice. When you open a folder
+  inside a collapsed one, for example from a link, its path expands. The
+  state is remembered per user in this browser; on a shared browser it keeps
+  listing your account names and folder paths after you log out. After an
+  upgrade, an account's folders form a tree from its next sync; until then,
+  and for removed accounts, the list stays flat.
 - **Message list:** newest first, with search at the top. More messages load
   as you scroll.
 - **Message:** headers, where the message was found (every account and

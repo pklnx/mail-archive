@@ -6,6 +6,11 @@ export interface Folder {
   lastSyncedAt: string | null;
   /** When the folder was last compared with the server. */
   lastReconciledAt: string | null;
+  /**
+   * The server's hierarchy delimiter ("/" or "."), "" for a server without
+   * hierarchy, null while unknown (before the folder's first sync).
+   */
+  delimiter: string | null;
 }
 
 export type TLSMode = "tls" | "starttls" | "none";
