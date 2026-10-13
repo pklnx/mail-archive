@@ -12,6 +12,7 @@ import { hasPrefix, searchFilter } from "./searchSyntax";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
 import { useAccounts } from "./useAccounts";
+import { useCollapsed } from "./sidebarState";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
 import type { User } from "./api";
@@ -29,6 +30,7 @@ export function App({ user, logout }: Props) {
   const prefixed = hasPrefix(query) || state.group === "1";
   const [filtersOpen, setFiltersOpen] = useState(prefixed);
   const accounts = useAccounts();
+  const collapsed = useCollapsed(user.name, accounts.data);
 
   // A typed prefix or grouping (also from the URL) shows the filters it set.
   useEffect(() => {
@@ -76,6 +78,7 @@ export function App({ user, logout }: Props) {
             accounts={accounts}
             user={user}
             logout={logout}
+            collapsed={collapsed}
             select={(account, folder) => {
               update({ account, folder, gone: "", m: "", view: "" });
               setMenuOpen(false);
@@ -114,6 +117,7 @@ export function App({ user, logout }: Props) {
               accounts={accounts}
               close={() => update({ view: "" })}
               renamed={(from, to) => {
+                collapsed.rename(from, to);
                 if (state.account === from) update({ account: to }, { replace: true });
               }}
               showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}

@@ -272,7 +272,7 @@ type demoUser struct {
 var users = []demoUser{
 	{
 		account: "personal", login: "alex@example.com", password: "demo",
-		mailboxes: []string{"INBOX", "Archive", "Sent", "Spam"},
+		mailboxes: []string{"INBOX", "Archive", "Archive/2025", "Sent", "Spam"},
 		excluded:  []string{"Spam"},
 	},
 	{
@@ -448,6 +448,10 @@ Content-Transfer-Encoding: base64
 			"Hi Alex,\n\nyes, November 3 works. I will send the contract tomorrow.\n\nRiley", "quote-1@kitchen.example", "re-quote@example.com")},
 		{"personal", "Archive", plain("Home Insurance <service@insurance.example>", alex, "Your 2026 premium invoice", ago(30, 0),
 			"Your premium invoice for 2026 is available in your customer portal.")},
+		{"personal", "Archive/2025", plain("City Utilities <billing@utilities.example>", alex, "Annual statement 2025", ago(280, 0),
+			"Your annual statement for 2025 is attached to your customer account.")},
+		{"personal", "Archive/2025", plain("Car Repair Shop <service@garage.example>", alex, "Invoice for the service in March", ago(210, 0),
+			"Thanks for your visit. Your invoice of $310.00 is attached.")},
 		{"personal", "Spam", plain("Prize Office <win@prizes.example>", alex, "You have won!!!", ago(1, 5),
 			"Click here to claim your prize.")},
 		{"work", "INBOX", plain("Code Review Bot <noreply@ci.example>", "alex.morgan@work.example", "[web-shop] Pull request #42 merged", ago(0, 8),
