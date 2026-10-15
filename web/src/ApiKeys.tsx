@@ -3,11 +3,11 @@ import { ApiError, apiKeyApi, profileApi, retryAfter, type ApiKey, type ApiKeyLi
 import { relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 
-const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+const primary = "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const button =
-  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800";
+  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const input =
-  "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
+  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 /** The expiry choices, in days; null is no expiry. */
 export const expiryChoices: (number | null)[] = [30, 90, 365, null];
@@ -38,10 +38,10 @@ export function ApiKeyItems({ keys, revoke }: { keys: ApiKey[]; revoke: (k: ApiK
   return (
     <ul className="flex flex-col gap-2">
       {keys.map((k) => (
-        <li key={k.id} className="flex items-center gap-3 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        <li key={k.id} className="flex items-center gap-3 rounded-md border border-line px-3 py-2">
           <div className={`mr-auto flex flex-col ${k.state === "active" ? "" : "opacity-60"}`}>
             <span className="font-medium">{k.name}</span>
-            <span className="text-xs text-zinc-500">{apiKeyDetails(k)}</span>
+            <span className="text-xs text-ink-muted">{apiKeyDetails(k)}</span>
           </div>
           {k.state === "active" && (
             <button type="button" className={button} onClick={() => window.confirm(t.apiKeyRevokeConfirm(k.name)) && revoke(k)}>
@@ -58,9 +58,9 @@ export function ApiKeyItems({ keys, revoke }: { keys: ApiKey[]; revoke: (k: ApiK
 export function NewKeyPanel({ created, done }: { created: NewApiKey; done: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div role="status" className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+    <div role="status" className="flex flex-col gap-2 rounded-lg border border-warning-line bg-warning-soft p-3 text-sm">
       <p className="font-semibold">{t.apiKeyCreated(created.name)}</p>
-      <code className="rounded bg-white px-2 py-1 font-mono text-sm break-all select-all dark:bg-zinc-900">{created.key}</code>
+      <code className="rounded bg-field px-2 py-1 font-mono text-sm break-all select-all">{created.key}</code>
       <div className="flex gap-2">
         <button
           type="button"
@@ -96,7 +96,7 @@ export function ApiKeySection() {
   }, []);
   useEffect(load, [load]);
 
-  if (!list) return error ? <p role="alert" className="text-sm text-red-600">{error}</p> : <p className="text-sm text-zinc-500">{t.loading}</p>;
+  if (!list) return error ? <p role="alert" className="text-sm text-danger">{error}</p> : <p className="text-sm text-ink-muted">{t.loading}</p>;
 
   const active = list.keys.filter((k) => k.state === "active").length;
   const toggle = (s: ApiKeyScope, on: boolean) => setScopes((cur) => (on ? [...cur.filter((x) => x !== s), s] : cur.filter((x) => x !== s)));
@@ -135,14 +135,14 @@ export function ApiKeySection() {
 
   return (
     <div className="flex flex-col gap-3 text-sm">
-      <p className="text-zinc-500">{t.apiKeysText}</p>
-      <p className="text-zinc-500">{t.apiKeysKeptOnPasswordChange}</p>
+      <p className="text-ink-muted">{t.apiKeysText}</p>
+      <p className="text-ink-muted">{t.apiKeysKeptOnPasswordChange}</p>
       {created && <NewKeyPanel created={created} done={() => setCreated(null)} />}
-      {list.keys.length === 0 ? <p className="text-zinc-500">{t.apiKeyNone}</p> : <ApiKeyItems keys={list.keys} revoke={(k) => void revoke(k)} />}
+      {list.keys.length === 0 ? <p className="text-ink-muted">{t.apiKeyNone}</p> : <ApiKeyItems keys={list.keys} revoke={(k) => void revoke(k)} />}
       {active >= list.max ? (
-        <p className="text-zinc-500">{t.apiKeyLimit(list.max)}</p>
+        <p className="text-ink-muted">{t.apiKeyLimit(list.max)}</p>
       ) : (
-        <form className="flex flex-col gap-3 border-t border-zinc-200 pt-3 dark:border-zinc-800" onSubmit={create}>
+        <form className="flex flex-col gap-3 border-t border-line pt-3" onSubmit={create}>
           <label className="flex flex-col gap-1">
             {t.apiKeyName}
             <input className={input} required maxLength={64} placeholder={t.apiKeyNameHint} value={name} onChange={(e) => setName(e.target.value)} />
@@ -168,7 +168,7 @@ export function ApiKeySection() {
               ))}
             </select>
           </label>
-          <p className="text-zinc-500">{twoFactor ? t.apiKeyConfirm2FA : t.apiKeyConfirm}</p>
+          <p className="text-ink-muted">{twoFactor ? t.apiKeyConfirm2FA : t.apiKeyConfirm}</p>
           <label className="flex flex-col gap-1">
             {t.currentPassword}
             <input className={input} type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -180,7 +180,7 @@ export function ApiKeySection() {
             </label>
           )}
           {error && (
-            <p role="alert" className="text-red-600">
+            <p role="alert" className="text-danger">
               {error}
             </p>
           )}

@@ -5,9 +5,9 @@ import { timestamp } from "./format";
 import { t } from "./i18n";
 
 const button =
-  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800";
+  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const input =
-  "rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
+  "rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 /** The action groups of the filter, as the API names them. */
 export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"];
@@ -107,11 +107,11 @@ export function LogPage({ admin, close, open }: { admin: boolean; close: () => v
 
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-blue-600 lg:hidden" onClick={close}>
+      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
         {t.backToMail}
       </button>
       <h1 className="text-xl font-semibold">{t.logTitle}</h1>
-      <p className="text-sm text-zinc-500">{admin ? t.logAdminNote : t.logOwnNote}</p>
+      <p className="text-sm text-ink-muted">{admin ? t.logAdminNote : t.logOwnNote}</p>
 
       <div className="flex flex-wrap items-end gap-3 text-sm">
         <label className="flex flex-col gap-1">
@@ -151,14 +151,14 @@ export function LogPage({ admin, close, open }: { admin: boolean; close: () => v
       </div>
 
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}
-      {!loading && !error && rows.length === 0 && <p className="text-sm text-zinc-500">{t.logEmpty}</p>}
+      {!loading && !error && rows.length === 0 && <p className="text-sm text-ink-muted">{t.logEmpty}</p>}
 
       {rows.length > 0 && (
-        <ul className="flex flex-col divide-y divide-zinc-200 rounded-lg border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
           {rows.map((row) => (
             <LogItem
               key={row.entry.id}
@@ -176,7 +176,7 @@ export function LogPage({ admin, close, open }: { admin: boolean; close: () => v
           {t.logMore}
         </button>
       )}
-      {loading && rows.length === 0 && <p className="text-sm text-zinc-500">{t.loading}</p>}
+      {loading && rows.length === 0 && <p className="text-sm text-ink-muted">{t.loading}</p>}
     </div>
   );
 }
@@ -198,12 +198,12 @@ function LogItem({
     <li className="flex flex-col gap-1 px-3 py-2">
       <EntryLine entry={row.entry} admin={admin} open={open} />
       {row.folded.length > 0 && (
-        <button type="button" className="self-start text-xs text-blue-600 hover:underline dark:text-blue-400" onClick={toggle}>
+        <button type="button" className="self-start text-xs text-accent-ink hover:underline" onClick={toggle}>
           {expanded ? t.logHideFolded : t.logFolded(row.folded.length)}
         </button>
       )}
       {expanded && (
-        <ul className="ml-4 flex flex-col gap-1 border-l border-zinc-200 pl-3 dark:border-zinc-800">
+        <ul className="ml-4 flex flex-col gap-1 border-l border-line pl-3">
           {row.folded.map((e) => (
             <li key={e.id}>
               <EntryLine entry={e} admin={admin} open={open} />
@@ -221,17 +221,17 @@ function EntryLine({ entry: e, admin, open }: { entry: AuditEntry; admin: boolea
   const failed = e.action === "auth.login_failed";
   return (
     <div className="flex flex-col gap-0.5 md:grid md:grid-cols-[12rem_1fr_14rem] md:gap-3">
-      <span className="text-zinc-500 tabular-nums">{timestamp(e.at)}</span>
+      <span className="text-ink-muted tabular-nums">{timestamp(e.at)}</span>
       <span className="min-w-0">
-        <span className={`font-medium ${failed ? "text-red-600" : ""}`}>{t.auditAction(e.action)}</span>
-        {admin && e.user && <span className="text-zinc-500"> · {e.user}</span>}
-        {e.actor === "cli" && <span className="text-zinc-500"> · {t.logCLI}</span>}
-        {e.apiKey && <span className="text-zinc-500"> · {t.logViaKey(e.apiKey)}</span>}
+        <span className={`font-medium ${failed ? "text-danger" : ""}`}>{t.auditAction(e.action)}</span>
+        {admin && e.user && <span className="text-ink-muted"> · {e.user}</span>}
+        {e.actor === "cli" && <span className="text-ink-muted"> · {t.logCLI}</span>}
+        {e.apiKey && <span className="text-ink-muted"> · {t.logViaKey(e.apiKey)}</span>}
         {target && (
           <>
             {" · "}
             {e.target?.type === "message" && e.target.subject ? (
-              <button type="button" className="text-blue-600 hover:underline dark:text-blue-400" onClick={() => open(e.target!.id)}>
+              <button type="button" className="text-accent-ink hover:underline" onClick={() => open(e.target!.id)}>
                 {target}
               </button>
             ) : (
@@ -239,9 +239,9 @@ function EntryLine({ entry: e, admin, open }: { entry: AuditEntry; admin: boolea
             )}
           </>
         )}
-        {detail && <span className="block break-words text-zinc-600 dark:text-zinc-400">{detail}</span>}
+        {detail && <span className="block break-words text-ink-muted">{detail}</span>}
       </span>
-      <span className="truncate text-xs text-zinc-500" title={e.userAgent ?? ""}>
+      <span className="truncate text-xs text-ink-muted" title={e.userAgent ?? ""}>
         {[e.clientIp, e.userAgent ? shortUserAgent(e.userAgent) : ""].filter(Boolean).join(" · ")}
       </span>
     </div>

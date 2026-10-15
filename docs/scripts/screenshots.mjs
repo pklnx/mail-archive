@@ -48,9 +48,18 @@ async function loginOnce() {
   return session;
 }
 
-async function page(colorScheme, viewport = desktop, { loggedIn = true } = {}) {
+// phone: a touch screen, so the UI shows its touch sizes (pointer: coarse).
+async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = false } = {}) {
   const storageState = loggedIn ? await loginOnce() : undefined;
-  const ctx = await browser.newContext({ locale: "en-US", timezoneId: "Europe/Berlin", colorScheme, viewport, deviceScaleFactor: 2, storageState });
+  const ctx = await browser.newContext({
+    locale: "en-US",
+    timezoneId: "Europe/Berlin",
+    colorScheme,
+    viewport,
+    deviceScaleFactor: 2,
+    storageState,
+    ...(phone && { isMobile: true, hasTouch: true }),
+  });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(String(e)));
   return p;
@@ -193,7 +202,7 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  const p = await page("light", { width: 390, height: 780 });
+  const p = await page("light", { width: 390, height: 780 }, { phone: true });
   await openMessage(p, "Photos from the weekend");
   await p.screenshot({ path: `${out}/mail-phone.png` });
   await p.context().close();

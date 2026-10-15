@@ -20,11 +20,11 @@ interface Props {
   collapsed: CollapsedState;
 }
 
-const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-sm";
-const active = "bg-blue-600 text-white";
-const idle = "hover:bg-zinc-200 dark:hover:bg-zinc-800";
+const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-sm pointer-coarse:min-h-11";
+const active = "bg-accent text-on-accent";
+const idle = "hover:bg-surface-hover";
 /** A collapsed node that contains the selection. */
-const within = "bg-blue-100 dark:bg-blue-950";
+const within = "bg-accent-soft";
 /** Deeper levels are not indented further, so names keep some room. */
 const maxIndent = 6;
 
@@ -36,7 +36,7 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-const toggleClass = "flex size-6 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100";
+const toggleClass = "relative flex size-6 shrink-0 items-center justify-center rounded text-ink-muted hover:bg-surface-hover hover:text-ink pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5";
 
 export function Sidebar({ state, accounts, select, selectGone, show, user, logout, collapsed }: Props) {
   const { data, error } = accounts;
@@ -72,22 +72,22 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
           onClick={selectGone}
         >
           <span className="truncate">{t.onlyInArchive}</span>
-          <span className={`text-xs tabular-nums ${goneOn ? "" : "text-zinc-500"}`}>{gone}</span>
+          <span className={`text-xs tabular-nums ${goneOn ? "" : "text-ink-muted"}`}>{gone}</span>
         </button>
       )}
       {data && data.accounts.some((a) => a.folders.length > 0) && (
         <div className="-mt-2 flex gap-3 px-2 text-xs">
-          <button type="button" className="text-blue-600 hover:underline disabled:text-zinc-400 disabled:no-underline dark:text-blue-400 dark:disabled:text-zinc-600" disabled={!collapsed.canCollapse} onClick={collapsed.collapseAll}>
+          <button type="button" className="text-accent-ink hover:underline disabled:text-ink-muted disabled:no-underline pointer-coarse:min-h-11" disabled={!collapsed.canCollapse} onClick={collapsed.collapseAll}>
             {t.collapseAll}
           </button>
-          <button type="button" className="text-blue-600 hover:underline disabled:text-zinc-400 disabled:no-underline dark:text-blue-400 dark:disabled:text-zinc-600" disabled={!collapsed.canExpand} onClick={collapsed.expandAll}>
+          <button type="button" className="text-accent-ink hover:underline disabled:text-ink-muted disabled:no-underline pointer-coarse:min-h-11" disabled={!collapsed.canExpand} onClick={collapsed.expandAll}>
             {t.expandAll}
           </button>
         </div>
       )}
-      {!data && !error && <p className="px-2 text-sm text-zinc-500">{t.loading}</p>}
-      {error && !data && <p className="px-2 text-sm text-red-600">{t.loadAccountsFailed(error)}</p>}
-      {data && data.accounts.length === 0 && <p className="px-2 text-sm text-zinc-500">{t.noAccounts}</p>}
+      {!data && !error && <p className="px-2 text-sm text-ink-muted">{t.loading}</p>}
+      {error && !data && <p className="px-2 text-sm text-danger">{t.loadAccountsFailed(error)}</p>}
+      {data && data.accounts.length === 0 && <p className="px-2 text-sm text-ink-muted">{t.noAccounts}</p>}
       {data?.accounts.map((a, ai) => {
         const open = !collapsed.isCollapsed(a.name, "");
         const listId = `${baseId}-${ai}`;
@@ -194,17 +194,17 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
           {t.log}
         </span>
       </button>
-      <div className="flex items-center justify-between gap-2 border-t border-zinc-200 px-2 pt-2 text-sm dark:border-zinc-800">
+      <div className="flex items-center justify-between gap-2 border-t border-line px-2 pt-2 text-sm">
         <button
           type="button"
-          className={`truncate hover:underline ${state.view === "profile" ? "font-semibold" : "text-zinc-500"}`}
+          className={`truncate hover:underline pointer-coarse:min-h-11 ${state.view === "profile" ? "font-semibold" : "text-ink-muted"}`}
           title={`${t.loggedInAs(user.name)} · ${t.profile}`}
           aria-current={state.view === "profile" ? "page" : undefined}
           onClick={() => show("profile")}
         >
           {user.name}
         </button>
-        <button type="button" className="shrink-0 text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>
+        <button type="button" className="shrink-0 text-accent-ink hover:underline pointer-coarse:min-h-11" onClick={logout}>
           {t.logOut}
         </button>
       </div>
@@ -290,7 +290,7 @@ function FolderItem({ node, id, account, depth, selected, select, collapsed }: O
             onClick={() => select(account, f.name)}
           >
             <span className="truncate">{node.label}</span>
-            <span className={`text-xs tabular-nums ${on ? "" : "text-zinc-500"} ${open ? "" : "italic"}`} title={countLabel}>
+            <span className={`text-xs tabular-nums ${on ? "" : "text-ink-muted"} ${open ? "" : "italic"}`} title={countLabel}>
               {count}
             </span>
           </button>
@@ -300,18 +300,18 @@ function FolderItem({ node, id, account, depth, selected, select, collapsed }: O
         // whole row toggles.
         <button
           type="button"
-          className={`flex w-full items-center gap-0.5 rounded-md py-1 pr-2 text-left text-sm text-zinc-600 dark:text-zinc-400 ${inside ? within : idle}`}
+          className={`flex w-full items-center gap-0.5 rounded-md py-1 pr-2 text-left text-sm text-ink-muted pointer-coarse:min-h-11 ${inside ? within : idle}`}
           aria-expanded={open}
           aria-controls={`${id}-c`}
           title={node.path}
           onClick={() => collapsed.toggle(account, node.path)}
         >
-          <span className="flex size-6 shrink-0 items-center justify-center text-zinc-500">
+          <span className="flex size-6 shrink-0 items-center justify-center text-ink-muted">
             <Chevron open={open} />
           </span>
           <span className="min-w-0 flex-1 truncate">{node.label}</span>
           {!open && (
-            <span className="text-xs tabular-nums text-zinc-500 italic" title={countLabel}>
+            <span className="text-xs tabular-nums text-ink-muted italic" title={countLabel}>
               {count}
             </span>
           )}

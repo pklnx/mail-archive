@@ -5,7 +5,7 @@ export function Highlight({ text }: { text: string }) {
     <>
       {splitHighlights(text).map((s, i) =>
         s.match ? (
-          <mark key={i} className="rounded-sm bg-yellow-200 px-0.5 text-inherit dark:bg-yellow-700/60">
+          <mark key={i} className="rounded-sm bg-highlight px-0.5 text-inherit">
             {s.text}
           </mark>
         ) : (

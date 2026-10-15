@@ -48,13 +48,13 @@ export function HealthBanner({ data, admin, openAccounts, openUsers }: Props) {
   }
   return (
     <div
-      className={`flex flex-col gap-1 border-b border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800 ${
-        b.failing.length ? "bg-red-50 dark:bg-red-950/40" : b.stale.length ? "bg-amber-50 dark:bg-amber-950/40" : ""
+      className={`flex flex-col gap-1 border-b border-line px-3 py-2 text-sm ${
+        b.failing.length ? "bg-danger-soft" : b.stale.length ? "bg-warning-soft" : ""
       }`}
     >
       <span role="alert" className="sr-only">{announce}</span>
       {b.failing.length > 0 && (
-        <p className="text-red-700 dark:text-red-400">
+        <p className="text-danger">
           {failingText}{" "}
           <button type="button" className={link} onClick={openAccounts}>
             {t.bannerOpenAccounts}
@@ -62,7 +62,7 @@ export function HealthBanner({ data, admin, openAccounts, openUsers }: Props) {
         </p>
       )}
       {b.stale.length > 0 && (
-        <p className="text-amber-700 dark:text-amber-500">
+        <p className="text-warning">
           {t.bannerStale(b.stale.join(", "))}
           {!b.failing.length && (
             <>
@@ -75,7 +75,7 @@ export function HealthBanner({ data, admin, openAccounts, openUsers }: Props) {
         </p>
       )}
       {others > 0 && (
-        <p className="text-zinc-600 dark:text-zinc-400">
+        <p className="text-ink-muted">
           {t.bannerOthers(others)}{" "}
           <button type="button" className={link} onClick={openUsers}>
             {t.bannerOpenUsers}

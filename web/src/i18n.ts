@@ -69,6 +69,7 @@ const en = {
   part: (n: number) => `part ${n}`,
   truncated: "This message is very large; the preview is shortened.",
   messageContent: "Message content",
+  showQuote: "Show quoted text",
 
   manageAccounts: "Manage accounts",
   removed: "removed",
@@ -612,6 +613,7 @@ const de: Messages = {
   part: (n) => `Teil ${n}`,
   truncated: "Diese Nachricht ist sehr groß, die Vorschau ist gekürzt.",
   messageContent: "Nachrichteninhalt",
+  showQuote: "Zitierten Text anzeigen",
 
   manageAccounts: "Konten verwalten",
   removed: "entfernt",

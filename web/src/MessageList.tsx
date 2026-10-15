@@ -87,7 +87,7 @@ export function MessageList({ filter, selected, open }: Props) {
         </li>
       ))}
       {list.error && (
-        <li className="p-4 text-sm text-red-600">
+        <li className="p-4 text-sm text-danger">
           {t.loadMessagesFailed(list.error)}{" "}
           <button type="button" className="underline" onClick={() => load(list.cursor, generation.current)}>
             {t.retry}
@@ -95,9 +95,9 @@ export function MessageList({ filter, selected, open }: Props) {
         </li>
       )}
       {!list.loading && !list.error && list.items.length === 0 && (
-        <li className="p-4 text-sm text-zinc-500">{searching ? t.noMatches : t.noMessages}</li>
+        <li className="p-4 text-sm text-ink-muted">{searching ? t.noMatches : t.noMessages}</li>
       )}
-      {list.loading && <li className="p-4 text-sm text-zinc-500">{t.loading}</li>}
+      {list.loading && <li className="p-4 text-sm text-ink-muted">{t.loading}</li>}
       {!list.done && <li ref={sentinel} aria-hidden className="h-px" />}
     </ul>
   );
@@ -127,8 +127,8 @@ function Row({ m, selected, open, nested, count }: RowProps) {
       type="button"
       onClick={() => open(m.id)}
       aria-current={on ? "true" : undefined}
-      className={`block w-full min-w-0 border-b border-zinc-200 py-3 pr-4 text-left dark:border-zinc-800 ${nested ? "pl-8" : "pl-4"} ${
-        on ? "bg-blue-50 dark:bg-blue-950/50" : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
+      className={`block w-full min-w-0 border-b border-line py-3 pr-4 text-left ${nested ? "pl-8" : "pl-4"} ${
+        on ? "bg-accent-soft" : "hover:bg-surface-sunken"
       }`}
     >
       <div className="flex items-baseline justify-between gap-2">
@@ -136,7 +136,7 @@ function Row({ m, selected, open, nested, count }: RowProps) {
           <span className="truncate text-sm font-semibold">{senderName(m.from)}</span>
           {count !== undefined && (
             <span
-              className="shrink-0 rounded-full bg-zinc-200 px-1.5 text-xs font-medium text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200"
+              className="shrink-0 rounded-full bg-line px-1.5 text-xs font-medium text-ink"
               title={t.inConversation(count)}
               aria-label={t.inConversation(count)}
             >
@@ -144,14 +144,14 @@ function Row({ m, selected, open, nested, count }: RowProps) {
             </span>
           )}
         </span>
-        <span className="flex shrink-0 items-center gap-1 text-xs text-zinc-500">
+        <span className="flex shrink-0 items-center gap-1 text-xs text-ink-muted">
           {m.hasAttachment && paperclip}
           <time dateTime={m.sortAt}>{shortDate(m.sentAt ?? m.sortAt)}</time>
         </span>
       </div>
       <div className="truncate text-sm">{m.subject || t.noSubject}</div>
       {m.snippet && !nested && (
-        <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="mt-0.5 line-clamp-2 text-xs text-ink-muted">
           <Highlight text={m.snippet} />
         </p>
       )}
@@ -176,7 +176,7 @@ function ThreadRow({ m, filter, selected, open }: { m: MessageSummary; filter: F
           aria-controls={id}
           aria-label={expanded ? t.hideConversation : t.showConversation(count - 1)}
           title={expanded ? t.hideConversation : t.showConversation(count - 1)}
-          className="shrink-0 border-b border-zinc-200 px-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:border-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+          className="shrink-0 border-b border-line px-2 pointer-coarse:px-3.5 text-ink-muted hover:bg-surface-hover hover:text-ink"
           onClick={() => setExpanded(!expanded)}
         >
           <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={expanded ? "rotate-180" : ""}>
@@ -215,16 +215,16 @@ function ThreadMembers({ id, filter, newest, count, selected, open }: ThreadMemb
   const members = res.status === "ok" ? earlierMembers(res.data.messages, newest) : [];
   const hidden = count - 1 - members.length;
   return (
-    <ul id={id} aria-label={t.conversation} className="bg-zinc-50/60 dark:bg-zinc-900/40">
-      {res.status === "loading" && <li className="py-2 pl-8 text-xs text-zinc-500">{t.loading}</li>}
-      {res.status === "error" && <li className="py-2 pl-8 text-xs text-red-600">{t.loadMessagesFailed(res.error.message)}</li>}
+    <ul id={id} aria-label={t.conversation} className="bg-surface-sunken">
+      {res.status === "loading" && <li className="py-2 pl-8 text-xs text-ink-muted">{t.loading}</li>}
+      {res.status === "error" && <li className="py-2 pl-8 text-xs text-danger">{t.loadMessagesFailed(res.error.message)}</li>}
       {res.status === "ok" &&
         members.map((x) => (
           <li key={x.id}>
             <Row m={x} selected={selected} open={open} nested />
           </li>
         ))}
-      {res.status === "ok" && hidden > 0 && <li className="py-2 pl-8 text-xs text-zinc-500">{t.moreInConversation(hidden)}</li>}
+      {res.status === "ok" && hidden > 0 && <li className="py-2 pl-8 text-xs text-ink-muted">{t.moreInConversation(hidden)}</li>}
     </ul>
   );
 }
