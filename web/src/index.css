@@ -35,6 +35,7 @@
   --color-tag-warning: var(--color-amber-100); /* gone from server, legal hold */
   --color-tag-warning-ink: var(--color-amber-900);
   --color-highlight: var(--color-yellow-200); /* search matches */
+  --color-paper: #ffffff; /* HTML mails bring their own colors, in both themes */
   --color-scrim: rgb(0 0 0 / 0.3);
 }
 

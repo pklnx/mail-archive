@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
-import { getConversation, getMessage, messageURL, type ConversationEntry, type MessageDetail } from "./api";
+import { getConversation, getMessage, messageURL, type ConversationEntry, type MessageDetail, type Part } from "./api";
 import { fileSize, locationLabel, longDate, retentionDay, senderName, shortDate } from "./format";
+import { attachmentKind, parseMailText, splitLinks, type TextBlock } from "./mailText";
 import { useAsync } from "./useAsync";
 import { t } from "./i18n";
 
@@ -122,17 +123,10 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
           </a>
         </div>
         {attachments.length > 0 && (
-          <ul aria-label={t.attachments} className="mt-3 flex flex-wrap gap-2">
+          <ul aria-label={t.attachments} className="-mx-4 mt-3 flex gap-2 overflow-x-auto px-4 pb-1 md:flex-wrap md:overflow-visible">
             {attachments.map((p) => (
-              <li key={p.index}>
-                <a
-                  href={messageURL.part(msg.id, p.index)}
-                  download={p.filename || undefined}
-                  className="inline-flex items-center gap-1 rounded border border-line-control px-2 py-1 text-xs hover:bg-surface-sunken pointer-coarse:min-h-11"
-                >
-                  📎 <span className="max-w-60 truncate">{p.filename || t.part(p.index)}</span>
-                  <span className="text-ink-muted">{fileSize(p.size)}</span>
-                </a>
+              <li key={p.index} className="shrink-0">
+                <AttachmentTile id={msg.id} part={p} />
               </li>
             ))}
           </ul>
@@ -141,23 +135,114 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
       </header>
       <ConversationSection id={msg.id} open={open} />
       {msg.hasHtml && showHTML ? (
-        // No allow-scripts and no allow-same-origin: the mail's HTML runs with
-        // an opaque origin and cannot reach the API. The server's CSP adds
-        // another layer (no scripts, no forms, no remote content).
-        <iframe
-          // A new element per mode: changing src would add a browser history
-          // entry, so Back would toggle images instead of leaving the message.
-          key={images ? "with-images" : "no-images"}
-          title={t.messageContent}
-          className="min-h-0 w-full flex-1 bg-white"
-          sandbox="allow-popups allow-popups-to-escape-sandbox"
-          referrerPolicy="no-referrer"
-          src={messageURL.html(msg.id, images)}
-        />
+        // In dark mode the mail's own (mostly white) page sits as a sheet on
+        // the dark background instead of filling the pane edge to edge.
+        <div className="flex min-h-0 flex-1 flex-col dark:p-3 md:dark:p-4">
+          {/* No allow-scripts and no allow-same-origin: the mail's HTML runs with
+              an opaque origin and cannot reach the API. The server's CSP adds
+              another layer (no scripts, no forms, no remote content). */}
+          <iframe
+            // A new element per mode: changing src would add a browser history
+            // entry, so Back would toggle images instead of leaving the message.
+            key={images ? "with-images" : "no-images"}
+            title={t.messageContent}
+            className="min-h-0 w-full flex-1 bg-paper dark:rounded-xl dark:border dark:border-line"
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            referrerPolicy="no-referrer"
+            src={messageURL.html(msg.id, images)}
+          />
+        </div>
       ) : (
-        <pre className="min-h-0 flex-1 overflow-auto p-4 font-sans text-sm whitespace-pre-wrap break-words">{msg.text}</pre>
+        <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+          <MailText blocks={parseMailText(msg.text)} />
+        </div>
       )}
     </article>
+  );
+}
+
+/** A downloadable attachment: type, name and size, large enough to tap. */
+function AttachmentTile({ id, part: p }: { id: string; part: Part }) {
+  const kind = attachmentKind(p.filename, p.contentType);
+  const name = p.filename || t.part(p.index);
+  return (
+    <a
+      href={messageURL.part(id, p.index)}
+      download={p.filename || undefined}
+      title={name}
+      className="grid w-52 grid-cols-[2.5rem_1fr] items-center gap-x-2 rounded-lg border border-line p-2 text-left hover:bg-surface-hover"
+    >
+      <span
+        aria-hidden
+        className={`row-span-2 grid size-10 place-items-center rounded text-[10px] font-bold tracking-wide ${
+          kind.image ? "bg-accent-soft text-accent-soft-ink" : "bg-surface-hover text-ink-muted"
+        }`}
+      >
+        {kind.image ? imageIcon : kind.label || fileIcon}
+      </span>
+      <span className="truncate text-sm font-medium">{name}</span>
+      <span className="truncate text-xs text-ink-muted">{[kind.label, fileSize(p.size)].filter(Boolean).join(" · ")}</span>
+    </a>
+  );
+}
+
+const iconProps = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+const imageIcon = (
+  <svg {...iconProps}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <circle cx="9" cy="10" r="2" />
+    <path d="M21 16l-5-5-9 9" />
+  </svg>
+);
+const fileIcon = (
+  <svg {...iconProps}>
+    <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+    <path d="M14 3v6h6" />
+  </svg>
+);
+
+/**
+ * A plain-text body set for reading: the line breaks of the mail are kept,
+ * quotes are indented and muted (older ones folded), the signature is quiet.
+ */
+function MailText({ blocks, depth = 0 }: { blocks: TextBlock[]; depth?: number }) {
+  return (
+    <div className={`flex max-w-2xl flex-col gap-3 break-words ${depth ? "" : "text-base leading-relaxed md:text-sm"}`}>
+      {blocks.map((b, i) =>
+        b.kind === "text" ? (
+          <p key={i} className="whitespace-pre-wrap">
+            <Linked text={b.text} />
+          </p>
+        ) : b.kind === "signature" ? (
+          <p key={i} className="text-sm whitespace-pre-wrap text-ink-muted md:text-xs">
+            <Linked text={b.text} />
+          </p>
+        ) : depth === 0 ? (
+          <blockquote key={i} className="border-l-2 border-line-control pl-3 text-ink-muted">
+            <MailText blocks={b.blocks} depth={depth + 1} />
+          </blockquote>
+        ) : (
+          <details key={i} className="border-l-2 border-line pl-3">
+            <summary className="cursor-pointer text-sm text-accent-ink pointer-coarse:min-h-11 pointer-coarse:content-center">{t.showQuote}</summary>
+            <div className="mt-2">
+              <MailText blocks={b.blocks} depth={depth + 1} />
+            </div>
+          </details>
+        ),
+      )}
+    </div>
+  );
+}
+
+function Linked({ text }: { text: string }) {
+  return splitLinks(text).map((s, i) =>
+    s.href ? (
+      <a key={i} href={s.href} target="_blank" rel="noopener noreferrer" className="text-accent-ink underline underline-offset-2">
+        {s.text}
+      </a>
+    ) : (
+      s.text
+    ),
   );
 }
 
