@@ -1,10 +1,11 @@
 # Web UI and search
 
 `docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
-with your user; your name (which opens your [profile](./users#your-profile))
-and **Log out** are at the bottom of the sidebar, next to **Log**, the
-[audit log](./audit-log) of what you did. Admins also find [Users](./users)
-there, and see everyone's entries in the log.
+with your user. The **Manage** section at the bottom of the sidebar holds
+**Manage accounts** and **Log**, the [audit log](./audit-log) of what you did;
+admins also find [Users](./users) and [Retention](./retention) there, and see
+everyone's entries in the log. Below it are your name, which opens your
+[profile](./users#your-profile), and **Log out**.
 
 ![The three-column mail view](/screenshots/mail-light.png)
 
@@ -31,9 +32,17 @@ there, and see everyone's entries in the log.
   state is remembered per user in this browser; on a shared browser it keeps
   listing your account names and folder paths after you log out. After an
   upgrade, an account's folders form a tree from its next sync; until then,
-  and for removed accounts, the list stays flat.
+  and for removed accounts, the list stays flat. The accounts are listed
+  under **Accounts**, the pages to manage them and the archive under
+  **Manage**.
 - **Message list:** newest first, with search at the top. More messages load
-  as you scroll.
+  as you scroll. A line above the list counts what is loaded ("42 messages",
+  "More than 50 matches" while more can load). Headings group the messages
+  by date and stay at the top while you scroll: **Today**, **Yesterday**,
+  **This week** (from Monday), **This month**, then the month for earlier
+  months of this year and the year before that. When a search finds
+  nothing, **Clear search** empties it, and **Search all mail** repeats it
+  outside the selected account or folder.
 - **Message:** headers, where the message was found (every account and
   folder), attachments and the body. A place marked *renumbered* is from
   before the server renumbered that folder; the message is listed there
@@ -41,10 +50,37 @@ there, and see everyone's entries in the log.
   *no longer on the server* (in amber, with the date it was last seen) was
   deleted there; the archive keeps the message.
 
+Above an open message, the arrows go to the previous and next message of
+the list, with the position in between ("3 of 42"; "3 of 42+" while more
+can load). At the end of what is loaded, the next arrow loads more. Paging
+does not add history entries.
+
 Everything you select is part of the URL, so the back button, reloads and
-bookmarks work. On a phone the columns become separate screens.
+bookmarks work. Back in the browser after paging returns to the list, not to
+the previous message.
+
+On a medium-sized screen, such as a tablet, the sidebar is a drawer behind
+the menu button next to the search field.
+
+On a phone the columns become separate screens. An app bar at the top shows
+the current folder, with its account below it, or **All mail**; the menu
+button on its left opens the sidebar as a drawer, and the sun/moon button
+is on its right. The search field takes the full width below it. A
+navigation bar at the bottom has four entries:
+
+- **Mail:** the message list.
+- **Folders:** opens the sidebar drawer with the accounts and folders.
+- **Accounts:** the [account page](./accounts).
+- **More:** the log, your profile, the light/dark switch and **Log out**;
+  admins also find users and retention there.
+
+An open message fills the screen without the navigation bar. The arrow at
+the top left leads back to the list, the arrows on the right page through
+it.
 
 <img src="/screenshots/mail-phone.png" alt="A message on a phone" width="320">
+
+<!-- screenshot: the message list on a phone, with the app bar, the filter chips and the bottom navigation -->
 
 ## Sync problems
 
@@ -79,7 +115,17 @@ folder is compared once a day. See [Reconcile](./syncing#reconcile).
 HTML mail is shown in a sandboxed frame: no scripts, no forms, no plugins.
 **Remote images stay blocked** because they tell the sender that you opened
 the message (tracking pixels). Click **Load remote images** for one message
-to allow them. Images embedded in the message are always shown.
+to allow them. Images embedded in the message are always shown. In dark
+mode, the mail keeps its own colors and is shown as a white sheet on the
+dark background, since most HTML mail is designed for white.
+
+Plain-text mail keeps its line breaks. Quoted text (lines starting with `>`)
+is indented and muted; quotes within the quote, from the second level on,
+are folded behind **Show quoted text**. A signature after a `-- ` line is
+set smaller and quieter. Web addresses (`http://` and `https://`) are
+clickable and open in a new tab.
+
+<!-- screenshot: a plain-text reply with an indented quote, a folded older quote and a signature -->
 
 **Found in** lists every folder that holds the message. For a copy an smtp
 account received, an **Envelope** row shows the sender and recipients the mail
@@ -88,8 +134,14 @@ server delivered it to, BCC included; for a copy it imported from IMAP
 row says that there is no envelope.
 
 **Show text** switches to the plain-text version. **Download .eml** saves the
-original message, which any mail client opens. Attachments are downloads;
-only PNG, JPEG, GIF and WebP images open in the browser.
+original message, which any mail client opens.
+
+Attachments are tiles below the headers, with the file type (such as PDF or
+DOCX), the name and the size; on a phone they scroll sideways. A tile is a
+download; only PNG, JPEG, GIF and WebP images open in the browser. There are
+no thumbnails on purpose: every attachment that is loaded is written to the
+[audit log](./audit-log) as `message.part`, so previews would log every
+attachment of every message you open.
 
 ## Search
 
@@ -133,9 +185,19 @@ message you received. The contents of attachments are not searched.
 
 The filter row under the search field sets the same prefixes for From, To or
 Cc, the date range and attachments. It writes them into the search field, and
-prefixes you type show up in it. On a phone it is behind the filter button
-and opens by itself when the search contains a prefix. The URL keeps the
-whole search, so Back, reload and bookmarks keep the filters.
+prefixes you type show up in it. The URL keeps the whole search, so Back,
+reload and bookmarks keep the filters.
+
+On a phone the filters are a row of chips under the search field:
+**Has attachment**, **Date**, **From**, **To or Cc** and **Conversation**.
+**Has attachment** and **Conversation** switch on and off in place. **Date**,
+**From** and **To or Cc** open the filter sheet, which has the same fields
+as the filter row; **Done** closes it. A chip that is set is highlighted and
+shows its value, for example `From: sam`; the × next to it removes that
+filter. The filter button next to the search field also opens the sheet and
+is highlighted while a prefix or grouping is set.
+
+<!-- screenshot: the filter chips on a phone with a set From chip, and the open filter sheet -->
 
 A message has an attachment when a part is marked as one, or when it is a
 named file that is not text, such as a PDF that Apple Mail sends inline.
@@ -171,10 +233,40 @@ without these headers starts a conversation of its own. You only see the
 messages in your own accounts, also when someone else archived the other
 half of a conversation.
 
+## Keyboard shortcuts
+
+| Key | Does |
+|---|---|
+| <kbd>/</kbd> | Moves to the search field. |
+| <kbd>j</kbd> | Next message; with no message open, opens the first one. |
+| <kbd>k</kbd> | Previous message. |
+| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the sidebar drawer. |
+| <kbd>g</kbd> then <kbd>a</kbd> | All mail. |
+| <kbd>?</kbd> | Lists the shortcuts. |
+
+They do not apply while you type in a field (<kbd>Esc</kbd> leaves the
+field) or while a dialog is open. With no message open, the reading pane
+points to <kbd>?</kbd>.
+
+## Install as an app
+
+The UI can be added to the home screen or the dock and then opens in its
+own window, without the browser's address bar.
+
+- **iPhone and iPad (Safari):** Share, then **Add to Home Screen**.
+- **Android and desktop (Chrome):** **Install** in the browser menu or in the
+  address bar.
+
+Browsers offer this only when the site is served over HTTPS (or opened as
+`localhost` on the same computer); see
+[Network access](../reference/security#network-access). The app is the same
+web page: it needs the server and stores nothing for offline use.
+
 ## Appearance and language
 
-Light and dark mode follow the system. The sun/moon button next to the search
-field overrides it; the choice is remembered in the browser.
+Light and dark mode follow the system. The sun/moon button overrides it: next
+to the search field on larger screens, in the app bar and under **More** on a
+phone. The choice is remembered in the browser.
 
 ![Dark mode](/screenshots/mail-dark.png)
 
