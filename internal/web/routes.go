@@ -32,7 +32,7 @@ func (s *Server) routes() []route {
 		return route{pattern: pattern, handler: f, access: a}
 	}
 	app := ui.Handler()
-	return []route{
+	routes := []route{
 		h("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("ok\n"))
 		}, accessPublic),
@@ -110,4 +110,9 @@ func (s *Server) routes() []route {
 		{pattern: "GET /{$}", handler: app, access: accessPublic, ui: true},
 		{pattern: "GET /assets/", handler: app, access: accessPublic, ui: true},
 	}
+	// The web app manifest and its icons, at fixed names in the root.
+	for _, path := range ui.RootPaths() {
+		routes = append(routes, route{pattern: "GET " + path, handler: app, access: accessPublic, ui: true})
+	}
+	return routes
 }

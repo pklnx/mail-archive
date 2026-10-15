@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	uipkg "github.com/pklnx/mail-archive/internal/web/ui"
 )
 
 // specMethods are the operations of a path item that can match a route.
@@ -143,7 +145,11 @@ func TestOpenAPIRoutes(t *testing.T) {
 			ui = append(ui, rt.pattern)
 		}
 	}
-	if want := []string{"GET /{$}", "GET /assets/"}; !slices.Equal(ui, want) {
+	want := []string{"GET /{$}", "GET /assets/"}
+	for _, path := range uipkg.RootPaths() {
+		want = append(want, "GET "+path)
+	}
+	if !slices.Equal(ui, want) {
 		t.Errorf("routes left out of the spec: %q, want %q", ui, want)
 	}
 }

@@ -71,6 +71,12 @@ body,
   height: 100%;
 }
 
+/* The page reaches under notch and home indicator (viewport-fit=cover in
+   index.html); the app keeps its content clear of them. 0 elsewhere. */
+#root {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
 body {
   @apply bg-bg text-ink antialiased;
 }

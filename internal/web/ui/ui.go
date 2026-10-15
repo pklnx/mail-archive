@@ -8,7 +8,9 @@ package ui
 import (
 	"embed"
 	"io/fs"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -20,7 +22,24 @@ var dist embed.FS
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
 	"frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
-// Handler serves index.html at "/" and the hashed build assets at "/assets/".
+// rootFiles are served from the build root (web/public): the web app manifest
+// and its icons, which browsers fetch by fixed names. Everything else that is
+// not under /assets/ gets index.html.
+var rootFiles = map[string]string{
+	"/manifest.webmanifest":  "application/manifest+json",
+	"/icon-192.png":          "image/png",
+	"/icon-512.png":          "image/png",
+	"/icon-maskable-512.png": "image/png",
+	"/apple-touch-icon.png":  "image/png",
+}
+
+// RootPaths are the request paths of the rootFiles, for the server's routes.
+func RootPaths() []string {
+	return slices.Sorted(maps.Keys(rootFiles))
+}
+
+// Handler serves index.html at "/", the hashed build assets at "/assets/" and
+// the rootFiles.
 func Handler() http.Handler {
 	files, err := fs.Sub(dist, "dist")
 	if err != nil {
@@ -43,6 +62,13 @@ func Handler() http.Handler {
 			return
 		}
 		h.Set("Cache-Control", "no-cache")
+		if typ, ok := rootFiles[r.URL.Path]; ok {
+			if data, err := fs.ReadFile(files, strings.TrimPrefix(r.URL.Path, "/")); err == nil {
+				h.Set("Content-Type", typ)
+				_, _ = w.Write(data)
+				return
+			}
+		}
 		if index == nil {
 			h.Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
