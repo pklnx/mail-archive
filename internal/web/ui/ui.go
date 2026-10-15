@@ -8,7 +8,9 @@ package ui
 import (
 	"embed"
 	"io/fs"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -20,7 +22,24 @@ var dist embed.FS
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
 	"frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
-// Handler serves index.html at "/" and the hashed build assets at "/assets/".
+// rootFiles are served from the build root (web/public): the web app manifest
+// and its icons, which browsers fetch by fixed names. Everything else that is
+// not under /assets/ gets index.html.
+var rootFiles = map[string]string{
+	"/manifest.webmanifest":  "application/manifest+json",
+	"/icon-192.png":          "image/png",
+	"/icon-512.png":          "image/png",
+	"/icon-maskable-512.png": "image/png",
+	"/apple-touch-icon.png":  "image/png",
+}
+
+// RootPaths are the request paths of the rootFiles, for the server's routes.
+func RootPaths() []string {
+	return slices.Sorted(maps.Keys(rootFiles))
+}
+
+// Handler serves index.html at "/", the hashed build assets at "/assets/" and
+// the rootFiles.
 func Handler() http.Handler {
 	files, err := fs.Sub(dist, "dist")
 	if err != nil {
@@ -31,6 +50,18 @@ func Handler() http.Handler {
 		index = nil // UI not built
 	}
 	assets := http.FileServerFS(files)
+	// The rootFiles are read once here, so a request only picks one of them
+	// by its exact path and never names a file.
+	type rootFile struct {
+		path, typ string
+		data      []byte
+	}
+	var root []rootFile
+	for _, path := range RootPaths() {
+		if data, err := fs.ReadFile(files, strings.TrimPrefix(path, "/")); err == nil {
+			root = append(root, rootFile{path, rootFiles[path], data})
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -43,6 +74,13 @@ func Handler() http.Handler {
 			return
 		}
 		h.Set("Cache-Control", "no-cache")
+		for _, f := range root {
+			if r.URL.Path == f.path {
+				h.Set("Content-Type", f.typ)
+				_, _ = w.Write(f.data)
+				return
+			}
+		}
 		if index == nil {
 			h.Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)

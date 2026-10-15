@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AccountsPage } from "./AccountsPage";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
@@ -11,6 +11,9 @@ import { SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+import { BackIcon, DownIcon, MenuIcon, UpIcon, iconButton } from "./icons";
+import { noList, pager, type ListNav } from "./pager";
+import logo from "./logo.svg";
 import { useAccounts } from "./useAccounts";
 import { useCollapsed } from "./sidebarState";
 import { useViewState } from "./urlState";
@@ -58,6 +61,38 @@ export function App({ user, logout }: Props) {
   };
   const reading = state.m !== "";
 
+  // Previous and next message in list order. Paging replaces the history
+  // entry, so Back still returns to the list.
+  const [nav, setNav] = useState<ListNav>(noList);
+  const onNav = useCallback((n: ListNav) => setNav(n), []);
+  const pos = pager(nav, state.m);
+  const [advance, setAdvance] = useState(false);
+  const go = useCallback((m: string) => update({ m }, { replace: true }), [update]);
+  const next = () => {
+    if (pos.next) go(pos.next);
+    else if (pos.nextNeedsMore) {
+      setAdvance(true);
+      nav.loadMore();
+    }
+  };
+  // After "next" at the end of a page: move on once the next page is there.
+  useEffect(() => {
+    if (!advance) return;
+    const p = pager(nav, state.m);
+    if (p.next) {
+      setAdvance(false);
+      go(p.next);
+    } else if (!p.nextNeedsMore) setAdvance(false);
+  }, [advance, nav, state.m, go]);
+
+  // The list's title on phones: where the user is.
+  const place =
+    state.gone === "1"
+      ? { title: t.onlyInArchive, sub: "" }
+      : state.folder
+        ? { title: state.folder, sub: state.account }
+        : { title: state.account || t.allMail, sub: "" };
+
   return (
     <div className="flex h-full flex-col">
       <HealthBanner
@@ -70,7 +105,9 @@ export function App({ user, logout }: Props) {
         {/* Sidebar: always visible on large screens, a drawer on small ones. */}
         <aside
           className={`border-r border-line bg-surface-sunken ${
-            menuOpen ? "fixed inset-y-0 left-0 z-20 w-64 shadow-xl" : "hidden"
+            menuOpen
+              ? "fixed inset-y-0 left-0 z-20 w-64 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl"
+              : "hidden"
           } lg:static lg:block lg:w-auto lg:shadow-none`}
         >
           <Sidebar
@@ -127,14 +164,26 @@ export function App({ user, logout }: Props) {
         ) : (
           <>
           <section className={`min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
+            {/* Phones: an app bar with the place, the search below at full width. */}
+            <header className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1 md:hidden">
+              <button type="button" aria-label={t.showMenu} title={t.showMenu} className={iconButton} onClick={() => setMenuOpen(true)}>
+                <MenuIcon />
+              </button>
+              <div className="min-w-0 flex-1 px-1">
+                <h1 className="truncate text-lg leading-6 font-semibold">{place.title}</h1>
+                {place.sub && <p className="truncate text-xs text-ink-muted">{place.sub}</p>}
+              </div>
+              <ThemeToggle />
+            </header>
             <div className="flex items-center gap-2 border-b border-line p-2">
               <button
                 type="button"
                 aria-label={t.showMenu}
-                className="rounded px-2 py-1 text-lg lg:hidden pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+                title={t.showMenu}
+                className={`${iconButton} hidden md:flex lg:hidden`}
                 onClick={() => setMenuOpen(true)}
               >
-                ☰
+                <MenuIcon />
               </button>
               <input
                 type="search"
@@ -161,7 +210,9 @@ export function App({ user, logout }: Props) {
                   <path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" />
                 </svg>
               </button>
-              <ThemeToggle />
+              <span className="hidden md:flex">
+                <ThemeToggle />
+              </span>
             </div>
             <div id="search-filters" className={filtersOpen ? "" : "hidden md:block"}>
               <SearchFilters
@@ -175,6 +226,12 @@ export function App({ user, logout }: Props) {
               <MessageList
                 filter={filter}
                 selected={state.m}
+                onNav={onNav}
+                clearSearch={() => {
+                  setQuery("");
+                  update({ q: "" }, { replace: true });
+                }}
+                searchEverywhere={state.account || state.gone === "1" ? () => update({ account: "", folder: "", gone: "" }) : undefined}
                 // Commit a pending search first (same history entry), then open
                 // the message as a new entry: the debounced update cannot close it
                 // again, and Back returns to the search results.
@@ -189,15 +246,45 @@ export function App({ user, logout }: Props) {
           <main className={`min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
             {reading ? (
               <>
-                <button type="button" className="p-2 text-left text-sm text-accent-ink md:hidden pointer-coarse:min-h-11" onClick={() => update({ m: "" })}>
-                  {t.back}
-                </button>
+                {/* Back on phones, previous and next everywhere (when the message is in the list). */}
+                <div className={`flex h-14 shrink-0 items-center gap-1 border-b border-line px-1 md:h-11 md:px-2 ${pos.index < 0 ? "md:hidden" : ""}`}>
+                  <button
+                    type="button"
+                    aria-label={t.backToList}
+                    title={t.backToList}
+                    className={`${iconButton} md:hidden`}
+                    onClick={() => update({ m: "" })}
+                  >
+                    <BackIcon />
+                  </button>
+                  {pos.index >= 0 && (
+                    <div className="ml-auto flex items-center">
+                      <button type="button" aria-label={t.previousMessage} title={t.previousMessage} className={iconButton} disabled={!pos.prev} onClick={() => pos.prev && go(pos.prev)}>
+                        <UpIcon />
+                      </button>
+                      <span className="px-1 text-xs text-ink-muted tabular-nums">{t.messagePosition(pos.index + 1, nav.ids.length, nav.more)}</span>
+                      <button
+                        type="button"
+                        aria-label={t.nextMessage}
+                        title={t.nextMessage}
+                        className={iconButton}
+                        disabled={!pos.next && !pos.nextNeedsMore}
+                        onClick={next}
+                      >
+                        <DownIcon />
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <div className="min-h-0 flex-1">
                   <MessageView id={state.m} open={(m) => update({ m })} />
                 </div>
               </>
             ) : (
-              <p className="m-auto text-sm text-ink-muted">{t.selectMessage}</p>
+              <div className="m-auto flex flex-col items-center gap-3 p-6 text-center">
+                <img src={logo} alt="" className="size-12 opacity-80" />
+                <p className="text-sm text-ink-muted">{t.selectMessage}</p>
+              </div>
             )}
           </main>
           </>
