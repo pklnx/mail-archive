@@ -3,6 +3,7 @@ import { accountsApi, folderQuestion, type Account, type AccountInput, type Acco
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
+import { PageHeader } from "./PageHeader";
 import { button, input, primary } from "./formStyles";
 import { FillForm, FillSection } from "./FillPanel";
 import { postfixSetup } from "./journalSetup";
@@ -50,11 +51,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
-        <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
-          {t.backToMail}
-        </button>
-        <header className="flex flex-wrap items-center gap-2">
-          <h1 className="mr-auto text-xl font-semibold">{t.accountsTitle}</h1>
+        <PageHeader title={t.accountsTitle} close={close}>
           {manage && (
             <>
               <button type="button" className={button} disabled={syncableCount(active) === 0} onClick={() => run(accountsApi.syncAll)}>
@@ -65,7 +62,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
               </button>
             </>
           )}
-        </header>
+        </PageHeader>
         {data && (
           <p className="text-sm text-ink-muted">
             {!manage ? t.manageOff : data.syncInterval ? t.schedule(formatEvery(data.syncInterval)) : t.scheduleOff}
@@ -509,7 +506,7 @@ function AccountForm({ account, bare, onCancel, onSaved }: FormProps) {
           {t.nameHint}
         </span>
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_9rem_7rem]">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_11rem_7rem]">
         <label className={field}>
           {t.fieldHost}
           <input className={input} required value={host} onChange={(e) => setHost(e.target.value)} placeholder="imap.mail.de" autoComplete="off" />

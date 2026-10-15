@@ -3,6 +3,7 @@ import { ApiKeyItems } from "./ApiKeys";
 import { apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
 import { relativeTime } from "./format";
 import { t } from "./i18n";
+import { PageHeader } from "./PageHeader";
 
 const button =
   "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
@@ -48,17 +49,13 @@ export function UsersPage({ close }: { close: () => void }) {
 
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
-        {t.backToMail}
-      </button>
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mr-auto text-xl font-semibold">{t.usersTitle}</h1>
+      <PageHeader title={t.usersTitle} close={close}>
         {!adding && (
           <button type="button" className={primary} onClick={() => setAdding(true)}>
             {t.addUser}
           </button>
         )}
-      </div>
+      </PageHeader>
       <p className="text-sm text-ink-muted">{t.adminsSeeNoMail}</p>
 
       {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}

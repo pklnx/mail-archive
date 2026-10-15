@@ -23,10 +23,12 @@ interface Props {
 }
 
 const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-sm pointer-coarse:min-h-11";
-const active = "bg-accent text-on-accent";
+const active = "bg-accent-soft font-semibold text-accent-soft-ink";
 const idle = "hover:bg-surface-hover";
 /** A collapsed node that contains the selection. */
-const within = "bg-accent-soft";
+const within = "text-accent-soft-ink";
+/** A heading over a group of entries. */
+const section = "px-2 pt-2 text-xs font-semibold tracking-wide text-ink-muted uppercase";
 /** Deeper levels are not indented further, so names keep some room. */
 const maxIndent = 6;
 
@@ -77,6 +79,7 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
           <span className={`text-xs tabular-nums ${goneOn ? "" : "text-ink-muted"}`}>{gone}</span>
         </button>
       )}
+      {data && data.accounts.length > 0 && <h2 className={section}>{t.sectionAccounts}</h2>}
       {data && data.accounts.some((a) => a.folders.length > 0) && (
         <div className="-mt-2 flex gap-3 px-2 text-xs">
           <button type="button" className="text-accent-ink hover:underline disabled:text-ink-muted disabled:no-underline pointer-coarse:min-h-11" disabled={!collapsed.canCollapse} onClick={collapsed.collapseAll}>
@@ -143,9 +146,10 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
           </div>
         );
       })}
+      <h2 className={`${section} mt-auto`}>{t.sectionManage}</h2>
       <button
         type="button"
-        className={`${item} mt-auto ${state.view === "accounts" ? active : idle}`}
+        className={`${item} -mt-2 ${state.view === "accounts" ? active : idle}`}
         aria-current={state.view === "accounts" ? "page" : undefined}
         onClick={() => show("accounts")}
       >
@@ -309,7 +313,7 @@ function FolderItem({ node, id, account, depth, selected, select, collapsed }: O
         // whole row toggles.
         <button
           type="button"
-          className={`flex w-full items-center gap-0.5 rounded-md py-1 pr-2 text-left text-sm text-ink-muted pointer-coarse:min-h-11 ${inside ? within : idle}`}
+          className={`flex w-full items-center gap-0.5 rounded-md py-1 pr-2 text-left text-sm pointer-coarse:min-h-11 ${inside ? within : `text-ink-muted ${idle}`}`}
           aria-expanded={open}
           aria-controls={`${id}-c`}
           title={node.path}

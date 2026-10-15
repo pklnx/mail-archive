@@ -176,7 +176,7 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
       <p className="text-sm text-ink-muted">
         {account.firstReceived ? t.firstReceived(longDate(account.firstReceived.at), account.firstReceived.subject) : t.noneReceived}
       </p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_9rem_7rem]">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_11rem_7rem]">
         <label className={field}>
           {t.fieldHost}
           <input className={input} required value={host} onChange={(e) => changed(setHost)(e.target.value)} placeholder="imap.example.com" autoComplete="off" />

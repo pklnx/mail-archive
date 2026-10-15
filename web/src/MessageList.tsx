@@ -104,7 +104,8 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
           <span>{t.newestFirst}</span>
         </p>
       )}
-      <ul aria-label={t.messages} aria-busy={loading} className="min-h-0 flex-1 overflow-y-auto">
+      {/* scroll-pt-9: rows scrolled into view stay clear of the sticky date heading. */}
+      <ul aria-label={t.messages} aria-busy={loading} className="min-h-0 flex-1 scroll-pt-9 overflow-y-auto">
         {items.map((m) => {
           // A heading where the date group changes (the list is newest first).
           const g = dateGroup(m.sortAt);

@@ -106,7 +106,7 @@ describe("Sidebar tree", () => {
     act(() => rerender(<Harness state={view("work", "Archive/2024")} d={data()} select={() => {}} />));
     expect(toggleFor("Archive").getAttribute("aria-expanded")).toBe("false");
     // The collapsed parent shows that it holds the selection.
-    expect(screen.getByRole("button", { name: /^Archive/ }).className).toContain("bg-accent-soft");
+    expect(screen.getByRole("button", { name: /^Archive/ }).className).toContain("text-accent-soft-ink");
   });
 
   it("works with the keyboard, as buttons do", () => {
