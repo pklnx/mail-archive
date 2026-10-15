@@ -11,6 +11,7 @@ import {
 } from "./api";
 import { day, fileSize } from "./format";
 import { t } from "./i18n";
+import { PageHeader } from "./PageHeader";
 import { parseQuery } from "./searchSyntax";
 
 const button =
@@ -62,10 +63,7 @@ export function RetentionPage({ close }: { close: () => void }) {
 
   return (
     <div className="mx-auto flex h-full max-w-4xl flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
-        {t.backToMail}
-      </button>
-      <h1 className="text-xl font-semibold">{t.retentionTitle}</h1>
+      <PageHeader title={t.retentionTitle} close={close} />
       <div role="tablist" className="flex gap-1">
         {(["rules", "holds", "runs"] as const).map((v) => (
           <button
@@ -510,22 +508,32 @@ function RunReview({ id, changed }: { id: number; changed: () => void }) {
         {t.runLine(run.id, run.candidates, fileSize(run.bytes))} · {t.runState(run.state)}
       </p>
       {review.groups.length > 0 && (
-        <table className="w-full text-left">
-          <thead className="text-ink-muted">
+        // Below 640px each row is a small block of label and value.
+        <table className="w-full text-left max-sm:block">
+          <thead className="text-ink-muted max-sm:hidden">
             <tr>
               <th className="py-1 font-normal">{t.runGroupsHead}</th>
               <th className="py-1 font-normal">{t.runYear}</th>
               <th className="py-1 text-right font-normal">{t.runMessages}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="max-sm:block">
             {review.groups.map((g) => (
-              <tr key={`${g.owner}/${g.account}/${g.folder}/${g.year}`} className="border-t border-line">
-                <td className="py-1">
-                  {g.owner || "-"} / {g.account} / {g.folder}
+              <tr
+                key={`${g.owner}/${g.account}/${g.folder}/${g.year}`}
+                className="border-t border-line max-sm:grid max-sm:grid-cols-[auto_1fr] max-sm:gap-x-3 max-sm:py-2"
+              >
+                <td data-label={t.runGroupsHead} className="py-1 max-sm:contents max-sm:before:text-ink-muted max-sm:before:content-[attr(data-label)]">
+                  <span className="max-sm:break-all">
+                    {g.owner || "-"} / {g.account} / {g.folder}
+                  </span>
                 </td>
-                <td className="py-1 tabular-nums">{g.year}</td>
-                <td className="py-1 text-right tabular-nums">{g.messages}</td>
+                <td data-label={t.runYear} className="py-1 tabular-nums max-sm:contents max-sm:before:text-ink-muted max-sm:before:content-[attr(data-label)]">
+                  <span>{g.year}</span>
+                </td>
+                <td data-label={t.runMessages} className="py-1 text-right tabular-nums max-sm:text-left max-sm:contents max-sm:before:text-ink-muted max-sm:before:content-[attr(data-label)]">
+                  <span>{g.messages}</span>
+                </td>
               </tr>
             ))}
           </tbody>

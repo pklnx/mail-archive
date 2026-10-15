@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AccountsPage } from "./AccountsPage";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
@@ -11,7 +11,10 @@ import { SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
-import { BackIcon, DownIcon, MenuIcon, UpIcon, iconButton } from "./icons";
+import { BackIcon, DownIcon, FilterIcon, FolderIcon, InboxIcon, MenuIcon, MoreIcon, ServerIcon, UpIcon, iconButton } from "./icons";
+import { FilterChips } from "./FilterChips";
+import { Sheet } from "./Sheet";
+import { primary } from "./formStyles";
 import { noList, pager, type ListNav } from "./pager";
 import logo from "./logo.svg";
 import { useAccounts } from "./useAccounts";
@@ -29,16 +32,13 @@ export function App({ user, logout }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   const [menuOpen, setMenuOpen] = useState(false);
-  // On small screens the filter row is folded away until needed.
+  // Phones show the filters as chips and a sheet; the filter button is
+  // highlighted while a prefix or grouping is set.
   const prefixed = hasPrefix(query) || state.group === "1";
-  const [filtersOpen, setFiltersOpen] = useState(prefixed);
+  const [sheet, setSheet] = useState<"" | "filters" | "more" | "shortcuts">("");
+  const closeSheet = useCallback(() => setSheet(""), []);
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
-
-  // A typed prefix or grouping (also from the URL) shows the filters it set.
-  useEffect(() => {
-    if (prefixed) setFiltersOpen(true);
-  }, [prefixed]);
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -92,23 +92,101 @@ export function App({ user, logout }: Props) {
       : state.folder
         ? { title: state.folder, sub: state.account }
         : { title: state.account || t.allMail, sub: "" };
+  const setGroup = (on: boolean) => update({ group: on ? "1" : "" }, { replace: true });
+  const show = (view: string) => {
+    update({ view, m: "" });
+    setMenuOpen(false);
+    setSheet("");
+  };
+
+  // The drawer: focus moves into it and back to where it was; the rest of
+  // the page is inert meanwhile (see below), so Tab stays inside.
+  const aside = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (menuOpen) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      // The drawer becomes visible as its transition starts, a frame later;
+      // hidden elements cannot take focus.
+      let frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => aside.current?.querySelector<HTMLElement>("button")?.focus());
+      });
+      return () => cancelAnimationFrame(frame);
+    } else if (opener.current) {
+      opener.current.focus();
+      opener.current = null;
+    }
+  }, [menuOpen]);
+  const hide = menuOpen || undefined;
+
+  // Keyboard shortcuts (? lists them). Not while typing or in a dialog.
+  const search = useRef<HTMLInputElement>(null);
+  const chord = useRef(0);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
+      if (e.key === "Escape" && menuOpen) {
+        setMenuOpen(false);
+        return;
+      }
+      const el = e.target instanceof HTMLElement ? e.target : null;
+      if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))) {
+        if (e.key === "Escape") el.blur();
+        return;
+      }
+      const mail = state.view === "";
+      const afterG = Date.now() - chord.current < 1000;
+      chord.current = 0;
+      switch (e.key) {
+        case "/":
+          if (mail) {
+            e.preventDefault();
+            search.current?.focus();
+          }
+          break;
+        case "?":
+          setSheet("shortcuts");
+          break;
+        case "j":
+          if (mail && reading) next();
+          else if (mail && nav.ids[0]) update({ m: nav.ids[0] });
+          break;
+        case "k":
+          if (mail && pos.prev) go(pos.prev);
+          break;
+        case "u":
+        case "Escape":
+          if (mail && reading) update({ m: "" });
+          break;
+        case "g":
+          chord.current = Date.now();
+          break;
+        case "a":
+          if (afterG) update({ account: "", folder: "", gone: "", m: "", view: "" });
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
     <div className="flex h-full flex-col">
-      <HealthBanner
-        data={accounts.data}
-        admin={user.admin}
-        openAccounts={() => update({ view: "accounts", m: "" })}
-        openUsers={() => update({ view: "users", m: "" })}
-      />
-      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[14rem_minmax(18rem,26rem)_1fr]">
+      <div inert={hide}>
+        <HealthBanner
+          data={accounts.data}
+          admin={user.admin}
+          openAccounts={() => update({ view: "accounts", m: "" })}
+          openUsers={() => update({ view: "users", m: "" })}
+        />
+      </div>
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[14rem_minmax(18rem,26rem)_1fr]">
         {/* Sidebar: always visible on large screens, a drawer on small ones. */}
         <aside
-          className={`border-r border-line bg-surface-sunken ${
-            menuOpen
-              ? "fixed inset-y-0 left-0 z-20 w-64 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl"
-              : "hidden"
-          } lg:static lg:block lg:w-auto lg:shadow-none`}
+          ref={aside}
+          className={`fixed inset-y-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
+            menuOpen ? "visible translate-x-0" : "invisible -translate-x-full"
+          } lg:visible lg:static lg:w-auto lg:translate-x-0 lg:shadow-none lg:transition-none`}
         >
           <Sidebar
             state={state}
@@ -124,32 +202,33 @@ export function App({ user, logout }: Props) {
               update({ account: "", folder: "", gone: "1", m: "", view: "" });
               setMenuOpen(false);
             }}
-            show={(view) => {
-              update({ view, m: "" });
-              setMenuOpen(false);
-            }}
+            show={show}
           />
         </aside>
-        {menuOpen && <div className="fixed inset-0 z-10 bg-scrim lg:hidden" onClick={() => setMenuOpen(false)} />}
+        <div
+          aria-hidden
+          className={`fixed inset-0 z-10 bg-scrim transition-opacity duration-200 motion-reduce:transition-none lg:hidden ${menuOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
+          onClick={() => setMenuOpen(false)}
+        />
 
         {state.view === "profile" ? (
-          <main className="min-h-0 md:col-span-2">
+          <main inert={hide} className="min-h-0 md:col-span-2">
             <ProfilePage name={user.name} close={() => update({ view: "" })} />
           </main>
         ) : state.view === "users" && user.admin ? (
-          <main className="min-h-0 md:col-span-2">
+          <main inert={hide} className="min-h-0 md:col-span-2">
             <UsersPage close={() => update({ view: "" })} />
           </main>
         ) : state.view === "retention" && user.admin ? (
-          <main className="min-h-0 md:col-span-2">
+          <main inert={hide} className="min-h-0 md:col-span-2">
             <RetentionPage close={() => update({ view: "" })} />
           </main>
         ) : state.view === "log" ? (
-          <main className="min-h-0 md:col-span-2">
+          <main inert={hide} className="min-h-0 md:col-span-2">
             <LogPage admin={user.admin} close={() => update({ view: "" })} open={(m) => update({ view: "", m })} />
           </main>
         ) : state.view === "accounts" ? (
-          <main className="min-h-0 md:col-span-2">
+          <main inert={hide} className="min-h-0 md:col-span-2">
             <AccountsPage
               admin={user.admin}
               accounts={accounts}
@@ -163,7 +242,7 @@ export function App({ user, logout }: Props) {
           </main>
         ) : (
           <>
-          <section className={`min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
+          <section inert={hide} className={`min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
             {/* Phones: an app bar with the place, the search below at full width. */}
             <header className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1 md:hidden">
               <button type="button" aria-label={t.showMenu} title={t.showMenu} className={iconButton} onClick={() => setMenuOpen(true)}>
@@ -186,6 +265,7 @@ export function App({ user, logout }: Props) {
                 <MenuIcon />
               </button>
               <input
+                ref={search}
                 type="search"
                 aria-label={t.searchMail}
                 placeholder={
@@ -199,28 +279,19 @@ export function App({ user, logout }: Props) {
                 type="button"
                 aria-label={t.filters}
                 title={t.filters}
-                aria-expanded={filtersOpen}
-                aria-controls="search-filters"
-                className={`flex shrink-0 items-center justify-center rounded-md p-1.5 hover:bg-surface-hover md:hidden pointer-coarse:size-11 ${
-                  prefixed ? "text-accent-ink" : "text-ink-muted"
-                }`}
-                onClick={() => setFiltersOpen((o) => !o)}
+                aria-haspopup="dialog"
+                className={`${iconButton} md:hidden ${prefixed ? "text-accent-ink" : ""}`}
+                onClick={() => setSheet("filters")}
               >
-                <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" />
-                </svg>
+                <FilterIcon />
               </button>
               <span className="hidden md:flex">
                 <ThemeToggle />
               </span>
             </div>
-            <div id="search-filters" className={filtersOpen ? "" : "hidden md:block"}>
-              <SearchFilters
-                query={query}
-                setQuery={setQuery}
-                group={state.group === "1"}
-                setGroup={(on) => update({ group: on ? "1" : "" }, { replace: true })}
-              />
+            <FilterChips query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} openFilters={() => setSheet("filters")} />
+            <div className="hidden md:block">
+              <SearchFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
             </div>
             <div className="min-h-0 flex-1">
               <MessageList
@@ -243,7 +314,7 @@ export function App({ user, logout }: Props) {
             </div>
           </section>
 
-          <main className={`min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
+          <main inert={hide} className={`min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
             {reading ? (
               <>
                 {/* Back on phones, previous and next everywhere (when the message is in the list). */}
@@ -284,12 +355,98 @@ export function App({ user, logout }: Props) {
               <div className="m-auto flex flex-col items-center gap-3 p-6 text-center">
                 <img src={logo} alt="" className="size-12 opacity-80" />
                 <p className="text-sm text-ink-muted">{t.selectMessage}</p>
+                <button type="button" className="hidden text-xs text-ink-muted hover:text-ink pointer-fine:block" onClick={() => setSheet("shortcuts")}>
+                  {t.shortcutsHint} <kbd className={kbd}>?</kbd>
+                </button>
               </div>
             )}
           </main>
           </>
         )}
       </div>
+
+      {/* Phones: the main places within thumb reach; hidden while reading. */}
+      {!(reading && state.view === "") && (
+        <nav inert={hide} aria-label={t.mainNavigation} className="grid h-14 shrink-0 grid-cols-4 border-t border-line bg-bg md:hidden">
+          <NavButton icon={<InboxIcon />} label={t.navMail} on={state.view === ""} onClick={() => show("")} />
+          <NavButton icon={<FolderIcon />} label={t.navFolders} on={menuOpen} onClick={() => setMenuOpen(true)} />
+          <NavButton icon={<ServerIcon />} label={t.navAccounts} on={state.view === "accounts"} onClick={() => show("accounts")} />
+          <NavButton icon={<MoreIcon />} label={t.navMore} on={["log", "users", "retention", "profile"].includes(state.view)} onClick={() => setSheet("more")} />
+        </nav>
+      )}
+
+      <Sheet open={sheet === "filters"} onClose={closeSheet} title={t.filters}>
+        <SearchFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
+        <button type="button" className={`${primary} self-end`} onClick={closeSheet}>
+          {t.done}
+        </button>
+      </Sheet>
+      <Sheet open={sheet === "more"} onClose={closeSheet} title={t.navMore}>
+        <ul className="-mx-2 flex flex-col">
+          {[
+            ["log", t.log],
+            ...(user.admin ? [["users", t.users], ["retention", t.retention]] : []),
+            ["profile", `${t.profile} (${user.name})`],
+          ].map(([view, label]) => (
+            <li key={view}>
+              <button type="button" className={moreItem} onClick={() => show(view ?? "")}>
+                {label}
+              </button>
+            </li>
+          ))}
+          <li className="flex items-center justify-between px-2">
+            <span className="text-sm text-ink-muted">{t.appearance}</span>
+            <ThemeToggle />
+          </li>
+          <li>
+            <button type="button" className={`${moreItem} text-danger`} onClick={logout}>
+              {t.logOut}
+            </button>
+          </li>
+        </ul>
+      </Sheet>
+      <Sheet open={sheet === "shortcuts"} onClose={closeSheet} title={t.shortcuts}>
+        <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
+          {(
+            [
+              [["/"], t.keySearch],
+              [["j"], t.keyNext],
+              [["k"], t.keyPrevious],
+              [["u", "Esc"], t.keyBack],
+              [["g", "a"], t.keyAllMail],
+              [["?"], t.keyHelp],
+            ] as const
+          ).map(([keys, label]) => (
+            <div key={label} className="contents">
+              <dt className="flex gap-1">
+                {keys.map((k) => (
+                  <kbd key={k} className={kbd}>
+                    {k}
+                  </kbd>
+                ))}
+              </dt>
+              <dd className="text-ink-muted">{label}</dd>
+            </div>
+          ))}
+        </dl>
+      </Sheet>
     </div>
+  );
+}
+
+const kbd = "inline-grid min-w-6 place-items-center rounded border border-b-2 border-line-control bg-bg px-1.5 font-mono text-xs leading-5";
+const moreItem = "flex min-h-11 w-full items-center rounded-md px-2 text-left hover:bg-surface-hover";
+
+function NavButton({ icon, label, on, onClick }: { icon: ReactNode; label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-current={on ? "page" : undefined}
+      className={`flex flex-col items-center justify-center gap-0.5 text-[11px] ${on ? "font-semibold text-accent-soft-ink" : "text-ink-muted"}`}
+      onClick={onClick}
+    >
+      <span className={`grid h-7 w-13 place-items-center rounded-full transition-colors ${on ? "bg-accent-soft" : ""}`}>{icon}</span>
+      {label}
+    </button>
   );
 }

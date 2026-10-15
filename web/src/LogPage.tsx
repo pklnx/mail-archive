@@ -3,6 +3,7 @@ import { auditApi, usersApi, type AuditEntry, type AuditFilter, type ManagedUser
 import { foldEntries, shortUserAgent, type LogRow } from "./auditLog";
 import { timestamp } from "./format";
 import { t } from "./i18n";
+import { PageHeader } from "./PageHeader";
 
 const button =
   "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
@@ -107,10 +108,7 @@ export function LogPage({ admin, close, open }: { admin: boolean; close: () => v
 
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
-        {t.backToMail}
-      </button>
-      <h1 className="text-xl font-semibold">{t.logTitle}</h1>
+      <PageHeader title={t.logTitle} close={close} />
       <p className="text-sm text-ink-muted">{admin ? t.logAdminNote : t.logOwnNote}</p>
 
       <div className="flex flex-wrap items-end gap-3 text-sm">

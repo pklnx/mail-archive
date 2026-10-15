@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetupState } from "./api";
 import { applySettings, canonical, languages, lang, messagesFor, needsReload, settings, t, type Settings } from "./i18n";
 import { ApiKeySection } from "./ApiKeys";
+import { PageHeader } from "./PageHeader";
 import { PasskeySection } from "./Passkeys";
 import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
 
@@ -167,10 +168,7 @@ export function ProfilePage({ name, close }: { name: string; close: () => void }
   const [changed, setChanged] = useState(false);
   return (
     <div className="mx-auto flex h-full max-w-md flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
-        {t.backToMail}
-      </button>
-      <h1 className="text-xl font-semibold">{t.profile}</h1>
+      <PageHeader title={t.profile} close={close} />
       <p className="text-sm text-ink-muted">{t.loggedInAs(name)}</p>
       <h2 className="font-semibold">{t.displaySettings}</h2>
       <DisplaySettings />
