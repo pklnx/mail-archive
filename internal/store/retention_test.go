@@ -126,6 +126,9 @@ func TestRetentionEnd(t *testing.T) {
 		{"received 5 March 2019, 6 years", ts("2019-03-05T10:00:00Z"), ts("2019-03-05T10:00:00Z"), ts(archived), 6, "2025-12-31T23:00:00Z"},
 		{"8 years", ts("2019-03-05T10:00:00Z"), nil, ts(archived), 8, "2027-12-31T23:00:00Z"},
 		{"10 years", ts("2019-03-05T10:00:00Z"), nil, ts(archived), 10, "2029-12-31T23:00:00Z"},
+		// Received 15 July 2016: the period runs 1 January 2017 to 31 December
+		// 2026, so the mail may be deleted from 1 January 2027 (Berlin).
+		{"mid-year mail counts from the year end", ts("2016-07-15T10:00:00Z"), ts("2016-07-15T10:00:00Z"), ts(archived), 10, "2026-12-31T23:00:00Z"},
 		// 00:30 on 1 January in Berlin is 2020, though it is 2019 in UTC.
 		{"Berlin new year", ts("2019-12-31T23:30:00Z"), nil, ts(archived), 6, "2026-12-31T23:00:00Z"},
 		{"a forged old Date header", ts("2001-01-01T00:00:00Z"), ts("2024-05-01T00:00:00Z"), ts(archived), 6, "2030-12-31T23:00:00Z"},
