@@ -86,6 +86,19 @@ textarea:focus-visible {
   outline-offset: 0;
 }
 
+/* Safari ignores padding and height on native selects (22px next to 34px
+   fields), so selects drop the native look and draw their own arrow; then the
+   field classes size them like text inputs in every browser. Unlayered, so the
+   room for the arrow wins over the px-* utilities. */
+select:not([multiple], [size]) {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1rem;
+  padding-right: 2rem;
+}
+
 /* Below 16px iOS Safari zooms into the page when a field gets focus. Unlayered,
    so it wins over the text-sm/text-xs utilities of the fields. */
 @media (max-width: 767px) {
