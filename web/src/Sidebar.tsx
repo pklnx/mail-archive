@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 import { t } from "./i18n";
+import { SidebarSkeleton } from "./Skeleton";
+import { primary } from "./formStyles";
 import type { AccountsState } from "./useAccounts";
 import type { ViewState } from "./urlState";
 import type { Account, User } from "./api";
@@ -85,9 +87,16 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
           </button>
         </div>
       )}
-      {!data && !error && <p className="px-2 text-sm text-ink-muted">{t.loading}</p>}
+      {!data && !error && <SidebarSkeleton />}
       {error && !data && <p className="px-2 text-sm text-danger">{t.loadAccountsFailed(error)}</p>}
-      {data && data.accounts.length === 0 && <p className="px-2 text-sm text-ink-muted">{t.noAccounts}</p>}
+      {data && data.accounts.length === 0 && (
+        <div className="flex flex-col items-start gap-2 px-2 text-sm text-ink-muted">
+          <p>{t.noAccounts}</p>
+          <button type="button" className={primary} onClick={() => show("accounts")}>
+            {t.addAccount}
+          </button>
+        </div>
+      )}
       {data?.accounts.map((a, ai) => {
         const open = !collapsed.isCollapsed(a.name, "");
         const listId = `${baseId}-${ai}`;

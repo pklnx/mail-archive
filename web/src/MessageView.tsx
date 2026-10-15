@@ -4,6 +4,7 @@ import { fileSize, locationLabel, longDate, retentionDay, senderName, shortDate 
 import { attachmentKind, parseMailText, splitLinks, type TextBlock } from "./mailText";
 import { useAsync } from "./useAsync";
 import { t } from "./i18n";
+import { MessageSkeleton } from "./Skeleton";
 
 interface Props {
   id: string;
@@ -13,7 +14,7 @@ interface Props {
 
 export function MessageView({ id, open }: Props) {
   const res = useAsync((signal) => getMessage(id, signal), [id]);
-  if (res.status === "loading") return <p className="p-6 text-sm text-ink-muted">{t.loading}</p>;
+  if (res.status === "loading") return <MessageSkeleton />;
   if (res.status === "error") return <p className="p-6 text-sm text-danger">{t.loadMessageFailed(res.error.message)}</p>;
   // key: reset view options (HTML/text, images) for each message.
   return <Message key={id} msg={res.data} open={open} />;

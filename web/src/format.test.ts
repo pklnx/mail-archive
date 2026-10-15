@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { day, fileSize, formatCount, formatInterval, locationLabel, relativeTime, senderName, shortDate, splitHighlights } from "./format";
+import { dateGroup, day, fileSize, formatCount, formatInterval, locationLabel, relativeTime, senderName, shortDate, splitHighlights } from "./format";
 import { applySettings, t } from "./i18n";
 
 describe("splitHighlights", () => {
@@ -88,5 +88,38 @@ describe("formats after a settings change", () => {
     expect(day("2026-10-12T12:00:00Z")).toBe("12.10.2026");
     expect(shortDate("2026-10-12T12:00:00Z", new Date("2027-01-01T00:00:00Z"))).toBe("12.10.2026");
     expect(relativeTime("2026-10-11T12:00:00Z", new Date("2026-10-12T12:00:00Z"))).toBe("gestern");
+  });
+});
+
+describe("dateGroup", () => {
+  afterEach(() => applySettings({ language: "auto", locale: "auto" }));
+  // Thursday, October 15, 2026, local time.
+  const now = new Date(2026, 9, 15, 12, 0);
+  const at = (m: number, d: number, y = 2026) => new Date(y, m, d, 9, 30).toISOString();
+  it("goes from today to the year", () => {
+    applySettings({ language: "en", locale: "en-US" });
+    expect(dateGroup(at(9, 15), now)).toBe("Today");
+    expect(dateGroup(at(9, 14), now)).toBe("Yesterday");
+    expect(dateGroup(at(9, 12), now)).toBe("This week"); // Monday
+    expect(dateGroup(at(9, 11), now)).toBe("This month"); // Sunday before
+    expect(dateGroup(at(9, 1), now)).toBe("This month");
+    expect(dateGroup(at(8, 30), now)).toBe("September 2026");
+    expect(dateGroup(at(0, 2), now)).toBe("January 2026");
+    expect(dateGroup(at(11, 31, 2025), now)).toBe("2025");
+  });
+  it("puts dates after now under today and follows the language", () => {
+    applySettings({ language: "de", locale: "de-DE" });
+    expect(dateGroup(at(9, 16), now)).toBe("Heute");
+    expect(dateGroup(at(8, 3), now)).toBe("September 2026");
+    expect(dateGroup("nonsense", now)).toBe("");
+  });
+  it("counts this week from Monday, also on Sunday and Monday", () => {
+    applySettings({ language: "en", locale: "en-US" });
+    const sunday = new Date(2026, 9, 18, 12, 0);
+    expect(dateGroup(at(9, 12), sunday)).toBe("This week");
+    expect(dateGroup(at(9, 11), sunday)).toBe("This month");
+    const monday = new Date(2026, 9, 12, 12, 0);
+    expect(dateGroup(at(9, 11), monday)).toBe("Yesterday");
+    expect(dateGroup(at(9, 10), monday)).toBe("This month");
   });
 });

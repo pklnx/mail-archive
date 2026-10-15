@@ -20,6 +20,8 @@ const dateFmt = cached("date", (l) => new Intl.DateTimeFormat(l, { dateStyle: "m
 const timeFmt = cached("time", (l) => new Intl.DateTimeFormat(l, { timeStyle: "short" }));
 const fullFmt = cached("full", (l) => new Intl.DateTimeFormat(l, { dateStyle: "full", timeStyle: "short" }));
 const stampFmt = cached("stamp", (l) => new Intl.DateTimeFormat(l, { dateStyle: "medium", timeStyle: "medium" }));
+const monthFmt = cached("month", (l) => new Intl.DateTimeFormat(l, { month: "long", year: "numeric" }));
+const yearFmt = cached("year", (l) => new Intl.DateTimeFormat(l, { year: "numeric" }));
 const relFmt = cached("relative", (l) => new Intl.RelativeTimeFormat(l, { numeric: "auto" }));
 
 /**
@@ -47,6 +49,22 @@ export function shortDate(iso: string | null, now = new Date()): string {
   const sameDay =
     d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
   return sameDay ? timeFmt().format(d) : dateFmt().format(d);
+}
+
+/**
+ * The heading a list row falls under, newest first: today, yesterday, this
+ * week (from Monday), this month, then the month of this year, then the year.
+ */
+export function dateGroup(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((today.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000);
+  if (days <= 0) return t.today;
+  if (days === 1) return t.yesterday;
+  if (days <= (today.getDay() + 6) % 7) return t.thisWeek;
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return t.thisMonth;
+  return d.getFullYear() === now.getFullYear() ? monthFmt().format(d) : yearFmt().format(d);
 }
 
 export function longDate(iso: string | null): string {
