@@ -50,6 +50,18 @@ func Handler() http.Handler {
 		index = nil // UI not built
 	}
 	assets := http.FileServerFS(files)
+	// The rootFiles are read once here, so a request only picks one of them
+	// by its exact path and never names a file.
+	type rootFile struct {
+		path, typ string
+		data      []byte
+	}
+	var root []rootFile
+	for _, path := range RootPaths() {
+		if data, err := fs.ReadFile(files, strings.TrimPrefix(path, "/")); err == nil {
+			root = append(root, rootFile{path, rootFiles[path], data})
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -62,10 +74,10 @@ func Handler() http.Handler {
 			return
 		}
 		h.Set("Cache-Control", "no-cache")
-		if typ, ok := rootFiles[r.URL.Path]; ok {
-			if data, err := fs.ReadFile(files, strings.TrimPrefix(r.URL.Path, "/")); err == nil {
-				h.Set("Content-Type", typ)
-				_, _ = w.Write(data)
+		for _, f := range root {
+			if r.URL.Path == f.path {
+				h.Set("Content-Type", f.typ)
+				_, _ = w.Write(f.data)
 				return
 			}
 		}
