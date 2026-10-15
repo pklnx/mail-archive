@@ -6,9 +6,9 @@ import { applySettings, t } from "./i18n";
 import logo from "./logo.svg";
 import { autofillSupported, browserError, credentialJSON, forgetPasskey, passkeysSupported, requestOptions } from "./webauthn";
 
-const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+const primary = "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const input =
-  "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
+  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 type GateState = SessionState | { loading: true } | { error: string };
 
@@ -47,7 +47,7 @@ export function AuthGate({ children }: Props) {
   if ("error" in state) {
     return (
       <Centered>
-        <p className="text-red-600">{t.failed(state.error)}</p>
+        <p className="text-danger">{t.failed(state.error)}</p>
         <button type="button" className={primary} onClick={check}>
           {t.retry}
         </button>
@@ -66,7 +66,7 @@ export function AuthGate({ children }: Props) {
           <h2 className="font-semibold">{t.chooseOwnPassword}</h2>
           <p>{t.chooseOwnPasswordText}</p>
           <PasswordForm done={() => setState({ user: { ...user, mustChangePassword: false } })} />
-          <button type="button" className="self-start text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>
+          <button type="button" className="self-start text-accent-ink hover:underline" onClick={logout}>
             {t.logOut}
           </button>
         </Centered>
@@ -79,7 +79,7 @@ export function AuthGate({ children }: Props) {
           <h2 className="font-semibold">{t.twoFactorSetup}</h2>
           <p>{t.twoFactorRequired}</p>
           <TwoFactorSetup user={state.user.name} onDone={() => check()} />
-          <button type="button" className="self-start text-blue-600 hover:underline dark:text-blue-400" onClick={logout}>{t.logOut}</button>
+          <button type="button" className="self-start text-accent-ink hover:underline" onClick={logout}>{t.logOut}</button>
         </Centered>
       );
     }
@@ -242,7 +242,7 @@ function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passke
             {/* Text, not numeric: recovery codes contain letters. */}
             <input className={input} required autoFocus autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
-          {error && <p role="alert" className="text-red-600">{error}</p>}
+          {error && <p role="alert" className="text-danger">{error}</p>}
           <button type="submit" className={`${primary} mt-1`} disabled={busy}>{busy ? t.loggingIn : t.logIn}</button>
         </form>
       </Centered>
@@ -277,7 +277,7 @@ function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passke
           />
         </label>
         {error && (
-          <p role="alert" className="text-red-600">
+          <p role="alert" className="text-danger">
             {error}
           </p>
         )}
@@ -287,14 +287,14 @@ function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passke
       </form>
       {passkeys && (
         <>
-          <div className="flex items-center gap-3 text-zinc-500">
-            <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+          <div className="flex items-center gap-3 text-ink-muted">
+            <span className="h-px flex-1 bg-line" />
             {t.or}
-            <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-800" />
+            <span className="h-px flex-1 bg-line" />
           </div>
           <button
             type="button"
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            className="rounded-md border border-line-control px-3 py-1.5 text-sm font-medium hover:bg-surface-hover disabled:opacity-50"
             disabled={busy}
             onClick={() => {
               setError("");
@@ -315,7 +315,7 @@ function SetupNotice({ check }: { check: () => void }) {
       <Brand />
       <h2 className="font-semibold">{t.setupTitle}</h2>
       <p>{t.setupText}</p>
-      <pre className="overflow-x-auto rounded-md bg-zinc-100 px-3 py-2 dark:bg-zinc-800">./ma user add NAME --admin</pre>
+      <pre className="overflow-x-auto rounded-md bg-surface-hover px-3 py-2">./ma user add NAME --admin</pre>
       <button type="button" className={`${primary} self-start`} onClick={check}>
         {t.checkAgain}
       </button>

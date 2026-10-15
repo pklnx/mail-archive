@@ -4,11 +4,11 @@ import { relativeTime } from "./format";
 import { t } from "./i18n";
 import { browserError, creationOptions, credentialJSON, forgetPasskey, passkeysSupported } from "./webauthn";
 
-const primary = "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+const primary = "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const button =
-  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800";
+  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const input =
-  "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
+  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 /** The message for a failed registration. */
 export function registrationError(err: unknown, max: number): string {
@@ -48,8 +48,8 @@ export function PasskeySection() {
   }, []);
   useEffect(load, [load]);
 
-  if (!list) return error ? <p role="alert" className="text-sm text-red-600">{error}</p> : <p className="text-sm text-zinc-500">{t.loading}</p>;
-  if (!list.available) return <p className="text-sm text-zinc-500">{t.passkeysUnavailable}</p>;
+  if (!list) return error ? <p role="alert" className="text-sm text-danger">{error}</p> : <p className="text-sm text-ink-muted">{t.loading}</p>;
+  if (!list.available) return <p className="text-sm text-ink-muted">{t.passkeysUnavailable}</p>;
 
   const here = list.origin === window.location.origin;
   const canAdd = here && passkeysSupported() && list.passkeys.length < list.max;
@@ -93,16 +93,16 @@ export function PasskeySection() {
 
   return (
     <div className="flex flex-col gap-3 text-sm">
-      <p className="text-zinc-500">{t.passkeysText}</p>
+      <p className="text-ink-muted">{t.passkeysText}</p>
       {list.passkeys.length === 0 ? (
-        <p className="text-zinc-500">{t.passkeyNone}</p>
+        <p className="text-ink-muted">{t.passkeyNone}</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {list.passkeys.map((p) => (
-            <li key={p.id} className="flex items-center gap-3 rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+            <li key={p.id} className="flex items-center gap-3 rounded-md border border-line px-3 py-2">
               <div className="mr-auto flex flex-col">
                 <span className="font-medium">{p.name}</span>
-                <span className="text-xs text-zinc-500">{p.lastUsedAt ? t.passkeyUsed(relativeTime(p.lastUsedAt)) : t.passkeyNeverUsed}</span>
+                <span className="text-xs text-ink-muted">{p.lastUsedAt ? t.passkeyUsed(relativeTime(p.lastUsedAt)) : t.passkeyNeverUsed}</span>
               </div>
               <button type="button" className={button} onClick={() => void remove(p.id, p.name)}>
                 {t.passkeyRemove}
@@ -112,20 +112,20 @@ export function PasskeySection() {
         </ul>
       )}
       {status && (
-        <p role="status" className="text-green-700 dark:text-green-400">
+        <p role="status" className="text-ok">
           {status}
         </p>
       )}
-      {!here && <p className="text-zinc-500">{t.passkeysOtherOrigin(list.origin ?? "")}</p>}
-      {here && !passkeysSupported() && <p className="text-zinc-500">{t.passkeysUnsupported}</p>}
-      {here && list.passkeys.length >= list.max && <p className="text-zinc-500">{t.passkeyLimit(list.max)}</p>}
+      {!here && <p className="text-ink-muted">{t.passkeysOtherOrigin(list.origin ?? "")}</p>}
+      {here && !passkeysSupported() && <p className="text-ink-muted">{t.passkeysUnsupported}</p>}
+      {here && list.passkeys.length >= list.max && <p className="text-ink-muted">{t.passkeyLimit(list.max)}</p>}
       {canAdd && (
-        <form className="flex flex-col gap-3 border-t border-zinc-200 pt-3 dark:border-zinc-800" onSubmit={add}>
+        <form className="flex flex-col gap-3 border-t border-line pt-3" onSubmit={add}>
           <label className="flex flex-col gap-1">
             {t.passkeyName}
             <input className={input} required maxLength={64} placeholder={t.passkeyNameHint} value={name} onChange={(e) => setName(e.target.value)} />
           </label>
-          <p className="text-zinc-500">{twoFactor ? t.passkeyConfirm2FA : t.passkeyConfirm}</p>
+          <p className="text-ink-muted">{twoFactor ? t.passkeyConfirm2FA : t.passkeyConfirm}</p>
           <label className="flex flex-col gap-1">
             {t.currentPassword}
             <input className={input} type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -137,7 +137,7 @@ export function PasskeySection() {
             </label>
           )}
           {error && (
-            <p role="alert" className="text-red-600">
+            <p role="alert" className="text-danger">
               {error}
             </p>
           )}
@@ -147,7 +147,7 @@ export function PasskeySection() {
         </form>
       )}
       {!canAdd && error && (
-        <p role="alert" className="text-red-600">
+        <p role="alert" className="text-danger">
           {error}
         </p>
       )}

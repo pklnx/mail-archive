@@ -50,7 +50,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
-        <button type="button" className="self-start text-sm text-blue-600 lg:hidden" onClick={close}>
+        <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
           {t.backToMail}
         </button>
         <header className="flex flex-wrap items-center gap-2">
@@ -67,14 +67,14 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
           )}
         </header>
         {data && (
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-ink-muted">
             {!manage ? t.manageOff : data.syncInterval ? t.schedule(formatEvery(data.syncInterval)) : t.scheduleOff}
             {manage && " " + (data.reconcileInterval ? t.reconcileSchedule(formatInterval(data.reconcileInterval)) : t.reconcileOff)}
           </p>
         )}
-        {error && !data && <p className="text-sm text-red-600">{t.loadAccountsFailed(error)}</p>}
+        {error && !data && <p className="text-sm text-danger">{t.loadAccountsFailed(error)}</p>}
         {actionError && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-danger">
             {actionError}
           </p>
         )}
@@ -93,7 +93,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
           />
         )}
 
-        {data && active.length === 0 && editing === null && <p className="text-sm text-zinc-500">{t.noAccounts}</p>}
+        {data && active.length === 0 && editing === null && <p className="text-sm text-ink-muted">{t.noAccounts}</p>}
 
         {active.map((a) =>
           fillAccount?.name === a.name ? (
@@ -150,14 +150,14 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
 
         {removed.length > 0 && (
           <section className="flex flex-col gap-2">
-            <h2 className="mt-2 text-sm font-semibold text-zinc-500">{t.removedAccounts}</h2>
+            <h2 className="mt-2 text-sm font-semibold text-ink-muted">{t.removedAccounts}</h2>
             {removed.map((a) => (
               <Card key={a.name}>
                 <div className="flex flex-wrap items-baseline gap-x-3">
                   <span className="font-semibold">{a.name}</span>
-                  <span className="text-sm text-zinc-500">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+                  <span className="text-sm text-ink-muted">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
                 </div>
-                <p className="text-sm text-zinc-500">{t.removedNote}</p>
+                <p className="text-sm text-ink-muted">{t.removedNote}</p>
               </Card>
             ))}
           </section>
@@ -169,7 +169,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
 
 function Card({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">{children}</div>
+    <div className="flex flex-col gap-2 rounded-lg border border-line p-4">{children}</div>
   );
 }
 
@@ -306,15 +306,15 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
       <Card>
         <div className="flex flex-wrap items-baseline gap-x-3">
           <span className="font-semibold">{a.name}</span>
-          <span className="text-sm text-zinc-500" title={t.sourceCompleteHint}>
+          <span className="text-sm text-ink-muted" title={t.sourceCompleteHint}>
             {t.sourceComplete}
           </span>
-          <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+          <span className="ml-auto text-sm text-ink-muted tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
         </div>
-        <p className="text-sm break-words text-zinc-600 dark:text-zinc-400">{t.receivesFor(a.addresses.join(", "))}</p>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">{receiveStatus(a)}</p>
-        {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.smtpDisabledNote}</p>}
-        {!data.smtp && <p className="text-sm text-amber-700 dark:text-amber-500">{t.smtpServerOffCard}</p>}
+        <p className="text-sm break-words text-ink-muted">{t.receivesFor(a.addresses.join(", "))}</p>
+        <p className="text-sm text-ink-muted">{receiveStatus(a)}</p>
+        {!a.enabled && <p className="text-sm text-warning">{t.smtpDisabledNote}</p>}
+        {!data.smtp && <p className="text-sm text-warning">{t.smtpServerOffCard}</p>}
         <div className="flex flex-wrap gap-2">
           <button type="button" className={button} aria-expanded={showSetup} onClick={() => setShowSetup(!showSetup)}>
             {showSetup ? t.hideMailServerSetup : t.mailServerSetup}
@@ -330,7 +330,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
               <button type="button" className={button} onClick={onToggle}>
                 {a.enabled ? t.disable : t.enable}
               </button>
-              <button type="button" className={`${button} text-red-600`} disabled={busy} onClick={onRemove}>
+              <button type="button" className={`${button} text-danger`} disabled={busy} onClick={onRemove}>
                 {t.remove}
               </button>
             </>
@@ -346,16 +346,16 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
       <Card>
         <div className="flex flex-wrap items-baseline gap-x-3">
           <span className="font-semibold">{a.name}</span>
-          <span className="text-sm text-zinc-500">{t.imported}</span>
-          <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+          <span className="text-sm text-ink-muted">{t.imported}</span>
+          <span className="ml-auto text-sm text-ink-muted tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
         </div>
-        <p className={`text-sm ${status.error ? "text-red-600" : "text-zinc-600 dark:text-zinc-400"}`} aria-live="polite">
+        <p className={`text-sm ${status.error ? "text-danger" : "text-ink-muted"}`} aria-live="polite">
           {busy && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}
           {status.text}
         </p>
-        {status.error && <p className="text-xs break-words text-red-600">{status.error}</p>}
+        {status.error && <p className="text-xs break-words text-danger">{status.error}</p>}
         {a.folders.length > 0 && (
-          <ul className="flex flex-wrap gap-x-3 text-xs text-zinc-500">
+          <ul className="flex flex-wrap gap-x-3 text-xs text-ink-muted">
             {a.folders.map((f) => (
               <li key={f.name}>
                 {f.name} <span className="tabular-nums">({formatCount(f.messages)})</span>
@@ -365,7 +365,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
         )}
         {manage && (
           <div className="flex flex-wrap gap-2">
-            <button type="button" className={`${button} text-red-600`} disabled={busy} onClick={onRemove}>
+            <button type="button" className={`${button} text-danger`} disabled={busy} onClick={onRemove}>
               {t.remove}
             </button>
           </div>
@@ -377,27 +377,27 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
     <Card>
       <div className="flex flex-wrap items-baseline gap-x-3">
         <span className="font-semibold">{a.name}</span>
-        <span className="min-w-0 truncate text-sm text-zinc-500">
+        <span className="min-w-0 truncate text-sm text-ink-muted">
           {a.username} · {a.host} ·{" "}
           <span title={t.sourceSnapshotHint}>{t.sourceSnapshot}</span>
         </span>
-        <span className="ml-auto text-sm text-zinc-500 tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+        <span className="ml-auto text-sm text-ink-muted tabular-nums">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
       </div>
-      <p className={`text-sm ${status.error ? "text-red-600" : "text-zinc-600 dark:text-zinc-400"}`} aria-live="polite">
+      <p className={`text-sm ${status.error ? "text-danger" : "text-ink-muted"}`} aria-live="polite">
         {busy && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}
         {status.text}
       </p>
-      {status.error && <p className="text-xs break-words text-red-600">{status.error}</p>}
+      {status.error && <p className="text-xs break-words text-danger">{status.error}</p>}
       {health && (
-        <p className={`text-sm ${health.failing ? "font-medium text-red-600" : "text-amber-700 dark:text-amber-500"}`}>{health.text}</p>
+        <p className={`text-sm ${health.failing ? "font-medium text-danger" : "text-warning"}`}>{health.text}</p>
       )}
-      {!a.enabled && <p className="text-sm text-amber-700 dark:text-amber-500">{t.disabledNote}</p>}
-      {schedule && <p className="text-sm text-zinc-600 dark:text-zinc-400">{schedule}</p>}
+      {!a.enabled && <p className="text-sm text-warning">{t.disabledNote}</p>}
+      {schedule && <p className="text-sm text-ink-muted">{schedule}</p>}
       {reconcile && (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="text-sm text-ink-muted">
           {reconcile.gone && (
             <>
-              <button type="button" className="font-medium text-amber-700 hover:underline dark:text-amber-500" onClick={onShowGone}>
+              <button type="button" className="font-medium text-warning hover:underline" onClick={onShowGone}>
                 {reconcile.gone}
               </button>
               {" · "}
@@ -420,7 +420,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
           <button type="button" className={button} onClick={onToggle}>
             {a.enabled ? t.disable : t.enable}
           </button>
-          <button type="button" className={`${button} text-red-600`} disabled={busy} onClick={onRemove}>
+          <button type="button" className={`${button} text-danger`} disabled={busy} onClick={onRemove}>
             {t.remove}
           </button>
         </div>
@@ -487,7 +487,7 @@ function AccountForm({ account, bare, onCancel, onSaved }: FormProps) {
 
   const field = "flex flex-col gap-1 text-sm";
   return (
-    <form onSubmit={submit} className={account || bare ? "flex flex-col gap-3" : "flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"}>
+    <form onSubmit={submit} className={account || bare ? "flex flex-col gap-3" : "flex flex-col gap-3 rounded-lg border border-line p-4"}>
       {!bare && <h2 className="font-semibold">{account ? account.name : t.addAccount}</h2>}
       <div className={field}>
         <label className={field}>
@@ -505,7 +505,7 @@ function AccountForm({ account, bare, onCancel, onSaved }: FormProps) {
             aria-describedby={`${hintId}-name`}
           />
         </label>
-        <span id={`${hintId}-name`} className="text-xs text-zinc-500">
+        <span id={`${hintId}-name`} className="text-xs text-ink-muted">
           {t.nameHint}
         </span>
       </div>
@@ -546,18 +546,18 @@ function AccountForm({ account, bare, onCancel, onSaved }: FormProps) {
               aria-describedby={`${hintId}-password`}
             />
           </label>
-          <span id={`${hintId}-password`} className="text-xs text-zinc-500">
+          <span id={`${hintId}-password`} className="text-xs text-ink-muted">
             {t.passwordHint}
           </span>
         </div>
       </div>
       {error && (
-        <p role="alert" className="text-sm break-words text-red-600">
+        <p role="alert" className="text-sm break-words text-danger">
           {error}
         </p>
       )}
       {question && (
-        <div role="alert" className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950/40">
+        <div role="alert" className="flex flex-col gap-2 rounded-md border border-warning-line bg-warning-soft p-3 text-sm">
           <p>{t.trashSpamQuestion(question.join(", "))}</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={primary} disabled={busy} onClick={() => save({ confirmFolders: true, excludedFolders: question })}>
@@ -576,7 +576,7 @@ function AccountForm({ account, bare, onCancel, onSaved }: FormProps) {
         <button type="button" className={button} onClick={onCancel} disabled={busy}>
           {t.cancel}
         </button>
-        {busy && <span className="text-sm text-zinc-500">{t.checkingLogin}</span>}
+        {busy && <span className="text-sm text-ink-muted">{t.checkingLogin}</span>}
       </div>
     </form>
   );
@@ -602,7 +602,7 @@ function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved, onFill }: {
   const [created, setCreated] = useState(false);
   const name = useId();
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <section className="flex flex-col gap-3 rounded-lg border border-line p-4">
       <h2 className="font-semibold">{t.addAccount}</h2>
       {admin && !created && (
         <fieldset className="flex flex-col gap-1 text-sm">
@@ -612,7 +612,7 @@ function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved, onFill }: {
               <input type="radio" name={name} className="mt-1" checked={source === k} onChange={() => setSource(k)} />
               <span>
                 {k === "imap" ? t.sourceIMAP : t.sourceSMTP}
-                <span className="block text-xs text-zinc-500">{k === "imap" ? t.sourceSnapshotHint : t.sourceCompleteHint}</span>
+                <span className="block text-xs text-ink-muted">{k === "imap" ? t.sourceSnapshotHint : t.sourceCompleteHint}</span>
               </span>
             </label>
           ))}
@@ -716,9 +716,9 @@ export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, o
     <form onSubmit={submit} className="flex flex-col gap-3">
       {account && <h2 className="font-semibold">{account.name}</h2>}
       {!smtpOn && (
-        <p className="text-sm text-amber-700 dark:text-amber-500">
+        <p className="text-sm text-warning">
           {t.smtpServerOff}{" "}
-          <a className="text-blue-600 hover:underline dark:text-blue-400" href={guideURL} target="_blank" rel="noreferrer">
+          <a className="text-accent-ink hover:underline" href={guideURL} target="_blank" rel="noreferrer">
             {t.journalingGuide}
           </a>
         </p>
@@ -754,12 +754,12 @@ export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, o
             {t.addAddress}
           </button>
         )}
-        <span id={`${hintId}-addresses`} className="text-xs text-zinc-500">
+        <span id={`${hintId}-addresses`} className="text-xs text-ink-muted">
           {canAddresses ? t.addressHint : t.addressesAdminOnly}
         </span>
       </fieldset>
       {error && (
-        <p role="alert" className="text-sm break-words text-red-600">
+        <p role="alert" className="text-sm break-words text-danger">
           {error}
         </p>
       )}
@@ -780,13 +780,13 @@ export function PostfixPanel({ addresses }: { addresses: string[] }) {
   const setup = postfixSetup(addresses);
   const [copied, setCopied] = useState(false);
   return (
-    <section className="flex flex-col gap-2 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-      {!setup.dedicated && <p className="text-amber-700 dark:text-amber-500">{t.setupNotDedicated(setup.address)}</p>}
+    <section className="flex flex-col gap-2 rounded-md border border-line p-3 text-sm">
+      {!setup.dedicated && <p className="text-warning">{t.setupNotDedicated(setup.address)}</p>}
       <p>{t.setupIntro}</p>
-      <pre className="overflow-x-auto rounded bg-zinc-100 p-2 text-xs dark:bg-zinc-900">{setup.text}</pre>
-      <p className="text-xs text-zinc-500">
+      <pre className="overflow-x-auto rounded bg-surface-hover p-2 text-xs">{setup.text}</pre>
+      <p className="text-xs text-ink-muted">
         {t.setupTarget}{" "}
-        <a className="text-blue-600 hover:underline dark:text-blue-400" href={guideURL} target="_blank" rel="noreferrer">
+        <a className="text-accent-ink hover:underline" href={guideURL} target="_blank" rel="noreferrer">
           {t.journalingGuide}
         </a>
       </p>
@@ -827,7 +827,7 @@ export function SchedulePicker({ account, data, onSaved }: { account: Account; d
   };
 
   return (
-    <section className="flex flex-col gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+    <section className="flex flex-col gap-2 border-t border-line pt-3">
       <label htmlFor={id} className="text-sm font-semibold">
         {t.scheduleTitle}
       </label>
@@ -843,8 +843,8 @@ export function SchedulePicker({ account, data, onSaved }: { account: Account; d
           {t.saveSchedule}
         </button>
       </div>
-      {off && <p className="text-xs text-zinc-500">{t.scheduleOffHint}</p>}
-      {!off && choice === "manual" && <p className="text-xs text-zinc-500">{t.intervalManualHint}</p>}
+      {off && <p className="text-xs text-ink-muted">{t.scheduleOffHint}</p>}
+      {!off && choice === "manual" && <p className="text-xs text-ink-muted">{t.intervalManualHint}</p>}
       {message && <p className="text-sm">{message}</p>}
     </section>
   );
@@ -881,7 +881,7 @@ function FolderPicker({ account, onSaved }: { account: Account; onSaved: () => v
   };
 
   return (
-    <section className="flex flex-col gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+    <section className="flex flex-col gap-2 border-t border-line pt-3">
       <h3 className="text-sm font-semibold">{t.folders}</h3>
       {!folders ? (
         <button type="button" className={`${button} self-start`} disabled={busy} onClick={load}>
@@ -889,7 +889,7 @@ function FolderPicker({ account, onSaved }: { account: Account; onSaved: () => v
         </button>
       ) : (
         <>
-          <p className="text-xs text-zinc-500">{t.foldersHint}</p>
+          <p className="text-xs text-ink-muted">{t.foldersHint}</p>
           <ul className="flex flex-col gap-1">
             {folders.map((f, i) => (
               <li key={f.name}>
@@ -900,7 +900,7 @@ function FolderPicker({ account, onSaved }: { account: Account; onSaved: () => v
                     onChange={(e) => setFolders(folders.map((g, j) => (i === j ? { ...g, selected: e.target.checked } : g)))}
                   />
                   <span>{f.name}</span>
-                  {f.specialUse && <span className="text-xs text-zinc-500">({t.role(f.specialUse)})</span>}
+                  {f.specialUse && <span className="text-xs text-ink-muted">({t.role(f.specialUse)})</span>}
                 </label>
               </li>
             ))}

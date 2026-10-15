@@ -39,17 +39,17 @@ export function FillSection({ account: a, manage, onChanged }: { account: Accoun
   };
 
   return (
-    <section className="flex flex-col gap-1 border-t border-zinc-200 pt-2 dark:border-zinc-800" aria-label={t.importFromIMAP}>
-      <p className={`text-sm ${status.error ? "text-red-600" : "text-zinc-600 dark:text-zinc-400"}`} aria-live="polite">
+    <section className="flex flex-col gap-1 border-t border-line pt-2" aria-label={t.importFromIMAP}>
+      <p className={`text-sm ${status.error ? "text-danger" : "text-ink-muted"}`} aria-live="polite">
         {f.status === "running" && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}
         {status.text}
       </p>
-      <p className="truncate text-xs text-zinc-500">{t.fillSource(f.username, f.host, f.folderPrefix)}</p>
-      {status.error && <p className="text-xs break-words text-red-600">{status.error}</p>}
+      <p className="truncate text-xs text-ink-muted">{t.fillSource(f.username, f.host, f.folderPrefix)}</p>
+      {status.error && <p className="text-xs break-words text-danger">{status.error}</p>}
       {f.folders.length > 0 && (
-        <ul className="flex flex-wrap gap-x-3 text-xs text-zinc-500">
+        <ul className="flex flex-wrap gap-x-3 text-xs text-ink-muted">
           {f.folders.map((ff) => (
-            <li key={ff.source} title={ff.error || undefined} className={ff.error ? "text-red-600" : undefined}>
+            <li key={ff.source} title={ff.error || undefined} className={ff.error ? "text-danger" : undefined}>
               {ff.folder} <span className="tabular-nums">({formatCount(ff.imported)})</span>
               {!ff.done && !ff.error && f.status === "running" && " …"}
             </li>
@@ -85,15 +85,15 @@ export function FillSection({ account: a, manage, onChanged }: { account: Accoun
             <button type="submit" className={button} disabled={busy || password === ""}>
               {t.resumeFill}
             </button>
-            {busy && <span className="text-sm text-zinc-500">{t.checkingLogin}</span>}
+            {busy && <span className="text-sm text-ink-muted">{t.checkingLogin}</span>}
           </div>
-          <span id={`${id}-resume`} className="text-xs text-zinc-500">
+          <span id={`${id}-resume`} className="text-xs text-ink-muted">
             {t.resumeFillHint}
           </span>
         </form>
       )}
       {error && (
-        <p role="alert" className="text-sm break-words text-red-600">
+        <p role="alert" className="text-sm break-words text-danger">
           {error}
         </p>
       )}
@@ -172,8 +172,8 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
   return (
     <form onSubmit={submit} className="flex flex-col gap-3">
       <h2 className="font-semibold">{t.importFromIMAP}</h2>
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">{t.fillIntro}</p>
-      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <p className="text-sm text-ink-muted">{t.fillIntro}</p>
+      <p className="text-sm text-ink-muted">
         {account.firstReceived ? t.firstReceived(longDate(account.firstReceived.at), account.firstReceived.subject) : t.noneReceived}
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_9rem_7rem]">
@@ -221,7 +221,7 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
       {folders && (
         <fieldset className="flex flex-col gap-1 text-sm" aria-describedby={`${id}-folders`}>
           <legend className="mb-1 font-medium">{t.folders}</legend>
-          {suggested.length > 0 && <p className="text-amber-700 dark:text-amber-500">{t.fillTrashSpam(suggested.join(", "))}</p>}
+          {suggested.length > 0 && <p className="text-warning">{t.fillTrashSpam(suggested.join(", "))}</p>}
           <ul className="flex flex-col gap-1">
             {folders.map((f, i) => (
               <li key={f.name}>
@@ -232,12 +232,12 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
                     onChange={(e) => setFolders(folders.map((g, j) => (i === j ? { ...g, selected: e.target.checked } : g)))}
                   />
                   <span>{f.name}</span>
-                  {f.specialUse && <span className="text-xs text-zinc-500">({t.role(f.specialUse)})</span>}
+                  {f.specialUse && <span className="text-xs text-ink-muted">({t.role(f.specialUse)})</span>}
                 </label>
               </li>
             ))}
           </ul>
-          <span id={`${id}-folders`} className="text-xs text-zinc-500">
+          <span id={`${id}-folders`} className="text-xs text-ink-muted">
             {t.fillFoldersHint}
           </span>
         </fieldset>
@@ -256,7 +256,7 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
               aria-describedby={`${id}-prefix`}
             />
           </label>
-          <span id={`${id}-prefix`} className="text-xs text-zinc-500">
+          <span id={`${id}-prefix`} className="text-xs text-ink-muted">
             {t.fillPrefixHint(shownPrefix)}
           </span>
         </div>
@@ -271,14 +271,14 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
               aria-describedby={`${id}-cutoff`}
             />
           </label>
-          <span id={`${id}-cutoff`} className="text-xs text-zinc-500">
+          <span id={`${id}-cutoff`} className="text-xs text-ink-muted">
             {t.cutoffHint}
-            {cutoff && <span className="block text-amber-700 dark:text-amber-500">{t.cutoffGap}</span>}
+            {cutoff && <span className="block text-warning">{t.cutoffGap}</span>}
           </span>
         </div>
       </div>
       {error && (
-        <p role="alert" className="text-sm break-words text-red-600">
+        <p role="alert" className="text-sm break-words text-danger">
           {error}
         </p>
       )}
@@ -289,7 +289,7 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
         <button type="button" className={button} onClick={onCancel} disabled={busy}>
           {t.cancel}
         </button>
-        {busy && <span className="text-sm text-zinc-500">{t.checkingLogin}</span>}
+        {busy && <span className="text-sm text-ink-muted">{t.checkingLogin}</span>}
       </div>
     </form>
   );

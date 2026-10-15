@@ -5,10 +5,10 @@ import { relativeTime } from "./format";
 import { t } from "./i18n";
 
 const button =
-  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800";
-const primary = "rounded-md bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
+const primary = "rounded-md bg-accent px-3 py-1 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const input =
-  "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
+  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 const message = (err: unknown) => t.failed(err instanceof Error ? err.message : String(err));
 
@@ -48,7 +48,7 @@ export function UsersPage({ close }: { close: () => void }) {
 
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-blue-600 lg:hidden" onClick={close}>
+      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
         {t.backToMail}
       </button>
       <div className="flex flex-wrap items-center gap-2">
@@ -59,7 +59,7 @@ export function UsersPage({ close }: { close: () => void }) {
           </button>
         )}
       </div>
-      <p className="text-sm text-zinc-500">{t.adminsSeeNoMail}</p>
+      <p className="text-sm text-ink-muted">{t.adminsSeeNoMail}</p>
 
       {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
       {adding && (
@@ -73,27 +73,27 @@ export function UsersPage({ close }: { close: () => void }) {
         />
       )}
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}
-      {!users && !error && <p className="text-sm text-zinc-500">{t.loading}</p>}
+      {!users && !error && <p className="text-sm text-ink-muted">{t.loading}</p>}
 
       <ul className="flex flex-col gap-3">
         {users?.map((u) => (
-          <li key={u.name} className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+          <li key={u.name} className="flex flex-col gap-2 rounded-lg border border-line p-3">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-semibold">{u.name}</span>
-              {u.self && <span className="text-sm text-zinc-500">({t.you})</span>}
-              <span className="text-sm text-zinc-500">{u.admin ? t.roleAdmin : t.roleUser}</span>
-              <span className={`text-sm ${u.locked ? "text-red-600" : "text-zinc-500"}`}>
+              {u.self && <span className="text-sm text-ink-muted">({t.you})</span>}
+              <span className="text-sm text-ink-muted">{u.admin ? t.roleAdmin : t.roleUser}</span>
+              <span className={`text-sm ${u.locked ? "text-danger" : "text-ink-muted"}`}>
                 {u.locked ? t.stateLocked : u.mustChangePassword ? t.stateMustChange : t.stateActive}
               </span>
-              <span className="text-sm text-zinc-500">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
-              {u.passkeys > 0 && <span className="text-sm text-zinc-500">{t.passkeyCount(u.passkeys)}</span>}
-              {u.apiKeys > 0 && <span className="text-sm text-zinc-500">{t.apiKeyCount(u.apiKeys)}</span>}
-              {u.failingAccounts > 0 && <span className="text-sm font-medium text-red-600">{t.failingCount(u.failingAccounts)}</span>}
-              <span className="ml-auto text-sm text-zinc-500">
+              <span className="text-sm text-ink-muted">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
+              {u.passkeys > 0 && <span className="text-sm text-ink-muted">{t.passkeyCount(u.passkeys)}</span>}
+              {u.apiKeys > 0 && <span className="text-sm text-ink-muted">{t.apiKeyCount(u.apiKeys)}</span>}
+              {u.failingAccounts > 0 && <span className="text-sm font-medium text-danger">{t.failingCount(u.failingAccounts)}</span>}
+              <span className="ml-auto text-sm text-ink-muted">
                 {t.colAccounts}: {u.accounts} · {t.colLastLogin}: {u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}
               </span>
             </div>
@@ -106,7 +106,7 @@ export function UsersPage({ close }: { close: () => void }) {
               <ApiKeyItems keys={keys.filter((k) => k.user === u.name)} revoke={(k) => void run(() => apiKeyApi.revokeAny(k.id))} />
             )}
             {u.self ? (
-              <p className="text-sm text-zinc-500">{t.selfHint}</p>
+              <p className="text-sm text-ink-muted">{t.selfHint}</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {u.twoFactorEnabled && (
@@ -142,7 +142,7 @@ export function UsersPage({ close }: { close: () => void }) {
                 </button>
                 <button
                   type="button"
-                  className={`${button} text-red-600`}
+                  className={`${button} text-danger`}
                   onClick={() => window.confirm(t.confirmRemoveUser(u.name)) && run(() => usersApi.remove(u.name))}
                 >
                   {t.removeUser}
@@ -183,7 +183,7 @@ function ResetPasswordConfirm({
   const [removePasskeys, setRemovePasskeys] = useState(true);
   const [revokeApiKeys, setRevokeApiKeys] = useState(true);
   return (
-    <div role="group" className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+    <div role="group" className="flex flex-col gap-2 rounded-md border border-warning-line bg-warning-soft p-3 text-sm">
       <p>{t.confirmResetPassword(user.name)}</p>
       {user.passkeys > 0 && (
         <label className="flex items-center gap-2">
@@ -228,7 +228,7 @@ function AddUserForm({ cancel, added }: { cancel: () => void; added: (g: Generat
   };
 
   return (
-    <form className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800" onSubmit={submit}>
+    <form className="flex flex-col gap-3 rounded-lg border border-line p-3 text-sm" onSubmit={submit}>
       <label className="flex flex-col gap-1">
         {t.userName}
         <input className={input} required autoFocus autoCapitalize="none" spellCheck={false} value={name} onChange={(e) => setName(e.target.value)} />
@@ -238,7 +238,7 @@ function AddUserForm({ cancel, added }: { cancel: () => void; added: (g: Generat
         {t.userIsAdmin}
       </label>
       {error && (
-        <p role="alert" className="text-red-600">
+        <p role="alert" className="text-danger">
           {error}
         </p>
       )}
@@ -258,9 +258,9 @@ function AddUserForm({ cancel, added }: { cancel: () => void; added: (g: Generat
 function GeneratedPanel({ value, done }: { value: GeneratedPassword; done: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div role="status" className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+    <div role="status" className="flex flex-col gap-2 rounded-lg border border-warning-line bg-warning-soft p-3 text-sm">
       <p className="font-semibold">{t.generatedFor(value.name)}</p>
-      <code className="w-fit rounded bg-white px-2 py-1 font-mono text-base select-all dark:bg-zinc-900">{value.password}</code>
+      <code className="w-fit rounded bg-field px-2 py-1 font-mono text-base select-all">{value.password}</code>
       <p>{t.generatedHint}</p>
       <div className="flex gap-2">
         <button

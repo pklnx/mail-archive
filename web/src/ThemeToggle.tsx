@@ -13,7 +13,7 @@ export function ThemeToggle() {
       type="button"
       aria-label={t.switchTheme(next)}
       title={t.switchTheme(next)}
-      className="shrink-0 rounded-md p-1.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+      className="flex shrink-0 items-center justify-center rounded-md p-1.5 pointer-coarse:size-11 text-ink-muted hover:bg-surface-hover hover:text-ink"
       onClick={() => {
         setTheme(next);
         set(next);

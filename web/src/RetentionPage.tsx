@@ -14,11 +14,11 @@ import { t } from "./i18n";
 import { parseQuery } from "./searchSyntax";
 
 const button =
-  "rounded-md border border-zinc-300 px-2.5 py-1 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800";
-const primary = "rounded-md bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
+  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
+const primary = "rounded-md bg-accent px-3 py-1 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
 const input =
-  "w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-900";
-const tab = "rounded-md px-3 py-1 text-sm";
+  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
+const tab = "rounded-md px-3 py-1 text-sm pointer-coarse:min-h-11";
 
 const message = (err: unknown) => t.failed(err instanceof Error ? err.message : String(err));
 
@@ -62,7 +62,7 @@ export function RetentionPage({ close }: { close: () => void }) {
 
   return (
     <div className="mx-auto flex h-full max-w-4xl flex-col gap-4 overflow-y-auto p-4">
-      <button type="button" className="self-start text-sm text-blue-600 lg:hidden" onClick={close}>
+      <button type="button" className="self-start text-sm text-accent-ink lg:hidden pointer-coarse:min-h-11" onClick={close}>
         {t.backToMail}
       </button>
       <h1 className="text-xl font-semibold">{t.retentionTitle}</h1>
@@ -73,7 +73,7 @@ export function RetentionPage({ close }: { close: () => void }) {
             type="button"
             role="tab"
             aria-selected={view === v}
-            className={`${tab} ${view === v ? "bg-zinc-200 font-medium dark:bg-zinc-800" : "hover:bg-zinc-100 dark:hover:bg-zinc-900"}`}
+            className={`${tab} ${view === v ? "bg-line font-medium" : "hover:bg-surface-hover"}`}
             onClick={() => setView(v)}
           >
             {v === "rules" ? t.retentionRulesTab : v === "holds" ? t.retentionHoldsTab : t.runsTab}
@@ -81,11 +81,11 @@ export function RetentionPage({ close }: { close: () => void }) {
         ))}
       </div>
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}
-      {!data && !error && <p className="text-sm text-zinc-500">{t.loading}</p>}
+      {!data && !error && <p className="text-sm text-ink-muted">{t.loading}</p>}
       {data && view === "rules" && <RulesTab data={data} reload={reload} />}
       {data && view === "holds" && <HoldsTab accounts={data.accounts} />}
       {view === "runs" && <RunsTab />}
@@ -136,24 +136,24 @@ function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }
 
   return (
     <section className="flex flex-col gap-4">
-      <p className="text-sm text-zinc-500">{t.retentionNote}</p>
-      <p className="text-sm text-zinc-500">{t.retentionLegal}</p>
+      <p className="text-sm text-ink-muted">{t.retentionNote}</p>
+      <p className="text-sm text-ink-muted">{t.retentionLegal}</p>
       {data.rules.length === 0 ? (
         <p className="text-sm">{t.ruleNone}</p>
       ) : (
-        <ul className="flex flex-col divide-y divide-zinc-200 rounded-lg border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
           {data.rules.map((r) => {
             const what = `${accountLabel({ owner: r.owner, name: r.account, removed: r.accountRemoved })} / ${r.folder || t.ruleAllFolders}`;
             return (
               <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
                 <span className="min-w-0 flex-1">
                   <span className="font-medium">{what}</span>
-                  <span className="text-zinc-500">
+                  <span className="text-ink-muted">
                     {" · "}
                     {t.ruleYearsCount(r.years)} · {r.timeZone}
                   </span>
-                  {r.note && <span className="block text-zinc-600 dark:text-zinc-400">{r.note}</span>}
-                  <span className="block text-xs text-zinc-500">{t.ruleCreated(r.createdBy, day(r.createdAt))}</span>
+                  {r.note && <span className="block text-ink-muted">{r.note}</span>}
+                  <span className="block text-xs text-ink-muted">{t.ruleCreated(r.createdBy, day(r.createdAt))}</span>
                 </span>
                 <button type="button" className={button} onClick={() => void remove(r.id, what)}>
                   {t.ruleRemove}
@@ -164,7 +164,7 @@ function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }
         </ul>
       )}
 
-      <form onSubmit={(e) => void add(e)} className="grid gap-3 rounded-lg border border-zinc-200 p-3 text-sm sm:grid-cols-2 dark:border-zinc-800">
+      <form onSubmit={(e) => void add(e)} className="grid gap-3 rounded-lg border border-line p-3 text-sm sm:grid-cols-2">
         <label className="flex flex-col gap-1">
           {t.ruleAccount}
           <select className={input} value={accountId} onChange={(e) => (setAccountId(e.target.value), setFolder(""))} required>
@@ -200,7 +200,7 @@ function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }
           <input className={input} value={note} maxLength={500} placeholder={t.ruleNotePlaceholder} onChange={(e) => setNote(e.target.value)} />
         </label>
         {error && (
-          <p role="alert" className="text-red-600 sm:col-span-2">
+          <p role="alert" className="text-danger sm:col-span-2">
             {error}
           </p>
         )}
@@ -241,27 +241,27 @@ function HoldsTab({ accounts }: { accounts: RetentionAccount[] }) {
 
   return (
     <section className="flex flex-col gap-4">
-      <p className="text-sm text-zinc-500">{t.holdNote}</p>
+      <p className="text-sm text-ink-muted">{t.holdNote}</p>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={released} onChange={(e) => setReleased(e.target.checked)} />
         {t.holdShowReleased}
       </label>
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}
-      {notice && <p className="text-sm text-green-700 dark:text-green-400">{notice}</p>}
+      {notice && <p className="text-sm text-ok">{notice}</p>}
       {holds && holds.length === 0 && <p className="text-sm">{t.holdNone}</p>}
       {holds && holds.length > 0 && (
-        <ul className="flex flex-col divide-y divide-zinc-200 rounded-lg border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
           {holds.map((h) => (
-            <li key={h.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 ${h.releasedAt ? "text-zinc-500" : ""}`}>
+            <li key={h.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 ${h.releasedAt ? "text-ink-muted" : ""}`}>
               <span className="min-w-0 flex-1">
                 <span className="font-medium">{h.name}</span>
-                <span className="text-zinc-500"> · {holdScope(h)}</span>
-                {h.reason && <span className="block text-zinc-600 dark:text-zinc-400">{h.reason}</span>}
-                <span className="block text-xs text-zinc-500">
+                <span className="text-ink-muted"> · {holdScope(h)}</span>
+                {h.reason && <span className="block text-ink-muted">{h.reason}</span>}
+                <span className="block text-xs text-ink-muted">
                   {h.releasedAt ? t.holdReleased(h.releasedBy, day(h.releasedAt), h.releaseNote) : t.ruleCreated(h.createdBy, day(h.createdAt))}
                 </span>
               </span>
@@ -330,7 +330,7 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
   };
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="grid gap-3 rounded-lg border border-zinc-200 p-3 text-sm sm:grid-cols-2 dark:border-zinc-800">
+    <form onSubmit={(e) => void submit(e)} className="grid gap-3 rounded-lg border border-line p-3 text-sm sm:grid-cols-2">
       <label className="flex flex-col gap-1">
         {t.holdName}
         <input className={input} value={name} maxLength={200} onChange={(e) => setName(e.target.value)} required />
@@ -370,12 +370,12 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
           <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
           <span>
             {t.holdAll}
-            <span className="block text-xs text-zinc-500">{t.holdAllNeeded}</span>
+            <span className="block text-xs text-ink-muted">{t.holdAllNeeded}</span>
           </span>
         </label>
       )}
       {error && (
-        <p role="alert" className="text-red-600 sm:col-span-2">
+        <p role="alert" className="text-danger sm:col-span-2">
           {error}
         </p>
       )}
@@ -433,30 +433,30 @@ function RunsTab() {
   const open = runs?.find(runOpen);
   return (
     <section className="flex flex-col gap-4">
-      <p className="text-sm text-zinc-500">{t.runsNote}</p>
-      <p className="text-sm text-zinc-500">{t.runsCLI}</p>
+      <p className="text-sm text-ink-muted">{t.runsNote}</p>
+      <p className="text-sm text-ink-muted">{t.runsCLI}</p>
       {!open && (
         <button type="button" className={`${primary} self-start`} disabled={busy || !runs} onClick={() => void propose()}>
           {t.runPropose}
         </button>
       )}
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}
       {runs && runs.length === 0 && <p className="text-sm">{t.runNone}</p>}
       {runs && runs.length > 0 && (
-        <ul className="flex flex-col divide-y divide-zinc-200 rounded-lg border border-zinc-200 text-sm dark:divide-zinc-800 dark:border-zinc-800">
+        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
           {runs.map((r) => (
             <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
               <span className="min-w-0 flex-1">
                 <span className="font-medium">{t.runLine(r.id, r.candidates, fileSize(r.bytes))}</span>
-                <span className="text-zinc-500"> · {t.runState(r.state)}</span>
+                <span className="text-ink-muted"> · {t.runState(r.state)}</span>
                 {(r.state === "done" || r.deleted + r.kept > 0) && (
-                  <span className="text-zinc-500"> · {t.runResult(r.deleted, r.kept)}</span>
+                  <span className="text-ink-muted"> · {t.runResult(r.deleted, r.kept)}</span>
                 )}
-                <span className="block text-xs text-zinc-500">{t.runProposedBy(r.createdBy, day(r.createdAt))}</span>
+                <span className="block text-xs text-ink-muted">{t.runProposedBy(r.createdBy, day(r.createdAt))}</span>
               </span>
               {selected !== r.id && (
                 <button type="button" className={button} onClick={() => setSelected(r.id)}>
@@ -497,21 +497,21 @@ function RunReview({ id, changed }: { id: number; changed: () => void }) {
 
   if (error && !review) {
     return (
-      <p role="alert" className="text-sm text-red-600">
+      <p role="alert" className="text-sm text-danger">
         {error}
       </p>
     );
   }
-  if (!review) return <p className="text-sm text-zinc-500">{t.loading}</p>;
+  if (!review) return <p className="text-sm text-ink-muted">{t.loading}</p>;
   const { run } = review;
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+    <div className="flex flex-col gap-3 rounded-lg border border-line p-3 text-sm">
       <p className="font-medium">
         {t.runLine(run.id, run.candidates, fileSize(run.bytes))} · {t.runState(run.state)}
       </p>
       {review.groups.length > 0 && (
         <table className="w-full text-left">
-          <thead className="text-zinc-500">
+          <thead className="text-ink-muted">
             <tr>
               <th className="py-1 font-normal">{t.runGroupsHead}</th>
               <th className="py-1 font-normal">{t.runYear}</th>
@@ -520,7 +520,7 @@ function RunReview({ id, changed }: { id: number; changed: () => void }) {
           </thead>
           <tbody>
             {review.groups.map((g) => (
-              <tr key={`${g.owner}/${g.account}/${g.folder}/${g.year}`} className="border-t border-zinc-100 dark:border-zinc-800">
+              <tr key={`${g.owner}/${g.account}/${g.folder}/${g.year}`} className="border-t border-line">
                 <td className="py-1">
                   {g.owner || "-"} / {g.account} / {g.folder}
                 </td>
@@ -533,10 +533,10 @@ function RunReview({ id, changed }: { id: number; changed: () => void }) {
       )}
       {review.candidates.length > 0 && (
         <details>
-          <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">{t.runHashes(review.listed, run.candidates)}</summary>
+          <summary className="cursor-pointer text-ink-muted">{t.runHashes(review.listed, run.candidates)}</summary>
           <ul className="mt-2 max-h-64 overflow-y-auto font-mono text-xs">
             {review.candidates.map((c) => (
-              <li key={c.sha256} className={c.state === "kept" ? "text-zinc-400" : ""}>
+              <li key={c.sha256} className={c.state === "kept" ? "text-ink-muted" : ""}>
                 {c.sha256} {c.state !== "pending" && `(${c.state})`}
               </li>
             ))}
@@ -560,7 +560,7 @@ function RunReview({ id, changed }: { id: number; changed: () => void }) {
               </label>
               <button
                 type="submit"
-                className="rounded-md bg-red-600 px-3 py-1 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                className="rounded-md bg-danger-solid px-3 py-1 text-sm font-medium text-on-accent hover:bg-danger-solid-hover disabled:opacity-50 pointer-coarse:min-h-11"
                 disabled={busy || Number(count) !== run.candidates}
               >
                 {t.runConfirm}
@@ -573,7 +573,7 @@ function RunReview({ id, changed }: { id: number; changed: () => void }) {
         </div>
       )}
       {error && (
-        <p role="alert" className="text-red-600">
+        <p role="alert" className="text-danger">
           {error}
         </p>
       )}
