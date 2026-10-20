@@ -57,8 +57,11 @@ first run happens here; the web server then runs it every --interval
 ("default": ` + config.EnvSyncInterval + `, or a duration from 5m to 720h),
 continuing each IMAP folder where the last run stopped. Moves and
 deletions in the mailbox are ignored. --keep-running without --host
-switches an ended fill on (its first run copies an older fill's folders
+switches an ended fill on (its first run scans the folders again and
+imports what the cut-off left out; it first copies an older fill's folders
 into JOURNAL); --interval alone changes the interval; --cancel stops it.
+With the schedule off (` + config.EnvSyncInterval + `=0) there are no
+scheduled runs; a run already started still finishes.
 
 The password is read from the terminal (or from stdin with --password-stdin)
 and kept, encrypted with ` + "MAIL_ARCHIVE_SECRET_KEY" + `, while the fill runs or keeps
@@ -497,6 +500,10 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 		},
 	}
 	fill, err := filler.RunLocked(ctx, id)
+	if errors.Is(err, archive.ErrFillSkipped) {
+		fmt.Fprintf(out, "%q is disabled: the web server runs the fill once it is enabled\n", acc.Name)
+		return nil
+	}
 	if err != nil && ctx.Err() != nil {
 		if fill != nil && fill.Recurring() {
 			// A recurring fill stays running with its password: the web

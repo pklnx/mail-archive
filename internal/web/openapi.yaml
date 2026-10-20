@@ -1890,9 +1890,10 @@ paths:
         - `{"keepRunning": true, "password": "…", "interval"?, "confirmFolders"?}`
           switches a fill that ended on: it keeps running from now on, and its
           first run is queued (`202`). The password is required and checked
-          first. A fill from before fills wrote into `JOURNAL` copies its
-          messages into `JOURNAL` in that run, as locations, without new
-          files. Trash and spam folders it has not copied yet need
+          first. That run scans the fill's IMAP folders again from the start
+          and copies what the cut-off left out. A fill from before fills
+          wrote into `JOURNAL` first copies its messages into `JOURNAL`, as
+          locations, without new files. Trash and spam folders it has not copied yet need
           `confirmFolders`, as for a new fill.
         - `{"keepRunning": false}` stops a recurring fill, like `cancel`.
         - `{"interval": "12h"}` changes the interval of a recurring fill

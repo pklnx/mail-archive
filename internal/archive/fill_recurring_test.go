@@ -495,3 +495,73 @@ func TestFillRunnerRecurring(t *testing.T) {
 		t.Errorf("run of a disabled account's fill: %v", err)
 	}
 }
+
+// TestRecurringFillSwitchedOn: a one-time fill into JOURNAL, switched on,
+// scans its folders again and imports what its cut-off left out, without
+// downloading what it imported before.
+func TestRecurringFillSwitchedOn(t *testing.T) {
+	f := newFixture(t, fillUser(t))
+	acc := f.smtpAccount()
+	f.journal(acc, "m2")
+	f.journal(acc, "m5")
+	fill := f.createFill(acc, "secret", "Spam", "Sent")
+	got, err := f.filler().Run(f.ctx, fill.ID)
+	if err != nil || got.Status != store.FillOK {
+		t.Fatalf("one-time fill %+v, %v", got, err)
+	}
+	// m1, m3 and the message without an ID; m4 is after the cut-off.
+	if c := folderOf(got, "INBOX"); c.Counts.Imported != 3 || c.Counts.AfterCutoff != 1 || c.LastUID != 6 {
+		t.Fatalf("one-time INBOX %+v", c)
+	}
+	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(f.sealer, id, "secret") }
+	if err := f.store.SetFillRecurring(f.ctx, fill.ID, nil, nil, seal); err != nil {
+		t.Fatal(err)
+	}
+	c := &clock{now: fillCutoff.Add(30 * 24 * time.Hour)}
+	f.srv.ResetCommands()
+	got = runFill(t, f.recurringFiller(c), fill.ID)
+	inbox := folderOf(got, "INBOX")
+	if want := (store.FillCounts{Scanned: 6, Imported: 1, New: 1, Journaled: 2, Present: 3}); got.Status != store.FillOK || inbox.Counts != want || inbox.LastUID != 6 {
+		t.Errorf("first recurring run %s %+v, want %+v", got.Status, inbox, want)
+	}
+	if b := f.srv.BodyFetches(); !slices.Equal(b, []string{"4", "6"}) {
+		t.Errorf("body fetches %v", b)
+	}
+	if locs := f.journalLocations(acc); len(locs) != 6 {
+		t.Errorf("journal locations %+v", locs)
+	}
+}
+
+// TestRecurringFillDisabledAccount: a recurring fill whose account is
+// disabled does not run, also when its run was already started: no state
+// change, no failure, no health.
+func TestRecurringFillDisabledAccount(t *testing.T) {
+	c := &clock{now: time.Now()}
+	f := newFixture(t, recurringUser(t, c.Now()))
+	acc := f.smtpAccount()
+	off := false
+	if err := f.store.UpdateAccount(f.ctx, acc.Ref(), store.AccountChange{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	fill := f.createRecurringFill(acc, "secret")
+	filler := f.recurringFiller(c)
+	if _, err := filler.Run(f.ctx, fill.ID); !errors.Is(err, archive.ErrFillSkipped) {
+		t.Fatalf("run: %v", err)
+	}
+	got, _ := f.store.GetFill(f.ctx, fill.ID)
+	if got.Status != store.FillRunning || got.PasswordEnc == nil || len(got.Folders) != 0 {
+		t.Errorf("after the skipped run %+v", got)
+	}
+	if h, _ := f.store.FillHealth(f.ctx, nil); h[fill.ID].LastSuccessAt != nil || h[fill.ID].FailureStreak != 0 {
+		t.Errorf("health %+v", h[fill.ID])
+	}
+	// Enabled again, it runs.
+	on := true
+	acc, _ = f.store.GetAccount(f.ctx, acc.ID)
+	if err := f.store.UpdateAccount(f.ctx, acc.Ref(), store.AccountChange{Enabled: &on}); err != nil {
+		t.Fatal(err)
+	}
+	if got := runFill(t, filler, fill.ID); got.Status != store.FillOK {
+		t.Errorf("after enabling %+v", got)
+	}
+}

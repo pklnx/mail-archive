@@ -103,17 +103,28 @@ func recurringVerdict(internalDate, now time.Time, journaled bool) fillVerdict {
 }
 
 // watermark moves a folder's LastUID during one pass, in UID order: over
-// every decided message until the first one that waits, and no further in
-// that pass. The messages after it are decided again by the next run;
-// imported ones are found by the pre-check without their bodies.
+// every decided message until the first one that is held (it waits, or its
+// body did not come back), and no further in that pass. The messages from
+// there on are decided again by the next run; imported ones are found by
+// the pre-check without their bodies.
 type watermark struct{ held bool }
 
-func (w *watermark) advance(last *uint32, uid uint32, waiting bool) {
-	if waiting {
+func (w *watermark) advance(last *uint32, uid uint32, hold bool) {
+	if hold {
 		w.held = true
 	}
 	if !w.held {
 		*last = max(*last, uid)
+	}
+}
+
+// advanceBatch moves the watermark over a batch of headers in UID order:
+// a message is held when it waits, or when its body was requested but did
+// not come back (the server lost it meanwhile, or skipped it), so that the
+// next run asks for it again.
+func (w *watermark) advanceBatch(last *uint32, chunk []imapsync.Header, waiting, requested, fetched map[uint32]bool) {
+	for _, h := range chunk {
+		w.advance(last, h.UID, waiting[h.UID] || requested[h.UID] && !fetched[h.UID])
 	}
 }
 
@@ -219,6 +230,18 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	}
 	if fill.Status != store.FillRunning {
 		return fill, store.ErrFillNotRunning
+	}
+	if fill.KeepRunning {
+		// A recurring fill waits while its account is disabled: no run, no
+		// failure, no change of its health. (A removed account's fills were
+		// stopped with it.)
+		a, err := f.Store.GetAccount(ctx, fill.AccountID)
+		if errors.Is(err, store.ErrNotFound) || err == nil && (a.RemovedAt != nil || !a.Enabled) {
+			return fill, ErrFillSkipped
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	log := f.logger().With("fill", fill.ID, "account_id", fill.AccountID)
 	now := f.now() // a recurring fill's messages are as old as at the start
@@ -440,6 +463,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	}
 	next := *ff // the progress if this batch commits
 	var fetch []uint32
+	waiting, requested, fetched := map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}
 	for i, h := range chunk {
 		next.Counts.Scanned++
 		isJournaled := ids[i] != "" && journaled[ids[i]]
@@ -463,8 +487,9 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 			next.Counts.Present++
 		default:
 			fetch = append(fetch, h.UID)
+			requested[h.UID] = true
 		}
-		wm.advance(&next.LastUID, h.UID, v == fillWaiting)
+		waiting[h.UID] = v == fillWaiting
 	}
 	var (
 		metas []store.MessageMeta
@@ -479,6 +504,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		fetched[m.UID] = true
 		sha := m.Body.blob.SHA256
 		if seen[sha] {
 			next.Counts.Present++
@@ -505,6 +531,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	if err != nil {
 		return err
 	}
+	wm.advanceBatch(&next.LastUID, chunk, waiting, requested, fetched)
 	next.Done = last
 	if _, err := f.Store.SaveFillBatch(ctx, &next, metas, locs); err != nil {
 		return err

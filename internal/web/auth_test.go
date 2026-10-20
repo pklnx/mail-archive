@@ -110,7 +110,7 @@ func newAuthFixtureLog(t *testing.T, opts Options, w io.Writer) *authFixture {
 	clock := &testClock{now: time.Now()}
 	s := New(st, nil, slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})), Options{
 		AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key, Now: clock.Now,
-		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL, Syncer: opts.Syncer, Runner: opts.Runner, AlertAfterFailures: opts.AlertAfterFailures,
+		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL, Syncer: opts.Syncer, Runner: opts.Runner, Fills: opts.Fills, AlertAfterFailures: opts.AlertAfterFailures,
 	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

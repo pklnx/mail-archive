@@ -372,8 +372,9 @@ deleted when the fill is stopped.
 (`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless set); it can have its own,
 from 5 minutes to 30 days, but not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`.
 The next run is due that long after the last one started. With the schedule
-off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) a recurring fill never runs again and is
-never stale. Change it on the card, or with
+off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are no scheduled runs, and no fill
+is stale; a fill just started, switched on, resumed or interrupted still
+finishes its current run. Change it on the card, or with
 `./ma account fill journal --interval 24h`. Runs of the fills of all accounts
 share one queue in the web server, one at a time; a long one-time fill delays
 the recurring runs behind it.
@@ -391,7 +392,8 @@ after two intervals without a successful run *stale*. The banner names the
 account with the mailbox, such as "journal (alice@example.com)",
 [`/healthz/sync`](./operations#healthz-sync) lists the smtp account's ID, and
 the [webhook alert](./operations#webhook-alerts) names the fill and its
-mailbox. Fills of a disabled account do not run and count as healthy.
+mailbox. Fills of a disabled account do not run, not even a run that was about to
+start, and count as healthy; they run again once the account is enabled.
 
 **Stop and resume.** **Stop importing** on the card, or
 `./ma account fill journal --cancel`, stops the fill (after its current batch
@@ -404,9 +406,11 @@ command line takes `--fill ID`; `./ma account fill journal` lists them.
 **Turning a one-time fill into a recurring one.** An ended one-time fill has
 **Keep importing new mail** on its card, or
 `./ma account fill journal --keep-running`. The password is asked for again.
-The first run imports what the cut-off left out; a fill from before
-`JOURNAL` first copies the messages of its own folders into `JOURNAL`, as
-locations, without storing any message file again. Its old folders stay.
+The first run scans its IMAP folders again from the start and imports what
+the cut-off left out; what the fill imported before is recognised without
+downloading it again. A fill from before `JOURNAL` first copies the messages
+of its own folders into `JOURNAL`, as locations, without storing any message
+file again. Its old folders stay.
 
 **Moving the account** to another user (`./ma account move`) keeps the fill
 running: it goes on importing the same mailbox, now into the new owner's

@@ -121,6 +121,9 @@ type busyState struct {
 	queued      map[int64]bool // waiting in this server's queue
 	runs        map[int64]store.LastRun
 	fillsQueued map[int64]bool // fills waiting in this server's queue, by fill ID
+	// holdUntil: until then recurring fills wait after this server's
+	// start (archive.RecurringStartHold).
+	holdUntil time.Time
 }
 
 func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
@@ -144,18 +147,29 @@ func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 			b.queued[id] = true
 		}
 		b.fillsQueued = s.fills.QueuedFills()
+		b.holdUntil = s.fills.HoldUntil
 	}
 	return b, nil
 }
 
 // fillSince is when a recurring fill became busy: the start of its run
-// while one is in progress (or waits to start, or to be continued), now
-// while it waits in the queue; nil between runs.
+// while one is in progress (or waits to start, or to be continued); now
+// while it waits in the queue or behind another run of its account (the
+// account's sync lock is held); the server's start during the hold after
+// it, when no recurring fill runs; nil otherwise.
 func (b busyState) fillSince(h *store.FillHealth, now time.Time) *time.Time {
 	switch {
-	case h.Running && h.RunStartedAt != nil:
+	case h.Running && h.RunStartedAt != nil && !now.Before(b.holdUntil):
 		return h.RunStartedAt
-	case h.Running, b.fillsQueued[h.FillID]:
+	case b.fillsQueued[h.FillID], b.running[h.AccountID]:
+		return &now
+	case now.Before(b.holdUntil):
+		start := b.holdUntil.Add(-archive.RecurringStartHold)
+		if h.Running && h.RunStartedAt != nil && h.RunStartedAt.After(start) {
+			return h.RunStartedAt
+		}
+		return &start
+	case h.Running:
 		return &now
 	}
 	return nil

@@ -248,3 +248,58 @@ func TestSyncHealthRecurringFills(t *testing.T) {
 		t.Fatalf("stopped fill: %d %s", status, body)
 	}
 }
+
+// TestSyncHealthRecurringFillsBusy: a recurring fill is not stale while it
+// waits for the hold after the server's start, nor while another run holds
+// its account's lock.
+func TestSyncHealthRecurringFillsBusy(t *testing.T) {
+	// The hold ends 70 minutes after the server's start, which on the
+	// server's clock comes an hour from now.
+	fills := &archive.FillRunner{HoldUntil: time.Now().Add(time.Hour + archive.RecurringStartHold)}
+	f := newAuthFixtureOpts(t, Options{
+		Runner: &archive.Runner{Schedule: archive.Schedule{Sync: 15 * time.Minute, SyncMin: 5 * time.Minute}}, Fills: fills,
+	})
+	ctx := context.Background()
+	journal := &store.Account{Name: "journal", Enabled: true}
+	if err := f.st.CreateSMTPAccount(ctx, journal, []string{"archive@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	fill := &store.Fill{AccountID: journal.ID, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", KeepRunning: true}
+	if err := f.st.CreateFill(ctx, fill, func(int64) ([]byte, error) { return []byte("x"), nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.FinishFill(ctx, fill.ID, store.FillOK, ""); err != nil {
+		t.Fatal(err)
+	}
+	stale := func() bool {
+		t.Helper()
+		f.clock.Advance(syncHealthTTL)
+		status, body := f.syncHealth("")
+		var out syncHealthJSON
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		return status == 503 && slices.Equal(out.Stale, []int64{journal.ID})
+	}
+	// 15 minutes: stale after 75 minutes without a success, but not
+	// before 75 minutes after the server's start. Two hours on, the hold
+	// is not over yet.
+	f.clock.Advance(2 * time.Hour)
+	if stale() {
+		t.Error("stale during the hold after the start")
+	}
+	// Long after the start, it counts.
+	f.clock.Advance(3 * time.Hour)
+	if !stale() {
+		t.Error("not stale long after the start")
+	}
+	// Another run holds the account's lock: the fill waits behind it.
+	unlock, ok, err := f.st.TryLockSyncForWrite(ctx, journal.ID)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	defer unlock()
+	if stale() {
+		t.Error("stale while waiting behind the account's lock")
+	}
+}

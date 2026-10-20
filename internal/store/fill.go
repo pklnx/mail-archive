@@ -651,8 +651,9 @@ func (s *Store) ResumeFill(ctx context.Context, id int64, seal func(id int64) ([
 // SetFillRecurring switches an ended fill on: from now on it keeps running
 // every interval (nil: the server's), with a newly sealed password, and
 // its first run starts at once. confirmed are trash and spam folders the
-// user confirmed. A fill from before #112 is copied into the journal
-// folder by its first run. It fails with ErrFillRunning while the fill or
+// user confirmed. A one-time fill's folders are scanned again from the
+// start, so that its first run imports what the cut-off left out; a fill
+// from before #112 is copied into the journal folder by that run. It fails with ErrFillRunning while the fill or
 // another fill of the account runs, with ErrFillKeepsRunning when it
 // already keeps running, and with ErrNotFound for a removed account.
 func (s *Store) SetFillRecurring(ctx context.Context, id int64, interval *time.Duration, confirmed []string,
@@ -696,6 +697,14 @@ func (s *Store) SetFillRecurring(ctx context.Context, id int64, interval *time.D
 		}
 		if err := q.ResetFillRun(ctx, id); err != nil {
 			return err
+		}
+		if f.RecurringSince == nil {
+			// The cut-off moved the folders' last UIDs past messages the
+			// new rule imports. The rescan is cheap: what the fill imported
+			// is found without the bodies (FillImported, LocationInFolder).
+			if err := q.RewindFillFolders(ctx, id); err != nil {
+				return err
+			}
 		}
 		return confirmFillFolders(ctx, q, id, f.AccountID, confirmed)
 	})

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -122,5 +123,29 @@ func TestWatermark(t *testing.T) {
 	w.advance(&last, 13, false)
 	if last != 11 {
 		t.Errorf("from 10: %d", last)
+	}
+}
+
+// TestWatermarkMissingBody: a message whose body was requested but did not
+// come back holds the watermark, so that the next run asks for it again.
+func TestWatermarkMissingBody(t *testing.T) {
+	chunk := []imapsync.Header{{UID: 4}, {UID: 5}, {UID: 6}, {UID: 7}}
+	requested := map[uint32]bool{4: true, 6: true, 7: true}
+	var w watermark
+	last := uint32(3)
+	w.advanceBatch(&last, chunk, map[uint32]bool{}, requested, map[uint32]bool{4: true, 7: true})
+	if last != 5 {
+		t.Errorf("last %d, want 5", last)
+	}
+	// It stays held for the rest of the pass.
+	w.advanceBatch(&last, []imapsync.Header{{UID: 8}}, map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{})
+	if last != 5 {
+		t.Errorf("after the next batch %d", last)
+	}
+	var all watermark
+	last = 3
+	all.advanceBatch(&last, chunk, map[uint32]bool{}, requested, map[uint32]bool{4: true, 6: true, 7: true})
+	if last != 7 {
+		t.Errorf("all fetched: %d", last)
 	}
 }

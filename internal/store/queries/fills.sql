@@ -99,6 +99,11 @@ UPDATE smtp_fills SET recurring_since = coalesce(recurring_since, now()), keep_r
     status = 'running', error = NULL, finished_at = NULL, run_started_at = now()
 WHERE id = @id AND status <> 'running' AND NOT keep_running;
 
+-- name: RewindFillFolders :exec
+-- A one-time fill that becomes recurring: its folders are scanned again
+-- from the start, so the new rule sees what the cut-off left out.
+UPDATE smtp_fill_folders SET last_uid = 0, done = FALSE WHERE fill_id = $1;
+
 -- name: SetFillInterval :execrows
 UPDATE smtp_fills SET interval_seconds = @interval_seconds WHERE id = @id AND keep_running;
 

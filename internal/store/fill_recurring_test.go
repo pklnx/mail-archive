@@ -207,6 +207,15 @@ func TestSetFillRecurring(t *testing.T) {
 	if err := st.SetFillRecurring(ctx, f.ID, nil, nil, seal); !errors.Is(err, store.ErrFillRunning) {
 		t.Errorf("switch on a running fill: %v", err)
 	}
+	// The cut-off moved the folder's last UID past messages it left out.
+	ff, err := st.FillFolder(ctx, f, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ff.LastUID, ff.Done = 9, true
+	if err := st.UpdateFillFolder(ctx, ff); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.CancelFill(ctx, f.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +225,12 @@ func TestSetFillRecurring(t *testing.T) {
 	}
 	got, _ := st.GetFill(ctx, f.ID)
 	if got.Status != store.FillRunning || !got.KeepRunning || got.Cutoff == nil || got.RecurringSince == nil ||
-		*got.Interval != day || got.PasswordEnc == nil || len(got.Folders) != 1 || got.Folders[0].SourceName != "Trash" {
+		*got.Interval != day || got.PasswordEnc == nil || len(got.Folders) != 2 || got.Folders[1].SourceName != "Trash" {
 		t.Errorf("switched on %+v", got)
+	}
+	// Its folders are scanned again from the start.
+	if inbox := got.Folders[0]; inbox.SourceName != "INBOX" || inbox.LastUID != 0 || inbox.Done {
+		t.Errorf("folder after switching on %+v", inbox)
 	}
 	if err := st.SetFillRecurring(ctx, 9999, nil, nil, seal); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing fill: %v", err)

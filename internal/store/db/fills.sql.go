@@ -711,6 +711,17 @@ func (q *Queries) ResumeFill(ctx context.Context, arg ResumeFillParams) (bool, e
 	return keep_running, err
 }
 
+const rewindFillFolders = `-- name: RewindFillFolders :exec
+UPDATE smtp_fill_folders SET last_uid = 0, done = FALSE WHERE fill_id = $1
+`
+
+// A one-time fill that becomes recurring: its folders are scanned again
+// from the start, so the new rule sees what the cut-off left out.
+func (q *Queries) RewindFillFolders(ctx context.Context, fillID int64) error {
+	_, err := q.db.Exec(ctx, rewindFillFolders, fillID)
+	return err
+}
+
 const runningFills = `-- name: RunningFills :many
 SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at, recurring_since, keep_running, interval_seconds, run_started_at, unconfirmed_folders FROM smtp_fills WHERE status = 'running' ORDER BY id
 `

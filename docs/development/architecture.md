@@ -208,7 +208,8 @@ error and counts, so the counts are those of one run.
 from the sync `Runner`) queues running fills every minute, as before, and
 the recurring fills whose next run is due (`RecurringFills`: active, between
 runs, account enabled and not removed). It uses the sync runner's
-`Schedule`; `MAIL_ARCHIVE_SYNC_INTERVAL=0` turns recurring runs off. For
+`Schedule`; `MAIL_ARCHIVE_SYNC_INTERVAL=0` turns the scheduled runs off (a
+run in status `running` is still finished). For
 `RecurringStartHold` (70 minutes) after the web server started
 (`HoldUntil`) it starts no run of a recurring fill: after an outage the mail
 server retries the journal copies it queued (Postfix every 4000 seconds at
@@ -217,14 +218,15 @@ one-time fill delays the recurring runs behind it; they show as queued.
 After each run, `AfterRun` wakes the notifier.
 
 **A run.** `Filler.Run` takes the account's sync lock, as for any fill, and
-calls `StartFillRun`; a fill whose account is disabled or removed is skipped
-without a change. One `now` per run decides by INTERNALDATE: journaled
+calls `StartFillRun`. A recurring fill whose account is disabled or removed
+is skipped without a change (`ErrFillSkipped`, also in `RunLocked` for a run
+already started), so it neither fails nor changes its health. One `now` per run decides by INTERNALDATE: journaled
 (Message-ID with an envelope in the account) first, then younger than
 `RecurringGrace` (two hours) waits, anything else is imported, also without a
 Message-ID; a date more than a day in the future counts as old. The headers
 are sorted by UID, and a folder's `last_uid` moves only over decided UIDs up
-to the first one that waits (`watermark`); later UIDs are decided again by
-the next run. Before fetching bodies, a recurring fill leaves out what it
+to the first one that waits, or whose body was requested but did not come
+back (`watermark`); later UIDs are decided again by the next run. Before fetching bodies, a recurring fill leaves out what it
 imported before: `FillImported` matches Message-ID, INTERNALDATE and
 `RFC822.SIZE` against this fill's locations, which makes moved messages,
 renamed folders and rescans after a `UIDVALIDITY` change cheap. Identical
@@ -239,7 +241,9 @@ the fill started or was switched on) or `included_folders` names it;
 otherwise the run skips it and records it in `unconfirmed_folders`.
 
 **Switching on an earlier fill.** `SetFillRecurring` gives an ended fill the
-new password and starts its first run. If the fill is from before `JOURNAL`,
+new password and starts its first run. The first time a fill becomes
+recurring, its folders get `last_uid = 0`, so the run applies the new rule
+to what the cut-off left out. If the fill is from before `JOURNAL`,
 that run first calls `ConvertLegacyFill`: in batches of 5,000, under the
 `JOURNAL` row lock, it copies one location per message from the fill's own
 folders (`DISTINCT ON (message_sha256)`, none for a message `JOURNAL` holds)
@@ -257,7 +261,9 @@ too (`CancelAccountFills`).
 
 **Health.** `smtp_fill_health` has the columns of `account_sync_health`.
 `FillHealth.State` and `SyncHealth.State` share `HealthState`; the stale
-time counts from the last success, or from `recurring_since`. `/healthz/sync`
+time counts from the last success, or from `recurring_since`; a fill counts
+as busy while it waits behind its account's lock, and since the server's
+start during the hold after it. `/healthz/sync`
 puts the smtp account's ID into `failing` or `stale`, and
 `CountFailingByOwner` counts it for admins. `Notifier.Deliver` has a pass
 for fills (`ClaimFillNotifications`), between the sync pass and the loss
