@@ -2,11 +2,13 @@ package archive
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"time"
 
@@ -16,22 +18,44 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
-// A fill copies an IMAP mailbox once into an smtp account: the mail that was
-// there before journaling started (#89). It writes into the journal folder
-// (store.SMTPFolder), whatever the IMAP folder, so a message filed in two
-// IMAP folders is stored once (#112). The journal copy and the mailbox copy
-// of one message differ in their Received: lines, so the archive cannot
-// tell them apart by content; the fill decides by INTERNALDATE and leaves
-// out messages the account already received over SMTP (same Message-ID).
-// Its locations have no envelope, which tells them from journaled ones.
+// A fill copies an IMAP mailbox into an smtp account: once, the mail that
+// was there before journaling started (#89), or on a schedule, what shows
+// up in the mailbox later and never passed the journal (a recurring fill,
+// #112). It writes into the journal folder (store.SMTPFolder), whatever the
+// IMAP folder, so a message filed in two IMAP folders is stored once. The
+// journal copy and the mailbox copy of one message differ in their
+// Received: lines, so the archive cannot tell them apart by content; the
+// fill decides by INTERNALDATE and leaves out messages the account already
+// received over SMTP (same Message-ID). Its locations have no envelope,
+// which tells them from journaled ones.
+//
+// A one-time fill imports what is older than its cut-off. A recurring
+// fill imports a message once it is RecurringGrace old, so that a journal
+// copy still in the mail server's queue counts; younger messages wait for
+// the next run. It goes through each IMAP folder by UID, like a sync, and
+// ignores moves and deletions in the mailbox: a moved message is the same
+// message, already in the journal folder.
 
 // FillWindow is how long after the cut-off messages are still imported
 // (unless journaled), for clock skew and late deliveries.
 const FillWindow = time.Hour
 
+// RecurringGrace is how old a message must be before a recurring fill
+// imports it: its journal copy may still be in the mail server's queue.
+const RecurringGrace = 2 * time.Hour
+
+// futureSlack: a recurring fill takes a message dated more than this in
+// the future for old (a server with a wrong clock), so that it cannot hold
+// back its folder for ever.
+const futureSlack = 24 * time.Hour
+
 // ErrFillBusy is returned when the account is being synced, filled or
 // removed by another process.
 var ErrFillBusy = errors.New("the account is being synced, filled or removed")
+
+// ErrFillSkipped is returned for a run of a recurring fill whose account
+// is disabled or removed: the fill stays as it is.
+var ErrFillSkipped = errors.New("the account is disabled or removed")
 
 // errFillCancelled stops a fill that was cancelled meanwhile.
 var errFillCancelled = errors.New("the fill was cancelled")
@@ -43,6 +67,7 @@ const (
 	fillImport fillVerdict = iota
 	fillAfterCutoff
 	fillJournaled
+	fillWaiting // younger than RecurringGrace: for the next run
 )
 
 // verdict applies the cut-off rule: a message from an hour after the
@@ -56,6 +81,39 @@ func verdict(internalDate, cutoff time.Time, journaled bool) fillVerdict {
 		return fillJournaled
 	default:
 		return fillImport
+	}
+}
+
+// recurringVerdict applies the rule of a recurring fill: a message the
+// account received over SMTP is left out, even a young one; any other is
+// imported once it is RecurringGrace old (also without a Message-ID: a
+// duplicate beats a gap) and waits until then. A date more than a day in
+// the future counts as old.
+func recurringVerdict(internalDate, now time.Time, journaled bool) fillVerdict {
+	switch {
+	case journaled:
+		return fillJournaled
+	case internalDate.After(now.Add(futureSlack)):
+		return fillImport
+	case now.Sub(internalDate) < RecurringGrace:
+		return fillWaiting
+	default:
+		return fillImport
+	}
+}
+
+// watermark moves a folder's LastUID during one pass, in UID order: over
+// every decided message until the first one that waits, and no further in
+// that pass. The messages after it are decided again by the next run;
+// imported ones are found by the pre-check without their bodies.
+type watermark struct{ held bool }
+
+func (w *watermark) advance(last *uint32, uid uint32, waiting bool) {
+	if waiting {
+		w.held = true
+	}
+	if !w.held {
+		*last = max(*last, uid)
 	}
 }
 
@@ -100,10 +158,23 @@ type Filler struct {
 	Dial func(context.Context, imapsync.Config) (*imapsync.Conn, error)
 	// Progress, if set, is called after each committed batch.
 	Progress func(store.FillFolder)
+	// Now returns the current time (default time.Now), for tests: a
+	// recurring fill measures the age of messages from it.
+	Now func() time.Time
+}
+
+func (f *Filler) now() time.Time {
+	if f.Now != nil {
+		return f.Now()
+	}
+	return time.Now()
 }
 
 // Run takes the account's sync lock and runs or resumes a fill (RunLocked).
-// It fails with ErrFillBusy while the lock is held elsewhere.
+// An active recurring fill between runs starts its next run, unless its
+// account is disabled or removed (ErrFillSkipped). It fails with
+// ErrFillBusy while the lock is held elsewhere or another fill of the
+// account runs.
 func (f *Filler) Run(ctx context.Context, fillID int64) (*store.Fill, error) {
 	fill, err := f.Store.GetFill(ctx, fillID)
 	if err != nil {
@@ -117,6 +188,21 @@ func (f *Filler) Run(ctx context.Context, fillID int64) (*store.Fill, error) {
 		return nil, ErrFillBusy
 	}
 	defer unlock()
+	if fill.KeepRunning && fill.Status != store.FillRunning {
+		a, err := f.Store.GetAccount(ctx, fill.AccountID)
+		if errors.Is(err, store.ErrNotFound) || err == nil && (a.RemovedAt != nil || !a.Enabled) {
+			return fill, ErrFillSkipped
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch err := f.Store.StartFillRun(ctx, fill.ID, f.now()); {
+		case errors.Is(err, store.ErrFillRunning):
+			return nil, ErrFillBusy
+		case err != nil:
+			return fill, err
+		}
+	}
 	return f.RunLocked(ctx, fillID)
 }
 
@@ -135,6 +221,7 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 		return fill, store.ErrFillNotRunning
 	}
 	log := f.logger().With("fill", fill.ID, "account_id", fill.AccountID)
+	now := f.now() // a recurring fill's messages are as old as at the start
 	end := func(status string, cause error) (*store.Fill, error) {
 		text := ""
 		if cause != nil {
@@ -148,7 +235,11 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 		if gerr != nil {
 			return nil, gerr
 		}
-		log.Info("fill ended", "status", got.Status)
+		if got.Recurring() && got.Status != store.FillCancelled {
+			log.Info("fill run ended", "status", got.Status)
+		} else {
+			log.Info("fill ended", "status", got.Status)
+		}
 		return got, nil
 	}
 
@@ -158,6 +249,20 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	}
 	if err != nil {
 		return nil, err
+	}
+	if fill.Recurring() && fill.FolderPrefix != "" {
+		// A fill from before #112 switched to recurring: its mail moves into
+		// the journal folder as locations, before the first run's scan.
+		n, err := f.Store.ConvertLegacyFill(ctx, fill)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fill, ctx.Err()
+			}
+			return end(store.FillFailed, fmt.Errorf("copy the fill's folders into %s: %w", store.SMTPFolder, err))
+		}
+		if n > 0 {
+			log.Info("fill's folders copied into the journal folder", "locations", n)
+		}
 	}
 	password, err := OpenFillPassword(f.Sealer, fill)
 	if err != nil {
@@ -184,12 +289,38 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 		}
 		return end(store.FillFailed, err)
 	}
-	var folderErrs []error
+	// A recurring fill picks up new folders, but a trash or spam folder
+	// only if the user confirmed it: it has a row from the start, or the
+	// included folders name it.
+	filled := map[string]bool{}
+	for _, ff := range fill.Folders {
+		filled[ff.SourceName] = true
+	}
+	var selected []string
+	unconfirmed := []string{}
 	for _, src := range folders {
 		if !FolderSelected(src.Name, fill.Included, fill.Excluded) {
 			continue
 		}
-		err := f.fillFolder(ctx, conn, fill, src.Name, log.With("folder", src.Name))
+		if role := src.SpecialUse(); fill.Recurring() && (role == imapsync.RoleJunk || role == imapsync.RoleTrash) &&
+			!filled[src.Name] && !containsFold(fill.Included, src.Name) {
+			log.Warn("new trash or spam folder skipped; not confirmed", "folder", src.Name)
+			unconfirmed = append(unconfirmed, src.Name)
+			continue
+		}
+		selected = append(selected, src.Name)
+	}
+	if fill.Recurring() {
+		if err := f.Store.SetFillUnconfirmed(ctx, fill.ID, unconfirmed); err != nil {
+			if ctx.Err() != nil {
+				return fill, ctx.Err()
+			}
+			return end(store.FillFailed, err)
+		}
+	}
+	var folderErrs []error
+	for _, name := range selected {
+		err := f.fillFolder(ctx, conn, fill, now, name, log.With("folder", name))
 		switch {
 		case errors.Is(err, errFillCancelled):
 			return end(store.FillCancelled, nil)
@@ -197,7 +328,7 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 			return fill, ctx.Err()
 		case err != nil:
 			log.Error("fill of a folder failed", "err", err)
-			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", src.Name, err))
+			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", name, err))
 		}
 	}
 	if len(folderErrs) > 0 {
@@ -206,9 +337,10 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	return end(store.FillOK, nil)
 }
 
-// fillFolder copies what the cut-off rule imports from one IMAP folder,
+// fillFolder copies what the fill's rule imports from one IMAP folder,
 // one transaction per batch of headers, with the progress.
-func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, source string, log *slog.Logger) (err error) {
+func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, now time.Time, source string,
+	log *slog.Logger) (err error) {
 	ff, err := f.Store.FillFolder(ctx, fill, source)
 	if err != nil {
 		return err
@@ -242,7 +374,11 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	}); err != nil {
 		return err
 	}
+	// The watermark needs UID order, which servers do not promise.
+	slices.SortFunc(headers, func(a, b imapsync.Header) int { return cmp.Compare(a.UID, b.UID) })
 	ff.Error = ""
+	ff.Counts.Waiting = 0 // a snapshot of this pass
+	var wm watermark
 	batch := f.BatchSize
 	if batch <= 0 {
 		batch = DefaultBatchSize
@@ -257,7 +393,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 			return err
 		}
 		chunk := headers[start:min(start+batch, len(headers))]
-		if err := f.fillBatch(ctx, conn, fill, ff, chunk, start+len(chunk) == len(headers)); err != nil {
+		if err := f.fillBatch(ctx, conn, fill, ff, &wm, now, chunk, start+len(chunk) == len(headers), log); err != nil {
 			return err
 		}
 		if f.Progress != nil {
@@ -273,7 +409,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	}
 	c := ff.Counts
 	log.Info("folder filled", "scanned", c.Scanned, "imported", c.Imported, "after_cutoff", c.AfterCutoff,
-		"journaled", c.Journaled, "present", c.Present)
+		"journaled", c.Journaled, "present", c.Present, "waiting", c.Waiting)
 	return nil
 }
 
@@ -281,9 +417,12 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 // import and commits them with the progress in one transaction. The check
 // for messages the folder already holds here only saves work: deliveries
 // write into the journal folder meanwhile, so SaveFillBatch checks again
-// under the folder's lock and numbers the new locations.
-func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder,
-	chunk []imapsync.Header, last bool) error {
+// under the folder's lock and numbers the new locations. A recurring fill
+// first leaves out, without fetching them, messages it imported before
+// (same Message-ID, INTERNALDATE and size): moved or seen again after a
+// rescan.
+func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder, wm *watermark,
+	now time.Time, chunk []imapsync.Header, last bool, log *slog.Logger) error {
 	ids := make([]string, len(chunk))
 	for i, h := range chunk {
 		ids[i] = ParseHeaders(bytes.NewReader(h.MessageID)).MessageID
@@ -292,19 +431,40 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	if err != nil {
 		return err
 	}
+	recurring := fill.Recurring()
+	var imported map[store.ImportedKey]bool
+	if recurring {
+		if imported, err = f.Store.FillImported(ctx, fill.ID, ids); err != nil {
+			return err
+		}
+	}
 	next := *ff // the progress if this batch commits
 	var fetch []uint32
 	for i, h := range chunk {
 		next.Counts.Scanned++
-		switch verdict(h.InternalDate, fill.Cutoff, ids[i] != "" && journaled[ids[i]]) {
-		case fillAfterCutoff:
+		isJournaled := ids[i] != "" && journaled[ids[i]]
+		var v fillVerdict
+		if recurring {
+			if h.InternalDate.After(now.Add(futureSlack)) && !isJournaled {
+				log.Warn("message dated in the future; taken for old", "uid", h.UID, "internal_date", h.InternalDate)
+			}
+			v = recurringVerdict(h.InternalDate, now, isJournaled)
+		} else {
+			v = verdict(h.InternalDate, *fill.Cutoff, isJournaled)
+		}
+		switch {
+		case v == fillAfterCutoff:
 			next.Counts.AfterCutoff++
-		case fillJournaled:
+		case v == fillJournaled:
 			next.Counts.Journaled++
+		case v == fillWaiting:
+			next.Counts.Waiting++
+		case recurring && ids[i] != "" && imported[store.NewImportedKey(ids[i], h.InternalDate, h.Size)]:
+			next.Counts.Present++
 		default:
 			fetch = append(fetch, h.UID)
 		}
-		next.LastUID = max(next.LastUID, h.UID)
+		wm.advance(&next.LastUID, h.UID, v == fillWaiting)
 	}
 	var (
 		metas []store.MessageMeta

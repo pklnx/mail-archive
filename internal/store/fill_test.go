@@ -13,8 +13,9 @@ import (
 )
 
 func newFill(a *store.Account, username string) *store.Fill {
+	cutoff := time.Now()
 	return &store.Fill{
-		AccountID: a.ID, Host: "imap.example.com", Port: 993, TLSMode: store.TLSModeTLS, Username: username, Cutoff: time.Now(),
+		AccountID: a.ID, Host: "imap.example.com", Port: 993, TLSMode: store.TLSModeTLS, Username: username, Cutoff: &cutoff,
 	}
 }
 

@@ -60,16 +60,26 @@ type SyncHealth struct {
 // accounts waiting behind it, but a hung one still does. Disabled accounts
 // are always ok: they are not synced.
 func (h *SyncHealth) State(alertAfter int, every time.Duration, busySince *time.Time, now time.Time) string {
+	since := h.CreatedAt
+	if h.LastSuccessAt != nil {
+		since = *h.LastSuccessAt
+	}
+	return HealthState(h.Enabled, h.FailureStreak, since, alertAfter, every, busySince, now)
+}
+
+// HealthState is the health of something that runs on a schedule, an IMAP
+// account's syncs or a recurring fill's runs: ok while disabled, failing
+// when streak reached alertAfter, stale when every is set and nothing
+// succeeded for StaleAfter(every) since lastOK (the last success, or the
+// start if none ever did) or busySince, whichever is later.
+func HealthState(enabled bool, streak int, lastOK time.Time, alertAfter int, every time.Duration, busySince *time.Time, now time.Time) string {
 	switch {
-	case !h.Enabled:
+	case !enabled:
 		return HealthOK
-	case h.FailureStreak >= alertAfter:
+	case streak >= alertAfter:
 		return HealthFailing
 	case every > 0:
-		since := h.CreatedAt
-		if h.LastSuccessAt != nil {
-			since = *h.LastSuccessAt
-		}
+		since := lastOK
 		if busySince != nil && busySince.After(since) {
 			since = *busySince
 		}
@@ -109,8 +119,9 @@ func (s *Store) SyncHealth(ctx context.Context, owner *int64) (map[int64]*SyncHe
 	return out, nil
 }
 
-// CountFailingByOwner returns, per owner ID, how many enabled IMAP accounts
-// failed their last threshold syncs.
+// CountFailingByOwner returns, per owner ID, how many enabled accounts
+// failed their last threshold syncs, or whose recurring fill failed its
+// last threshold runs.
 func (s *Store) CountFailingByOwner(ctx context.Context, threshold int) (map[int64]int64, error) {
 	rows, err := s.q.CountFailingByOwner(ctx, clampInt32(threshold))
 	if err != nil {
@@ -127,9 +138,13 @@ func (s *Store) CountFailingByOwner(ctx context.Context, threshold int) (map[int
 
 // PendingNotification is an alert or a recovery claimed for delivery.
 type PendingNotification struct {
-	AccountID     int64
-	Account       string
-	Owner         string
+	AccountID int64
+	Account   string
+	Owner     string
+	// FillID and Mailbox are set for a recurring fill: its ID and the
+	// IMAP user name it imports from.
+	FillID        int64
+	Mailbox       string
 	FailureStreak int
 	// FailingSince is the start of the streak the message is about; for a
 	// recovery, of the streak that ended.

@@ -96,6 +96,7 @@ func (s *Server) routes() []route {
 		h("POST /api/accounts/{name}/sync", s.handleSyncAccount, accessSync),
 		h("POST /api/accounts/{name}/fills", s.handleStartFill, accessSession),
 		h("POST /api/accounts/{name}/fills/folders", s.handleFillFolders, accessSession),
+		h("PATCH /api/accounts/{name}/fills/{id}", s.handleChangeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/resume", s.handleResumeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/cancel", s.handleCancelFill, accessSession),
 		h("POST /api/sync", s.handleSyncAll, accessSync),

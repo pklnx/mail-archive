@@ -289,8 +289,11 @@ func TestReceiveMessageConcurrent(t *testing.T) {
 func TestSMTPMigrationDownRefused(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
-	// First the journal folder, before the account exists: its Down
-	// writes an audit entry per smtp account.
+	// First the recurring fills and the journal folder, before the account
+	// exists: the latter's Down writes an audit entry per smtp account.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00028_recurring_fills") {
+		t.Fatalf("down the recurring fills: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00027_smtp_journal_folder") {
 		t.Fatalf("down the journal folder: %q, %v", m, err)
 	}

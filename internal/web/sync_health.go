@@ -30,9 +30,10 @@ type syncHealthJSON struct {
 	Stale   []int64 `json:"stale,omitempty"`
 }
 
-// handleSyncHealth answers 200 when every enabled IMAP account syncs, and
-// 503 with the IDs of failing and stale accounts otherwise. It needs no
-// login, so it names no accounts, users or mail.
+// handleSyncHealth answers 200 when every enabled IMAP account syncs and
+// every recurring fill runs, and 503 with the IDs of failing and stale
+// accounts otherwise; a failing or stale recurring fill lists its smtp
+// account. It needs no login, so it names no accounts, users or mail.
 func (s *Server) handleSyncHealth(w http.ResponseWriter, r *http.Request) {
 	now := s.currentTime()
 	c := &s.healthCache
@@ -56,13 +57,21 @@ func (s *Server) syncHealthAnswer(r *http.Request) (int, []byte) {
 		s.log.Error("sync health", "err", err)
 		out, status = syncHealthJSON{Status: "unavailable"}, http.StatusServiceUnavailable
 	}
+	var fills map[int64]*store.FillHealth
+	if err == nil {
+		if fills, err = s.store.FillHealth(r.Context(), nil); err != nil {
+			s.log.Error("sync health", "err", err)
+			out, status = syncHealthJSON{Status: "unavailable"}, http.StatusServiceUnavailable
+			health = nil
+		}
+	}
 	now := s.currentTime()
 	var busy busyState
 	if err == nil {
 		if busy, err = s.loadBusy(r.Context()); err != nil {
 			s.log.Error("sync health", "err", err)
 			out, status = syncHealthJSON{Status: "unavailable"}, http.StatusServiceUnavailable
-			health = nil
+			health, fills = nil, nil
 		}
 	}
 	for id, h := range health {
@@ -71,6 +80,18 @@ func (s *Server) syncHealthAnswer(r *http.Request) (int, []byte) {
 			out.Failing = append(out.Failing, id)
 		case store.HealthStale:
 			out.Stale = append(out.Stale, id)
+		}
+	}
+	for _, h := range fills {
+		switch s.fillHealthState(h, busy, now) {
+		case store.HealthFailing:
+			if !slices.Contains(out.Failing, h.AccountID) {
+				out.Failing = append(out.Failing, h.AccountID)
+			}
+		case store.HealthStale:
+			if !slices.Contains(out.Stale, h.AccountID) {
+				out.Stale = append(out.Stale, h.AccountID)
+			}
 		}
 	}
 	if len(out.Failing)+len(out.Stale) > 0 {
@@ -93,11 +114,13 @@ func (s *Server) schedule() archive.Schedule {
 }
 
 // busyState tells which accounts are syncing or waiting to: a sync that
-// runs or waits makes no account stale (see store.SyncHealth.State).
+// runs or waits makes no account stale (see store.SyncHealth.State). So
+// does a run of a recurring fill.
 type busyState struct {
-	running map[int64]bool // the sync lock is held, also by the CLI
-	queued  map[int64]bool // waiting in this server's queue
-	runs    map[int64]store.LastRun
+	running     map[int64]bool // the sync lock is held, also by the CLI
+	queued      map[int64]bool // waiting in this server's queue
+	runs        map[int64]store.LastRun
+	fillsQueued map[int64]bool // fills waiting in this server's queue, by fill ID
 }
 
 func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
@@ -120,8 +143,27 @@ func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 		for id := range s.fills.Queued() {
 			b.queued[id] = true
 		}
+		b.fillsQueued = s.fills.QueuedFills()
 	}
 	return b, nil
+}
+
+// fillSince is when a recurring fill became busy: the start of its run
+// while one is in progress (or waits to start, or to be continued), now
+// while it waits in the queue; nil between runs.
+func (b busyState) fillSince(h *store.FillHealth, now time.Time) *time.Time {
+	switch {
+	case h.Running && h.RunStartedAt != nil:
+		return h.RunStartedAt
+	case h.Running, b.fillsQueued[h.FillID]:
+		return &now
+	}
+	return nil
+}
+
+// fillHealthState is a recurring fill's health on this server's schedule.
+func (s *Server) fillHealthState(h *store.FillHealth, busy busyState, now time.Time) string {
+	return h.State(s.alertAfter, s.schedule().Every(h.Interval), busy.fillSince(h, now), now)
 }
 
 // since is when the account became busy: the start of its running sync,

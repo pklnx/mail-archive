@@ -1,5 +1,5 @@
-// Package notify tells the operator when syncs of an account keep failing,
-// when they work again, and when many of an account's messages were
+// Package notify tells the operator when syncs of an account or runs of a
+// recurring fill keep failing, when they work again, and when many of an account's messages were
 // deleted on the server, through a webhook.
 package notify
 
@@ -50,6 +50,10 @@ type AccountEvent struct {
 	FailureStreak int        `json:"failureStreak"`
 	FailingSince  *time.Time `json:"failingSince"`
 	LastError     string     `json:"lastError,omitempty"`
+	// For a recurring fill: its ID and the mailbox it imports from (the
+	// IMAP user name); the account is the smtp account it fills.
+	FillID  int64  `json:"fillId,omitempty"`
+	Mailbox string `json:"mailbox,omitempty"`
 	// For EventGone: messages now only in the archive, how many were on the
 	// server before, and the folders they were deleted from.
 	Lost          int          `json:"lost,omitempty"`
