@@ -35,6 +35,26 @@ func (q *Queries) AccountSMTPAddresses(ctx context.Context, accountID int64) ([]
 	return items, nil
 }
 
+const allocateUIDs = `-- name: AllocateUIDs :one
+UPDATE folders SET last_uid = last_uid + $1::bigint WHERE id = $2
+RETURNING last_uid
+`
+
+type AllocateUIDsParams struct {
+	N  int64
+	ID int64
+}
+
+// Reserves @n UIDs of a folder for a fill's batch and returns the last
+// one; the caller holds the folder row lock (LockFolder). It leaves
+// last_synced_at alone: LastReceived reads it as the last SMTP delivery.
+func (q *Queries) AllocateUIDs(ctx context.Context, arg AllocateUIDsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, allocateUIDs, arg.N, arg.ID)
+	var last_uid int64
+	err := row.Scan(&last_uid)
+	return last_uid, err
+}
+
 const bumpAccountVersion = `-- name: BumpAccountVersion :execrows
 UPDATE accounts SET version = version + 1, updated_at = now() WHERE id = $1
 `
@@ -94,7 +114,7 @@ func (q *Queries) DeleteSMTPAddress(ctx context.Context, arg DeleteSMTPAddressPa
 const findReceivedLocation = `-- name: FindReceivedLocation :one
 SELECT l.id, l.uid, e.rcpt_to
 FROM message_locations l
-LEFT JOIN envelopes e ON e.location_id = l.id
+JOIN envelopes e ON e.location_id = l.id
 WHERE l.message_sha256 = $1 AND l.folder_id = $2
 ORDER BY l.id
 LIMIT 1
@@ -111,8 +131,9 @@ type FindReceivedLocationRow struct {
 	RcptTo []string
 }
 
-// The location of a message already received into the folder, with its
-// envelope; uses message_locations_sha_idx.
+// The location of a message already received over SMTP into the folder,
+// with its envelope; uses message_locations_sha_idx. A location a fill
+// imported has no envelope and does not count.
 func (q *Queries) FindReceivedLocation(ctx context.Context, arg FindReceivedLocationParams) (FindReceivedLocationRow, error) {
 	row := q.db.QueryRow(ctx, findReceivedLocation, arg.Sha256, arg.FolderID)
 	var i FindReceivedLocationRow
@@ -144,6 +165,36 @@ func (q *Queries) InsertEnvelope(ctx context.Context, arg InsertEnvelopeParams) 
 		arg.ReceivedAt,
 		arg.ClientIp,
 		arg.Helo,
+	)
+	return err
+}
+
+const insertFilledLocation = `-- name: InsertFilledLocation :exec
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertFilledLocationParams struct {
+	MessageSha256 string
+	FolderID      int64
+	Uidvalidity   int64
+	Uid           int64
+	Flags         []string
+	InternalDate  *time.Time
+	FillID        *int64
+}
+
+// A location a fill imported into the journal folder: no ON CONFLICT, the
+// UIDs come from AllocateUIDs under the folder row lock.
+func (q *Queries) InsertFilledLocation(ctx context.Context, arg InsertFilledLocationParams) error {
+	_, err := q.db.Exec(ctx, insertFilledLocation,
+		arg.MessageSha256,
+		arg.FolderID,
+		arg.Uidvalidity,
+		arg.Uid,
+		arg.Flags,
+		arg.InternalDate,
+		arg.FillID,
 	)
 	return err
 }
@@ -196,7 +247,7 @@ func (q *Queries) InsertSMTPAddress(ctx context.Context, arg InsertSMTPAddressPa
 const lastReceived = `-- name: LastReceived :many
 SELECT f.account_id, f.last_synced_at
 FROM folders f JOIN accounts a ON a.id = f.account_id
-WHERE a.kind = 'smtp' AND f.name = 'INBOX' AND f.last_synced_at IS NOT NULL
+WHERE a.kind = 'smtp' AND f.name = $1 AND f.last_synced_at IS NOT NULL
 `
 
 type LastReceivedRow struct {
@@ -205,10 +256,9 @@ type LastReceivedRow struct {
 }
 
 // When each SMTP account last accepted a message: its journal folder is
-// touched on every accepted transaction. A fill touches its own folders
-// (prefix/name), never INBOX.
-func (q *Queries) LastReceived(ctx context.Context) ([]LastReceivedRow, error) {
-	rows, err := q.db.Query(ctx, lastReceived)
+// touched on every accepted transaction, and only then.
+func (q *Queries) LastReceived(ctx context.Context, folder string) ([]LastReceivedRow, error) {
+	rows, err := q.db.Query(ctx, lastReceived, folder)
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +331,23 @@ type LockFolderRow struct {
 func (q *Queries) LockFolder(ctx context.Context, arg LockFolderParams) (LockFolderRow, error) {
 	row := q.db.QueryRow(ctx, lockFolder, arg.AccountID, arg.Name)
 	var i LockFolderRow
+	err := row.Scan(&i.ID, &i.Uidvalidity)
+	return i, err
+}
+
+const lockFolderByID = `-- name: LockFolderByID :one
+SELECT id, uidvalidity FROM folders WHERE id = $1 FOR UPDATE
+`
+
+type LockFolderByIDRow struct {
+	ID          int64
+	Uidvalidity int64
+}
+
+// LockFolder by ID, for a fill's batch.
+func (q *Queries) LockFolderByID(ctx context.Context, id int64) (LockFolderByIDRow, error) {
+	row := q.db.QueryRow(ctx, lockFolderByID, id)
+	var i LockFolderByIDRow
 	err := row.Scan(&i.ID, &i.Uidvalidity)
 	return i, err
 }

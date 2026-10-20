@@ -25,10 +25,6 @@ ORDER BY sf.account_id, sf.id DESC;
 -- name: RunningFills :many
 SELECT * FROM smtp_fills WHERE status = 'running' ORDER BY id;
 
--- name: FillPrefixInUse :one
--- Whether another fill of the account writes under the prefix.
-SELECT EXISTS (SELECT 1 FROM smtp_fills WHERE account_id = @account_id AND folder_prefix = @folder_prefix AND id <> @id::bigint);
-
 -- name: ListFillFolders :many
 SELECT ff.*, f.name AS folder_name
 FROM smtp_fill_folders ff JOIN folders f ON f.id = ff.folder_id
@@ -40,7 +36,7 @@ INSERT INTO smtp_fill_folders (fill_id, source_name, folder_id) VALUES ($1, $2, 
 ON CONFLICT (fill_id, source_name) DO NOTHING;
 
 -- name: GetFillFolder :one
-SELECT ff.*, f.name AS folder_name, f.uidvalidity AS folder_uidvalidity, f.last_uid AS folder_last_uid
+SELECT ff.*, f.name AS folder_name
 FROM smtp_fill_folders ff JOIN folders f ON f.id = ff.folder_id
 WHERE ff.fill_id = $1 AND ff.source_name = $2;
 
@@ -83,12 +79,18 @@ JOIN folders f ON f.id = l.folder_id
 WHERE f.account_id = @account_id AND m.message_id = ANY (@ids::text[]);
 
 -- name: FirstReceived :one
--- The first message the smtp account received that is still stored: its
--- journal INBOX's lowest UID.
+-- The first message the smtp account received over SMTP that is still
+-- stored: the lowest UID in its journal folder with an envelope (fills
+-- write into the folder too, without one).
 SELECT l.internal_date, m.subject
 FROM folders f
 JOIN message_locations l ON l.folder_id = f.id
+JOIN envelopes e ON e.location_id = l.id
 JOIN messages m ON m.sha256 = l.message_sha256
-WHERE f.account_id = $1 AND f.name = 'INBOX'
+WHERE f.account_id = @account_id AND f.name = @folder
 ORDER BY l.uidvalidity, l.uid
 LIMIT 1;
+
+-- name: JournalFolder :one
+-- The journal folder of an smtp account, which fills write into.
+SELECT id, name, uidvalidity, last_uid FROM folders WHERE account_id = @account_id AND name = @folder;

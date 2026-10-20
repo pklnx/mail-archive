@@ -241,6 +241,7 @@ type MessageLocation struct {
 	FirstSeenAt   time.Time
 	LastSeenAt    time.Time
 	GoneAt        *time.Time
+	FillID        *int64
 }
 
 type Passkey struct {
@@ -288,7 +289,7 @@ type SmtpFill struct {
 	PasswordEnc     []byte
 	IncludedFolders []string
 	ExcludedFolders []string
-	FolderPrefix    string
+	FolderPrefix    *string
 	Cutoff          time.Time
 	Status          string
 	Error           *string

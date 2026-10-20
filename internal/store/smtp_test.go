@@ -291,6 +291,9 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	ctx := context.Background()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
 	// First the attestations and the audit log, which are empty here.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00027_smtp_journal_folder") {
+		t.Fatalf("down the journal folder: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00026_smtp_fills") {
 		t.Fatalf("down the smtp fills: %q, %v", m, err)
 	}

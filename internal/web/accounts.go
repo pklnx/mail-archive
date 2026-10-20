@@ -179,7 +179,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			delim := f.Delimiter
 			if !a.Kind.HasServer() {
 				// Import folder names are joined with "/" (mbox directories,
-				// Maildir++, --folder); smtp accounts only have INBOX.
+				// Maildir++, --folder); smtp accounts have JOURNAL, and earlier
+				// fills "<prefix>/<IMAP folder>".
 				slash := "/"
 				delim = &slash
 			}

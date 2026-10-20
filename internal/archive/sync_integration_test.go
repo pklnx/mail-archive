@@ -46,6 +46,7 @@ type fixture struct {
 	t       *testing.T
 	ctx     context.Context
 	store   *store.Store
+	dbURL   string // for state the store API cannot create
 	blobs   *blobstore.Store
 	dataDir string
 	sealer  *crypto.Sealer
@@ -57,7 +58,7 @@ type fixture struct {
 }
 
 func newFixture(t *testing.T, users ...*imapmemserver.User) *fixture {
-	st := storetest.New(t)
+	st, dbURL := storetest.NewWithURL(t)
 	dataDir := t.TempDir()
 	blobs, err := blobstore.New(dataDir)
 	if err != nil {
@@ -72,7 +73,7 @@ func newFixture(t *testing.T, users ...*imapmemserver.User) *fixture {
 	srv := imaptest.StartServer(t, users...)
 	logs := &logBuffer{}
 	return &fixture{
-		t: t, ctx: context.Background(), store: st, blobs: blobs, dataDir: dataDir, sealer: sealer,
+		t: t, ctx: context.Background(), store: st, dbURL: dbURL, blobs: blobs, dataDir: dataDir, sealer: sealer,
 		host: srv.Host, port: srv.Port, srv: srv, logs: logs,
 		syncer: &archive.Syncer{
 			Store: st, Blobs: blobs, Sealer: sealer, BatchSize: 2,

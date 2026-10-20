@@ -28,16 +28,21 @@ SELECT kind, enabled, (removed_at IS NOT NULL)::boolean AS removed FROM accounts
 -- existing location must not race.
 SELECT id, uidvalidity FROM folders WHERE account_id = $1 AND name = $2 FOR UPDATE;
 
+-- name: LockFolderByID :one
+-- LockFolder by ID, for a fill's batch.
+SELECT id, uidvalidity FROM folders WHERE id = $1 FOR UPDATE;
+
 -- name: CreateSMTPFolder :one
 INSERT INTO folders (account_id, name, uidvalidity) VALUES ($1, $2, $3)
 RETURNING id;
 
 -- name: FindReceivedLocation :one
--- The location of a message already received into the folder, with its
--- envelope; uses message_locations_sha_idx.
+-- The location of a message already received over SMTP into the folder,
+-- with its envelope; uses message_locations_sha_idx. A location a fill
+-- imported has no envelope and does not count.
 SELECT l.id, l.uid, e.rcpt_to
 FROM message_locations l
-LEFT JOIN envelopes e ON e.location_id = l.id
+JOIN envelopes e ON e.location_id = l.id
 WHERE l.message_sha256 = @sha256 AND l.folder_id = @folder_id
 ORDER BY l.id
 LIMIT 1;
@@ -45,6 +50,19 @@ LIMIT 1;
 -- name: NextUID :one
 UPDATE folders SET last_uid = last_uid + 1, last_synced_at = now() WHERE id = $1
 RETURNING last_uid;
+
+-- name: AllocateUIDs :one
+-- Reserves @n UIDs of a folder for a fill's batch and returns the last
+-- one; the caller holds the folder row lock (LockFolder). It leaves
+-- last_synced_at alone: LastReceived reads it as the last SMTP delivery.
+UPDATE folders SET last_uid = last_uid + @n::bigint WHERE id = @id
+RETURNING last_uid;
+
+-- name: InsertFilledLocation :exec
+-- A location a fill imported into the journal folder: no ON CONFLICT, the
+-- UIDs come from AllocateUIDs under the folder row lock.
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
+VALUES (@message_sha256, @folder_id, @uidvalidity, @uid, @flags, @internal_date, @fill_id);
 
 -- name: TouchReceivedFolder :exec
 UPDATE folders SET last_synced_at = now() WHERE id = $1;
@@ -63,11 +81,10 @@ UPDATE envelopes SET rcpt_to = @rcpt_to::text[], rcpt_text = @rcpt_text WHERE lo
 
 -- name: LastReceived :many
 -- When each SMTP account last accepted a message: its journal folder is
--- touched on every accepted transaction. A fill touches its own folders
--- (prefix/name), never INBOX.
+-- touched on every accepted transaction, and only then.
 SELECT f.account_id, f.last_synced_at
 FROM folders f JOIN accounts a ON a.id = f.account_id
-WHERE a.kind = 'smtp' AND f.name = 'INBOX' AND f.last_synced_at IS NOT NULL;
+WHERE a.kind = 'smtp' AND f.name = @folder AND f.last_synced_at IS NOT NULL;
 
 -- name: BumpAccountVersion :execrows
 UPDATE accounts SET version = version + 1, updated_at = now() WHERE id = $1;

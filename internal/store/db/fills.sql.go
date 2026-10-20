@@ -34,24 +34,6 @@ func (q *Queries) CancelFill(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
-const fillPrefixInUse = `-- name: FillPrefixInUse :one
-SELECT EXISTS (SELECT 1 FROM smtp_fills WHERE account_id = $1 AND folder_prefix = $2 AND id <> $3::bigint)
-`
-
-type FillPrefixInUseParams struct {
-	AccountID    int64
-	FolderPrefix string
-	ID           int64
-}
-
-// Whether another fill of the account writes under the prefix.
-func (q *Queries) FillPrefixInUse(ctx context.Context, arg FillPrefixInUseParams) (bool, error) {
-	row := q.db.QueryRow(ctx, fillPrefixInUse, arg.AccountID, arg.FolderPrefix, arg.ID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const fillStatus = `-- name: FillStatus :one
 SELECT status FROM smtp_fills WHERE id = $1
 `
@@ -87,21 +69,28 @@ const firstReceived = `-- name: FirstReceived :one
 SELECT l.internal_date, m.subject
 FROM folders f
 JOIN message_locations l ON l.folder_id = f.id
+JOIN envelopes e ON e.location_id = l.id
 JOIN messages m ON m.sha256 = l.message_sha256
-WHERE f.account_id = $1 AND f.name = 'INBOX'
+WHERE f.account_id = $1 AND f.name = $2
 ORDER BY l.uidvalidity, l.uid
 LIMIT 1
 `
+
+type FirstReceivedParams struct {
+	AccountID int64
+	Folder    string
+}
 
 type FirstReceivedRow struct {
 	InternalDate *time.Time
 	Subject      *string
 }
 
-// The first message the smtp account received that is still stored: its
-// journal INBOX's lowest UID.
-func (q *Queries) FirstReceived(ctx context.Context, accountID int64) (FirstReceivedRow, error) {
-	row := q.db.QueryRow(ctx, firstReceived, accountID)
+// The first message the smtp account received over SMTP that is still
+// stored: the lowest UID in its journal folder with an envelope (fills
+// write into the folder too, without one).
+func (q *Queries) FirstReceived(ctx context.Context, arg FirstReceivedParams) (FirstReceivedRow, error) {
+	row := q.db.QueryRow(ctx, firstReceived, arg.AccountID, arg.Folder)
 	var i FirstReceivedRow
 	err := row.Scan(&i.InternalDate, &i.Subject)
 	return i, err
@@ -136,7 +125,7 @@ func (q *Queries) GetFill(ctx context.Context, id int64) (SmtpFill, error) {
 }
 
 const getFillFolder = `-- name: GetFillFolder :one
-SELECT ff.fill_id, ff.source_name, ff.folder_id, ff.source_uidvalidity, ff.last_uid, ff.done, ff.scanned, ff.imported, ff.new_messages, ff.after_cutoff, ff.journaled, ff.present, ff.deleted, ff.error, f.name AS folder_name, f.uidvalidity AS folder_uidvalidity, f.last_uid AS folder_last_uid
+SELECT ff.fill_id, ff.source_name, ff.folder_id, ff.source_uidvalidity, ff.last_uid, ff.done, ff.scanned, ff.imported, ff.new_messages, ff.after_cutoff, ff.journaled, ff.present, ff.deleted, ff.error, f.name AS folder_name
 FROM smtp_fill_folders ff JOIN folders f ON f.id = ff.folder_id
 WHERE ff.fill_id = $1 AND ff.source_name = $2
 `
@@ -162,8 +151,6 @@ type GetFillFolderRow struct {
 	Deleted           int32
 	Error             *string
 	FolderName        string
-	FolderUidvalidity int64
-	FolderLastUid     int64
 }
 
 func (q *Queries) GetFillFolder(ctx context.Context, arg GetFillFolderParams) (GetFillFolderRow, error) {
@@ -185,8 +172,6 @@ func (q *Queries) GetFillFolder(ctx context.Context, arg GetFillFolderParams) (G
 		&i.Deleted,
 		&i.Error,
 		&i.FolderName,
-		&i.FolderUidvalidity,
-		&i.FolderLastUid,
 	)
 	return i, err
 }
@@ -207,7 +192,7 @@ type InsertFillParams struct {
 	Username        string
 	IncludedFolders []string
 	ExcludedFolders []string
-	FolderPrefix    string
+	FolderPrefix    *string
 	Cutoff          time.Time
 	CreatedBy       *int64
 }
@@ -249,6 +234,35 @@ type InsertFillFolderParams struct {
 func (q *Queries) InsertFillFolder(ctx context.Context, arg InsertFillFolderParams) error {
 	_, err := q.db.Exec(ctx, insertFillFolder, arg.FillID, arg.SourceName, arg.FolderID)
 	return err
+}
+
+const journalFolder = `-- name: JournalFolder :one
+SELECT id, name, uidvalidity, last_uid FROM folders WHERE account_id = $1 AND name = $2
+`
+
+type JournalFolderParams struct {
+	AccountID int64
+	Folder    string
+}
+
+type JournalFolderRow struct {
+	ID          int64
+	Name        string
+	Uidvalidity int64
+	LastUid     int64
+}
+
+// The journal folder of an smtp account, which fills write into.
+func (q *Queries) JournalFolder(ctx context.Context, arg JournalFolderParams) (JournalFolderRow, error) {
+	row := q.db.QueryRow(ctx, journalFolder, arg.AccountID, arg.Folder)
+	var i JournalFolderRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Uidvalidity,
+		&i.LastUid,
+	)
+	return i, err
 }
 
 const journaledMessageIDs = `-- name: JournaledMessageIDs :many

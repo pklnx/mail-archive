@@ -1,13 +1,13 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
-	"strings"
+	"slices"
 	"time"
-	"unicode"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -15,9 +15,12 @@ import (
 )
 
 // A fill copies an IMAP mailbox once into an smtp account: the mail that
-// was there before journaling started (#89). It writes into its own folders,
-// "<prefix>/<IMAP folder>", and keeps its progress per IMAP folder, so an
-// interrupted fill resumes where it stopped.
+// was there before journaling started (#89). It writes into the account's
+// journal folder (SMTPFolder), next to what arrives over SMTP; its
+// locations have no envelope and name the fill (#112). It keeps its
+// progress per IMAP folder, so an interrupted fill resumes where it
+// stopped. Fills from before #112 wrote into folders of their own,
+// "<prefix>/<IMAP folder>", and finish there.
 
 // Fill states.
 const (
@@ -39,8 +42,9 @@ var ErrFillNotRunning = errors.New("the fill is not running")
 // well.
 var ErrFillNotResumable = errors.New("only a failed, partial or cancelled fill can be resumed")
 
-// MaxFillPrefix is the longest folder prefix a fill takes.
-const MaxFillPrefix = 200
+// ErrFillPrefix is returned for a new fill with a folder prefix: fills
+// write into the journal folder.
+var ErrFillPrefix = errors.New("a folder prefix is no longer supported: fills write into " + SMTPFolder)
 
 // Fill is a copy of an IMAP mailbox into an smtp account.
 type Fill struct {
@@ -52,7 +56,9 @@ type Fill struct {
 	// PasswordEnc is the sealed IMAP password; nil once the fill ended.
 	PasswordEnc        []byte
 	Included, Excluded []string
-	// FolderPrefix names the fill's folders: "<prefix>/<IMAP folder>".
+	// FolderPrefix is set only for fills from before #112, which write
+	// into "<prefix>/<IMAP folder>"; empty for fills into the journal
+	// folder.
 	FolderPrefix string
 	// Cutoff: messages with an INTERNALDATE from an hour after it on are
 	// left to journaling.
@@ -91,7 +97,8 @@ func (c *FillCounts) Add(o FillCounts) {
 type FillFolder struct {
 	FillID int64
 	// SourceName is the IMAP folder, FolderName the archive folder it
-	// fills ("<prefix>/<SourceName>").
+	// fills: the journal folder, or "<prefix>/<SourceName>" for an earlier
+	// fill.
 	SourceName, FolderName string
 	FolderID               int64
 	// SourceUIDValidity and LastUID are the server's: a resume continues
@@ -101,34 +108,13 @@ type FillFolder struct {
 	Done              bool
 	Counts            FillCounts
 	Error             string
-	// TargetUIDValidity and TargetLastUID are the archive folder's: fill
-	// locations get the archive's own UIDs, like imported mail.
-	TargetUIDValidity uint32
-	TargetLastUID     uint32
-}
-
-// ValidFillPrefix checks a folder prefix for a fill.
-func ValidFillPrefix(p string) error {
-	switch {
-	case p == "":
-		return errors.New("the folder prefix must not be empty")
-	case len(p) > MaxFillPrefix:
-		return fmt.Errorf("the folder prefix is longer than %d bytes", MaxFillPrefix)
-	case strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/"):
-		return errors.New("the folder prefix must not start or end with /")
-	case strings.EqualFold(p, SMTPFolder):
-		return errors.New("the folder prefix must not be INBOX")
-	case strings.IndexFunc(p, unicode.IsControl) >= 0:
-		return errors.New("the folder prefix must not contain control characters")
-	}
-	return nil
 }
 
 func fillFromDB(r db.SmtpFill) *Fill {
 	f := &Fill{
 		ID: r.ID, AccountID: r.AccountID, Host: r.Host, Port: int(r.Port), TLSMode: TLSMode(r.TlsMode),
 		Username: r.Username, PasswordEnc: r.PasswordEnc, Included: r.IncludedFolders, Excluded: r.ExcludedFolders,
-		FolderPrefix: r.FolderPrefix, Cutoff: r.Cutoff, Status: r.Status, CreatedBy: r.CreatedBy,
+		FolderPrefix: deref(r.FolderPrefix), Cutoff: r.Cutoff, Status: r.Status, CreatedBy: r.CreatedBy,
 		CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt,
 	}
 	if r.Error != nil {
@@ -145,13 +131,13 @@ func uid32(v int64) uint32 {
 }
 
 // CreateFill inserts a running fill for an smtp account and its sealed
-// password in one transaction, like CreateAccountSealed. It fails with
-// ErrFillRunning while another fill of the account runs, with ErrConflict
-// when another fill of the account uses the prefix, and with ErrNotSMTP
-// for other kinds of accounts.
+// password in one transaction, like CreateAccountSealed. The fill writes
+// into the account's journal folder. It fails with ErrFillRunning while
+// another fill of the account runs, with ErrNotSMTP for other kinds of
+// accounts, and with ErrFillPrefix if f has a folder prefix.
 func (s *Store) CreateFill(ctx context.Context, f *Fill, seal func(id int64) ([]byte, error)) error {
-	if err := ValidFillPrefix(f.FolderPrefix); err != nil {
-		return err
+	if f.FolderPrefix != "" {
+		return ErrFillPrefix
 	}
 	if f.Port < 1 || f.Port > 65535 {
 		return fmt.Errorf("invalid port %d", f.Port)
@@ -170,17 +156,10 @@ func (s *Store) CreateFill(ctx context.Context, f *Fill, seal func(id int64) ([]
 		if a.RemovedAt != nil {
 			return ErrNotFound
 		}
-		inUse, err := q.FillPrefixInUse(ctx, db.FillPrefixInUseParams{AccountID: f.AccountID, FolderPrefix: f.FolderPrefix})
-		if err != nil {
-			return err
-		}
-		if inUse {
-			return fmt.Errorf("another fill of the account uses the prefix %q: %w", f.FolderPrefix, ErrConflict)
-		}
 		row, err := q.InsertFill(ctx, db.InsertFillParams{
 			AccountID: f.AccountID, Host: f.Host, Port: int32(f.Port), TlsMode: string(f.TLSMode), //nolint:gosec // range checked above
 			Username: f.Username, IncludedFolders: nonNil(f.Included), ExcludedFolders: nonNil(f.Excluded),
-			FolderPrefix: f.FolderPrefix, Cutoff: f.Cutoff, CreatedBy: f.CreatedBy,
+			Cutoff: f.Cutoff, CreatedBy: f.CreatedBy,
 		})
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -291,25 +270,39 @@ func (s *Store) RunningFills(ctx context.Context) ([]Fill, error) {
 }
 
 // FillFolder returns the progress of a fill in an IMAP folder, creating it
-// and its archive folder ("<prefix>/<source>") if new. A new archive folder
-// gets the fill's start as UIDVALIDITY, like imported mail.
+// if new. The archive folder is the account's journal folder; for a fill
+// from before #112 it is "<prefix>/<source>", created if new with the
+// fill's start as UIDVALIDITY, like imported mail.
 func (s *Store) FillFolder(ctx context.Context, f *Fill, source string) (*FillFolder, error) {
 	var out *FillFolder
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		folder, err := q.GetOrCreateFolder(ctx, db.GetOrCreateFolderParams{AccountID: f.AccountID, Name: f.FolderPrefix + "/" + source})
-		if err != nil {
-			return err
-		}
-		if folder.Uidvalidity == 0 {
-			v := f.CreatedAt.Unix()
-			if v < 1 || v > math.MaxUint32 {
-				return fmt.Errorf("fill start %v does not fit a UIDVALIDITY", f.CreatedAt)
+		var folderID int64
+		if f.FolderPrefix == "" {
+			journal, err := q.JournalFolder(ctx, db.JournalFolderParams{AccountID: f.AccountID, Folder: SMTPFolder})
+			if isNoRows(err) {
+				return fmt.Errorf("the account has no folder %s", SMTPFolder)
 			}
-			if err := one(q.ResetFolder(ctx, db.ResetFolderParams{ID: folder.ID, Uidvalidity: v})); err != nil {
+			if err != nil {
 				return err
 			}
+			folderID = journal.ID
+		} else {
+			folder, err := q.GetOrCreateFolder(ctx, db.GetOrCreateFolderParams{AccountID: f.AccountID, Name: f.FolderPrefix + "/" + source})
+			if err != nil {
+				return err
+			}
+			if folder.Uidvalidity == 0 {
+				v := f.CreatedAt.Unix()
+				if v < 1 || v > math.MaxUint32 {
+					return fmt.Errorf("fill start %v does not fit a UIDVALIDITY", f.CreatedAt)
+				}
+				if err := one(q.ResetFolder(ctx, db.ResetFolderParams{ID: folder.ID, Uidvalidity: v})); err != nil {
+					return err
+				}
+			}
+			folderID = folder.ID
 		}
-		if err := q.InsertFillFolder(ctx, db.InsertFillFolderParams{FillID: f.ID, SourceName: source, FolderID: folder.ID}); err != nil {
+		if err := q.InsertFillFolder(ctx, db.InsertFillFolderParams{FillID: f.ID, SourceName: source, FolderID: folderID}); err != nil {
 			return err
 		}
 		r, err := q.GetFillFolder(ctx, db.GetFillFolderParams{FillID: f.ID, SourceName: source})
@@ -323,7 +316,6 @@ func (s *Store) FillFolder(ctx context.Context, f *Fill, source string) (*FillFo
 				Scanned: int(r.Scanned), Imported: int(r.Imported), New: int(r.NewMessages), AfterCutoff: int(r.AfterCutoff),
 				Journaled: int(r.Journaled), Present: int(r.Present), Deleted: int(r.Deleted),
 			},
-			TargetUIDValidity: uid32(r.FolderUidvalidity), TargetLastUID: uid32(r.FolderLastUid),
 		}
 		if r.Error != nil {
 			out.Error = *r.Error
@@ -354,25 +346,124 @@ func (s *Store) UpdateFillFolder(ctx context.Context, ff *FillFolder) error {
 }
 
 // SaveFillBatch is SaveBatch for a fill: it stores the messages and their
-// locations in the archive folder, advances it to targetLastUID and records
-// ff (the server's UID and the counts) in the same transaction, so a resume
-// never repeats a committed batch. With no messages it records only ff.
-// The counts in ff must already include the batch; ff.Counts.New and
-// ff.Counts.Deleted are corrected here by what was actually stored.
-func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, targetLastUID uint32, metas []MessageMeta, locs []Location) (SaveResult, error) {
+// locations in the fill's archive folder and records ff (the server's UID
+// and the counts) in the same transaction, so a resume never repeats a
+// committed batch. With no messages it records only ff. The counts in ff
+// must already include the batch; ff.Counts.New, Imported, Present and
+// Deleted are corrected here by what was actually stored.
+//
+// The journal folder is shared with deliveries over SMTP (ReceiveMessage),
+// so the batch takes the folder's row lock, checks again inside the
+// transaction which messages the folder holds, and only then numbers the
+// new locations. The UIDs and UIDVALIDITY in locs are ignored; the
+// locations name the fill. The caller holds the blob lock (the fill holds
+// the account's sync lock for writing), so the transaction takes only the
+// attestation fence.
+func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []MessageMeta, locs []Location) (SaveResult, error) {
 	before := ff.Counts
-	res, err := s.saveBatch(ctx, ff.FolderID, targetLastUID, metas, locs, func(q *db.Queries, r SaveResult) error {
-		ff.Counts.New += r.New
-		ff.Counts.Deleted += r.Skipped
-		ff.Counts.Imported -= r.Skipped
+	metas, locs = sortBatch(metas, locs)
+	var res SaveResult
+	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
+		res = SaveResult{}
+		ff.Counts = before
+		folder, err := q.LockFolderByID(ctx, ff.FolderID)
+		if err != nil {
+			return fmt.Errorf("lock folder: %w", err)
+		}
+		skip, err := skipDeleted(ctx, q, folder.ID, metas, locs)
+		if err != nil {
+			return err
+		}
+		type pending struct {
+			meta *MessageMeta
+			loc  Location
+		}
+		var add []pending
+		seen := map[string]bool{}
+		for i := range metas {
+			m := &metas[i]
+			if skip[m.SHA256] {
+				res.Skipped++
+				ff.Counts.Deleted++
+				ff.Counts.Imported--
+				continue
+			}
+			// Under the row lock no delivery can add a location meanwhile.
+			present := seen[m.SHA256]
+			if !present {
+				if present, err = q.LocationInFolder(ctx, db.LocationInFolderParams{FolderID: folder.ID, Sha256: m.SHA256}); err != nil {
+					return err
+				}
+			}
+			seen[m.SHA256] = true
+			if present {
+				ff.Counts.Present++
+				ff.Counts.Imported--
+				continue
+			}
+			n, err := q.InsertMessage(ctx, insertMessageParams(m))
+			if err != nil {
+				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
+			}
+			res.New += int(n)
+			add = append(add, pending{m, locs[i]})
+		}
+		ff.Counts.New += res.New
+		if len(add) > 0 {
+			last, err := q.AllocateUIDs(ctx, db.AllocateUIDsParams{ID: folder.ID, N: int64(len(add))})
+			if err != nil {
+				return err
+			}
+			if last > math.MaxUint32 {
+				return fmt.Errorf("the folder %s has no UIDs left", ff.FolderName)
+			}
+			fillID := ff.FillID
+			first := last - int64(len(add)) + 1
+			for i, p := range add {
+				flags := p.loc.Flags
+				if flags == nil {
+					flags = []string{}
+				}
+				var internal *time.Time
+				if !p.loc.InternalDate.IsZero() {
+					internal = &p.loc.InternalDate
+				}
+				err := q.InsertFilledLocation(ctx, db.InsertFilledLocationParams{
+					MessageSha256: p.meta.SHA256, FolderID: folder.ID, Uidvalidity: folder.Uidvalidity, Uid: first + int64(i),
+					Flags: flags, InternalDate: internal, FillID: &fillID,
+				})
+				if err != nil {
+					return fmt.Errorf("insert location: %w", err)
+				}
+			}
+		}
 		return updateFillFolder(ctx, q, ff)
 	})
 	if err != nil {
 		ff.Counts = before
 		return SaveResult{}, err
 	}
-	ff.TargetLastUID = max(ff.TargetLastUID, targetLastUID)
 	return res, nil
+}
+
+// sortBatch returns the messages of a batch and their locations ordered by
+// hash, so that concurrent batches lock the rows of messages in the same
+// order and cannot deadlock.
+func sortBatch(metas []MessageMeta, locs []Location) ([]MessageMeta, []Location) {
+	if slices.IsSortedFunc(metas, func(a, b MessageMeta) int { return cmp.Compare(a.SHA256, b.SHA256) }) {
+		return metas, locs
+	}
+	idx := make([]int, len(metas))
+	for i := range idx {
+		idx[i] = i
+	}
+	slices.SortStableFunc(idx, func(a, b int) int { return cmp.Compare(metas[a].SHA256, metas[b].SHA256) })
+	m := make([]MessageMeta, len(metas))
+	l := make([]Location, len(locs))
+	for i, j := range idx {
+		m[i], l[i] = metas[j], locs[j]
+	}
+	return m, l
 }
 
 // FinishFill ends a running fill and wipes its password. A fill that was
@@ -483,10 +574,11 @@ type FirstMessage struct {
 	Subject    string
 }
 
-// FirstReceived returns the first message the smtp account received that is
-// still stored, or nil if it has none.
+// FirstReceived returns the first message the smtp account received over
+// SMTP that is still stored, or nil if it has none. Mail a fill imported
+// into the journal folder does not count.
 func (s *Store) FirstReceived(ctx context.Context, accountID int64) (*FirstMessage, error) {
-	r, err := s.q.FirstReceived(ctx, accountID)
+	r, err := s.q.FirstReceived(ctx, db.FirstReceivedParams{AccountID: accountID, Folder: SMTPFolder})
 	if isNoRows(err) {
 		return nil, nil
 	}

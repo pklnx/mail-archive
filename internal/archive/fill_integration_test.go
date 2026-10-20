@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/imaptest"
@@ -61,7 +62,7 @@ func (f *fixture) createFill(acc *store.Account, password string, excluded ...st
 	f.t.Helper()
 	fill := &store.Fill{
 		AccountID: acc.ID, Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com",
-		Excluded: excluded, FolderPrefix: "alice@example.com", Cutoff: fillCutoff,
+		Excluded: excluded, Cutoff: fillCutoff,
 	}
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(f.sealer, id, password) }
 	if err := f.store.CreateFill(f.ctx, fill, seal); err != nil {
@@ -123,7 +124,7 @@ func TestFill(t *testing.T) {
 	if want := (store.FillCounts{Scanned: 1, Imported: 1, New: 1}); sent.Counts != want {
 		t.Errorf("Sent %+v", sent.Counts)
 	}
-	if len(got.Folders) != 2 || inbox.FolderName != "alice@example.com/INBOX" || sent.FolderName != "alice@example.com/Sent" {
+	if len(got.Folders) != 2 || inbox.FolderName != store.SMTPFolder || sent.FolderName != store.SMTPFolder {
 		t.Errorf("folders %+v", got.Folders)
 	}
 	// Only the imported messages were downloaded: UIDs 1, 3 and 6 of INBOX
@@ -131,15 +132,131 @@ func TestFill(t *testing.T) {
 	if b := f.srv.BodyFetches(); !slices.Equal(b, []string{"1", "3", "6", "1"}) {
 		t.Errorf("body fetches %v", b)
 	}
-	// The journal INBOX is untouched; the fill folders have their own UIDs.
+	// Everything is in JOURNAL: two journaled messages with an envelope,
+	// UIDs 1 and 2, and four imported ones after them, which name the fill.
 	locs, _ := f.stats()
 	if locs["journal"] != 6 {
 		t.Errorf("locations %v", locs)
+	}
+	folders := f.journalLocations(acc)
+	if len(folders) != 6 {
+		t.Fatalf("journal locations %+v", folders)
+	}
+	for i, l := range folders {
+		if l.uid != int64(i+1) || l.filled != (i >= 2) || l.filled != (l.fillID == fill.ID) {
+			t.Errorf("location %d: %+v", i, l)
+		}
+	}
+	if last, _ := f.store.LastReceived(f.ctx); last[acc.ID].IsZero() {
+		t.Error("no last received")
 	}
 
 	// A second run of an ended fill does nothing.
 	if _, err := f.filler().Run(f.ctx, fill.ID); !errors.Is(err, store.ErrFillNotRunning) {
 		t.Errorf("run an ended fill: %v", err)
+	}
+}
+
+// journalLocation is a location in an smtp account's journal folder.
+type journalLocation struct {
+	uid    int64
+	filled bool
+	fillID int64
+}
+
+// journalLocations returns the locations in the journal folder of acc by
+// UID.
+func (f *fixture) journalLocations(acc *store.Account) []journalLocation {
+	f.t.Helper()
+	conn, err := pgx.Connect(f.ctx, f.dbURL)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(f.ctx) }()
+	rows, err := conn.Query(f.ctx, `SELECT l.uid, e.location_id IS NULL, coalesce(l.fill_id, 0)
+		FROM message_locations l JOIN folders fo ON fo.id = l.folder_id LEFT JOIN envelopes e ON e.location_id = l.id
+		WHERE fo.account_id = $1 AND fo.name = $2 ORDER BY l.uid`, acc.ID, store.SMTPFolder)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (journalLocation, error) {
+		var l journalLocation
+		err := r.Scan(&l.uid, &l.filled, &l.fillID)
+		return l, err
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return out
+}
+
+// A message filed in two IMAP folders, or moved between them, is stored
+// once in JOURNAL.
+func TestFillOneFolder(t *testing.T) {
+	u := imapmemserver.NewUser("alice@example.com", "secret")
+	imaptest.CreateMailboxes(t, u, "INBOX", "Clients/Miller")
+	imaptest.AppendAt(t, u, "INBOX", fillMessage("both"), fillCutoff.Add(-time.Hour))
+	imaptest.AppendAt(t, u, "Clients/Miller", fillMessage("both"), fillCutoff.Add(-time.Hour))
+	imaptest.AppendAt(t, u, "Clients/Miller", fillMessage("miller"), fillCutoff.Add(-time.Hour))
+	f := newFixture(t, u)
+	acc := f.smtpAccount()
+	fill := f.createFill(acc, "secret")
+	got, err := f.filler().Run(f.ctx, fill.ID)
+	if err != nil || got.Status != store.FillOK {
+		t.Fatalf("fill %+v, %v", got, err)
+	}
+	var c store.FillCounts
+	for _, ff := range got.Folders {
+		c.Add(ff.Counts)
+	}
+	if c.Imported != 2 || c.Present != 1 {
+		t.Errorf("counts %+v", c)
+	}
+	if locs := f.journalLocations(acc); len(locs) != 2 {
+		t.Errorf("journal locations %+v", locs)
+	}
+	// No folder besides JOURNAL.
+	conn, err := pgx.Connect(f.ctx, f.dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(f.ctx) }()
+	var names []string
+	rows, _ := conn.Query(f.ctx, "SELECT name FROM folders WHERE account_id = $1", acc.ID)
+	if names, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil || !slices.Equal(names, []string{store.SMTPFolder}) {
+		t.Errorf("folders %v, %v", names, err)
+	}
+}
+
+// A fill from before #112 has a folder prefix: resumed, it goes on
+// writing into its own folders.
+func TestFillLegacyPrefix(t *testing.T) {
+	f := newFixture(t, fillUser(t))
+	acc := f.smtpAccount()
+	fill := f.createFill(acc, "secret", "Spam", "Sent")
+	conn, err := pgx.Connect(f.ctx, f.dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(f.ctx) }()
+	if _, err := conn.Exec(f.ctx, "UPDATE smtp_fills SET folder_prefix = 'alice' WHERE id = $1", fill.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.filler().Run(f.ctx, fill.ID)
+	if err != nil || got.Status != store.FillOK || got.FolderPrefix != "alice" {
+		t.Fatalf("fill %+v, %v", got, err)
+	}
+	if inbox := folderOf(got, "INBOX"); inbox.FolderName != "alice/INBOX" || inbox.Counts.Imported != 5 {
+		t.Errorf("INBOX %+v", inbox)
+	}
+	if locs := f.journalLocations(acc); len(locs) != 0 {
+		t.Errorf("journal locations %+v", locs)
+	}
+	rows, _ := conn.Query(f.ctx, `SELECT l.uid FROM message_locations l JOIN folders fo ON fo.id = l.folder_id
+		WHERE fo.account_id = $1 AND fo.name = 'alice/INBOX' AND l.fill_id = $2 ORDER BY l.uid`, acc.ID, fill.ID)
+	uids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil || !slices.Equal(uids, []int64{1, 2, 3, 4, 5}) {
+		t.Errorf("legacy folder UIDs %v, %v", uids, err)
 	}
 }
 
