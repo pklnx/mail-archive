@@ -278,14 +278,14 @@ func (s *Store) FillFolder(ctx context.Context, f *Fill, source string) (*FillFo
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		var folderID int64
 		if f.FolderPrefix == "" {
-			journal, err := q.JournalFolder(ctx, db.JournalFolderParams{AccountID: f.AccountID, Folder: SMTPFolder})
+			id, err := q.JournalFolder(ctx, db.JournalFolderParams{AccountID: f.AccountID, Folder: SMTPFolder})
 			if isNoRows(err) {
 				return fmt.Errorf("the account has no folder %s", SMTPFolder)
 			}
 			if err != nil {
 				return err
 			}
-			folderID = journal.ID
+			folderID = id
 		} else {
 			folder, err := q.GetOrCreateFolder(ctx, db.GetOrCreateFolderParams{AccountID: f.AccountID, Name: f.FolderPrefix + "/" + source})
 			if err != nil {

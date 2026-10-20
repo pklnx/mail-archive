@@ -237,7 +237,7 @@ func (q *Queries) InsertFillFolder(ctx context.Context, arg InsertFillFolderPara
 }
 
 const journalFolder = `-- name: JournalFolder :one
-SELECT id, name, uidvalidity, last_uid FROM folders WHERE account_id = $1 AND name = $2
+SELECT id FROM folders WHERE account_id = $1 AND name = $2
 `
 
 type JournalFolderParams struct {
@@ -245,24 +245,12 @@ type JournalFolderParams struct {
 	Folder    string
 }
 
-type JournalFolderRow struct {
-	ID          int64
-	Name        string
-	Uidvalidity int64
-	LastUid     int64
-}
-
 // The journal folder of an smtp account, which fills write into.
-func (q *Queries) JournalFolder(ctx context.Context, arg JournalFolderParams) (JournalFolderRow, error) {
+func (q *Queries) JournalFolder(ctx context.Context, arg JournalFolderParams) (int64, error) {
 	row := q.db.QueryRow(ctx, journalFolder, arg.AccountID, arg.Folder)
-	var i JournalFolderRow
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Uidvalidity,
-		&i.LastUid,
-	)
-	return i, err
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const journaledMessageIDs = `-- name: JournaledMessageIDs :many

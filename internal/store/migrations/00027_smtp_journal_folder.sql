@@ -94,23 +94,51 @@ BEGIN
     IF EXISTS (SELECT 1 FROM smtp_fills WHERE folder_prefix IS NULL AND status = 'running') THEN
         RAISE EXCEPTION 'a fill into JOURNAL is running; cancel it before rolling back';
     END IF;
+    -- Ended fills into JOURNAL get the prefix fill-<id> below; it must not
+    -- be another fill's prefix in the same account.
+    IF EXISTS (SELECT 1 FROM smtp_fills sf JOIN smtp_fills other ON other.account_id = sf.account_id
+               WHERE sf.folder_prefix IS NULL AND other.folder_prefix = 'fill-' || sf.id) THEN
+        RAISE EXCEPTION 'another fill already uses the prefix fill-<id> that a fill into JOURNAL would get; rolling back is not possible';
+    END IF;
 END $$;
 -- +goose StatementEnd
+
+SELECT audit_log_ensure_partitions(1);
 
 -- Ended fills into JOURNAL imported nothing that is still stored (checked
 -- above). They get a prefix of their own, and a resume starts their
 -- folders again there.
 DELETE FROM smtp_fill_folders ff USING smtp_fills sf
 WHERE sf.id = ff.fill_id AND sf.folder_prefix IS NULL;
-UPDATE smtp_fills SET folder_prefix = 'fill-' || id WHERE folder_prefix IS NULL;
+WITH prefixed AS (
+    UPDATE smtp_fills SET folder_prefix = 'fill-' || id WHERE folder_prefix IS NULL
+    RETURNING id, account_id, folder_prefix
+)
+INSERT INTO audit_log (actor, action, target_type, target_id, target_name, details)
+SELECT 'cli', 'account.change', 'account', p.account_id::text, a.name,
+       jsonb_build_object('by', 'migration 00027 down', 'fields', jsonb_build_array('fill_prefix'),
+                          'fill', p.id, 'prefix', p.folder_prefix)
+FROM prefixed p JOIN accounts a ON a.id = p.account_id;
 ALTER TABLE smtp_fills ALTER COLUMN folder_prefix SET NOT NULL;
 
 DROP INDEX message_locations_fill_idx;
 ALTER TABLE message_locations DROP COLUMN fill_id;
 
-UPDATE folders f SET name = 'INBOX'
-FROM accounts a
-WHERE a.id = f.account_id AND a.kind = 'smtp' AND f.name = 'JOURNAL';
-UPDATE retention_rules r SET folder = 'INBOX'
-FROM accounts a
-WHERE a.id = r.account_id AND a.kind = 'smtp' AND r.folder = 'JOURNAL';
+WITH renamed AS (
+    UPDATE retention_rules r SET folder = 'INBOX'
+    FROM accounts a
+    WHERE a.id = r.account_id AND a.kind = 'smtp' AND r.folder = 'JOURNAL'
+    RETURNING r.id, r.account_id
+), folders_renamed AS (
+    UPDATE folders f SET name = 'INBOX'
+    FROM accounts a
+    WHERE a.id = f.account_id AND a.kind = 'smtp' AND f.name = 'JOURNAL'
+    RETURNING f.account_id, a.name
+)
+INSERT INTO audit_log (actor, action, target_type, target_id, target_name, details)
+SELECT 'cli', 'account.change', 'account', fr.account_id::text, fr.name,
+       jsonb_build_object('by', 'migration 00027 down', 'fields', jsonb_build_array('folder'),
+                          'folder', jsonb_build_object('from', 'JOURNAL', 'to', 'INBOX'),
+                          'retention_rules', coalesce((SELECT jsonb_agg(rn.id ORDER BY rn.id) FROM renamed rn
+                                                       WHERE rn.account_id = fr.account_id), '[]'::jsonb))
+FROM folders_renamed fr;

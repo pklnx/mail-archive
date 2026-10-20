@@ -126,17 +126,25 @@ func TestJournalFolderMigration(t *testing.T) {
 		Action, TargetID, TargetName string
 		Details                      map[string]any
 	}
-	rows, _ = conn.Query(ctx, "SELECT action, target_id, target_name, details FROM audit_log ORDER BY id")
-	entries, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (entry, error) {
-		var e entry
-		var raw []byte
-		if err := r.Scan(&e.Action, &e.TargetID, &e.TargetName, &raw); err != nil {
-			return e, err
+	auditBy := func(by string) []entry {
+		t.Helper()
+		rows, _ := conn.Query(ctx, "SELECT action, target_id, target_name, details FROM audit_log WHERE details->>'by' = $1 ORDER BY id", by)
+		entries, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (entry, error) {
+			var e entry
+			var raw []byte
+			if err := r.Scan(&e.Action, &e.TargetID, &e.TargetName, &raw); err != nil {
+				return e, err
+			}
+			return e, json.Unmarshal(raw, &e.Details)
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return e, json.Unmarshal(raw, &e.Details)
-	})
-	if err != nil || len(entries) != 2 {
-		t.Fatalf("audit %+v, %v", entries, err)
+		return entries
+	}
+	entries := auditBy("migration 00027")
+	if len(entries) != 2 {
+		t.Fatalf("audit %+v", entries)
 	}
 	if e := entries[0]; e.Action != "retention.rule_remove" || e.TargetName != "journal" || e.Details["by"] != "migration 00027" ||
 		e.Details["rule_id"] != float64(dead) || e.Details["folder"] != "JOURNAL" || e.Details["years"] != float64(2) {
@@ -187,6 +195,13 @@ func TestJournalFolderMigration(t *testing.T) {
 	if err := st.FinishFill(ctx, f.ID, store.FillOK, ""); err != nil {
 		t.Fatal(err)
 	}
+	// ... and while the prefix the fill would get is another fill's.
+	exec("UPDATE smtp_fills SET folder_prefix = $1 WHERE id = $2", "fill-"+strconv.FormatInt(f.ID, 10), fill)
+	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "already uses the prefix") {
+		t.Fatalf("down with a prefix clash: %v", err)
+	}
+	exec("UPDATE smtp_fills SET folder_prefix = 'alice' WHERE id = $1", fill)
+	downBefore := len(auditBy("migration 00027 down"))
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00027_smtp_journal_folder") {
 		t.Fatalf("down: %q, %v", m, err)
 	}
@@ -196,6 +211,19 @@ func TestJournalFolderMigration(t *testing.T) {
 	var prefix string
 	if err := conn.QueryRow(ctx, "SELECT folder_prefix FROM smtp_fills WHERE id = $1", f.ID).Scan(&prefix); err != nil || prefix != "fill-"+strconv.FormatInt(f.ID, 10) {
 		t.Errorf("prefix after down %q, %v", prefix, err)
+	}
+	// The generated prefix and the reverse rename are in the audit log.
+	down := auditBy("migration 00027 down")[downBefore:]
+	if len(down) != 2 {
+		t.Fatalf("audit of the down %+v", down)
+	}
+	if e := down[0]; e.Action != "account.change" || e.TargetName != "journal" || e.Details["fill"] != float64(f.ID) ||
+		e.Details["prefix"] != prefix || mustJSON(t, e.Details["fields"]) != `["fill_prefix"]` {
+		t.Errorf("prefix entry %+v", e)
+	}
+	if e := down[1]; e.Action != "account.change" || e.TargetName != "journal" ||
+		mustJSON(t, e.Details["folder"]) != `{"from":"JOURNAL","to":"INBOX"}` || mustJSON(t, e.Details["retention_rules"]) != mustJSON(t, []int64{kept}) {
+		t.Errorf("rename entry %+v", e)
 	}
 	if _, err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)

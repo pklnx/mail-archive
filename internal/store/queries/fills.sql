@@ -93,4 +93,4 @@ LIMIT 1;
 
 -- name: JournalFolder :one
 -- The journal folder of an smtp account, which fills write into.
-SELECT id, name, uidvalidity, last_uid FROM folders WHERE account_id = @account_id AND name = @folder;
+SELECT id FROM folders WHERE account_id = @account_id AND name = @folder;
