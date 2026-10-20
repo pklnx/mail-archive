@@ -28,7 +28,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock and the attestation fence. |
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files. No database. |
-| `internal/notify` | Alerts for accounts whose syncs keep failing: compares each account's failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
+| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
@@ -48,8 +48,9 @@ internal/web (JSON API, UI from web/) ──────────────
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID, last sync time and `last_reconciled_at`. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
 | `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. `fill_id` names the fill that imported a location into an smtp account (`NULL` otherwise). |
-| `smtp_fills` | Fill of an smtp account from an IMAP mailbox: server, login, the password (encrypted, only while it runs), folder filters, cut-off, status. `folder_prefix` is set only for fills from before fills wrote into `JOURNAL`. One running fill per account (partial unique index). |
-| `smtp_fill_folders` | A fill's progress in one IMAP folder: the server's `UIDVALIDITY` and last UID, the archive folder it writes into, `done`, the counts and the error. |
+| `smtp_fills` | Fill of an smtp account from an IMAP mailbox: server, login, the password (encrypted, only while it runs or keeps running), folder filters, the cut-off of a one-time fill, status. A recurring fill has `recurring_since`, `keep_running`, its own `interval_seconds` (`NULL` for the server's), `run_started_at` and the trash and spam folders its last run skipped (`unconfirmed_folders`). `folder_prefix` is set only for fills from before fills wrote into `JOURNAL`. One running fill per account (partial unique index). |
+| `smtp_fill_folders` | A fill's progress in one IMAP folder: the server's `UIDVALIDITY` and last UID, the archive folder it writes into, `done`, the counts (of the last run for a recurring fill, `waiting` included) and the error. |
+| `smtp_fill_health` | The failure streak of a recurring fill and what the notifier last announced about it, like `account_sync_health` for IMAP accounts. |
 | `sync_runs` | Sync or import of an account: start, end, status, counters (also of the reconcile), error. |
 | `loss_alerts` | Alert about messages an account lost on the server in one sync run, with its delivery state. |
 | `audit_log` | Event of the [audit log](../guide/audit-log): time, actor, user ID and name, action, target, client IP, user agent, details (JSONB). Partitioned by month; append-only by trigger. No foreign keys to users or accounts, so entries outlive them. |
@@ -182,6 +183,86 @@ check out.
 Fills from before `JOURNAL` (migration 00027) have a `folder_prefix` and
 write into `PREFIX/<IMAP folder>`, with the same code path.
 
+### Recurring fills
+
+A recurring fill reuses the statuses of a fill. One fill per account is in
+progress at a time (`smtp_fills_running_idx`); the account's sync lock
+guarantees the same.
+
+| Column | Meaning |
+|---|---|
+| `recurring_since` | Set when the fill became recurring (created so, or switched on); never cleared. The fill then uses the two-hour rule instead of the cut-off, and a resume makes it recurring again. |
+| `keep_running` | Recurring and not stopped. Stopping clears it and the password. |
+| `interval_seconds` | `NULL` for `MAIL_ARCHIVE_SYNC_INTERVAL`; otherwise whole minutes from 5m to 720h. The floor `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` applies when reading. |
+| `run_started_at` | Start of the current or last run, by the runner's clock. The next run is due an interval later (`Schedule.NextFill`). |
+| `status` | `running` during a run, or while a new or resumed fill waits for its first; afterwards the run's outcome `ok`, `partial` or `failed`, with `finished_at` and `error`. A stopped fill is `cancelled`. |
+
+Between runs an active recurring fill keeps its sealed password; the CHECK
+`smtp_fills_password_check` allows a password only while a fill runs or
+keeps running. `FinishFill` records the run in `smtp_fill_health` in the
+same transaction (`ok` and `partial` end the streak, `failed` extends it).
+`StartFillRun` sets the next run going and resets the folders' `done`,
+error and counts, so the counts are those of one run.
+
+**Scheduling.** `archive.FillRunner` (one queue, one fill at a time, apart
+from the sync `Runner`) queues running fills every minute, as before, and
+the recurring fills whose next run is due (`RecurringFills`: active, between
+runs, account enabled and not removed). It uses the sync runner's
+`Schedule`; `MAIL_ARCHIVE_SYNC_INTERVAL=0` turns recurring runs off. For
+`RecurringStartHold` (70 minutes) after the web server started
+(`HoldUntil`) it starts no run of a recurring fill: after an outage the mail
+server retries the journal copies it queued (Postfix every 4000 seconds at
+most), and the fill must not import the mailbox copies first. A long
+one-time fill delays the recurring runs behind it; they show as queued.
+After each run, `AfterRun` wakes the notifier.
+
+**A run.** `Filler.Run` takes the account's sync lock, as for any fill, and
+calls `StartFillRun`; a fill whose account is disabled or removed is skipped
+without a change. One `now` per run decides by INTERNALDATE: journaled
+(Message-ID with an envelope in the account) first, then younger than
+`RecurringGrace` (two hours) waits, anything else is imported, also without a
+Message-ID; a date more than a day in the future counts as old. The headers
+are sorted by UID, and a folder's `last_uid` moves only over decided UIDs up
+to the first one that waits (`watermark`); later UIDs are decided again by
+the next run. Before fetching bodies, a recurring fill leaves out what it
+imported before: `FillImported` matches Message-ID, INTERNALDATE and
+`RFC822.SIZE` against this fill's locations, which makes moved messages,
+renamed folders and rescans after a `UIDVALIDITY` change cheap. Identical
+bytes without a Message-ID are caught by `LocationInFolder`, before the
+fetch and again under the folder lock. Moves and deletions in the mailbox
+are not reconciled.
+
+New IMAP folders are picked up through the fill's folder filters. A folder
+the server marks `\Trash` or `\Junk` is filled only if it already has a
+`smtp_fill_folders` row (created from the folders the user confirmed when
+the fill started or was switched on) or `included_folders` names it;
+otherwise the run skips it and records it in `unconfirmed_folders`.
+
+**Switching on an earlier fill.** `SetFillRecurring` gives an ended fill the
+new password and starts its first run. If the fill is from before `JOURNAL`,
+that run first calls `ConvertLegacyFill`: in batches of 5,000, under the
+`JOURNAL` row lock, it copies one location per message from the fill's own
+folders (`DISTINCT ON (message_sha256)`, none for a message `JOURNAL` holds)
+with `JOURNAL`'s `UIDVALIDITY` and UIDs from `AllocateUIDs` (refused past
+`2^32-1`), and retries a batch that fails with `23503` (a message retention
+deleted meanwhile). Then its IMAP folders point at `JOURNAL` with
+`last_uid = 0`, so the scan applies the new rule to what the cut-off left
+out. No files are written, and the old folders keep their locations.
+
+**Stopping and restarts.** `CancelFill` stops a running or recurring fill
+and wipes the password; a running batch notices at its `FillStatus` check.
+A run interrupted by a shutdown stays `running` with its password and
+continues at the next start. Removing an account stops its recurring fills
+too (`CancelAccountFills`).
+
+**Health.** `smtp_fill_health` has the columns of `account_sync_health`.
+`FillHealth.State` and `SyncHealth.State` share `HealthState`; the stale
+time counts from the last success, or from `recurring_since`. `/healthz/sync`
+puts the smtp account's ID into `failing` or `stale`, and
+`CountFailingByOwner` counts it for admins. `Notifier.Deliver` has a pass
+for fills (`ClaimFillNotifications`), between the sync pass and the loss
+alerts; its event IDs are `fill-<id>-<since>-<event>`.
+
 ## Attestations
 
 An attestation (`archive.Attest`) covers the `messages` rows with
@@ -253,7 +334,8 @@ reconcile ran in it, without a present location in the account). If
 the same transaction as the run. `account_sync_health` holds one state per
 account that the notifier compares with what it announced; losses are
 events, so they get an outbox of their own with the same lease and retry
-columns. `Notifier.Deliver` sends them in a second pass. Rows not sent
+columns. `Notifier.Deliver` sends them in its last pass, after the failing
+syncs and the failing recurring fills (`smtp_fill_health`). Rows not sent
 within 24 hours are given up by the next finished run, so the pending
 index stays small without a webhook.
 

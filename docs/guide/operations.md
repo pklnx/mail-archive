@@ -174,6 +174,7 @@ Pull requests that change the database schema carry the label
 | A version without reconcile | Nothing to run. The migration only adds columns and an index. The first sync after the upgrade compares every folder with the server (one UID and flag listing per folder, no bodies; see [Reconcile](./syncing#reconcile)). Messages deleted on the server before the upgrade are found by it too. |
 | A version without loss alerts | Nothing to run. The migration adds an empty table. |
 | A version with the journal folder `INBOX` | Stop the web server before `./ma migrate` (`docker compose stop web`): the migration renames the journal folder of every smtp account from `INBOX` to `JOURNAL` and records for every location of a fill which fill it came from, which locks the message locations table while it runs. Postfix keeps the copies queued meanwhile and delivers them when the web server is back; a web server of the old version that still runs after the migration answers them with `451` too. Retention rules on `INBOX` of smtp accounts are renamed with the folder; a rule on `JOURNAL`, which matched nothing, is removed and logged. Afterwards, links and scripts that name the folder `INBOX` of an smtp account (`./ma export --folder INBOX`, the API's `folder`, saved URLs) need `JOURNAL`, and `./ma account fill --prefix` and the API's `folderPrefix` are refused: fills write into `JOURNAL`. See [Journaling](./journaling#bring-in-the-mail-from-before-journaling). |
+| A version without recurring fills | Nothing to run. The migration adds columns and an empty table; existing fills stay one-time fills. Switch one on in the web UI or with `./ma account fill NAME --keep-running` (the password is asked for again); see [Keep importing](./journaling#keep-importing-recurring-fill). Rolling the migration back stops recurring fills and deletes their passwords; what they imported stays. |
 | A version without passkeys | Nothing to run. To use passkeys, set `MAIL_ARCHIVE_PUBLIC_URL` to the address you open in the browser (Compose defaults to `http://localhost:WEB_PORT`). Passkeys are bound to its host name: after changing it, remove the passkeys (`./ma user remove-passkeys NAME`) and register them again. |
 
 ## Monitoring and alerts
@@ -186,7 +187,9 @@ things make it visible:
   keeps failing or has not synced for a while; see [Web UI](./web-ui#sync-problems).
 - **An alert** through a webhook: one message when an account's syncs keep
   failing, one when they work again. See [Syncing](./syncing#alerts) for
-  what counts. Another alert reports mail deleted on the server in bulk;
+  what counts. The same goes for the runs of a
+  [recurring fill](./journaling#keep-importing-recurring-fill) of an smtp
+  account. Another alert reports mail deleted on the server in bulk;
   see [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
 - **`/healthz/sync`** for a monitoring tool such as Uptime Kuma.
 
@@ -246,8 +249,31 @@ with the format `json`. They show the `text` (Slack, Mattermost) or `content`
 ```
 
 `event` is `failing`, `recovered`, `mixed` (alerts and recoveries in one
-message), `gone` (mail deleted on the server) or `test`. A `gone` message
-looks like this:
+message), `gone` (mail deleted on the server) or `test`.
+
+A [recurring fill](./journaling#keep-importing-recurring-fill) whose runs
+keep failing, for example because the mailbox's password changed, is
+announced the same way, after `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed
+runs, and again when a run succeeds. Its entry names the smtp account and
+adds `fillId` and `mailbox`, the IMAP user name it imports from:
+
+```json
+{
+  "id": "fill-7-1759320000-failing",
+  "event": "failing",
+  "title": "Mail archive: import of ak@example.com into journal keeps failing",
+  "message": "Import of ak@example.com into account \"journal\" (owner anna, fill 7) failed 3 runs in a row since 2026-10-01 12:00 UTC.\nLast error: …",
+  "text": "…", "content": "…",
+  "accounts": [{"id": "fill-7-1759320000-failing", "event": "failing", "accountId": 4, "account": "journal",
+                "owner": "anna", "failureStreak": 3, "failingSince": "2026-10-01T12:00:00Z", "lastError": "…",
+                "fillId": 7, "mailbox": "ak@example.com"}]
+}
+```
+
+Its recovery has the title "Mail archive: ak@example.com imports into
+journal again". Syncs and fills never share a message.
+
+A `gone` message looks like this:
 
 ```json
 {
@@ -288,13 +314,16 @@ message; failed attempts name only the scheme and host.
 
 | Status | Body | Meaning |
 |---|---|---|
-| `200` | `{"status":"ok"}` | Every enabled account syncs. |
-| `503` | `{"status":"degraded","failing":[3,7],"stale":[5]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). |
+| `200` | `{"status":"ok"}` | Every enabled account syncs, and every recurring fill runs. |
+| `503` | `{"status":"degraded","failing":[3,7],"stale":[5]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). An smtp account is listed when one of its recurring fills fails or is stale the same way. |
 | `503` | `{"status":"unavailable"}` | The database cannot be reached. |
 
-Disabled, removed and import accounts are left out; with the schedule off
-(`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts as stale, nor does an account
-not on the schedule, or one that is syncing or waiting in the queue. The
+Disabled, removed and import accounts are left out, as are fills that were
+stopped; with the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts
+as stale, nor does an account not on the schedule, or one that is syncing
+or waiting in the queue, nor a recurring fill during a run or while it
+waits for one. A recurring fill counts as stale from when it was switched on
+until its first successful run. The
 answer is cached for 15 seconds. `./ma status` shows each account's ID next
 to its name, in `HEALTH` the same state, and in `FAILED` how many syncs in a
 row failed.

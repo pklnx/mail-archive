@@ -252,7 +252,7 @@ conversations, grouped rows and `thread=` alike.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null` for both. |
+| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), `fills`, their recurring fills and the latest one, and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null`, `[]` and `null`. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. With `{"kind": "smtp", "name": "journal", "addresses": ["archive@archive.local"]}` (admins only, otherwise `403`) it adds an smtp account: no server fields, no login check; `409` names an address another account receives for. |
 | `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. `addresses` replaces an smtp account's list (admins only; `409` on other kinds). A new connection or password is checked with a login first; if that fails, nothing changes. All fields are saved together or not at all. `409` when the name is taken or when the account was changed since it was loaded (reload and try again). Works while the account is being synced; the change applies from the next sync. |
 | `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced or filled. |
@@ -297,10 +297,12 @@ minute's check of the schedule.
 
 ### Fills
 
-A fill copies an IMAP mailbox once into an smtp account's folder `JOURNAL`:
+A fill copies an IMAP mailbox into an smtp account's folder `JOURNAL`: once,
 the mail from before
 [journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
-started. These endpoints need a session (not an API key), only work on the
+started, or on a schedule, what arrives in the mailbox later and never
+passed the journal ([recurring fill](../guide/journaling#keep-importing-recurring-fill)).
+These endpoints need a session (not an API key), only work on the
 user's own smtp accounts (`409` on other kinds) and answer `503` without
 `MAIL_ARCHIVE_SECRET_KEY`.
 
@@ -308,8 +310,9 @@ user's own smtp accounts (`409` on other kinds) and answer `503` without
 |---|---|
 | `POST /api/accounts/{name}/fills/folders` | The folders of the IMAP mailbox, before a fill: body `{"host", "port", "tls", "username", "password"}`. Answers `{"folders": [{"name", "specialUse", "selected"}], "suggestedExclusions": [...]}` with the folders the server marks as trash or spam. `422` when the login fails. |
 | `POST /api/accounts/{name}/fills` | Start a fill. The login is checked first (`422`). Answers `202` with `{"id"}`; the web server runs it in the background, one fill at a time. `409` when a fill of the account runs or folders need confirming (as for `POST /api/accounts`: `suggestedExclusions`, then again with `"confirmFolders": true`). Also for a disabled account. |
-| `POST /api/accounts/{name}/fills/{id}/resume` | Continue a fill that failed, partly failed or was cancelled, with `{"password"}` (checked first, `422`). `202`; `409` when it runs or ended well. |
-| `POST /api/accounts/{name}/fills/{id}/cancel` | Stop a running fill after its current batch and wipe its password. `204`; `409` when it is not running. What it copied stays. |
+| `PATCH /api/accounts/{name}/fills/{id}` | Change a fill. `{"keepRunning": true, "password", "interval", "confirmFolders"}` switches a fill that ended on: the password is required and checked first (`422`), trash and spam folders it has not copied need `confirmFolders` (`409` with `suggestedExclusions`), and it answers `202` with `{"id"}` and queues the first run. `{"keepRunning": false}` stops a recurring fill, like `cancel`. `{"interval": "12h"}` alone changes the interval of a fill that keeps running (`204`; `400` below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`). `409` while the fill runs, when it already keeps running (or, to stop it or change the interval, does not). A password only goes with `"keepRunning": true`: to give a recurring fill a new one, stop it and resume it. |
+| `POST /api/accounts/{name}/fills/{id}/resume` | Continue a fill that failed, partly failed or was cancelled, with `{"password"}` (checked first, `422`). A stopped recurring fill keeps running again. `202`; `409` when it runs, ended well or keeps running. |
+| `POST /api/accounts/{name}/fills/{id}/cancel` | Stop a running fill after its current batch, or a recurring fill, and wipe its password. `204`; `409` when it neither runs nor keeps running. What it copied stays. |
 
 Body of `POST /api/accounts/{name}/fills`:
 
@@ -326,6 +329,9 @@ Body of `POST /api/accounts/{name}/fills`:
 }
 ```
 
+or, for a recurring fill, `"keepRunning": true` and `"interval": "12h"`
+instead of `before`.
+
 `port` defaults to 993 with `tls`, else 143; `tls` to `tls`. `includedFolders`
 limits the fill to these folders. Every IMAP folder goes into `JOURNAL`; a
 message filed in several folders is stored once. `folderPrefix` is no longer
@@ -335,9 +341,19 @@ cut-off plus one hour, unless the account received a message with the same
 Message-ID over SMTP. The password is kept, encrypted, only while the fill
 runs.
 
+With `"keepRunning": true` the fill is recurring and has no cut-off (`before`
+together with it is `400`): a message is copied once its INTERNALDATE is two
+hours old, unless the account received it over SMTP. `interval` is
+`default` (the server's `MAIL_ARCHIVE_SYNC_INTERVAL`) or a duration of whole
+minutes from `5m` to `720h`, not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`. The
+web server runs it every interval, counted from the start of its last run,
+but not in the first 70 minutes after the server started. Its password is
+kept until it is stopped.
+
 While a fill waits or runs, the account's `sync.state` is `queued` or
-`running`. `fill` in `GET /api/accounts` shows the latest fill (never its
-password):
+`running`. `fills` in `GET /api/accounts` lists the account's recurring fills
+(also stopped ones) and its latest fill, newest first; `fill` is the latest
+one. Neither carries a password:
 
 ```json
 {
@@ -351,12 +367,21 @@ password):
   "excludedFolders": ["Spam"],
   "folderPrefix": "",
   "before": "2026-10-13T08:00:00Z",
+  "keepRunning": false,
+  "recurringSince": null,
+  "runStartedAt": null,
+  "interval": null,
+  "every": null,
+  "nextAt": null,
+  "health": null,
+  "unconfirmedFolders": [],
   "error": "",
   "createdAt": "2026-10-13T08:00:00Z",
   "finishedAt": null,
   "folders": [
     {"source": "INBOX", "folder": "JOURNAL", "done": true, "error": "",
-     "scanned": 1200, "imported": 1150, "new": 1150, "afterCutoff": 12, "journaled": 38, "present": 0, "deleted": 0}
+     "scanned": 1200, "imported": 1150, "new": 1150, "afterCutoff": 12, "journaled": 38, "present": 0, "deleted": 0,
+     "waiting": 0}
   ]
 }
 ```
@@ -371,6 +396,20 @@ them new to the archive), `afterCutoff` left to journaling, `journaled`
 skipped because the account received them over SMTP, `present` already in
 `JOURNAL` (a resumed fill, or a message in several IMAP folders), `deleted`
 deleted by retention before.
+
+A recurring fill has `keepRunning` true until it is stopped,
+`recurringSince` (when it became recurring), `runStartedAt` (the start of the
+current or last run), `interval` (its own: `default` or a duration such as
+`12h0m0s`), `every` (the effective interval) and `nextAt` (the next run; in
+the past when due, the end of the 70 minutes while a run waits after the
+server's start). `every` and `nextAt` are `null` once it is stopped or when
+the schedule is off. Its `status`, `error` and counters are those of the
+current or last run, and `waiting` counts messages younger than two hours
+that the next run copies. `health` is
+`{"state", "failureStreak", "failingSince", "lastSuccessAt"}` like an
+account's [sync state](#sync-state), `null` for other fills.
+`unconfirmedFolders` are trash and spam folders that appeared after the fill
+started; its runs skip them. A stopped recurring fill is `cancelled`.
 
 ### Sync state
 
@@ -449,4 +488,4 @@ allowed `Host`.
 | Endpoint | Description |
 |---|---|
 | `GET /healthz` | `200 ok` while the server runs. |
-| `GET /healthz/sync` | `200 {"status":"ok"}`, or `503` with `{"status":"degraded","failing":[…],"stale":[…]}` (account IDs only) or `{"status":"unavailable"}`. Cached for 15 seconds. See [Monitoring and alerts](../guide/operations#healthz-sync). |
+| `GET /healthz/sync` | `200 {"status":"ok"}`, or `503` with `{"status":"degraded","failing":[…],"stale":[…]}` (account IDs only; a failing or stale recurring fill lists its smtp account) or `{"status":"unavailable"}`. Cached for 15 seconds. See [Monitoring and alerts](../guide/operations#healthz-sync). |
