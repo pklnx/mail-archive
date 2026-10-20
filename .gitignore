@@ -36,6 +36,7 @@ go.work.sum
 /data/
 /import/
 /bin/
+/demo
 
 # Web UI build output (embedded into the binary; only the placeholder is tracked)
 /internal/web/ui/dist/*
