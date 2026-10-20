@@ -223,11 +223,10 @@ already holds comes into the same account with a one-time **fill** from IMAP.
 In the web UI, the smtp account's card has **Import existing mail from IMAP**
 (also offered right after creating the account). The form takes the IMAP
 server and login, checks the login and lists the folders: trash and spam
-folders start unticked. The prefix and the cut-off are optional. The form
-shows the first message the account received over SMTP, as a check that
-journaling works.
+folders start unticked. The cut-off is optional. The form shows the first
+message the account received over SMTP, as a check that journaling works.
 
-![The import form of the smtp account "journal": IMAP server, login, folder prefix and cut-off](/screenshots/fill-form.png)
+![The import form of the smtp account "journal": IMAP server, login and cut-off](/screenshots/fill-form.png)
 
 On the command line:
 
@@ -240,14 +239,22 @@ encrypted, only while the fill runs. The command prints the first message the
 account received over SMTP and then the progress per folder. It is not a sync:
 nothing is fetched again afterwards, and the account stays *complete (SMTP)*.
 
-**Where the mail goes.** Into folders of their own, `PREFIX/<IMAP folder>`,
-such as `alice@example.com/INBOX` and `alice@example.com/Sent`; the prefix is
-the user name unless `--prefix` sets another. The journal `INBOX` stays
-exactly what arrived over SMTP, with an envelope on every message. Imported
-messages have no envelope: BCC recipients are unknown for them, and the
-message view says so in an **Origin** row.
+**Where the mail goes.** An smtp account has one folder, `JOURNAL`. The fill
+writes into it too, whatever the IMAP folder: a message filed in `INBOX` and
+in `Clients/Miller` is stored once, and the archive's folders do not follow
+the mailbox's. What arrived over SMTP has an envelope; imported messages have
+none, so BCC recipients are unknown for them. The message view says so in an
+**Origin** row, with the mailbox the message was imported from, such as
+"Imported from IMAP: alice@example.com".
 
-![A message the fill copied: found in the journal's fill folder and in the work account; the origin row says it was imported from IMAP](/screenshots/fill-origin.png)
+![A message the fill copied: found in the journal's JOURNAL folder and in the work account; the origin row names the mailbox it was imported from](/screenshots/fill-origin.png)
+
+Fills started before this layout wrote into folders of their own,
+`PREFIX/<IMAP folder>` (such as `alice@example.com/INBOX`). Those folders
+stay, and such a fill, resumed, finishes there. `--prefix` (`folderPrefix` in
+the API) is no longer accepted. An old fill with the prefix `JOURNAL` has
+folders such as `JOURNAL/INBOX`, which the sidebar shows below the journal
+folder; that is only how they are displayed.
 
 **Which messages.** The journal copy and the mailbox copy of a message differ
 in their `Received:` lines, so the archive cannot match them by content. The
@@ -272,7 +279,8 @@ earlier one (`2026-06-01` for midnight UTC, or RFC 3339 with an offset).
   `--confirm-folders`.
 
 **Several mailboxes** journaled into one account get one fill each, one after
-another, each with its own prefix.
+another, all into `JOURNAL`; the origin row tells which mailbox a message
+came from.
 
 **Interrupted or failed.** Ctrl-C stops the fill; `./ma account fill journal
 --resume` continues it where it stopped (the password is asked again), and so
@@ -291,8 +299,10 @@ was running when it stopped keeps its encrypted password and continues at the
 next start. So does a fill whose command-line process died without Ctrl-C:
 the web server picks it up within a minute.
 
-**Retention.** An account-wide rule covers the fill folders. A rule on the
-folder `INBOX` covers the journal only. See [Retention](./retention#rules).
+**Retention.** A rule on the folder `JOURNAL`, or an account-wide one, covers
+journaled and imported mail alike. Folders of older fills are covered by an
+account-wide rule or by rules of their own. See
+[Retention](./retention#smtp-accounts-with-a-fill).
 
 ## Two copies of one message
 

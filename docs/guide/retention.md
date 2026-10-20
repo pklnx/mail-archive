@@ -107,13 +107,22 @@ each folder its own.
 Rules are added and removed, not changed. Removing a rule keeps its mail for
 ever again, unless another rule covers it.
 
-**smtp accounts with a fill.** A rule matches the folder name exactly. A
-rule on `INBOX` covers the journal, not the folders a
-[fill](./journaling#bring-in-the-mail-from-before-journaling) wrote
-(`alice@example.com/INBOX`); an account-wide rule covers both. A journal copy
-that retention deleted no longer counts as received over SMTP, so a later
-fill imports the mailbox's copy of it; with only an `INBOX` rule, that copy
-is kept for ever.
+### smtp accounts with a fill
+
+An smtp account has one folder, `JOURNAL`: what arrives over SMTP and what a
+[fill](./journaling#bring-in-the-mail-from-before-journaling) imports from
+IMAP both go there. A rule on `JOURNAL`, or an account-wide one, covers both.
+
+- A rule matches the folder name exactly. Folders of fills started before
+  this layout (`alice@example.com/INBOX`) are covered by an account-wide rule
+  or by rules of their own, not by a rule on `JOURNAL`.
+- Older versions called the journal folder `INBOX`. The upgrade renames it
+  to `JOURNAL` together with its rules, so retention does not change. A rule
+  on `JOURNAL` that existed before matched no folder, so its mail was kept
+  for ever; the upgrade deletes it, with an entry in the audit log, rather
+  than let it shorten retention.
+- A journal copy that retention deleted no longer counts as received over
+  SMTP, so a later fill imports the mailbox's copy of it.
 
 ## Legal holds
 

@@ -185,7 +185,7 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account that a [fill](#fills) copied from IMAP: it has no envelope, so BCC recipients are unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account that a [fill](#fills) copied from IMAP: it has no envelope, so BCC recipients are unknown. `fill` names that fill and its mailbox, `{"id", "username", "host"}`; `null` for other locations, and for filled ones whose fill is unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
@@ -297,8 +297,9 @@ minute's check of the schedule.
 
 ### Fills
 
-A fill copies an IMAP mailbox once into an smtp account: the mail from
-before [journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
+A fill copies an IMAP mailbox once into an smtp account's folder `JOURNAL`:
+the mail from before
+[journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
 started. These endpoints need a session (not an API key), only work on the
 user's own smtp accounts (`409` on other kinds) and answer `503` without
 `MAIL_ARCHIVE_SECRET_KEY`.
@@ -306,7 +307,7 @@ user's own smtp accounts (`409` on other kinds) and answer `503` without
 | Endpoint | Description |
 |---|---|
 | `POST /api/accounts/{name}/fills/folders` | The folders of the IMAP mailbox, before a fill: body `{"host", "port", "tls", "username", "password"}`. Answers `{"folders": [{"name", "specialUse", "selected"}], "suggestedExclusions": [...]}` with the folders the server marks as trash or spam. `422` when the login fails. |
-| `POST /api/accounts/{name}/fills` | Start a fill. The login is checked first (`422`). Answers `202` with `{"id"}`; the web server runs it in the background, one fill at a time. `409` when a fill of the account runs, another fill uses the prefix, or folders need confirming (as for `POST /api/accounts`: `suggestedExclusions`, then again with `"confirmFolders": true`). Also for a disabled account. |
+| `POST /api/accounts/{name}/fills` | Start a fill. The login is checked first (`422`). Answers `202` with `{"id"}`; the web server runs it in the background, one fill at a time. `409` when a fill of the account runs or folders need confirming (as for `POST /api/accounts`: `suggestedExclusions`, then again with `"confirmFolders": true`). Also for a disabled account. |
 | `POST /api/accounts/{name}/fills/{id}/resume` | Continue a fill that failed, partly failed or was cancelled, with `{"password"}` (checked first, `422`). `202`; `409` when it runs or ended well. |
 | `POST /api/accounts/{name}/fills/{id}/cancel` | Stop a running fill after its current batch and wipe its password. `204`; `409` when it is not running. What it copied stays. |
 
@@ -320,16 +321,15 @@ Body of `POST /api/accounts/{name}/fills`:
   "username": "alice@example.com",
   "password": "…",
   "excludedFolders": ["Spam"],
-  "folderPrefix": "alice@example.com",
   "before": "2026-10-01T00:00:00Z",
   "confirmFolders": true
 }
 ```
 
 `port` defaults to 993 with `tls`, else 143; `tls` to `tls`. `includedFolders`
-limits the fill to these folders. `folderPrefix` names the archive folders,
-`PREFIX/<IMAP folder>`; it defaults to the user name and must not be `INBOX`,
-start or end with `/`, or be longer than 200 bytes. `before` is the cut-off,
+limits the fill to these folders. Every IMAP folder goes into `JOURNAL`; a
+message filed in several folders is stored once. `folderPrefix` is no longer
+supported: a non-empty value is answered `400`. `before` is the cut-off,
 by default now: a message is copied when its INTERNALDATE is before the
 cut-off plus one hour, unless the account received a message with the same
 Message-ID over SMTP. The password is kept, encrypted, only while the fill
@@ -349,24 +349,28 @@ password):
   "username": "alice@example.com",
   "includedFolders": [],
   "excludedFolders": ["Spam"],
-  "folderPrefix": "alice@example.com",
+  "folderPrefix": "",
   "before": "2026-10-13T08:00:00Z",
   "error": "",
   "createdAt": "2026-10-13T08:00:00Z",
   "finishedAt": null,
   "folders": [
-    {"source": "INBOX", "folder": "alice@example.com/INBOX", "done": true, "error": "",
+    {"source": "INBOX", "folder": "JOURNAL", "done": true, "error": "",
      "scanned": 1200, "imported": 1150, "new": 1150, "afterCutoff": 12, "journaled": 38, "present": 0, "deleted": 0}
   ]
 }
 ```
 
 `status` is `running`, `ok`, `partial` (some folders failed; see their
-`error`), `failed` or `cancelled`. `folders` lists the folders started so far.
+`error`), `failed` or `cancelled`. `folders` lists the folders started so far:
+`source` is the IMAP folder, `folder` the archive folder, `JOURNAL`. Fills
+started before fills wrote into `JOURNAL` have a `folderPrefix` and write
+into `PREFIX/<IMAP folder>`; for newer fills it is empty.
 The counters: `scanned` headers read, `imported` messages copied (`new` of
 them new to the archive), `afterCutoff` left to journaling, `journaled`
-skipped because the account received them over SMTP, `present` already in the
-folder (a resumed fill), `deleted` deleted by retention before.
+skipped because the account received them over SMTP, `present` already in
+`JOURNAL` (a resumed fill, or a message in several IMAP folders), `deleted`
+deleted by retention before.
 
 ### Sync state
 
