@@ -62,14 +62,19 @@ export interface Account {
   lastReceivedAt: string | null;
   /** smtp accounts: the latest fill from IMAP, null without one. */
   fill: Fill | null;
+  /** smtp accounts: the recurring fills (also stopped ones) and the latest fill, newest first. */
+  fills: Fill[];
   /** smtp accounts: the first message received over SMTP that is still stored. */
   firstReceived: { at: string; subject: string } | null;
 }
 
-/** A one-time copy of an IMAP mailbox into an smtp account, into its folder JOURNAL. */
+/**
+ * A copy of an IMAP mailbox into an smtp account, into its folder JOURNAL:
+ * once, or on a schedule (recurring).
+ */
 export interface Fill {
   id: number;
-  /** "partial": some folders failed (see their error). */
+  /** "partial": some folders failed (see their error). A recurring fill: its current or last run; "cancelled" once stopped. */
   status: "running" | "ok" | "partial" | "failed" | "cancelled";
   host: string;
   port: number;
@@ -79,8 +84,21 @@ export interface Fill {
   excludedFolders: string[];
   /** Only for fills started before fills wrote into JOURNAL: they write into "prefix/<IMAP folder>". Empty otherwise. */
   folderPrefix: string;
-  /** The cut-off: messages from an hour after it on are left to journaling. */
-  before: string;
+  /** The cut-off: messages from an hour after it on are left to journaling. Null for a fill recurring from the start. */
+  before: string | null;
+  /** Recurring and not stopped. */
+  keepRunning: boolean;
+  /** When the fill became recurring; null for a one-time fill. Its counts are then those of the last run. */
+  recurringSince: string | null;
+  runStartedAt: string | null;
+  /** The fill's own interval ("default" or a Go duration), the effective one and the next run; null for one-time fills. */
+  interval: string | null;
+  every: string | null;
+  nextAt: string | null;
+  /** The health of a fill that keeps running; null otherwise. */
+  health: FillHealth | null;
+  /** Trash and spam folders that appeared later; the runs skip them. */
+  unconfirmedFolders: string[];
   error: string;
   createdAt: string;
   finishedAt: string | null;
@@ -101,6 +119,15 @@ export interface FillFolder {
   journaled: number;
   present: number;
   deleted: number;
+  /** Recurring fills: younger than two hours at the last run. */
+  waiting: number;
+}
+
+export interface FillHealth {
+  state: Health;
+  failureStreak: number;
+  failingSince: string | null;
+  lastSuccessAt: string | null;
 }
 
 export interface FillInput {
@@ -111,8 +138,19 @@ export interface FillInput {
   password: string;
   includedFolders?: string[];
   excludedFolders?: string[];
-  /** The cut-off as RFC 3339; default: now. */
+  /** The cut-off as RFC 3339; default: now. Not with keepRunning. */
   before?: string;
+  confirmFolders?: boolean;
+  /** Keep importing new mail, every interval ("default" or a Go duration). */
+  keepRunning?: boolean;
+  interval?: string;
+}
+
+/** A change of a fill: switch it on (with the password), stop it, or set its interval. */
+export interface FillChange {
+  keepRunning?: boolean;
+  password?: string;
+  interval?: string;
   confirmFolders?: boolean;
 }
 
@@ -394,6 +432,7 @@ export const accountsApi = {
   startFill: (name: string, f: FillInput) => send("POST", `${accountPath(name)}/fills`, f),
   resumeFill: (name: string, id: number, password: string) => send("POST", `${accountPath(name)}/fills/${id}/resume`, { password }),
   cancelFill: (name: string, id: number) => send("POST", `${accountPath(name)}/fills/${id}/cancel`),
+  changeFill: (name: string, id: number, change: FillChange) => send("PATCH", `${accountPath(name)}/fills/${id}`, change),
 };
 
 export function listMessages(filter: Filter, cursor: string | null, signal?: AbortSignal, limit = 50): Promise<MessagePage> {

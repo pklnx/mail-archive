@@ -9,7 +9,7 @@ function smtpAccount(f: Fill | null, more: Partial<Account> = {}): Account {
   return {
     name: "journal", kind: "smtp", enabled: true, removed: false, host: "", port: 0, tls: "tls", username: "",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: f, firstReceived: null,
+    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: f, fills: f ? [f] : [], firstReceived: null,
     sync: { state: f?.status === "running" ? "running" : "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
     ...more,
   };
@@ -123,5 +123,97 @@ describe("the fill on the smtp card", () => {
     expect(await screen.findByRole("button", { name: t.startFill })).toBeTruthy();
     fireEvent.change(screen.getByLabelText(t.fieldPassword), { target: { value: "other" } });
     expect(screen.getByRole("button", { name: t.loadFillFolders })).toBeTruthy();
+  });
+});
+
+describe("recurring fills on the smtp card", () => {
+  const recurring = (more: Partial<Fill> = {}) =>
+    fill({
+      id: 5, status: "ok", keepRunning: true, recurringSince: "2026-10-01T08:00:00Z", runStartedAt: "2026-10-13T07:55:00Z",
+      finishedAt: "2026-10-13T08:00:00Z", before: null, interval: "default", every: "6h0m0s", nextAt: "2026-10-13T13:55:00Z",
+      health: { state: "ok", failureStreak: 0, failingSince: null, lastSuccessAt: "2026-10-13T08:00:00Z" }, ...more,
+    });
+
+  it("shows every fill, stops a recurring one and changes its interval", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const once = fill({ status: "ok", finishedAt: "2026-10-12T09:00:00Z", username: "bob@example.com" });
+    const reload = page([smtpAccount(once, { fills: [once, recurring({ unconfirmedFolders: ["Deleted"] })] })]);
+    expect(screen.getByText(t.fillSource("bob@example.com", "imap.example.com", "JOURNAL"))).toBeTruthy();
+    expect(screen.getByText(/^Imports new mail every 6 hours/)).toBeTruthy();
+    expect(screen.getByText(t.fillUnconfirmed("Deleted"))).toBeTruthy();
+    // Another mailbox can be added while no fill runs.
+    expect((screen.getByRole("button", { name: t.importFromIMAP }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText(`${t.fillInterval} (alice@example.com)`), { target: { value: "12h0m0s" } });
+    fireEvent.click(screen.getByRole("button", { name: t.saveFillInterval }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual({ method: "PATCH", url: "/api/accounts/journal/fills/5", body: { interval: "12h0m0s" } });
+    fireEvent.click(screen.getByRole("button", { name: t.stopFill }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toEqual({ method: "POST", url: "/api/accounts/journal/fills/5/cancel", body: undefined });
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it("shows the health of a failing fill", () => {
+    const f = recurring({ status: "failed", error: "login failed", health: { state: "failing", failureStreak: 4, failingSince: null, lastSuccessAt: null } });
+    page([smtpAccount(f)]);
+    expect(screen.getByText(t.fillFailing(4))).toBeTruthy();
+    expect(screen.getByText("login failed")).toBeTruthy();
+    // It is stopped first, then resumed with a new password.
+    expect(screen.queryByRole("button", { name: t.resumeFill })).toBeNull();
+  });
+
+  it("switches an ended one-time fill on with the password, after asking about trash and spam", async () => {
+    let calls = 0;
+    answer = () =>
+      ++calls === 1
+        ? new Response(JSON.stringify({ error: "confirm", suggestedExclusions: ["Junk"] }), { status: 409 })
+        : new Response(JSON.stringify({ id: 3 }), { status: 202 });
+    page([smtpAccount(fill({ status: "ok", finishedAt: "2026-10-13T09:00:00Z" }))]);
+    expect(screen.queryByRole("button", { name: t.resumeFill })).toBeNull();
+    fireEvent.change(screen.getByLabelText(`${t.fieldPassword} (alice@example.com)`), { target: { value: "secret" } });
+    fireEvent.change(screen.getByLabelText(`${t.fillInterval} (alice@example.com)`), { target: { value: "24h0m0s" } });
+    fireEvent.click(screen.getByRole("button", { name: t.keepRunningFill }));
+    expect(await screen.findByText(t.keepRunningTrashSpam("Junk"))).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(`${t.fieldPassword} (alice@example.com)`), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: t.keepRunningCopy }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[0]).toEqual({ method: "PATCH", url: "/api/accounts/journal/fills/3", body: { keepRunning: true, password: "secret", interval: "24h0m0s" } });
+    expect(requests[1]!.body).toEqual({ keepRunning: true, password: "secret", interval: "24h0m0s", confirmFolders: true });
+  });
+
+  it("resumes a stopped recurring fill", async () => {
+    answer = () => new Response(JSON.stringify({ id: 5 }), { status: 202 });
+    page([smtpAccount(recurring({ status: "cancelled", keepRunning: false, every: null, nextAt: null, health: null }))]);
+    expect(screen.getByText(t.resumeRecurringHint)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: t.keepRunningFill })).toBeNull();
+    fireEvent.change(screen.getByLabelText(`${t.fieldPassword} (alice@example.com)`), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: t.resumeFill }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual({ method: "POST", url: "/api/accounts/journal/fills/5/resume", body: { password: "secret" } });
+  });
+
+  it("starts a recurring fill without a cut-off", async () => {
+    answer = (url) =>
+      url.endsWith("/fills/folders")
+        ? new Response(JSON.stringify({ folders: [{ name: "INBOX", selected: true }], suggestedExclusions: [] }), { status: 200 })
+        : new Response(JSON.stringify({ id: 4 }), { status: 202 });
+    page([smtpAccount(null)]);
+    fireEvent.click(screen.getByRole("button", { name: t.importFromIMAP }));
+    fireEvent.change(screen.getByLabelText(t.fieldHost), { target: { value: "imap.example.com" } });
+    fireEvent.change(screen.getByLabelText(t.fieldUsername), { target: { value: "alice@example.com" } });
+    fireEvent.change(screen.getByLabelText(t.fieldPassword), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: t.loadFillFolders }));
+    await screen.findByRole("button", { name: t.startFill });
+    const keep = screen.getByRole("checkbox", { name: t.keepImporting }) as HTMLInputElement;
+    expect(keep.checked).toBe(false);
+    fireEvent.click(keep);
+    expect(screen.queryByLabelText(t.fieldCutoff)).toBeNull();
+    expect(screen.getByText(t.keepImportingHint)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(t.fillInterval), { target: { value: "12h0m0s" } });
+    fireEvent.click(screen.getByRole("button", { name: t.startFill }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    const start = requests[1]!.body as Record<string, unknown>;
+    expect(start).toMatchObject({ keepRunning: true, interval: "12h0m0s", confirmFolders: true });
+    expect(start.before).toBeUndefined();
   });
 });

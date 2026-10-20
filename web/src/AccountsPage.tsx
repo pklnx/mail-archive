@@ -95,7 +95,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
         {active.map((a) =>
           fillAccount?.name === a.name ? (
             <Card key={a.name}>
-              <FillForm account={a} onCancel={() => setEditing(null)} onStarted={done} />
+              <FillForm account={a} data={data!} onCancel={() => setEditing(null)} onStarted={done} />
             </Card>
           ) : editAccount?.name === a.name && a.kind === "smtp" ? (
             <Card key={a.name}>
@@ -318,7 +318,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
           </button>
           {manage && (
             <>
-              <button type="button" className={button} disabled={busy || a.fill?.status === "running"} onClick={onFill}>
+              <button type="button" className={button} disabled={busy || a.fills.some((f) => f.status === "running")} onClick={onFill}>
                 {t.importFromIMAP}
               </button>
               <button type="button" className={button} onClick={onEdit}>
@@ -334,7 +334,7 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
           )}
         </div>
         {showSetup && <PostfixPanel addresses={a.addresses} />}
-        <FillSection account={a} manage={manage} onChanged={onChanged} />
+        <FillSection account={a} data={data} manage={manage} onChanged={onChanged} />
       </Card>
     );
   }
