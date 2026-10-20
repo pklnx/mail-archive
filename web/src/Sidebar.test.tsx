@@ -12,7 +12,7 @@ function account(name: string, folders: Folder[]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders, goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
   };
 }

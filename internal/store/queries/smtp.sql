@@ -30,7 +30,7 @@ SELECT id, uidvalidity FROM folders WHERE account_id = $1 AND name = $2 FOR UPDA
 
 -- name: LockFolderByID :one
 -- LockFolder by ID, for a fill's batch.
-SELECT id, uidvalidity FROM folders WHERE id = $1 FOR UPDATE;
+SELECT id, uidvalidity, last_uid FROM folders WHERE id = $1 FOR UPDATE;
 
 -- name: CreateSMTPFolder :one
 INSERT INTO folders (account_id, name, uidvalidity) VALUES ($1, $2, $3)

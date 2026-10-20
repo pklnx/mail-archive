@@ -30,6 +30,9 @@ func TestJournalFolderMigration(t *testing.T) {
 	if err := st.CreateAccount(ctx, imap); err != nil {
 		t.Fatal(err)
 	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00028_recurring_fills") {
+		t.Fatalf("down the recurring fills: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00027_smtp_journal_folder") {
 		t.Fatalf("down the journal folder: %q, %v", m, err)
 	}
@@ -159,18 +162,7 @@ func TestJournalFolderMigration(t *testing.T) {
 		t.Fatalf("receive after the migration: %+v, %v", res, err)
 	}
 
-	// Down refuses while a rule names INBOX of an smtp account...
-	rule, err := st.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: journal.ID, Folder: "INBOX", Years: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "retention rule on the folder INBOX") {
-		t.Fatalf("down with an INBOX rule: %v", err)
-	}
-	if err := st.RemoveRetentionRule(ctx, rule); err != nil {
-		t.Fatal(err)
-	}
-	// ... while JOURNAL holds imported mail, and while a fill into it runs.
+	// A fill into JOURNAL, set up while the schema is the current one.
 	f := newFill(journal, "bob@example.com")
 	if err := st.CreateFill(ctx, f, seal); err != nil {
 		t.Fatal(err)
@@ -183,6 +175,22 @@ func TestJournalFolderMigration(t *testing.T) {
 	if _, err := st.SaveFillBatch(ctx, ff, []store.MessageMeta{receivedMeta(10)}, []store.Location{{}}); err != nil {
 		t.Fatal(err)
 	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00028_recurring_fills") {
+		t.Fatalf("down the recurring fills: %q, %v", m, err)
+	}
+
+	// Down refuses while a rule names INBOX of an smtp account...
+	rule, err := st.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: journal.ID, Folder: "INBOX", Years: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "retention rule on the folder INBOX") {
+		t.Fatalf("down with an INBOX rule: %v", err)
+	}
+	if err := st.RemoveRetentionRule(ctx, rule); err != nil {
+		t.Fatal(err)
+	}
+	// ... while JOURNAL holds imported mail, and while a fill into it runs.
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "imported by a fill") {
 		t.Fatalf("down with imported mail: %v", err)
 	}
@@ -192,9 +200,7 @@ func TestJournalFolderMigration(t *testing.T) {
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "is running") {
 		t.Fatalf("down with a running fill: %v", err)
 	}
-	if err := st.FinishFill(ctx, f.ID, store.FillOK, ""); err != nil {
-		t.Fatal(err)
-	}
+	exec("UPDATE smtp_fills SET status = 'ok', finished_at = now(), password_enc = NULL WHERE id = $1", f.ID)
 	// ... and while the prefix the fill would get is another fill's.
 	exec("UPDATE smtp_fills SET folder_prefix = $1 WHERE id = $2", "fill-"+strconv.FormatInt(f.ID, 10), fill)
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "already uses the prefix") {

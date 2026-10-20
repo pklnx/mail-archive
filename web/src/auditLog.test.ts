@@ -88,6 +88,8 @@ describe("entry texts", () => {
   });
   it("words every action and falls back to the name", () => {
     expect(t.auditAction("message.open")).not.toBe("message.open");
+    expect(t.auditAction("data.fill_change")).toBe("Changed import from IMAP");
+    expect(t.auditAction("data.fill_cancel")).toBe("Stopped or cancelled import from IMAP");
     expect(t.auditAction("future.thing")).toBe("future.thing");
   });
   it("shortens user agents", () => {

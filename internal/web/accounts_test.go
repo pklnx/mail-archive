@@ -63,7 +63,7 @@ func newManageFixtureOpts(t *testing.T, roles map[string]imap.MailboxAttr, sched
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	runner := &archive.Runner{Syncer: syncer, Schedule: sched, CheckEvery: 10 * time.Millisecond}
-	fills := &archive.FillRunner{Filler: &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}, CheckEvery: 10 * time.Millisecond}
+	fills := &archive.FillRunner{Filler: &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}, Schedule: sched, CheckEvery: 10 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &manageFixture{t: t, st: st, blobs: blobs, runnerDone: make(chan struct{})}
 	fillsDone := make(chan struct{})

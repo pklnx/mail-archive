@@ -280,22 +280,27 @@ type SmtpAddress struct {
 }
 
 type SmtpFill struct {
-	ID              int64
-	AccountID       int64
-	Host            string
-	Port            int32
-	TlsMode         string
-	Username        string
-	PasswordEnc     []byte
-	IncludedFolders []string
-	ExcludedFolders []string
-	FolderPrefix    *string
-	Cutoff          time.Time
-	Status          string
-	Error           *string
-	CreatedBy       *int64
-	CreatedAt       time.Time
-	FinishedAt      *time.Time
+	ID                 int64
+	AccountID          int64
+	Host               string
+	Port               int32
+	TlsMode            string
+	Username           string
+	PasswordEnc        []byte
+	IncludedFolders    []string
+	ExcludedFolders    []string
+	FolderPrefix       *string
+	Cutoff             *time.Time
+	Status             string
+	Error              *string
+	CreatedBy          *int64
+	CreatedAt          time.Time
+	FinishedAt         *time.Time
+	RecurringSince     *time.Time
+	KeepRunning        bool
+	IntervalSeconds    *int32
+	RunStartedAt       *time.Time
+	UnconfirmedFolders []string
 }
 
 type SmtpFillFolder struct {
@@ -313,6 +318,22 @@ type SmtpFillFolder struct {
 	Present           int32
 	Deleted           int32
 	Error             *string
+	Waiting           int32
+}
+
+type SmtpFillHealth struct {
+	FillID             int64
+	FailureStreak      int32
+	FailingSince       *time.Time
+	LastSuccessAt      *time.Time
+	NotifiedState      string
+	NotifiedAt         *time.Time
+	NotifyAttempts     int32
+	NotifyNextAt       *time.Time
+	NotifyError        *string
+	NotifyFirstErrorAt *time.Time
+	NotifyLease        []byte
+	NotifyLeaseUntil   *time.Time
 }
 
 type SyncRun struct {

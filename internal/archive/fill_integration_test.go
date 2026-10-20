@@ -62,7 +62,7 @@ func (f *fixture) createFill(acc *store.Account, password string, excluded ...st
 	f.t.Helper()
 	fill := &store.Fill{
 		AccountID: acc.ID, Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com",
-		Excluded: excluded, Cutoff: fillCutoff,
+		Excluded: excluded, Cutoff: &fillCutoff,
 	}
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(f.sealer, id, password) }
 	if err := f.store.CreateFill(f.ctx, fill, seal); err != nil {

@@ -11,27 +11,133 @@ import (
 )
 
 const cancelAccountFills = `-- name: CancelAccountFills :exec
-UPDATE smtp_fills SET status = 'cancelled', finished_at = now(), password_enc = NULL, error = 'the account was removed'
-WHERE account_id = $1 AND status = 'running'
+UPDATE smtp_fills SET status = 'cancelled', finished_at = coalesce(finished_at, now()), password_enc = NULL,
+    keep_running = FALSE, error = 'the account was removed'
+WHERE account_id = $1 AND (status = 'running' OR keep_running)
 `
 
-// For a removed account: no fill runs on, and no password stays.
+// For a removed account: no fill runs on or keeps running, and no
+// password stays.
 func (q *Queries) CancelAccountFills(ctx context.Context, accountID int64) error {
 	_, err := q.db.Exec(ctx, cancelAccountFills, accountID)
 	return err
 }
 
 const cancelFill = `-- name: CancelFill :execrows
-UPDATE smtp_fills SET status = 'cancelled', finished_at = now(), password_enc = NULL
-WHERE id = $1 AND status = 'running'
+UPDATE smtp_fills SET status = 'cancelled', finished_at = coalesce(finished_at, now()), password_enc = NULL,
+    keep_running = FALSE
+WHERE id = $1 AND (status = 'running' OR keep_running)
 `
 
+// Stops a running fill, or a recurring one between runs.
 func (q *Queries) CancelFill(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, cancelFill, id)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const convertLegacyFillBatch = `-- name: ConvertLegacyFillBatch :many
+WITH p AS (
+    SELECT $1::bigint AS journal_id, $2::bigint AS uidvalidity, $3::bigint AS last_uid,
+           $4::bigint AS fill_id, $5::bigint[] AS folders, $6::text AS after, $7::int AS max_rows
+), batch AS (
+    SELECT DISTINCT ON (l.message_sha256) l.message_sha256, l.flags, l.internal_date
+    FROM message_locations l, p
+    WHERE l.folder_id = ANY (p.folders) AND l.message_sha256 > p.after
+      AND NOT EXISTS (SELECT 1 FROM message_locations j WHERE j.folder_id = p.journal_id AND j.message_sha256 = l.message_sha256)
+    ORDER BY l.message_sha256, l.folder_id, l.uid
+    LIMIT (SELECT max_rows FROM p)
+)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
+SELECT b.message_sha256, p.journal_id, p.uidvalidity, p.last_uid + row_number() OVER (ORDER BY b.message_sha256),
+       b.flags, b.internal_date, p.fill_id
+FROM batch b, p
+RETURNING message_sha256
+`
+
+type ConvertLegacyFillBatchParams struct {
+	JournalID   int64
+	Uidvalidity int64
+	LastUid     int64
+	FillID      int64
+	Folders     []int64
+	After       string
+	MaxRows     int32
+}
+
+// Copies the locations of a fill's own folders into the journal folder,
+// one per message and none for a message the journal folder holds, in
+// the order of the hashes after @after. The copies take the journal
+// folder's UIDVALIDITY and UIDs after @last_uid; the caller holds its row
+// lock and reserves the UIDs (AllocateUIDs).
+func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyFillBatchParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, convertLegacyFillBatch,
+		arg.JournalID,
+		arg.Uidvalidity,
+		arg.LastUid,
+		arg.FillID,
+		arg.Folders,
+		arg.After,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var message_sha256 string
+		if err := rows.Scan(&message_sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, message_sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const fillImported = `-- name: FillImported :many
+SELECT m.message_id::text AS message_id, l.internal_date, m.size
+FROM messages m JOIN message_locations l ON l.message_sha256 = m.sha256
+WHERE l.fill_id = $1 AND m.message_id = ANY ($2::text[])
+`
+
+type FillImportedParams struct {
+	FillID *int64
+	Ids    []string
+}
+
+type FillImportedRow struct {
+	MessageID    string
+	InternalDate *time.Time
+	Size         int64
+}
+
+// What the fill imported among messages with these Message-IDs: the
+// Message-ID, INTERNALDATE and size of its locations, the key of the
+// pre-check of a recurring fill. Uses messages_message_id_idx.
+func (q *Queries) FillImported(ctx context.Context, arg FillImportedParams) ([]FillImportedRow, error) {
+	rows, err := q.db.Query(ctx, fillImported, arg.FillID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FillImportedRow
+	for rows.Next() {
+		var i FillImportedRow
+		if err := rows.Scan(&i.MessageID, &i.InternalDate, &i.Size); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const fillStatus = `-- name: FillStatus :one
@@ -45,9 +151,11 @@ func (q *Queries) FillStatus(ctx context.Context, id int64) (string, error) {
 	return status, err
 }
 
-const finishFill = `-- name: FinishFill :execrows
-UPDATE smtp_fills SET status = $1, error = $2, finished_at = now(), password_enc = NULL
+const finishFill = `-- name: FinishFill :one
+UPDATE smtp_fills SET status = $1, error = $2, finished_at = now(),
+    password_enc = CASE WHEN keep_running THEN password_enc END
 WHERE id = $3 AND status = 'running'
+RETURNING keep_running
 `
 
 type FinishFillParams struct {
@@ -56,13 +164,13 @@ type FinishFillParams struct {
 	ID     int64
 }
 
-// Only a running fill: a cancel that came first stays.
-func (q *Queries) FinishFill(ctx context.Context, arg FinishFillParams) (int64, error) {
-	result, err := q.db.Exec(ctx, finishFill, arg.Status, arg.Error, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// Only a running fill: a cancel that came first stays. A recurring fill
+// keeps its password for the next run.
+func (q *Queries) FinishFill(ctx context.Context, arg FinishFillParams) (bool, error) {
+	row := q.db.QueryRow(ctx, finishFill, arg.Status, arg.Error, arg.ID)
+	var keep_running bool
+	err := row.Scan(&keep_running)
+	return keep_running, err
 }
 
 const firstReceived = `-- name: FirstReceived :one
@@ -97,7 +205,7 @@ func (q *Queries) FirstReceived(ctx context.Context, arg FirstReceivedParams) (F
 }
 
 const getFill = `-- name: GetFill :one
-SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at FROM smtp_fills WHERE id = $1
+SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at, recurring_since, keep_running, interval_seconds, run_started_at, unconfirmed_folders FROM smtp_fills WHERE id = $1
 `
 
 func (q *Queries) GetFill(ctx context.Context, id int64) (SmtpFill, error) {
@@ -120,12 +228,17 @@ func (q *Queries) GetFill(ctx context.Context, id int64) (SmtpFill, error) {
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.FinishedAt,
+		&i.RecurringSince,
+		&i.KeepRunning,
+		&i.IntervalSeconds,
+		&i.RunStartedAt,
+		&i.UnconfirmedFolders,
 	)
 	return i, err
 }
 
 const getFillFolder = `-- name: GetFillFolder :one
-SELECT ff.fill_id, ff.source_name, ff.folder_id, ff.source_uidvalidity, ff.last_uid, ff.done, ff.scanned, ff.imported, ff.new_messages, ff.after_cutoff, ff.journaled, ff.present, ff.deleted, ff.error, f.name AS folder_name
+SELECT ff.fill_id, ff.source_name, ff.folder_id, ff.source_uidvalidity, ff.last_uid, ff.done, ff.scanned, ff.imported, ff.new_messages, ff.after_cutoff, ff.journaled, ff.present, ff.deleted, ff.error, ff.waiting, f.name AS folder_name
 FROM smtp_fill_folders ff JOIN folders f ON f.id = ff.folder_id
 WHERE ff.fill_id = $1 AND ff.source_name = $2
 `
@@ -150,6 +263,7 @@ type GetFillFolderRow struct {
 	Present           int32
 	Deleted           int32
 	Error             *string
+	Waiting           int32
 	FolderName        string
 }
 
@@ -171,6 +285,7 @@ func (q *Queries) GetFillFolder(ctx context.Context, arg GetFillFolderParams) (G
 		&i.Present,
 		&i.Deleted,
 		&i.Error,
+		&i.Waiting,
 		&i.FolderName,
 	)
 	return i, err
@@ -178,9 +293,11 @@ func (q *Queries) GetFillFolder(ctx context.Context, arg GetFillFolderParams) (G
 
 const insertFill = `-- name: InsertFill :one
 INSERT INTO smtp_fills (account_id, host, port, tls_mode, username, included_folders, excluded_folders,
-                        folder_prefix, cutoff, created_by)
+                        folder_prefix, cutoff, created_by, keep_running, interval_seconds,
+                        recurring_since, run_started_at)
 VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[],
-        $8, $9, $10)
+        $8, $9, $10, $11, $12,
+        $13, $14)
 RETURNING id, created_at
 `
 
@@ -193,8 +310,12 @@ type InsertFillParams struct {
 	IncludedFolders []string
 	ExcludedFolders []string
 	FolderPrefix    *string
-	Cutoff          time.Time
+	Cutoff          *time.Time
 	CreatedBy       *int64
+	KeepRunning     bool
+	IntervalSeconds *int32
+	RecurringSince  *time.Time
+	RunStartedAt    *time.Time
 }
 
 type InsertFillRow struct {
@@ -202,6 +323,7 @@ type InsertFillRow struct {
 	CreatedAt time.Time
 }
 
+// A recurring fill has no cut-off and starts its first run at once.
 func (q *Queries) InsertFill(ctx context.Context, arg InsertFillParams) (InsertFillRow, error) {
 	row := q.db.QueryRow(ctx, insertFill,
 		arg.AccountID,
@@ -214,6 +336,10 @@ func (q *Queries) InsertFill(ctx context.Context, arg InsertFillParams) (InsertF
 		arg.FolderPrefix,
 		arg.Cutoff,
 		arg.CreatedBy,
+		arg.KeepRunning,
+		arg.IntervalSeconds,
+		arg.RecurringSince,
+		arg.RunStartedAt,
 	)
 	var i InsertFillRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -289,44 +415,29 @@ func (q *Queries) JournaledMessageIDs(ctx context.Context, arg JournaledMessageI
 	return items, nil
 }
 
-const latestFills = `-- name: LatestFills :many
-SELECT DISTINCT ON (sf.account_id) sf.id, sf.account_id, sf.host, sf.port, sf.tls_mode, sf.username, sf.password_enc, sf.included_folders, sf.excluded_folders, sf.folder_prefix, sf.cutoff, sf.status, sf.error, sf.created_by, sf.created_at, sf.finished_at
-FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id
-WHERE a.owner_id = $1
-ORDER BY sf.account_id, sf.id DESC
+const legacyFillFolders = `-- name: LegacyFillFolders :many
+SELECT DISTINCT folder_id FROM smtp_fill_folders WHERE fill_id = $1 AND folder_id <> $2
 `
 
-// The newest fill of each account of the owner.
-func (q *Queries) LatestFills(ctx context.Context, ownerID *int64) ([]SmtpFill, error) {
-	rows, err := q.db.Query(ctx, latestFills, ownerID)
+type LegacyFillFoldersParams struct {
+	FillID    int64
+	JournalID int64
+}
+
+// The folders of a fill from before #112 other than the journal folder.
+func (q *Queries) LegacyFillFolders(ctx context.Context, arg LegacyFillFoldersParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, legacyFillFolders, arg.FillID, arg.JournalID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SmtpFill
+	var items []int64
 	for rows.Next() {
-		var i SmtpFill
-		if err := rows.Scan(
-			&i.ID,
-			&i.AccountID,
-			&i.Host,
-			&i.Port,
-			&i.TlsMode,
-			&i.Username,
-			&i.PasswordEnc,
-			&i.IncludedFolders,
-			&i.ExcludedFolders,
-			&i.FolderPrefix,
-			&i.Cutoff,
-			&i.Status,
-			&i.Error,
-			&i.CreatedBy,
-			&i.CreatedAt,
-			&i.FinishedAt,
-		); err != nil {
+		var folder_id int64
+		if err := rows.Scan(&folder_id); err != nil {
 			return nil, err
 		}
-		items = append(items, i)
+		items = append(items, folder_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -335,7 +446,7 @@ func (q *Queries) LatestFills(ctx context.Context, ownerID *int64) ([]SmtpFill, 
 }
 
 const listAccountFills = `-- name: ListAccountFills :many
-SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at FROM smtp_fills WHERE account_id = $1 ORDER BY id DESC
+SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at, recurring_since, keep_running, interval_seconds, run_started_at, unconfirmed_folders FROM smtp_fills WHERE account_id = $1 ORDER BY id DESC
 `
 
 // The fills of an account, newest first.
@@ -365,6 +476,11 @@ func (q *Queries) ListAccountFills(ctx context.Context, accountID int64) ([]Smtp
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.RecurringSince,
+			&i.KeepRunning,
+			&i.IntervalSeconds,
+			&i.RunStartedAt,
+			&i.UnconfirmedFolders,
 		); err != nil {
 			return nil, err
 		}
@@ -377,7 +493,7 @@ func (q *Queries) ListAccountFills(ctx context.Context, accountID int64) ([]Smtp
 }
 
 const listFillFolders = `-- name: ListFillFolders :many
-SELECT ff.fill_id, ff.source_name, ff.folder_id, ff.source_uidvalidity, ff.last_uid, ff.done, ff.scanned, ff.imported, ff.new_messages, ff.after_cutoff, ff.journaled, ff.present, ff.deleted, ff.error, f.name AS folder_name
+SELECT ff.fill_id, ff.source_name, ff.folder_id, ff.source_uidvalidity, ff.last_uid, ff.done, ff.scanned, ff.imported, ff.new_messages, ff.after_cutoff, ff.journaled, ff.present, ff.deleted, ff.error, ff.waiting, f.name AS folder_name
 FROM smtp_fill_folders ff JOIN folders f ON f.id = ff.folder_id
 WHERE ff.fill_id = $1
 ORDER BY ff.source_name
@@ -398,6 +514,7 @@ type ListFillFoldersRow struct {
 	Present           int32
 	Deleted           int32
 	Error             *string
+	Waiting           int32
 	FolderName        string
 }
 
@@ -425,6 +542,7 @@ func (q *Queries) ListFillFolders(ctx context.Context, fillID int64) ([]ListFill
 			&i.Present,
 			&i.Deleted,
 			&i.Error,
+			&i.Waiting,
 			&i.FolderName,
 		); err != nil {
 			return nil, err
@@ -437,9 +555,146 @@ func (q *Queries) ListFillFolders(ctx context.Context, fillID int64) ([]ListFill
 	return items, nil
 }
 
-const resumeFill = `-- name: ResumeFill :execrows
-UPDATE smtp_fills SET status = 'running', error = NULL, finished_at = NULL, password_enc = $1
-WHERE id = $2 AND status IN ('failed', 'partial', 'cancelled')
+const moveFillFolders = `-- name: MoveFillFolders :exec
+UPDATE smtp_fill_folders SET folder_id = $1, last_uid = 0, done = FALSE
+WHERE fill_id = $2 AND folder_id <> $1
+`
+
+type MoveFillFoldersParams struct {
+	JournalID int64
+	FillID    int64
+}
+
+// After the copy: the fill's IMAP folders fill the journal folder, and
+// are scanned again from the start under the rule of a recurring fill.
+func (q *Queries) MoveFillFolders(ctx context.Context, arg MoveFillFoldersParams) error {
+	_, err := q.db.Exec(ctx, moveFillFolders, arg.JournalID, arg.FillID)
+	return err
+}
+
+const ownerFills = `-- name: OwnerFills :many
+SELECT sf.id, sf.account_id, sf.host, sf.port, sf.tls_mode, sf.username, sf.password_enc, sf.included_folders, sf.excluded_folders, sf.folder_prefix, sf.cutoff, sf.status, sf.error, sf.created_by, sf.created_at, sf.finished_at, sf.recurring_since, sf.keep_running, sf.interval_seconds, sf.run_started_at, sf.unconfirmed_folders
+FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id
+WHERE a.owner_id = $1
+  AND (sf.recurring_since IS NOT NULL
+    OR sf.id = (SELECT max(n.id) FROM smtp_fills n WHERE n.account_id = sf.account_id))
+ORDER BY sf.account_id, sf.id DESC
+`
+
+// The fills the owner's account cards show: every fill that was ever
+// recurring, and the newest fill of each account; newest first.
+func (q *Queries) OwnerFills(ctx context.Context, ownerID *int64) ([]SmtpFill, error) {
+	rows, err := q.db.Query(ctx, ownerFills, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SmtpFill
+	for rows.Next() {
+		var i SmtpFill
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Host,
+			&i.Port,
+			&i.TlsMode,
+			&i.Username,
+			&i.PasswordEnc,
+			&i.IncludedFolders,
+			&i.ExcludedFolders,
+			&i.FolderPrefix,
+			&i.Cutoff,
+			&i.Status,
+			&i.Error,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.RecurringSince,
+			&i.KeepRunning,
+			&i.IntervalSeconds,
+			&i.RunStartedAt,
+			&i.UnconfirmedFolders,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recurringFills = `-- name: RecurringFills :many
+SELECT sf.id, sf.account_id, sf.host, sf.port, sf.tls_mode, sf.username, sf.password_enc, sf.included_folders, sf.excluded_folders, sf.folder_prefix, sf.cutoff, sf.status, sf.error, sf.created_by, sf.created_at, sf.finished_at, sf.recurring_since, sf.keep_running, sf.interval_seconds, sf.run_started_at, sf.unconfirmed_folders FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id
+WHERE sf.keep_running AND sf.status <> 'running' AND a.enabled AND a.removed_at IS NULL
+ORDER BY sf.id
+`
+
+// Active recurring fills between runs, of enabled accounts that are not
+// removed; the runner decides which are due.
+func (q *Queries) RecurringFills(ctx context.Context) ([]SmtpFill, error) {
+	rows, err := q.db.Query(ctx, recurringFills)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SmtpFill
+	for rows.Next() {
+		var i SmtpFill
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Host,
+			&i.Port,
+			&i.TlsMode,
+			&i.Username,
+			&i.PasswordEnc,
+			&i.IncludedFolders,
+			&i.ExcludedFolders,
+			&i.FolderPrefix,
+			&i.Cutoff,
+			&i.Status,
+			&i.Error,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.FinishedAt,
+			&i.RecurringSince,
+			&i.KeepRunning,
+			&i.IntervalSeconds,
+			&i.RunStartedAt,
+			&i.UnconfirmedFolders,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resetFillRun = `-- name: ResetFillRun :exec
+UPDATE smtp_fill_folders
+SET done = FALSE, error = NULL, scanned = 0, imported = 0, new_messages = 0, after_cutoff = 0,
+    journaled = 0, present = 0, deleted = 0, waiting = 0
+WHERE fill_id = $1
+`
+
+// A new run of a recurring fill: every folder is visited again, and the
+// counts are those of the run.
+func (q *Queries) ResetFillRun(ctx context.Context, fillID int64) error {
+	_, err := q.db.Exec(ctx, resetFillRun, fillID)
+	return err
+}
+
+const resumeFill = `-- name: ResumeFill :one
+UPDATE smtp_fills SET status = 'running', error = NULL, finished_at = NULL, password_enc = $1,
+    keep_running = recurring_since IS NOT NULL,
+    run_started_at = CASE WHEN recurring_since IS NOT NULL THEN now() ELSE run_started_at END
+WHERE id = $2 AND NOT keep_running AND status IN ('failed', 'partial', 'cancelled')
+RETURNING keep_running
 `
 
 type ResumeFillParams struct {
@@ -447,16 +702,28 @@ type ResumeFillParams struct {
 	ID          int64
 }
 
-func (q *Queries) ResumeFill(ctx context.Context, arg ResumeFillParams) (int64, error) {
-	result, err := q.db.Exec(ctx, resumeFill, arg.PasswordEnc, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// A one-time fill continues where it stopped; a stopped recurring fill
+// keeps running again, starting a run.
+func (q *Queries) ResumeFill(ctx context.Context, arg ResumeFillParams) (bool, error) {
+	row := q.db.QueryRow(ctx, resumeFill, arg.PasswordEnc, arg.ID)
+	var keep_running bool
+	err := row.Scan(&keep_running)
+	return keep_running, err
+}
+
+const rewindFillFolders = `-- name: RewindFillFolders :exec
+UPDATE smtp_fill_folders SET last_uid = 0, done = FALSE WHERE fill_id = $1
+`
+
+// A one-time fill that becomes recurring: its folders are scanned again
+// from the start, so the new rule sees what the cut-off left out.
+func (q *Queries) RewindFillFolders(ctx context.Context, fillID int64) error {
+	_, err := q.db.Exec(ctx, rewindFillFolders, fillID)
+	return err
 }
 
 const runningFills = `-- name: RunningFills :many
-SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at FROM smtp_fills WHERE status = 'running' ORDER BY id
+SELECT id, account_id, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, folder_prefix, cutoff, status, error, created_by, created_at, finished_at, recurring_since, keep_running, interval_seconds, run_started_at, unconfirmed_folders FROM smtp_fills WHERE status = 'running' ORDER BY id
 `
 
 func (q *Queries) RunningFills(ctx context.Context) ([]SmtpFill, error) {
@@ -485,6 +752,11 @@ func (q *Queries) RunningFills(ctx context.Context) ([]SmtpFill, error) {
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.FinishedAt,
+			&i.RecurringSince,
+			&i.KeepRunning,
+			&i.IntervalSeconds,
+			&i.RunStartedAt,
+			&i.UnconfirmedFolders,
 		); err != nil {
 			return nil, err
 		}
@@ -494,6 +766,23 @@ func (q *Queries) RunningFills(ctx context.Context) ([]SmtpFill, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setFillInterval = `-- name: SetFillInterval :execrows
+UPDATE smtp_fills SET interval_seconds = $1 WHERE id = $2 AND keep_running
+`
+
+type SetFillIntervalParams struct {
+	IntervalSeconds *int32
+	ID              int64
+}
+
+func (q *Queries) SetFillInterval(ctx context.Context, arg SetFillIntervalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setFillInterval, arg.IntervalSeconds, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setFillPassword = `-- name: SetFillPassword :execrows
@@ -513,12 +802,69 @@ func (q *Queries) SetFillPassword(ctx context.Context, arg SetFillPasswordParams
 	return result.RowsAffected(), nil
 }
 
+const setFillRecurring = `-- name: SetFillRecurring :execrows
+UPDATE smtp_fills SET recurring_since = coalesce(recurring_since, now()), keep_running = TRUE,
+    interval_seconds = $1, password_enc = $2,
+    status = 'running', error = NULL, finished_at = NULL, run_started_at = now()
+WHERE id = $3 AND status <> 'running' AND NOT keep_running
+`
+
+type SetFillRecurringParams struct {
+	IntervalSeconds *int32
+	PasswordEnc     []byte
+	ID              int64
+}
+
+// Switches an ended fill on: it keeps running from now on, with the new
+// password, and starts its first run.
+func (q *Queries) SetFillRecurring(ctx context.Context, arg SetFillRecurringParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setFillRecurring, arg.IntervalSeconds, arg.PasswordEnc, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setFillUnconfirmed = `-- name: SetFillUnconfirmed :exec
+UPDATE smtp_fills SET unconfirmed_folders = $1::text[] WHERE id = $2
+`
+
+type SetFillUnconfirmedParams struct {
+	Folders []string
+	ID      int64
+}
+
+func (q *Queries) SetFillUnconfirmed(ctx context.Context, arg SetFillUnconfirmedParams) error {
+	_, err := q.db.Exec(ctx, setFillUnconfirmed, arg.Folders, arg.ID)
+	return err
+}
+
+const startFillRun = `-- name: StartFillRun :execrows
+UPDATE smtp_fills SET status = 'running', error = NULL, finished_at = NULL, run_started_at = $1
+WHERE id = $2 AND keep_running AND status IN ('ok', 'partial', 'failed')
+`
+
+type StartFillRunParams struct {
+	StartedAt *time.Time
+	ID        int64
+}
+
+// The next run of an active recurring fill, started at @started_at by the
+// clock of the runner, which compares it with that clock.
+func (q *Queries) StartFillRun(ctx context.Context, arg StartFillRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, startFillRun, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateFillFolder = `-- name: UpdateFillFolder :exec
 UPDATE smtp_fill_folders
 SET source_uidvalidity = $1, last_uid = $2, done = $3,
     scanned = $4, imported = $5, new_messages = $6, after_cutoff = $7,
-    journaled = $8, present = $9, deleted = $10, error = $11
-WHERE fill_id = $12 AND source_name = $13
+    journaled = $8, present = $9, deleted = $10, waiting = $11, error = $12
+WHERE fill_id = $13 AND source_name = $14
 `
 
 type UpdateFillFolderParams struct {
@@ -532,6 +878,7 @@ type UpdateFillFolderParams struct {
 	Journaled         int32
 	Present           int32
 	Deleted           int32
+	Waiting           int32
 	Error             *string
 	FillID            int64
 	SourceName        string
@@ -549,6 +896,7 @@ func (q *Queries) UpdateFillFolder(ctx context.Context, arg UpdateFillFolderPara
 		arg.Journaled,
 		arg.Present,
 		arg.Deleted,
+		arg.Waiting,
 		arg.Error,
 		arg.FillID,
 		arg.SourceName,

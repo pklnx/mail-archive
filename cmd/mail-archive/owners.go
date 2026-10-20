@@ -157,6 +157,18 @@ instead of the current owner. Also works for removed accounts.`,
 				return staleError(err)
 			}
 			fmt.Printf("account %q now belongs to %q\n", acc.Name, target.Name)
+			// A recurring fill goes on importing the same mailbox, now for
+			// the new owner.
+			fills, err := a.store.AccountFills(cmd.Context(), acc.ID)
+			if err != nil {
+				return err
+			}
+			for _, f := range fills {
+				if f.KeepRunning {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: fill %d keeps importing %s into %q, now for %q; stop it with: %s account fill %s --cancel --fill %d\n",
+						f.ID, f.Username, acc.Name, target.Name, commandName(), shellQuote(acc.Name), f.ID)
+				}
+			}
 			return nil
 		},
 	}

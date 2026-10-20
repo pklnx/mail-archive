@@ -36,8 +36,8 @@ const (
 	maxErrorLen = 200
 )
 
-// Notifier announces accounts whose syncs keep failing, and their
-// recovery, once each. The account's health row in the database is the
+// Notifier announces accounts whose syncs keep failing, recurring fills
+// whose runs keep failing, and their recovery, once each. The account's health row in the database is the
 // state: a sync only updates the failure streak, and the notifier sends
 // the difference to what it last announced. Leases keep two notifiers (two
 // servers, or a server and `sync`) from claiming the same transition.
@@ -95,11 +95,12 @@ func (n *Notifier) Run(ctx context.Context) {
 }
 
 // Deliver sends every announcement that is due, in batches of BatchSize:
-// failing syncs and recoveries first, then loss alerts. It stops at the
-// first failed request; the retry waits for its time. It returns an error
-// only if the database fails.
+// failing syncs and recoveries first, then failing recurring fills and
+// theirs, then loss alerts. It stops at the first failed request; the
+// retry waits for its time. It returns an error only if the database
+// fails.
 func (n *Notifier) Deliver(ctx context.Context) error {
-	for _, pass := range []func(context.Context) (int, bool, error){n.pass, n.passLoss} {
+	for _, pass := range []func(context.Context) (int, bool, error){n.pass, n.passFill, n.passLoss} {
 		for ctx.Err() == nil {
 			claimed, ok, err := pass(ctx)
 			if err != nil || !ok {
@@ -113,15 +114,44 @@ func (n *Notifier) Deliver(ctx context.Context) error {
 	return nil
 }
 
-// pass claims and sends one batch. ok is false when the request failed.
+// healthKind is what pass announces: accounts whose syncs fail, or
+// recurring fills whose runs fail.
+type healthKind struct {
+	claim    func(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int) ([]store.PendingNotification, error)
+	build    func([]store.PendingNotification) *Message
+	finish   func(ctx context.Context, id int64, lease []byte, state, errMsg string) error
+	postpone func(ctx context.Context, id int64, lease []byte, next time.Time, errMsg string) error
+	id       func(store.PendingNotification) int64
+}
+
+// pass claims and sends one batch of failing and recovered syncs. ok is
+// false when the request failed.
 func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
+	return n.passHealth(ctx, healthKind{
+		claim: n.Store.ClaimNotifications, build: BuildMessage,
+		finish: n.Store.FinishNotification, postpone: n.Store.DeferNotification,
+		id: func(p store.PendingNotification) int64 { return p.AccountID },
+	})
+}
+
+// passFill claims and sends one batch of failing and recovered recurring
+// fills.
+func (n *Notifier) passFill(ctx context.Context) (claimed int, ok bool, err error) {
+	return n.passHealth(ctx, healthKind{
+		claim: n.Store.ClaimFillNotifications, build: BuildFillMessage,
+		finish: n.Store.FinishFillNotification, postpone: n.Store.DeferFillNotification,
+		id: func(p store.PendingNotification) int64 { return p.FillID },
+	})
+}
+
+func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, ok bool, err error) {
 	lease := make([]byte, 16)
 	_, _ = rand.Read(lease)
-	pending, err := n.Store.ClaimNotifications(ctx, lease, LeaseDuration, n.AlertAfter, BatchSize)
+	pending, err := k.claim(ctx, lease, LeaseDuration, n.AlertAfter, BatchSize)
 	if err != nil || len(pending) == 0 {
 		return 0, true, err
 	}
-	msg := BuildMessage(pending)
+	msg := k.build(pending)
 	status, sendErr := n.Webhook.Send(ctx, msg)
 	// Record the outcome even if ctx was cancelled during the request.
 	bg := context.WithoutCancel(ctx)
@@ -129,7 +159,7 @@ func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 	if sendErr == nil {
 		for i, p := range pending {
 			ev := msg.Accounts[i]
-			if err := n.Store.FinishNotification(bg, p.AccountID, lease, targetState(ev.Event), ""); err != nil {
+			if err := k.finish(bg, k.id(p), lease, targetState(ev.Event), ""); err != nil {
 				return len(pending), true, n.lostLease(p, err)
 			}
 			what := "alert sent"
@@ -154,7 +184,7 @@ func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 	for i, p := range pending {
 		ev := msg.Accounts[i]
 		if p.FirstErrorAt != nil && now.Sub(*p.FirstErrorAt) >= GiveUpAfter {
-			if err := n.Store.FinishNotification(bg, p.AccountID, lease, targetState(ev.Event), de.Error()); err != nil {
+			if err := k.finish(bg, k.id(p), lease, targetState(ev.Event), de.Error()); err != nil {
 				return len(pending), false, n.lostLease(p, err)
 			}
 			log.Error("notification given up", "account", p.Account, "owner", p.Owner, "attempts", p.Attempts+1,
@@ -162,7 +192,7 @@ func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 			continue
 		}
 		next := now.Add(RetryDelay(p.Attempts, de))
-		if err := n.Store.DeferNotification(bg, p.AccountID, lease, next, de.Error()); err != nil {
+		if err := k.postpone(bg, k.id(p), lease, next, de.Error()); err != nil {
 			return len(pending), false, n.lostLease(p, err)
 		}
 	}
@@ -262,6 +292,80 @@ func BuildMessage(pending []store.PendingNotification) *Message {
 	}
 	m.Body = strings.Join(lines, "\n\n")
 	return m
+}
+
+// FillEventID is the stable ID of one transition of a recurring fill: the
+// fill, the start of its streak and the event.
+func FillEventID(fillID int64, failingSince *time.Time, event string) string {
+	return "fill-" + EventID(fillID, failingSince, event)
+}
+
+// BuildFillMessage turns claimed announcements of recurring fills into one
+// message, like BuildMessage.
+func BuildFillMessage(pending []store.PendingNotification) *Message {
+	m := &Message{Accounts: make([]AccountEvent, 0, len(pending))}
+	var failing, recovered int
+	var lines, ids []string
+	for _, p := range pending {
+		ev := AccountEvent{
+			Event: EventFailing, AccountID: p.AccountID, Account: p.Account, Owner: p.Owner, FillID: p.FillID, Mailbox: p.Mailbox,
+			FailureStreak: p.FailureStreak, FailingSince: p.FailingSince, LastError: truncate(p.LastError, maxErrorLen),
+		}
+		if p.NotifiedState == store.NotifiedFailing {
+			ev.Event, ev.LastError = EventRecovered, ""
+			recovered++
+		} else {
+			failing++
+		}
+		ev.ID = FillEventID(p.FillID, p.FailingSince, ev.Event)
+		m.Accounts = append(m.Accounts, ev)
+		ids = append(ids, ev.ID)
+		lines = append(lines, describeFill(ev))
+	}
+	first := m.Accounts[0]
+	switch {
+	case failing > 0 && recovered > 0:
+		m.Event = EventMixed
+		m.Title = fmt.Sprintf("Mail archive: %s failing, %d recovered", plural(failing, "import"), recovered)
+	case failing > 0:
+		m.Event = EventFailing
+		if failing == 1 {
+			m.Title = "Mail archive: import of " + first.Mailbox + " into " + first.Account + " keeps failing"
+		} else {
+			m.Title = fmt.Sprintf("Mail archive: imports of %d mailboxes keep failing", failing)
+		}
+	default:
+		m.Event = EventRecovered
+		if recovered == 1 {
+			m.Title = "Mail archive: " + first.Mailbox + " imports into " + first.Account + " again"
+		} else {
+			m.Title = fmt.Sprintf("Mail archive: %d mailboxes import again", recovered)
+		}
+	}
+	if len(ids) == 1 {
+		m.ID = ids[0]
+	} else {
+		sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
+		m.ID = "batch-" + hex.EncodeToString(sum[:8])
+	}
+	m.Body = strings.Join(lines, "\n\n")
+	return m
+}
+
+func describeFill(ev AccountEvent) string {
+	who := fmt.Sprintf("Import of %s into account %q (owner %s, fill %d)", ev.Mailbox, ev.Account, orDash(ev.Owner), ev.FillID)
+	since := ""
+	if ev.FailingSince != nil {
+		since = " since " + ev.FailingSince.UTC().Format("2006-01-02 15:04 UTC")
+	}
+	if ev.Event == EventRecovered {
+		return who + " ran successfully again after failing" + since + "."
+	}
+	s := fmt.Sprintf("%s failed %s in a row%s.", who, plural(ev.FailureStreak, "run"), since)
+	if ev.LastError != "" {
+		s += "\nLast error: " + ev.LastError
+	}
+	return s
 }
 
 func describe(ev AccountEvent) string {

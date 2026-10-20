@@ -73,9 +73,18 @@ WHERE a.kind = 'imap' AND a.removed_at IS NULL
 ORDER BY a.id;
 
 -- name: CountFailingByOwner :many
--- Enabled IMAP accounts per owner whose streak reached the threshold.
-SELECT a.owner_id, count(*) AS failing
-FROM accounts a JOIN account_sync_health h ON h.account_id = a.id
-WHERE a.kind = 'imap' AND a.enabled AND a.removed_at IS NULL AND a.owner_id IS NOT NULL
-  AND h.failure_streak >= @threshold::int
-GROUP BY a.owner_id;
+-- Enabled accounts per owner whose streak reached the threshold: IMAP
+-- accounts by their syncs, smtp accounts by their recurring fills.
+SELECT f.owner_id, count(DISTINCT f.account_id) AS failing
+FROM (
+    SELECT a.owner_id, a.id AS account_id
+    FROM accounts a JOIN account_sync_health h ON h.account_id = a.id
+    WHERE a.kind = 'imap' AND a.enabled AND a.removed_at IS NULL AND a.owner_id IS NOT NULL
+      AND h.failure_streak >= @threshold::int
+    UNION ALL
+    SELECT a.owner_id, a.id
+    FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id JOIN smtp_fill_health h ON h.fill_id = sf.id
+    WHERE sf.keep_running AND a.enabled AND a.removed_at IS NULL AND a.owner_id IS NOT NULL
+      AND h.failure_streak >= @threshold::int
+) f
+GROUP BY f.owner_id;

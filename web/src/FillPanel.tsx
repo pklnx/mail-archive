@@ -1,6 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
-import { accountsApi, folderQuestion, type Account, type ServerFolder, type TLSMode } from "./api";
-import { cutoffFromInput, fillStatus, resumable } from "./fill";
+import { accountsApi, folderQuestion, type Account, type AccountsResponse, type Fill, type ServerFolder, type TLSMode } from "./api";
+import { canKeepRunning, cutoffFromInput, fillIntervalOptions, fillStatus, resumable, stoppable } from "./fill";
 import { button, input, primary } from "./formStyles";
 import { formatCount, longDate } from "./format";
 import { t } from "./i18n";
@@ -8,17 +8,32 @@ import { t } from "./i18n";
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
- * The fill part of an smtp account's card: the latest fill's progress or
- * result, its folders, and cancel or resume.
+ * The fill part of an smtp account's card: its recurring fills and its
+ * latest fill, each with its progress or result, its folders, and stop,
+ * resume, keep running or the interval.
  */
-export function FillSection({ account: a, manage, onChanged }: { account: Account; manage: boolean; onChanged: () => void }) {
-  const f = a.fill;
-  const status = fillStatus(a);
+export function FillSection({ account: a, data, manage, onChanged }: { account: Account; data: AccountsResponse; manage: boolean; onChanged: () => void }) {
+  const fills = a.fills;
+  if (fills.length === 0) return null;
+  return (
+    <>
+      {fills.map((f) => (
+        <FillBlock key={f.id} account={a} fill={f} data={data} manage={manage} onChanged={onChanged} />
+      ))}
+    </>
+  );
+}
+
+function FillBlock({ account: a, fill: f, data, manage, onChanged }: { account: Account; fill: Fill; data: AccountsResponse; manage: boolean; onChanged: () => void }) {
+  const status = fillStatus(a, f);
   const [password, setPassword] = useState("");
+  const [interval, setIntervalChoice] = useState(f.interval ?? "default");
+  // Trash and spam folders that switching on would copy, once asked.
+  const [confirm, setConfirm] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const id = useId();
-  if (!f || !status) return null;
+  if (!status) return null;
 
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -26,8 +41,11 @@ export function FillSection({ account: a, manage, onChanged }: { account: Accoun
     try {
       await action();
       setPassword("");
+      setConfirm(null);
     } catch (err) {
-      setError(t.failed(errorText(err)));
+      const question = folderQuestion(err);
+      if (question) setConfirm(question);
+      else setError(t.failed(errorText(err)));
     }
     setBusy(false);
     onChanged();
@@ -37,40 +55,81 @@ export function FillSection({ account: a, manage, onChanged }: { account: Accoun
     e.preventDefault();
     void act(() => accountsApi.resumeFill(a.name, f.id, password));
   };
+  const keepRunning = (e: FormEvent) => {
+    e.preventDefault();
+    void act(() =>
+      accountsApi.changeFill(a.name, f.id, { keepRunning: true, password, interval, ...(confirm ? { confirmFolders: true } : {}) }),
+    );
+  };
+  const health = f.health && f.health.state !== "ok" ? f.health : null;
+  // Older fills write into a folder per IMAP folder until they keep running; newer ones all into JOURNAL.
+  const prefixed = f.folderPrefix && !f.recurringSince;
 
   return (
     <section className="flex flex-col gap-1 border-t border-line pt-2" aria-label={t.importFromIMAP}>
-      <p className={`text-sm ${status.error ? "text-danger" : "text-ink-muted"}`} aria-live="polite">
+      <p className={`text-sm ${status.error || health ? "text-danger" : "text-ink-muted"}`} aria-live="polite">
         {f.status === "running" && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}
         {status.text}
       </p>
-      <p className="truncate text-xs text-ink-muted">{t.fillSource(f.username, f.host, f.folderPrefix ? `${f.folderPrefix}/…` : "JOURNAL")}</p>
+      <p className="truncate text-xs text-ink-muted">{t.fillSource(f.username, f.host, prefixed ? `${f.folderPrefix}/…` : "JOURNAL")}</p>
+      {health && (
+        <p className={`text-xs ${health.state === "failing" ? "text-danger" : "text-warning"}`}>
+          {health.state === "failing" ? t.fillFailing(health.failureStreak) : t.fillStale}
+        </p>
+      )}
       {status.error && <p className="text-xs break-words text-danger">{status.error}</p>}
       {f.folders.length > 0 && (
-        <ul className="flex flex-wrap gap-x-3 text-xs text-ink-muted">
+        <ul className="flex flex-wrap gap-x-3 text-xs text-ink-muted" title={f.recurringSince ? t.recurringCountsHint : undefined}>
           {f.folders.map((ff) => (
             <li key={ff.source} title={ff.error || undefined} className={ff.error ? "text-danger" : undefined}>
-              {/* Older fills write into a folder per IMAP folder; newer ones all into JOURNAL. */}
-              {f.folderPrefix ? ff.folder : ff.source} <span className="tabular-nums">({formatCount(ff.imported)})</span>
+              {prefixed ? ff.folder : ff.source} <span className="tabular-nums">({formatCount(ff.imported)})</span>
               {!ff.done && !ff.error && f.status === "running" && " …"}
             </li>
           ))}
         </ul>
       )}
-      {manage && f.status === "running" && (
-        <button
-          type="button"
-          className={`${button} mt-1 self-start`}
-          disabled={busy}
-          onClick={() => {
-            if (window.confirm(t.confirmCancelFill)) void act(() => accountsApi.cancelFill(a.name, f.id));
-          }}
-        >
-          {t.cancelFill}
-        </button>
+      {f.unconfirmedFolders.length > 0 && <p className="text-xs text-warning">{t.fillUnconfirmed(f.unconfirmedFolders.join(", "))}</p>}
+      {manage && stoppable(f) && (
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={button}
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm(f.keepRunning ? t.confirmStopFill : t.confirmCancelFill)) void act(() => accountsApi.cancelFill(a.name, f.id));
+            }}
+          >
+            {f.keepRunning ? t.stopFill : t.cancelFill}
+          </button>
+          {f.keepRunning && (
+            <>
+              <select
+                className={`${input} w-auto`}
+                value={interval}
+                disabled={busy}
+                onChange={(e) => setIntervalChoice(e.target.value)}
+                aria-label={`${t.fillInterval} (${f.username})`}
+              >
+                {fillIntervalOptions(f.interval, data).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={button}
+                disabled={busy || interval === (f.interval ?? "default")}
+                onClick={() => void act(() => accountsApi.changeFill(a.name, f.id, { interval }))}
+              >
+                {t.saveFillInterval}
+              </button>
+            </>
+          )}
+        </div>
       )}
-      {manage && resumable(f) && (
-        <form onSubmit={resume} className="mt-1 flex flex-col gap-1">
+      {manage && (resumable(f) || canKeepRunning(f)) && (
+        <form onSubmit={resumable(f) ? resume : keepRunning} className="mt-1 flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <input
               className={`${input} w-56`}
@@ -81,15 +140,38 @@ export function FillSection({ account: a, manage, onChanged }: { account: Accoun
               aria-label={`${t.fieldPassword} (${f.username})`}
               placeholder={t.fieldPassword}
               autoComplete="new-password"
-              aria-describedby={`${id}-resume`}
+              aria-describedby={`${id}-password`}
             />
-            <button type="submit" className={button} disabled={busy || password === ""}>
-              {t.resumeFill}
-            </button>
+            {resumable(f) && (
+              <button type="submit" className={button} disabled={busy || password === ""}>
+                {t.resumeFill}
+              </button>
+            )}
+            {canKeepRunning(f) && (
+              <>
+                <select
+                  className={`${input} w-auto`}
+                  value={interval}
+                  disabled={busy}
+                  onChange={(e) => setIntervalChoice(e.target.value)}
+                  aria-label={`${t.fillInterval} (${f.username})`}
+                >
+                  {fillIntervalOptions(null, data).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className={button} disabled={busy || password === ""} onClick={keepRunning}>
+                  {confirm ? t.keepRunningCopy : t.keepRunningFill}
+                </button>
+              </>
+            )}
             {busy && <span className="text-sm text-ink-muted">{t.checkingLogin}</span>}
           </div>
-          <span id={`${id}-resume`} className="text-xs text-ink-muted">
-            {t.resumeFillHint}
+          {confirm && <p className="text-sm text-warning">{t.keepRunningTrashSpam(confirm.join(", "))}</p>}
+          <span id={`${id}-password`} className="text-xs text-ink-muted">
+            {f.recurringSince ? t.resumeRecurringHint : resumable(f) ? `${t.resumeFillHint} ${t.keepRunningHint}` : t.keepRunningHint}
           </span>
         </form>
       )}
@@ -106,16 +188,19 @@ const defaultPort: Record<TLSMode, number> = { tls: 993, starttls: 143, none: 14
 
 /**
  * Starts a fill of an smtp account: the IMAP server, its folders after a
- * login check (trash and spam unticked) and the cut-off. The mail goes into
- * the account's folder JOURNAL.
+ * login check (trash and spam unticked), and the cut-off, or whether it
+ * keeps importing new mail and how often. The mail goes into the account's
+ * folder JOURNAL.
  */
-export function FillForm({ account, onCancel, onStarted }: { account: Account; onCancel: () => void; onStarted: () => void }) {
+export function FillForm({ account, data, onCancel, onStarted }: { account: Account; data: AccountsResponse; onCancel: () => void; onStarted: () => void }) {
   const [host, setHost] = useState("");
   const [tls, setTLS] = useState<TLSMode>("tls");
   const [port, setPort] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [cutoff, setCutoff] = useState("");
+  const [keep, setKeep] = useState(false);
+  const [interval, setIntervalChoice] = useState("default");
   // The server's folders after the login check; changing the server or the
   // login loads them again.
   const [folders, setFolders] = useState<ServerFolder[] | null>(null);
@@ -155,7 +240,7 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
       await accountsApi.startFill(account.name, {
         ...server(),
         excludedFolders: folders.filter((f) => !f.selected).map((f) => f.name),
-        before: cutoffFromInput(cutoff),
+        ...(keep ? { keepRunning: true, ...(interval !== "default" ? { interval } : {}) } : { before: cutoffFromInput(cutoff) }),
         // The user saw the trash and spam folders unticked in the list.
         confirmFolders: true,
       });
@@ -241,24 +326,46 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
           </span>
         </fieldset>
       )}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className={field}>
-          <label className={field}>
-            {t.fieldCutoff}
-            <input
-              className={input}
-              type="datetime-local"
-              value={cutoff}
-              onChange={(e) => setCutoff(e.target.value)}
-              aria-describedby={`${id}-cutoff`}
-            />
-          </label>
-          <span id={`${id}-cutoff`} className="text-xs text-ink-muted">
-            {t.cutoffHint}
-            {cutoff && <span className="block text-warning">{t.cutoffGap}</span>}
-          </span>
-        </div>
+      <div className="flex flex-col gap-1 text-sm">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} aria-describedby={`${id}-keep`} />
+          <span className="font-medium">{t.keepImporting}</span>
+        </label>
+        <span id={`${id}-keep`} className="text-xs text-ink-muted">
+          {t.keepImportingHint}
+        </span>
       </div>
+      {keep ? (
+        <label className={`${field} sm:w-64`}>
+          {t.fillInterval}
+          <select className={input} value={interval} onChange={(e) => setIntervalChoice(e.target.value)}>
+            {fillIntervalOptions(null, data).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className={field}>
+            <label className={field}>
+              {t.fieldCutoff}
+              <input
+                className={input}
+                type="datetime-local"
+                value={cutoff}
+                onChange={(e) => setCutoff(e.target.value)}
+                aria-describedby={`${id}-cutoff`}
+              />
+            </label>
+            <span id={`${id}-cutoff`} className="text-xs text-ink-muted">
+              {t.cutoffHint}
+              {cutoff && <span className="block text-warning">{t.cutoffGap}</span>}
+            </span>
+          </div>
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-sm break-words text-danger">
           {error}

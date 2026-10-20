@@ -69,6 +69,9 @@ func TestListHeaders(t *testing.T) {
 	if !got[0].InternalDate.Equal(at.Add(time.Hour)) {
 		t.Errorf("internal date %v, want %v", got[0].InternalDate, at.Add(time.Hour))
 	}
+	if want := int64(len(msg("m2@example.com"))); got[0].Size != want {
+		t.Errorf("size %d, want %d", got[0].Size, want)
+	}
 	if c := srv.Commands(); !slices.Equal(c, []string{"UID FETCH HEADER"}) || len(srv.BodyFetches()) != 0 {
 		t.Errorf("commands %v, body fetches %v", c, srv.BodyFetches())
 	}

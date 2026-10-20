@@ -123,3 +123,78 @@ func TestDueAccounts(t *testing.T) {
 		t.Errorf("due with floor %v, want [5]", got)
 	}
 }
+
+func TestParseFillInterval(t *testing.T) {
+	for in, want := range map[string]*time.Duration{"default": nil, "12h": dur(12 * time.Hour), "5m": dur(5 * time.Minute)} {
+		if got, err := ParseFillInterval(in); err != nil || !SameOwnInterval(got, want) {
+			t.Errorf("ParseFillInterval(%q) = %v, %v", in, got, err)
+		}
+	}
+	// A recurring fill is always on the schedule.
+	for _, in := range []string{"manual", "0", "4m", "721h", "90s"} {
+		if _, err := ParseFillInterval(in); !errors.Is(err, ErrOwnInterval) {
+			t.Errorf("ParseFillInterval(%q) = %v, want ErrOwnInterval", in, err)
+		}
+	}
+}
+
+func TestScheduleNextFill(t *testing.T) {
+	created := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
+	started := created.Add(time.Hour)
+	s := Schedule{Sync: 6 * time.Hour, SyncMin: 2 * time.Hour}
+	for _, c := range []struct {
+		name string
+		s    Schedule
+		f    store.Fill
+		want time.Time
+		ok   bool
+	}{
+		{"never ran", s, store.Fill{KeepRunning: true, CreatedAt: created}, created, true},
+		{"default", s, store.Fill{KeepRunning: true, CreatedAt: created, RunStartedAt: &started}, started.Add(6 * time.Hour), true},
+		{"own", s, store.Fill{KeepRunning: true, Interval: dur(3 * time.Hour), RunStartedAt: &started}, started.Add(3 * time.Hour), true},
+		{"below the floor", s, store.Fill{KeepRunning: true, Interval: dur(30 * time.Minute), RunStartedAt: &started}, started.Add(2 * time.Hour), true},
+		{"stopped", s, store.Fill{RunStartedAt: &started}, time.Time{}, false},
+		{"schedule off", Schedule{}, store.Fill{KeepRunning: true, RunStartedAt: &started}, time.Time{}, false},
+	} {
+		if got, ok := c.s.NextFill(&c.f); ok != c.ok || !got.Equal(c.want) {
+			t.Errorf("%s: %v %v, want %v %v", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestDueFills(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	at := func(ago time.Duration) *time.Time { t := now.Add(-ago); return &t }
+	fills := []store.Fill{
+		{ID: 1, KeepRunning: true, RunStartedAt: at(7 * time.Hour)},                              // due
+		{ID: 2, KeepRunning: true, RunStartedAt: at(5 * time.Hour)},                              // not yet
+		{ID: 3, KeepRunning: true, RunStartedAt: at(time.Hour), Interval: dur(time.Hour)},        // due on its own interval
+		{ID: 4, KeepRunning: true, RunStartedAt: at(time.Hour), Interval: dur(30 * time.Minute)}, // floor 2h: not yet
+		{ID: 5, KeepRunning: true, CreatedAt: *at(time.Minute)},                                  // never ran: due
+	}
+	s := Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}
+	ids := func(fs []store.Fill) []int64 {
+		var out []int64
+		for _, f := range fs {
+			out = append(out, f.ID)
+		}
+		return out
+	}
+	if got := ids(dueFills(fills, s, now, time.Time{})); !slices.Equal(got, []int64{1, 3, 4, 5}) {
+		t.Errorf("due %v", got)
+	}
+	s.SyncMin = 2 * time.Hour
+	if got := ids(dueFills(fills, s, now, time.Time{})); !slices.Equal(got, []int64{1, 5}) {
+		t.Errorf("due with a floor of 2h %v", got)
+	}
+	// Nothing in the 70 minutes after the start.
+	if got := dueFills(fills, s, now, now.Add(RecurringStartHold-time.Hour)); len(got) != 0 {
+		t.Errorf("due during the hold %v", ids(got))
+	}
+	if got := ids(dueFills(fills, s, now, now)); !slices.Equal(got, []int64{1, 5}) {
+		t.Errorf("due at the end of the hold %v", got)
+	}
+	if got := dueFills(fills, Schedule{}, now, time.Time{}); len(got) != 0 {
+		t.Errorf("due with the schedule off %v", ids(got))
+	}
+}

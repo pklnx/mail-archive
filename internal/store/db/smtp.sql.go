@@ -336,19 +336,20 @@ func (q *Queries) LockFolder(ctx context.Context, arg LockFolderParams) (LockFol
 }
 
 const lockFolderByID = `-- name: LockFolderByID :one
-SELECT id, uidvalidity FROM folders WHERE id = $1 FOR UPDATE
+SELECT id, uidvalidity, last_uid FROM folders WHERE id = $1 FOR UPDATE
 `
 
 type LockFolderByIDRow struct {
 	ID          int64
 	Uidvalidity int64
+	LastUid     int64
 }
 
 // LockFolder by ID, for a fill's batch.
 func (q *Queries) LockFolderByID(ctx context.Context, id int64) (LockFolderByIDRow, error) {
 	row := q.db.QueryRow(ctx, lockFolderByID, id)
 	var i LockFolderByIDRow
-	err := row.Scan(&i.ID, &i.Uidvalidity)
+	err := row.Scan(&i.ID, &i.Uidvalidity, &i.LastUid)
 	return i, err
 }
 

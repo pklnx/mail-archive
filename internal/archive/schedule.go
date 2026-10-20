@@ -101,6 +101,21 @@ func (s Schedule) Next(a Scheduled) (next time.Time, ok bool) {
 	return a.LastStart.Add(every), true
 }
 
+// NextFill is when the schedule runs an active recurring fill next: the
+// start of its last run plus its interval, or its creation if it never
+// ran. It may lie in the past. ok is false for other fills and when the
+// schedule is off.
+func (s Schedule) NextFill(f *store.Fill) (next time.Time, ok bool) {
+	every := s.Every(f.Interval)
+	if every == 0 || !f.KeepRunning {
+		return time.Time{}, false
+	}
+	if f.RunStartedAt == nil {
+		return f.CreatedAt, true
+	}
+	return f.RunStartedAt.Add(every), true
+}
+
 // ErrOwnInterval is wrapped by the errors of ParseOwnInterval and CheckFloor.
 var ErrOwnInterval = errors.New("invalid sync interval")
 
@@ -120,6 +135,24 @@ func ParseOwnInterval(v string) (*time.Duration, error) {
 		return nil, fmt.Errorf("%w %q", ErrOwnInterval, v)
 	}
 	return &d, nil
+}
+
+// ParseFillInterval reads the interval of a recurring fill: "default"
+// (nil) or a Go duration of whole minutes from MinOwnInterval to
+// MaxOwnInterval. A recurring fill is always on the schedule, so "manual"
+// is refused.
+func ParseFillInterval(v string) (*time.Duration, error) {
+	if v == OwnIntervalManual {
+		return nil, fmt.Errorf("%w %q", ErrOwnInterval, v)
+	}
+	return ParseOwnInterval(v)
+}
+
+// FillIntervalRule describes the accepted intervals of a recurring fill,
+// for error messages.
+func (s Schedule) FillIntervalRule() string {
+	return fmt.Sprintf("want %s or a duration of whole minutes from %s to %s",
+		OwnIntervalDefault, config.FormatDuration(max(MinOwnInterval, s.SyncMin)), config.FormatDuration(MaxOwnInterval))
 }
 
 // CheckFloor refuses an own interval below the server's floor. Callers

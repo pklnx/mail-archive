@@ -82,9 +82,11 @@ type accountJSON struct {
 	Addresses      []string   `json:"addresses"`
 	LastReceivedAt *time.Time `json:"lastReceivedAt"`
 	// Fill is the latest fill of an smtp account, null without one;
-	// FirstReceived its first message still stored, null without one.
-	// Both null for other kinds.
+	// Fills its recurring fills (also stopped ones) and its latest fill,
+	// newest first; FirstReceived its first message still stored, null
+	// without one. Null and empty for other kinds.
 	Fill          *fillJSON          `json:"fill"`
+	Fills         []*fillJSON        `json:"fills"`
 	FirstReceived *firstReceivedJSON `json:"firstReceived"`
 }
 
@@ -167,7 +169,12 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	fills, err := s.store.LatestFills(ctx, me)
+	fills, err := s.store.OwnerFills(ctx, me)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	fillHealth, err := s.store.FillHealth(ctx, &me)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -247,8 +254,12 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		if t, ok := received[a.ID]; ok {
 			aj.LastReceivedAt = &t
 		}
-		if f := fills[a.ID]; f != nil {
-			aj.Fill = newFillJSON(f)
+		aj.Fills = []*fillJSON{}
+		for i := range fills[a.ID] {
+			aj.Fills = append(aj.Fills, s.fillJSON(&fills[a.ID][i], fillHealth, busy, now))
+		}
+		if len(aj.Fills) > 0 {
+			aj.Fill = aj.Fills[0]
 		}
 		if a.Kind == store.KindSMTP {
 			first, err := s.store.FirstReceived(ctx, a.ID)

@@ -378,13 +378,15 @@ func ListFlags(conn *Conn, handle func(uid uint32, flags []imap.Flag)) error {
 type Header struct {
 	UID          uint32
 	InternalDate time.Time
-	MessageID    []byte
+	// Size is the message's RFC822.SIZE.
+	Size      int64
+	MessageID []byte
 }
 
 // maxHeaderField bounds the bytes read of a header section.
 const maxHeaderField = 64 << 10
 
-// ListHeaders sends UID FETCH after+1:* (UID INTERNALDATE
+// ListHeaders sends UID FETCH after+1:* (UID INTERNALDATE RFC822.SIZE
 // BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]) in the examined folder and calls
 // handle for each message. It reads no bodies, and it skips the last
 // message that "n:*" returns even if its UID is lower. An empty folder
@@ -396,7 +398,7 @@ func ListHeaders(conn *Conn, after uint32, handle func(Header) error) error {
 	var set imap.UIDSet
 	set.AddRange(imap.UID(after+1), 0) // after+1:*
 	section := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, HeaderFields: []string{"Message-ID"}, Peek: true}
-	cmd := conn.c.Fetch(set, &imap.FetchOptions{UID: true, InternalDate: true, BodySection: []*imap.FetchItemBodySection{section}})
+	cmd := conn.c.Fetch(set, &imap.FetchOptions{UID: true, InternalDate: true, RFC822Size: true, BodySection: []*imap.FetchItemBodySection{section}})
 	var handleErr error
 	for {
 		msg := cmd.Next()
@@ -414,6 +416,8 @@ func ListHeaders(conn *Conn, after uint32, handle func(Header) error) error {
 				h.UID = uint32(item.UID)
 			case imapclient.FetchItemDataInternalDate:
 				h.InternalDate = item.Time
+			case imapclient.FetchItemDataRFC822Size:
+				h.Size = item.Size
 			case imapclient.FetchItemDataBodySection:
 				if item.Literal != nil {
 					b, err := io.ReadAll(io.LimitReader(item.Literal, maxHeaderField))

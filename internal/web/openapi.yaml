@@ -88,8 +88,10 @@ paths:
       operationId: getSyncHealth
       summary: Sync health of all accounts
       description: |
-        Whether every enabled IMAP account syncs. Names no accounts, users or
-        mail, only account IDs. Cached for 15 seconds.
+        Whether every enabled IMAP account syncs and every recurring fill
+        runs. A failing or stale recurring fill lists the ID of its smtp
+        account. Names no accounts, users or mail, only account IDs. Cached
+        for 15 seconds.
       security: []
       responses:
         "200":
@@ -1815,7 +1817,7 @@ paths:
     post:
       tags: [accounts]
       operationId: startFill
-      summary: Copy an IMAP mailbox once into an smtp account
+      summary: Copy an IMAP mailbox into an smtp account, once or on a schedule
       description: |
         A fill brings in the mail from before journaling: the messages of
         the IMAP mailbox go into the smtp account's folder `JOURNAL`, next to
@@ -1824,7 +1826,16 @@ paths:
         filed in several IMAP folders is stored once. A message is copied when
         its INTERNALDATE is before the cut-off (`before`) plus one hour,
         unless the account received a message with the same Message-ID over
-        SMTP. It is not a sync: nothing is fetched again afterwards.
+        SMTP. Such a fill runs once.
+
+        With `"keepRunning": true` the fill is recurring: it has no cut-off
+        and copies a message once its INTERNALDATE is two hours old, unless
+        the account received it over SMTP. The web server runs it again
+        every `interval` (default its sync interval), but not in the first
+        70 minutes after it started; each run continues every IMAP folder
+        where the last one stopped. Moves and deletions in the mailbox are
+        ignored. A trash or spam folder that appears later is skipped
+        (`unconfirmedFolders`) unless `includedFolders` names it.
 
         The login is checked first. If the server marks folders as trash or
         spam and the fill would copy them, nothing is saved: the answer is
@@ -1833,7 +1844,8 @@ paths:
         background, one at a time; `GET /api/accounts` shows its progress
         under `fill`, and the account's `sync.state` is `queued` or
         `running` meanwhile. The password is kept, encrypted, only while the
-        fill runs. Also for a disabled account.
+        fill runs or keeps running. Also for a disabled account; a recurring
+        fill does not run again while the account is disabled.
       requestBody:
         required: true
         content:
@@ -1857,6 +1869,64 @@ paths:
           description: >-
             Not an smtp account, a fill of it is running, or folders need
             confirming.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderConfirmation"
+        "422":
+          $ref: "#/components/responses/LoginFailed"
+        "503":
+          $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/fills/{id}:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+      - $ref: "#/components/parameters/numericID"
+    patch:
+      tags: [accounts]
+      operationId: changeFill
+      summary: Switch a fill to recurring, stop it or change its interval
+      description: |
+        - `{"keepRunning": true, "password": "…", "interval"?, "confirmFolders"?}`
+          switches a fill that ended on: it keeps running from now on, and its
+          first run is queued (`202`). The password is required and checked
+          first. That run scans the fill's IMAP folders again from the start
+          and copies what the cut-off left out. A fill from before fills
+          wrote into `JOURNAL` first copies its messages into `JOURNAL`, as
+          locations, without new files. Trash and spam folders it has not copied yet need
+          `confirmFolders`, as for a new fill.
+        - `{"keepRunning": false}` stops a recurring fill, like `cancel`.
+        - `{"interval": "12h"}` changes the interval of a recurring fill
+          that keeps running (`204`).
+
+        A new password for a recurring fill whose login fails: stop it and
+        resume it with the new password.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FillChange"
+      responses:
+        "202":
+          description: Switched on; its first run is queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FillID"
+        "204":
+          description: Stopped, or the interval changed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: >-
+            Not an smtp account; the fill runs, already keeps running, or
+            (to stop it or change its interval) does not; another fill of
+            the account runs; or folders need confirming.
           content:
             application/json:
               schema:
@@ -1934,7 +2004,8 @@ paths:
       description: |
         A fill that failed, partly failed or was cancelled continues where it
         stopped. Its password was wiped when it ended, so it is given again
-        and checked.
+        and checked. A stopped recurring fill keeps running again, starting
+        with a run; one that still keeps running is not resumed (`409`).
       requestBody:
         required: true
         content:
@@ -1961,7 +2032,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Not an smtp account, the fill is running or ended well, or another fill of the account runs.
+          description: Not an smtp account, the fill is running, ended well or keeps running, or another fill of the account runs.
           content:
             application/json:
               schema:
@@ -1978,10 +2049,11 @@ paths:
     post:
       tags: [accounts]
       operationId: cancelFill
-      summary: Stop a running fill
+      summary: Stop a running or recurring fill
       description: |
-        The fill stops after its current batch and its password is wiped.
-        What it copied stays; `resume` continues it.
+        A running fill stops after its current batch; a recurring fill no
+        longer keeps running. Its password is wiped. What it copied stays;
+        `resume` continues it.
       responses:
         "204":
           description: Cancelled.
@@ -1990,7 +2062,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Not an smtp account, or the fill is not running.
+          description: Not an smtp account, or the fill neither runs nor keeps running.
           content:
             application/json:
               schema:
@@ -2847,7 +2919,7 @@ components:
             it is on.
     Account:
       type: object
-      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, firstReceived]
+      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived]
       properties:
         name:
           type: string
@@ -2903,6 +2975,13 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/Fill"
+        fills:
+          type: array
+          description: >-
+            The recurring fills of an smtp account (also stopped ones) and
+            its latest fill, newest first; empty for other kinds.
+          items:
+            $ref: "#/components/schemas/Fill"
         firstReceived:
           description: >-
             The first message an smtp account received that is still
@@ -3109,11 +3188,42 @@ components:
           format: date-time
           description: >-
             The cut-off; default now. Messages from an hour after it on are
-            left to journaling.
+            left to journaling. Not with `keepRunning`.
         confirmFolders:
           type: boolean
           default: false
           description: Copy trash and spam folders too, if the filters select them.
+        keepRunning:
+          type: boolean
+          default: false
+          description: >-
+            Keep importing: a recurring fill copies what is two hours old and
+            runs again every `interval`.
+        interval:
+          type: string
+          default: default
+          description: >-
+            With `keepRunning`: `default` (the server's
+            `MAIL_ARCHIVE_SYNC_INTERVAL`) or a duration of whole minutes from
+            5m to 720h, not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`.
+    FillChange:
+      type: object
+      additionalProperties: false
+      properties:
+        keepRunning:
+          type: boolean
+          description: "`true` switches an ended fill on; `false` stops a recurring one."
+        password:
+          type: string
+          writeOnly: true
+          description: 'Required with `"keepRunning": true`; only with it.'
+        interval:
+          type: string
+          description: "`default` or a duration; alone, it changes the interval of a fill that keeps running."
+        confirmFolders:
+          type: boolean
+          default: false
+          description: 'With `"keepRunning": true`, copy trash and spam folders the fill has not copied yet.'
     FillID:
       type: object
       required: [id]
@@ -3124,7 +3234,8 @@ components:
     Fill:
       type: object
       description: A copy of an IMAP mailbox into an smtp account. Never carries the password.
-      required: [id, status, host, port, tls, username, includedFolders, excludedFolders, folderPrefix, before, error, createdAt, finishedAt, folders]
+      required: [id, status, host, port, tls, username, includedFolders, excludedFolders, folderPrefix, before, keepRunning, recurringSince,
+                 runStartedAt, interval, every, nextAt, health, unconfirmedFolders, error, createdAt, finishedAt, folders]
       properties:
         id:
           type: integer
@@ -3132,7 +3243,10 @@ components:
         status:
           type: string
           enum: [running, ok, partial, failed, cancelled]
-          description: "`partial`: some folders failed (see their `error`)."
+          description: >-
+            `partial`: some folders failed (see their `error`). For a
+            recurring fill, the state of its current or last run;
+            `cancelled` once it was stopped.
         host:
           type: string
         port:
@@ -3155,12 +3269,51 @@ components:
             Only for fills started before fills wrote into `JOURNAL`: they
             write into `PREFIX/<IMAP folder>`. Empty for newer fills.
         before:
-          type: string
+          type: [string, "null"]
           format: date-time
-          description: The cut-off.
+          description: The cut-off; null for a fill that was recurring from the start.
+        keepRunning:
+          type: boolean
+          description: The fill is recurring and has not been stopped.
+        recurringSince:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When the fill became recurring; null for a one-time fill. A
+            recurring fill copies what is two hours old, and its `status`,
+            `error` and counts are those of its current or last run.
+        runStartedAt:
+          type: [string, "null"]
+          format: date-time
+          description: The start of the current or last run of a recurring fill.
+        interval:
+          type: [string, "null"]
+          description: The fill's own interval, `default` or a duration like `12h0m0s`; null for a one-time fill.
+        every:
+          type: [string, "null"]
+          description: >-
+            How often the web server runs the fill, with the server's
+            default and floor applied; null unless it keeps running and
+            the schedule is on.
+        nextAt:
+          type: [string, "null"]
+          format: date-time
+          description: The next run (in the past when due); null when `every` is.
+        health:
+          description: The health of a fill that keeps running, like an account's sync health; null otherwise.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/FillHealth"
+        unconfirmedFolders:
+          type: array
+          description: >-
+            Trash and spam folders that appeared after the fill started; its
+            runs skip them.
+          items:
+            type: string
         error:
           type: string
-          description: Why the fill failed; empty otherwise.
+          description: Why the fill (or a recurring fill's last run) failed; empty otherwise.
         createdAt:
           type: string
           format: date-time
@@ -3172,9 +3325,27 @@ components:
           description: The folders started so far.
           items:
             $ref: "#/components/schemas/FillFolder"
+    FillHealth:
+      type: object
+      required: [state, failureStreak, failingSince, lastSuccessAt]
+      properties:
+        state:
+          type: string
+          enum: [ok, failing, stale]
+          description: >-
+            `failing`: the last `alertAfter` runs failed; `stale`: no run
+            succeeded within two intervals (at least one plus an hour).
+        failureStreak:
+          type: integer
+        failingSince:
+          type: [string, "null"]
+          format: date-time
+        lastSuccessAt:
+          type: [string, "null"]
+          format: date-time
     FillFolder:
       type: object
-      required: [source, folder, done, error, scanned, imported, new, afterCutoff, journaled, present, deleted]
+      required: [source, folder, done, error, scanned, imported, new, afterCutoff, journaled, present, deleted, waiting]
       properties:
         source:
           type: string
@@ -3203,10 +3374,15 @@ components:
           description: Skipped; the account received the same Message-ID over SMTP.
         present:
           type: integer
-          description: Already in the archive folder (a resumed fill).
+          description: >-
+            Already in the archive folder (a resumed fill), or copied by
+            this fill before (a recurring fill: a moved message).
         deleted:
           type: integer
           description: Deleted by retention before; not stored again.
+        waiting:
+          type: integer
+          description: Recurring fills only, younger than two hours; the next run copies them.
     FirstReceived:
       type: object
       required: [at, subject]
@@ -3231,13 +3407,13 @@ components:
           enum: [ok, degraded, unavailable]
         failing:
           type: array
-          description: IDs of failing accounts.
+          description: IDs of failing accounts (an smtp account when one of its recurring fills fails).
           items:
             type: integer
             format: int64
         stale:
           type: array
-          description: IDs of stale accounts.
+          description: IDs of stale accounts (an smtp account when one of its recurring fills is stale).
           items:
             type: integer
             format: int64

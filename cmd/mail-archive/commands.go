@@ -920,7 +920,12 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				}()
 				// Let a running sync record its outcome before the store closes.
 				defer func() { <-runnerDone }()
-				opts.Fills = &archive.FillRunner{Filler: &archive.Filler{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log}}
+				// Recurring fills wait after the start, so that journal copies
+				// the mail server queued during an outage arrive first.
+				opts.Fills = &archive.FillRunner{
+					Filler:   &archive.Filler{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log},
+					Schedule: opts.Runner.Schedule, HoldUntil: time.Now().Add(archive.RecurringStartHold), AfterRun: afterSync,
+				}
 				fillsDone := make(chan struct{})
 				go func() {
 					opts.Fills.Run(cmd.Context())
