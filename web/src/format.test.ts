@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { dateGroup, day, fileSize, formatCount, formatInterval, locationLabel, relativeTime, senderName, shortDate, splitHighlights } from "./format";
+import { dateGroup, day, fileSize, formatCount, formatInterval, locationLabel, originText, relativeTime, senderName, shortDate, splitHighlights } from "./format";
 import { applySettings, t } from "./i18n";
 
 describe("splitHighlights", () => {
@@ -58,6 +58,16 @@ describe("relativeTime and formatInterval", () => {
     expect(formatInterval("6h0m0s")).toBe("6 hours");
     expect(formatInterval("1h30m0s")).toBe("1 hour 30 minutes");
     expect(formatInterval("5m0s")).toBe("5 minutes");
+  });
+});
+
+describe("originText", () => {
+  it("names the mailbox a fill imported from", () => {
+    expect(originText({ fill: { username: "ak@example.com" } })).toBe(t.originFilledFrom("ak@example.com"));
+    expect(t.originFilledFrom("ak@example.com")).toContain("ak@example.com");
+  });
+  it("falls back to the plain text without the fill", () => {
+    expect(originText({ fill: null })).toBe(t.originFilled);
   });
 });
 

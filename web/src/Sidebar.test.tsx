@@ -122,10 +122,18 @@ describe("Sidebar tree", () => {
 describe("Sidebar account state", () => {
   it("says importing for a running fill, syncing for IMAP", () => {
     const d = data();
-    const smtp = { ...account("journal", [f("INBOX"), f("alice/INBOX")]), kind: "smtp" as const, sync: { ...d.accounts[0]!.sync, state: "running" as const } };
+    const smtp = { ...account("journal", [f("alice/INBOX"), f("JOURNAL")]), kind: "smtp" as const, sync: { ...d.accounts[0]!.sync, state: "running" as const } };
     d.accounts = [{ ...d.accounts[0]!, sync: { ...d.accounts[0]!.sync, state: "running" } }, smtp];
     render(<Harness state={view()} d={d} select={() => {}} />);
     expect(screen.getAllByTitle(t.importing)).toHaveLength(1);
     expect(screen.getAllByTitle(t.syncing)).toHaveLength(1);
+  });
+
+  it("lists JOURNAL first in an smtp account", () => {
+    const d = data();
+    d.accounts = [{ ...account("journal", [f("alice/INBOX"), f("JOURNAL")]), kind: "smtp" }];
+    render(<Harness state={view()} d={d} select={() => {}} />);
+    const names = screen.getAllByRole("button", { hidden: true }).map((b) => b.title).filter((n) => n === "JOURNAL" || n === "alice/INBOX");
+    expect(names).toEqual(["JOURNAL", "alice/INBOX"]);
   });
 });

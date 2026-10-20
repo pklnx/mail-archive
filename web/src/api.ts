@@ -66,7 +66,7 @@ export interface Account {
   firstReceived: { at: string; subject: string } | null;
 }
 
-/** A one-time copy of an IMAP mailbox into an smtp account. */
+/** A one-time copy of an IMAP mailbox into an smtp account, into its folder JOURNAL. */
 export interface Fill {
   id: number;
   /** "partial": some folders failed (see their error). */
@@ -77,6 +77,7 @@ export interface Fill {
   username: string;
   includedFolders: string[];
   excludedFolders: string[];
+  /** Only for fills started before fills wrote into JOURNAL: they write into "prefix/<IMAP folder>". Empty otherwise. */
   folderPrefix: string;
   /** The cut-off: messages from an hour after it on are left to journaling. */
   before: string;
@@ -88,7 +89,7 @@ export interface Fill {
 }
 
 export interface FillFolder {
-  /** The IMAP folder, and the archive folder it fills ("prefix/source"). */
+  /** The IMAP folder, and the archive folder it fills: JOURNAL ("prefix/source" for older fills). */
   source: string;
   folder: string;
   done: boolean;
@@ -110,8 +111,6 @@ export interface FillInput {
   password: string;
   includedFolders?: string[];
   excludedFolders?: string[];
-  /** Default: the user name. */
-  folderPrefix?: string;
   /** The cut-off as RFC 3339; default: now. */
   before?: string;
   confirmFolders?: boolean;
@@ -236,10 +235,19 @@ export interface Location {
   envelope: Envelope | null;
   /** smtp accounts: copied from IMAP by a fill, so there is no envelope. */
   filled: boolean;
+  /** The fill a filled location came from, with its mailbox; null when unknown. */
+  fill: LocationFill | null;
   /** When the retention period ends; null without a rule (kept for ever). */
   retainUntil: string | null;
   /** On legal hold; only sent to admins. */
   onHold?: boolean;
+}
+
+/** The fill a location came from: the IMAP mailbox it was imported from. */
+export interface LocationFill {
+  id: number;
+  username: string;
+  host: string;
 }
 
 /** The SMTP envelope of a received message; the recipients include BCC. */

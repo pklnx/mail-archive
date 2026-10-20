@@ -1,6 +1,6 @@
 // The folders of an account as a tree, split at the server's hierarchy
 // delimiter. Pure functions, for the sidebar.
-import type { Folder } from "./api";
+import type { Account, Folder } from "./api";
 
 export interface FolderNode {
   /** Full name up to this node with the folder's delimiter, e.g. "INBOX.Archive". */
@@ -39,20 +39,23 @@ function compare(a: FolderNode, b: FolderNode): number {
   return collator.compare(a.label, b.label) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
 }
 
-function sortTree(nodes: FolderNode[], root: boolean) {
+function sortTree(nodes: FolderNode[], first: string | null) {
   nodes.sort((a, b) => {
-    if (root) {
-      const ai = a.label.toUpperCase() === "INBOX";
-      const bi = b.label.toUpperCase() === "INBOX";
+    if (first) {
+      const ai = a.label.toUpperCase() === first;
+      const bi = b.label.toUpperCase() === first;
       if (ai !== bi) return ai ? -1 : 1;
     }
     return compare(a, b);
   });
-  for (const n of nodes) sortTree(n.children, false);
+  for (const n of nodes) sortTree(n.children, null);
 }
 
-/** The tree of an account's folders: INBOX first, then by name, numbers in numeric order. */
-export function buildFolderTree(folders: Folder[]): FolderNode[] {
+/**
+ * The tree of an account's folders: INBOX first (JOURNAL for smtp accounts),
+ * then by name, numbers in numeric order.
+ */
+export function buildFolderTree(folders: Folder[], kind?: Account["kind"]): FolderNode[] {
   const fallback = accountDelimiter(folders);
   const roots: FolderNode[] = [];
   const byPath = new Map<string, FolderNode>();
@@ -72,7 +75,7 @@ export function buildFolderTree(folders: Folder[]): FolderNode[] {
       siblings = node.children;
     });
   }
-  sortTree(roots, true);
+  sortTree(roots, kind === "smtp" ? "JOURNAL" : "INBOX");
   return roots;
 }
 

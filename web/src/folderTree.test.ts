@@ -44,6 +44,11 @@ describe("buildFolderTree", () => {
     const tree = buildFolderTree([f("b"), f("Inbox"), f("A"), f("x/10"), f("x/9"), f("x/INBOX"), f("x/a")]);
     expect(shape(tree)).toEqual(["Inbox", "A", "b", "x*", "  9", "  10", "  a", "  INBOX"]);
   });
+  it("sorts JOURNAL first in smtp accounts, before the folders of older fills", () => {
+    const folders = [f("alice/INBOX"), f("JOURNAL"), f("INBOX")];
+    expect(shape(buildFolderTree(folders, "smtp"))).toEqual(["JOURNAL", "alice*", "  INBOX", "INBOX"]);
+    expect(shape(buildFolderTree(folders, "imap"))).toEqual(["INBOX", "alice*", "  INBOX", "JOURNAL"]);
+  });
 });
 
 describe("tree helpers", () => {

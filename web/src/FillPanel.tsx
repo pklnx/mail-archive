@@ -1,6 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { accountsApi, folderQuestion, type Account, type ServerFolder, type TLSMode } from "./api";
-import { cutoffFromInput, defaultFillPrefix, fillStatus, resumable } from "./fill";
+import { cutoffFromInput, fillStatus, resumable } from "./fill";
 import { button, input, primary } from "./formStyles";
 import { formatCount, longDate } from "./format";
 import { t } from "./i18n";
@@ -44,13 +44,14 @@ export function FillSection({ account: a, manage, onChanged }: { account: Accoun
         {f.status === "running" && <span aria-hidden className="mr-1 inline-block animate-spin">↻</span>}
         {status.text}
       </p>
-      <p className="truncate text-xs text-ink-muted">{t.fillSource(f.username, f.host, f.folderPrefix)}</p>
+      <p className="truncate text-xs text-ink-muted">{t.fillSource(f.username, f.host, f.folderPrefix ? `${f.folderPrefix}/…` : "JOURNAL")}</p>
       {status.error && <p className="text-xs break-words text-danger">{status.error}</p>}
       {f.folders.length > 0 && (
         <ul className="flex flex-wrap gap-x-3 text-xs text-ink-muted">
           {f.folders.map((ff) => (
             <li key={ff.source} title={ff.error || undefined} className={ff.error ? "text-danger" : undefined}>
-              {ff.folder} <span className="tabular-nums">({formatCount(ff.imported)})</span>
+              {/* Older fills write into a folder per IMAP folder; newer ones all into JOURNAL. */}
+              {f.folderPrefix ? ff.folder : ff.source} <span className="tabular-nums">({formatCount(ff.imported)})</span>
               {!ff.done && !ff.error && f.status === "running" && " …"}
             </li>
           ))}
@@ -105,7 +106,8 @@ const defaultPort: Record<TLSMode, number> = { tls: 993, starttls: 143, none: 14
 
 /**
  * Starts a fill of an smtp account: the IMAP server, its folders after a
- * login check (trash and spam unticked), the prefix and the cut-off.
+ * login check (trash and spam unticked) and the cut-off. The mail goes into
+ * the account's folder JOURNAL.
  */
 export function FillForm({ account, onCancel, onStarted }: { account: Account; onCancel: () => void; onStarted: () => void }) {
   const [host, setHost] = useState("");
@@ -113,7 +115,6 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
   const [port, setPort] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [prefix, setPrefix] = useState("");
   const [cutoff, setCutoff] = useState("");
   // The server's folders after the login check; changing the server or the
   // login loads them again.
@@ -154,7 +155,6 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
       await accountsApi.startFill(account.name, {
         ...server(),
         excludedFolders: folders.filter((f) => !f.selected).map((f) => f.name),
-        folderPrefix: prefix.trim() || undefined,
         before: cutoffFromInput(cutoff),
         // The user saw the trash and spam folders unticked in the list.
         confirmFolders: true,
@@ -167,7 +167,6 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
     }
   };
 
-  const shownPrefix = prefix.trim() || defaultFillPrefix(username) || "alice@example.com";
   const field = "flex flex-col gap-1 text-sm";
   return (
     <form onSubmit={submit} className="flex flex-col gap-3">
@@ -243,23 +242,6 @@ export function FillForm({ account, onCancel, onStarted }: { account: Account; o
         </fieldset>
       )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className={field}>
-          <label className={field}>
-            {t.fieldFillPrefix}
-            <input
-              className={input}
-              value={prefix}
-              maxLength={200}
-              onChange={(e) => setPrefix(e.target.value)}
-              placeholder={defaultFillPrefix(username)}
-              autoComplete="off"
-              aria-describedby={`${id}-prefix`}
-            />
-          </label>
-          <span id={`${id}-prefix`} className="text-xs text-ink-muted">
-            {t.fillPrefixHint(shownPrefix)}
-          </span>
-        </div>
         <div className={field}>
           <label className={field}>
             {t.fieldCutoff}

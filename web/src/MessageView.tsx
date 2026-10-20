@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import { getConversation, getMessage, messageURL, type ConversationEntry, type MessageDetail, type Part } from "./api";
-import { fileSize, locationLabel, longDate, retentionDay, senderName, shortDate } from "./format";
+import { fileSize, locationLabel, longDate, originText, retentionDay, senderName, shortDate } from "./format";
 import { attachmentKind, parseMailText, splitLinks, type TextBlock } from "./mailText";
 import { useAsync } from "./useAsync";
 import { t } from "./i18n";
@@ -98,7 +98,7 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
               l.filled && (
                 <Fragment key={`origin/${l.account}/${l.folder}/${l.uid}`}>
                   <dt className="text-ink-muted">{t.origin(l.account)}</dt>
-                  <dd>{t.originFilled}</dd>
+                  <dd>{originText(l)}</dd>
                 </Fragment>
               ),
           )}
