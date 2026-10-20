@@ -131,7 +131,7 @@ clickable and open in a new tab.
 account received, an **Envelope** row shows the sender and recipients the mail
 server delivered it to, BCC included; for a copy it imported from IMAP
 ([fill](./journaling#bring-in-the-mail-from-before-journaling)), an **Origin**
-row says that there is no envelope.
+row names the mailbox it came from and says that there is no envelope.
 
 **Show text** switches to the plain-text version. **Download .eml** saves the
 original message, which any mail client opens.

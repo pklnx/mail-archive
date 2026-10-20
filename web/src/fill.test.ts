@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Account, Fill } from "./api";
 import { fill } from "./fillFixture";
-import { cutoffFromInput, defaultFillPrefix, fillStatus, fillTotals, resumable } from "./fill";
+import { cutoffFromInput, fillStatus, fillTotals, resumable } from "./fill";
 import { t } from "./i18n";
 
 function account(f: Fill | null, state: "idle" | "queued" | "running" = "idle"): Account {
@@ -36,13 +36,6 @@ describe("fillStatus", () => {
     expect(resumable(fill({ status: "ok" }))).toBe(false);
     expect(resumable(fill())).toBe(false);
     expect(resumable(null)).toBe(false);
-  });
-});
-
-describe("defaultFillPrefix", () => {
-  it("is the user name like the server's", () => {
-    expect(defaultFillPrefix(" /alice@example.com/\n")).toBe("alice@example.com");
-    expect(defaultFillPrefix("a\u0007b")).toBe("ab");
   });
 });
 

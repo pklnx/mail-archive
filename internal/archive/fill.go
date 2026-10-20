@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"strconv"
-	"strings"
 	"time"
-	"unicode"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
@@ -20,10 +17,13 @@ import (
 )
 
 // A fill copies an IMAP mailbox once into an smtp account: the mail that was
-// there before journaling started (#89). The journal copy and the mailbox
-// copy of one message differ in their Received: lines, so the archive cannot
+// there before journaling started (#89). It writes into the journal folder
+// (store.SMTPFolder), whatever the IMAP folder, so a message filed in two
+// IMAP folders is stored once (#112). The journal copy and the mailbox copy
+// of one message differ in their Received: lines, so the archive cannot
 // tell them apart by content; the fill decides by INTERNALDATE and leaves
 // out messages the account already received over SMTP (same Message-ID).
+// Its locations have no envelope, which tells them from journaled ones.
 
 // FillWindow is how long after the cut-off messages are still imported
 // (unless journaled), for clock skew and late deliveries.
@@ -249,7 +249,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	}
 	if len(headers) == 0 {
 		ff.Done = true
-		_, err := f.Store.SaveFillBatch(ctx, ff, ff.TargetLastUID, nil, nil)
+		_, err := f.Store.SaveFillBatch(ctx, ff, nil, nil)
 		return err
 	}
 	for start := 0; start < len(headers); start += batch {
@@ -278,7 +278,10 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 }
 
 // fillBatch decides about a batch of headers, fetches the messages to
-// import and commits them with the progress in one transaction.
+// import and commits them with the progress in one transaction. The check
+// for messages the folder already holds here only saves work: deliveries
+// write into the journal folder meanwhile, so SaveFillBatch checks again
+// under the folder's lock and numbers the new locations.
 func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder,
 	chunk []imapsync.Header, last bool) error {
 	ids := make([]string, len(chunk))
@@ -330,19 +333,12 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 			next.Counts.Present++
 			return nil
 		}
-		uid := int64(ff.TargetLastUID) + int64(len(locs)) + 1
-		if uid > math.MaxUint32 {
-			return errors.New("the folder has no UIDs left")
-		}
 		meta, err := BuildMeta(ctx, f.Store, f.Blobs, m.Body.blob, m.Body.created)
 		if err != nil {
 			return err
 		}
 		metas = append(metas, meta)
-		locs = append(locs, store.Location{
-			FolderID: ff.FolderID, UIDValidity: ff.TargetUIDValidity, UID: uint32(uid), //nolint:gosec // range checked above
-			Flags: storedFlags(m.Flags), InternalDate: m.InternalDate,
-		})
+		locs = append(locs, store.Location{FolderID: ff.FolderID, Flags: storedFlags(m.Flags), InternalDate: m.InternalDate})
 		next.Counts.Imported++
 		return nil
 	})
@@ -350,8 +346,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		return err
 	}
 	next.Done = last
-	target := ff.TargetLastUID + uint32(len(locs)) //nolint:gosec // checked against MaxUint32 above
-	if _, err := f.Store.SaveFillBatch(ctx, &next, target, metas, locs); err != nil {
+	if _, err := f.Store.SaveFillBatch(ctx, &next, metas, locs); err != nil {
 		return err
 	}
 	*ff = next
@@ -363,16 +358,4 @@ func (f *Filler) logger() *slog.Logger {
 		return f.Logger
 	}
 	return slog.Default()
-}
-
-// DefaultFillPrefix is the folder prefix of a fill without one: the IMAP
-// user name, cleaned up to a valid prefix.
-func DefaultFillPrefix(username string) string {
-	p := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.TrimSpace(username))
-	return strings.Trim(p, "/")
 }

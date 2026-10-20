@@ -195,11 +195,20 @@ type MessageLocation struct {
 	// Filled: a location in an smtp account that a fill copied from IMAP,
 	// not received over SMTP; it has no envelope.
 	Filled bool
+	// Fill is the fill a filled location came from: its mailbox. Nil for
+	// other locations, and for filled ones whose fill is unknown.
+	Fill *LocationFill
 	// RetainUntil is when the location's retention period ends (#55); nil
 	// when no rule covers it, so it is kept for ever.
 	RetainUntil *time.Time
 	// OnHold: an active legal hold covers the location. Admins only.
 	OnHold bool
+}
+
+// LocationFill is the fill a location came from.
+type LocationFill struct {
+	ID             int64
+	Username, Host string
 }
 
 // MessageDetail is a message's stored metadata and locations.
@@ -244,6 +253,9 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 		loc := MessageLocation{
 			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, OnHold: l.OnHold, Filled: l.Filled,
+		}
+		if l.FillID != nil {
+			loc.Fill = &LocationFill{ID: *l.FillID, Username: deref(l.FillUsername), Host: deref(l.FillHost)}
 		}
 		if !l.KeptForever {
 			until := l.RetainUntil

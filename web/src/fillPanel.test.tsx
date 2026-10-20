@@ -47,12 +47,20 @@ describe("the fill on the smtp card", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const reload = page([smtpAccount(fill())]);
     expect(screen.getByText(t.fillRunning(15, 12, 1, 2))).toBeTruthy();
-    expect(screen.getByText(/alice@example\.com\/Sent/)).toBeTruthy();
+    expect(screen.getByText(t.fillSource("alice@example.com", "imap.example.com", "JOURNAL"))).toBeTruthy();
+    expect(screen.getByText(/^Sent/)).toBeTruthy();
     expect((screen.getByRole("button", { name: t.importFromIMAP }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: t.remove }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: t.cancelFill }));
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(requests).toEqual([{ method: "POST", url: "/api/accounts/journal/fills/3/cancel", body: undefined }]);
+  });
+
+  it("shows the folders of an older fill with a prefix", () => {
+    const folders = fill().folders.map((ff) => ({ ...ff, folder: `alice/${ff.source}` }));
+    page([smtpAccount(fill({ status: "ok", finishedAt: "2026-10-13T09:00:00Z", folderPrefix: "alice", folders }))]);
+    expect(screen.getByText(t.fillSource("alice@example.com", "imap.example.com", "alice/…"))).toBeTruthy();
+    expect(screen.getByText(/^alice\/Sent/)).toBeTruthy();
   });
 
   it("resumes a failed fill with the password", async () => {
@@ -83,7 +91,7 @@ describe("the fill on the smtp card", () => {
     fireEvent.change(screen.getByLabelText(t.fieldHost), { target: { value: "imap.example.com" } });
     fireEvent.change(screen.getByLabelText(t.fieldUsername), { target: { value: "alice@example.com" } });
     fireEvent.change(screen.getByLabelText(t.fieldPassword), { target: { value: "secret" } });
-    expect(screen.getByText(t.fillPrefixHint("alice@example.com"))).toBeTruthy();
+    expect(screen.queryByLabelText(/prefix/i)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: t.loadFillFolders }));
     expect(await screen.findByText(t.fillTrashSpam("Junk"))).toBeTruthy();
     expect((screen.getByRole("checkbox", { name: /Junk/ }) as HTMLInputElement).checked).toBe(false);

@@ -147,7 +147,7 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	filler := &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	fill := &store.Fill{
 		AccountID: journalAcc.ID, Host: host, Port: portNum, TLSMode: store.TLSModeNone,
-		Username: "alex.morgan@work.example", FolderPrefix: "alex.morgan@work.example", Cutoff: time.Now(),
+		Username: "alex.morgan@work.example", Cutoff: time.Now(),
 	}
 	if err := st.CreateFill(ctx, fill, func(id int64) ([]byte, error) { return archive.SealFillPassword(sealer, id, "demo") }); err != nil {
 		return err

@@ -47,7 +47,9 @@ internal/web (JSON API, UI from web/) ──────────────
 | `accounts` | Account: `kind` (`imap`, or `import` for mail from files), owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. Import accounts have port 0 and are never enabled; check constraints enforce both. |
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID, last sync time and `last_reconciled_at`. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
-| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. |
+| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. `fill_id` names the fill that imported a location into an smtp account (`NULL` otherwise). |
+| `smtp_fills` | Fill of an smtp account from an IMAP mailbox: server, login, the password (encrypted, only while it runs), folder filters, cut-off, status. `folder_prefix` is set only for fills from before fills wrote into `JOURNAL`. One running fill per account (partial unique index). |
+| `smtp_fill_folders` | A fill's progress in one IMAP folder: the server's `UIDVALIDITY` and last UID, the archive folder it writes into, `done`, the counts and the error. |
 | `sync_runs` | Sync or import of an account: start, end, status, counters (also of the reconcile), error. |
 | `loss_alerts` | Alert about messages an account lost on the server in one sync run, with its delivery state. |
 | `audit_log` | Event of the [audit log](../guide/audit-log): time, actor, user ID and name, action, target, client IP, user agent, details (JSONB). Partitioned by month; append-only by trigger. No foreign keys to users or accounts, so entries outlive them. |
@@ -144,6 +146,41 @@ looks for orphans; a sync that starts meanwhile waits. If the lock stays busy
 longer than `--lock-timeout`, `verify` skips the orphan check and exits `2`.
 Deleting an account takes only the account lock, so it never waits for
 `verify`. PostgreSQL drops both locks with the connection when a process dies.
+
+## Journaling and fills
+
+An smtp account has one folder, `store.SMTPFolder` (`JOURNAL`).
+`Store.ReceiveMessage` stores what arrives over SMTP there, with an
+envelope; a fill (`archive.Filler`) imports from IMAP into the same folder,
+without one. The envelope is what tells them apart: `filled` in the message
+view, `FindReceivedLocation`, `FirstReceived` and `JournaledMessageIDs` only
+count locations with an envelope.
+
+Both write into one folder at the same time (deliveries take no sync lock),
+so they number their locations the same way:
+
+- A delivery takes the folder row with `LockFolder` (`SELECT … FOR UPDATE`),
+  checks for an existing location with an envelope and takes the next UID
+  with `NextUID`, which also sets `folders.last_synced_at`: `LastReceived`
+  reads it as the last delivery.
+- A fill's batch (`Store.SaveFillBatch`) takes the same row lock, checks
+  inside the transaction which messages the folder already holds
+  (`LocationInFolder`; they count as `present`), inserts the rest and
+  reserves their UIDs at once with `AllocateUIDs`. That leaves
+  `last_synced_at` alone, and the locations are inserted without
+  `ON CONFLICT`, so a clash would fail rather than merge into another
+  location. The fill's own check before downloading the bodies only saves
+  work.
+
+The lock order is the same in both: attestation fence, folder row, message
+rows. Batches insert their messages in the order of the hashes
+(`sortBatch`, also in `SaveBatch`), so two batches cannot deadlock on
+message rows. A fill holds the account's sync lock for writing for its whole
+run, like a sync, which keeps removal, other fills and `verify`'s orphan
+check out.
+
+Fills from before `JOURNAL` (migration 00027) have a `folder_prefix` and
+write into `PREFIX/<IMAP folder>`, with the same code path.
 
 ## Attestations
 

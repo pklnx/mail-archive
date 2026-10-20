@@ -217,11 +217,21 @@ type locationJSON struct {
 	// Filled: a location in an smtp account copied from IMAP by a fill, not
 	// received over SMTP; it has no envelope, so BCC recipients are unknown.
 	Filled bool `json:"filled"`
+	// Fill is the fill a filled location came from: the mailbox it was
+	// imported from. Null for other locations and when it is unknown.
+	Fill *locationFillJSON `json:"fill"`
 	// RetainUntil: when the location's retention period ends; null when no
 	// rule covers it (kept for ever).
 	RetainUntil *time.Time `json:"retainUntil"`
 	// OnHold: an active legal hold covers it. Only for admins.
 	OnHold *bool `json:"onHold,omitempty"`
+}
+
+// locationFillJSON is the fill a location came from.
+type locationFillJSON struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	Host     string `json:"host"`
 }
 
 // envelopeJSON is the SMTP envelope a message arrived with. Recipients are
@@ -311,6 +321,9 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		lj := locationJSON{
 			Account: l.Account, Folder: l.Folder, UID: l.UID, Flags: flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, RetainUntil: l.RetainUntil, Filled: l.Filled,
+		}
+		if f := l.Fill; f != nil {
+			lj.Fill = &locationFillJSON{ID: f.ID, Username: f.Username, Host: f.Host}
 		}
 		if admin {
 			held := l.OnHold

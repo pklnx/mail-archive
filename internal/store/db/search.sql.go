@@ -301,6 +301,8 @@ SELECT a.name AS account, f.name AS folder, l.uid, l.flags, l.internal_date,
        -- A location in an smtp account without an envelope came from a
        -- fill: ReceiveMessage always writes one.
        (a.kind = 'smtp' AND e.location_id IS NULL)::boolean AS filled,
+       -- The fill it came from, if still known: its mailbox.
+       sf.id AS fill_id, sf.username AS fill_username, sf.host AS fill_host,
        -- The end of the retention period (#55); pgx cannot scan infinity
        -- into a time, so "no rule" is a flag.
        (r.until = 'infinity')::boolean AS kept_forever,
@@ -311,6 +313,7 @@ JOIN messages m ON m.sha256 = l.message_sha256
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
 LEFT JOIN envelopes e ON e.location_id = l.id
+LEFT JOIN smtp_fills sf ON sf.id = l.fill_id
 CROSS JOIN LATERAL (SELECT location_retain_until(l.folder_id, m.sent_at, l.internal_date, m.created_at) AS until) r
 WHERE l.message_sha256 = $1 AND a.owner_id = $2::bigint
 ORDER BY superseded, a.name, f.name
@@ -337,6 +340,9 @@ type ListLocationsRow struct {
 	ClientIp         *netip.Addr
 	Helo             *string
 	Filled           bool
+	FillID           *int64
+	FillUsername     *string
+	FillHost         *string
 	KeptForever      bool
 	RetainUntil      time.Time
 	OnHold           bool
@@ -371,6 +377,9 @@ func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([
 			&i.ClientIp,
 			&i.Helo,
 			&i.Filled,
+			&i.FillID,
+			&i.FillUsername,
+			&i.FillHost,
 			&i.KeptForever,
 			&i.RetainUntil,
 			&i.OnHold,

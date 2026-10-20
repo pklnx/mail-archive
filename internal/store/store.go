@@ -456,7 +456,8 @@ type SaveResult struct {
 }
 
 // SaveBatch stores message metadata and locations for a batch and advances
-// the folder's last UID, all in one transaction. A message deleted by
+// the folder's last UID, all in one transaction, in the order of the
+// hashes (sortBatch). A message deleted by
 // retention is stored again only where it would not already be expired;
 // otherwise it is skipped and its file scheduled for removal. The caller
 // holds the blob lock (sync and import take it for the whole run), so the
@@ -469,6 +470,7 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 // with what the batch stored.
 func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location,
 	after func(*db.Queries, SaveResult) error) (SaveResult, error) {
+	metas, locs = sortBatch(metas, locs)
 	var res SaveResult
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
 		res = SaveResult{}

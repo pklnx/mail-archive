@@ -158,7 +158,8 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // The import of earlier mail from IMAP into the smtp account "journal".
+  // The import of earlier mail from IMAP into the smtp account "journal":
+  // server, login and cut-off; everything goes into its folder JOURNAL.
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
   await p.getByRole("button", { name: "Import existing mail from IMAP" }).click();
@@ -170,10 +171,13 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // A message the import copied: no envelope, so the origin says so.
+  // A message the import copied into JOURNAL: no envelope, so the origin
+  // row says so and names the mailbox it came from.
   const p = await page("light");
   await openMessage(p, "Invoice 2026-10");
   await p.getByText(/Origin \(journal\)/).waitFor();
+  await p.getByText(/Imported from IMAP: alex\.morgan@work\.example/).waitFor();
+  await p.getByText("journal / JOURNAL").waitFor();
   await p.screenshot({ path: `${out}/fill-origin.png` });
   await p.context().close();
 }

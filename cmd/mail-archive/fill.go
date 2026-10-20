@@ -27,7 +27,7 @@ type fillFlags struct {
 }
 
 // fillSourceFlags are the flags of a new fill.
-var fillSourceFlags = []string{"host", "username", "port", "tls", "include", "exclude", "prefix", "before", "confirm-folders"}
+var fillSourceFlags = []string{"host", "username", "port", "tls", "include", "exclude", "before", "confirm-folders"}
 
 func newAccountFillCmd() *cobra.Command {
 	var fl fillFlags
@@ -38,10 +38,11 @@ func newAccountFillCmd() *cobra.Command {
 from before journaling started is in the same account. It is not a sync:
 nothing is fetched again afterwards.
 
-The messages go into folders of their own, PREFIX/<IMAP folder> (PREFIX is
-the user name by default), never into the journal INBOX. A message is
-imported when its INTERNALDATE is before the cut-off plus one hour, unless
-the account already received a message with the same Message-ID over SMTP.
+The messages go into the account's folder JOURNAL, next to the journaled
+mail, whatever their IMAP folder; they have no envelope, and the message
+view names the mailbox they came from. A message is imported when its
+INTERNALDATE is before the cut-off plus one hour, unless the account
+already received a message with the same Message-ID over SMTP.
 The cut-off is now by default; --before sets an earlier one (RFC 3339, or
 YYYY-MM-DD for midnight UTC).
 
@@ -56,6 +57,8 @@ Without flags, the command lists the account's fills.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			source := slices.ContainsFunc(fillSourceFlags, cmd.Flags().Changed)
 			switch {
+			case cmd.Flags().Changed("prefix"):
+				return errors.New("--prefix is no longer supported: fills write into " + store.SMTPFolder)
 			case fl.resume && fl.cancel:
 				return errors.New("--resume and --cancel exclude each other")
 			case (fl.resume || fl.cancel) && source:
@@ -90,7 +93,9 @@ Without flags, the command lists the account's fills.`,
 	f.StringVar(&fl.username, "username", "", "IMAP user name")
 	f.StringArrayVar(&fl.include, "include", nil, "only copy these folders (repeatable; default: all)")
 	f.StringArrayVar(&fl.exclude, "exclude", nil, "skip these folders (repeatable)")
-	f.StringVar(&fl.prefix, "prefix", "", "folder prefix in the account (default: the user name)")
+	// Gone with #112; kept hidden for a clear error instead of "unknown flag".
+	f.StringVar(&fl.prefix, "prefix", "", "no longer supported")
+	_ = f.MarkHidden("prefix")
 	f.StringVar(&fl.before, "before", "", "cut-off: RFC 3339 or YYYY-MM-DD (UTC); default now")
 	f.BoolVar(&fl.confirmFolders, "confirm-folders", false, "copy trash and spam folders too, if the filters select them")
 	f.BoolVar(&fl.passwordStdin, "password-stdin", false, "read the password from stdin")
@@ -125,13 +130,6 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 		if tlsMode != store.TLSModeTLS {
 			port = 143
 		}
-	}
-	prefix := fl.prefix
-	if prefix == "" {
-		prefix = archive.DefaultFillPrefix(fl.username)
-	}
-	if err := store.ValidFillPrefix(prefix); err != nil {
-		return fmt.Errorf("--prefix: %w", err)
 	}
 	cutoff, err := parseCutoff(fl.before, time.Now())
 	if err != nil {
@@ -186,25 +184,22 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 
 	fill := &store.Fill{
 		AccountID: acc.ID, Host: fl.host, Port: port, TLSMode: tlsMode, Username: fl.username,
-		Included: fl.include, Excluded: fl.exclude, FolderPrefix: prefix, Cutoff: cutoff,
+		Included: fl.include, Excluded: fl.exclude, Cutoff: cutoff,
 	}
 	e := cliAccountTarget(cliEntry("data.fill"), acc)
 	e.Detail("host", fl.host)
 	e.Detail("username", fl.username)
 	e.Detail("before", cutoff.UTC().Format(time.RFC3339))
-	e.Detail("prefix", prefix)
 	e.Detail("folders", map[string]any{"included": nonNilStrings(fl.include), "excluded": nonNilStrings(fl.exclude)})
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(sealer, id, password) }
 	if err := a.store.CreateFill(withCLIAudit(cmd, e), fill, seal); err != nil {
 		switch {
 		case errors.Is(err, store.ErrFillRunning):
 			return fmt.Errorf("a fill of %q is running; %s account fill %s --cancel stops it", acc.Name, commandName(), shellQuote(acc.Name))
-		case errors.Is(err, store.ErrConflict):
-			return fmt.Errorf("%w; choose another --prefix", err)
 		}
 		return err
 	}
-	fmt.Fprintf(out, "fill %d started into %s/...\n", fill.ID, prefix)
+	fmt.Fprintf(out, "fill %d started into %s\n", fill.ID, store.SMTPFolder)
 	return runFill(cmd, a, acc, blobs, sealer, fill.ID)
 }
 
@@ -351,8 +346,13 @@ func printFirstReceived(cmd *cobra.Command, a *app, acc *store.Account) error {
 }
 
 func printFill(w io.Writer, f *store.Fill) {
-	fmt.Fprintf(w, "fill %d: %s, %s@%s:%d into %s/..., cut-off %s, started %s\n", f.ID, f.Status, f.Username, f.Host, f.Port,
-		f.FolderPrefix, f.Cutoff.UTC().Format(time.RFC3339), f.CreatedAt.Local().Format(time.DateTime))
+	// Fills from before #112 write into folders of their own.
+	into := store.SMTPFolder
+	if f.FolderPrefix != "" {
+		into = f.FolderPrefix + "/..."
+	}
+	fmt.Fprintf(w, "fill %d: %s, %s@%s:%d into %s, cut-off %s, started %s\n", f.ID, f.Status, f.Username, f.Host, f.Port,
+		into, f.Cutoff.UTC().Format(time.RFC3339), f.CreatedAt.Local().Format(time.DateTime))
 	if f.Error != "" {
 		fmt.Fprintf(w, "  error: %s\n", f.Error)
 	}

@@ -188,7 +188,7 @@ const en = {
   smtpServerOffCard: "The SMTP server is off: this account receives nothing until MAIL_ARCHIVE_SMTP_LISTEN is set.",
   importFromIMAP: "Import existing mail from IMAP",
   fillIntro:
-    "Copies the mail an IMAP mailbox already holds once into this account, into folders of their own. Nothing is fetched again afterwards. Several mailboxes get one import each.",
+    "Copies the mail an IMAP mailbox already holds once into this account's folder JOURNAL, next to the journaled mail. A message filed in several IMAP folders is stored once. Nothing is fetched again afterwards. Several mailboxes get one import each.",
   fillQueued: "Import from IMAP waits to start…",
   fillRunning: (scanned: number, imported: number, after: number, journaled: number) =>
     `Importing from IMAP: ${scanned} read, ${imported} imported, ${after} after the cut-off, ${journaled} already journaled`,
@@ -197,13 +197,11 @@ const en = {
   fillPartial: (when: string, imported: number) => `Import from IMAP ${when}: ${imported} imported, some folders failed`,
   fillCancelled: (when: string, imported: number) => `Import from IMAP cancelled ${when}: ${imported} imported`,
   fillFailed: (when: string) => `Import from IMAP failed ${when}`,
-  fillSource: (username: string, host: string, prefix: string) => `${username} · ${host} → ${prefix}/…`,
+  fillSource: (username: string, host: string, folder: string) => `${username} · ${host} → ${folder}`,
   cancelFill: "Cancel import",
   confirmCancelFill: "Cancel the import? What it copied so far stays, and it can be resumed later.",
   resumeFill: "Resume import",
   resumeFillHint: "The password is asked for again: it was deleted when the import stopped.",
-  fieldFillPrefix: "Folder prefix",
-  fillPrefixHint: (prefix: string) => `The mail goes into folders such as ${prefix}/INBOX, never into the journal INBOX.`,
   fieldCutoff: "Cut-off (optional)",
   cutoffHint:
     "Mail the mailbox received before this time is imported, except messages already received over SMTP (same Message-ID). Empty: now. Mail from an hour after it on is left to journaling.",
@@ -216,6 +214,7 @@ const en = {
   startFill: "Start import",
   origin: (account: string) => `Origin (${account})`,
   originFilled: "Imported from IMAP: no envelope, BCC recipients unknown.",
+  originFilledFrom: (mailbox: string) => `Imported from IMAP: ${mailbox}. No envelope, BCC recipients unknown.`,
   journalingGuide: "Journaling guide",
   smtpAccountAdded: (name: string) => `Account ${name} added. Set up the mail server to send it the copies:`,
   mailServerSetup: "Mail server setup",
@@ -762,7 +761,7 @@ const de: Messages = {
   smtpServerOffCard: "Der SMTP-Server ist aus: Dieses Konto empfängt nichts, bis MAIL_ARCHIVE_SMTP_LISTEN gesetzt ist.",
   importFromIMAP: "Vorhandene Mails aus IMAP importieren",
   fillIntro:
-    "Kopiert die Mails, die ein IMAP-Postfach schon enthält, einmal in dieses Konto, in eigene Ordner. Danach wird nichts mehr abgerufen. Mehrere Postfächer bekommen je einen Import.",
+    "Kopiert die Mails, die ein IMAP-Postfach schon enthält, einmal in den Ordner JOURNAL dieses Kontos, neben die Journal-Mails. Eine Nachricht, die in mehreren IMAP-Ordnern liegt, wird einmal gespeichert. Danach wird nichts mehr abgerufen. Mehrere Postfächer bekommen je einen Import.",
   fillQueued: "Import aus IMAP wartet auf den Start…",
   fillRunning: (scanned, imported, after, journaled) =>
     `Import aus IMAP läuft: ${scanned} gelesen, ${imported} importiert, ${after} nach dem Stichtag, ${journaled} schon per Journaling da`,
@@ -770,13 +769,11 @@ const de: Messages = {
   fillPartial: (when, imported) => `Import aus IMAP ${when}: ${imported} importiert, einige Ordner fehlgeschlagen`,
   fillCancelled: (when, imported) => `Import aus IMAP ${when} abgebrochen: ${imported} importiert`,
   fillFailed: (when) => `Import aus IMAP ${when} fehlgeschlagen`,
-  fillSource: (username, host, prefix) => `${username} · ${host} → ${prefix}/…`,
+  fillSource: (username, host, folder) => `${username} · ${host} → ${folder}`,
   cancelFill: "Import abbrechen",
   confirmCancelFill: "Import abbrechen? Was er bisher kopiert hat, bleibt, und er kann später fortgesetzt werden.",
   resumeFill: "Import fortsetzen",
   resumeFillHint: "Das Passwort wird erneut abgefragt: Es wurde gelöscht, als der Import endete.",
-  fieldFillPrefix: "Ordner-Präfix",
-  fillPrefixHint: (prefix) => `Die Mails kommen in Ordner wie ${prefix}/INBOX, nie in die Journal-INBOX.`,
   fieldCutoff: "Stichtag (optional)",
   cutoffHint:
     "Mails, die das Postfach vor diesem Zeitpunkt empfangen hat, werden importiert, außer Nachrichten, die schon per SMTP kamen (gleiche Message-ID). Leer: jetzt. Mails ab einer Stunde danach bleiben dem Journaling überlassen.",
@@ -789,6 +786,7 @@ const de: Messages = {
   startFill: "Import starten",
   origin: (account) => `Herkunft (${account})`,
   originFilled: "Aus IMAP importiert: kein Umschlag, BCC-Empfänger unbekannt.",
+  originFilledFrom: (mailbox) => `Aus IMAP importiert: ${mailbox}. Kein Umschlag, BCC-Empfänger unbekannt.`,
   journalingGuide: "Anleitung zum Journaling",
   smtpAccountAdded: (name) => `Konto ${name} angelegt. Richte den Mailserver ein, damit er ihm die Kopien schickt:`,
   mailServerSetup: "Mailserver einrichten",

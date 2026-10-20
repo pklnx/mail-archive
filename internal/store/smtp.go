@@ -14,9 +14,11 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
-// SMTPFolder is the journal folder of an smtp account: what arrives over
-// SMTP. A fill from IMAP writes into folders of its own ("<prefix>/...").
-const SMTPFolder = "INBOX"
+// SMTPFolder is the journal folder of an smtp account, its only folder:
+// what arrives over SMTP, with an envelope, and what a fill imports from
+// IMAP, without one (#112). Fills from before #112 wrote into folders of
+// their own ("<prefix>/...").
+const SMTPFolder = "JOURNAL"
 
 // ErrAddressTaken is returned for an address another smtp account
 // receives for.
@@ -207,7 +209,7 @@ func (s *Store) SMTPAddresses(ctx context.Context) (map[int64][]string, error) {
 
 // LastReceived returns when each smtp account last accepted a message.
 func (s *Store) LastReceived(ctx context.Context) (map[int64]time.Time, error) {
-	rows, err := s.q.LastReceived(ctx)
+	rows, err := s.q.LastReceived(ctx, SMTPFolder)
 	if err != nil {
 		return nil, err
 	}
@@ -264,8 +266,10 @@ type ReceiveResult struct {
 
 // ReceiveMessage stores a message received over SMTP for an smtp account,
 // with its envelope, in one transaction. A message the folder already holds
-// (a retry, or a delivery Postfix split into several transactions) gets
-// no second location: its envelope gains the new recipients instead. It
+// with an envelope (a retry, or a delivery Postfix split into several
+// transactions) gets no second location: its envelope gains the new
+// recipients instead. A location a fill imported (no envelope) does not
+// count: the delivery adds its own next to it. It
 // fails with ErrNotReceiving if the account is disabled or removed.
 //
 // The message file is written before, without a lock. The transaction

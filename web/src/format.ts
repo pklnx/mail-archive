@@ -41,6 +41,14 @@ export function locationLabel(l: {
   return where;
 }
 
+/**
+ * The origin row of a location a fill imported: the mailbox it came from,
+ * when the server knows it.
+ */
+export function originText(l: { fill: { username: string } | null }): string {
+  return l.fill ? t.originFilledFrom(l.fill.username) : t.originFilled;
+}
+
 /** Short date for lists: time for today, otherwise the date. */
 export function shortDate(iso: string | null, now = new Date()): string {
   if (!iso) return "";

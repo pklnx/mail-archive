@@ -135,7 +135,7 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
               <FolderList
                 id={listId}
                 hidden={!open}
-                nodes={buildFolderTree(a.folders)}
+                nodes={buildFolderTree(a.folders, a.kind)}
                 account={a.name}
                 depth={0}
                 selected={selected ? state.folder : null}

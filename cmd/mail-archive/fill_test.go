@@ -12,7 +12,6 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
-	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -36,9 +35,6 @@ func TestParseCutoff(t *testing.T) {
 	}
 	if _, err := parseCutoff("June 1", now); err == nil {
 		t.Error("accepted June 1")
-	}
-	if p := archive.DefaultFillPrefix(" /alice@example.com/\n"); p != "alice@example.com" {
-		t.Errorf("prefix %q", p)
 	}
 }
 
@@ -78,7 +74,7 @@ func TestAccountFillCommand(t *testing.T) {
 		{[]string{"fill", "journal", "--host", "h"}, "--host and --username"},
 		{append([]string{"fill", "mail"}, source...), "not an smtp account"},
 		{append([]string{"fill", "journal", "--before", "June"}, source...), "--before"},
-		{append([]string{"fill", "journal", "--prefix", "INBOX"}, source...), "--prefix"},
+		{append([]string{"fill", "journal", "--prefix", "alice"}, source...), "--prefix is no longer supported: fills write into JOURNAL"},
 		{append([]string{"fill", "journal"}, source...), "Spam"},
 		{[]string{"fill", "journal", "--cancel"}, "no fill"},
 		{[]string{"fill", "journal", "--resume"}, "no fill to resume"},
@@ -96,12 +92,12 @@ func TestAccountFillCommand(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if !regexpMatch(`fill \d+: ok, alice@example.com@`, out) || !regexpMatch(`INBOX\s+3\s+3\s+3\s+0\s+0\s+0\s+0`, out) {
+	if !regexpMatch(`fill \d+: ok, alice@example.com@\S+ into JOURNAL,`, out) || !regexpMatch(`INBOX\s+3\s+3\s+3\s+0\s+0\s+0\s+0`, out) {
 		t.Errorf("fill output:\n%s", out)
 	}
 	accs, _ := st.ListAccountsByName(ctx, "journal")
 	fills, err := st.AccountFills(ctx, accs[0].ID)
-	if err != nil || len(fills) != 1 || fills[0].Status != store.FillOK || fills[0].FolderPrefix != "alice@example.com" || fills[0].PasswordEnc != nil {
+	if err != nil || len(fills) != 1 || fills[0].Status != store.FillOK || fills[0].FolderPrefix != "" || fills[0].Folders[0].FolderName != "JOURNAL" || fills[0].PasswordEnc != nil {
 		t.Fatalf("fills %+v, %v", fills, err)
 	}
 	if err := account("", "fill", "journal", "--resume"); err == nil || !strings.Contains(err.Error(), "ended well") {
@@ -122,7 +118,7 @@ func TestAccountFillCommand(t *testing.T) {
 		}
 		return nil
 	})
-	if started["host"] != host || started["username"] != "alice@example.com" || started["prefix"] != "alice@example.com" {
+	if started["host"] != host || started["username"] != "alice@example.com" || started["prefix"] != nil {
 		t.Errorf("data.fill %v (actions %v)", started, actions)
 	}
 	if done["status"] != "ok" || done["imported"] != float64(3) {

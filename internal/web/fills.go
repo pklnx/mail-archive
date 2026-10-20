@@ -2,7 +2,6 @@ package web
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,13 +10,14 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
-// Fills: a one-time copy of an IMAP mailbox into an smtp account (#89).
-// The fill runner of the web server runs them, one at a time. The password
-// is only written, and only kept while the fill runs.
+// Fills: a one-time copy of an IMAP mailbox into an smtp account (#89),
+// into its journal folder (#112). The fill runner of the web server runs
+// them, one at a time. The password is only written, and only kept while
+// the fill runs.
 
 type fillFolderJSON struct {
-	// Source is the IMAP folder, Folder the archive folder it fills
-	// ("<prefix>/<source>").
+	// Source is the IMAP folder, Folder the archive folder it fills:
+	// JOURNAL, or "<prefix>/<source>" for a fill from before #112.
 	Source string `json:"source"`
 	Folder string `json:"folder"`
 	Done   bool   `json:"done"`
@@ -42,7 +42,9 @@ type fillJSON struct {
 	Username        string   `json:"username"`
 	IncludedFolders []string `json:"includedFolders"`
 	ExcludedFolders []string `json:"excludedFolders"`
-	FolderPrefix    string   `json:"folderPrefix"`
+	// FolderPrefix is set only for fills from before #112, which wrote
+	// into "<prefix>/<IMAP folder>"; empty for fills into JOURNAL.
+	FolderPrefix string `json:"folderPrefix"`
 	// Before is the cut-off: messages from an hour after it on are left to
 	// journaling.
 	Before     time.Time        `json:"before"`
@@ -105,8 +107,7 @@ type fillInput struct {
 	// ExcludedFolders skips these.
 	IncludedFolders []string `json:"includedFolders"`
 	ExcludedFolders []string `json:"excludedFolders"`
-	// FolderPrefix names the archive folders ("<prefix>/<IMAP folder>");
-	// default: the user name.
+	// FolderPrefix is refused: fills write into JOURNAL (#112).
 	FolderPrefix string `json:"folderPrefix"`
 	// Before is the cut-off; default: now.
 	Before *time.Time `json:"before"`
@@ -227,12 +228,8 @@ func (s *Server) handleStartFill(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	prefix := in.FolderPrefix
-	if prefix == "" {
-		prefix = archive.DefaultFillPrefix(src.Username)
-	}
-	if err := store.ValidFillPrefix(prefix); err != nil {
-		s.fail(w, r, http.StatusBadRequest, "folderPrefix: "+err.Error(), nil)
+	if in.FolderPrefix != "" {
+		s.fail(w, r, http.StatusBadRequest, "folderPrefix is no longer supported: fills write into "+store.SMTPFolder, nil)
 		return
 	}
 	cutoff := s.currentTime()
@@ -256,23 +253,19 @@ func (s *Server) handleStartFill(w http.ResponseWriter, r *http.Request) {
 	me := userID(r)
 	fill := &store.Fill{
 		AccountID: a.ID, Host: src.Host, Port: src.Port, TLSMode: src.TLSMode, Username: src.Username,
-		Included: in.IncludedFolders, Excluded: in.ExcludedFolders, FolderPrefix: prefix, Cutoff: cutoff, CreatedBy: &me,
+		Included: in.IncludedFolders, Excluded: in.ExcludedFolders, Cutoff: cutoff, CreatedBy: &me,
 	}
 	e := s.auditEntry(r, "data.fill")
 	auditAccount(e, a)
 	e.Detail("host", src.Host)
 	e.Detail("username", src.Username)
 	e.Detail("before", cutoff.UTC().Format(time.RFC3339))
-	e.Detail("prefix", prefix)
 	e.Detail("folders", map[string]any{"included": nonNilList(in.IncludedFolders), "excluded": nonNilList(in.ExcludedFolders)})
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(s.syncer.Sealer, id, in.Password) }
 	err = s.store.CreateFill(withAudit(r, e), fill, seal)
 	switch {
 	case errors.Is(err, store.ErrFillRunning):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
-		return
-	case errors.Is(err, store.ErrConflict):
-		s.fail(w, r, http.StatusConflict, fmt.Sprintf("%v; choose another folderPrefix", err), nil)
 		return
 	case errors.Is(err, store.ErrNotSMTP):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)

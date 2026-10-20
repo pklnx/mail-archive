@@ -97,11 +97,15 @@ func TestFillAPI(t *testing.T) {
 	for _, bad := range []map[string]any{
 		{"host": f.host, "username": "alice@example.com"},
 		{"host": "", "username": "alice@example.com", "password": "secret"},
-		{"host": f.host, "port": f.port, "tls": "none", "username": "alice@example.com", "password": "secret", "folderPrefix": "INBOX"},
-		{"host": f.host, "port": f.port, "tls": "none", "username": "alice@example.com", "password": "secret", "folderPrefix": "/x"},
+		{"host": f.host, "port": f.port, "tls": "none", "username": "alice@example.com", "password": "secret", "folderPrefix": "alice"},
 		{"host": f.host, "tls": "ssl", "username": "alice@example.com", "password": "secret"},
 	} {
 		f.do("POST", "/api/accounts/journal/fills", bad, http.StatusBadRequest)
+	}
+	prefix := f.fillBody("secret")
+	prefix["folderPrefix"] = "alice"
+	if raw := f.do("POST", "/api/accounts/journal/fills", prefix, http.StatusBadRequest); !strings.Contains(string(raw), "folderPrefix is no longer supported: fills write into JOURNAL") {
+		t.Errorf("folderPrefix: %s", raw)
 	}
 	f.do("POST", "/api/accounts/journal/fills", f.fillBody("wrong"), http.StatusUnprocessableEntity)
 	var c folderConfirmation
@@ -127,11 +131,11 @@ func TestFillAPI(t *testing.T) {
 	}
 	a := f.waitFill("journal", store.FillOK)
 	fill := a.Fill
-	if fill.ID != started.ID || fill.FolderPrefix != "alice@example.com" || fill.Host != f.host || fill.TLS != "none" ||
+	if fill.ID != started.ID || fill.FolderPrefix != "" || fill.Host != f.host || fill.TLS != "none" ||
 		!slices.Equal(fill.ExcludedFolders, []string{"Spam"}) || fill.FinishedAt == nil || len(fill.Folders) != 1 {
 		t.Fatalf("fill %+v", fill)
 	}
-	if ff := fill.Folders[0]; ff.Source != "INBOX" || ff.Folder != "alice@example.com/INBOX" || !ff.Done ||
+	if ff := fill.Folders[0]; ff.Source != "INBOX" || ff.Folder != "JOURNAL" || !ff.Done ||
 		ff.Scanned != 1 || ff.Imported != 1 || ff.New != 1 {
 		t.Errorf("fill folder %+v", ff)
 	}
@@ -151,7 +155,7 @@ func TestFillAPI(t *testing.T) {
 		switch e.Action {
 		case "data.fill":
 			if e.TargetName != "journal" || d["host"] != f.host || d["username"] != "alice@example.com" ||
-				d["prefix"] != "alice@example.com" || d["fill"] != float64(started.ID) || d["before"] == nil {
+				d["prefix"] != nil || d["fill"] != float64(started.ID) || d["before"] == nil {
 				t.Errorf("data.fill %+v %s", e, e.Details)
 			}
 			if fmt.Sprint(d["folders"]) != "map[excluded:[Spam] included:[]]" {
@@ -167,8 +171,8 @@ func TestFillAPI(t *testing.T) {
 		t.Errorf("audit %v", actions)
 	}
 
-	// The copied location has no envelope and says so; the journaled one
-	// does not.
+	// The copied location has no envelope and names its mailbox; the
+	// journaled one does not. Both are in JOURNAL.
 	var msgs struct {
 		Messages []struct {
 			ID string `json:"id"`
@@ -189,20 +193,19 @@ func TestFillAPI(t *testing.T) {
 		}
 		l := msg.Locations[0]
 		if m.ID == journaled {
-			if l.Filled || l.Envelope == nil {
+			if l.Filled || l.Envelope == nil || l.Fill != nil || l.Folder != "JOURNAL" {
 				t.Errorf("journaled location %+v", l)
 			}
-		} else if !l.Filled || l.Envelope != nil || l.Folder != "alice@example.com/INBOX" {
+		} else if !l.Filled || l.Envelope != nil || l.Folder != "JOURNAL" || l.Fill == nil ||
+			l.Fill.ID != started.ID || l.Fill.Username != "alice@example.com" || l.Fill.Host != f.host {
 			t.Errorf("filled location %+v", l)
 		}
 	}
 
-	// A fill that ended well is neither resumed nor cancelled; the prefix
-	// stays its own.
+	// A fill that ended well is neither resumed nor cancelled.
 	id := fmt.Sprint(started.ID)
 	f.do("POST", "/api/accounts/journal/fills/"+id+"/resume", map[string]any{"password": "secret"}, http.StatusConflict)
 	f.do("POST", "/api/accounts/journal/fills/"+id+"/cancel", nil, http.StatusConflict)
-	f.do("POST", "/api/accounts/journal/fills", body, http.StatusConflict)
 	f.do("POST", "/api/accounts/journal/fills/999999/cancel", nil, http.StatusNotFound)
 	f.do("POST", "/api/accounts/journal/fills/x/cancel", nil, http.StatusNotFound)
 
@@ -257,7 +260,6 @@ func TestFillCancelAndResume(t *testing.T) {
 		t.Fatalf("waiting fill %+v %+v", a.Fill, a.Sync)
 	}
 	// One fill per account at a time.
-	body["folderPrefix"] = "other"
 	f.do("POST", "/api/accounts/journal/fills", body, http.StatusConflict)
 	f.do("POST", "/api/accounts/journal/fills/"+id+"/resume", map[string]any{"password": "secret"}, http.StatusConflict)
 	// The account is not removed under a fill.

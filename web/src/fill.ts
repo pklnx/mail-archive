@@ -1,4 +1,5 @@
-// Fills: a one-time copy of an IMAP mailbox into an smtp account (#89).
+// Fills: a one-time copy of an IMAP mailbox into an smtp account (#89),
+// into its folder JOURNAL (#112).
 
 import type { Account, Fill, FillFolder } from "./api";
 import { relativeTime } from "./format";
@@ -40,14 +41,6 @@ export function fillStatus(a: Account, now = new Date()): { text: string; error?
 /** A fill that "Resume" continues: it failed, partly failed or was cancelled. */
 export function resumable(f: Fill | null): f is Fill {
   return !!f && (f.status === "failed" || f.status === "partial" || f.status === "cancelled");
-}
-
-/**
- * The folder prefix the server uses when none is given: the user name
- * without control characters, surrounding spaces and slashes.
- */
-export function defaultFillPrefix(username: string): string {
-  return username.trim().replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/^\/+|\/+$/g, "");
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
