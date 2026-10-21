@@ -64,6 +64,11 @@ migration change into a pull request (not on other pushes; the check reads
 at most 300 files of the earlier state, so a very large pull request may get
 one review more). The Action only comments; it never pushes.
 
+Go toolchain bumps change the `toolchain` line in `go.mod` and the `golang` tag
+in the `Dockerfile` together, in one pull request: the image build fails when
+they differ (`scripts/check-go-toolchain.sh`), also on a Dependabot bump of
+only one of them.
+
 ## Claude GitHub Action
 
 `.github/workflows/claude.yml` runs

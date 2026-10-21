@@ -54,6 +54,8 @@ jobs:
           version: v2.14.0
       # Generated database code must match internal/store/queries.
       - run: make sqlc-check
+      # The Dockerfile's Go version guard must pass and fail where it should.
+      - run: sh scripts/check-go-toolchain-test.sh
 
   vulncheck:
     runs-on: ubuntu-latest
