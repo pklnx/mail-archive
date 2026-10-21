@@ -14,13 +14,20 @@ RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
 
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+# Keep the golang tag equal to the `toolchain` line in go.mod (a toolchain bump
+# changes both together): the image sets GOTOOLCHAIN=local, so a floating tag
+# could silently build with an older patch release. The check below fails the
+# image build on a mismatch. It covers image builds only, not host builds
+# (`make build`, scripts that run `go build` on the host).
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download && go mod verify
+COPY scripts/check-go-toolchain.sh ./scripts/
+RUN sh scripts/check-go-toolchain.sh go.mod \
+ && go mod download && go mod verify
 COPY . .
 COPY --from=web /src/internal/web/ui/dist ./internal/web/ui/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
