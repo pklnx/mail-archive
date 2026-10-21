@@ -73,7 +73,7 @@ To run the code of a branch, or to change it, clone the repository; its
 code changes (about a second when nothing changed):
 
 ```sh
-git clone https://github.com/pklnx/mail-archive.git
+gh repo clone pklnx/mail-archive   # the repository is private; uses the gh sign-in above
 cd mail-archive
 cp .env.example .env
 ```
