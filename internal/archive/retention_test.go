@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -237,5 +239,175 @@ func TestDeletionAndAttestations(t *testing.T) {
 	found = nil
 	if _, err := CheckAttestations(ctx, s.st, AttestCheckOptions{Dir: dir, KeyExists: true, OnFinding: func(f Finding) { found = append(found, f) }}); err != nil || len(found) != 0 {
 		t.Fatalf("signed: %+v %v", found, err)
+	}
+}
+
+// oldMessage is message i of newRetentionSetup.
+func oldMessage(i int) string {
+	return fmt.Sprintf("Subject: old %d\r\nDate: Fri, 05 Mar 2010 10:00:00 +0000\r\n\r\nhi\r\n", i)
+}
+
+// fileBytes returns the content of sha's file.
+func (s *retentionSetup) fileBytes(t *testing.T, sha string) string {
+	t.Helper()
+	f, err := s.blobs.Open(blobstore.RelPath(sha))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// count returns the rows of table (deleted_messages, message_deletions or
+// blob_removals) for sha.
+func (s *retentionSetup) count(t *testing.T, table, sha string) int {
+	t.Helper()
+	ctx := context.Background()
+	c, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close(ctx) }()
+	var n int
+	if err := c.QueryRow(ctx, "SELECT count(*) FROM "+pgx.Identifier{table}.Sanitize()+" WHERE sha256 = $1", sha).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A message shared with bob stays, file included, while bob's location is
+// unexpired or on bob's hold: whether that was so at the preview, or came
+// after it. Message 0 is shared; message 1, wholly expired, goes.
+func TestDeletionKeepsProtectedSharedMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hold bool // bob's location is expired too, but bob has a hold
+		late bool // the protection comes after the confirmation
+	}{
+		{name: "unexpired before the preview"},
+		{name: "hold before the preview", hold: true},
+		{name: "unexpired after the preview", late: true},
+		{name: "hold after the preview", hold: true, late: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newRetentionSetup(t, 2)
+			shared, control := s.shas[0], s.shas[1]
+			bob, err := s.st.CreateUser(ctx, "bob", "h", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			acc := &store.Account{Name: "private", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &bob.ID}
+			if err := s.st.CreateAccount(ctx, acc); err != nil {
+				t.Fatal(err)
+			}
+			folder, err := s.st.GetOrCreateFolder(ctx, acc.ID, "INBOX")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A normal rule: bob's location expires by its own dates.
+			if _, err := s.st.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: acc.ID, Years: 1}); err != nil {
+				t.Fatal(err)
+			}
+			sent := time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)
+			addBobLocation := func() {
+				t.Helper()
+				internal := time.Now() // unexpired
+				if tc.hold {
+					internal = sent
+				}
+				meta := store.MessageMeta{SHA256: shared, Size: int64(len(oldMessage(0))), StoredPath: blobstore.RelPath(shared), Subject: "old 0", SentAt: &sent}
+				loc := store.Location{FolderID: folder.ID, UID: 1, InternalDate: internal}
+				if _, err := s.st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{meta}, []store.Location{loc}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			addHold := func() {
+				t.Helper()
+				if _, err := s.st.AddLegalHold(ctx, store.NewLegalHold{Name: "bob", OwnerID: &bob.ID}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Bob's expired location for a hold is there before the preview
+			// in both hold cases: the SHA is already shared.
+			if !tc.late || tc.hold {
+				addBobLocation()
+			}
+			if tc.hold && !tc.late {
+				addHold()
+			}
+
+			id := s.confirmedRun(t)
+			cands, err := s.st.PendingCandidates(ctx, id, "", 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{control}
+			if tc.late {
+				want = []string{shared, control}
+				slices.Sort(want)
+			}
+			if !slices.Equal(cands, want) {
+				t.Fatalf("candidates %v, want %v", cands, want)
+			}
+			if run, err := s.st.DeletionRun(ctx, id); err != nil || run.Candidates != len(want) {
+				t.Fatalf("run %+v %v", run, err)
+			}
+
+			if tc.late {
+				if tc.hold {
+					addHold()
+				} else {
+					addBobLocation()
+				}
+			}
+			run, err := ExecuteDeletionRun(ctx, s.st, id, DeletionOptions{})
+			wantKept := 0
+			if tc.late {
+				wantKept = 1
+			}
+			if err != nil || run.State != store.RunDone || run.Deleted != 1 || run.Kept != wantKept {
+				t.Fatalf("run %+v %v, want 1 deleted, %d kept", run, err, wantKept)
+			}
+			if n, err := SweepBlobs(ctx, s.st, s.blobs, SweepOptions{}); err != nil || n != 1 {
+				t.Fatalf("sweep: %d %v", n, err)
+			}
+
+			// Both owners still read the shared message and its file.
+			for _, o := range []struct {
+				user    *store.User
+				account string
+			}{{s.user, "work"}, {bob, "private"}} {
+				d, err := s.st.GetMessageDetail(ctx, o.user.ID, shared)
+				if err != nil {
+					t.Fatalf("%s: %v", o.user.Name, err)
+				}
+				if len(d.Locations) != 1 || d.Locations[0].Account != o.account {
+					t.Errorf("%s's locations %+v", o.user.Name, d.Locations)
+				}
+			}
+			if !s.blobs.Exists(shared) || s.fileBytes(t, shared) != oldMessage(0) {
+				t.Error("the shared file is gone or changed")
+			}
+			for _, table := range []string{"deleted_messages", "message_deletions", "blob_removals"} {
+				if n := s.count(t, table, shared); n != 0 {
+					t.Errorf("%d %s rows for the shared message", n, table)
+				}
+			}
+			// The control is gone, row and file; its removal is done.
+			if _, err := s.st.GetMessageDetail(ctx, s.user.ID, control); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("control: %v", err)
+			}
+			if s.blobs.Exists(control) {
+				t.Error("the control's file is still there")
+			}
+			if s.count(t, "deleted_messages", control) != 1 || s.count(t, "blob_removals", control) != 0 {
+				t.Error("the control's tombstone or removal")
+			}
+		})
 	}
 }

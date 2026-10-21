@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -454,4 +455,115 @@ func (f *fixture) assertFilesPresent() {
 	if res.Checked == 0 {
 		f.t.Error("verify checked no messages")
 	}
+}
+
+// Retention deletes and sweeps an expired copy of the same bytes between
+// Put/BuildMeta and the commit: the delivery relied on the row and the
+// file, which are gone, so it must not acknowledge. The retry stores the
+// message again in the unruled smtp account, with its file.
+func TestReceiveRetentionBetweenPutAndCommit(t *testing.T) {
+	const subject = "bandicoot"
+	// What the one-shot cleanup saw, written by the server's goroutine.
+	var (
+		mu       sync.Mutex
+		fired    bool
+		known    bool
+		cleanErr error
+	)
+	runID := new(atomic.Int64)
+	f := newFixture(t, func(s *Server) {
+		s.receive = func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error) {
+			mu.Lock()
+			first := !fired
+			fired = true
+			mu.Unlock()
+			if first {
+				_, err := archive.ExecuteDeletionRun(ctx, s.Store, runID.Load(), archive.DeletionOptions{Logger: s.Logger})
+				if err == nil {
+					_, err = archive.SweepBlobs(ctx, s.Store, s.Blobs, archive.SweepOptions{Logger: s.Logger})
+				}
+				mu.Lock()
+				known, cleanErr = meta.Known, err
+				mu.Unlock()
+			}
+			return s.Store.ReceiveMessage(ctx, account, meta, env, fileExists)
+		}
+	})
+	ctx := context.Background()
+
+	// The bytes send delivers, archived over IMAP in 2010 under a 1-year
+	// rule: expired. The smtp account has no rule.
+	body := message(subject)
+	work := &store.Account{Name: "work", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &f.owner}
+	if err := f.st.CreateAccount(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := f.st.GetOrCreateFolder(ctx, work.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: work.ID, Years: 1}); err != nil {
+		t.Fatal(err)
+	}
+	blob, created, err := f.srv.Blobs.Put(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := archive.BuildMeta(ctx, f.st, f.srv.Blobs, blob, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := store.Location{FolderID: inbox.ID, UID: 1, InternalDate: time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)}
+	if _, err := f.st.SaveBatch(ctx, inbox.ID, 1, []store.MessageMeta{meta}, []store.Location{loc}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.st.ProposeDeletion(ctx, nil)
+	if err != nil || run.Candidates != 1 {
+		t.Fatalf("proposal %+v %v", run, err)
+	}
+	if err := f.st.ConfirmDeletionRun(ctx, run.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	runID.Store(run.ID)
+
+	rcpts := []string{"archive+alice=example.com@archive.test"}
+	if err := f.send("sender@example.com", rcpts, body); code(err) != 451 {
+		t.Fatalf("delivery after the cleanup: %v", err)
+	}
+	mu.Lock()
+	if !fired || cleanErr != nil || !known {
+		t.Fatalf("cleanup fired %v, error %v, metadata known %v", fired, cleanErr, known)
+	}
+	mu.Unlock()
+	if done, err := f.st.DeletionRun(ctx, run.ID); err != nil || done.State != store.RunDone || done.Deleted != 1 {
+		t.Fatalf("run %+v %v", done, err)
+	}
+	// The expired row and file are gone, and no smtp location came.
+	if f.srv.Blobs.Exists(blob.SHA256) {
+		t.Fatal("the swept file is there")
+	}
+	if _, err := f.st.GetMessageDetail(ctx, f.owner, blob.SHA256); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the 451: %v", err)
+	}
+
+	// The retry builds the metadata again and archives the message.
+	if err := f.send("sender@example.com", rcpts, body); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.envelopes(subject); len(got) != 1 || !slices.Equal(got["journal"], []string{"alice@example.com"}) {
+		t.Fatalf("after retry %v", got)
+	}
+	d, err := f.st.GetMessageDetail(ctx, f.owner, blob.SHA256)
+	if err != nil || len(d.Locations) != 1 || d.Locations[0].Account != "journal" || d.Locations[0].Folder != store.SMTPFolder || d.Subject != subject {
+		t.Fatalf("after retry %+v %v", d, err)
+	}
+	file, err := f.srv.Blobs.Open(d.StoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	if b, err := io.ReadAll(file); err != nil || string(b) != body {
+		t.Fatalf("file %q %v", b, err)
+	}
+	f.assertFilesPresent()
 }
