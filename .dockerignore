@@ -4,6 +4,8 @@ data
 .env
 *.test
 *.out
+/demo
+/bin/
 web/node_modules
 internal/web/ui/dist
 docs/node_modules
