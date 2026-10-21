@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -360,6 +362,38 @@ func TestReceiveCommitFailure(t *testing.T) {
 	}
 	if !strings.Contains(f.logs.String(), `msg="smtp message not stored"`) {
 		t.Errorf("failure not logged:\n%s", f.logs)
+	}
+}
+
+// A message the blob store cannot persist gets 451 before any recipient
+// transaction; the retry stores it.
+func TestReceivePutFailure(t *testing.T) {
+	var commits atomic.Int64
+	f := newFixture(t, func(s *Server) {
+		s.receive = func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error) {
+			commits.Add(1)
+			return s.Store.ReceiveMessage(ctx, account, meta, env, fileExists)
+		}
+	})
+	tmp := filepath.Join(f.srv.Blobs.Root(), "tmp")
+	if err := os.RemoveAll(tmp); err != nil {
+		t.Fatal(err)
+	}
+	rcpts := []string{"archive+alice=example.com@archive.test"}
+	if err := f.send("sender@example.com", rcpts, message("quokka")); code(err) != 451 {
+		t.Fatalf("delivery into a failing store: %v", err)
+	}
+	if n := commits.Load(); n != 0 {
+		t.Fatalf("%d recipient transactions without a stored file", n)
+	}
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.send("sender@example.com", rcpts, message("quokka")); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.envelopes("quokka"); !slices.Equal(got["journal"], []string{"alice@example.com"}) {
+		t.Fatalf("after retry %v", got)
 	}
 }
 

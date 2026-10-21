@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,6 +134,40 @@ func TestExecuteDeletionRun(t *testing.T) {
 	}
 	if n, err := SweepBlobs(ctx, s.st, s.blobs, SweepOptions{}); err != nil || n != 0 {
 		t.Fatalf("second sweep: %d %v", n, err)
+	}
+}
+
+// A removal that is not durable leaves its cleanup record pending, and the
+// retry completes it although the file is gone already.
+func TestSweepKeepsRemovalsUntilDurable(t *testing.T) {
+	ctx := context.Background()
+	s := newRetentionSetup(t, 1)
+	id := s.confirmedRun(t)
+	if _, err := ExecuteDeletionRun(ctx, s.st, id, DeletionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The store root is unavailable: the absence of the file cannot be
+	// made durable.
+	root := s.blobs.Root()
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := SweepBlobs(ctx, s.st, s.blobs, SweepOptions{}); err == nil {
+		t.Fatalf("sweep without the store root: %d removed, no error", n)
+	}
+	if due, err := s.st.BlobRemovalDue(ctx); err != nil || !due {
+		t.Fatalf("removal forgotten after the failure: due=%v %v", due, err)
+	}
+
+	// Back, but without the file: the retry finishes the removal.
+	if err := os.MkdirAll(filepath.Join(root, "messages"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := SweepBlobs(ctx, s.st, s.blobs, SweepOptions{}); err != nil || n != 1 {
+		t.Fatalf("retry: %d %v", n, err)
+	}
+	if due, err := s.st.BlobRemovalDue(ctx); err != nil || due {
+		t.Fatalf("removal still due after the retry: due=%v %v", due, err)
 	}
 }
 

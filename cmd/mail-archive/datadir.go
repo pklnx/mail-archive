@@ -207,11 +207,18 @@ func isEmpty(dir string) (bool, error) {
 	return true, nil
 }
 
-// openBlobs opens the blob store and explains a permission error.
+// openBlobs opens the blob store and explains a permission error. A
+// parent directory that cannot be opened for its durability barrier is
+// not the data directory being read-only.
 func openBlobs(dir string) (*blobstore.Store, error) {
 	blobs, err := blobstore.New(dir)
 	if err == nil || !errors.Is(err, fs.ErrPermission) {
 		return blobs, err
+	}
+	var ae *blobstore.AncestorError
+	if errors.As(err, &ae) {
+		return nil, fmt.Errorf("data directory %s: cannot synchronize its parent directory %s, which must be readable for UID %d: %w",
+			dir, ae.Dir, os.Getuid(), err)
 	}
 	return nil, notWritableError(dir, os.Getuid(), commandName(), err)
 }

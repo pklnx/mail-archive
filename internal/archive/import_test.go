@@ -428,3 +428,24 @@ func TestImportRoundTripsExport(t *testing.T) {
 		t.Errorf("hashes %v, want %v", got, want)
 	}
 }
+
+// A message the blob store cannot persist fails the import; it is no
+// unreadable source message to skip, and gets no location.
+func TestImportFailsWhenTheBlobStoreFails(t *testing.T) {
+	e := newArchiveEnv(t)
+	acc := e.importAccount("broken store")
+	if err := os.RemoveAll(e.path("tmp")); err != nil {
+		t.Fatal(err)
+	}
+	folders, _, err := archive.ImportFolders("mbox", "testdata/import/thunderbird", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.importer().Import(e.ctx, acc, folders)
+	if err == nil || res.Status != "failed" || res.Total().Skipped != 0 {
+		t.Fatalf("import into a failing store: %v %s %+v", err, res.Status, res.Total())
+	}
+	if got := e.placesOf(acc); len(got) != 0 {
+		t.Fatalf("locations without a stored file: %+v", got)
+	}
+}

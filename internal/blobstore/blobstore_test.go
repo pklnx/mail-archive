@@ -151,3 +151,23 @@ func TestWalk(t *testing.T) {
 		}
 	}
 }
+
+// A removal is only durable within an available store root: without it,
+// Remove fails instead of reporting the file as gone.
+func TestRemoveFailsWithoutRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, _, err := s.Put(strings.NewReader("Subject: gone\r\n\r\nbody\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Remove(blob.SHA256); err == nil {
+		t.Fatal("Remove succeeded without the store root")
+	}
+}

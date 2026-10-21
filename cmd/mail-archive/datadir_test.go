@@ -160,6 +160,28 @@ func TestOpenBlobsNotWritable(t *testing.T) {
 	}
 }
 
+// A parent directory that cannot be opened for the durability barrier is
+// named; the data directory itself is writable.
+func TestOpenBlobsUnreadableParent(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can read any directory")
+	}
+	parent := filepath.Join(t.TempDir(), "parent")
+	dir := filepath.Join(parent, "data")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o300); err != nil { // traversable, not readable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	_, err := openBlobs(dir)
+	if err == nil || strings.Contains(err.Error(), "is not writable") ||
+		!strings.Contains(err.Error(), "cannot synchronize its parent directory "+parent+", which must be readable") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestNotWritableError(t *testing.T) {
 	cause := errors.New("mkdir /data/messages: permission denied")
 	got := notWritableError("/data", 65532, "./ma", cause).Error()
