@@ -18,6 +18,9 @@ This is a hobby project maintained in spare time. Reports are handled on a
 best-effort basis, without fixed response times. You will be credited in the
 fix unless you prefer otherwise.
 
+CI scans every pull request and every push to `main` for committed
+credentials (gitleaks, check `secret-scan`).
+
 This project is entirely AI-written (see the [README](README.md)).
 Independent review is welcome.
 

@@ -128,7 +128,9 @@ file changes on `main`.
 
 A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
 
-## Dependency security
+## Security checks
+
+### Dependencies
 
 - CI runs `govulncheck`, `go mod verify`, `go vet`, golangci-lint (with
   `gosec`), tests with the race detector, and `pnpm audit` for the UI.
@@ -139,3 +141,48 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
   permissions unless a job needs more.
 - Direct Go dependencies are few: go-imap v2 (still in beta) with go-sasl,
   go-message, pgx, goose, cobra, x/net, x/term and x/text.
+
+### Secret scanning
+
+The `secret-scan` check (`.github/workflows/secrets.yml`) runs
+[gitleaks](https://github.com/gitleaks/gitleaks) with its built-in rules and
+the narrow allowlist in `.gitleaks.toml`:
+
+- on every pull request: the commits the pull request adds
+  (`base..head`);
+- on every push to `main`: the commits the push adds (`before..after`). A
+  push without a previous commit, or whose previous commit is not in the
+  clone, scans only its last commit and says so in the log.
+
+The workflow has no `paths` filter, so the check runs on every pull request;
+the maintainer adds it to the required checks of the `main` ruleset. Secret
+values are redacted in the log. Pull request runs cancel older runs of the
+same pull request; push runs are never cancelled.
+
+```sh
+make secrets        # scan the full history of all local refs
+make secrets-test   # self-test: the scan fails and passes where it should
+```
+
+gitleaks is pinned in the Makefile (`GITLEAKS_VERSION`) and verified through
+the Go checksum database. Dependabot does not update it: bump it by hand,
+then rescan the full history with `make secrets` on a clone with all
+branches and tags.
+
+**If the check finds a credential:**
+
+1. Treat it as leaked: rotate or revoke it first. Removing the commit does
+   not help, because the value stays in the history and in clones.
+2. Never post the value on GitHub (issues, pull requests, comments). Report
+   it to the maintainer privately.
+3. Remove it from the branch. On a pull request branch, rewrite the branch
+   so no commit contains the value. On `main` the history is not rewritten:
+   after rotating, add the finding's fingerprint (`commit:file:rule:line`,
+   printed by gitleaks) to `.gitleaksignore` with a comment.
+
+**False positives** (a fake key in a test fixture) get a narrow entry in
+`.gitleaks.toml`: one `[[allowlists]]` block with `condition = "AND"`, the
+fixture's exact path and a regex for the fake value, and a comment saying why
+it is safe. Global regexes and path globs are not allowed. Better still,
+build fake credentials at runtime in tests, so nothing in the repository
+matches a rule (see `scripts/secret-scan-test.sh`).
