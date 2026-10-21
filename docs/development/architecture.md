@@ -204,13 +204,17 @@ host side of a bind mount or volume durably. File shares of Docker Desktop
 `fsync`, deliveries get `451` and syncs fail. Other platforms build,
 without a durability claim.
 
-The unit tests (`internal/blobstore`, `TestSweepKeepsRemovalsUntilDurable`,
-the `…FailsWhenTheBlobStoreFails` and `TestReceivePutFailure` tests) prove the
-order of the barriers, error propagation, retries and concurrent writers,
-with failures injected per store. They do not prove that data survives a
-power loss. That needs a disposable VM or a fault-injecting block device,
-power cuts at the publication and removal boundaries, a restart, and a check
-that every acknowledged blob and every pending removal is still there.
+The tests in `internal/blobstore` and `TestSweepKeepsRemovalsUntilDurable`
+prove the order of the barriers, error propagation, retries and concurrent
+writers, with failures injected per store. The four caller tests
+(`TestImportFailsWhenTheBlobStoreFails`, `TestSyncFailsWhenTheBlobStoreFails`,
+`TestFillFailsWhenTheBlobStoreFails` and `TestReceivePutFailure`) guard the
+existing error handling of import, sync, fill and SMTP; they are no
+regression tests for new behaviour. None of these tests proves that data
+survives a power loss. That needs a disposable VM or a fault-injecting
+block device, power cuts at the publication and removal boundaries, a
+restart, and a check that every acknowledged blob and every pending removal
+is still there.
 
 ## Journaling and fills
 

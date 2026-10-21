@@ -454,13 +454,17 @@ func TestPutConcurrentInstances(t *testing.T) {
 		close(bAtLink)
 		<-aPublished
 	})
+	// A closes aPublished in its barrier, or when its Put returns early,
+	// so that B never waits for a publication that will not come.
+	var publishOnce sync.Once
+	signalPublished := func() { publishOnce.Do(func() { close(aPublished) }) }
 	var published os.FileInfo
 	recA.onBefore("open:"+leaf, func(string) {
 		var err error
 		if published, err = os.Stat(final); err != nil {
 			t.Error(err)
 		}
-		close(aPublished)
+		signalPublished()
 		<-releaseA
 	})
 	recB.failOnce("sync:"+shardDirs(root, hash)[2], errInjected)
@@ -478,6 +482,7 @@ func TestPutConcurrentInstances(t *testing.T) {
 	<-bAtLink
 	go func() {
 		blob, created, err := a.Put(strings.NewReader(content))
+		signalPublished()
 		resA <- result{blob, created, err}
 	}()
 
