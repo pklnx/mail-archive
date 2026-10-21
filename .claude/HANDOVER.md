@@ -6,7 +6,7 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Next tickets
-- #125: `ready` (pin the Go patch version in the Dockerfile + build guard). Plan by the Action, approved by the Action plan reviewer. The `@claude` answer on the issue notes that host builds (`make build`, `scripts/docs-screenshots.sh`, `scripts/compose-smoke-test.sh`) are outside the guard's scope.
+- None `ready`. Open follow-ups are in `FOLLOWUPS.md`.
 
 ## Done (2026-10-21)
 - #115: durable blob publication and removal, merged via #121 (local Opus review + Action second review).
@@ -15,6 +15,7 @@ State of the work for the next session. Update before a session ends.
 - #119: agent workflow, briefs and handover.
 - #120: Go 1.27.3 (GO-2026-6809) and docs vite 8.3.3.
 - #122: Claude GitHub Action (plans, plan reviews, second reviews, answer-only mentions; GITHUB_TOKEN, no App).
+- #125: Go patch version pinned in the Dockerfile with a build guard (PR #127; plan, plan review and second review by the Action).
 - #124: bubblewrap and socat for the Action's sandbox. All four triggers tested on GitHub: `second-review` (#121, #123, #124), `needs-plan`, `plan-review` and `@claude` (#125).
 
 ## Manual checks for the maintainer
