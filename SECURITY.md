@@ -2,9 +2,8 @@
 
 ## Reporting a vulnerability
 
-Please report security problems **privately** through
-[GitHub's private vulnerability reporting](https://github.com/pklnx/mail-archive/security/advisories/new).
-Do not open a public issue.
+The repository is private, so only its collaborators can read its issues.
+Report security problems as an issue with the label `security`.
 
 Include what you found, how to reproduce it and what an attacker could do with it.
 
@@ -17,7 +16,7 @@ maintained older versions.
 
 This is a hobby project maintained in spare time. Reports are handled on a
 best-effort basis, without fixed response times. You will be credited in the
-advisory unless you prefer otherwise.
+fix unless you prefer otherwise.
 
 This project is entirely AI-written (see the [README](README.md)).
 Independent review is welcome.
