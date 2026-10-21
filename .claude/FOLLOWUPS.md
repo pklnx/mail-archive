@@ -4,5 +4,10 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 
 | Source | Follow-up | Status |
 |---|---|---|
-| #120 review | Pin the Go patch version in the Dockerfile (`golang:1.27.3-alpine`) so security toolchain bumps reach the image without relying on a refreshed floating tag. | open |
+| #120 review | Pin the Go patch version in the Dockerfile (`golang:1.27.3-alpine`) so security toolchain bumps reach the image without relying on a refreshed floating tag. | planned as #125 |
 | #119 review | CLAUDE.md and the briefs still name `gh` commands; cloud sessions map them to GitHub MCP tools via a one-line note only. | open |
+| #122 re-review 2 | `mention`: `download_job_log` saves logs under `/home/runner/work/_temp/github-ci-logs/`, which the `_temp` deny rule makes unreadable. Deny only the sensitive parts of `_temp` if log reading is wanted. | open |
+| #122 re-review 2 | The second reviewer may call `gh pr checks --watch` and idle until the job timeout (runner minutes, no API credit). Deny `Bash(gh pr checks --watch:*)`. | open |
+| #124 Action review | If the sandbox fails to start, the reviewer posts a "changes requested" comment instead of failing the job and removing the label. Fail the run when no tool could run. | open |
+| #124 Action review | `apt-get update` adds time and a mirror dependency to every Claude job; skip the install when `bwrap` and `socat` exist, or cache the packages. | open |
+| #123 implementer | The `addMessage` test helper leaves the folder's UIDVALIDITY unset, so its locations show `superseded: true`; harmless test-data artifact. | open |
