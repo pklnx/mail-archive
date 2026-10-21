@@ -14,10 +14,22 @@ the web server, and a one-shot container for commands.
 ## Install
 
 Download the Docker Compose bundle of the latest
-[release](https://github.com/pklnx/mail-archive/releases) and extract it:
+release and extract it.
+
+The repository and its images on `ghcr.io` are private. Downloads need the
+[GitHub CLI](https://cli.github.com/) signed in to an account with access,
+with the `read:packages` scope for the images:
 
 ```sh
-curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
+gh auth login
+gh auth refresh -s read:packages
+gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
+```
+
+Then:
+
+```sh
+gh release download --repo pklnx/mail-archive --pattern mail-archive.tar.gz --clobber && tar -xzf mail-archive.tar.gz
 cd mail-archive
 cp .env.example .env
 ```
@@ -61,7 +73,7 @@ To run the code of a branch, or to change it, clone the repository; its
 code changes (about a second when nothing changed):
 
 ```sh
-git clone https://github.com/pklnx/mail-archive.git
+gh repo clone pklnx/mail-archive   # the repository is private; uses the gh sign-in above
 cd mail-archive
 cp .env.example .env
 ```

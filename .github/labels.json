@@ -11,5 +11,6 @@
   { "name": "ready",         "color": "0e8a16", "description": "Plan approved by a plan reviewer or the maintainer; ready to implement" },
   { "name": "needs-plan",    "color": "c2e0c6", "description": "Claude GitHub Action writes the implementation plan" },
   { "name": "plan-review",   "color": "d4c5f9", "description": "Claude GitHub Action reviews the posted plan independently" },
-  { "name": "second-review", "color": "fef2c0", "description": "Claude GitHub Action reviews the pull request as second reviewer" }
+  { "name": "second-review", "color": "fef2c0", "description": "Claude GitHub Action reviews the pull request as second reviewer" },
+  { "name": "security",      "color": "b60205", "description": "Security problem; the repository is private" }
 ]
