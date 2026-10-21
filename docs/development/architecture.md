@@ -24,7 +24,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/archive` | Sync of accounts and folders, deduplication, header parsing, the background `Runner` with its schedule, `reindex`, `verify` and `export`. |
 | `internal/mailbox` | mbox and Maildir writers for `export`; readers and source walkers (Thunderbird, Apple Mail, Maildir++) for `import`. |
 | `internal/imapsync` | Read-only IMAP client on top of go-imap v2. |
-| `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and written atomically. |
+| `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and published and removed durably (see [Blob durability](#blob-durability)). |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock and the attestation fence. |
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files. No database. |
@@ -147,6 +147,74 @@ looks for orphans; a sync that starts meanwhile waits. If the lock stays busy
 longer than `--lock-timeout`, `verify` skips the orphan check and exits `2`.
 Deleting an account takes only the account lock, so it never waits for
 `verify`. PostgreSQL drops both locks with the connection when a process dies.
+
+## Blob durability
+
+`blobstore.New`, `Put` and `Remove` return success only after the files and
+directory entries their result depends on are synchronized with `fsync`.
+Callers acknowledge nothing before that: import, sync and fill return the
+error before the batch with the message's row and the folder's progress
+commits, and SMTP answers `451` before any recipient transaction. An error
+can still leave the result visible (a published file, a removed one); it
+counts as a failure, and the retry completes it. A file being visible,
+`Stat` and `Exists` say nothing about durability.
+
+- **New** creates `messages/` and `tmp/` if needed and, on every call,
+  synchronizes them, then the store root and each of its ancestors bottom up
+  through `/`. It resolves symlinks in the root first, so the target's
+  ancestry is synchronized, not the lexical parents of a link; `Root()`
+  still returns the configured path. Every ancestor of the data directory
+  must therefore be readable by the service user; one that is not fails the
+  start with a message naming it. The configured path, its symlinks and, for
+  a relative root, the working directory must not change while the process
+  runs.
+- **Put** writes into `tmp/put-*`, synchronizes and closes the file, and
+  publishes it with a hard link under `messages/ab/cd/<sha256>.eml`. A link
+  never replaces an existing name, so of identical concurrent writers, also
+  in other processes, exactly one publishes (`created`), and nobody replaces
+  the file another writer is still synchronizing. Then it synchronizes
+  `messages/ab/cd`, `messages/ab` and `messages`, also when they existed.
+  A writer that finds the file (before or through a lost link race)
+  synchronizes that file and the same directories itself before it returns
+  `created=false`: the file may be what an earlier, failed call published.
+  If a sweep or `verify --fix-orphans` removes the file between the lookup
+  and its synchronization (SMTP puts run without the blob lock), `Put`
+  publishes its own copy instead. After a failure the final file stays for
+  the retry; the temporary name is removed, but not durably.
+- **Remove** unlinks the file and synchronizes its directory, also when the
+  file was already gone: an earlier call may have unlinked it and failed
+  before the barrier. If shard directories are missing, it synchronizes the
+  nearest existing one and its ancestors through the store root; a missing
+  store root is an error. `SweepBlobs` marks the removals of a page done
+  only after every `Remove` succeeded, so a failure leaves them pending and
+  the next sweep repeats them.
+
+Stale temporary names in `tmp/` are possible after a crash. A name left
+after publication is a second hard link to a live blob; `verify
+--fix-orphans` moves it into `orphans/` as `stale_temp`, which removes only
+that name, but counts its bytes among the orphans although the blob stays.
+
+The guarantee holds on Linux, for a data directory on one local filesystem
+that supports hard links and `fsync` on regular files and directories, on a
+device that honours flushes. Storage without hard links or directory
+`fsync` fails every write instead of falling back to weaker behaviour. A
+container can only synchronize what it sees: the operator provisions the
+host side of a bind mount or volume durably. File shares of Docker Desktop
+(macOS, Windows) are not tested; if one lacks hard links or directory
+`fsync`, deliveries get `451` and syncs fail. Other platforms build,
+without a durability claim.
+
+The tests in `internal/blobstore` and `TestSweepKeepsRemovalsUntilDurable`
+prove the order of the barriers, error propagation, retries and concurrent
+writers, with failures injected per store. The four caller tests
+(`TestImportFailsWhenTheBlobStoreFails`, `TestSyncFailsWhenTheBlobStoreFails`,
+`TestFillFailsWhenTheBlobStoreFails` and `TestReceivePutFailure`) guard the
+existing error handling of import, sync, fill and SMTP; they are no
+regression tests for new behaviour. None of these tests proves that data
+survives a power loss. That needs a disposable VM or a fault-injecting
+block device, power cuts at the publication and removal boundaries, a
+restart, and a check that every acknowledged blob and every pending removal
+is still there.
 
 ## Journaling and fills
 

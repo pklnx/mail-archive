@@ -351,3 +351,27 @@ func TestSyncSkipsAccountDeletedMeanwhile(t *testing.T) {
 		t.Fatalf("runs recorded: %v, %v", runs, err)
 	}
 }
+
+// A message the blob store cannot persist fails the sync before its batch
+// and the folder's last UID commit, so the next sync fetches it again.
+func TestSyncFailsWhenTheBlobStoreFails(t *testing.T) {
+	u := imapmemserver.NewUser("u", "pw")
+	createMailboxes(t, u, "INBOX")
+	appendMsg(t, u, "INBOX", rawMessage("p1", "Persist me"))
+	f := newFixture(t, u)
+	f.addAccount("acc", "u", "pw")
+	tmp := filepath.Join(f.dataDir, "tmp")
+	if err := os.RemoveAll(tmp); err != nil {
+		t.Fatal(err)
+	}
+	if res := f.sync(); res["acc"].Err == nil {
+		t.Fatalf("sync into a failing store: %+v", res["acc"])
+	}
+	if locs, unique := f.stats(); locs["acc"] != 0 || unique != 0 {
+		t.Fatalf("committed without a stored file: %v, %d", locs, unique)
+	}
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expectResult(t, f.sync()["acc"], 1, 1)
+}

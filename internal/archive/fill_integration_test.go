@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -622,5 +624,31 @@ func TestFillAgainstSweep(t *testing.T) {
 	}
 	if n, err := archive.SweepBlobs(c.ctx, c.cleaner, c.blobs, archive.SweepOptions{LockTimeout: cleanupLockTimeout}); err != nil || n != 0 {
 		t.Errorf("second sweep: %d %v", n, err)
+	}
+}
+
+// A message the blob store cannot persist fails the fill before its batch
+// and the folder's progress commit.
+func TestFillFailsWhenTheBlobStoreFails(t *testing.T) {
+	f := newFixture(t, fillUser(t))
+	acc := f.smtpAccount()
+	fill := f.createFill(acc, "secret", "Spam", "Sent")
+	if err := os.RemoveAll(filepath.Join(f.dataDir, "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.filler().Run(f.ctx, fill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The folder fails; the fill ends partial.
+	c := folderOf(got, "INBOX")
+	if got.Status == store.FillOK || c.Error == "" {
+		t.Fatalf("fill into a failing store: %s, folder %+v", got.Status, c)
+	}
+	if c.LastUID != 0 || c.Counts.Imported != 0 || c.Done {
+		t.Errorf("progress without stored files %+v", c)
+	}
+	if locs, _ := f.stats(); locs["journal"] != 0 {
+		t.Errorf("locations %v", locs)
 	}
 }
