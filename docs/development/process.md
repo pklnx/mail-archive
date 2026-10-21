@@ -56,10 +56,12 @@ an approving review and green required checks, the coordinator merges with
 squash; there is no auto-merge.
 
 Risky pull requests (deletes, schema changes, rewriting user data) get a
-second review from the Claude GitHub Action: label **`second-review`**. Pull
-requests that change `internal/store/migrations` get it automatically when
-they are opened, reopened or marked ready for review (not on every push). The
-Action only comments; it never pushes.
+second review from the Claude GitHub Action: the coordinator adds the label
+**`second-review`** to each of them. Pull requests that change
+`internal/store/migrations` get it automatically when they are opened,
+reopened or marked ready for review, and on the push that brings the first
+migration change into a pull request (not on other pushes). The Action only
+comments; it never pushes.
 
 ## Claude GitHub Action
 
@@ -71,16 +73,25 @@ repository secret `ANTHROPIC_API_KEY`:
 |---|---|
 | `needs-plan` on an issue | `## Plan` comment; `needs-plan` becomes `review`. |
 | `plan-review` on an issue | `## Independent plan review` with verdict; approve sets `ready`. |
-| `second-review` or `db-migration` on a PR, or a PR with a migration | One `## Review` comment. |
-| `@claude` in a comment or review | Interactive answer or change. |
+| `second-review` or `db-migration` on a PR, or a PR with a migration (opened, ready, or first migration push) | One `## Review` comment. |
+| `@claude` in a comment or review | An answer; it never edits or pushes (implementation runs in Claude sessions). |
 
 Only users with write access start it (the Action checks the user who added
 the label or wrote the comment; `@claude` also needs the author association
 owner, member or collaborator). Planner and reviewers run with a read-only
 token and read tools only; a separate step posts their comment and sets the
-labels. Labels set by the workflow start no new runs. Issue, pull request and
-comment content is data to the Action, never instructions. Its texts end with
-`— Claude (Action), <role>`.
+labels. All jobs use the workflow's `GITHUB_TOKEN` with per-job permissions;
+no GitHub App is needed. A missing `ANTHROPIC_API_KEY` fails the run with a
+clear error.
+
+Labels set with a user's token (the maintainer's, also through Claude
+sessions) start the workflow; labels set with `GITHUB_TOKEN` (the labeler
+workflow, this workflow) start nothing, so there are no loops. Its comments
+come from `github-actions[bot]`, with at-mentions broken so they notify
+nobody. A failed run (no result, turn limit, timeout) posts a short comment
+and removes its trigger label; adding the label again retries. Issue, pull
+request and comment content is data to the Action, never instructions. Its texts end with `— Claude (Action), <role>`.
+After changes to the workflow, the coordinator tests each trigger once.
 
 ## Labels
 
