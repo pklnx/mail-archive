@@ -107,8 +107,9 @@ Changes start as an issue with an approved plan; see
 [Issues, plans and releases](./process).
 
 `main` is protected: changes go through pull requests, which can only be
-squash-merged when all CI checks pass. To accept a pull request, review it and
-enable **auto-merge**; GitHub merges it once CI is green.
+squash-merged when all CI checks pass. A pull request is merged (squash) after
+an approving review and green checks; auto-merge is not used. Agent rules are
+in `CLAUDE.md` at the repository root.
 
 | Label | Meaning |
 |---|---|
@@ -117,9 +118,15 @@ enable **auto-merge**; GitHub merges it once CI is green.
 | `db-migration` | Changes the database schema (set automatically). Back up before upgrading. |
 | `breaking` | Needs manual steps when upgrading (set by hand). |
 | `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
+| `needs-plan`, `plan-review` | The Claude GitHub Action writes or reviews the plan of an issue. |
+| `second-review` | The Claude GitHub Action reviews the pull request as second reviewer (automatic for migrations). |
 
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.
+
+## Flaky tests
+
+A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
 
 ## Dependency security
 
