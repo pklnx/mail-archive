@@ -93,12 +93,12 @@ jobs:
         with:
           persist-credentials: false
       - if: steps.gate.outputs.run == 'true'
-        name: Install bubblewrap
+        name: Install sandbox tools
         run: &bwrap |
-          # Required by CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: Claude Code runs its
-          # tool subprocesses in a bubblewrap sandbox without the API key.
+          # Required by CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: Claude Code runs its Bash
+          # tool in a bubblewrap sandbox (socat proxies its network) without the API key.
           sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap
+          sudo apt-get install -y -qq bubblewrap socat
           # Ubuntu 24.04 runners block unprivileged user namespaces via AppArmor.
           if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -247,7 +247,7 @@ jobs:
         with:
           persist-credentials: false
       - if: steps.gate.outputs.run == 'true'
-        name: Install bubblewrap
+        name: Install sandbox tools
         run: *bwrap
       - if: steps.gate.outputs.run == 'true'
         id: claude
@@ -455,7 +455,7 @@ jobs:
         with:
           persist-credentials: false
       - if: steps.gate.outputs.run == 'true'
-        name: Install bubblewrap
+        name: Install sandbox tools
         run: *bwrap
       - if: steps.gate.outputs.run == 'true'
         id: claude
@@ -590,7 +590,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install bubblewrap
+      - name: Install sandbox tools
         run: *bwrap
       - uses: anthropics/claude-code-action@a5a423f75c251dcbff8a74e99f83b2cb03c72bfa # v1.0.256
         with:
