@@ -37,7 +37,7 @@ agent or the maintainer replaces `review` with **`ready`**. Only `ready`
 issues are implemented.
 
 A plan with several parts gets one sub-issue per part, titled
-"<what> (#N, part K)". The `ready` on the main issue covers all parts, and the
+`<what> (#N, part K)`. The `ready` on the main issue covers all parts, and the
 main issue closes with the last part.
 
 The order of `ready` issues is chosen during implementation, with a short
@@ -60,7 +60,8 @@ squash; there is no auto-merge.
 | `review` | planner | The plan is posted and waits for review. |
 | `ready` | plan-reviewer agent or maintainer | The plan is approved; the issue may be implemented. |
 | `needs-plan`, `plan-review` | reserved | For the Claude GitHub Action; not yet defined on GitHub. |
-| `db-migration`, `breaking` | by hand or automatically | Schema change; manual upgrade steps (see Releases). |
+| `db-migration` | automatically | Schema change (see Releases). |
+| `breaking` | by hand | Manual upgrade steps (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change. |
 
 Label changes do not notify anyone by themselves: after setting `plan` or

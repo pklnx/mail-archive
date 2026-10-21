@@ -1,6 +1,6 @@
 # Workflow
 
-Roles: maintainer (human) decides and sets `plan`/`ready`; coordinator (Claude, Opus) plans the work, delegates to subagents, merges; implementers (Opus for features, Sonnet for mechanical work) build one PR each; reviewers (Opus for risky/large, Sonnet for small) review only; an independent plan-reviewer agent (never the planner) reviews plans. The Claude GitHub Action writes plans (`needs-plan`) and is second reviewer on risky PRs (once the Claude GitHub Action is set up; until then a second local reviewer takes this role).
+Roles: maintainer (human) decides, sets `plan` and may set `ready`; coordinator (Claude, Opus) plans the work, delegates to subagents, merges; implementers (Opus for features, Sonnet for mechanical work) build one PR each; reviewers (Opus for risky/large, Sonnet for small) review only; an independent plan-reviewer agent (never the planner) reviews plans. The Claude GitHub Action writes plans (`needs-plan`) and is second reviewer on risky PRs (once the Claude GitHub Action is set up; until then a second local reviewer takes this role).
 
 Language: chat with the maintainer in German; everything on GitHub and in code in English. Every GitHub text ends with `— Claude (<model>), <role>`.
 
