@@ -2,8 +2,10 @@ package archive_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -381,6 +384,247 @@ func TestFillHoldsTheSyncLock(t *testing.T) {
 	// Journaling goes on while the lock is held.
 	f.journal(acc, "during")
 	unlock()
+}
+
+// cleanupFixture is the setting of the fill-versus-cleanup tests: alice's
+// IMAP account "work" with a 1-year rule, holding messages of 2010, and
+// bob's smtp account without a rule, which a fill imports into from an
+// IMAP mailbox whose first message (UID 1) is the target.
+type cleanupFixture struct {
+	*fixture
+	work, journal *store.Account
+	alice, bob    *store.User
+	// cleaner is a second Store handle for the callbacks' cleanup, so it
+	// needs no free connection in the fill's pool.
+	cleaner *store.Store
+	ctx     context.Context
+}
+
+const cleanupLockTimeout = 150 * time.Millisecond
+
+func newCleanupFixture(t *testing.T) *cleanupFixture {
+	t.Helper()
+	u := imapmemserver.NewUser("alice@example.com", "secret")
+	imaptest.CreateMailboxes(t, u, "INBOX")
+	for _, id := range []string{"target", "second", "third"} {
+		imaptest.AppendAt(t, u, "INBOX", fillMessage(id), fillCutoff.Add(-48*time.Hour))
+	}
+	f := newFixture(t, u)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	c := &cleanupFixture{fixture: f, ctx: ctx}
+	var err error
+	if c.alice, err = f.store.CreateUser(ctx, "alice", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	if c.bob, err = f.store.CreateUser(ctx, "bob", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	c.work = &store.Account{Name: "work", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &c.alice.ID}
+	if err := f.store.CreateAccount(ctx, c.work); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.AddRetentionRule(ctx, store.NewRetentionRule{AccountID: c.work.ID, Years: 1}); err != nil {
+		t.Fatal(err)
+	}
+	c.journal = &store.Account{Name: "journal", Enabled: true, OwnerID: &c.bob.ID}
+	if err := f.store.CreateSMTPAccount(ctx, c.journal, []string{"archive@archive.local"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.cleaner, err = store.Open(ctx, f.dbURL); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.cleaner.Close)
+	return c
+}
+
+// expired archives fillMessage(id) in work/INBOX with an internal date in
+// 2010 and returns its SHA.
+func (c *cleanupFixture) expired(id string, uid uint32) string {
+	c.t.Helper()
+	blob, created, err := c.blobs.Put(bytes.NewReader(fillMessage(id)))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	meta, err := archive.BuildMeta(c.ctx, c.store, c.blobs, blob, created)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	inbox, err := c.store.GetOrCreateFolder(c.ctx, c.work.ID, "INBOX")
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	loc := store.Location{FolderID: inbox.ID, UID: uid, InternalDate: time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)}
+	if _, err := c.store.SaveBatch(c.ctx, inbox.ID, uid, []store.MessageMeta{meta}, []store.Location{loc}); err != nil {
+		c.t.Fatal(err)
+	}
+	return blob.SHA256
+}
+
+func (c *cleanupFixture) confirmedRun() int64 {
+	c.t.Helper()
+	run, err := c.store.ProposeDeletion(c.ctx, nil)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if err := c.store.ConfirmDeletionRun(c.ctx, run.ID, nil); err != nil {
+		c.t.Fatal(err)
+	}
+	return run.ID
+}
+
+// runFill runs a fill into bob's journal and calls during once, from the
+// Progress of the first batch that committed the target (INBOX, UID 1),
+// while the fill holds the blob lock. It fails the test if during never
+// ran.
+func (c *cleanupFixture) runFill(during func()) {
+	c.t.Helper()
+	fill := c.createFill(c.journal, "secret")
+	filler := c.filler()
+	fired := false
+	filler.Progress = func(ff store.FillFolder) {
+		if !fired && ff.SourceName == "INBOX" && ff.LastUID >= 1 {
+			fired = true
+			during()
+		}
+	}
+	got, err := filler.Run(c.ctx, fill.ID)
+	if err != nil || got.Status != store.FillOK {
+		c.t.Fatalf("fill %+v %v", got, err)
+	}
+	if !fired {
+		c.t.Fatal("the callback never ran")
+	}
+	if inbox := folderOf(got, "INBOX"); inbox.Counts.Imported != 3 {
+		c.t.Fatalf("INBOX %+v", inbox)
+	}
+}
+
+// fileBytes returns the content of sha's file.
+func (c *cleanupFixture) fileBytes(sha string) []byte {
+	c.t.Helper()
+	file, err := c.blobs.Open(blobstore.RelPath(sha))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	b, err := io.ReadAll(file)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return b
+}
+
+// assertLocations checks that alice's and bob's views of sha are their
+// given accounts.
+func (c *cleanupFixture) assertLocations(sha string, want map[*store.User]string) {
+	c.t.Helper()
+	for u, account := range want {
+		d, err := c.store.GetMessageDetail(c.ctx, u.ID, sha)
+		if err != nil {
+			c.t.Errorf("%s: %v", u.Name, err)
+			continue
+		}
+		if len(d.Locations) != 1 || d.Locations[0].Account != account {
+			c.t.Errorf("%s's locations %+v", u.Name, d.Locations)
+		}
+	}
+}
+
+// A fill imports the bytes of a confirmed candidate into an unruled
+// account. While it holds the blob lock, the deletion cannot run; after
+// it, the new location keeps the candidate.
+func TestFillAgainstDeletion(t *testing.T) {
+	c := newCleanupFixture(t)
+	target := c.expired("target", 1)
+	id := c.confirmedRun()
+	if got, err := c.store.PendingCandidates(c.ctx, id, "", 10); err != nil || !slices.Equal(got, []string{target}) {
+		t.Fatalf("candidates %v %v", got, err)
+	}
+
+	var (
+		duringErr error
+		during    *store.DeletionRun
+		pending   []string
+	)
+	c.runFill(func() {
+		_, duringErr = archive.ExecuteDeletionRun(c.ctx, c.cleaner, id, archive.DeletionOptions{LockTimeout: cleanupLockTimeout})
+		var err error
+		if during, err = c.cleaner.DeletionRun(c.ctx, id); err != nil {
+			t.Error(err)
+		}
+		if pending, err = c.cleaner.PendingCandidates(c.ctx, id, "", 10); err != nil {
+			t.Error(err)
+		}
+	})
+	if !errors.Is(duringErr, archive.ErrBlobsBusy) {
+		t.Fatalf("deletion during the fill: %v", duringErr)
+	}
+	if during == nil || during.State != store.RunConfirmed || during.Deleted != 0 || during.Kept != 0 || !slices.Equal(pending, []string{target}) {
+		t.Fatalf("run during the fill %+v, pending %v", during, pending)
+	}
+
+	run, err := archive.ExecuteDeletionRun(c.ctx, c.cleaner, id, archive.DeletionOptions{LockTimeout: cleanupLockTimeout})
+	if err != nil || run.State != store.RunDone || run.Deleted != 0 || run.Kept != 1 {
+		t.Fatalf("run after the fill %+v %v", run, err)
+	}
+	if !bytes.Equal(c.fileBytes(target), fillMessage("target")) {
+		t.Error("the target's file changed")
+	}
+	c.assertLocations(target, map[*store.User]string{c.alice: "work", c.bob: "journal"})
+}
+
+// A fill archives a deleted message again, into an unruled account, while
+// its file waits for the sweep. While the fill holds the blob lock, the
+// sweep cannot run; after it, the sweep removes only the file of the
+// control, which nothing archived again.
+func TestFillAgainstSweep(t *testing.T) {
+	c := newCleanupFixture(t)
+	target, control := c.expired("target", 1), c.expired("control", 2)
+	run, err := archive.ExecuteDeletionRun(c.ctx, c.cleaner, c.confirmedRun(), archive.DeletionOptions{})
+	if err != nil || run.Deleted != 2 {
+		t.Fatalf("run %+v %v", run, err)
+	}
+	if !c.blobs.Exists(target) || !c.blobs.Exists(control) {
+		t.Fatal("files removed before the sweep")
+	}
+	if due, err := c.store.BlobRemovalDue(c.ctx); err != nil || !due {
+		t.Fatalf("removals due %v %v", due, err)
+	}
+
+	var (
+		duringErr     error
+		duringRemoved int
+		duringFiles   bool
+	)
+	c.runFill(func() {
+		duringRemoved, duringErr = archive.SweepBlobs(c.ctx, c.cleaner, c.blobs, archive.SweepOptions{LockTimeout: cleanupLockTimeout})
+		duringFiles = c.blobs.Exists(target) && c.blobs.Exists(control)
+	})
+	if !errors.Is(duringErr, archive.ErrBlobsBusy) || duringRemoved != 0 || !duringFiles {
+		t.Fatalf("sweep during the fill: %d %v, files there %v", duringRemoved, duringErr, duringFiles)
+	}
+
+	n, err := archive.SweepBlobs(c.ctx, c.cleaner, c.blobs, archive.SweepOptions{LockTimeout: cleanupLockTimeout})
+	if err != nil || n != 1 {
+		t.Fatalf("sweep after the fill: %d %v", n, err)
+	}
+	if c.blobs.Exists(control) {
+		t.Error("the control's file is there")
+	}
+	if !bytes.Equal(c.fileBytes(target), fillMessage("target")) {
+		t.Error("the target's file is gone or changed")
+	}
+	c.assertLocations(target, map[*store.User]string{c.bob: "journal"})
+	if _, err := c.store.GetMessageDetail(c.ctx, c.alice.ID, target); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("alice's deleted location: %v", err)
+	}
+	if rows, err := c.store.DueBlobRemovals(c.ctx, time.Time{}, "", 10); err != nil || len(rows) != 0 {
+		t.Errorf("removals left %+v %v", rows, err)
+	}
+	if n, err := archive.SweepBlobs(c.ctx, c.cleaner, c.blobs, archive.SweepOptions{LockTimeout: cleanupLockTimeout}); err != nil || n != 0 {
+		t.Errorf("second sweep: %d %v", n, err)
+	}
 }
 
 // A message the blob store cannot persist fails the fill before its batch

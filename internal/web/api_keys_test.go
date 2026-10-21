@@ -428,3 +428,115 @@ func TestAPIKeyRefusedAudit(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// Moving an account to another user takes effect for keys issued before:
+// authorization follows the current owner on each request, with no key
+// revoked or issued again.
+func TestAPIKeyAfterAccountTransfer(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	tester, err := f.st.GetUserByName(ctx, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newOwner, _ := sessionFor(t, f.st, "newowner")
+	old := credential{name: "tester's key", key: readKey(t, f.st, tester)}
+	gaining := credential{name: "newowner's key", key: readKey(t, f.st, newOwner)}
+	rich := "/api/messages/" + f.ids["rich"]
+	objects := []string{"", "/html", "/raw", "/parts/3", "/conversation"}
+	accounts := func(c credential) []string {
+		t.Helper()
+		var a accountsResponse
+		f.fetchJSON(c, "/api/accounts", &a)
+		out := []string{}
+		for _, acc := range a.Accounts {
+			out = append(out, acc.Name)
+		}
+		return out
+	}
+	status := func(c credential, path string) int {
+		t.Helper()
+		s, _ := f.fetch(c, path)
+		return s
+	}
+
+	// Before: tester's key reads rich; newowner's finds nothing.
+	if got := f.listAs(old, "to=alice%40example.com", false); !equal(got, []string{"rich"}) {
+		t.Fatalf("old owner's search before: %v", got)
+	}
+	for _, p := range objects {
+		if s := status(old, rich+p); s != http.StatusOK {
+			t.Fatalf("GET rich%s with the old owner's key before: %d", p, s)
+		}
+		if s := status(gaining, rich+p); s != http.StatusNotFound {
+			t.Fatalf("GET rich%s with the new owner's key before: %d", p, s)
+		}
+	}
+	if got := f.listAs(gaining, "", false); len(got) != 0 {
+		t.Fatalf("new owner's list before: %v", got)
+	}
+
+	alice, err := accountByName(f.st, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetAccountOwner(ctx, alice.Ref(), newOwner.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// After: the old key still works for what tester keeps (bob: invoice,
+	// newsletter), and has lost alice with rich and meeting.
+	if s := status(old, "/api/status"); s != http.StatusOK {
+		t.Errorf("status with the old owner's key: %d", s)
+	}
+	if got := accounts(old); !equal(got, []string{"bob"}) {
+		t.Errorf("old owner's accounts: %v", got)
+	}
+	if got := f.listAs(old, "", false); !equal(got, []string{"newsletter", "invoice"}) {
+		t.Errorf("old owner's list: %v", got)
+	}
+	for _, name := range []string{"invoice", "newsletter"} {
+		var d messageJSON
+		f.fetchJSON(old, "/api/messages/"+f.ids[name], &d)
+		if len(d.Locations) != 1 || d.Locations[0].Account != "bob" {
+			t.Errorf("old owner's locations of %s: %+v", name, d.Locations)
+		}
+	}
+	for _, q := range []string{"to=alice%40example.com", "q=Vertrag", "q=roadmap", "account=alice"} {
+		for _, grouped := range []bool{false, true} {
+			if got := f.listAs(old, q, grouped); len(got) != 0 {
+				t.Errorf("old owner's search %s (grouped %v): %v", q, grouped, got)
+			}
+		}
+	}
+	for _, p := range objects {
+		if s := status(old, rich+p); s != http.StatusNotFound {
+			t.Errorf("GET rich%s with the old owner's key: %d, want 404", p, s)
+		}
+	}
+	if s := status(old, "/api/messages/"+f.ids["meeting"]); s != http.StatusNotFound {
+		t.Errorf("GET meeting with the old owner's key: %d, want 404", s)
+	}
+
+	// The new owner's key, issued before, gains alice/INBOX and the bytes.
+	if got := accounts(gaining); !equal(got, []string{"alice"}) {
+		t.Errorf("new owner's accounts: %v", got)
+	}
+	if got := f.listAs(gaining, "", false); !equal(got, []string{"rich", "meeting", "invoice"}) {
+		t.Errorf("new owner's list: %v", got)
+	}
+	var d messageJSON
+	f.fetchJSON(gaining, rich, &d)
+	if len(d.Locations) != 1 || d.Locations[0].Account != "alice" || d.Locations[0].Folder != "INBOX" {
+		t.Errorf("new owner's locations: %+v", d.Locations)
+	}
+	for _, p := range objects {
+		s, body := f.fetch(gaining, rich+p)
+		if s != http.StatusOK {
+			t.Errorf("GET rich%s with the new owner's key: %d", p, s)
+		}
+		if (p == "/raw" && string(body) != msgRich) || (p == "/parts/3" && string(body) != "%PDF-1.4\n") {
+			t.Errorf("GET rich%s with the new owner's key: %q", p, body)
+		}
+	}
+}
