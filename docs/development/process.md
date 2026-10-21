@@ -30,9 +30,15 @@ The plan is posted as a comment on the issue, and the label changes from
 
 ## 3. Review and approval
 
-The maintainer reads the plan and asks questions or for changes in the
-issue; the plan is updated in place. When it is good, the maintainer
-replaces `review` with **`ready`**. Only `ready` issues are implemented.
+An independent plan-reviewer agent (never the planner) reviews the plan and
+the maintainer may read it too; both can ask questions or for changes in the
+issue, and the plan is updated in place. When the plan is good, the reviewer
+agent or the maintainer replaces `review` with **`ready`**. Only `ready`
+issues are implemented.
+
+A plan with several parts gets one sub-issue per part, titled
+"<what> (#N, part K)". The `ready` on the main issue covers all parts, and the
+main issue closes with the last part.
 
 The order of `ready` issues is chosen during implementation, with a short
 reason (dependencies between issues, risk, size). Changes to an approved plan
@@ -40,18 +46,21 @@ that come up during the work are noted in the issue before the pull request.
 
 ## 4. Pull request
 
-Each issue gets its own branch and pull request. The description says
-`Closes #N`, so merging closes the issue. Labels follow the
-[label table](./#pull-requests-and-labels). CI must be green; the maintainer
-reviews and enables auto-merge.
+Each issue (or part of a plan) gets its own branch and pull request. The
+description says `Closes #N` (and "Part K of #N" for a part), so merging closes
+the issue. Labels follow the [label table](./#pull-requests-and-labels). After
+an approving review and green required checks, the coordinator merges with
+squash; there is no auto-merge.
 
 ## Labels
 
 | Label | Set by | Meaning |
 |---|---|---|
 | `plan` | maintainer | Please write an implementation plan. |
-| `review` | implementer | The plan is posted and waits for the maintainer. |
-| `ready` | maintainer | The plan is approved; the issue may be implemented. |
+| `review` | planner | The plan is posted and waits for review. |
+| `ready` | plan-reviewer agent or maintainer | The plan is approved; the issue may be implemented. |
+| `needs-plan`, `plan-review` | reserved | For the Claude GitHub Action; not yet defined on GitHub. |
+| `db-migration`, `breaking` | by hand or automatically | Schema change; manual upgrade steps (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change. |
 
 Label changes do not notify anyone by themselves: after setting `plan` or
