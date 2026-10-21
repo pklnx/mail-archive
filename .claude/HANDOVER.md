@@ -6,7 +6,7 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Next tickets
-- None `ready`. Open follow-ups are in `FOLLOWUPS.md`.
+- Not planned yet, from review follow-ups: #128 (harden the Claude Action workflow), #129 (tool-neutral CLAUDE.md/briefs), #130 (`addMessage` test helper UIDVALIDITY), #131 (`check-go-toolchain.sh` message). Label `needs-plan` to have the Action plan them.
 
 ## Done (2026-10-21)
 - #115: durable blob publication and removal, merged via #121 (local Opus review + Action second review).
@@ -20,3 +20,4 @@ State of the work for the next session. Update before a session ends.
 
 ## Manual checks for the maintainer
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.
+- #125/#127 (needs a Docker daemon): change the build tag to `golang:1.27.2-alpine` and confirm `docker build .` fails at the toolchain guard.
