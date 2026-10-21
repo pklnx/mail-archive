@@ -60,8 +60,9 @@ second review from the Claude GitHub Action: the coordinator adds the label
 **`second-review`** to each of them. Pull requests that change
 `internal/store/migrations` get it automatically when they are opened,
 reopened or marked ready for review, and on the push that brings the first
-migration change into a pull request (not on other pushes). The Action only
-comments; it never pushes.
+migration change into a pull request (not on other pushes; the check reads
+at most 300 files of the earlier state, so a very large pull request may get
+one review more). The Action only comments; it never pushes.
 
 ## Claude GitHub Action
 

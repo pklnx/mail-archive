@@ -22,7 +22,10 @@ name: Claude
 # start no workflows, so there are no loops. Every job uses GITHUB_TOKEN with
 # the job's permissions; no GitHub App and no OIDC.
 #
-# Planner and reviewers run with a read-only token and only read tools; they
+# Planner and reviewers run with a read-only token and only read tools: Read
+# (repository only), Grep, Glob and gh issue/pr view, gh pr diff, gh pr checks.
+# No git and no other shell commands, since git accepts paths and output files
+# outside the repository (git diff --no-index, --output, -O). They
 # return their comment as structured output, and a separate job with write
 # access checks it (heading, signature, no secrets, no at-mentions) and posts
 # it. They never execute code from the repository or the pull request. A
@@ -120,7 +123,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 40
-            --allowedTools "Read(./**),Grep,Glob,Bash(gh issue view:*),Bash(git log:*),Bash(git show:*)"
+            --allowedTools "Read(./**),Grep,Glob,Bash(gh issue view:*)"
             --disallowedTools "Read(//proc/**),Read(//sys/**),Read(//home/runner/work/_temp/**)"
             --json-schema '{"type":"object","properties":{"body":{"type":"string","description":"The plan comment in Markdown, starting with ## Plan"}},"required":["body"],"additionalProperties":false}'
 
@@ -268,7 +271,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 30
-            --allowedTools "Read(./**),Grep,Glob,Bash(gh issue view:*),Bash(git log:*),Bash(git show:*)"
+            --allowedTools "Read(./**),Grep,Glob,Bash(gh issue view:*)"
             --disallowedTools "Read(//proc/**),Read(//sys/**),Read(//home/runner/work/_temp/**)"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes requested"]},"body":{"type":"string","description":"The review comment in Markdown, starting with ## Independent plan review"}},"required":["verdict","body"],"additionalProperties":false}'
 
@@ -362,28 +365,27 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          # grep without -q reads all input, so gh never gets SIGPIPE under pipefail.
-          migrations() { grep '^internal/store/migrations/' >/dev/null; }
-          pr_has_migrations() {
-            gh api "repos/$GH_REPO/pulls/$PR/files" --paginate --jq '.[].filename' | migrations
-          }
+          set -uo pipefail
+          # On an API error: warning, no automatic review, and the job stays
+          # green (second-review-failed reacts only to the review itself).
+          skip() { echo "::warning::$1; no automatic second review"; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          # grep without -q reads all input (no SIGPIPE for the writer).
+          has_migrations() { grep '^internal/store/migrations/' >/dev/null; }
           run=false
           case "$ACTION" in
-            # A queued run after an earlier one already handled the label does nothing.
             labeled)
-              if gh pr view "$PR" --json labels --jq '.labels[].name' | grep -x -- "$LABEL" >/dev/null; then
-                run=true
-              else
-                echo "$LABEL is no longer set"
-              fi ;;
-            opened|reopened|ready_for_review) if pr_has_migrations; then run=true; fi ;;
-            synchronize)
-              if pr_has_migrations; then
-                if ! before=$(gh api "repos/$GH_REPO/compare/$BASE...$BEFORE" --jq '.files[].filename'); then
-                  echo "::warning::Cannot compare base with the previous head; no automatic second review"
-                elif ! migrations <<<"$before"; then
+              labels=$(gh pr view "$PR" --json labels --jq '.labels[].name') || skip "Cannot read the labels"
+              if grep -x -- "$LABEL" >/dev/null <<<"$labels"; then run=true; else echo "$LABEL is no longer set"; fi ;;
+            opened|reopened|ready_for_review|synchronize)
+              # pulls/N/files lists up to 3000 files, compare up to 300: a PR
+              # beyond that may get one review more or one less.
+              files=$(gh api "repos/$GH_REPO/pulls/$PR/files" --paginate --jq '.[].filename') || skip "Cannot list the PR files"
+              if has_migrations <<<"$files"; then
+                if [ "$ACTION" != synchronize ]; then
                   run=true
+                else
+                  before=$(gh api "repos/$GH_REPO/compare/$BASE...$BEFORE" --jq '.files[]?.filename') || skip "Cannot compare base with the previous head"
+                  has_migrations <<<"$before" || run=true
                 fi
               fi ;;
           esac
@@ -410,18 +412,36 @@ jobs:
     outputs:
       result: ${{ steps.claude.outputs.structured_output }}
     steps:
-      - name: API key set
+      # Again inside the concurrency group: a queued run after an earlier one
+      # already handled (and removed) the label does nothing.
+      - name: Label still set
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          if [ "$ACTION" != labeled ] || gh pr view "$PR" --json labels --jq '.labels[].name' | grep -x -- "$LABEL" >/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$LABEL is no longer set; skipping"
+          fi
+      - if: steps.gate.outputs.run == 'true'
+        name: API key set
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::error::The repository secret ANTHROPIC_API_KEY is missing or empty"; exit 1
           fi
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0 # base and head history for git diff and git log
-      - id: claude
+      - if: steps.gate.outputs.run == 'true'
+        id: claude
         uses: anthropics/claude-code-action@a5a423f75c251dcbff8a74e99f83b2cb03c72bfa # v1.0.256
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -458,7 +478,7 @@ jobs:
           claude_args: |
             --model opus
             --max-turns 40
-            --allowedTools "Read(./**),Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --allowedTools "Read(./**),Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh issue view:*)"
             --disallowedTools "Read(//proc/**),Read(//sys/**),Read(//home/runner/work/_temp/**)"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","approve, pending CI","changes requested"]},"body":{"type":"string","description":"The review comment in Markdown, starting with ## Review"}},"required":["verdict","body"],"additionalProperties":false}'
 
@@ -490,8 +510,12 @@ jobs:
   second-review-failed:
     # The run failed (no structured output, max turns, timeout, or the comment
     # was rejected): say so and remove the trigger label for a clean retry.
-    needs: [second-review-check, second-review, second-review-post]
-    if: failure()
+    # Not for a failed second-review-check: that job decides only, and it
+    # turns API errors into run=false.
+    needs: [second-review, second-review-post]
+    if: >-
+      failure() &&
+      (needs.second-review.result == 'failure' || needs.second-review-post.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -529,6 +553,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read # CI status and job logs for questions about checks
       issues: write # progress comment and answers
       pull-requests: write # answers on PRs
     env:
