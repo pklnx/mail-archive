@@ -66,3 +66,42 @@ func NewWithURL(t *testing.T) (*store.Store, string) {
 	}
 	return st, u.String()
 }
+
+// SimulateAlpineDatabase makes the test database at dbURL look like one
+// created by the postgres:18-alpine image (musl), which records no collation
+// version, while the server (glibc) reports one. It needs a superuser and a
+// server that reports a collation version for the database; the test is
+// skipped otherwise.
+func SimulateAlpineDatabase(t *testing.T, dbURL string) {
+	t.Helper()
+	ctx := context.Background()
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := u.Path[1:]
+	admin, err := pgx.Connect(ctx, os.Getenv(EnvURL))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	var super bool
+	if err := admin.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
+		t.Fatal(err)
+	}
+	if !super {
+		t.Skip("the test role is no superuser: cannot clear datcollversion")
+	}
+	var provider string
+	var actual *string
+	if err := admin.QueryRow(ctx, `SELECT datlocprovider::text, pg_database_collation_actual_version(oid) FROM pg_database WHERE datname = $1`, name).
+		Scan(&provider, &actual); err != nil {
+		t.Fatal(err)
+	}
+	if provider != "c" || actual == nil {
+		t.Skipf("the test database uses locale provider %q and reports no collation version; the test needs a glibc locale such as en_US.UTF-8", provider)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE pg_database SET datcollversion = NULL WHERE datname = $1`, name); err != nil {
+		t.Fatalf("clear datcollversion: %v", err)
+	}
+}
