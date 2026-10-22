@@ -54,6 +54,14 @@ squash; there is no auto-merge.
 Risky pull requests (deletes, schema changes, rewriting user data) get a
 second, independent reviewer agent in a Claude session.
 
+Pull requests that can weaken the secret scan are merged only after the
+maintainer's explicit OK, noted on the pull request. This covers
+`.gitleaksignore`, `.gitleaks.toml` and files it extends, a new
+`gitleaks:allow` comment, `.github/workflows/secrets.yml`,
+`scripts/secret-scan-*` and the gitleaks variables and targets in the
+`Makefile`. The reviewer flags any such change as blocking until the OK is
+there. The OK names the changed entries, never secret values.
+
 Go toolchain bumps change the `toolchain` line in `go.mod` and the `golang` tag
 in the `Dockerfile` together, in one pull request: the image build fails when
 they differ (`scripts/check-go-toolchain.sh`), also on a Dependabot bump of

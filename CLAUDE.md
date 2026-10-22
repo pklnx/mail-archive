@@ -12,6 +12,7 @@ Steps are written as operations; the commands for local sessions (`gh`) and clou
 5. One branch + PR per part; body "Closes #<sub>." and "Part K of #N.".
 6. Review: local reviewer always; a second, independent local reviewer on risky PRs (deletes, schema changes (`db-migration`), rewriting user data). PRs without app code (docs, CI, test-only): one local reviewer (Sonnet) + green required checks.
 7. Merge: approving review + green required checks; squash merge pinned to the reviewed head SHA (see GitHub operations). Never auto-merge, never change rulesets or repo settings.
+   - A PR that touches the secret scan's allowlist or configuration (`.gitleaksignore`, `.gitleaks.toml` and files it extends, a new `gitleaks:allow` comment, `.github/workflows/secrets.yml`, `scripts/secret-scan-*`, the Makefile's gitleaks variables and targets) is merged only after the maintainer's explicit OK. The coordinator asks via AskUserQuestion, names the changed entries (file, rule id, path or fingerprint) and never posts secret values; the OK is noted on the PR.
 
 ## GitHub operations
 Local sessions use `gh`; cloud sessions have no `gh` and use the GitHub MCP tools (load them via ToolSearch). The same operation, the same rules.

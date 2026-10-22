@@ -13,6 +13,6 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 | #123 implementer | The `addMessage` test helper leaves the folder's UIDVALIDITY unset, so its locations show `superseded: true`; harmless test-data artifact. | done (#130, PR #142) |
 | #127 Action review | `scripts/check-go-toolchain.sh` says "Dockerfile builds with …" also when run on a host (CI `lint`, a developer machine). Reword to "Go toolchain is …". | done (#131, PR #141) |
 | #127 PR | Manual check with a Docker daemon: change the build tag to `golang:1.27.2-alpine` and confirm `docker build .` fails at the guard. | manual check, see HANDOVER |
-| #135 Action review | `.gitleaksignore` and `.gitleaks.toml` are read from the PR's own checkout, so a PR could add a secret together with its allowlist entry. Require an explicit maintainer OK for changes to either file (CODEOWNERS or a reviewer-brief line). | open |
+| #135 Action review | `.gitleaksignore` and `.gitleaks.toml` are read from the PR's own checkout, so a PR could add a secret together with its allowlist entry. Require an explicit maintainer OK for changes to either file (CODEOWNERS or a reviewer-brief line). | done (#144) |
 | #135 Action review | The Action reviewer could not read checks (`gh pr checks`: "Resource not accessible by integration" via GraphQL). Fix with #128. | obsolete: Claude Action removed |
 | #140 review | `.claude/briefs/implementer.md`: PR step read as if title and body were set after the label. | done (handover PR after #142) |
