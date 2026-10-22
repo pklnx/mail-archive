@@ -11,7 +11,7 @@ The issue {{ISSUE}} with its comments: the "## Plan" comment, its reviews and ma
 - Tests never touch real data, credentials or network. Bug fix → regression test that fails without the fix. Wait for signals, never time.
 - Unclear plan or product decision → stop and report.
 - Branch `{{BRANCH}}`; own build/log folders; run only the tests of changed code (`TEST_DATABASE_URL=postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable go test -race -count=1 ./internal/<pkg>/ -run <filter>`), plus lint/format checks.
-- Commits end with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`. Open the PR, then set its label (default `feature`, fixes `bug`; see the GitHub operations table), title "<what> (#{{ISSUE}}, part N)", body: plan link, changes, tests, results, open manual checks; "Closes #<sub-issue>." / "Part N of #{{ISSUE}}." or "Closes #{{ISSUE}}."; then `— Claude (<model>), implementer`.
+- Commits end with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`. Open the PR with title "<what> (#{{ISSUE}}, part N)" and body: plan link, changes, tests, results, open manual checks; "Closes #<sub-issue>." / "Part N of #{{ISSUE}}." or "Closes #{{ISSUE}}."; then `— Claude (<model>), implementer`. Then set its label (default `feature`, fixes `bug`; see the GitHub operations table).
 - Don't wait for or watch CI. Clean up only what you created.
 
 ## Report
