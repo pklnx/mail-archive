@@ -13,8 +13,8 @@ name: mail-archive
 services:
   postgres:
     # The Debian image, not -alpine: full-text search is up to 2.3 times
-    # slower with musl (#145). Do not switch an existing volume between the
-    # two: they sort text differently, so text indexes need a REINDEX.
+    # slower with musl (#145). Switching an existing volume between the two
+    # needs a REINDEX, see docs/guide/operations.md.
     image: postgres:18
     restart: unless-stopped
     environment:
