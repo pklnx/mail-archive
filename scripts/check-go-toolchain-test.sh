@@ -29,13 +29,17 @@ expect() {
 	fi
 }
 
+# Full mismatch message per case (expect takes one substring).
+remedy1="Go toolchain is $have, go.mod requires go1.0.0: update the golang tag in the Dockerfile (image build) or your local Go (host)"
+remedy2="Go toolchain is $have, go.mod requires go1.20: update the golang tag in the Dockerfile (image build) or your local Go (host)"
+
 mk() { printf '%b' "$2" >"$tmp/$1"; }
 
 expect "real go.mod" 0 "matches" "$repo/go.mod"
 mk toolchain-old 'module x\n\ngo 1.20\n\ntoolchain go1.0.0\n'
-expect "wrong toolchain line" 1 "requires go1.0.0" "$tmp/toolchain-old"
+expect "wrong toolchain line" 1 "$remedy1" "$tmp/toolchain-old"
 mk go-only-old 'module x\n\ngo 1.20\n'
-expect "no toolchain line, wrong go line" 1 "requires go1.20" "$tmp/go-only-old"
+expect "no toolchain line, wrong go line" 1 "$remedy2" "$tmp/go-only-old"
 mk match "module x\n\ngo 1.20\n\ntoolchain $have\n"
 expect "matching toolchain line" 0 "matches" "$tmp/match"
 mk crlf "module x\r\n\r\ngo 1.20\r\n\r\ntoolchain $have\r\n"
