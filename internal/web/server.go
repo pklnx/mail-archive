@@ -62,6 +62,12 @@ type Server struct {
 	// retention executes confirmed deletion runs; nil leaves them to the
 	// next start of serve or to the command line.
 	retention interface{ Wake() }
+	// purgeGrace is how long the retention job keeps the files of deleted
+	// messages; nil without the job.
+	purgeGrace *time.Duration
+	// beforeConfirmPurge, for tests, runs after a purge's account was
+	// loaded and before it is confirmed.
+	beforeConfirmPurge func()
 	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
 	// is off.
 	smtpListen string
@@ -98,7 +104,8 @@ type Options struct {
 	// client (MAIL_ARCHIVE_TRUSTED_PROXIES), for the audit log and the
 	// login limits.
 	TrustedProxies []netip.Prefix
-	// Retention executes deletion runs confirmed in the web UI.
+	// Retention executes deletion runs and account purges confirmed in the
+	// web UI.
 	Retention *archive.Retention
 	// SMTPListen is where the SMTP server receives mail for smtp accounts
 	// (MAIL_ARCHIVE_SMTP_LISTEN); empty when it is off.
@@ -146,6 +153,8 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention
+		grace := opts.Retention.Grace
+		srv.purgeGrace = &grace
 	}
 	return srv
 }

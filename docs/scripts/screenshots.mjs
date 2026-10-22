@@ -149,6 +149,16 @@ for (const scheme of ["light", "dark"]) {
   await p.getByText(/Last sync/).first().waitFor();
   await p.screenshot({ path: `${out}/accounts.png` });
 
+  // Deleting the removed account "old-provider" completely: the preview
+  // and the typed-count confirmation in its card. Nothing is confirmed.
+  await p.getByRole("button", { name: "Delete completely…" }).click();
+  const purge = p.getByRole("group", { name: /Delete “old-provider” completely\?/ });
+  await purge.getByLabel(/^Type \d+ to confirm$/).waitFor();
+  // The whole card, its bottom edge included, at the bottom of the window.
+  await purge.evaluate((el) => el.parentElement.scrollIntoView({ block: "end" }));
+  await p.screenshot({ path: `${out}/account-purge.png` });
+  await purge.getByRole("button", { name: "Cancel" }).click();
+
   // The first card is the smtp account "journal"; the IMAP account "personal" is next.
   await p.getByRole("button", { name: "Edit" }).nth(1).click();
   await p.getByRole("button", { name: "Choose folders" }).click();

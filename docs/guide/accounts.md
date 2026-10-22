@@ -169,6 +169,20 @@ else:
 ./ma account purge NAME --count 42     # the same, for scripts
 ```
 
+In the web UI, an admin finds **Delete completely…** on each of their own
+cards under *Removed accounts* (**Manage accounts**). It opens the same
+preview in the card; the button **Delete completely** is enabled only once
+the number of messages to delete is typed. When something is in the way,
+the card names the rules and holds instead and offers no button: remove the
+rules and release the holds on the **Retention** page first. After the
+confirmation the web server deletes in the background; the card shows
+*Being deleted completely* with the messages deleted so far and disappears
+when it is done. A purge confirmed elsewhere (another browser tab, the
+command line) shows the same way, without the form. Other users' removed accounts are deleted from the command line with
+`./ma account purge NAME --user USER`.
+
+![Deleting the removed account old-provider completely: the preview and the field for the number of messages](/screenshots/account-purge.png)
+
 It is only possible when:
 
 - the account is **removed** (`account remove` first);
@@ -204,13 +218,20 @@ removed and messages deleted and kept.
 The purge runs in batches of 500 messages. An interrupted purge (Ctrl-C, a
 crash) leaves a consistent removed account and resumes with the same
 command, without asking again, or when the web server starts. `account
-list` shows the account as *removed (being deleted)* meanwhile.
+list` shows the account as *removed (being deleted)* meanwhile, the web UI
+*Being deleted completely*.
 
 A purge is **cancelled** when a retention rule or a legal hold for the
 account appears while it runs, or when it would delete more messages than
-confirmed. `./ma account purge NAME --cancel` cancels an open purge by hand,
-for example when the account was moved to another user after the
+confirmed. In the web UI the card then returns to its normal state
+(**Delete completely…**); if the page was open meanwhile, the card also
+says that the deletion was cancelled. The reason is in the audit log
+(*Cancelled account deletion*, with a note such as "retention rule #12
+added"), and a new preview names the rule or hold that is now in the way.
+`./ma account purge NAME --cancel` cancels an open purge by hand (there is
+no cancel button in the web UI), for example when the account was moved to another user after the
 confirmation. What a cancelled purge already deleted stays deleted (with its
 records); the account stays removed with the rest of its mail, consistent
-and searchable. To go on, remove the reason and run `account purge` again:
-it shows a new preview and asks for the new number.
+and searchable. To go on, remove the reason and run `account purge` again
+(or **Delete completely…**): it shows a new preview and asks for the new
+number.

@@ -193,6 +193,10 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	go runner.Run(ctx)
 	fills := &archive.FillRunner{Filler: filler}
 	go fills.Run(ctx)
+	// The retention job, as in serve: it executes deletion runs and account
+	// purges confirmed in the UI.
+	retention := &archive.Retention{Store: st, Blobs: blobs, Grace: 7 * 24 * time.Hour, Logger: log}
+	go retention.Run(ctx)
 	// Passkeys need a host name: the demo is meant for localhost.
 	_, webPort, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -204,6 +208,7 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		// The demo stores its journal messages directly; the UI shows the
 		// SMTP server as on, as in a real journaling setup.
 		SMTPListen: ":2525",
+		Retention:  retention,
 	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
 		publicURL, loginName, loginPassword, loginTOTPSecret)

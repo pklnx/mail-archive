@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listAccounts, type AccountsResponse } from "./api";
 
-// Poll quickly while a sync is queued or running, slowly otherwise so that
-// syncs started by the schedule or the CLI show up too.
+// Poll quickly while a sync is queued or running or an account is being
+// deleted completely, slowly otherwise so that syncs started by the
+// schedule or the CLI show up too.
 const ACTIVE_MS = 2000;
 const IDLE_MS = 30000;
 
@@ -14,7 +15,7 @@ export interface AccountsState {
 }
 
 export function isActive(data: AccountsResponse | null): boolean {
-  return !!data?.accounts.some((a) => a.sync.state !== "idle");
+  return !!data?.accounts.some((a) => a.sync.state !== "idle" || a.purging);
 }
 
 export function useAccounts(): AccountsState {

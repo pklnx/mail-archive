@@ -255,6 +255,38 @@ const en = {
     `No address of this account is in a domain used only for the archive. The transport line routes a whole domain to the archive, so these lines use ${address}: add it to the account, or another address in such a domain.`,
   removedNote: "Removed. Its mail stays in the archive.",
   removedAccounts: "Removed accounts",
+  purgeStart: "Delete completely…",
+  purgeTitle: (name: string) => `Delete “${name}” completely?`,
+  purgeLocations: (n: number, s: string) =>
+    n === 1 ? "1 location (a copy in one of its folders) is removed." : `${s} locations (copies in its folders) are removed.`,
+  purgeDeleted: (n: number, s: string, size: string) =>
+    n === 1
+      ? `1 message (${size}) is only in this account and is deleted, like a retention deletion.`
+      : `${s} messages (${size}) are only in this account and are deleted, like a retention deletion.`,
+  purgeFiles: (n: number, grace: string) =>
+    `${n === 1 ? "Its file is" : "Their files are"} removed after ${grace}, so restoring the last dump still works.`,
+  purgeFilesLater: (n: number) =>
+    `${n === 1 ? "Its file is" : "Their files are"} removed after the grace period, so restoring the last dump still works.`,
+  purgeKept: (n: number, s: string) =>
+    n === 1 ? "1 message is also in other accounts and stays there:" : `${s} messages are also in other accounts and stay there:`,
+  purgeAccountGone: "Then its folders and the account are deleted; its name is free again. This cannot be undone.",
+  purgeTypeCount: (n: number) => `Type ${n} to confirm`,
+  purgeConfirm: "Delete completely",
+  purgeBlocked: "It cannot be deleted completely:",
+  purgeNotRemoved: "The account is not removed.",
+  purgeSyncing: "The account is being synced, filled or imported into. Try again later.",
+  purgeOtherOpen: "Another account is being deleted completely. Try again when that has finished.",
+  purgeRule: (id: number, folder: string, years: number) =>
+    folder ? `Retention rule #${id} (folder “${folder}”, ${years} years)` : `Retention rule #${id} (all folders, ${years} years)`,
+  purgeHoldCovers: (id: number, name: string) => `Legal hold #${id} “${name}” covers mail of this account`,
+  purgeHoldNames: (id: number, name: string) => `Legal hold #${id} “${name}” names this account`,
+  purgeHoldReleased: (id: number, name: string) => `Released legal hold #${id} “${name}” names this account; its record keeps the account`,
+  purgeFixRules: "Remove the retention rules on the Retention page first.",
+  purgeFixHolds: "Active legal holds must be released on the Retention page first.",
+  purgeRunning: "Being deleted completely…",
+  purgeProgress: (deleted: string, expected: string, kept: string) =>
+    `${deleted} of ${expected} messages deleted, ${kept} kept in other accounts.`,
+  purgeCancelled: "The complete deletion was cancelled. The account stays removed with the rest of its mail; the log says why.",
   fieldName: "Name",
   nameHint: "Shown in the archive and used in commands like ./ma sync --account NAME.",
   fieldHost: "IMAP server",
@@ -868,6 +900,37 @@ const de: Messages = {
     `Keine Adresse dieses Kontos liegt in einer Domain, die nur das Archiv empfängt. Die Transport-Zeile leitet eine ganze Domain zum Archiv, deshalb verwenden diese Zeilen ${address}: Füge sie dem Konto hinzu oder eine andere Adresse in einer solchen Domain.`,
   removedNote: "Entfernt. Die Mails bleiben im Archiv.",
   removedAccounts: "Entfernte Konten",
+  purgeStart: "Vollständig löschen…",
+  purgeTitle: (name) => `„${name}“ vollständig löschen?`,
+  purgeLocations: (n, s) =>
+    n === 1 ? "1 Fundort (eine Kopie in einem seiner Ordner) wird entfernt." : `${s} Fundorte (Kopien in seinen Ordnern) werden entfernt.`,
+  purgeDeleted: (n, s, size) =>
+    n === 1
+      ? `1 Nachricht (${size}) ist nur in diesem Konto und wird gelöscht, wie beim Löschen nach Ablauf der Aufbewahrung.`
+      : `${s} Nachrichten (${size}) sind nur in diesem Konto und werden gelöscht, wie beim Löschen nach Ablauf der Aufbewahrung.`,
+  purgeFiles: (n, grace) =>
+    `${n === 1 ? "Ihre Datei wird" : "Ihre Dateien werden"} nach ${grace} entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
+  purgeFilesLater: (n) =>
+    `${n === 1 ? "Ihre Datei wird" : "Ihre Dateien werden"} nach der Karenzzeit entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
+  purgeKept: (n, s) =>
+    n === 1 ? "1 Nachricht ist auch in anderen Konten und bleibt dort:" : `${s} Nachrichten sind auch in anderen Konten und bleiben dort:`,
+  purgeAccountGone: "Danach werden seine Ordner und das Konto gelöscht; der Name ist wieder frei. Das lässt sich nicht rückgängig machen.",
+  purgeTypeCount: (n) => `Zur Bestätigung ${n} eingeben`,
+  purgeConfirm: "Vollständig löschen",
+  purgeBlocked: "Es kann nicht vollständig gelöscht werden:",
+  purgeNotRemoved: "Das Konto ist nicht entfernt.",
+  purgeSyncing: "Das Konto wird gerade synchronisiert, befüllt oder importiert. Später erneut versuchen.",
+  purgeOtherOpen: "Ein anderes Konto wird gerade vollständig gelöscht. Erneut versuchen, wenn das beendet ist.",
+  purgeRule: (id, folder, years) =>
+    folder ? `Aufbewahrungsregel #${id} (Ordner „${folder}“, ${years} Jahre)` : `Aufbewahrungsregel #${id} (alle Ordner, ${years} Jahre)`,
+  purgeHoldCovers: (id, name) => `Legal Hold #${id} „${name}“ erfasst Mails dieses Kontos`,
+  purgeHoldNames: (id, name) => `Legal Hold #${id} „${name}“ nennt dieses Konto`,
+  purgeHoldReleased: (id, name) => `Der aufgehobene Legal Hold #${id} „${name}“ nennt dieses Konto; sein Eintrag hält das Konto`,
+  purgeFixRules: "Zuerst die Aufbewahrungsregeln auf der Seite Aufbewahrung entfernen.",
+  purgeFixHolds: "Aktive Legal Holds müssen zuerst auf der Seite Aufbewahrung aufgehoben werden.",
+  purgeRunning: "Wird vollständig gelöscht…",
+  purgeProgress: (deleted, expected, kept) => `${deleted} von ${expected} Nachrichten gelöscht, ${kept} bleiben in anderen Konten.`,
+  purgeCancelled: "Das vollständige Löschen wurde abgebrochen. Das Konto bleibt mit seinen übrigen Mails entfernt; der Grund steht im Protokoll.",
   fieldName: "Name",
   nameHint: "Wird im Archiv angezeigt und in Befehlen wie ./ma sync --account NAME verwendet.",
   fieldHost: "IMAP-Server",

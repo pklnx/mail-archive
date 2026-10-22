@@ -78,6 +78,7 @@ type authFixture struct {
 	secretKey    []byte
 	adminSecrets map[string]string
 	clock        *testClock
+	server       *Server
 }
 
 func newAuthFixture(t *testing.T) *authFixture {
@@ -92,7 +93,8 @@ func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 }
 
 // newAuthFixtureOpts is newAuthFixture with Require2FA, PublicURL, Syncer,
-// Runner and AlertAfterFailures from opts.
+// Runner, AlertAfterFailures and Retention (its Store set to the fixture's
+// if nil) from opts.
 func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 	t.Helper()
 	return newAuthFixtureLog(t, opts, io.Discard)
@@ -108,14 +110,18 @@ func newAuthFixtureLog(t *testing.T, opts Options, w io.Writer) *authFixture {
 		t.Fatal(err)
 	}
 	clock := &testClock{now: time.Now()}
+	if opts.Retention != nil && opts.Retention.Store == nil {
+		opts.Retention.Store = st
+	}
 	s := New(st, nil, slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})), Options{
 		AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key, Now: clock.Now,
 		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL, Syncer: opts.Syncer, Runner: opts.Runner, Fills: opts.Fills, AlertAfterFailures: opts.AlertAfterFailures,
+		Retention: opts.Retention,
 	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &authFixture{t: t, st: st, dbURL: dbURL, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
+	return &authFixture{server: s, t: t, st: st, dbURL: dbURL, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
 }
 
 func (f *authFixture) addUser(name, password string, admin bool) *store.User {

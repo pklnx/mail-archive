@@ -57,15 +57,19 @@ type accountJSON struct {
 	// Kind is "imap", "import" for mail imported from files, or "smtp" for
 	// mail a mail server delivers over SMTP. Import and smtp accounts have
 	// no server and are never synced.
-	Kind            string   `json:"kind"`
-	Enabled         bool     `json:"enabled"`
-	Removed         bool     `json:"removed"`
-	Host            string   `json:"host"`
-	Port            int      `json:"port"`
-	TLS             string   `json:"tls"`
-	Username        string   `json:"username"`
-	IncludedFolders []string `json:"includedFolders"`
-	ExcludedFolders []string `json:"excludedFolders"`
+	Kind    string `json:"kind"`
+	Enabled bool   `json:"enabled"`
+	Removed bool   `json:"removed"`
+	// Purging: the removed account is being deleted completely (a
+	// confirmed purge); Purge has its progress, null otherwise.
+	Purging         bool              `json:"purging"`
+	Purge           *accountPurgeJSON `json:"purge"`
+	Host            string            `json:"host"`
+	Port            int               `json:"port"`
+	TLS             string            `json:"tls"`
+	Username        string            `json:"username"`
+	IncludedFolders []string          `json:"includedFolders"`
+	ExcludedFolders []string          `json:"excludedFolders"`
 	// SyncInterval is the account's own sync interval: "default" (the
 	// server's), "manual" (not on the schedule) or a duration ("30m0s").
 	// Always "default" for import and smtp accounts.
@@ -88,6 +92,17 @@ type accountJSON struct {
 	Fill          *fillJSON          `json:"fill"`
 	Fills         []*fillJSON        `json:"fills"`
 	FirstReceived *firstReceivedJSON `json:"firstReceived"`
+}
+
+// accountPurgeJSON is the progress of an account's confirmed purge: the
+// messages it deletes (expected), those deleted so far, the locations
+// removed and the messages kept because they are also elsewhere.
+type accountPurgeJSON struct {
+	ID        int64 `json:"id"`
+	Expected  int   `json:"expected"`
+	Locations int64 `json:"locations"`
+	Deleted   int   `json:"deleted"`
+	Kept      int   `json:"kept"`
 }
 
 type folderJSON struct {
@@ -179,6 +194,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	purge, err := s.store.OpenAccountPurge(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	folders := make(map[string][]folderJSON, len(counts))
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
@@ -229,7 +249,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	for _, a := range accounts {
 		aj := accountJSON{
 			Name: a.Name, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.RemovedAt != nil,
-			Host: a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
+			Purging: purge != nil && purge.AccountID == a.ID,
+			Host:    a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
 			SyncInterval: archive.FormatOwnInterval(a.SyncInterval),
 			Folders:      folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},
@@ -269,6 +290,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 			if first != nil {
 				aj.FirstReceived = &firstReceivedJSON{At: first.ReceivedAt, Subject: first.Subject}
+			}
+		}
+		if aj.Purging {
+			aj.Purge = &accountPurgeJSON{
+				ID: purge.ID, Expected: purge.Expected, Locations: purge.Locations, Deleted: purge.Deleted, Kept: purge.Kept,
 			}
 		}
 		if aj.Folders == nil {

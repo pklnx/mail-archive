@@ -7,7 +7,7 @@ import { t } from "./i18n";
 
 function smtpAccount(f: Fill | null, more: Partial<Account> = {}): Account {
   return {
-    name: "journal", kind: "smtp", enabled: true, removed: false, host: "", port: 0, tls: "tls", username: "",
+    name: "journal", kind: "smtp", enabled: true, removed: false, purging: false, purge: null, host: "", port: 0, tls: "tls", username: "",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
     addresses: ["archive@archive.local"], lastReceivedAt: null, fill: f, fills: f ? [f] : [], firstReceived: null,
     sync: { state: f?.status === "running" ? "running" : "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },

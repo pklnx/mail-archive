@@ -91,6 +91,8 @@ func (s *Server) routes() []route {
 		h("POST /api/accounts", s.handleCreateAccount, accessSession),
 		h("PATCH /api/accounts/{name}", s.handleUpdateAccount, accessSession),
 		h("DELETE /api/accounts/{name}", s.handleDeleteAccount, accessSession),
+		h("GET /api/accounts/{name}/purge", s.handlePurgePreview, accessSession),
+		h("POST /api/accounts/{name}/purge", s.handleConfirmPurge, accessSession),
 		// It logs in to the IMAP server: account setup, not reading.
 		h("GET /api/accounts/{name}/server-folders", s.handleServerFolders, accessSession),
 		h("POST /api/accounts/{name}/sync", s.handleSyncAccount, accessSync),

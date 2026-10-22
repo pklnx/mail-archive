@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { accountsApi, folderQuestion, type Account, type AccountInput, type AccountsResponse, type ServerFolder, type TLSMode } from "./api";
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
@@ -6,6 +6,7 @@ import { t } from "./i18n";
 import { PageHeader } from "./PageHeader";
 import { button, input, primary } from "./formStyles";
 import { FillForm, FillSection } from "./FillPanel";
+import { PurgeDialog, PurgeProgress } from "./AccountPurge";
 import { postfixSetup } from "./journalSetup";
 import type { AccountsState } from "./useAccounts";
 
@@ -149,18 +150,90 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
           <section className="flex flex-col gap-2">
             <h2 className="mt-2 text-sm font-semibold text-ink-muted">{t.removedAccounts}</h2>
             {removed.map((a) => (
-              <Card key={a.name}>
-                <div className="flex flex-wrap items-baseline gap-x-3">
-                  <span className="font-semibold">{a.name}</span>
-                  <span className="text-sm text-ink-muted">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
-                </div>
-                <p className="text-sm text-ink-muted">{t.removedNote}</p>
-              </Card>
+              <RemovedCard key={a.name} account={a} admin={admin} onChanged={reload} />
             ))}
           </section>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A removed account. Admins can delete their own removed accounts
+ * completely; the server then deletes in the background. A purge open
+ * elsewhere (another tab, the command line) shows as progress, never as
+ * the form.
+ */
+export function RemovedCard({ account: a, admin, onChanged }: { account: Account; admin: boolean; onChanged: () => void }) {
+  const [reviewing, setReviewing] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+  const start = useRef<HTMLButtonElement>(null);
+  const wasReviewing = useRef(false);
+  const wasPurging = useRef(a.purging);
+
+  useEffect(() => {
+    // Still listed after its purge ended: it was cancelled.
+    if (wasPurging.current && !a.purging) setCancelled(true);
+    if (a.purging) {
+      setReviewing(false);
+      setCancelled(false);
+    }
+    wasPurging.current = a.purging;
+  }, [a.purging]);
+
+  useLayoutEffect(() => {
+    // Closing the dialog returns the focus to the button that opened it,
+    // in the same commit that shows the button again.
+    if (wasReviewing.current && !reviewing) start.current?.focus();
+    wasReviewing.current = reviewing;
+  }, [reviewing]);
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className="font-semibold">{a.name}</span>
+        <span className="text-sm text-ink-muted">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+      </div>
+      {a.purging ? (
+        <PurgeProgress purge={a.purge} />
+      ) : (
+        <>
+          <p className="text-sm text-ink-muted">{t.removedNote}</p>
+          {cancelled && (
+            <p role="status" className="text-sm text-warning">
+              {t.purgeCancelled}
+            </p>
+          )}
+          {admin && reviewing && (
+            <PurgeDialog
+              name={a.name}
+              onClose={() => setReviewing(false)}
+              onConflict={onChanged}
+              onConfirmed={() => {
+                setReviewing(false);
+                onChanged();
+              }}
+            />
+          )}
+          {admin && !reviewing && (
+            <div>
+              <button
+                ref={start}
+                type="button"
+                className={`${button} text-danger`}
+                onClick={() => {
+                  setCancelled(false);
+                  setReviewing(true);
+                }}
+              >
+                {t.purgeStart}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
 
