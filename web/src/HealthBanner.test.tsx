@@ -1,8 +1,9 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse, Fill } from "./api";
 import { fill } from "./fillFixture";
 import { bannerState, HealthBanner } from "./HealthBanner";
+import { applySettings, messagesFor, t } from "./i18n";
 
 function acc(name: string, health: Account["sync"]["health"]): Account {
   return {
@@ -51,6 +52,45 @@ describe("HealthBanner", () => {
     render(<HealthBanner data={data([journal])} admin={false} openAccounts={noop} openUsers={noop} />);
     expect(screen.getByRole("alert").textContent).toMatch(/journal \(ak@example.com\)/);
   });
+  it("offers one way to the accounts and one to the users, without taking focus", () => {
+    const openAccounts = vi.fn();
+    const openUsers = vi.fn();
+    const before = document.createElement("button");
+    document.body.append(before);
+    before.focus();
+    const { container } = render(
+      <HealthBanner data={data([acc("work", "failing"), acc("old", "stale")], 1)} admin openAccounts={openAccounts} openUsers={openUsers} />,
+    );
+    // A banner that appears with a poll is no dialog: focus stays where it was.
+    expect(document.activeElement).toBe(before);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Failing and stale share one button to the accounts.
+    expect(screen.getAllByRole("button", { name: t.bannerOpenAccounts })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: t.bannerOpenAccounts }));
+    expect(openAccounts).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: t.bannerOpenUsers }));
+    expect(openUsers).toHaveBeenCalledTimes(1);
+    // Not closable, and no hidden focus traps.
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(container.querySelectorAll("[tabindex]")).toHaveLength(0);
+    expect(container.innerHTML).not.toContain("Focus sentinel");
+    before.remove();
+  });
+
+  it("shows Carbon's texts in German", () => {
+    applySettings({ language: "de", locale: "de" });
+    try {
+      const de = messagesFor("de");
+      render(<HealthBanner data={data([acc("work", "failing"), acc("old", "stale")], 1)} admin openAccounts={noop} openUsers={noop} />);
+      expect(screen.getByRole("button", { name: de.bannerOpenAccounts })).toBeTruthy();
+      const html = document.body.innerHTML;
+      for (const s of [de.carbon.status.error, de.carbon.status.warning, de.carbon.status.info]) expect(html).toContain(s);
+      for (const s of ["error icon", "warning icon", "info icon", "close notification", "Focus sentinel"]) expect(html).not.toContain(s);
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
+  });
+
   it("shows admins a count of other users' failing accounts", () => {
     const d = data([], 2);
     const { rerender } = render(<HealthBanner data={d} admin openAccounts={noop} openUsers={noop} />);

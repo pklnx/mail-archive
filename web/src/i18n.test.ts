@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as i18n from "./i18n";
-import { applySettings, detectLocale, languages, messagesFor, needsReload, resolve, storedSettings, t } from "./i18n";
+import { applySettings, detectLocale, languages, messagesFor, needsReload, resolve, storedSettings, t, translateWithId } from "./i18n";
 
 describe("detectLocale", () => {
   it("picks the first supported browser language", () => {
@@ -33,6 +33,39 @@ describe("messages", () => {
     expect(en.messageCount(1, "1")).toBe("1 message");
     expect(en.messageCount(1200, "1,200")).toBe("1,200 messages");
     expect(de.messageCount(1, "1")).toBe("1 Nachricht");
+  });
+});
+
+describe("Carbon texts", () => {
+  /** Every string leaf of an object, by its dotted path. */
+  const leaves = (o: object, path = ""): [string, unknown][] =>
+    Object.entries(o).flatMap(([k, v]) => (v && typeof v === "object" ? leaves(v, `${path}${k}.`) : [[`${path}${k}`, v]]));
+
+  it("translates every Carbon text", () => {
+    const en = new Map(leaves(messagesFor("en").carbon));
+    const de = new Map(leaves(messagesFor("de").carbon));
+    expect([...de.keys()].sort()).toEqual([...en.keys()].sort());
+    for (const [key, v] of de) {
+      expect(v, key).toBeTypeOf("string");
+      expect(v, key).not.toBe("");
+    }
+    expect(messagesFor("de").carbon.showPassword).toBe("Passwort anzeigen");
+  });
+
+  it("looks up translateWithId ids in the current language", () => {
+    const de = messagesFor("de");
+    de.carbon.ids["test.id"] = "Test-Text";
+    try {
+      applySettings({ language: "de", locale: "de" });
+      expect(translateWithId("test.id")).toBe("Test-Text");
+      // A missing id shows as itself, so the German rendering tests find it.
+      expect(translateWithId("missing.id")).toBe("missing.id");
+      applySettings({ language: "en", locale: "en" });
+      expect(translateWithId("test.id")).toBe("test.id");
+    } finally {
+      delete de.carbon.ids["test.id"];
+      applySettings({ language: "en", locale: "en" });
+    }
   });
 });
 

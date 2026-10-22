@@ -1,4 +1,5 @@
 import { lockedUser, timeStep, totp, twoFactorUser } from "./demo";
+import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 
 // No session: these tests use the login page.
@@ -8,13 +9,29 @@ test.use({ storageState: { cookies: [], origins: [] } });
 // after logging out); the browser logs that as a console error.
 test.beforeEach(({ guards }) => guards.allowHTTPError("/api/session", 401));
 
+// The password field. Exact: the field's "Show password" button names it too.
+const passwordField = (page: Page) => page.getByLabel("Password", { exact: true });
+// The login error. Carbon's text field has an empty alert region of its own
+// (for its character counter), so the one alert with text is the error.
+const loginError = (page: Page) => page.getByRole("alert").filter({ hasText: /\S/ });
+
 test("login with password and authentication code", async ({ page }) => {
   await page.goto("/");
+  // Carbon's type scale applies: heading-04 for the app name (28px), not
+  // body text. Its tokens are scoped inside Carbon's CSS, so a class that
+  // relies on them silently falls back to 16px with line-height 1.
+  await expect(page.getByRole("heading", { name: "Mail Archive", level: 1 })).toHaveCSS("font-size", "28px");
   await page.getByLabel("User name").fill(twoFactorUser.name);
-  await page.getByLabel("Password").fill(twoFactorUser.password);
+  await passwordField(page).fill(twoFactorUser.password);
   await page.getByRole("button", { name: "Log in" }).click();
 
-  await expect(page.getByRole("heading", { name: "Enter your authentication code" })).toBeVisible();
+  const codeHeading = page.getByRole("heading", { name: "Enter your authentication code" });
+  await expect(codeHeading).toBeVisible();
+  // heading-03: 20px on a 28px line.
+  await expect(codeHeading).toHaveCSS("font-size", "20px");
+  await expect(codeHeading).toHaveCSS("line-height", "28px");
+  // body-01 for the text below it: 14px.
+  await expect(page.getByText("Enter the six-digit code from your authenticator app, or a recovery code.")).toHaveCSS("font-size", "14px");
   // The password is not carried over into the code field.
   await expect(page.getByLabel("Authentication code")).toHaveValue("");
   // The demo confirmed this user's 2FA with an old code, so the current
@@ -34,19 +51,20 @@ test("login errors: wrong password and locked user", async ({ page, guards }) =>
   guards.allowHTTPError("/api/session", 403);
   await page.goto("/");
   await page.getByLabel("User name").fill(twoFactorUser.name);
-  await page.getByLabel("Password").fill("not-the-password");
+  await passwordField(page).fill("not-the-password");
   const wrong = page.waitForResponse((r) => r.url().endsWith("/api/session") && r.request().method() === "POST");
   await page.getByRole("button", { name: "Log in" }).click();
   expect((await wrong).status()).toBe(401);
-  await expect(page.getByRole("alert")).toHaveText("Wrong user name or password.");
+  // The notification's text: its status icon's label, then the message.
+  await expect(loginError(page)).toHaveText("ErrorWrong user name or password.");
   // The password field is cleared after a failed login.
-  await expect(page.getByLabel("Password")).toHaveValue("");
+  await expect(passwordField(page)).toHaveValue("");
 
   await page.getByLabel("User name").fill(lockedUser.name);
-  await page.getByLabel("Password").fill(lockedUser.password);
+  await passwordField(page).fill(lockedUser.password);
   const locked = page.waitForResponse((r) => r.url().endsWith("/api/session") && r.request().method() === "POST");
   await page.getByRole("button", { name: "Log in" }).click();
   expect((await locked).status()).toBe(403);
-  await expect(page.getByRole("alert")).toHaveText("This user is locked. Ask an admin to unlock it.");
+  await expect(loginError(page)).toHaveText("ErrorThis user is locked. Ask an admin to unlock it.");
   await expect(page.getByRole("heading", { name: "Enter your authentication code" })).toHaveCount(0);
 });

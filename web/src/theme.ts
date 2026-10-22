@@ -18,14 +18,25 @@ export function currentTheme(): Theme {
   return storedTheme() ?? (media().matches ? "dark" : "light");
 }
 
-/** The page background per theme (--color-bg), for the browser and status bar. */
-const barColor: Record<Theme, string> = { light: "#ffffff", dark: "#09090b" };
+/** The page background per theme (Carbon's white and g100), for the browser and status bar. */
+const barColor: Record<Theme, string> = { light: "#ffffff", dark: "#161616" };
+
+/** Carbon's theme class per theme. On <html>, so portaled overlays follow it too. */
+export const carbonTheme: Record<Theme, string> = { light: "cds--white", dark: "cds--g100" };
+
+/** Fired on window when a theme is applied, so every toggle on screen shows it. */
+export const THEME_EVENT = "mail-archive:theme";
 
 export function applyTheme(theme: Theme) {
-  document.documentElement.classList.toggle("dark", theme === "dark");
-  document.documentElement.style.colorScheme = theme;
+  const root = document.documentElement;
+  // The dark class drives the unconverted (Tailwind) markup until #168 part 6.
+  root.classList.toggle("dark", theme === "dark");
+  root.classList.toggle(carbonTheme.light, theme === "light");
+  root.classList.toggle(carbonTheme.dark, theme === "dark");
+  root.style.colorScheme = theme;
   // index.html has one theme-color per system scheme; a chosen theme wins over both.
   for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute("content", barColor[theme]);
+  window.dispatchEvent(new Event(THEME_EVENT));
 }
 
 export function setTheme(theme: Theme) {

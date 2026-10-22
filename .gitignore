@@ -42,6 +42,8 @@ go.work.sum
 /internal/web/ui/dist/*
 !/internal/web/ui/dist/.keep
 /web/node_modules/
+# Carbon's CSS without its CDN fonts, written by web/build/stripRemoteFonts.ts
+/web/src/vendor/
 # Playwright: the saved login and the results of failed runs
 /web/e2e/.auth/
 /web/test-results/

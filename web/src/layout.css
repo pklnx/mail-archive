@@ -1,0 +1,160 @@
+/* Page layout (layer app, above Carbon and Tailwind's utilities). Converted
+   views use Carbon components and these classes, no Tailwind utilities. */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The page reaches under notch and home indicator (viewport-fit=cover in
+   index.html); the app keeps its content clear of them. 0 elsewhere. */
+#root {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Safari ignores padding and height on native selects (22px next to 34px
+   fields), so the unconverted selects drop the native look and draw their
+   own arrow; the field classes then size them like text inputs. Above the
+   utilities, so the room for the arrow wins over px-*. Carbon's Select keeps
+   its own arrow. */
+select:not([multiple], [size], .cds--select-input) {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1rem;
+  padding-right: 2rem;
+}
+
+/* Below 16px iOS Safari zooms into the page when a field gets focus. For
+   every field, Carbon's included: a deliberate deviation from its 14px
+   fields, on phones only. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"], [type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* The shell: Carbon's Header is fixed at the top; the app below it fills the
+   rest of the screen. The header reaches under the notch with its background
+   and keeps its content clear of it. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding-top: 3rem;
+}
+.app-shell > .cds--header {
+  height: calc(3rem + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-left: env(safe-area-inset-left);
+}
+.app-shell__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.app-header__logo {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-inline-end: 0.5rem;
+}
+/* The drawer is permanent from 64rem on (the unconverted sidebar's lg), so
+   the menu button hides there too, not only from Carbon's 66rem. Part 4a
+   moves the navigation to Carbon's SideNav and breakpoints. */
+@media (min-width: 64rem) {
+  .app-shell .cds--header__menu-toggle {
+    display: none;
+  }
+}
+
+/* The health banner under the header: notifications at full width. */
+.health-banner {
+  display: flex;
+  flex-direction: column;
+}
+.health-banner .cds--actionable-notification {
+  max-width: none;
+}
+
+/* Login and the other screens before the app: one centered column. */
+.auth-page {
+  position: relative;
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.auth-page__theme {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+.auth-page__column {
+  display: flex;
+  width: 100%;
+  max-width: 24rem;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.auth-page__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.auth-page__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.auth-page__wide {
+  width: 100%;
+  max-width: none;
+}
+/* Carbon's type styles as classes. The precompiled CSS has no cds--type-*
+   classes, and it defines the --cds-heading-* / --cds-body-* tokens only
+   inside one component's scope, so they do not resolve here: the values
+   are Carbon's type scale (@carbon/type 1.x), written out. */
+.auth-page__text {
+  /* body-01 */
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.42857;
+  letter-spacing: 0.16px;
+}
+.type-heading-03 {
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+.type-heading-04 {
+  font-size: 1.75rem;
+  font-weight: 400;
+  line-height: 1.28572;
+  letter-spacing: 0;
+}
+.auth-page__or {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--cds-text-secondary);
+}
+.auth-page__or::before,
+.auth-page__or::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--cds-border-subtle);
+}
+.auth-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}

@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { Header, HeaderGlobalBar, HeaderMenuButton, HeaderName } from "@carbon/react";
 import { AccountsPage } from "./AccountsPage";
+import { isPlainClick } from "./clicks";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
 import { UsersPage } from "./UsersPage";
@@ -11,7 +13,7 @@ import { SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
-import { BackIcon, DownIcon, FilterIcon, FolderIcon, InboxIcon, MenuIcon, MoreIcon, ServerIcon, UpIcon, iconButton } from "./icons";
+import { BackIcon, DownIcon, FilterIcon, FolderIcon, InboxIcon, MoreIcon, ServerIcon, UpIcon, iconButton } from "./icons";
 import { FilterChips } from "./FilterChips";
 import { Sheet } from "./Sheet";
 import { primary } from "./formStyles";
@@ -174,7 +176,37 @@ export function App({ user, logout }: Props) {
   });
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="app-shell">
+      {/* Stays usable while the drawer is open: its menu button closes it. */}
+      <Header aria-label={t.appName}>
+        {/* Below lg it opens the drawer with accounts and folders (#168 part 4a brings Carbon's SideNav). */}
+        <HeaderMenuButton
+          aria-label={menuOpen ? t.hideMenu : t.showMenu}
+          aria-controls={asideId}
+          aria-expanded={menuOpen}
+          isActive={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+        />
+        <HeaderName
+          href="/"
+          prefix=""
+          onClick={(e: MouseEvent) => {
+            // All mail, as "g a" does. A Ctrl/Cmd, Shift or Alt click is left
+            // to the browser, so it still opens "/" in a new tab or window.
+            if (!isPlainClick(e)) return;
+            e.preventDefault();
+            update({ account: "", folder: "", gone: "", m: "", view: "" });
+            setMenuOpen(false);
+          }}
+        >
+          <img src={logo} alt="" className="app-header__logo" />
+          {t.appName}
+        </HeaderName>
+        <HeaderGlobalBar>
+          <ThemeToggle header />
+        </HeaderGlobalBar>
+      </Header>
+      <div className="app-shell__body">
       <div inert={hide}>
         <HealthBanner
           data={accounts.data}
@@ -183,6 +215,8 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
+      {/* Not converted to Carbon yet (#168 parts 3 to 6). */}
+      <div className="legacy flex min-h-0 flex-1 flex-col text-ink">
       <div
         className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[var(--sidebar-w)_minmax(18rem,26rem)_1fr]"
         // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
@@ -192,9 +226,10 @@ export function App({ user, logout }: Props) {
         <aside
           ref={aside}
           id={asideId}
-          className={`fixed inset-y-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
+          // Below the fixed header, which keeps its menu button usable to close the drawer.
+          className={`fixed top-[calc(3rem+env(safe-area-inset-top))] bottom-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
             menuOpen ? "visible translate-x-0" : "invisible -translate-x-full"
-          } lg:visible lg:relative lg:w-auto lg:min-w-0 lg:translate-x-0 lg:shadow-none lg:transition-none`}
+          } lg:visible lg:relative lg:top-0 lg:w-auto lg:min-w-0 lg:translate-x-0 lg:shadow-none lg:transition-none`}
         >
           <SidebarPanel
             layout={layout}
@@ -253,27 +288,13 @@ export function App({ user, logout }: Props) {
         ) : (
           <>
           <section inert={hide} className={`min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
-            {/* Phones: an app bar with the place, the search below at full width. */}
-            <header className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1 md:hidden">
-              <button type="button" aria-label={t.showMenu} title={t.showMenu} className={iconButton} onClick={() => setMenuOpen(true)}>
-                <MenuIcon />
-              </button>
-              <div className="min-w-0 flex-1 px-1">
-                <h1 className="truncate text-lg leading-6 font-semibold">{place.title}</h1>
-                {place.sub && <p className="truncate text-xs text-ink-muted">{place.sub}</p>}
-              </div>
-              <ThemeToggle />
-            </header>
+            {/* Phones: where the user is, the search below at full width. Menu
+                and theme are in the header. */}
+            <div className="flex min-h-12 shrink-0 flex-col justify-center border-b border-line px-3 py-1 md:hidden">
+              <h1 className="truncate text-lg leading-6 font-semibold">{place.title}</h1>
+              {place.sub && <p className="truncate text-xs text-ink-muted">{place.sub}</p>}
+            </div>
             <div className="flex items-center gap-2 border-b border-line p-2">
-              <button
-                type="button"
-                aria-label={t.showMenu}
-                title={t.showMenu}
-                className={`${iconButton} hidden md:flex lg:hidden`}
-                onClick={() => setMenuOpen(true)}
-              >
-                <MenuIcon />
-              </button>
               <input
                 ref={search}
                 type="search"
@@ -295,9 +316,6 @@ export function App({ user, logout }: Props) {
               >
                 <FilterIcon />
               </button>
-              <span className="hidden md:flex">
-                <ThemeToggle />
-              </span>
             </div>
             <FilterChips query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} openFilters={() => setSheet("filters")} />
             <div className="hidden md:block">
@@ -440,6 +458,8 @@ export function App({ user, logout }: Props) {
           ))}
         </dl>
       </Sheet>
+      </div>
+      </div>
     </div>
   );
 }
