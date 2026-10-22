@@ -3,10 +3,10 @@
 State of the work for the next session. Update before a session ends.
 
 ## Open PRs
-- None besides this handover update.
+- #146 (Debian `postgres:18` image, `breaking`, for #145): from another Claude session; not handled by this coordinator.
 
 ## Next tickets
-- None open. Open follow-up: the #135 row in `.claude/FOLLOWUPS.md` (maintainer OK for `.gitleaksignore`/`.gitleaks.toml` changes).
+- None besides #145 (see Open PRs).
 
 ## Done (2026-10-21/22)
 - #115: durable blob publication and removal, merged via #121 (local Opus review + Action second review).
@@ -22,6 +22,7 @@ State of the work for the next session. Update before a session ends.
 - 2026-10-22: Claude GitHub Action removed again (#138); plans and reviews run in Claude sessions on the subscription. #128 closed as not planned. The maintainer deleted the `ANTHROPIC_API_KEY` secret and the labels `needs-plan`, `plan-review` and `second-review`.
 - #124: bubblewrap and socat for the Action's sandbox. All four triggers tested on GitHub: `second-review` (#121, #123, #124), `needs-plan`, `plan-review` and `@claude` (#125).
 - 2026-10-22: #129 (gh/MCP operations table in CLAUDE.md and the briefs, PR #140), #130 (`addMessage` sets UIDVALIDITY, PR #142), #131 (toolchain mismatch message, PR #141).
+- 2026-10-22: #144 (maintainer OK for changes that can weaken the secret scan, PR #147).
 
 ## Manual checks for the maintainer
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.
