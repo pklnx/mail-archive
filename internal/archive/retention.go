@@ -372,9 +372,14 @@ func (r *Retention) purgeCancelCommand(ctx context.Context, p *store.AccountPurg
 // shellWord quotes s for a shell unless it is plain.
 func shellWord(s string) string {
 	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._@+-", c)) {
+		if !isPlainShellChar(c) {
 			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 		}
 	}
 	return s
+}
+
+// isPlainShellChar reports whether c needs no quoting in a shell word.
+func isPlainShellChar(c rune) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._@+-", c)
 }
