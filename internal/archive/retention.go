@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,23 +123,35 @@ func ExecuteDeletionRun(ctx context.Context, st *store.Store, runID int64, opts 
 // waitBlobLock takes the blob lock exclusively, retrying every second for
 // up to timeout. It returns a nil unlock when the lock stayed busy.
 func waitBlobLock(ctx context.Context, st *store.Store, timeout time.Duration) (func(), error) {
+	var unlock func()
+	ok, err := waitLock(ctx, timeout, func() (bool, error) {
+		u, ok, err := st.TryLockBlobs(ctx)
+		unlock = u
+		return ok, err
+	})
+	if err != nil || !ok {
+		return nil, err
+	}
+	return unlock, nil
+}
+
+// waitLock calls try every second until it takes its lock, for up to
+// timeout. It returns false when the lock stayed busy.
+func waitLock(ctx context.Context, timeout time.Duration, try func() (bool, error)) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		unlock, ok, err := st.TryLockBlobs(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return unlock, nil
+		ok, err := try()
+		if err != nil || ok {
+			return ok, err
 		}
 		wait := min(time.Second, time.Until(deadline))
 		if wait <= 0 {
-			return nil, nil
+			return false, nil
 		}
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return false, ctx.Err()
 		}
 	}
 }
@@ -219,9 +233,9 @@ func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 }
 
 // Retention is the retention job of the web server: it resumes a
-// confirmed deletion run (interrupted, or confirmed in the web UI) and
-// sweeps the files whose grace period ended, at start, every CheckEvery,
-// and when woken.
+// confirmed deletion run (interrupted, or confirmed in the web UI), then a
+// confirmed account purge, and sweeps the files whose grace period ended,
+// at start, every CheckEvery, and when woken.
 type Retention struct {
 	Store      *store.Store
 	Blobs      *blobstore.Store
@@ -266,8 +280,8 @@ func (r *Retention) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce executes a confirmed run, if any, then sweeps. Errors are
-// logged; the next check retries.
+// RunOnce executes a confirmed run, if any, then a confirmed purge, then
+// sweeps. Errors are logged; the next check retries.
 func (r *Retention) RunOnce(ctx context.Context) {
 	log := r.Logger
 	if log == nil {
@@ -294,6 +308,7 @@ func (r *Retention) RunOnce(ctx context.Context) {
 			log.Error("retention check failed", "err", err)
 		}
 	}
+	r.resumePurge(ctx, log)
 	audit := func() *store.AuditEntry {
 		return &store.AuditEntry{Actor: store.ActorCLI, Action: "retention.sweep", Details: map[string]any{"by": "web server"}}
 	}
@@ -304,4 +319,67 @@ func (r *Retention) RunOnce(ctx context.Context) {
 			log.Error("file sweep failed", "err", err)
 		}
 	}
+}
+
+// resumePurge executes a confirmed account purge, if there is one.
+func (r *Retention) resumePurge(ctx context.Context, log *slog.Logger) {
+	p, err := r.Store.OpenAccountPurge(ctx)
+	if err != nil {
+		log.Error("purge check failed", "err", err)
+		return
+	}
+	if p == nil {
+		return
+	}
+	audit := func(action string) *store.AuditEntry {
+		e := &store.AuditEntry{Actor: store.ActorCLI, Action: action, Details: map[string]any{"by": "web server"}}
+		e.SetTarget(store.TargetAccount, strconv.FormatInt(p.AccountID, 10), p.Account)
+		return e
+	}
+	done, err := ExecutePurge(ctx, r.Store, p.ID, PurgeOptions{Grace: r.Grace, Audit: audit, Logger: log})
+	var cancelled *PurgeCancelledError
+	switch {
+	case errors.Is(err, ErrPurgeRunning):
+		log.Debug("purge executed elsewhere", "purge", p.ID)
+	case errors.Is(err, ErrSyncRunning):
+		log.Info("purge postponed: the account is being synced, filled or imported into", "purge", p.ID, "account", p.Account)
+	case errors.As(err, &cancelled):
+		log.Warn("purge cancelled", "purge", p.ID, "account", p.Account, "reason", cancelled.Err.Error())
+	case errors.Is(err, store.ErrStale):
+		// It fails the same way at every check until an admin cancels it.
+		log.Error("purge cannot go on; cancel it", "purge", p.ID, "account", p.Account, "err", err,
+			"cancel_with", r.purgeCancelCommand(ctx, p))
+	case err != nil && ctx.Err() == nil:
+		log.Error("purge failed; it resumes at the next check", "purge", p.ID, "account", p.Account, "err", err)
+	case err == nil:
+		log.Info("account deleted completely", "purge", p.ID, "account", p.Account, "locations", done.Locations,
+			"deleted", done.Deleted, "kept", done.Kept)
+	}
+}
+
+// purgeCancelCommand is the command that cancels p, with the account's
+// current owner.
+func (r *Retention) purgeCancelCommand(ctx context.Context, p *store.AccountPurge) string {
+	cmd := "./ma account purge " + shellWord(p.Account)
+	if a, err := r.Store.GetAccount(ctx, p.AccountID); err == nil && a.OwnerID != nil {
+		if u, err := r.Store.GetUserByID(ctx, *a.OwnerID); err == nil {
+			cmd += " --user " + shellWord(u.Name)
+		}
+	}
+	return cmd + " --cancel"
+}
+
+// shellWord quotes s for a shell unless it is plain.
+func shellWord(s string) string {
+	for _, c := range s {
+		if !isPlainShellChar(c) {
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
+}
+
+// isPlainShellChar reports whether c needs no quoting in a shell word.
+func isPlainShellChar(c rune) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._@+-", c)
 }

@@ -148,9 +148,69 @@ instead; see the [comparison](./syncing#per-account).
 the account and folder it came from; in the sidebar the account is marked
 *removed*. The stored password is deleted and the account is never synced
 again. This cannot be undone, and the name stays taken: a new account needs a
-different name. An account without any archived mail is deleted completely.
+different name, or the removed account is deleted completely (below). An
+account without any archived mail is deleted completely right away.
 
 ```sh
 ./ma account disable NAME
 ./ma account remove NAME
 ```
+
+### Deleting a removed account completely
+
+A removed account keeps its archived mail for ever unless an admin deletes
+it completely. This is meant for accounts that should never have held mail,
+for example an import into the wrong account, whose mail is (also) somewhere
+else:
+
+```sh
+./ma account purge NAME --dry-run      # what would happen
+./ma account purge NAME                # asks for the number of messages to delete
+./ma account purge NAME --count 42     # the same, for scripts
+```
+
+It is only possible when:
+
+- the account is **removed** (`account remove` first);
+- **no retention rule** covers it or one of its folders. Remove the rules
+  first with `./ma retention rule remove ID`, deliberately: a protected
+  account is never deleted by accident;
+- **no legal hold** names it, also a released one (its record keeps the
+  account), and no active hold covers any of its mail;
+- it is not being synced, filled or imported into, and no other purge is
+  open.
+
+The command names every rule and hold that is in the way. Otherwise it
+first shows what happens: how many locations are removed, how many messages
+are deleted because this account has their last location, and how many
+are kept because they are also in other accounts (with the owner and
+account). Then it asks for the number of messages to delete.
+
+- A message that is **also in another account**, of any user, stays there
+  unchanged, file included.
+- A message whose **last location** is in this account is deleted like a
+  [retention deletion](./retention): a deletion record (hash, size, dates; no
+  subject, sender or recipients), a deletion entry for the next signed
+  [attestation](./tamper-evidence), and its file stays for
+  `MAIL_ARCHIVE_RETENTION_FILE_GRACE` so that restoring the last dump still
+  works.
+- Then the folders and the account itself are deleted, with its fills,
+  imports, smtp addresses and sync history. The name is free again.
+
+The [audit log](./audit-log) records the confirmation (*Account deletion
+confirmed*), each batch and the end (*Finished deleting account*), with the account, owner, locations
+removed and messages deleted and kept.
+
+The purge runs in batches of 500 messages. An interrupted purge (Ctrl-C, a
+crash) leaves a consistent removed account and resumes with the same
+command, without asking again, or when the web server starts. `account
+list` shows the account as *removed (being deleted)* meanwhile.
+
+A purge is **cancelled** when a retention rule or a legal hold for the
+account appears while it runs, or when it would delete more messages than
+confirmed. `./ma account purge NAME --cancel` cancels an open purge by hand,
+for example when the account was moved to another user after the
+confirmation. What a cancelled purge already deleted stays deleted (with its
+records); the account stays removed with the rest of its mail, consistent
+and searchable. To go on, remove the reason and run `account purge` again:
+it shows a new preview and asks for the new number.

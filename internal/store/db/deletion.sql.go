@@ -148,7 +148,8 @@ type DeletedFilesRow struct {
 	Scheduled bool
 }
 
-// Of some hashes, those deleted by retention and not archived again, and
+// Of some hashes, those deleted (retention or account purge) and not
+// archived again, and
 // whether their file is scheduled for removal.
 func (q *Queries) DeletedFiles(ctx context.Context, shas []string) ([]DeletedFilesRow, error) {
 	rows, err := q.db.Query(ctx, deletedFiles, shas)

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { auditQuery, type AuditEntry } from "./api";
 import { foldEntries, shortUserAgent } from "./auditLog";
 import { defaultFilter, entryDetail, targetLabel } from "./LogPage";
-import { t } from "./i18n";
+import { messagesFor, t } from "./i18n";
 
 let id = 0;
 function entry(action: string, at: string, more: Partial<AuditEntry> = {}): AuditEntry {
@@ -91,6 +91,15 @@ describe("entry texts", () => {
     expect(t.auditAction("data.fill_change")).toBe("Changed import from IMAP");
     expect(t.auditAction("data.fill_cancel")).toBe("Stopped or cancelled import from IMAP");
     expect(t.auditAction("future.thing")).toBe("future.thing");
+  });
+  it("words the account purge actions in every language", () => {
+    const de = messagesFor("de");
+    for (const a of ["account.purge", "account.purge_batch", "account.purge_finish", "account.purge_cancel"]) {
+      expect(t.auditAction(a)).not.toBe(a);
+      expect(de.auditAction(a)).not.toBe(a);
+    }
+    expect(t.auditAction("account.purge")).toBe("Account deletion confirmed");
+    expect(de.auditAction("account.purge")).toBe("Löschen des Kontos bestätigt");
   });
   it("shortens user agents", () => {
     expect(shortUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0")).toBe("Firefox 141 · Windows");

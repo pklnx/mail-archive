@@ -34,8 +34,8 @@ const (
 	FindingStaleTemp  = "stale-temp" // a file left in tmp/ by an unfinished write
 	FindingUnexpected = "unexpected" // anything else in messages/ or tmp/
 	FindingIOError    = "io-error"   // a file that could not be checked
-	// FindingDeleted is the file of a message deleted by retention that is
-	// not scheduled for removal (#55). Files waiting out their grace
+	// FindingDeleted is the file of a message deleted (by retention or an
+	// account purge) that is not scheduled for removal (#55, #155). Files waiting out their grace
 	// period are no finding.
 	FindingDeleted = "deleted"
 )
@@ -349,8 +349,8 @@ func (v *verifier) checkOrphans(ctx context.Context, batch []blobstore.Entry) er
 			missing = append(missing, e.SHA256)
 		}
 	}
-	// Files of messages deleted by retention: removed by the sweep once
-	// their grace period ends.
+	// Files of messages deleted (retention or account purge): removed by
+	// the sweep once their grace period ends.
 	deleted, err := v.st.DeletedFiles(ctx, missing)
 	if err != nil {
 		return err
@@ -365,7 +365,7 @@ func (v *verifier) checkOrphans(ctx context.Context, batch []blobstore.Entry) er
 		case isDeleted:
 			unscheduled = append(unscheduled, e)
 			v.report(Finding{Kind: FindingDeleted, SHA256: e.SHA256, Path: e.Path, Size: e.Size,
-				Detail: "deleted by retention, but not scheduled for removal"})
+				Detail: "deleted (retention or account purge), but not scheduled for removal"})
 		default:
 			orphans = append(orphans, e)
 			v.report(Finding{Kind: FindingOrphan, SHA256: e.SHA256, Path: e.Path, Size: e.Size})

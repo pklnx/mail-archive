@@ -345,6 +345,9 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 func TestRetentionMigrationDown(t *testing.T) {
 	f := newRetentionFixture(t)
 	f.hold(store.NewLegalHold{OwnerID: &f.alice.ID})
+	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
+		t.Fatalf("down the account purges: %q, %v", m, err)
+	}
 	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00029_smtp_imports") {
 		t.Fatalf("down the smtp imports: %q %v", m, err)
 	}

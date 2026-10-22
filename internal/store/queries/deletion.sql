@@ -178,7 +178,8 @@ SELECT (SELECT count(*) FROM blob_removals)::bigint AS pending_files,
        coalesce((SELECT id FROM deletion_runs WHERE state IN ('proposed', 'confirmed')), 0)::bigint AS open_run;
 
 -- name: DeletedFiles :many
--- Of some hashes, those deleted by retention and not archived again, and
+-- Of some hashes, those deleted (retention or account purge) and not
+-- archived again, and
 -- whether their file is scheduled for removal.
 SELECT s::text AS sha256, EXISTS (SELECT 1 FROM blob_removals b WHERE b.sha256 = s) AS scheduled
 FROM unnest(@shas::text[]) s

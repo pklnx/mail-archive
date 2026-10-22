@@ -125,7 +125,7 @@ func runVerify(ctx context.Context, opts archive.VerifyOptions, publicKeys []str
 		fmt.Fprintf(stdout, "moved %d file(s), %d bytes, to %s in the data directory\n", res.Moved, res.MovedBytes, res.MovedTo)
 	}
 	if res.PendingRemovals > 0 {
-		fmt.Fprintf(stdout, "note: %d file(s) of messages deleted by retention wait for their removal after the grace period\n", res.PendingRemovals)
+		fmt.Fprintf(stdout, "note: %d file(s) of deleted messages (retention or account purge) wait for their removal after the grace period\n", res.PendingRemovals)
 	}
 	if res.Scheduled > 0 {
 		fmt.Fprintf(stdout, "scheduled %d file(s) of deleted messages for removal by the next sweep\n", res.Scheduled)

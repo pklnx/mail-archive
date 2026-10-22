@@ -30,6 +30,9 @@ func TestJournalFolderMigration(t *testing.T) {
 	if err := st.CreateAccount(ctx, imap); err != nil {
 		t.Fatal(err)
 	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
+		t.Fatalf("down the account purges: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00029_smtp_imports") {
 		t.Fatalf("down the smtp imports: %q, %v", m, err)
 	}
@@ -177,6 +180,9 @@ func TestJournalFolderMigration(t *testing.T) {
 	ff.Counts.Imported = 1
 	if _, err := st.SaveFillBatch(ctx, ff, []store.MessageMeta{receivedMeta(10)}, []store.Location{{}}); err != nil {
 		t.Fatal(err)
+	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
+		t.Fatalf("down the account purges: %q, %v", m, err)
 	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00029_smtp_imports") {
 		t.Fatalf("down the smtp imports: %q, %v", m, err)

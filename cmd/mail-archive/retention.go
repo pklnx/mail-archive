@@ -444,6 +444,13 @@ func retentionStatus(cmd *cobra.Command, a *app) (string, error) {
 	if d.OpenRun != 0 {
 		line += fmt.Sprintf(", deletion run %d open", d.OpenRun)
 	}
+	p, err := a.store.OpenAccountPurge(cmd.Context())
+	if err != nil {
+		return "", err
+	}
+	if p != nil {
+		line += fmt.Sprintf(", purge %d of account %q open", p.ID, p.Account)
+	}
 	if d.PendingFiles > 0 {
 		line += fmt.Sprintf(", %d file(s) of deleted messages to remove", d.PendingFiles)
 	}
@@ -451,7 +458,8 @@ func retentionStatus(cmd *cobra.Command, a *app) (string, error) {
 }
 
 // startRetention starts the retention job of serve (resuming confirmed
-// deletion runs, removing the files of deleted messages) and returns a
+// deletion runs and account purges, removing the files of deleted
+// messages) and returns a
 // function that stops it.
 func startRetention(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (r *archive.Retention, stop func()) {
 	ctx, cancel := context.WithCancel(ctx)

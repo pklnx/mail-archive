@@ -388,7 +388,8 @@ func (s *Store) ScheduleBlobRemoval(ctx context.Context, sha256 string, due time
 	return s.q.ScheduleBlobRemovals(ctx, db.ScheduleBlobRemovalsParams{Shas: []string{sha256}, DueAt: due})
 }
 
-// IsTombstoned reports whether a message was deleted by retention.
+// IsTombstoned reports whether a message was deleted (by retention or an
+// account purge).
 func (s *Store) IsTombstoned(ctx context.Context, sha256 string) (bool, error) {
 	return s.q.IsTombstoned(ctx, sha256)
 }
@@ -405,8 +406,8 @@ func (s *Store) DeletionCounts(ctx context.Context) (DeletionCounts, error) {
 	return DeletionCounts{OpenRun: r.OpenRun, PendingFiles: r.PendingFiles}, err
 }
 
-// DeletedFiles returns, of some hashes, those deleted by retention and not
-// archived again, mapped to whether their file is scheduled for removal.
+// DeletedFiles returns, of some hashes, those deleted (retention or account
+// purge) and not archived again, mapped to whether their file is scheduled for removal.
 func (s *Store) DeletedFiles(ctx context.Context, shas []string) (map[string]bool, error) {
 	rows, err := s.q.DeletedFiles(ctx, shas)
 	if err != nil {

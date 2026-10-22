@@ -407,7 +407,9 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, idleCutoff time.Time)
 }
 
 // inTx runs fn in a transaction. With an entry from WithAudit in ctx, the
-// entry is written after fn succeeded, in the same transaction.
+// entry is written after fn succeeded, in the same transaction. The
+// transaction runs on the pool, or on the dedicated connection of ctx
+// (withConn).
 func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 	p, _ := ctx.Value(auditKey{}).(*pendingAudit)
 	if p != nil && p.written {
@@ -420,7 +422,13 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 			return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
 		}
 	}
-	tx, err := s.pool.Begin(ctx)
+	var begin interface {
+		Begin(context.Context) (pgx.Tx, error)
+	} = s.pool
+	if c := connFrom(ctx); c != nil {
+		begin = c
+	}
+	tx, err := begin.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -428,6 +436,9 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 	q := s.q.WithTx(tx)
 	if err := fn(q); err != nil {
 		return err
+	}
+	if p != nil && p.skip {
+		p.skip, p = false, nil
 	}
 	if p != nil {
 		if err := insertAudit(ctx, q, p.entry, ua); err != nil {

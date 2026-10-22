@@ -29,8 +29,10 @@ and signed with an Ed25519 key. From that:
   `verify` as `removed` (or `attestation`), with its hash and the
   attestation that covered it. A message inserted into an attested range
   afterwards shows up as `unattested`. Deletions recorded by the archive
-  itself (retention, once it exists) are signed with their hash, reason and
-  time and are not findings.
+  itself are signed with their hash, reason and time and are not findings.
+  The reason is `retention` for a [deletion run](./retention) and
+  `account_purge` for a message deleted with its [removed
+  account](./accounts#deleting-a-removed-account-completely).
 - **Not proven:** that every message reached the archive. IMAP accounts are
   snapshots, see [what each source
   guarantees](./accounts). Messages archived and removed between two

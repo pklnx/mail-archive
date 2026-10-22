@@ -212,6 +212,9 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// First the smtp imports, the recurring fills, the journal folder, the smtp fills, the user settings, the sync intervals, the folder delimiters and the attestations, of which there are none.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
+		t.Fatalf("down the account purges: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00029_smtp_imports") {
 		t.Fatalf("down the smtp imports: %q, %v", m, err)
 	}
@@ -249,6 +252,9 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatalf("down with entries: %v", err)
 	}
 	empty := storetest.New(t)
+	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
+		t.Fatalf("down the account purges: %q, %v", m, err)
+	}
 	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00029_smtp_imports") {
 		t.Fatalf("down the smtp imports: %q, %v", m, err)
 	}
