@@ -120,15 +120,17 @@ func fillAuditTarget(ctx context.Context, typ string, id int64) {
 
 // Audit writes one entry outside any transaction: for reads, searches,
 // exports and failed logins. A missing partition is created and the insert
-// tried once more.
+// tried once more. It runs on the pool, or on the dedicated connection of
+// ctx (withConn).
 func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
+	q := s.qFor(ctx)
 	ua, err := s.auditUserAgent(ctx, &e)
 	if err == nil {
-		err = insertAudit(ctx, s.q, &e, ua)
+		err = insertAudit(ctx, q, &e, ua)
 	}
 	if missingPartition(err) {
 		if _, perr := s.EnsureAuditPartitions(ctx, 1); perr == nil {
-			err = insertAudit(ctx, s.q, &e, ua)
+			err = insertAudit(ctx, q, &e, ua)
 		}
 	}
 	if err != nil {
@@ -138,7 +140,8 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
 }
 
 // auditUserAgent returns the id of e's user agent, or nil without one. It
-// may insert on a pool connection of its own, so inTx calls it before the
+// may insert outside any transaction, on a pool connection of its own or on
+// the dedicated connection of ctx (withConn), so inTx calls it before the
 // transaction starts: called with the transaction's connection held, it
 // can wait for a free connection while every other one waits for a row
 // lock that transaction holds.
@@ -186,9 +189,10 @@ func missingPartition(err error) bool {
 
 // EnsureAuditPartitions creates the audit log partitions of this month and
 // the next monthsAhead months that do not exist yet, and returns how many it
-// created. It fails with ErrNotMigrated before the migrations ran.
+// created. It fails with ErrNotMigrated before the migrations ran. It runs
+// on the pool, or on the dedicated connection of ctx (withConn).
 func (s *Store) EnsureAuditPartitions(ctx context.Context, monthsAhead int) (int, error) {
-	n, err := s.q.EnsureAuditPartitions(ctx, clampInt32(monthsAhead))
+	n, err := s.qFor(ctx).EnsureAuditPartitions(ctx, clampInt32(monthsAhead))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "42883" { // undefined_function
 		return 0, ErrNotMigrated
@@ -216,7 +220,7 @@ func (s *Store) userAgentID(ctx context.Context, ua string) (int64, error) {
 	var err error
 	for range 2 {
 		// No row: a concurrent insert of the same string won; look again.
-		if id, err = s.q.AuditUserAgentID(ctx, ua); err == nil || !isNoRows(err) {
+		if id, err = s.qFor(ctx).AuditUserAgentID(ctx, ua); err == nil || !isNoRows(err) {
 			break
 		}
 	}

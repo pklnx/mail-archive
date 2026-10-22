@@ -409,7 +409,8 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, idleCutoff time.Time)
 // inTx runs fn in a transaction. With an entry from WithAudit in ctx, the
 // entry is written after fn succeeded, in the same transaction. The
 // transaction runs on the pool, or on the dedicated connection of ctx
-// (withConn).
+// (withConn); so do the user agent lookup before it and the creation of a
+// missing audit partition after its rollback.
 func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 	p, _ := ctx.Value(auditKey{}).(*pendingAudit)
 	if p != nil && p.written {

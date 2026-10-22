@@ -42,7 +42,10 @@ type DeletionOptions struct {
 // one: in batches, each under the exclusive blob lock and in one
 // transaction, it deletes the candidates that are still deletable and
 // keeps the others (a rule removed, a hold added or a new location since
-// the preview). A done run is returned as it is.
+// the preview). The run lock, the blob lock and the batches share one
+// connection (store.DeletionSession), so writers waiting for the blob lock
+// can never take the connection a batch needs. A done run is returned as
+// it is.
 func ExecuteDeletionRun(ctx context.Context, st *store.Store, runID int64, opts DeletionOptions) (*store.DeletionRun, error) {
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = DefaultDeletionBatch
@@ -53,14 +56,18 @@ func ExecuteDeletionRun(ctx context.Context, st *store.Store, runID int64, opts 
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	unlock, ok, err := st.TryLockDeletionRun(ctx)
+	// All locks and the batches on one connection (store.DeletionSession):
+	// while the blob lock is held, waiting writers may hold every other
+	// connection of the pool. The reads on the pool (st) run without the
+	// blob lock, when the writers can go on and give theirs back.
+	sess, ok, err := st.StartDeletionSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return nil, ErrDeletionRunning
 	}
-	defer unlock()
+	defer sess.Close(ctx)
 	run, err := st.DeletionRun(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -87,19 +94,21 @@ func ExecuteDeletionRun(ctx context.Context, st *store.Store, runID int64, opts 
 		if len(shas) == 0 {
 			break
 		}
-		unlockBlobs, err := waitBlobLock(ctx, st, opts.LockTimeout)
+		ok, err := waitLock(ctx, opts.LockTimeout, func() (bool, error) { return sess.TryLockBlobs(ctx) })
 		if err != nil {
 			return nil, err
 		}
-		if unlockBlobs == nil {
+		if !ok {
 			return nil, ErrBlobsBusy
 		}
 		bctx := ctx
 		if opts.Audit != nil {
 			bctx = store.WithAudit(ctx, opts.Audit("retention.batch"))
 		}
-		d, k, err := st.DeleteBatch(bctx, runID, shas, opts.Grace)
-		unlockBlobs()
+		d, k, err := sess.Batch(bctx, runID, shas, opts.Grace)
+		if uerr := sess.UnlockBlobs(ctx); uerr != nil && err == nil {
+			return nil, uerr
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -114,14 +123,17 @@ func ExecuteDeletionRun(ctx context.Context, st *store.Store, runID int64, opts 
 	if opts.Audit != nil {
 		fctx = store.WithAudit(ctx, opts.Audit("retention.finish"))
 	}
-	if err := st.FinishDeletionRun(fctx, runID); err != nil {
+	if err := sess.Finish(fctx, runID); err != nil {
 		return nil, err
 	}
 	return st.DeletionRun(ctx, runID)
 }
 
 // waitBlobLock takes the blob lock exclusively, retrying every second for
-// up to timeout. It returns a nil unlock when the lock stayed busy.
+// up to timeout. It returns a nil unlock when the lock stayed busy. The
+// lock is held on a pool connection of its own, so only verify uses it: it
+// runs in a process without blob writers, which could otherwise hold every
+// other connection while they wait for the lock.
 func waitBlobLock(ctx context.Context, st *store.Store, timeout time.Duration) (func(), error) {
 	var unlock func()
 	ok, err := waitLock(ctx, timeout, func() (bool, error) {
@@ -171,7 +183,9 @@ const sweepPage = 1000
 // SweepBlobs removes the files of deleted messages whose grace period has
 // ended, under the exclusive blob lock. A file whose message was archived
 // again stays. Without due removals it takes no lock, so syncs and SMTP
-// deliveries never wait for nothing.
+// deliveries never wait for nothing. The lock and every query under it
+// share one connection (store.BlobSession): while the blob lock is held,
+// waiting writers may hold every other connection of the pool.
 func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts SweepOptions) (int, error) {
 	if opts.LockTimeout <= 0 {
 		opts.LockTimeout = time.Minute
@@ -183,19 +197,34 @@ func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 	if err != nil || !due {
 		return 0, err
 	}
-	unlock, err := waitBlobLock(ctx, st, opts.LockTimeout)
+	sess, err := st.StartBlobSession(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if unlock == nil {
+	defer sess.Close(ctx)
+	ok, err := waitLock(ctx, opts.LockTimeout, func() (bool, error) { return sess.TryLockBlobs(ctx) })
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
 		return 0, ErrBlobsBusy
 	}
-	defer unlock()
+	removed, err := sweepLocked(ctx, sess, blobs, opts)
+	if uerr := sess.UnlockBlobs(ctx); uerr != nil && err == nil {
+		return removed, uerr
+	}
+	return removed, err
+}
+
+// sweepLocked is the part of SweepBlobs under the blob lock. It gets only
+// the session, not the store, so that every query here runs on the
+// session's connection.
+func sweepLocked(ctx context.Context, sess *store.BlobSession, blobs *blobstore.Store, opts SweepOptions) (int, error) {
 	removed := 0
 	var afterDue time.Time
 	afterSHA := ""
 	for {
-		rows, err := st.DueBlobRemovals(ctx, afterDue, afterSHA, sweepPage)
+		rows, err := sess.DueBlobRemovals(ctx, afterDue, afterSHA, sweepPage)
 		if err != nil {
 			return removed, err
 		}
@@ -213,7 +242,7 @@ func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 			shas = append(shas, r.SHA256)
 		}
 		// A crash before this only removes again.
-		if _, err := st.DoneBlobRemovals(ctx, shas); err != nil {
+		if _, err := sess.DoneBlobRemovals(ctx, shas); err != nil {
 			return removed, err
 		}
 		last := rows[len(rows)-1]
@@ -224,7 +253,7 @@ func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 		if opts.Audit != nil {
 			e := opts.Audit()
 			e.Detail("files", removed)
-			if err := st.Audit(ctx, *e); err != nil {
+			if err := sess.Audit(ctx, *e); err != nil {
 				return removed, err
 			}
 		}

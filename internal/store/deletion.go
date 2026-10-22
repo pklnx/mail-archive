@@ -290,10 +290,37 @@ func (s *Store) FinishDeletionRun(ctx context.Context, id int64) error {
 	})
 }
 
-// TryLockDeletionRun takes the lock that lets one process execute a run.
-// It returns false if another one does.
-func (s *Store) TryLockDeletionRun(ctx context.Context) (unlock func(), ok bool, err error) {
-	return s.tryLockClass(ctx, retentionLockClass)
+// DeletionSession holds the locks of a deletion run's execution on one
+// dedicated connection, and runs its batches on that connection too: the
+// run lock that lets one process execute a run and, per batch, the blob
+// lock (TryLockBlobs, UnlockBlobs). While it holds the blob lock
+// exclusively, writers wait for it with a connection of the pool each, and
+// may hold every other connection; a batch that needed another one would
+// wait for them for ever. See locksession.go.
+type DeletionSession struct {
+	lockConn
+}
+
+// StartDeletionSession takes the run lock on a dedicated connection. It
+// returns false if another session holds it.
+func (s *Store) StartDeletionSession(ctx context.Context) (*DeletionSession, bool, error) {
+	// The run lock is (retentionLockClass, 0); rule and hold changes and
+	// the batches take (retentionLockClass, 1) in their transactions.
+	l, ok, err := s.startLockConn(ctx, retentionLockClass)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return &DeletionSession{lockConn: *l}, true, nil
+}
+
+// Batch is Store.DeleteBatch on the session's connection.
+func (d *DeletionSession) Batch(ctx context.Context, runID int64, shas []string, grace time.Duration) (deleted, kept int, err error) {
+	return d.s.DeleteBatch(d.on(ctx), runID, shas, grace)
+}
+
+// Finish is Store.FinishDeletionRun on the session's connection.
+func (d *DeletionSession) Finish(ctx context.Context, runID int64) error {
+	return d.s.FinishDeletionRun(d.on(ctx), runID)
 }
 
 // DeletionGroup counts a run's pending candidates by where they are and
@@ -366,7 +393,7 @@ func (s *Store) BlobRemovalDue(ctx context.Context) (bool, error) {
 // DueBlobRemovals returns up to limit due removals after (afterDue,
 // afterSHA), in that order.
 func (s *Store) DueBlobRemovals(ctx context.Context, afterDue time.Time, afterSHA string, limit int) ([]BlobRemoval, error) {
-	rows, err := s.q.DueBlobRemovals(ctx, db.DueBlobRemovalsParams{AfterDue: afterDue, AfterSha: afterSHA, RowLimit: clampInt32(limit)})
+	rows, err := s.qFor(ctx).DueBlobRemovals(ctx, db.DueBlobRemovalsParams{AfterDue: afterDue, AfterSha: afterSHA, RowLimit: clampInt32(limit)})
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +407,40 @@ func (s *Store) DueBlobRemovals(ctx context.Context, afterDue time.Time, afterSH
 // DoneBlobRemovals forgets due removals that were carried out (or skipped
 // because the message came back).
 func (s *Store) DoneBlobRemovals(ctx context.Context, shas []string) (int64, error) {
-	return s.q.DeleteBlobRemovals(ctx, shas)
+	return s.qFor(ctx).DeleteBlobRemovals(ctx, shas)
+}
+
+// BlobSession holds the blob lock of a file sweep on one dedicated
+// connection, and runs the sweep's queries on that connection too: while
+// it holds the blob lock exclusively, writers waiting for it may hold
+// every other connection of the pool. See locksession.go.
+type BlobSession struct {
+	lockConn
+}
+
+// StartBlobSession acquires the dedicated connection of a sweep; it takes
+// no lock yet (TryLockBlobs).
+func (s *Store) StartBlobSession(ctx context.Context) (*BlobSession, error) {
+	l, err := s.newLockConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &BlobSession{lockConn: *l}, nil
+}
+
+// DueBlobRemovals is Store.DueBlobRemovals on the session's connection.
+func (b *BlobSession) DueBlobRemovals(ctx context.Context, afterDue time.Time, afterSHA string, limit int) ([]BlobRemoval, error) {
+	return b.s.DueBlobRemovals(b.on(ctx), afterDue, afterSHA, limit)
+}
+
+// DoneBlobRemovals is Store.DoneBlobRemovals on the session's connection.
+func (b *BlobSession) DoneBlobRemovals(ctx context.Context, shas []string) (int64, error) {
+	return b.s.DoneBlobRemovals(b.on(ctx), shas)
+}
+
+// Audit is Store.Audit on the session's connection.
+func (b *BlobSession) Audit(ctx context.Context, e AuditEntry) error {
+	return b.s.Audit(b.on(ctx), e)
 }
 
 // ScheduleBlobRemoval schedules a message file for removal at due.
