@@ -12,7 +12,10 @@ name: mail-archive
 
 services:
   postgres:
-    image: postgres:18-alpine
+    # The Debian image, not -alpine: full-text search is up to 2.3 times
+    # slower with musl (#145). Switching an existing volume between the two
+    # needs a REINDEX, see docs/guide/operations.md.
+    image: postgres:18
     restart: unless-stopped
     environment:
       POSTGRES_DB: mailarchive
