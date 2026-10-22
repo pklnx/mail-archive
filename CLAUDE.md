@@ -4,14 +4,29 @@ Roles: maintainer (human) decides, sets `plan` and may set `ready`; coordinator 
 
 Language: chat with the maintainer in German; everything on GitHub and in code in English. Every GitHub text ends with `— Claude (<model>), <role>`.
 
-Cloud sessions have no `gh` CLI: the GitHub MCP tools replace the `gh` commands, and the coordinator is woken by the PR activity subscription instead of a background `gh pr checks --watch`.
+Steps are written as operations; the commands for local sessions (`gh`) and cloud sessions (GitHub MCP tools, no `gh` CLI) are in the table under [GitHub operations](#github-operations).
 
 ## Ticket flow
 1. Issue (template). 2. Maintainer labels `plan` → `## Plan` comment (approach, files, data model, external services, tests, open questions, size), label becomes `review`. 3. Independent plan review by a plan-reviewer agent; an approving reviewer or the maintainer replaces `review` with `ready`; only `ready` issues are built.
-4. Plan with several parts: one sub-issue per part, title "<what> (#N, part K)", linked as GitHub sub-issue (`gh api -X POST repos/pklnx/mail-archive/issues/N/sub_issues -F sub_issue_id=<issue .id>`). The main issue's `ready` covers them; it closes with the last part.
+4. Plan with several parts: one sub-issue per part, title "<what> (#N, part K)", linked as GitHub sub-issue (see GitHub operations; the link needs the sub-issue's `id`, not its number). The main issue's `ready` covers them; it closes with the last part.
 5. One branch + PR per part; body "Closes #<sub>." and "Part K of #N.".
 6. Review: local reviewer always; a second, independent local reviewer on risky PRs (deletes, schema changes (`db-migration`), rewriting user data). PRs without app code (docs, CI, test-only): one local reviewer (Sonnet) + green required checks.
-7. Merge: approving review + green required checks; `gh pr merge <n> --squash --match-head-commit <sha>`. Never auto-merge, never change rulesets or repo settings.
+7. Merge: approving review + green required checks; squash merge pinned to the reviewed head SHA (see GitHub operations). Never auto-merge, never change rulesets or repo settings.
+
+## GitHub operations
+Local sessions use `gh`; cloud sessions have no `gh` and use the GitHub MCP tools (load them via ToolSearch). The same operation, the same rules.
+
+| Operation | Local (`gh`) | Cloud session (MCP / session tools) |
+|---|---|---|
+| Read an issue and its comments | `gh issue view <n> --comments` | `mcp__github__issue_read` method `get`, then `get_comments` |
+| Comment on an issue or PR | `gh issue comment` / `gh pr comment` | `mcp__github__add_issue_comment` (PR number as `issue_number`) |
+| Change labels | `gh issue edit --add-label/--remove-label` | `mcp__github__issue_write` method `update` with `labels`: **replaces the whole set**, so read the current labels first (`issue_read` method `get_labels`) |
+| Create a sub-issue and link it | `gh issue create`, then `gh api -X POST repos/pklnx/mail-archive/issues/N/sub_issues -F sub_issue_id=<issue .id>` | `mcp__github__issue_write` method `create` with `parent_issue_number: N`; for an existing issue `mcp__github__sub_issue_write` method `add` with `sub_issue_id` (the issue's id, not its number) |
+| Open a PR with a label | `gh pr create --label <l>` | `mcp__github__create_pull_request` (cannot set labels), then `mcp__github__issue_write` method `update` with `labels` on the PR number |
+| Read a PR and its diff | `gh pr view`, `gh pr diff` | `mcp__github__pull_request_read` method `get`, `get_diff` (`get_files` for the file list) |
+| Read check status once | `gh pr checks <n>` | `mcp__github__pull_request_read` method `get_check_runs` (plus `get_status` for commit statuses) |
+| Coordinator waits for CI (wait until the checks appear first, in both columns) | background `gh pr checks <n> --watch --interval 120 >/dev/null 2>&1; gh pr checks <n>` | `mcp__claude-code-remote__subscribe_pr_activity` for the PR wakes the coordinator; optionally one `mcp__claude-code-remote__send_later` check-in as a safety net that reads `get_check_runs` (a suggestion, not a rule); `unsubscribe_pr_activity` after merge or close |
+| Merge | `gh pr merge <n> --squash --match-head-commit <sha>` | `mcp__github__merge_pull_request` with `merge_method: squash`, `expectedHeadSha: <sha>` |
 
 Blocking in reviews only: crash, data loss/corruption, hang, wrong result in a main function, security/privacy problem, broken main flow, missing/failing test for new behaviour, violation of plan or maintainer decision. Everything else is a follow-up.
 
@@ -19,7 +34,7 @@ Blocking in reviews only: crash, data loss/corruption, hang, wrong result in a m
 - Tests never touch real user data, real credentials or the network; secrets only in the secret store, never in chat or files.
 - Every behaviour change has tests; a bug fix has a regression test that fails without the fix. Tests wait for signals, never for time (no sleeps/fixed delays).
 - Locally run only the tests of what changed; CI runs everything.
-- Agents never watch CI: push, open the PR, report. The coordinator gets woken per PR by a background `gh pr checks <n> --watch --interval 120 >/dev/null 2>&1; gh pr checks <n>` (wait until the checks appear first).
+- Agents never watch CI: push, open the PR, report. The coordinator gets woken per PR when the checks finish (wait until the checks appear first; see GitHub operations).
 - ≤3 tickets in parallel, ≤2 PRs in CI at a time.
 - A flaky-test rerun gets a row in `docs/development/flaky-tests.md`; a test listed twice is fixed right away.
 - After 3 review rounds that keep finding new holes in a heuristic: stop patching, rebuild it on a principle or give the maintainer options.
