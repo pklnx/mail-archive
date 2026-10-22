@@ -6,6 +6,7 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Next tickets
+- #168 Carbon Design System migration (maintainer decision 2026-10-22 after comparing shadcn/ui, React Aria, Clarity, Carbon and Primer on a clickable Accounts page and reviewing full-page drafts for shadcn and Carbon). Plan posted, label `review`: needs an independent plan review, then `ready`. Sub-issues #169 (Playwright suite first), #170 (scaffold, login), #171 (Accounts, evaluation point), #172 (mail view, second review), #173 (Users, Log, Retention), #174 (Profile, Tailwind removal, cleanup, second review). Decisions: Tailwind removed at the end (preflight off meanwhile), order scaffold → Accounts → mail → rest, feature scope unchanged.
 - None planned. Optional release: main has #150 (PR #159, `./ma migrate` index rebuild), #156 (PR #158, profile tabs), #157 (PR #160, sidebar) and the screenshots (PR #161) since 26.10-8.
 
 ## Done (2026-10-21/22)
