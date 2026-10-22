@@ -134,3 +134,48 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm audit --prod
+
+  web-e2e:
+    # Playwright end-to-end tests of the web UI against the demo server
+    # (tools/demo: made-up mail, a temporary database, no network).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Blocks the telemetry postinstall of the Carbon packages (from #170 on).
+      IBM_TELEMETRY_DISABLED: "true"
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: mailarchive
+          POSTGRES_PASSWORD: mailarchive
+          POSTGRES_DB: mailarchive
+        ports: ["127.0.0.1::5432"]
+        options: >-
+          --health-cmd "pg_isready -U mailarchive"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
+      - run: npm install -g corepack@0.36.0 && corepack enable
+      - run: pnpm install --frozen-lockfile
+      # The headless Chromium of the pinned Playwright, with its system
+      # libraries: --with-deps installs them with apt, so the job does not
+      # depend on what the runner image happens to ship.
+      - run: pnpm exec playwright install --with-deps --only-shell chromium
+      # The config builds the UI, then builds and starts the demo (it embeds
+      # the built UI), and stops it at the end so it drops its database.
+      - run: pnpm e2e
+        env:
+          DEMO_DATABASE_URL: postgres://mailarchive:mailarchive@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/mailarchive?sslmode=disable

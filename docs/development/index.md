@@ -47,6 +47,31 @@ for dates and numbers is one more entry in `formatChoices`
 pnpm refuses packages released less than a day ago (supply-chain protection).
 Keep it that way instead of adding exceptions.
 
+### End-to-end tests
+
+`web/e2e` holds a Playwright suite that drives the UI in Chromium against
+the demo server (see [Documentation](#documentation)): login with 2FA and its
+errors, search and the message view, "Only in archive", accounts, retention,
+users and the phone layout. It needs Go, a PostgreSQL user with `CREATEDB`
+and a Chromium:
+
+```sh
+make web-e2e DEMO_DATABASE_URL='postgres://mailarchive:<password>@localhost:5432/mailarchive?sslmode=disable'
+```
+
+The config (`web/playwright.config.ts`) builds the UI, builds and starts a
+fresh demo on <http://localhost:18181> (IMAP on port 18143), logs the demo
+admin in once and stops the demo at the end. Set `CHROMIUM_PATH` to use an
+installed Chromium, or run `pnpm exec playwright install chromium` once in
+`web/`. A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
+trace in `web/test-results/` (`pnpm exec playwright show-trace <file>`).
+
+The tests fail on page errors, console errors, CSP violations and requests
+to any other host (`web/e2e/fixtures.ts`). They use role and label queries,
+wait for elements and responses, never for time, and run without retries.
+Names a test creates are unique per run, and no test depends on another.
+CI runs the suite in the `web-e2e` job.
+
 ## Documentation
 
 This site is built with [VitePress](https://vitepress.dev/) from `docs/` and
