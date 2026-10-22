@@ -105,3 +105,8 @@ SELECT EXISTS (SELECT 1 FROM accounts WHERE owner_id = @owner::bigint AND kind =
 -- The blob lock, shared, until the transaction ends: verify, which holds it
 -- exclusive while it moves orphans, waits for the commit.
 SELECT pg_advisory_xact_lock_shared(@class::int, 0);
+
+-- name: TryLockBlobsShared :one
+-- LockBlobsShared without waiting: false while verify, a deletion batch,
+-- the sweep or a purge holds the blob lock exclusively.
+SELECT pg_try_advisory_xact_lock_shared(@class::int, 0)::boolean AS locked;

@@ -173,6 +173,11 @@ Exit codes: `0` nothing found, `1` findings, `2` the check is incomplete
 (orphan check skipped, unreadable files, attestations but no trusted public
 key, no database connection, wrong flags). Progress goes to stderr every 10,000 messages.
 
+While the orphan check runs, it holds the blob lock, and syncs, fills,
+imports and SMTP deliveries wait for it; the web UI keeps working. An SMTP
+delivery that waits longer than 2 minutes gets `451`, and the mail server
+retries it later.
+
 ### attest
 
 An attestation records which messages the archive held, so that a message

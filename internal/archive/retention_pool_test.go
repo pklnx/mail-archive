@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,9 @@ import (
 )
 
 // waitingWriters starts blob writers on a small pool (#166): syncs of two
-// accounts and one SMTP delivery, each of which holds a pool connection
-// while it waits for the blob lock.
+// accounts and one SMTP delivery, which wait for the blob lock. Since #178
+// one of them waits in PostgreSQL with a pool connection, the others wait
+// for the store's wait slot without one.
 type waitingWriters struct {
 	t        *testing.T
 	small    *store.Store
@@ -25,7 +27,7 @@ type waitingWriters struct {
 	meta     store.MessageMeta
 	results  chan error
 	started  int
-	seen     int // writers last seen waiting for the blob lock
+	seen     int // writers last seen waiting for the blob lock or its slot
 }
 
 // newWaitingWriters opens a store with a pool of four connections and
@@ -74,7 +76,8 @@ func newWaitingWriters(t *testing.T, ctx context.Context, s *retentionSetup) *wa
 }
 
 // start starts the three writers with ctx (never a session's) and waits
-// until all three wait for the blob lock, or ctx ends. Each writer lets go
+// until all three wait for the blob lock or for its wait slot, or ctx
+// ends. Each writer lets go
 // of its lock and connection as soon as it has them.
 func (w *waitingWriters) start(ctx context.Context) {
 	for _, id := range w.syncs {
@@ -97,7 +100,7 @@ func (w *waitingWriters) start(ctx context.Context) {
 		w.results <- err
 	}()
 	for ctx.Err() == nil {
-		if w.seen = waitingForBlobs(ctx, w.observer); w.seen >= 3 {
+		if w.seen = waitingForBlobs(ctx, w.observer) + w.small.BlobWaiters(); w.seen >= 3 {
 			return
 		}
 	}
@@ -184,5 +187,75 @@ func TestSweepWithWaitingWriters(t *testing.T) {
 	var entries int
 	if err := w.observer.QueryRow(ctx, "SELECT count(*) FROM audit_log WHERE action = 'retention.sweep'").Scan(&entries); err != nil || entries != 1 {
 		t.Fatalf("%d sweep entries %v", entries, err)
+	}
+}
+
+// TestSweepWaitHoldsNoConnection (#178): while the sweep retries the blob
+// lock, it keeps no connection between its tries, so on a pool of one a
+// read still gets the connection. Before, the sweep kept its session's
+// connection idle for the whole lock timeout.
+func TestSweepWaitHoldsNoConnection(t *testing.T) {
+	s := newRetentionSetup(t, 1)
+	id := s.confirmedRun(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := ExecuteDeletionRun(ctx, s.st, id, DeletionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(storetest.WithMaxConns(t, s.url, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("application_name", "sweep-test")
+	u.RawQuery = q.Encode()
+	small, err := store.Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(small.Close)
+	observer, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observer.Close(context.Background()) })
+	if _, err := observer.Exec(ctx, "SELECT pg_advisory_lock($1, 0)", 0x6d62); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	collected := false
+	// The sweep ends before the small store closes, also when the test
+	// fails: pgxpool.Close waits for every connection.
+	t.Cleanup(func() {
+		stop()
+		if !collected {
+			<-done
+		}
+	})
+	go func() {
+		_, err := SweepBlobs(sweepCtx, small, s.blobs, SweepOptions{LockTimeout: time.Hour})
+		done <- err
+	}()
+	// Wait until the sweep's connection has run its first try.
+	for {
+		var n int
+		if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE application_name = 'sweep-test' AND datname = current_database()
+			  AND (query LIKE '%pg_try_advisory_lock%' OR query LIKE '%pg_advisory_unlock_all%')`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			break
+		}
+	}
+	if _, err := small.ListAccounts(ctx); err != nil {
+		t.Fatalf("read while the sweep waits for the blob lock: %v", err)
+	}
+	stop()
+	collected = true
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("stopped sweep: %v", err)
 	}
 }

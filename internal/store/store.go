@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,10 @@ type Store struct {
 	pool       *pgxpool.Pool
 	q          *db.Queries
 	userAgents userAgentCache
+	// blobWait holds the wait slots for the blob lock (blobWaitSlot), and
+	// blobParked counts the writers waiting for one.
+	blobWait   chan struct{}
+	blobParked atomic.Int32
 }
 
 // Open connects to the database.
@@ -52,7 +57,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	return &Store{pool: pool, q: db.New(pool)}, nil
+	return &Store{pool: pool, q: db.New(pool), blobWait: make(chan struct{}, blobWaiters)}, nil
 }
 
 // Close releases all connections.

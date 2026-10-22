@@ -87,7 +87,7 @@ func TestAttestedWritesTakeFence(t *testing.T) {
 					if !inWriteTxFunc(stack) {
 						t.Errorf("%s: %s outside a function passed to inWriteTx", pos, name)
 					}
-				case name == "LockBlobsShared" && inWriteTxFunc(stack):
+				case (name == "LockBlobsShared" || name == "TryLockBlobsShared") && inWriteTxFunc(stack):
 					t.Errorf("%s: the blob lock is taken inside inWriteTx, after the fence", pos)
 				case name == "LockFenceShared" && enclosingFunc(stack) != "inWriteTx":
 					t.Errorf("%s: the fence is taken outside inWriteTx", pos)
@@ -180,14 +180,16 @@ func enclosingFunc(stack []ast.Node) string {
 	return ""
 }
 
-// checkLockOrder checks that inWriteTx takes the blob lock before the
-// fence.
+// checkLockOrder checks that inWriteTx takes the blob lock, tried and
+// waited for, before the fence.
 func checkLockOrder(t *testing.T, fset *token.FileSet, fd *ast.FuncDecl) {
 	t.Helper()
-	var blob, fence token.Pos
+	var try, blob, fence token.Pos
 	ast.Inspect(fd, func(n ast.Node) bool {
 		if c, ok := n.(*ast.CallExpr); ok {
 			switch calledName(c) {
+			case "TryLockBlobsShared":
+				try = c.Pos()
 			case "LockBlobsShared":
 				blob = c.Pos()
 			case "LockFenceShared":
@@ -196,7 +198,7 @@ func checkLockOrder(t *testing.T, fset *token.FileSet, fd *ast.FuncDecl) {
 		}
 		return true
 	})
-	if blob == token.NoPos || fence == token.NoPos || blob > fence {
+	if try == token.NoPos || blob == token.NoPos || fence == token.NoPos || try > fence || blob > fence {
 		t.Errorf("%s: inWriteTx must take the blob lock, then the fence", fset.Position(fd.Pos()))
 	}
 }

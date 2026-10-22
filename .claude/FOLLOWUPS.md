@@ -26,3 +26,4 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 | #158 review | Move `RetentionPage` onto the shared `Tabs` component. | open |
 | #160 review | `sidebarWidth` aria text is not locale-formatted ("13.25 rem" in German); a 28 rem sidebar at 1024 px leaves the reader narrow. | open |
 | #161 review | `docs/guide/web-ui.md` does not name the width bounds (12–28 rem) or Home/End/Enter on the handle. | open |
+| #176 plan | Attester (web): `TryLockAttest` keeps an idle pooled connection for the whole attestation, beside its snapshot connection. Take the writer lock on the snapshot connection instead (one long-held connection fewer). Bounded: `WithAttestSnapshot` waits for the fence at most 30 s. | open |

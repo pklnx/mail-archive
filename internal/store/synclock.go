@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // syncLockClass is the first key of the advisory locks that guard account
@@ -42,11 +45,49 @@ func (s *Store) TryLockSync(ctx context.Context, accountID int64) (unlock func()
 }
 
 // TryLockSyncForWrite is TryLockSync for a sync or import that writes
-// blobs: once it has the account's lock, it also waits for the shared blob
-// lock on the same connection, so that verify never sees a blob without its
-// row as an orphan.
+// blobs: once it has the account's lock, it also takes the shared blob
+// lock on the same connection, so that verify never sees a blob without
+// its row as an orphan. While the blob lock is held exclusively, it waits
+// for it without the account's lock (blobWaitSlot) and then takes the
+// account's lock again: ok is false if another session took it meanwhile.
 func (s *Store) TryLockSyncForWrite(ctx context.Context, accountID int64) (unlock func(), ok bool, err error) {
 	return s.tryLockSync(ctx, accountID, true)
+}
+
+// blobWaiters is how many writers of one Store may wait for the blob lock
+// in PostgreSQL at a time (blobWaitSlot).
+const blobWaiters = 1
+
+// blobWaitSlot waits for one of the blobWaiters wait slots, or for the end
+// of ctx. A writer that waits for the blob lock keeps a connection; at
+// most blobWaiters may, so reads keep connections while the lock is held
+// exclusively, also by another process (a CLI verify or deletion). So a
+// writer first tries the lock; only if that fails does it give its
+// connection back, take a slot and wait in PostgreSQL with the blocking
+// call. It calls release as soon as the lock is granted (or the wait
+// failed): when the exclusive holder lets go, the next slot holder's call
+// returns at once. PostgreSQL's queue stays the only source of truth for
+// the lock; the slots only limit how many wait in it. release may be
+// called more than once.
+func (s *Store) blobWaitSlot(ctx context.Context) (release func(), err error) {
+	s.blobParked.Add(1)
+	select {
+	case s.blobWait <- struct{}{}:
+		// Counted as parked until here, then only in pg_locks.
+		s.blobParked.Add(-1)
+	case <-ctx.Done():
+		s.blobParked.Add(-1)
+		return nil, ctx.Err()
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-s.blobWait }) }, nil
+}
+
+// BlobWaiters returns how many writers wait for a wait slot of the blob
+// lock (blobWaitSlot), without a connection. The one with the slot waits
+// in PostgreSQL and is not counted. For tests and diagnostics.
+func (s *Store) BlobWaiters() int {
+	return int(s.blobParked.Load())
 }
 
 func (s *Store) tryLockSync(ctx context.Context, accountID int64, blobs bool) (unlock func(), ok bool, err error) {
@@ -54,41 +95,84 @@ func (s *Store) tryLockSync(ctx context.Context, accountID int64, blobs bool) (u
 		return nil, false, fmt.Errorf("account id %d out of range for the sync lock", accountID)
 	}
 	key := int32(accountID) //nolint:gosec // range checked above
+	conn, ok, err := s.lockAccount(ctx, key)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	if blobs {
+		var got bool
+		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock_shared($1, 0)", blobLockClass).Scan(&got); err != nil {
+			// A cancelled query leaves the connection unusable; close it,
+			// which also releases the account lock.
+			closeConn(ctx, conn)
+			return nil, false, fmt.Errorf("try the blob lock: %w", err)
+		}
+		if !got {
+			// Held exclusively: wait without the account lock and without
+			// the connection, then start over with the blocking call.
+			unlockSync(ctx, conn, key, false)
+			release, err := s.blobWaitSlot(ctx)
+			if err != nil {
+				return nil, false, fmt.Errorf("wait for the blob lock: %w", err)
+			}
+			defer release()
+			if conn, ok, err = s.lockAccount(ctx, key); err != nil || !ok {
+				return nil, false, err
+			}
+			_, err = conn.Exec(ctx, "SELECT pg_advisory_lock_shared($1, 0)", blobLockClass)
+			release()
+			if err != nil {
+				// A cancelled wait leaves the connection unusable; close it,
+				// which also releases the account lock.
+				closeConn(ctx, conn)
+				return nil, false, fmt.Errorf("wait for the blob lock: %w", err)
+			}
+		}
+	}
+	return func() { unlockSync(ctx, conn, key, blobs) }, true, nil
+}
+
+// lockAccount acquires a connection and takes the account's sync lock on
+// it. It returns false, and no connection, if another session holds it.
+func (s *Store) lockAccount(ctx context.Context, key int32) (*pgxpool.Conn, bool, error) {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return nil, false, err
 	}
+	var ok bool
 	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, $2)", syncLockClass, key).Scan(&ok); err != nil {
-		conn.Release()
+		// The lock may have been taken before the query failed: close the
+		// connection, so it cannot leak into the pool.
+		closeConn(ctx, conn)
 		return nil, false, err
 	}
 	if !ok {
 		conn.Release()
 		return nil, false, nil
 	}
-	unlock = func() {
-		// Unlock even if ctx was cancelled; on failure, drop the connection
-		// so the lock cannot leak into the pool.
-		bg := context.WithoutCancel(ctx)
-		_, err := conn.Exec(bg, "SELECT pg_advisory_unlock($1, $2)", syncLockClass, key)
-		if err == nil && blobs {
-			_, err = conn.Exec(bg, "SELECT pg_advisory_unlock_shared($1, 0)", blobLockClass)
-		}
-		if err != nil {
-			_ = conn.Conn().Close(bg)
-		}
-		conn.Release()
+	return conn, true, nil
+}
+
+// unlockSync releases the account's sync lock, with blobs also the shared
+// blob lock, and the connection. It unlocks even if ctx was cancelled; on
+// failure it closes the connection, so no lock can leak into the pool.
+func unlockSync(ctx context.Context, conn *pgxpool.Conn, key int32, blobs bool) {
+	bg := context.WithoutCancel(ctx)
+	_, err := conn.Exec(bg, "SELECT pg_advisory_unlock($1, $2)", syncLockClass, key)
+	if err == nil && blobs {
+		_, err = conn.Exec(bg, "SELECT pg_advisory_unlock_shared($1, 0)", blobLockClass)
 	}
-	if blobs {
-		if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock_shared($1, 0)", blobLockClass); err != nil {
-			// A cancelled wait leaves the connection unusable; close it,
-			// which also releases the account lock.
-			_ = conn.Conn().Close(context.WithoutCancel(ctx))
-			conn.Release()
-			return nil, false, fmt.Errorf("wait for the blob lock: %w", err)
-		}
+	if err != nil {
+		_ = conn.Conn().Close(bg)
 	}
-	return unlock, true, nil
+	conn.Release()
+}
+
+// closeConn closes and releases a connection whose session state is
+// unknown, which releases its session locks.
+func closeConn(ctx context.Context, conn *pgxpool.Conn) {
+	_ = conn.Conn().Close(context.WithoutCancel(ctx))
+	conn.Release()
 }
 
 // TryLockBlobs takes the blob lock exclusively, which waits for no one: it

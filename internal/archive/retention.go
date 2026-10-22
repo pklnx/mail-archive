@@ -197,20 +197,32 @@ func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 	if err != nil || !due {
 		return 0, err
 	}
-	sess, err := st.StartBlobSession(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer sess.Close(ctx)
-	ok, err := waitLock(ctx, opts.LockTimeout, func() (bool, error) { return sess.TryLockBlobs(ctx) })
+	// Each try takes a session and gives it back when the lock is busy: a
+	// connection kept between tries would count against the pool like a
+	// writer waiting for the lock (#178).
+	var locked *store.BlobSession
+	ok, err := waitLock(ctx, opts.LockTimeout, func() (bool, error) {
+		sess, err := st.StartBlobSession(ctx)
+		if err != nil {
+			return false, err
+		}
+		ok, err := sess.TryLockBlobs(ctx)
+		if err != nil || !ok {
+			sess.Close(ctx)
+			return false, err
+		}
+		locked = sess
+		return true, nil
+	})
 	if err != nil {
 		return 0, err
 	}
 	if !ok {
 		return 0, ErrBlobsBusy
 	}
-	removed, err := sweepLocked(ctx, sess, blobs, opts)
-	if uerr := sess.UnlockBlobs(ctx); uerr != nil && err == nil {
+	defer locked.Close(ctx)
+	removed, err := sweepLocked(ctx, locked, blobs, opts)
+	if uerr := locked.UnlockBlobs(ctx); uerr != nil && err == nil {
 		return removed, uerr
 	}
 	return removed, err
