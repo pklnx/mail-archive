@@ -2,7 +2,8 @@
 # Fails if the Go toolchain in use differs from the one go.mod asks for: the
 # `toolchain goX.Y.Z` line, or the `go` line when there is none. The Dockerfile
 # runs this in the build stage so the pinned golang image tag cannot drift from
-# go.mod.
+# go.mod. It also runs on hosts: in the CI lint job (through
+# check-go-toolchain-test.sh) and when a developer runs it locally.
 #
 # Usage: scripts/check-go-toolchain.sh [go.mod]   (default: ./go.mod)
 set -eu
@@ -30,7 +31,7 @@ have=$(cd / && GOTOOLCHAIN=local go env GOVERSION)
 have=${have%% *}
 
 if [ "$have" != "$want" ]; then
-	echo "Dockerfile builds with $have, go.mod requires $want: update the golang tag in the Dockerfile" >&2
+	echo "Go toolchain is $have, go.mod requires $want: update the golang tag in the Dockerfile (image build) or your local Go (host)" >&2
 	exit 1
 fi
 echo "Go toolchain $have matches $gomod"
