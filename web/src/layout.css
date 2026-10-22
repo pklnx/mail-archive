@@ -117,25 +117,28 @@ select:not([multiple], [size], .cds--select-input) {
   width: 100%;
   max-width: none;
 }
+/* Carbon's type styles as classes. The precompiled CSS has no cds--type-*
+   classes, and it defines the --cds-heading-* / --cds-body-* tokens only
+   inside one component's scope, so they do not resolve here: the values
+   are Carbon's type scale (@carbon/type 1.x), written out. */
 .auth-page__text {
-  font-size: var(--cds-body-01-font-size);
-  font-weight: var(--cds-body-01-font-weight);
-  line-height: var(--cds-body-01-line-height);
-  letter-spacing: var(--cds-body-01-letter-spacing);
+  /* body-01 */
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.42857;
+  letter-spacing: 0.16px;
 }
-
-/* Carbon's type tokens as classes (the precompiled CSS has none). */
 .type-heading-03 {
-  font-size: var(--cds-heading-03-font-size);
-  font-weight: var(--cds-heading-03-font-weight);
-  line-height: var(--cds-heading-03-line-height);
-  letter-spacing: var(--cds-heading-03-letter-spacing);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
 }
 .type-heading-04 {
-  font-size: var(--cds-heading-04-font-size);
-  font-weight: var(--cds-heading-04-font-weight);
-  line-height: var(--cds-heading-04-line-height);
-  letter-spacing: var(--cds-heading-04-letter-spacing);
+  font-size: 1.75rem;
+  font-weight: 400;
+  line-height: 1.28572;
+  letter-spacing: 0;
 }
 .auth-page__or {
   display: flex;

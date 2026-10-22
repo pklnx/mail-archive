@@ -17,11 +17,21 @@ const loginError = (page: Page) => page.getByRole("alert").filter({ hasText: /\S
 
 test("login with password and authentication code", async ({ page }) => {
   await page.goto("/");
+  // Carbon's type scale applies: heading-04 for the app name (28px), not
+  // body text. Its tokens are scoped inside Carbon's CSS, so a class that
+  // relies on them silently falls back to 16px with line-height 1.
+  await expect(page.getByRole("heading", { name: "Mail Archive", level: 1 })).toHaveCSS("font-size", "28px");
   await page.getByLabel("User name").fill(twoFactorUser.name);
   await passwordField(page).fill(twoFactorUser.password);
   await page.getByRole("button", { name: "Log in" }).click();
 
-  await expect(page.getByRole("heading", { name: "Enter your authentication code" })).toBeVisible();
+  const codeHeading = page.getByRole("heading", { name: "Enter your authentication code" });
+  await expect(codeHeading).toBeVisible();
+  // heading-03: 20px on a 28px line.
+  await expect(codeHeading).toHaveCSS("font-size", "20px");
+  await expect(codeHeading).toHaveCSS("line-height", "28px");
+  // body-01 for the text below it: 14px.
+  await expect(page.getByText("Enter the six-digit code from your authenticator app, or a recovery code.")).toHaveCSS("font-size", "14px");
   // The password is not carried over into the code field.
   await expect(page.getByLabel("Authentication code")).toHaveValue("");
   // The demo confirmed this user's 2FA with an old code, so the current

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { Header, HeaderGlobalBar, HeaderMenuButton, HeaderName } from "@carbon/react";
 import { AccountsPage } from "./AccountsPage";
+import { isPlainClick } from "./clicks";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
 import { UsersPage } from "./UsersPage";
@@ -190,7 +191,9 @@ export function App({ user, logout }: Props) {
           href="/"
           prefix=""
           onClick={(e: MouseEvent) => {
-            // All mail, as "g a" does; a new tab still opens "/".
+            // All mail, as "g a" does. A Ctrl/Cmd, Shift or Alt click is left
+            // to the browser, so it still opens "/" in a new tab or window.
+            if (!isPlainClick(e)) return;
             e.preventDefault();
             update({ account: "", folder: "", gone: "", m: "", view: "" });
             setMenuOpen(false);
