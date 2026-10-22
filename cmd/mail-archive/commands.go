@@ -748,17 +748,12 @@ completely afterwards with "account purge NAME".`,
 			}
 			defer a.close()
 			// Not while a sync writes folders and messages for the account.
-			unlock, ok, err := a.store.TryLockSync(cmd.Context(), acc.ID)
+			res, ok, err := a.store.RemoveAccountLocked(withCLIAudit(cmd, cliAccountTarget(cliEntry("account.remove"), acc)), acc.Ref())
 			if err != nil {
-				return err
+				return staleError(err)
 			}
 			if !ok {
 				return archive.ErrSyncRunning
-			}
-			defer unlock()
-			res, err := a.store.DeleteOrRemoveAccount(withCLIAudit(cmd, cliAccountTarget(cliEntry("account.remove"), acc)), acc.Ref())
-			if err != nil {
-				return staleError(err)
 			}
 			if res == store.AccountDeleted {
 				fmt.Printf("account %q deleted\n", acc.Name)

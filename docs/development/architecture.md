@@ -483,9 +483,14 @@ A sync never writes the `accounts` row. Renaming, new connection settings,
 filters, enabling and moving therefore do not disturb a running sync and
 apply from the next one. Only deleting must not overlap a sync, which
 writes folders and messages for the account: `DeleteOrRemoveAccount`
-requires the caller to hold the account's sync lock (`409` if a sync holds
-it), and a sync reads the account again after taking the lock, so it skips
-an account deleted while it was queued.
+requires the caller to hold the account's sync lock, and a sync reads the
+account again after taking the lock, so it skips an account deleted while
+it was queued. The web server and the CLI delete with
+`RemoveAccountLocked`, which takes the sync lock (`409` if another session
+holds it) and runs the delete on the same dedicated connection, as a lock
+session does (`locksession.go`): with every other pooled connection held
+by writers waiting for the blob lock, a delete that needed a second
+connection would wait for ever.
 
 Stored IMAP passwords are bound to the account ID (AES-GCM associated
 data), so renaming or moving needs no new encryption. `UpgradePasswords`
