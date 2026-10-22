@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -98,15 +99,16 @@ func TestGoneMessagesPerUser(t *testing.T) {
 func TestReconcileButton(t *testing.T) {
 	f := newManageFixture(t, testUser(t))
 	f.do("POST", "/api/accounts", f.newAccount("private", "alice", "secret"), http.StatusCreated)
-	if a := f.waitIdle("private"); a.Sync.LastRun.ReconciledFolders != 0 {
-		t.Fatalf("plain sync reconciled: %+v", a.Sync.LastRun)
+	plain := f.waitIdle("private")
+	if plain.Sync.LastRun.ReconciledFolders != 0 {
+		t.Fatalf("plain sync reconciled: %+v", plain.Sync.LastRun)
 	}
 	if r := f.accounts(); r.ReconcileInterval != "" {
 		t.Errorf("reconcileInterval = %q, want off", r.ReconcileInterval)
 	}
 
 	f.do("POST", "/api/accounts/private/sync", map[string]any{"reconcile": true}, http.StatusAccepted)
-	first := waitNewRun(f, "private", "")
+	first := waitNewRun(f, "private", plain.Sync.LastRun.StartedAt.String())
 	if first.Sync.LastRun.ReconciledFolders != 2 || first.LastReconciledAt == nil {
 		t.Fatalf("after the button: %+v", first)
 	}
@@ -135,13 +137,20 @@ func TestReconcileButton(t *testing.T) {
 }
 
 // waitNewRun waits for a finished run other than the one that started at
-// after ("" for any). The request queued it before answering, so the
-// account is not idle until it finished.
+// after. The account can look idle with the previous run after the request
+// queued a new one: the runner takes it off the queue before the new run
+// holds the sync lock, and only then is it shown as running.
 func waitNewRun(f *manageFixture, name, after string) accountJSON {
 	f.t.Helper()
-	a := f.waitIdle(name)
-	if a.Sync.LastRun.StartedAt.String() == after {
-		f.t.Fatalf("no new run of %s", name)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		a := f.account(name)
+		if a.Sync.State == "idle" && a.Sync.LastRun != nil && a.Sync.LastRun.FinishedAt != nil &&
+			a.Sync.LastRun.StartedAt.String() != after {
+			return a
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return a
+	f.t.Fatalf("no new run of %s after %s", name, after)
+	return accountJSON{}
 }
