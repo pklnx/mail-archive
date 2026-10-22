@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -104,4 +105,18 @@ func SimulateAlpineDatabase(t *testing.T, dbURL string) {
 	if _, err := admin.Exec(ctx, `UPDATE pg_database SET datcollversion = NULL WHERE datname = $1`, name); err != nil {
 		t.Fatalf("clear datcollversion: %v", err)
 	}
+}
+
+// WithMaxConns returns dbURL with a pool of at most n connections, for
+// tests of how the store copes with a small pool.
+func WithMaxConns(t *testing.T, dbURL string, n int) string {
+	t.Helper()
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("pool_max_conns", strconv.Itoa(n))
+	u.RawQuery = q.Encode()
+	return u.String()
 }

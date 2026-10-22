@@ -80,6 +80,16 @@ type auditKey struct{}
 type pendingAudit struct {
 	entry   *AuditEntry
 	written bool
+	// skip: the transaction changed nothing worth an entry (skipAudit).
+	skip bool
+}
+
+// skipAudit keeps the current transaction from writing the pending entry,
+// for a step that turned out to change nothing; a later one may write it.
+func skipAudit(ctx context.Context) {
+	if p, ok := ctx.Value(auditKey{}).(*pendingAudit); ok && !p.written {
+		p.skip = true
+	}
 }
 
 // WithAudit returns a context whose next store transaction also writes e,

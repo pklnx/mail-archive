@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/attest"
 	"github.com/pklnx/mail-archive/internal/blobstore"
@@ -21,6 +24,7 @@ import (
 // "work". No rule covers anything.
 type purgeSetup struct {
 	st         *store.Store
+	url        string
 	blobs      *blobstore.Store
 	alice, bob *store.User
 	acc        *store.Account
@@ -32,12 +36,12 @@ type purgeSetup struct {
 func newPurgeSetup(t *testing.T) *purgeSetup {
 	t.Helper()
 	ctx := context.Background()
-	st := storetest.New(t)
+	st, dbURL := storetest.NewWithURL(t)
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &purgeSetup{st: st, blobs: blobs}
+	s := &purgeSetup{st: st, url: dbURL, blobs: blobs}
 	if s.alice, err = st.CreateUser(ctx, "alice", "h", false); err != nil {
 		t.Fatal(err)
 	}
@@ -373,5 +377,87 @@ func TestPurgeWaitsForSync(t *testing.T) {
 	}
 	if p, err := ExecutePurge(ctx, s.st, id, PurgeOptions{}); err != nil || p.State != store.PurgeDone {
 		t.Fatalf("after the sync: %+v %v", p, err)
+	}
+}
+
+// TestPurgeWithWaitingWriter (review of #165): with a pool of four
+// connections, a writer that waits for the blob lock while a batch holds
+// it must not keep the batch from its connection. The deadline only
+// guards against the deadlock.
+func TestPurgeWithWaitingWriter(t *testing.T) {
+	s := newPurgeSetup(t)
+	id := s.confirm(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	small, err := store.Open(ctx, storetest.WithMaxConns(t, s.url, 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer small.Close()
+	observer, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = observer.Close(context.Background()) }()
+	bobMail, err := small.GetOwnedAccount(ctx, s.bob.ID, "mail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := make(chan error, 1)
+	started := false
+	p, err := ExecutePurge(ctx, small, id, PurgeOptions{
+		BatchSize: 1,
+		// Called with the blob lock held, before the batch.
+		Audit: func(action string) *store.AuditEntry {
+			if action == "account.purge_batch" && !started {
+				started = true
+				go func() {
+					// A sync of bob's account: it holds a connection of the
+					// pool while it waits for the blob lock.
+					release, ok, err := small.TryLockSyncForWrite(ctx, bobMail.ID)
+					if err == nil && !ok {
+						err = errors.New("sync lock busy")
+					}
+					if ok {
+						release()
+					}
+					writer <- err
+				}()
+				for ctx.Err() == nil {
+					var n int
+					if err := observer.QueryRow(ctx, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = $1 AND NOT granted",
+						0x6d62).Scan(&n); err != nil || n > 0 {
+						break
+					}
+				}
+			}
+			return &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+		},
+	})
+	if err != nil || p.State != store.PurgeDone {
+		t.Fatalf("purge with a waiting writer: %+v %v", p, err)
+	}
+	if err := <-writer; err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+}
+
+// A purge whose account moved after the confirmation fails at every
+// check; the job's log says how to cancel it.
+func TestPurgeStaleLog(t *testing.T) {
+	ctx := context.Background()
+	s := newPurgeSetup(t)
+	id := s.confirm(t)
+	if err := s.st.SetAccountOwner(ctx, s.acc.Ref(), s.bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	job := &Retention{Store: s.st, Blobs: s.blobs, Logger: slog.New(slog.NewTextHandler(&buf, nil))}
+	job.RunOnce(ctx)
+	if !strings.Contains(buf.String(), `cancel_with="./ma account purge old --user bob --cancel"`) {
+		t.Errorf("log:\n%s", buf.String())
+	}
+	if p, _ := s.st.AccountPurge(ctx, id); p.State != store.PurgeConfirmed {
+		t.Errorf("purge %+v", p)
 	}
 }

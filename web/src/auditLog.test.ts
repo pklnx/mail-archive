@@ -98,8 +98,8 @@ describe("entry texts", () => {
       expect(t.auditAction(a)).not.toBe(a);
       expect(de.auditAction(a)).not.toBe(a);
     }
-    expect(t.auditAction("account.purge")).toBe("Deleted account completely");
-    expect(de.auditAction("account.purge")).toBe("Konto vollständig gelöscht");
+    expect(t.auditAction("account.purge")).toBe("Account deletion confirmed");
+    expect(de.auditAction("account.purge")).toBe("Löschen des Kontos bestätigt");
   });
   it("shortens user agents", () => {
     expect(shortUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0")).toBe("Firefox 141 · Windows");

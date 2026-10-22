@@ -35,7 +35,9 @@ type PurgeOptions struct {
 // (ErrSyncRunning) throughout, matches the filter holds, and purges the
 // account in batches, each under the exclusive blob lock and in one
 // transaction (store.PurgeBatch), then deletes the account
-// (store.FinishPurge). A rule or a hold found on the way, or more
+// (store.FinishPurge). The locks and the batches share one connection
+// (store.PurgeSession), so writers waiting for the blob lock can never
+// take the connection a batch needs. A rule or a hold found on the way, or more
 // messages to delete than confirmed, cancel the purge: what was deleted
 // stays deleted, the account stays removed with the rest of its mail, and
 // the error says why. A done purge is returned as it is.
@@ -49,14 +51,17 @@ func ExecutePurge(ctx context.Context, st *store.Store, purgeID int64, opts Purg
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	unlock, ok, err := st.TryLockPurge(ctx)
+	// All locks and the batches on one connection (store.PurgeSession):
+	// while the blob lock is held, waiting writers may hold every other
+	// connection of the pool.
+	sess, ok, err := st.StartPurgeSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return nil, ErrPurgeRunning
 	}
-	defer unlock()
+	defer sess.Close(ctx)
 	p, err := st.AccountPurge(ctx, purgeID)
 	if err != nil {
 		return nil, err
@@ -68,14 +73,11 @@ func ExecutePurge(ctx context.Context, st *store.Store, purgeID int64, opts Purg
 	default:
 		return nil, fmt.Errorf("purge %d is %s: %w", purgeID, p.State, store.ErrPurgeState)
 	}
-	unlockSync, ok, err := st.TryLockSync(ctx, p.AccountID)
-	if err != nil {
+	if ok, err := sess.TryLockSync(ctx, p.AccountID); err != nil {
 		return nil, err
-	}
-	if !ok {
+	} else if !ok {
 		return nil, ErrSyncRunning
 	}
-	defer unlockSync()
 	// Holds added since the confirmation: their matches must be known
 	// before the first batch checks.
 	if _, err := st.MatchLegalHolds(ctx); err != nil {
@@ -85,19 +87,21 @@ func ExecutePurge(ctx context.Context, st *store.Store, purgeID int64, opts Purg
 		return nil, cancelPurge(ctx, st, purgeID, opts, err)
 	}
 	for {
-		unlockBlobs, err := waitBlobLock(ctx, st, opts.LockTimeout)
+		ok, err := waitLock(ctx, opts.LockTimeout, func() (bool, error) { return sess.TryLockBlobs(ctx) })
 		if err != nil {
 			return nil, err
 		}
-		if unlockBlobs == nil {
+		if !ok {
 			return nil, ErrBlobsBusy
 		}
 		bctx := ctx
 		if opts.Audit != nil {
 			bctx = store.WithAudit(ctx, opts.Audit("account.purge_batch"))
 		}
-		res, err := st.PurgeBatch(bctx, purgeID, opts.BatchSize, opts.Grace)
-		unlockBlobs()
+		res, err := sess.Batch(bctx, purgeID, opts.BatchSize, opts.Grace)
+		if uerr := sess.UnlockBlobs(ctx); uerr != nil && err == nil {
+			return nil, uerr
+		}
 		if err != nil {
 			return nil, cancelPurge(ctx, st, purgeID, opts, err)
 		}
@@ -119,7 +123,7 @@ func ExecutePurge(ctx context.Context, st *store.Store, purgeID int64, opts Purg
 	if opts.Audit != nil {
 		fctx = store.WithAudit(ctx, opts.Audit("account.purge_finish"))
 	}
-	done, err := st.FinishPurge(fctx, purgeID)
+	done, err := sess.Finish(fctx, purgeID)
 	if err != nil {
 		return nil, cancelPurge(ctx, st, purgeID, opts, err)
 	}

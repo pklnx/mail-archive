@@ -197,8 +197,8 @@ account). Then it asks for the number of messages to delete.
 - Then the folders and the account itself are deleted, with its fills,
   imports, smtp addresses and sync history. The name is free again.
 
-The [audit log](./audit-log) records the confirmation (*Deleted account
-completely*), each batch and the end, with the account, owner, locations
+The [audit log](./audit-log) records the confirmation (*Account deletion
+confirmed*), each batch and the end (*Finished deleting account*), with the account, owner, locations
 removed and messages deleted and kept.
 
 The purge runs in batches of 500 messages. An interrupted purge (Ctrl-C, a

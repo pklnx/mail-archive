@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 // purgeFixture has alice's account "old" (A) with m1 in INBOX and Archive
@@ -540,6 +541,33 @@ func TestFinishPurgeRechecks(t *testing.T) {
 	}
 }
 
+// TestPurgeEmptyBatchNotAudited: a batch with nothing left to purge (a
+// resume after the last batch) writes no entry; the entry stays for the
+// next transaction.
+func TestPurgeEmptyBatchNotAudited(t *testing.T) {
+	f := newPurgeFixture(t)
+	c := connect(t, f.url)
+	p := f.confirm(1)
+	if res, err := f.st.PurgeBatch(f.ctx, p.ID, 100, 0); err != nil || !res.Done {
+		t.Fatalf("batch %+v %v", res, err)
+	}
+	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.purge_batch"}
+	actx := store.WithAudit(f.ctx, e)
+	if res, err := f.st.PurgeBatch(actx, p.ID, 100, 0); err != nil || !res.Done || res.Locations != 0 {
+		t.Fatalf("empty batch %+v %v", res, err)
+	}
+	if n := countOf(t, c, "SELECT count(*) FROM audit_log WHERE action = 'account.purge_batch'"); n != 0 {
+		t.Errorf("empty batch wrote %d entries", n)
+	}
+	e.Action = "account.purge_finish"
+	if _, err := f.st.FinishPurge(actx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := countOf(t, c, "SELECT count(*) FROM audit_log WHERE action = 'account.purge_finish'"); n != 1 {
+		t.Errorf("finish wrote %d entries", n)
+	}
+}
+
 // TestPurgeStale (plan review finding 4): a purge whose account moved to
 // another user stops, and can be cancelled.
 func TestPurgeStale(t *testing.T) {
@@ -603,6 +631,26 @@ func TestPurgeGuard(t *testing.T) {
 	own := fmt.Sprint(f.acc.ID)
 	try("no setting", "", f.m1, f.inbox.ID, false)
 	try("no confirmed purge", own, f.m1, f.inbox.ID, false)
+	// An account that is not removed, even with a confirmed purge row
+	// (which only a hand-made row can give it).
+	func() {
+		tx, err := c.Begin(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(f.ctx) }()
+		if _, err := tx.Exec(f.ctx, `INSERT INTO account_purges (account_id, account_name, account_kind, account_version, expected)
+		                            VALUES ($1, 'work', 'imap', $2, 0)`, work.ID, work.Version); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(f.ctx, "SELECT set_config('mail_archive.purge_account', $1, true)", fmt.Sprint(work.ID)); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(f.ctx, "DELETE FROM message_locations WHERE message_sha256 = $1 AND folder_id = $2", f.m3, f.aliceWork.ID)
+		if err == nil || !strings.Contains(err.Error(), "still retained or on legal hold") {
+			t.Errorf("an active account with a confirmed purge: %v", err)
+		}
+	}()
 	p := f.confirm(1)
 	try("no setting, purge confirmed", "", f.m1, f.inbox.ID, false)
 	try("another account", fmt.Sprint(work.ID), f.m1, f.inbox.ID, false)
@@ -625,7 +673,7 @@ func TestPurgeGuard(t *testing.T) {
 // deletion on that connection still works.
 func TestPurgeSettingOnPooledConnection(t *testing.T) {
 	f := newPurgeFixture(t)
-	st, err := store.Open(f.ctx, f.url+"&pool_max_conns=1")
+	st, err := store.Open(f.ctx, storetest.WithMaxConns(t, f.url, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
