@@ -1,8 +1,9 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse, Folder } from "./api";
 import { t } from "./i18n";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, SidebarPanel, drawerFocusTarget } from "./Sidebar";
+import { useSidebarLayout } from "./sidebarLayout";
 import { useCollapsed } from "./sidebarState";
 import type { ViewState } from "./urlState";
 
@@ -135,5 +136,228 @@ describe("Sidebar account state", () => {
     render(<Harness state={view()} d={d} select={() => {}} />);
     const names = screen.getAllByRole("button", { hidden: true }).map((b) => b.title).filter((n) => n === "JOURNAL" || n === "alice/INBOX");
     expect(names).toEqual(["JOURNAL", "alice/INBOX"]);
+  });
+});
+
+// The aside's content as App renders it: full sidebar with resize handle, or the rail.
+function Panel({ state = view(), d = data(), select = () => {} }: { state?: ViewState; d?: AccountsResponse; select?: (a: string, f: string) => void }) {
+  const collapsed = useCollapsed("alice", d);
+  const layout = useSidebarLayout("alice");
+  return (
+    <aside id="aside" data-testid="aside">
+      <SidebarPanel
+        layout={layout}
+        controls="aside"
+        state={state}
+        accounts={{ data: d, error: "", reload: () => {} }}
+        select={select}
+        selectGone={() => {}}
+        show={() => {}}
+        user={{ name: "alice", admin: false, mustChangePassword: false, twoFactorEnabled: false, twoFactorRequired: false, language: "auto", locale: "auto" }}
+        logout={() => {}}
+        collapsed={collapsed}
+      />
+    </aside>
+  );
+}
+
+const layoutKey = "mail-archive.sidebar-layout.alice";
+const stored = () => JSON.parse(localStorage.getItem(layoutKey) ?? "null") as { width: number; collapsed: boolean } | null;
+const separator = () => screen.getByRole("separator", { name: t.resizeSidebar });
+const now = () => Number(separator().getAttribute("aria-valuenow"));
+const collapseButton = () => screen.getByRole("button", { name: t.collapseSidebar });
+const expandButton = () => screen.getByRole("button", { name: t.expandSidebar });
+const collapseStored = () => localStorage.setItem(layoutKey, JSON.stringify({ v: 1, width: 14, collapsed: true }));
+
+describe("Sidebar width", () => {
+  it("has a separator with role, bounds and value", () => {
+    render(<Panel />);
+    const s = separator();
+    expect(s.getAttribute("aria-valuemin")).toBe("12");
+    expect(s.getAttribute("aria-valuemax")).toBe("28");
+    expect(s.getAttribute("aria-valuenow")).toBe("14");
+    expect(s.getAttribute("aria-valuetext")).toBe(t.sidebarWidth(14));
+    expect(s.getAttribute("aria-orientation")).toBe("vertical");
+    expect(s.getAttribute("aria-controls")).toBe("aside");
+    expect(s.tabIndex).toBe(0);
+    expect([...s.classList]).toEqual(expect.arrayContaining(["hidden", "lg:block", "touch-none"]));
+  });
+
+  it("resizes with the keyboard and clamps", () => {
+    render(<Panel />);
+    const s = separator();
+    const key = (k: string) => fireEvent.keyDown(s, { key: k });
+    expect(key("ArrowRight")).toBe(false); // default prevented
+    expect(now()).toBe(15);
+    key("End");
+    expect(now()).toBe(28);
+    key("ArrowRight");
+    expect(now()).toBe(28);
+    key("Home");
+    expect(now()).toBe(12);
+    key("ArrowLeft");
+    expect(now()).toBe(12);
+    expect(stored()?.width).toBe(12);
+    // Other keys are left alone.
+    expect(key("a")).toBe(true);
+  });
+
+  it("resizes by dragging with a pointer and saves on release", () => {
+    render(<Panel />);
+    const s = separator();
+    // A drag start prevents the default, so no text gets selected.
+    expect(fireEvent.pointerDown(s, { clientX: 100, button: 0 })).toBe(false);
+    expect(document.body.style.userSelect).toBe("none");
+    fireEvent.pointerMove(window, { clientX: 180 }); // 80px at 16px per rem
+    expect(now()).toBe(19);
+    expect(stored()).toBeNull();
+    fireEvent.pointerUp(window);
+    expect(stored()?.width).toBe(19);
+    expect(document.body.style.userSelect).toBe("");
+    // Moving after release changes nothing.
+    fireEvent.pointerMove(window, { clientX: 400 });
+    expect(now()).toBe(19);
+
+    fireEvent.pointerDown(s, { clientX: 0, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 2000 });
+    expect(now()).toBe(28);
+    fireEvent.pointerCancel(window);
+    expect(document.body.style.userSelect).toBe("");
+    expect(stored()?.width).toBe(28);
+    fireEvent.pointerMove(window, { clientX: 0 });
+    expect(now()).toBe(28);
+  });
+
+  it("ignores other mouse buttons", () => {
+    render(<Panel />);
+    expect(fireEvent.pointerDown(separator(), { clientX: 100, button: 2 })).toBe(true);
+    fireEvent.pointerMove(window, { clientX: 300 });
+    expect(now()).toBe(14);
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("restores the text selection when unmounted during a drag", () => {
+    const { unmount } = render(<Panel />);
+    fireEvent.pointerDown(separator(), { clientX: 100, button: 0 });
+    unmount();
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("resets the width with a double-click", () => {
+    localStorage.setItem(layoutKey, JSON.stringify({ v: 1, width: 22, collapsed: false }));
+    render(<Panel />);
+    expect(now()).toBe(22);
+    fireEvent.doubleClick(separator());
+    expect(now()).toBe(14);
+    expect(stored()).toBeNull();
+  });
+});
+
+describe("Sidebar rail", () => {
+  it("collapses to a rail and back, moving focus", () => {
+    render(<Panel />);
+    const collapse = collapseButton();
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    expect(collapse.getAttribute("aria-controls")).toBe("aside");
+    fireEvent.click(collapse);
+    const expand = expandButton();
+    expect(document.activeElement).toBe(expand);
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect([...expand.closest("nav")!.classList]).toEqual(expect.arrayContaining(["hidden", "lg:flex"]));
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(stored()?.collapsed).toBe(true);
+    fireEvent.click(expand);
+    expect(screen.queryByRole("button", { name: t.expandSidebar })).toBeNull();
+    expect(document.activeElement).toBe(collapseButton());
+    expect(stored()).toBeNull();
+  });
+
+  it("collapses with Enter on the separator and focuses the expand button", () => {
+    render(<Panel />);
+    separator().focus();
+    expect(fireEvent.keyDown(separator(), { key: "Enter" })).toBe(false);
+    expect(document.activeElement).toBe(expandButton());
+    expect(stored()?.collapsed).toBe(true);
+  });
+
+  it("does not move focus for the stored state on load", () => {
+    collapseStored();
+    render(<Panel />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("shows each account in the rail with its full name, selection and state", () => {
+    collapseStored();
+    const d = data();
+    const base = d.accounts[0]!;
+    d.accounts = [
+      base,
+      account("Private Mail", []),
+      { ...account("old", []), enabled: false },
+      { ...account("bad", []), sync: { ...base.sync, health: "failing" } },
+      { ...account("late", []), sync: { ...base.sync, health: "stale" } },
+      { ...account("busy", []), sync: { ...base.sync, state: "running" } },
+      { ...account("gone", []), removed: true },
+    ];
+    render(<Panel state={view("work", "INBOX")} d={d} />);
+    const rail = within(expandButton().closest("nav")!);
+    const work = rail.getByRole("button", { name: "work" });
+    expect(work.textContent).toBe("WO");
+    expect(work.title).toBe("work");
+    expect(work.getAttribute("aria-current")).toBe("true");
+    const pm = rail.getByRole("button", { name: "Private Mail" });
+    expect(pm.textContent).toBe("PM");
+    expect(pm.getAttribute("aria-current")).toBeNull();
+    const old = rail.getByRole("button", { name: `old, ${t.disabled}` });
+    expect(old.title).toBe(`old, ${t.disabled}`);
+    expect(old.className).toContain("border-dashed");
+    expect(rail.getByRole("button", { name: `gone, ${t.removed}` }).className).toContain("opacity-60");
+    expect(rail.getByRole("button", { name: `bad, ${t.railFailing}` }).querySelector(".bg-danger")).not.toBeNull();
+    expect(rail.getByRole("button", { name: `late, ${t.railStale}` }).querySelector(".bg-warning")).not.toBeNull();
+    expect(rail.getByRole("button", { name: `busy, ${t.syncing}` }).querySelector(".animate-spin")).not.toBeNull();
+    expect(rail.getByRole("button", { name: t.allMail }).getAttribute("aria-current")).toBeNull();
+  });
+
+  it("marks All mail in the rail when nothing is selected, not in the archive-only view", () => {
+    collapseStored();
+    const { rerender } = render(<Panel />);
+    const allMail = () => within(expandButton().closest("nav")!).getByRole("button", { name: t.allMail });
+    expect(allMail().getAttribute("aria-current")).toBe("true");
+    rerender(<Panel state={{ ...view(), gone: "1" }} />);
+    expect(allMail().getAttribute("aria-current")).toBeNull();
+  });
+
+  it("selects an account from the rail", () => {
+    collapseStored();
+    const select = vi.fn();
+    render(<Panel select={select} />);
+    fireEvent.click(within(expandButton().closest("nav")!).getByRole("button", { name: "work" }));
+    expect(select).toHaveBeenCalledWith("work", "");
+  });
+
+  it("keeps the full sidebar for the drawer while collapsed", () => {
+    collapseStored();
+    render(<Panel />);
+    const full = screen.getByRole("button", { name: t.manageAccounts }).closest("nav")!;
+    expect(full.parentElement!.className).toContain("lg:hidden");
+    expect(within(full).getByRole("button", { name: t.foldersIn("work") })).toBeTruthy();
+    // No collapse button inside the drawer's copy.
+    expect(screen.queryByRole("button", { name: t.collapseSidebar })).toBeNull();
+  });
+
+  it("focuses a button the drawer shows, also while collapsed", () => {
+    // Below lg the rail and the collapse button are display:none and
+    // cannot take focus; the drawer must focus the full sidebar's All mail.
+    collapseStored();
+    const { unmount } = render(<Panel />);
+    let target = drawerFocusTarget(screen.getByTestId("aside"));
+    expect(target?.textContent).toBe(t.allMail);
+    expect(target?.closest(".lg\\:hidden")).not.toBeNull();
+    unmount();
+    render(<Panel />);
+    act(() => fireEvent.click(expandButton()));
+    target = drawerFocusTarget(screen.getByTestId("aside"));
+    expect(target?.textContent).toBe(t.allMail);
+    expect(target?.closest(".hidden")).toBeNull();
   });
 });
