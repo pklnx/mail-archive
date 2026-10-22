@@ -35,3 +35,21 @@ export function suggestName(username: string, host: string): string {
   const rest = labels.filter((l) => !genericHost.has(l));
   return rest.length ? clean(domainLabel([...rest, tld])) : "";
 }
+
+const separators = /[\s._\-@]+/u;
+
+/** Splits into user-perceived characters, so emoji and flags stay whole; code points without Intl.Segmenter. */
+export function graphemes(s: string, segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl): string[] {
+  if (segmenter) return Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(s), (g) => g.segment);
+  return [...s];
+}
+
+/**
+ * A short label for an account in the collapsed sidebar: the first letters
+ * of the first two words, or the first two characters of a single word.
+ */
+export function railLabel(name: string): string {
+  const words = name.split(separators).filter(Boolean);
+  const chars = words.length >= 2 ? [graphemes(words[0]!)[0], graphemes(words[1]!)[0]] : graphemes(words[0] ?? "").slice(0, 2);
+  return chars.map((c) => c?.toLocaleUpperCase() ?? "").join("");
+}

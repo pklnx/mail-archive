@@ -84,6 +84,20 @@ export const MoreIcon = () => (
   </svg>
 );
 
+/** « : collapses the sidebar. */
+export const CollapseIcon = () => (
+  <svg {...props}>
+    <path d="M11 17l-5-5 5-5M18 17l-5-5 5-5" />
+  </svg>
+);
+
+/** » : expands the sidebar. */
+export const ExpandIcon = () => (
+  <svg {...props}>
+    <path d="M13 17l5-5-5-5M6 17l5-5-5-5" />
+  </svg>
+);
+
 /** A square icon button, 36px with a mouse and 44px on touch screens. */
 export const iconButton =
   "flex size-9 shrink-0 items-center justify-center rounded-md text-ink-muted hover:bg-surface-hover hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent pointer-coarse:size-11";

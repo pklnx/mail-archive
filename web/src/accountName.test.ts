@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { suggestName } from "./accountName";
+import { graphemes, railLabel, suggestName } from "./accountName";
+
+describe("railLabel", () => {
+  it("takes the first letters of two words or of one word", () => {
+    expect(railLabel("work")).toBe("WO");
+    expect(railLabel("Private Mail")).toBe("PM");
+    expect(railLabel("max.mustermann@example.org")).toBe("MM");
+    expect(railLabel("a")).toBe("A");
+    expect(railLabel("ä-büro")).toBe("ÄB");
+    expect(railLabel("")).toBe("");
+  });
+  it("keeps emoji and flags whole", () => {
+    const family = "\u{1F468}‍\u{1F469}‍\u{1F467}";
+    expect(railLabel(`${family} home`)).toBe(`${family}H`);
+    expect(railLabel(`${family}x`)).toBe(`${family}X`);
+    expect(railLabel("\u{1F1E9}\u{1F1EA}")).toBe("\u{1F1E9}\u{1F1EA}");
+  });
+  it("falls back to code points without Intl.Segmenter", () => {
+    expect(graphemes("a\u{1F600}b", false)).toEqual(["a", "\u{1F600}", "b"]);
+    expect(graphemes("éx", true)).toEqual(["é", "x"]);
+  });
+});
 
 describe("suggestName", () => {
   it("uses the domain of the login", () => {

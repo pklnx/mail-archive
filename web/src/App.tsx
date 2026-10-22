@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AccountsPage } from "./AccountsPage";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
@@ -9,7 +9,7 @@ import { RetentionPage } from "./RetentionPage";
 import { MessageView } from "./MessageView";
 import { SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
-import { Sidebar } from "./Sidebar";
+import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
 import { BackIcon, DownIcon, FilterIcon, FolderIcon, InboxIcon, MenuIcon, MoreIcon, ServerIcon, UpIcon, iconButton } from "./icons";
 import { FilterChips } from "./FilterChips";
@@ -19,6 +19,7 @@ import { noList, pager, type ListNav } from "./pager";
 import logo from "./logo.svg";
 import { useAccounts } from "./useAccounts";
 import { useCollapsed } from "./sidebarState";
+import { railWidth, useSidebarLayout } from "./sidebarLayout";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
 import type { User } from "./api";
@@ -39,6 +40,8 @@ export function App({ user, logout }: Props) {
   const closeSheet = useCallback(() => setSheet(""), []);
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
+  const layout = useSidebarLayout(user.name);
+  const asideId = useId();
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -109,7 +112,7 @@ export function App({ user, logout }: Props) {
       // The drawer becomes visible as its transition starts, a frame later;
       // hidden elements cannot take focus.
       let frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => aside.current?.querySelector<HTMLElement>("button")?.focus());
+        frame = requestAnimationFrame(() => drawerFocusTarget(aside.current)?.focus());
       });
       return () => cancelAnimationFrame(frame);
     } else if (opener.current) {
@@ -180,15 +183,22 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[14rem_minmax(18rem,26rem)_1fr]">
+      <div
+        className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[var(--sidebar-w)_minmax(18rem,26rem)_1fr]"
+        // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
+        style={{ "--sidebar-w": `${layout.collapsed ? railWidth : layout.width}rem` } as CSSProperties}
+      >
         {/* Sidebar: always visible on large screens, a drawer on small ones. */}
         <aside
           ref={aside}
+          id={asideId}
           className={`fixed inset-y-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
             menuOpen ? "visible translate-x-0" : "invisible -translate-x-full"
-          } lg:visible lg:static lg:w-auto lg:translate-x-0 lg:shadow-none lg:transition-none`}
+          } lg:visible lg:relative lg:w-auto lg:min-w-0 lg:translate-x-0 lg:shadow-none lg:transition-none`}
         >
-          <Sidebar
+          <SidebarPanel
+            layout={layout}
+            controls={asideId}
             state={state}
             accounts={accounts}
             user={user}
