@@ -383,6 +383,7 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{fillFolderJSON{}, "FillFolder", true},
 		{firstReceivedJSON{}, "FirstReceived", true},
 		{locationJSON{}, "Location", true},
+		{purgePreviewJSON{}, "PurgePreview", true},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {

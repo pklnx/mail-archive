@@ -160,6 +160,13 @@ export function formatInterval(goDuration: string): string {
   return parts.join(" ") || goDuration;
 }
 
+/** A Go duration like "720h0m0s" in words, in days when it is whole days: "30 days". */
+export function formatDuration(goDuration: string): string {
+  const min = durationMinutes(goDuration);
+  if (min === null || min === 0 || min % (24 * 60) !== 0) return formatInterval(goDuration);
+  return new Intl.NumberFormat(locale, { style: "unit", unit: "day", unitDisplay: "long" }).format(min / (24 * 60));
+}
+
 /** Whole minutes of a Go duration like "1h30m0s", or null if it is not one. */
 export function durationMinutes(goDuration: string): number | null {
   const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(goDuration);

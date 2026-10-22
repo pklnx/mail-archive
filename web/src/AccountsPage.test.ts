@@ -6,7 +6,7 @@ import { isActive } from "./useAccounts";
 
 function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, kind: Account["kind"] = "imap"): Account {
   return {
-    name: "a", kind, enabled: kind !== "import", removed: false, host: "h", port: 993, tls: "tls", username: "u",
+    name: "a", kind, enabled: kind !== "import", removed: false, purging: false, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
     addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
     sync: { failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null, ...sync },

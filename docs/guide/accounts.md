@@ -169,6 +169,19 @@ else:
 ./ma account purge NAME --count 42     # the same, for scripts
 ```
 
+In the web UI, an admin finds **Delete completely…** on each of their own
+cards under *Removed accounts* (**Manage accounts**). It opens the same
+preview in the card; the button **Delete completely** is enabled only once
+the number of messages to delete is typed. When something is in the way,
+the card names the rules and holds instead and offers no button: remove the
+rules and release the holds on the **Retention** page first. After the
+confirmation the web server deletes in the background; the card shows
+*Being deleted completely* with the progress and disappears when it is
+done. Other users' removed accounts are deleted from the command line with
+`./ma account purge NAME --user USER`.
+
+![Deleting the removed account old-provider completely: the preview and the field for the number of messages](/screenshots/account-purge.png)
+
 It is only possible when:
 
 - the account is **removed** (`account remove` first);
@@ -204,11 +217,14 @@ removed and messages deleted and kept.
 The purge runs in batches of 500 messages. An interrupted purge (Ctrl-C, a
 crash) leaves a consistent removed account and resumes with the same
 command, without asking again, or when the web server starts. `account
-list` shows the account as *removed (being deleted)* meanwhile.
+list` shows the account as *removed (being deleted)* meanwhile, the web UI
+*Being deleted completely*.
 
 A purge is **cancelled** when a retention rule or a legal hold for the
 account appears while it runs, or when it would delete more messages than
-confirmed. `./ma account purge NAME --cancel` cancels an open purge by hand,
+confirmed; the web UI then shows the card with a new preview, which names
+the rule or hold. `./ma account purge NAME --cancel` cancels an open purge by hand
+(there is no cancel button in the web UI),
 for example when the account was moved to another user after the
 confirmation. What a cancelled purge already deleted stays deleted (with its
 records); the account stays removed with the rest of its mail, consistent

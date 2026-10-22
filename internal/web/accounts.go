@@ -57,9 +57,12 @@ type accountJSON struct {
 	// Kind is "imap", "import" for mail imported from files, or "smtp" for
 	// mail a mail server delivers over SMTP. Import and smtp accounts have
 	// no server and are never synced.
-	Kind            string   `json:"kind"`
-	Enabled         bool     `json:"enabled"`
-	Removed         bool     `json:"removed"`
+	Kind    string `json:"kind"`
+	Enabled bool   `json:"enabled"`
+	Removed bool   `json:"removed"`
+	// Purging: the removed account is being deleted completely (a
+	// confirmed purge).
+	Purging         bool     `json:"purging"`
 	Host            string   `json:"host"`
 	Port            int      `json:"port"`
 	TLS             string   `json:"tls"`
@@ -179,6 +182,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	purge, err := s.store.OpenAccountPurge(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	folders := make(map[string][]folderJSON, len(counts))
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
@@ -229,7 +237,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	for _, a := range accounts {
 		aj := accountJSON{
 			Name: a.Name, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.RemovedAt != nil,
-			Host: a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
+			Purging: purge != nil && purge.AccountID == a.ID,
+			Host:    a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
 			SyncInterval: archive.FormatOwnInterval(a.SyncInterval),
 			Folders:      folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},

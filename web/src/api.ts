@@ -39,6 +39,8 @@ export interface Account {
   enabled: boolean;
   /** Removed accounts keep their mail but are never synced or changed. */
   removed: boolean;
+  /** The removed account is being deleted completely (a confirmed purge). */
+  purging: boolean;
   host: string;
   port: number;
   tls: TLSMode;
@@ -441,7 +443,43 @@ export const accountsApi = {
   resumeFill: (name: string, id: number, password: string) => send("POST", `${accountPath(name)}/fills/${id}/resume`, { password }),
   cancelFill: (name: string, id: number) => send("POST", `${accountPath(name)}/fills/${id}/cancel`),
   changeFill: (name: string, id: number, change: FillChange) => send("PATCH", `${accountPath(name)}/fills/${id}`, change),
+  /** What deleting a removed account completely would do (admins, own accounts). */
+  purgePreview: (name: string, signal?: AbortSignal) => getJSON<PurgePreview>(`${accountPath(name)}/purge`, signal),
+  /** Confirms deleting it completely with the number of messages to delete; the server deletes in the background. */
+  purge: async (name: string, count: number) => (await send<{ purge: number }>("POST", `${accountPath(name)}/purge`, { count }))!.purge,
 };
+
+/** What deleting a removed account completely would do, and what keeps it from it. */
+export interface PurgePreview {
+  account: string;
+  kind: Account["kind"];
+  /** Locations removed: every copy in the account's folders. */
+  locations: number;
+  messages: number;
+  /** Messages only in this account: they are deleted. The number to type. */
+  deleted: number;
+  deletedBytes: number;
+  /** Messages also in other accounts: they stay there. */
+  kept: number;
+  keptIn: { owner: string; account: string; messages: number }[];
+  /** How long the files of deleted messages are kept, a Go duration ("720h0m0s"); empty if unknown. */
+  grace: string;
+  blockers: PurgeBlockers;
+  /** The account's confirmed purge while it is being executed. */
+  purge: { id: number; state: "confirmed"; expected: number; locations: number; deleted: number; kept: number } | null;
+}
+
+export interface PurgeBlockers {
+  notRemoved: boolean;
+  syncing: boolean;
+  /** Another account's purge is open. */
+  purgeOpen: boolean;
+  /** Empty folder: the rule covers all folders. */
+  rules: { id: number; folder: string; years: number }[];
+  holds: { id: number; name: string; released: boolean; namesAccount: boolean }[];
+  /** The blockers in the server's words (English). */
+  messages: string[];
+}
 
 export function listMessages(filter: Filter, cursor: string | null, signal?: AbortSignal, limit = 50): Promise<MessagePage> {
   const p = new URLSearchParams();

@@ -1718,6 +1718,104 @@ paths:
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
+  /api/accounts/{name}/purge:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+    get:
+      tags: [accounts]
+      operationId: previewAccountPurge
+      summary: What deleting a removed account completely would do
+      description: |
+        Admins only, and only for their own accounts (other users' accounts
+        are `404`; they are purged with `account purge NAME --user USER`).
+        Changes nothing. `blockers` lists what keeps the account from being
+        deleted: it is not removed, it is being synced, filled or imported
+        into, another purge is open, retention rules cover it, or legal
+        holds name it (also released ones) or cover its mail. Filter holds
+        whose matches are not stored yet count as covering it.
+      responses:
+        "200":
+          description: The preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurgePreview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [accounts]
+      operationId: confirmAccountPurge
+      summary: Confirm deleting a removed account completely; the web server then deletes
+      description: |
+        Admins only, own accounts only. Matches the filter legal holds,
+        then records a confirmed purge if nothing blocks it and `count` is
+        the number of messages it deletes. The web server's retention job
+        executes it in the background: messages also in other accounts
+        stay there, messages whose last location is in this account are
+        deleted like a retention deletion, then the folders and the
+        account. Poll `GET /api/accounts` (`purging`) or the preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [count]
+              properties:
+                count:
+                  type: integer
+                  format: int64
+                  description: The preview's `deleted`, typed by the admin.
+      responses:
+        "202":
+          description: Confirmed; the purge runs in the background.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [purge]
+                properties:
+                  purge:
+                    type: integer
+                    format: int64
+                    description: The purge's ID.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Something blocks the purge (the message names the rules and
+            holds), a purge is open, the account changed, or the number of
+            messages to delete is no longer `count` (then `deleted` is the
+            current number; review again).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                  deleted:
+                    type: integer
+                    format: int64
+        "503":
+          description: The server runs without its retention job and cannot execute purges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/accounts/{name}/server-folders:
     parameters:
       - $ref: "#/components/parameters/accountName"
@@ -2919,7 +3017,7 @@ components:
             it is on.
     Account:
       type: object
-      required: [name, kind, enabled, removed, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived]
+      required: [name, kind, enabled, removed, purging, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived]
       properties:
         name:
           type: string
@@ -2929,6 +3027,9 @@ components:
           type: boolean
         removed:
           type: boolean
+        purging:
+          type: boolean
+          description: The removed account is being deleted completely (a confirmed purge).
         host:
           type: string
         port:
@@ -2990,6 +3091,123 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/FirstReceived"
+    PurgePreview:
+      type: object
+      required: [account, kind, locations, messages, deleted, deletedBytes, kept, keptIn, grace, blockers, purge]
+      properties:
+        account:
+          type: string
+        kind:
+          $ref: "#/components/schemas/AccountKind"
+        locations:
+          type: integer
+          format: int64
+          description: Locations removed (every location in the account's folders).
+        messages:
+          type: integer
+          format: int64
+          description: Distinct messages in the account.
+        deleted:
+          type: integer
+          format: int64
+          description: Messages only in this account; they are deleted. The number to type.
+        deletedBytes:
+          type: integer
+          format: int64
+        kept:
+          type: integer
+          format: int64
+          description: Messages also in other accounts; they stay there.
+        keptIn:
+          type: array
+          description: Where the kept messages also are (counts only).
+          items:
+            type: object
+            required: [owner, account, messages]
+            properties:
+              owner:
+                type: string
+                description: Empty for an account without owner.
+              account:
+                type: string
+              messages:
+                type: integer
+                format: int64
+        grace:
+          type: string
+          description: >-
+            MAIL_ARCHIVE_RETENTION_FILE_GRACE as a Go duration ("720h0m0s"):
+            how long the files of deleted messages are kept. Empty without
+            the retention job.
+        blockers:
+          type: object
+          required: [notRemoved, syncing, purgeOpen, rules, holds, messages]
+          properties:
+            notRemoved:
+              type: boolean
+            syncing:
+              type: boolean
+              description: The account is being synced, filled or imported into.
+            purgeOpen:
+              type: boolean
+              description: Another account's purge is confirmed and not finished.
+            rules:
+              type: array
+              items:
+                type: object
+                required: [id, folder, years]
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+                  folder:
+                    type: string
+                    description: Empty for a rule on all folders.
+                  years:
+                    type: integer
+            holds:
+              type: array
+              items:
+                type: object
+                required: [id, name, released, namesAccount]
+                properties:
+                  id:
+                    type: integer
+                    format: int64
+                  name:
+                    type: string
+                  released:
+                    type: boolean
+                  namesAccount:
+                    type: boolean
+                    description: The hold names the account; otherwise it covers some of its mail.
+            messages:
+              type: array
+              description: The blockers in words, naming the rules and holds.
+              items:
+                type: string
+        purge:
+          description: The account's confirmed purge while it is being executed; null without one.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [id, state, expected, locations, deleted, kept]
+              properties:
+                id:
+                  type: integer
+                  format: int64
+                state:
+                  type: string
+                  enum: [confirmed]
+                expected:
+                  type: integer
+                locations:
+                  type: integer
+                  format: int64
+                deleted:
+                  type: integer
+                kept:
+                  type: integer
     Folder:
       type: object
       required: [name, messages, lastSyncedAt, lastReconciledAt, delimiter]

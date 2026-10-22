@@ -6,6 +6,7 @@ import { t } from "./i18n";
 import { PageHeader } from "./PageHeader";
 import { button, input, primary } from "./formStyles";
 import { FillForm, FillSection } from "./FillPanel";
+import { PurgeDialog, PurgeProgress } from "./AccountPurge";
 import { postfixSetup } from "./journalSetup";
 import type { AccountsState } from "./useAccounts";
 
@@ -149,18 +150,52 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
           <section className="flex flex-col gap-2">
             <h2 className="mt-2 text-sm font-semibold text-ink-muted">{t.removedAccounts}</h2>
             {removed.map((a) => (
-              <Card key={a.name}>
-                <div className="flex flex-wrap items-baseline gap-x-3">
-                  <span className="font-semibold">{a.name}</span>
-                  <span className="text-sm text-ink-muted">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
-                </div>
-                <p className="text-sm text-ink-muted">{t.removedNote}</p>
-              </Card>
+              <RemovedCard key={a.name} account={a} admin={admin} refresh={data} onChanged={reload} />
             ))}
           </section>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A removed account. Admins can delete their own removed accounts
+ * completely; the server then deletes in the background.
+ */
+export function RemovedCard({ account: a, admin, refresh, onChanged }: { account: Account; admin: boolean; refresh: unknown; onChanged: () => void }) {
+  const [reviewing, setReviewing] = useState(false);
+  return (
+    <Card>
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className="font-semibold">{a.name}</span>
+        <span className="text-sm text-ink-muted">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
+      </div>
+      {a.purging ? (
+        <PurgeProgress name={a.name} admin={admin} refresh={refresh} />
+      ) : (
+        <>
+          <p className="text-sm text-ink-muted">{t.removedNote}</p>
+          {admin && reviewing && (
+            <PurgeDialog
+              name={a.name}
+              onClose={() => setReviewing(false)}
+              onConfirmed={() => {
+                setReviewing(false);
+                onChanged();
+              }}
+            />
+          )}
+          {admin && !reviewing && (
+            <div>
+              <button type="button" className={`${button} text-danger`} onClick={() => setReviewing(true)}>
+                {t.purgeStart}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
 
