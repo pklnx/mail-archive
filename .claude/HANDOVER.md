@@ -6,8 +6,7 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Next tickets
-- #150 (open, maintainer): add the REINDEX step to the published 26.10-7 release notes; decide whether `./ma migrate` should detect a volume created by the Alpine image.
-- Release with #152 (PR #153, `db-migration` 00029): run the Release workflow when the maintainer wants it; the production install needs it for its piler re-import.
+- None planned. Optional release: main has #150 (PR #159, `./ma migrate` index rebuild), #156 (PR #158, profile tabs), #157 (PR #160, sidebar) and the screenshots (PR #161) since 26.10-8.
 
 ## Done (2026-10-21/22)
 - #115: durable blob publication and removal, merged via #121 (local Opus review + Action second review).
@@ -28,8 +27,11 @@ State of the work for the next session. Update before a session ends.
 
 - 2026-10-22: correction to #145: the production install runs `postgres:18-alpine` (bundles up to 26.10-6), so the premise of PR #149 was wrong. The REINDEX row is back in `docs/guide/operations.md` (PR #151, `breaking`); #150 stays open for the release notes and the optional migrate guard.
 - 2026-10-22: #152 (import files into an smtp account's `JOURNAL` folder, `./ma import ACCOUNT --journal [--label TEXT]`, migration 00029 `smtp_imports`, origin row "Imported from files: <label>"), PR #153. Plan reviewed (one blocking finding fixed: Message-ID parsed from the blob), two independent Opus reviews, both approve.
+- 2026-10-22: #150 closed (release notes of 26.10-7/-8 edited by the maintainer; PR #159: `./ma migrate` rebuilds indexes of an Alpine-built database, other commands refuse until then). #156 (PR #158, profile tabs; tab bar shrink fix in PR #161). #157 (PR #160, resizable and collapsible sidebar). PR #161: screenshots regenerated, new rule: UI PRs update screenshots and docs text.
 
 ## Manual checks for the maintainer
+- #159: upgrade a real volume created by `postgres:18-alpine` (bundle ≤ 26.10-6): `./ma status` refuses, `./ma migrate` rebuilds and records the marker, then commands work.
+- #158/#160: look at the profile tabs and the sidebar in a browser (EN/DE, light/dark, 320 px and 1024 px width, touch drag, many accounts).
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.
 - #125/#127 (needs a Docker daemon): change the build tag to `golang:1.27.2-alpine` and confirm `docker build .` fails at the toolchain guard.
 - #152/#153: a real piler export into a journal account (`--dry-run`, then the run); check the counts and the Origin row in the web UI (EN and DE). The invocation is in `docs/guide/importing.md` ("piler into a journaled mailbox").
