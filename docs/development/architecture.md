@@ -148,6 +148,27 @@ longer than `--lock-timeout`, `verify` skips the orphan check and exits `2`.
 Deleting an account takes only the account lock, so it never waits for
 `verify`. PostgreSQL drops both locks with the connection when a process dies.
 
+While the blob lock is held exclusively (by `verify`, a deletion batch, the
+sweep or a purge, in any process), at most one writer per process waits for
+it with a pool connection, so reads keep working. Writers (SMTP deliveries
+in `inWriteTx`, syncs, fills and imports in `TryLockSyncForWrite`) first try
+the lock without waiting. If that fails, a delivery rolls its transaction
+back before it wrote anything, and a sync gives back its account lock and
+connection; both then wait in the process for the store's single wait slot
+without a connection. The slot holder waits in PostgreSQL with the
+blocking call, as before, and frees the slot once the lock is granted; when
+the lock is released, the waiters follow one after the other within
+milliseconds. A delivery takes the lock inside its write transaction and a
+sync on its account-lock connection, as before. A sync takes the account
+lock again after the wait and gives up (`ok=false`) if another session took
+it meanwhile; `Filler.Run` reads the fill again under the lock, and syncs
+and imports read the account again. So a parked sync holds no account
+lock: `SyncingAccounts` and the UI do not show it as syncing, the account
+can be deleted meanwhile, and the CLI's "is being synced ... by another
+process" can also mean that it lost that race after waiting. The sweep
+takes its session connection anew for each try of the lock, so it keeps
+no connection while it waits either.
+
 ## Blob durability
 
 `blobstore.New`, `Put` and `Remove` return success only after the files and

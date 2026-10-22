@@ -24,3 +24,14 @@ var RebuildError = rebuildError
 
 // MarkerError builds the error of a rebuild whose marker could not be set.
 var MarkerError = markerError
+
+// HoldBlobWaitSlotForTest takes a wait slot of the blob lock until release
+// is called.
+func (s *Store) HoldBlobWaitSlotForTest(ctx context.Context) (release func(), err error) {
+	return s.blobWaitSlot(ctx)
+}
+
+// AcquiredConnsForTest returns how many connections of the pool are in use.
+func (s *Store) AcquiredConnsForTest() int32 {
+	return s.pool.Stat().AcquiredConns()
+}

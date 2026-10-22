@@ -466,19 +466,62 @@ func (s *Store) inTx(ctx context.Context, fn func(*db.Queries) error) error {
 // and with blobs the blob lock shared before that: the lock order is blob
 // lock, fence, row locks, so a writer never waits for the fence while it
 // holds a row lock. A test checks that every such insert runs in fn.
+//
+// The blob lock is tried first. While it is held exclusively, the
+// transaction is rolled back before fn runs, which gives the connection
+// back, and a second one waits for the lock with one of the wait slots
+// (blobWaitSlot), so that at most blobWaiters writers keep a connection
+// while they wait. The slot is freed as soon as the lock is granted, before
+// the fence: a writer waiting for an attestation must not hold it.
 func (s *Store) inWriteTx(ctx context.Context, blobs bool, fn func(*db.Queries) error) error {
-	return s.inTx(ctx, func(q *db.Queries) error {
-		if blobs {
-			if err := q.LockBlobsShared(ctx, blobLockClass); err != nil {
-				return fmt.Errorf("wait for the blob lock: %w", err)
+	var release func() // the wait slot of the second attempt
+	lockBlobs := func(q *db.Queries) error {
+		if release == nil {
+			ok, err := q.TryLockBlobsShared(ctx, blobLockClass)
+			if err != nil {
+				return fmt.Errorf("try the blob lock: %w", err)
 			}
+			if !ok {
+				return errBlobsBusy
+			}
+			return nil
 		}
-		if err := q.LockFenceShared(ctx, attestFenceClass); err != nil {
-			return fmt.Errorf("wait for the attestation fence: %w", err)
+		err := q.LockBlobsShared(ctx, blobLockClass)
+		release()
+		if err != nil {
+			return fmt.Errorf("wait for the blob lock: %w", err)
 		}
-		return fn(q)
-	})
+		return nil
+	}
+	attempt := func() error {
+		return s.inTx(ctx, func(q *db.Queries) error {
+			if blobs {
+				if err := lockBlobs(q); err != nil {
+					return err
+				}
+			}
+			if err := q.LockFenceShared(ctx, attestFenceClass); err != nil {
+				return fmt.Errorf("wait for the attestation fence: %w", err)
+			}
+			return fn(q)
+		})
+	}
+	err := attempt()
+	if !blobs || !errors.Is(err, errBlobsBusy) {
+		return err
+	}
+	r, err := s.blobWaitSlot(ctx)
+	if err != nil {
+		return fmt.Errorf("wait for the blob lock: %w", err)
+	}
+	release = r
+	defer release()
+	return attempt()
 }
+
+// errBlobsBusy ends the first attempt of inWriteTx while the blob lock is
+// held exclusively; it never leaves inWriteTx.
+var errBlobsBusy = errors.New("blob lock busy")
 
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 

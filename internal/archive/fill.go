@@ -199,6 +199,11 @@ func (f *Filler) Run(ctx context.Context, fillID int64) (*store.Fill, error) {
 		return nil, ErrFillBusy
 	}
 	defer unlock()
+	// The fill may have changed while TryLockSyncForWrite waited for the
+	// blob lock without the account's lock (a CLI verify): read it again.
+	if fill, err = f.Store.GetFill(ctx, fillID); err != nil {
+		return nil, err
+	}
 	if fill.KeepRunning && fill.Status != store.FillRunning {
 		a, err := f.Store.GetAccount(ctx, fill.AccountID)
 		if errors.Is(err, store.ErrNotFound) || err == nil && (a.RemovedAt != nil || !a.Enabled) {

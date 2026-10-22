@@ -472,3 +472,16 @@ func (q *Queries) TouchReceivedFolder(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, touchReceivedFolder, id)
 	return err
 }
+
+const tryLockBlobsShared = `-- name: TryLockBlobsShared :one
+SELECT pg_try_advisory_xact_lock_shared($1::int, 0)::boolean AS locked
+`
+
+// LockBlobsShared without waiting: false while verify, a deletion batch,
+// the sweep or a purge holds the blob lock exclusively.
+func (q *Queries) TryLockBlobsShared(ctx context.Context, class int32) (bool, error) {
+	row := q.db.QueryRow(ctx, tryLockBlobsShared, class)
+	var locked bool
+	err := row.Scan(&locked)
+	return locked, err
+}
