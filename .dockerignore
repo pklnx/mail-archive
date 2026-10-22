@@ -7,6 +7,9 @@ data
 /demo
 /bin/
 web/node_modules
+web/e2e/.auth
+web/test-results
+web/playwright-report
 internal/web/ui/dist
 docs/node_modules
 docs/.vitepress/cache

@@ -50,18 +50,30 @@ const (
 	loginTOTPSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" //nolint:gosec // public demo login
 )
 
+// Logins for the end-to-end tests in web/e2e (web/e2e/demo.ts has the same
+// values). The 2FA user logs in through the login page with a secret of
+// its own, so its time steps never clash with the admin's API login.
+const (
+	twoFactorName     = "kim"
+	twoFactorPassword = "kim-password"                     //nolint:gosec // public demo login
+	twoFactorSecret   = "KRSXG5BAKRSXG5BAKRSXG5BAKRSXG5BA" //nolint:gosec // public demo login
+	lockedName        = "lee"
+	lockedPassword    = "lee-password" //nolint:gosec // public demo login
+)
+
 func main() {
 	dbURL := flag.String("db", os.Getenv("MAIL_ARCHIVE_DATABASE_URL"), "PostgreSQL URL of a user with CREATEDB")
 	listen := flag.String("listen", "127.0.0.1:18080", "address of the web UI")
+	imapListen := flag.String("imap-listen", "127.0.0.1:0", "address of the demo IMAP server (port 0: a free port)")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	if err := run(*dbURL, *listen, log); err != nil {
+	if err := run(*dbURL, *listen, *imapListen, log); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dbURL, listen string, log *slog.Logger) error {
+func run(dbURL, listen, imapListen string, log *slog.Logger) error {
 	if dbURL == "" {
 		return errors.New("set -db or MAIL_ARCHIVE_DATABASE_URL")
 	}
@@ -98,7 +110,7 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		return err
 	}
 
-	imapAddr, err := startIMAP(time.Now())
+	imapAddr, err := startIMAP(imapListen, time.Now())
 	if err != nil {
 		return err
 	}
@@ -109,6 +121,9 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log, ReconcileInterval: 24 * time.Hour}
 	var reconcile []*store.Account
 	for _, u := range users {
+		if u.spare {
+			continue
+		}
 		a := &store.Account{
 			Name: u.account, Host: host, Port: portNum, TLSMode: store.TLSModeNone,
 			Username: u.login, ExcludedFolders: u.excluded, Enabled: true,
@@ -188,6 +203,9 @@ func run(dbURL, listen string, log *slog.Logger) error {
 	if _, err := st.CreateUserWithGeneratedPassword(ctx, "sam", hash, false); err != nil {
 		return err
 	}
+	if err := e2eUsers(ctx, st, sealer, key); err != nil {
+		return err
+	}
 
 	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
@@ -216,6 +234,41 @@ func run(dbURL, listen string, log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// e2eUsers creates the users of the end-to-end tests: one with 2FA and one
+// that is locked.
+func e2eUsers(ctx context.Context, st *store.Store, sealer *crypto.Sealer, key []byte) error {
+	hasher := auth.NewHasher(auth.DefaultParams)
+	hash, err := hasher.Hash(ctx, twoFactorPassword)
+	if err != nil {
+		return err
+	}
+	kim, err := st.CreateUser(ctx, twoFactorName, hash, false)
+	if err != nil {
+		return err
+	}
+	// The setup is confirmed with a code from an hour ago, so every current
+	// time step is still unused for the login.
+	past := time.Now().Add(-time.Hour)
+	code, err := auth.GenerateTOTP(twoFactorSecret, past)
+	if err != nil {
+		return err
+	}
+	if err := st.BeginTwoFactorSetup(ctx, kim.ID, twoFactorSecret, sealer); err != nil {
+		return err
+	}
+	if err := st.ConfirmTwoFactorSetup(ctx, kim.ID, code, past, sealer, nil, key); err != nil {
+		return err
+	}
+	if hash, err = hasher.Hash(ctx, lockedPassword); err != nil {
+		return err
+	}
+	lee, err := st.CreateUser(ctx, lockedName, hash, false)
+	if err != nil {
+		return err
+	}
+	return st.SetUserLocked(ctx, lee.ID, true)
 }
 
 // journal creates an smtp account with copies the mail server delivered,
@@ -294,12 +347,17 @@ type demoUser struct {
 	mailboxes                []string
 	excluded                 []string
 	removed                  bool
+	// spare is a login on the IMAP server that is not an account; the
+	// end-to-end tests add it through the UI.
+	spare bool
 }
 
 var users = []demoUser{
 	{
 		account: "personal", login: "alex@example.com", password: "demo",
-		mailboxes: []string{"INBOX", "Archive", "Archive/2025", "Sent", "Spam"},
+		// Archive/2014 holds old mail for the retention test in web/e2e,
+		// which deletes it; no other test uses it.
+		mailboxes: []string{"INBOX", "Archive", "Archive/2014", "Archive/2025", "Sent", "Spam"},
 		excluded:  []string{"Spam"},
 	},
 	{
@@ -311,6 +369,11 @@ var users = []demoUser{
 		mailboxes: []string{"INBOX"},
 		removed:   true,
 	},
+	{
+		account: "spare", login: "robin@example.net", password: "demo",
+		mailboxes: []string{"INBOX", "Receipts", "Trash"},
+		spare:     true,
+	},
 }
 
 type message struct {
@@ -318,8 +381,8 @@ type message struct {
 	raw              string
 }
 
-// startIMAP serves the demo users on a random local port.
-func startIMAP(now time.Time) (string, error) {
+// startIMAP serves the demo users on addr.
+func startIMAP(addr string, now time.Time) (string, error) {
 	mem := imapmemserver.New()
 	byAccount := map[string]*imapmemserver.User{}
 	for _, u := range users {
@@ -337,6 +400,13 @@ func startIMAP(now time.Time) (string, error) {
 			return "", fmt.Errorf("append to %s/%s: %w", m.account, m.mailbox, err)
 		}
 	}
+	// Mail with its date as the internal date, as after a migration: the
+	// retention period of the old mail has ended.
+	for _, m := range datedMessages(now) {
+		if _, err := byAccount[m.account].Append(m.mailbox, bytes.NewReader([]byte(m.raw)), &imap.AppendOptions{Time: m.at}); err != nil {
+			return "", fmt.Errorf("append to %s/%s: %w", m.account, m.mailbox, err)
+		}
+	}
 	srv := imapserver.New(&imapserver.Options{
 		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 			return mem.NewSession(), nil, nil
@@ -344,7 +414,7 @@ func startIMAP(now time.Time) (string, error) {
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}},
 		InsecureAuth: true,
 	})
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return "", err
 	}
@@ -495,4 +565,38 @@ Content-Transfer-Encoding: base64
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})
 	}
 	return msgs
+}
+
+type datedMessage struct {
+	message
+	at time.Time
+}
+
+// datedMessages have their own internal date: twelve-year-old mail in the
+// folder the retention test in web/e2e deletes from, and the spare login's mail.
+func datedMessages(now time.Time) []datedMessage {
+	alex := "Alex Morgan <alex@example.com>"
+	var out []datedMessage
+	for i, m := range []struct{ from, subject, body string }{
+		{"Tax Office <office@tax.example>", "Tax assessment 2013", "Your tax assessment for 2013 is enclosed."},
+		{"City Utilities <billing@utilities.example>", "Annual statement 2013", "Your annual statement for 2013."},
+		{"Court Registry <registry@court.example>", "Case 4711: hearing date", "The hearing in case 4711 is set for May 12."},
+	} {
+		date := now.AddDate(-12, 0, -30*i)
+		out = append(out, datedMessage{message{"personal", "Archive/2014", plain(m.from, alex, m.subject, date, m.body)}, date})
+	}
+	robin := "robin@example.net"
+	for _, m := range []struct {
+		mailbox, from, subject string
+		days                   int
+	}{
+		{"INBOX", "Book Club <club@books.example>", "Next meeting", 2},
+		{"INBOX", "Bike Shop <shop@bikes.example>", "Your repair is done", 4},
+		{"Receipts", "Bike Shop <shop@bikes.example>", "Receipt 2026-031", 4},
+		{"Trash", "Spam Sender <spam@junk.example>", "Old junk", 9},
+	} {
+		date := now.AddDate(0, 0, -m.days)
+		out = append(out, datedMessage{message{"spare", m.mailbox, plain(m.from, robin, m.subject, date, m.subject+".")}, date})
+	}
+	return out
 }

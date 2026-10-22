@@ -42,6 +42,10 @@ go.work.sum
 /internal/web/ui/dist/*
 !/internal/web/ui/dist/.keep
 /web/node_modules/
+# Playwright: the saved login and the results of failed runs
+/web/e2e/.auth/
+/web/test-results/
+/web/playwright-report/
 /docs/node_modules/
 /docs/.vitepress/cache/
 /docs/.vitepress/dist/

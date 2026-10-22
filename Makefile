@@ -24,6 +24,12 @@ web:
 web-test:
 	cd web && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
 
+.PHONY: web-e2e
+## web-e2e: end-to-end tests of the web UI against the demo server (needs DEMO_DATABASE_URL)
+web-e2e:
+	@: "$${DEMO_DATABASE_URL:?set DEMO_DATABASE_URL to a PostgreSQL URL with CREATEDB}"
+	cd web && corepack enable && pnpm install --frozen-lockfile && pnpm e2e
+
 ## docs: build the documentation site into docs/.vitepress/dist
 docs:
 	cd docs && corepack enable && pnpm install --frozen-lockfile && pnpm build
