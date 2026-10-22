@@ -804,26 +804,20 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Deleting must not overlap a sync that writes folders and messages for
-	// the account: hold its sync lock for the whole operation.
-	unlock, ok, err := s.store.TryLockSync(r.Context(), a.ID)
-	if err != nil {
-		s.failStore(w, r, err)
-		return
-	}
-	if !ok {
-		s.fail(w, r, http.StatusConflict, "the account is being synced or filled; try again when that has finished", nil)
-		return
-	}
-	defer unlock()
+	// the account: it runs under the account's sync lock.
 	e := s.auditEntry(r, "account.remove")
 	auditAccount(e, a)
-	res, err := s.store.DeleteOrRemoveAccount(withAudit(r, e), a.Ref())
+	res, ok, err := s.store.RemoveAccountLocked(withAudit(r, e), a.Ref())
 	if errors.Is(err, store.ErrStale) {
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
 	}
 	if err != nil {
 		s.failStore(w, r, err)
+		return
+	}
+	if !ok {
+		s.fail(w, r, http.StatusConflict, "the account is being synced or filled; try again when that has finished", nil)
 		return
 	}
 	s.log.Info("account removed", "account", a.Name, "result", res)

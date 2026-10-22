@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -223,7 +224,8 @@ const (
 // and keeps showing where it came from, but the password is wiped and the
 // account is never synced again. It is checked against ref like
 // UpdateAccount. The caller must hold the account's sync lock (TryLockSync),
-// so that no sync writes folders or messages for it meanwhile.
+// so that no sync writes folders or messages for it meanwhile; a caller
+// without it uses RemoveAccountLocked.
 func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (RemoveResult, error) {
 	var result RemoveResult
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -267,6 +269,33 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 		return one(q.DeleteAccount(ctx, ref.ID))
 	})
 	return result, err
+}
+
+// RemoveAccountLocked is DeleteOrRemoveAccount under the account's sync
+// lock. It returns false, and changes nothing, while another session (a
+// sync, fill, import or purge) holds the lock. The lock and the
+// transaction share one dedicated connection (see locksession.go): with a
+// separate lock connection, a delete would need two connections, and with
+// every other one held by writers waiting for the blob lock it would wait
+// for ever.
+func (s *Store) RemoveAccountLocked(ctx context.Context, ref AccountRef) (RemoveResult, bool, error) {
+	if ref.ID < 1 || ref.ID > math.MaxInt32 {
+		return "", false, fmt.Errorf("account id %d out of range for the sync lock", ref.ID)
+	}
+	l, err := s.newLockConn(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer l.Close(ctx)
+	ok, err := l.tryLock(ctx, syncLockClass, int32(ref.ID)) //nolint:gosec // range checked above
+	if err != nil || !ok {
+		return "", false, err
+	}
+	res, err := s.DeleteOrRemoveAccount(l.on(ctx), ref)
+	if err != nil {
+		return "", true, err
+	}
+	return res, true, nil
 }
 
 // ReplacePassword stores a new encryption of the same password, but only if
