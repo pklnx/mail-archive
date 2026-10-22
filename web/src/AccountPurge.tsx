@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { accountsApi, type AccountPurge, type PurgeBlockers, type PurgePreview } from "./api";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { accountsApi, ApiError, type AccountPurge, type PurgeBlockers, type PurgePreview } from "./api";
 import { fileSize, formatCount, formatDuration } from "./format";
 import { button, input } from "./formStyles";
 import { t } from "./i18n";
@@ -49,8 +49,9 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
   // An exact match only: an empty field is not "0".
   const matches = count.trim() === String(p.deleted);
   // Focus moves into the dialog when it opens: to the field, or to the
-  // heading when something blocks the deletion.
-  useEffect(() => {
+  // heading when something blocks the deletion. A layout effect, so the
+  // focus is set in the same commit that shows the dialog.
+  useLayoutEffect(() => {
     (field.current ?? heading.current)?.focus();
   }, []);
   return (
@@ -133,10 +134,15 @@ interface DialogProps {
   onClose: () => void;
   /** The purge was confirmed; the server deletes in the background. */
   onConfirmed: () => void;
+  /**
+   * The server refused with a conflict (a purge open elsewhere, the
+   * account changed, the count changed): reload the account list now.
+   */
+  onConflict?: () => void;
 }
 
 /** Loads the preview of deleting the account completely and confirms it with the typed count. */
-export function PurgeDialog({ name, onClose, onConfirmed }: DialogProps) {
+export function PurgeDialog({ name, onClose, onConfirmed, onConflict }: DialogProps) {
   const [preview, setPreview] = useState<PurgePreview | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -158,6 +164,7 @@ export function PurgeDialog({ name, onClose, onConfirmed }: DialogProps) {
       onConfirmed();
     } catch (err) {
       setError(message(err));
+      if (err instanceof ApiError && err.status === 409) onConflict?.();
       // The numbers or the blockers may have changed: show them as they are now.
       setTick((n) => n + 1);
     } finally {

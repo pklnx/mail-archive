@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { accountsApi, folderQuestion, type Account, type AccountInput, type AccountsResponse, type ServerFolder, type TLSMode } from "./api";
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
@@ -182,8 +182,9 @@ export function RemovedCard({ account: a, admin, onChanged }: { account: Account
     wasPurging.current = a.purging;
   }, [a.purging]);
 
-  useEffect(() => {
-    // Closing the dialog returns the focus to the button that opened it.
+  useLayoutEffect(() => {
+    // Closing the dialog returns the focus to the button that opened it,
+    // in the same commit that shows the button again.
     if (wasReviewing.current && !reviewing) start.current?.focus();
     wasReviewing.current = reviewing;
   }, [reviewing]);
@@ -208,6 +209,7 @@ export function RemovedCard({ account: a, admin, onChanged }: { account: Account
             <PurgeDialog
               name={a.name}
               onClose={() => setReviewing(false)}
+              onConflict={onChanged}
               onConfirmed={() => {
                 setReviewing(false);
                 onChanged();

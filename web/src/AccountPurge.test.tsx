@@ -187,6 +187,27 @@ describe("RemovedCard", () => {
     expect(await screen.findByText(t.purgeTitle("old"))).toBe(document.activeElement);
   });
 
+  it("reloads the account list at once after a conflict", async () => {
+    vi.spyOn(accountsApi, "purgePreview").mockResolvedValue(preview());
+    const purge = vi
+      .spyOn(accountsApi, "purge")
+      .mockRejectedValueOnce(new ApiError(409, 'purge 4 of account "old" is open already: an account purge is open'))
+      .mockRejectedValueOnce(new ApiError(500, "internal error"));
+    const onChanged = vi.fn();
+    render(<RemovedCard account={removed} admin={true} onChanged={onChanged} />);
+    fireEvent.click(screen.getByText(t.purgeStart));
+    fireEvent.change(await screen.findByLabelText(t.purgeTypeCount(3)), { target: { value: "3" } });
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/is open already/)).toBeTruthy();
+    // Other errors leave the list alone.
+    fireEvent.change(await screen.findByLabelText(t.purgeTypeCount(3)), { target: { value: "3" } });
+    fireEvent.click(confirmButton());
+    expect(await screen.findByText(t.failed("internal error"))).toBeTruthy();
+    expect(purge).toHaveBeenCalledTimes(2);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
   it("polls fast while an account is being deleted", () => {
     const data = { manage: true, syncInterval: "", syncIntervalMin: "", reconcileInterval: "", alertAfter: 3, smtp: null, accounts: [removed] };
     expect(isActive(data)).toBe(false);
