@@ -21,7 +21,7 @@ test("add an IMAP account, choose folders, sync, remove it", async ({ page }) =>
   // Saving checks the login and syncs the account: 2 + 1 + 1 messages.
   const card = accountCard(page, name);
   await expect(card.getByText(`${spareLogin.username} · 127.0.0.1 · snapshot (IMAP)`)).toBeVisible();
-  await expect(card.getByText("4 messages")).toBeVisible();
+  await expect(card.getByText("4 messages", { exact: true })).toBeVisible();
   await expect(card.getByText(/^Last sync .*: \d+ new$/)).toBeVisible();
 
   // Leave Trash out of the next syncs.
@@ -33,7 +33,7 @@ test("add an IMAP account, choose folders, sync, remove it", async ({ page }) =>
   await expect(form.getByRole("checkbox", { name: "Receipts" })).toBeChecked();
   await form.getByRole("checkbox", { name: "Trash" }).uncheck();
   await form.getByRole("button", { name: "Save folder selection" }).click();
-  await expect(form.getByText("Saved.")).toBeVisible();
+  await expect(form.getByText("Saved.", { exact: true })).toBeVisible();
   await form.getByRole("button", { name: "Cancel" }).click();
 
   // The selection is stored.
@@ -48,7 +48,7 @@ test("add an IMAP account, choose folders, sync, remove it", async ({ page }) =>
   await card.getByRole("button", { name: "Sync", exact: true }).click();
   expect((await synced).ok()).toBe(true);
   await expect(card.getByText(/^Last sync .*: 0 new$/)).toBeVisible();
-  await expect(card.getByText("4 messages")).toBeVisible();
+  await expect(card.getByText("4 messages", { exact: true })).toBeVisible();
 
   // The account also shows in the sidebar, with its folders.
   const nav = page.getByRole("navigation", { name: "Accounts and folders" });
@@ -56,10 +56,15 @@ test("add an IMAP account, choose folders, sync, remove it", async ({ page }) =>
 
   // Removing asks first; the mail stays in the archive.
   acceptDialog(page);
-  await card.getByRole("button", { name: "Remove" }).click();
+  const removing = page.waitForResponse((r) => r.url().endsWith(`/api/accounts/${name}`) && r.request().method() === "DELETE");
+  await card.getByRole("button", { name: "Remove", exact: true }).click();
+  expect((await removing).ok()).toBe(true);
+  // The demo's old-provider is listed there already; the card must be ours.
   await expect(main.getByRole("heading", { name: "Removed accounts" })).toBeVisible();
+  await expect(card).toHaveCount(0);
   const gone = accountCard(page, name, "Delete completely…");
+  await expect(gone).toHaveCount(1);
   await expect(gone.getByText("Removed. Its mail stays in the archive.")).toBeVisible();
-  await expect(gone.getByText("4 messages")).toBeVisible();
+  await expect(gone.getByText("4 messages", { exact: true })).toBeVisible();
   await expect(nav.getByRole("button", { name: new RegExp(`^${name} removed$`) })).toBeVisible();
 });

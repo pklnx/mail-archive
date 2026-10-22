@@ -13,11 +13,25 @@ export { expect };
 // Console errors that come from the mail's own HTML in the sandboxed message
 // frame (/api/messages/<id>/html), not from the app. The browser logs each
 // thing the frame's sandbox and CSP block, and blocking is their job.
-const message = `${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/api/messages/[0-9a-f]{64}`;
+const escapedOrigin = origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const message = `${escapedOrigin}/api/messages/[0-9a-f]{64}`;
+// The HTML view of a message, with or without ?images=….
+const mailFrame = new RegExp(`^${message}/html(\\?[^#]*)?$`);
+// An absolute http(s) URL on another host than the demo server.
+const remote = `https?://(?!localhost[/:]|127\\.0\\.0\\.1[/:])[^'\\s]+`;
 const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
-  // A remote image or style the frame's CSP refused (the "Load remote
-  // images" gate).
-  { text: /^Refused to load .* because it violates the following Content Security Policy directive/, url: new RegExp(`^${message}/html`) },
+  // A remote image the frame's img-src refused: the "Load remote images"
+  // gate working. Only images, only remote ones, only in the mail frame;
+  // every other CSP violation still fails the test. Chromium has two
+  // wordings: up to about 141 "Refused to load …", later "Loading … violates".
+  {
+    text: new RegExp(`^Refused to load the image '${remote}' because it violates the following Content Security Policy directive: "img-src [^"]*"\\.\\s*$`),
+    url: mailFrame,
+  },
+  {
+    text: new RegExp(`^Loading the image '${remote}' violates the following Content Security Policy directive: "img-src [^"]*"\\. The action has been blocked\\.\\s*$`),
+    url: mailFrame,
+  },
   // This suite's own init script (the CSP listener below): the frame has no
   // allow-scripts, so it never runs there.
   {
@@ -31,7 +45,7 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
   { text: /^Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE\.NotSameOrigin$/, url: new RegExp(`^${message}/parts/\\d+$`) },
 ];
 
-function fromMailFrame(url: string, text: string): boolean {
+export function fromMailFrame(url: string, text: string): boolean {
   return mailFrameErrors.some((e) => e.text.test(text) && e.url.test(url));
 }
 
@@ -85,17 +99,23 @@ export const test = base.extend<{ guards: Guards }>({
 });
 
 /**
- * The card of an account on the Accounts page: the innermost block with the
- * account's name and the button (Edit for an active account). Cards have no
- * role yet; the Carbon conversion of the page (#171) can give them one.
+ * The card of an account on the Accounts page: the block with the account's
+ * (run-unique) name and its button (Edit for an active account, "Delete
+ * completely…" for a removed one, Save while editing). A block with two
+ * such buttons or two message counts holds several cards and is never the
+ * one meant, so the locator matches the card itself or, while the list
+ * re-renders, nothing (and the assertions wait). Strict mode catches any
+ * other ambiguity. Cards have no role yet; #171 can give them one.
  */
 export function accountCard(page: Page, name: string, button = "Edit"): Locator {
+  const action = page.getByRole("button", { name: button, exact: true });
   return page
     .getByRole("main")
     .locator("div")
     .filter({ has: page.getByText(name, { exact: true }) })
-    .filter({ has: page.getByRole("button", { name: button }) })
-    .last();
+    .filter({ has: action })
+    .filter({ hasNot: action.nth(1) })
+    .filter({ hasNot: page.getByText(/^[\d,.]+ messages?$/).nth(1) });
 }
 
 /** Accepts the next window.confirm or window.prompt, optionally with text. */

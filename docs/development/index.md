@@ -63,7 +63,11 @@ The config (`web/playwright.config.ts`) builds the UI, builds and starts a
 fresh demo on <http://localhost:18181> (IMAP on port 18143), logs the demo
 admin in once and stops the demo at the end. Set `CHROMIUM_PATH` to use an
 installed Chromium, or run `pnpm exec playwright install chromium` once in
-`web/`. A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
+`web/`. An installed Chromium should have the same major version as the one
+Playwright brings (`pnpm exec playwright --version` names the Playwright
+release; its release notes name the Chromium). Older builds word console
+messages differently, and the guards match some of them by their text. CI
+uses Playwright's own headless shell (`--only-shell`). A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
 trace in `web/test-results/` (`pnpm exec playwright show-trace <file>`).
 
 The tests fail on page errors, console errors, CSP violations and requests
