@@ -93,3 +93,52 @@ func TestIndexRebuildRefusalAfterCollationChange(t *testing.T) {
 		t.Errorf("refusal after a collation change: %v", err)
 	}
 }
+
+// migrate rebuilds the indexes before it creates the audit log partitions:
+// the indexes of a partition it creates are not rebuilt (their relfilenode
+// is still their oid), while those of an older partition are.
+func TestMigrateRebuildsBeforeAuditPartitions(t *testing.T) {
+	_, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var current, next string
+	if err := conn.QueryRow(ctx, `
+		SELECT 'audit_log_' || to_char(m, 'YYYY_MM'), 'audit_log_' || to_char(m + interval '1 month', 'YYYY_MM')
+		  FROM date_trunc('month', now() AT TIME ZONE 'UTC') AS m`).Scan(&current, &next); err != nil {
+		t.Fatal(err)
+	}
+	// migrate creates this partition again.
+	if _, err := conn.Exec(ctx, "DROP TABLE "+pgx.Identifier{next}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	storetest.SimulateAlpineDatabase(t, url)
+
+	cmd := newMigrateCmd()
+	cmd.SetArgs(nil)
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	if err := cmd.ExecuteContext(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	rebuilt := func(table string) (n, rebuilt int) {
+		t.Helper()
+		if err := conn.QueryRow(ctx, `
+			SELECT count(*), count(*) FILTER (WHERE c.relfilenode <> c.oid)
+			  FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+			 WHERE i.indrelid = $1::regclass`, table).Scan(&n, &rebuilt); err != nil {
+			t.Fatal(err)
+		}
+		return n, rebuilt
+	}
+	if n, r := rebuilt(current); n == 0 || r != n {
+		t.Errorf("%s: %d of %d indexes rebuilt", current, r, n)
+	}
+	if n, r := rebuilt(next); n == 0 || r != 0 {
+		t.Errorf("%s, created by migrate: %d of %d indexes rebuilt, so the partition existed before the rebuild", next, r, n)
+	}
+}

@@ -10,3 +10,6 @@ func SetMaxEnvelopeMatches(n int) (restore func()) {
 
 // RebuildError builds the error of a failed index rebuild.
 var RebuildError = rebuildError
+
+// MarkerError builds the error of a rebuild whose marker could not be set.
+var MarkerError = markerError

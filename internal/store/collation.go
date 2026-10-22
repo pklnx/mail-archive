@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -60,11 +61,43 @@ func (c CollationState) Reason() string {
 	return fmt.Sprintf("the indexes were rebuilt for collation version %s, but the database server now uses %s", *c.Marker, actual)
 }
 
-// ManualCommand is the command that rebuilds the indexes by hand with
-// Docker Compose.
+// ManualCommand is how to rebuild the indexes and record it by hand with
+// Docker Compose: the REINDEX, then the marker. Setting the marker needs a
+// superuser (the bundle's database user is one).
 func (c CollationState) ManualCommand() string {
-	return fmt.Sprintf("docker compose exec -T postgres psql -U %s -d %s -c 'REINDEX DATABASE %s'",
-		c.User, c.Database, pgx.Identifier{c.Database}.Sanitize())
+	return "as a superuser, run both:\n  " + c.psql("REINDEX DATABASE "+sqlIdent(c.Database)) +
+		"\n  " + c.MarkerCommand()
+}
+
+// MarkerCommand is how to record by hand, as a superuser, that the indexes
+// were rebuilt for the actual collation version.
+func (c CollationState) MarkerCommand() string {
+	actual := ""
+	if c.ActualVersion != nil {
+		actual = *c.ActualVersion
+	}
+	return c.psql(fmt.Sprintf("ALTER DATABASE %s SET %s = '%s'",
+		sqlIdent(c.Database), collationMarker, strings.ReplaceAll(actual, "'", "''")))
+}
+
+func (c CollationState) psql(sql string) string {
+	return fmt.Sprintf(`docker compose exec -T postgres psql -U %s -d %s -c "%s"`,
+		shellDQ(c.User), shellDQ(c.Database), shellDQ(sql))
+}
+
+var plainIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
+// sqlIdent quotes a name for SQL only when it needs it.
+func sqlIdent(name string) string {
+	if plainIdent.MatchString(name) {
+		return name
+	}
+	return pgx.Identifier{name}.Sanitize()
+}
+
+// shellDQ escapes s for use inside double quotes in a POSIX shell.
+func shellDQ(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`, "`", "\\`").Replace(s)
 }
 
 // Collation reads the current database's collation state.
@@ -110,13 +143,21 @@ func (s *Store) RebuildIndexesIfNeeded(ctx context.Context, notify func(Collatio
 	var stmt string
 	if err := s.pool.QueryRow(ctx, `SELECT format('ALTER DATABASE %I SET `+collationMarker+` = %L', current_database(), $1::text)`,
 		*c.ActualVersion).Scan(&stmt); err != nil {
-		return true, fmt.Errorf("record the index rebuild: %w", err)
+		return true, markerError(c, err)
 	}
 	if _, err := s.pool.Exec(ctx, stmt); err != nil {
-		return true, fmt.Errorf("record the index rebuild (the indexes were rebuilt; to record it by hand: ALTER DATABASE %s SET %s = '%s'): %w",
-			pgx.Identifier{c.Database}.Sanitize(), collationMarker, *c.ActualVersion, err)
+		return true, markerError(c, err)
 	}
 	return true, nil
+}
+
+// markerError is the error when the indexes were rebuilt but the marker
+// could not be set, typically because the database user is no superuser.
+// Until it is set, the other commands keep refusing.
+func markerError(c CollationState, err error) error {
+	return fmt.Errorf("the index rebuild is done, but recording it failed, so nothing was migrated: %w.\n"+
+		"Until it is recorded, the other commands refuse to run. Record it as a superuser, then run migrate again:\n  %s",
+		err, c.MarkerCommand())
 }
 
 func rebuildError(c CollationState, err error) error {
@@ -131,7 +172,7 @@ func rebuildError(c CollationState, err error) error {
 		b.WriteString(".\nTwo rows collide under the new sort order: something wrote to the database before the rebuild. " +
 			"Restore the backup from before the upgrade, see \"Restore\" in docs/guide/operations.md")
 	} else {
-		fmt.Fprintf(&b, ".\nTo rebuild the indexes by hand (as the database owner or a superuser): %s", c.ManualCommand())
+		fmt.Fprintf(&b, ".\nTo rebuild the indexes and record it by hand, %s", c.ManualCommand())
 	}
 	return errors.New(b.String())
 }

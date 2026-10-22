@@ -2,7 +2,11 @@ package store_test
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -53,7 +57,7 @@ func TestCollationReason(t *testing.T) {
 }
 
 func TestRebuildError(t *testing.T) {
-	c := store.CollationState{Database: "mailarchive", User: "mailarchive"}
+	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
 	dup := &pgconn.PgError{Code: "23505", Message: `could not create unique index "accounts_name_key"`, Detail: "Key (name)=(a) is duplicated."}
 	msg := store.RebuildError(c, dup).Error()
 	for _, want := range []string{"nothing was migrated", "accounts_name_key", "Key (name)=(a) is duplicated.", "Restore"} {
@@ -62,13 +66,41 @@ func TestRebuildError(t *testing.T) {
 		}
 	}
 	msg = store.RebuildError(c, &pgconn.PgError{Code: "42501", Message: "must be owner of database mailarchive"}).Error()
-	for _, want := range []string{"nothing was migrated", "must be owner", `docker compose exec -T postgres psql -U mailarchive -d mailarchive -c 'REINDEX DATABASE "mailarchive"'`} {
+	for _, want := range []string{"nothing was migrated", "must be owner", "as a superuser",
+		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "REINDEX DATABASE mailarchive"`,
+		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE mailarchive SET mail_archive.collation_reindexed = '2.41'"`} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("rights: %q lacks %q", msg, want)
 		}
 	}
+	if i, j := strings.Index(msg, "REINDEX DATABASE"), strings.Index(msg, "ALTER DATABASE"); i < 0 || j < i {
+		t.Errorf("the marker command does not follow the REINDEX: %q", msg)
+	}
 	if msg := store.RebuildError(c, errors.New("boom")).Error(); !strings.Contains(msg, "REINDEX DATABASE") {
 		t.Errorf("other: %q", msg)
+	}
+}
+
+func TestMarkerError(t *testing.T) {
+	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
+	msg := store.MarkerError(c, &pgconn.PgError{Code: "42501", Message: `permission denied to set parameter "mail_archive.collation_reindexed"`}).Error()
+	for _, want := range []string{"index rebuild is done", "recording it failed", "nothing was migrated", "permission denied", "as a superuser",
+		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE mailarchive SET mail_archive.collation_reindexed = '2.41'"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("%q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "REINDEX") || strings.Contains(msg, "rebuild failed") {
+		t.Errorf("the rebuild is done, but the message asks for it again: %q", msg)
+	}
+}
+
+func TestManualCommandQuoting(t *testing.T) {
+	c := store.CollationState{Database: `Mail"$x`, User: "ma", ActualVersion: strp("2'41")}
+	got := c.MarkerCommand()
+	want := `docker compose exec -T postgres psql -U ma -d Mail\"\$x -c "ALTER DATABASE \"Mail\"\"\$x\" SET mail_archive.collation_reindexed = '2''41'"`
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
 
@@ -232,5 +264,94 @@ func TestMigrateRebuildsBeforePendingMigrations(t *testing.T) {
 	}
 	if c, err := st.Collation(ctx); err != nil || c.NeedsIndexRebuild() {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// A database whose owner is no superuser: the REINDEX works, setting the
+// marker does not, and the error says how to record it.
+func TestRebuildMarkerNeedsSuperuser(t *testing.T) {
+	base := os.Getenv(storetest.EnvURL)
+	if base == "" {
+		t.Skip(storetest.EnvURL + " not set; skipping database test")
+	}
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	var super bool
+	if err := admin.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
+		t.Fatal(err)
+	}
+	if !super {
+		t.Skip("the test role is no superuser: cannot create a role and clear datcollversion")
+	}
+	suffix := make([]byte, 6)
+	_, _ = rand.Read(suffix)
+	name := "mailarchive_owner_" + hex.EncodeToString(suffix)
+	ident := pgx.Identifier{name}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE ROLE "+ident+" LOGIN NOSUPERUSER PASSWORD 'owner'"); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(ctx, "DROP ROLE IF EXISTS "+ident) })
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+ident+" OWNER "+ident); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	// Registered after the role, so it runs before the role is dropped.
+	t.Cleanup(func() { _, _ = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+ident+" WITH (FORCE)") })
+
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+	u.User = url.UserPassword(name, "owner")
+	st, err := store.Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate as owner: %v", err)
+	}
+	storetest.SimulateAlpineDatabase(t, u.String())
+
+	conn, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	idx := textIndex(t, conn)
+	before := indexFiles(t, conn)
+	rebuilt, err := st.RebuildIndexesIfNeeded(ctx, nil)
+	if err == nil {
+		t.Fatal("a database owner without superuser set the marker")
+	}
+	if !rebuilt {
+		t.Fatalf("the REINDEX failed: %v", err)
+	}
+	if after := indexFiles(t, conn); after[idx] == before[idx] {
+		t.Errorf("%s was not rebuilt", idx)
+	}
+	for _, want := range []string{"index rebuild is done", "recording it failed", "as a superuser", "ALTER DATABASE " + name + " SET mail_archive.collation_reindexed = '"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q lacks %q", err, want)
+		}
+	}
+	if _, err := st.Migrate(ctx); err == nil || !strings.Contains(err.Error(), "recording it failed") {
+		t.Errorf("Migrate: %v", err)
+	}
+
+	// The command from the message, run as a superuser, unlocks it.
+	c, err := st.Collation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "ALTER DATABASE "+ident+" SET mail_archive.collation_reindexed = '"+*c.ActualVersion+"'"); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := st.Collation(ctx); err != nil || c.NeedsIndexRebuild() {
+		t.Fatalf("still needs a rebuild after the manual marker: %+v %v", c, err)
 	}
 }
