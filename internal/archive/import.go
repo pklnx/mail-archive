@@ -25,26 +25,9 @@ const DefaultMaxMessageSize = 256 << 20
 // source with one folder gets that name and a source with several gets it as
 // a prefix ("folder/<name>").
 func ImportFolders(format, path, folder string) ([]mailbox.SourceFolder, []mailbox.Skipped, error) {
-	var (
-		folders []mailbox.SourceFolder
-		skipped []mailbox.Skipped
-		err     error
-	)
-	switch format {
-	case mailbox.KindMbox:
-		folders, skipped, err = mailbox.ListMbox(path)
-	case mailbox.KindMaildir:
-		folders, skipped, err = mailbox.ListMaildir(path)
-	case mailbox.KindEML:
-		folders, skipped, err = mailbox.ListEML(path)
-	default:
-		return nil, nil, fmt.Errorf("unknown format %q (use mbox, maildir or eml)", format)
-	}
+	folders, skipped, err := listSource(format, path)
 	if err != nil {
-		return nil, nil, err
-	}
-	if len(folders) == 0 {
-		return nil, skipped, fmt.Errorf("no %s folders found in %s", format, path)
+		return nil, skipped, err
 	}
 	if folder != "" {
 		if err := mailbox.CheckFolderName(folder); err != nil {
@@ -69,8 +52,52 @@ func ImportFolders(format, path, folder string) ([]mailbox.SourceFolder, []mailb
 	return folders, skipped, nil
 }
 
+// JournalImportFolders lists the folders of an import source for an import
+// into an smtp account's journal folder (ImportJournal). Their names only
+// label the counts, since every message goes into the journal folder; .eml
+// files directly in path are the folder ".".
+func JournalImportFolders(format, path string) ([]mailbox.SourceFolder, []mailbox.Skipped, error) {
+	folders, skipped, err := listSource(format, path)
+	if err != nil {
+		return nil, skipped, err
+	}
+	for i := range folders {
+		if folders[i].Name == "" {
+			folders[i].Name = "."
+		}
+	}
+	return folders, skipped, nil
+}
+
+// listSource lists the folders of an import source, at least one.
+func listSource(format, path string) ([]mailbox.SourceFolder, []mailbox.Skipped, error) {
+	var (
+		folders []mailbox.SourceFolder
+		skipped []mailbox.Skipped
+		err     error
+	)
+	switch format {
+	case mailbox.KindMbox:
+		folders, skipped, err = mailbox.ListMbox(path)
+	case mailbox.KindMaildir:
+		folders, skipped, err = mailbox.ListMaildir(path)
+	case mailbox.KindEML:
+		folders, skipped, err = mailbox.ListEML(path)
+	default:
+		return nil, nil, fmt.Errorf("unknown format %q (use mbox, maildir or eml)", format)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(folders) == 0 {
+		return nil, skipped, fmt.Errorf("no %s folders found in %s", format, path)
+	}
+	return folders, skipped, nil
+}
+
 // Importer stores messages from mbox files and Maildirs in an import
-// account, the same way a sync stores messages from IMAP.
+// account, the same way a sync stores messages from IMAP, or in an smtp
+// account's journal folder (ImportJournal).
 type Importer struct {
 	Store          *store.Store
 	Blobs          *blobstore.Store
@@ -93,6 +120,9 @@ type ImportFolderResult struct {
 	// Deleted counts messages deleted by retention that were not archived
 	// again (see store.SaveBatch).
 	Deleted int
+	// Journaled counts messages an import into an smtp account left out:
+	// the account received their Message-ID over SMTP.
+	Journaled int
 }
 
 // ImportResult is the outcome of an import.
@@ -111,6 +141,7 @@ func (r *ImportResult) Total() ImportFolderResult {
 		t.Present += f.Present
 		t.Skipped += f.Skipped
 		t.Deleted += f.Deleted
+		t.Journaled += f.Journaled
 	}
 	return t
 }
@@ -253,21 +284,8 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fr.Read++
-		where := m.logAttrs()
-		src := &sourceReader{r: body, left: im.maxSize()}
-		blob, created, err := im.Blobs.Put(mailbox.NewCRLFReader(src))
-		var se *sourceError
-		switch {
-		case errors.Is(err, errTooLarge):
-			fr.Skipped++
-			log.Warn("message skipped: larger than the limit", append(where, "limit", im.maxSize())...)
-			return nil
-		case errors.As(err, &se):
-			fr.Skipped++
-			log.Warn("message skipped: cannot read it", append(where, "err", se.err)...)
-			return nil
-		case err != nil:
+		blob, created, ok, err := im.put(body, m, fr, log)
+		if !ok || err != nil {
 			return err
 		}
 		if inBatch[blob.SHA256] {
@@ -308,13 +326,26 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		return w.add(ctx, meta, loc)
 	}
 
+	err = im.readSource(sf, fr, log, store1)
+	if err == nil {
+		err = w.flush(ctx)
+	}
+	fr.Added -= w.skipped - fr.Deleted
+	fr.New, fr.Deleted = w.added, w.skipped
+	return err
+}
+
+// readSource calls fn with every message of a source folder. Files it
+// cannot open, and empty .eml files, count as read and skipped.
+func (im *Importer) readSource(sf mailbox.SourceFolder, fr *ImportFolderResult, log *slog.Logger,
+	fn func(io.Reader, sourceMessage) error) error {
 	switch sf.Kind {
 	case mailbox.KindMbox:
-		err = im.readMbox(sf.Path, func(m *mailbox.ScannedMessage, index int) error {
-			return store1(m.Body, sourceMessage{kind: mailbox.KindMbox, date: mailbox.ParseFromDate(m.From), index: index, offset: m.Offset})
+		return im.readMbox(sf.Path, func(m *mailbox.ScannedMessage, index int) error {
+			return fn(m.Body, sourceMessage{kind: mailbox.KindMbox, date: mailbox.ParseFromDate(m.From), index: index, offset: m.Offset})
 		})
 	case mailbox.KindMaildir:
-		err = im.readMaildir(sf.Path, log, func(f mailbox.MaildirFile, index int) error {
+		return im.readMaildir(sf.Path, log, func(f mailbox.MaildirFile, index int) error {
 			file, err := os.Open(f.Path) //nolint:gosec // a file of the import source
 			if err != nil {
 				fr.Read++
@@ -323,10 +354,10 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 				return nil
 			}
 			defer func() { _ = file.Close() }()
-			return store1(file, sourceMessage{kind: mailbox.KindMaildir, flags: f.Flags, date: f.Date, index: index})
+			return fn(file, sourceMessage{kind: mailbox.KindMaildir, flags: f.Flags, date: f.Date, index: index})
 		})
 	case mailbox.KindEML:
-		err = im.readEML(sf.Path, func(f mailbox.EMLFile, index int) error {
+		return im.readEML(sf.Path, func(f mailbox.EMLFile, index int) error {
 			m := sourceMessage{kind: mailbox.KindEML, date: f.Date, index: index, file: filepath.Base(f.Path)}
 			if f.Size == 0 {
 				fr.Read++
@@ -342,17 +373,34 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 				return nil
 			}
 			defer func() { _ = file.Close() }()
-			return store1(file, m)
+			return fn(file, m)
 		})
-	default:
-		err = fmt.Errorf("unknown source kind %q", sf.Kind)
 	}
-	if err == nil {
-		err = w.flush(ctx)
+	return fmt.Errorf("unknown source kind %q", sf.Kind)
+}
+
+// put counts a message as read and stores it in the blob store through the
+// size limit, with bare LFs turned into CRLF. A message over the limit or
+// one the source cannot deliver counts as skipped: ok is false.
+func (im *Importer) put(body io.Reader, m sourceMessage, fr *ImportFolderResult, log *slog.Logger) (blobstore.Blob, bool, bool, error) {
+	fr.Read++
+	where := m.logAttrs()
+	src := &sourceReader{r: body, left: im.maxSize()}
+	blob, created, err := im.Blobs.Put(mailbox.NewCRLFReader(src))
+	var se *sourceError
+	switch {
+	case errors.Is(err, errTooLarge):
+		fr.Skipped++
+		log.Warn("message skipped: larger than the limit", append(where, "limit", im.maxSize())...)
+		return blob, false, false, nil
+	case errors.As(err, &se):
+		fr.Skipped++
+		log.Warn("message skipped: cannot read it", append(where, "err", se.err)...)
+		return blob, false, false, nil
+	case err != nil:
+		return blob, false, false, err
 	}
-	fr.Added -= w.skipped - fr.Deleted
-	fr.New, fr.Deleted = w.added, w.skipped
-	return err
+	return blob, created, true, nil
 }
 
 // sourceMessage is where a message comes from and what the source says

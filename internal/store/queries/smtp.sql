@@ -59,10 +59,17 @@ UPDATE folders SET last_uid = last_uid + @n::bigint WHERE id = @id
 RETURNING last_uid;
 
 -- name: InsertFilledLocation :exec
--- A location a fill imported into the journal folder: no ON CONFLICT, the
--- UIDs come from AllocateUIDs under the folder row lock.
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
-VALUES (@message_sha256, @folder_id, @uidvalidity, @uid, @flags, @internal_date, @fill_id);
+-- A location a fill or an import of files added to the journal folder: no
+-- ON CONFLICT, the UIDs come from AllocateUIDs under the folder row lock.
+-- It names its fill or its import; the other is NULL.
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, import_id)
+VALUES (@message_sha256, @folder_id, @uidvalidity, @uid, @flags, @internal_date, @fill_id, @import_id);
+
+-- name: InsertSMTPImport :one
+-- A run of `import --journal` into an smtp account.
+INSERT INTO smtp_imports (account_id, label, format, source)
+VALUES (@account_id, @label, @format, @source)
+RETURNING id, created_at;
 
 -- name: TouchReceivedFolder :exec
 UPDATE folders SET last_synced_at = now() WHERE id = $1;

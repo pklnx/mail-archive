@@ -16,6 +16,10 @@ the first import and shows up in the web UI like any account, marked
 to add more mail, run `import` again with the same name. They can be renamed,
 handed to another user and removed like other accounts.
 
+The mail of a journaled mailbox from before journaling can go into its
+smtp account instead, next to what arrives over SMTP; see
+[Into an smtp account](#into-an-smtp-account).
+
 Importing runs only on the command line. The web server never reads files
 from the disk.
 
@@ -137,6 +141,82 @@ piler. `verify` checks the stored files afterwards.
 piler and IMAP copies of the same mail are usually stored twice; see
 [Duplicates](#duplicates). piler keeps no folders or read marks, so all its
 mail lands in one folder, unread.
+
+### piler into a journaled mailbox
+
+When a mailbox is journaled now and piler held its mail before, its piler
+export can go into the mailbox's smtp account instead, with
+[`--journal`](#into-an-smtp-account). Export the mailbox's mail from piler
+(see `pilerexport --help` for how to choose it), copy it into `./import`,
+and import it into the existing smtp account, here `alice@example.com`
+owned by the user `alice`:
+
+```sh
+./ma import alice@example.com --journal --user alice --format eml --from /import/piler-alice --label piler --dry-run
+./ma import alice@example.com --journal --user alice --format eml --from /import/piler-alice --label piler
+```
+
+The message view shows these messages as "Imported from files: piler". What
+the account already received over SMTP is left out by its Message-ID, so
+nothing is stored twice inside the account, also when the piler stock was
+imported into an import account before. `.eml` files directly in `--from`
+need no `--folder` here.
+
+## Into an smtp account
+
+The mail of a [journaled](./journaling) mailbox from before journaling
+belongs into the same smtp account. A
+[fill](./journaling#bring-in-the-mail-from-before-journaling) copies it from
+IMAP; when it exists only as files (a piler export, an mbox, a Maildir),
+`import --journal` brings it in:
+
+```sh
+./ma import journal --journal --from /import/old-mail --format mbox --label "old server" --dry-run
+./ma import journal --journal --from /import/old-mail --format mbox --label "old server"
+```
+
+- `journal` must be an existing smtp account (`--user` names its owner when
+  several users exist). Nothing is created: an import account, an IMAP
+  account, a removed account or a name without an account is refused. A
+  disabled smtp account is fine; disabling stops receiving, not storing.
+  Without `--journal`, `import` refuses an smtp account and says so.
+- Every message goes into the account's folder `JOURNAL`, whatever the
+  source folder: subfolders are merged, a message in two of them is stored
+  once. `--folder` is refused.
+- The rules are a fill's. A message the account received over SMTP with the
+  same Message-ID is left out (*journaled*); one with the same bytes is
+  *already there*. The Message-ID is read from the message itself. A message
+  without a Message-ID is always stored: a duplicate beats a gap. There is no
+  cut-off; the Message-ID check covers the overlap with journaling.
+- Imported messages have no envelope, so BCC recipients are unknown. The
+  message view's **Origin** row says "Imported from files: LABEL". `--label`
+  sets the label, 1 to 200 characters without control characters; it
+  defaults to the `--from` path. Every run is recorded with its label, and a
+  message keeps the label of the run that added it.
+- Read marks and dates come from the source as for import accounts.
+- `--dry-run` checks the account and lists the folders and counts; the
+  Message-ID check needs every message read, so it only runs for real.
+
+The summary has a `JOURNALED` column and ends with
+`ok: read N, added N (N new to the archive), N already there, N already journaled, N skipped`.
+Running it again adds nothing new; each run gets a row of its own, and only
+what it adds names it.
+
+Only one import, fill, sync or removal of the account runs at a time; a busy
+account is refused with "the account is being filled, imported into or
+removed". Mail keeps arriving over SMTP meanwhile. A delivery with the same
+Message-ID but other bytes that arrives during the import can give two
+copies, never a gap, as with a fill.
+
+Only messages the account received over SMTP count. Mail a fill imported
+from IMAP with the same Message-ID but other bytes is stored a second time:
+a stricter check would hide distinct messages that share a Message-ID.
+
+**Retention.** Rules on `JOURNAL` and account-wide rules cover the imported
+messages. A message retention deleted is not stored again. Once retention
+has deleted the journal copy of a message, a file copy with other bytes no
+longer matches by its Message-ID and is stored; its retention period has
+ended too, so the next deletion run lists it again.
 
 ## Running an import again
 

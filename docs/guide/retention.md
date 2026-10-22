@@ -109,9 +109,11 @@ ever again, unless another rule covers it.
 
 ### smtp accounts with a fill
 
-An smtp account has one folder, `JOURNAL`: what arrives over SMTP and what a
+An smtp account has one folder, `JOURNAL`: what arrives over SMTP, what a
 [fill](./journaling#bring-in-the-mail-from-before-journaling) imports from
-IMAP both go there. A rule on `JOURNAL`, or an account-wide one, covers both.
+IMAP and what [`import --journal`](./importing#into-an-smtp-account) imports
+from files all go there. A rule on `JOURNAL`, or an account-wide one, covers
+them all.
 
 - A rule matches the folder name exactly. Folders of fills started before
   this layout (`alice@example.com/INBOX`) are covered by an account-wide rule
@@ -122,7 +124,10 @@ IMAP both go there. A rule on `JOURNAL`, or an account-wide one, covers both.
   for ever; the upgrade deletes it, with an entry in the audit log, rather
   than let it shorten retention.
 - A journal copy that retention deleted no longer counts as received over
-  SMTP, so a later fill imports the mailbox's copy of it.
+  SMTP, so a later fill or `import --journal` stores the other copy of it.
+  Its retention period has ended too, so the next deletion run lists it
+  again; nothing is lost. A message retention deleted itself is not stored
+  again.
 
 ## Legal holds
 

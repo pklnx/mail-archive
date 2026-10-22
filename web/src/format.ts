@@ -42,11 +42,14 @@ export function locationLabel(l: {
 }
 
 /**
- * The origin row of a location a fill imported: the mailbox it came from,
- * when the server knows it.
+ * The origin row of a location in an smtp account without an envelope: the
+ * import of files (its label) or the fill (its mailbox) it came from, when
+ * the server knows it, and otherwise a neutral text.
  */
-export function originText(l: { fill: { username: string } | null }): string {
-  return l.fill ? t.originFilledFrom(l.fill.username) : t.originFilled;
+export function originText(l: { fill: { username: string } | null; import: { label: string } | null }): string {
+  if (l.import) return t.originImportedFrom(l.import.label);
+  if (l.fill) return t.originFilledFrom(l.fill.username);
+  return t.originFilled;
 }
 
 /** Short date for lists: time for today, otherwise the date. */

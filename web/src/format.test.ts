@@ -62,12 +62,18 @@ describe("relativeTime and formatInterval", () => {
 });
 
 describe("originText", () => {
+  it("names the label of an import of files", () => {
+    expect(originText({ fill: null, import: { label: "piler" } })).toBe(t.originImportedFrom("piler"));
+    expect(t.originImportedFrom("piler")).toContain("piler");
+    expect(t.originImportedFrom("piler")).toContain("files");
+  });
   it("names the mailbox a fill imported from", () => {
-    expect(originText({ fill: { username: "ak@example.com" } })).toBe(t.originFilledFrom("ak@example.com"));
+    expect(originText({ fill: { username: "ak@example.com" }, import: null })).toBe(t.originFilledFrom("ak@example.com"));
     expect(t.originFilledFrom("ak@example.com")).toContain("ak@example.com");
   });
-  it("falls back to the plain text without the fill", () => {
-    expect(originText({ fill: null })).toBe(t.originFilled);
+  it("falls back to a neutral text without a fill or an import", () => {
+    expect(originText({ fill: null, import: null })).toBe(t.originFilled);
+    expect(t.originFilled).not.toContain("IMAP");
   });
 });
 

@@ -79,7 +79,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
 | `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. |
 | `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
-| `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed. See below. |
+| `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed, or with `--journal` into the folder `JOURNAL` of the existing smtp account `NAME`. See below. |
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Safe to interrupt and rerun, and to run alongside the web server and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: the attestations, every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
@@ -106,14 +106,17 @@ list commands are not recorded.
 ./ma import takeout --from "/import/All mail Including Spam and Trash.mbox" --format mbox --folder Gmail
 ./ma import old-server --from /import/Maildir --format maildir --dry-run
 ./ma import piler --from /import/piler-export --format eml --folder piler
+./ma import journal --journal --from /import/piler-alice --format eml --label piler
 ```
 
 | Flag | Default | |
 |---|---|---|
 | `--from PATH` | | A file or directory. With Docker Compose under `/import` (`./import` on the host, read-only). |
 | `--format` | | `mbox`, `maildir` or `eml` (only files ending in `.eml`). |
-| `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. Required for `.eml` files directly in `--from`. |
-| `--user USER` | the only user | The owner of the import account. |
+| `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. Required for `.eml` files directly in `--from`. Not with `--journal`. |
+| `--user USER` | the only user | The owner of the account. |
+| `--journal` | off | Import into the folder `JOURNAL` of the existing smtp account `NAME`, like a fill: no envelope, and messages whose Message-ID the account received over SMTP are left out (counted as `JOURNALED`). Source folders are merged. |
+| `--label TEXT` | the `--from` path | With `--journal`: the origin the message view shows ("Imported from files: TEXT"), 1 to 200 characters. |
 | `--max-message-size SIZE` | `256MiB` | Larger messages are skipped; the import then exits `1` (`partial`). |
 | `--dry-run` | off | List folders and message counts, store nothing. |
 
@@ -122,7 +125,10 @@ stderr after every batch, a summary per folder to stdout. Exit codes: `0`
 done, `1` messages skipped or an error. Import accounts are never synced:
 `sync --account NAME` refuses them, and `account enable`, `disable`,
 `set-password`, `set-folders` and `folders` do not apply. `rename`, `move`
-and `remove` work. See [Importing mail](../guide/importing).
+and `remove` work. Without `--journal`, an smtp account is refused; with it,
+anything but an existing smtp account is, and nothing is created. See
+[Importing mail](../guide/importing) and
+[Into an smtp account](../guide/importing#into-an-smtp-account).
 
 ### verify
 

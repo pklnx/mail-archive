@@ -192,12 +192,16 @@ type MessageLocation struct {
 	LastSeenAt time.Time
 	// Envelope is the SMTP envelope of a location in an smtp account.
 	Envelope *Envelope
-	// Filled: a location in an smtp account that a fill copied from IMAP,
-	// not received over SMTP; it has no envelope.
+	// Filled: a location in an smtp account that a fill copied from IMAP
+	// or an import of files added, not received over SMTP; it has no
+	// envelope.
 	Filled bool
 	// Fill is the fill a filled location came from: its mailbox. Nil for
 	// other locations, and for filled ones whose fill is unknown.
 	Fill *LocationFill
+	// Import is the import of files a filled location came from: its
+	// label. Nil for other locations, and when it is unknown.
+	Import *LocationImport
 	// RetainUntil is when the location's retention period ends (#55); nil
 	// when no rule covers it, so it is kept for ever.
 	RetainUntil *time.Time
@@ -209,6 +213,12 @@ type MessageLocation struct {
 type LocationFill struct {
 	ID             int64
 	Username, Host string
+}
+
+// LocationImport is the import of files a location came from.
+type LocationImport struct {
+	ID    int64
+	Label string
 }
 
 // MessageDetail is a message's stored metadata and locations.
@@ -256,6 +266,9 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 		}
 		if l.FillID != nil {
 			loc.Fill = &LocationFill{ID: *l.FillID, Username: deref(l.FillUsername), Host: deref(l.FillHost)}
+		}
+		if l.ImportID != nil {
+			loc.Import = &LocationImport{ID: *l.ImportID, Label: deref(l.ImportLabel)}
 		}
 		if !l.KeptForever {
 			until := l.RetainUntil
