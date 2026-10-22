@@ -117,6 +117,10 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    env:
+      # Second guard against the telemetry postinstall of the Carbon packages;
+      # web/pnpm-workspace.yaml blocks their install scripts.
+      IBM_TELEMETRY_DISABLED: "true"
     defaults:
       run:
         working-directory: web
@@ -141,7 +145,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Blocks the telemetry postinstall of the Carbon packages (from #170 on).
+      # Second guard against the telemetry postinstall of the Carbon packages;
+      # web/pnpm-workspace.yaml blocks their install scripts.
       IBM_TELEMETRY_DISABLED: "true"
     services:
       postgres:

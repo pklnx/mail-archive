@@ -13,6 +13,10 @@ GITLEAKS  := bin/gitleaks-$(GITLEAKS_VERSION)/gitleaks
 # (git log options, e.g. a commit range) is set.
 SECRETS_SOURCE ?= .
 TEST_DATABASE_URL ?= postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable
+# The Carbon and IBM Plex packages of the web UI report usage to IBM after
+# install. web/pnpm-workspace.yaml blocks their install scripts; this is a
+# second guard for every recipe here (web, web-test, web-e2e, docs-screenshots).
+export IBM_TELEMETRY_DISABLED := true
 
 .PHONY: web web-test docs docs-screenshots build test test-unit lint vuln secrets secrets-test generate sqlc-check tidy docker docker-multiarch clean
 

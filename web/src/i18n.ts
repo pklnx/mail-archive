@@ -5,6 +5,7 @@
 
 const en = {
   showMenu: "Show accounts and folders",
+  hideMenu: "Hide accounts and folders",
   searchMail: "Search mail",
   searchAll: "Search all mail (from:, to:)",
   searchIn: (where: string) => `Search in ${where} (from:, to:)`,
@@ -647,12 +648,25 @@ const en = {
   formatsHint: "Month and day names follow this setting too. Automatic uses your browser's format for the chosen language.",
   role: (r: string): string =>
     ({ trash: "Trash", junk: "Spam", drafts: "Drafts", sent: "Sent", archive: "Archive", all: "All mail", flagged: "Flagged" })[r] ?? r,
+  /** Texts that Carbon components bring in English; passed as props or through translateWithId. */
+  carbon: {
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    copy: "Copy to clipboard",
+    copied: "Copied",
+    closeNotification: "Close notification",
+    /** The status icon of a notification, by kind. */
+    status: { error: "Error", warning: "Warning", info: "Information", success: "Done" },
+    /** Message ids for translateWithId (below), added by each part that uses such a component. */
+    ids: {} as Record<string, string>,
+  },
 };
 
 export type Messages = typeof en;
 
 const de: Messages = {
   showMenu: "Konten und Ordner anzeigen",
+  hideMenu: "Konten und Ordner ausblenden",
   searchMail: "E-Mails durchsuchen",
   searchAll: "Alle E-Mails durchsuchen (from:, to:)",
   searchIn: (where) => `In ${where} suchen (from:, to:)`,
@@ -1289,6 +1303,15 @@ const de: Messages = {
   formatsHint: "Monats- und Tagesnamen folgen auch dieser Einstellung. Automatisch nimmt das Format deines Browsers für die gewählte Sprache.",
   role: (r) =>
     ({ trash: "Papierkorb", junk: "Spam", drafts: "Entwürfe", sent: "Gesendet", archive: "Archiv", all: "Alle Nachrichten", flagged: "Markiert" })[r] ?? r,
+  carbon: {
+    showPassword: "Passwort anzeigen",
+    hidePassword: "Passwort verbergen",
+    copy: "In die Zwischenablage kopieren",
+    copied: "Kopiert",
+    closeNotification: "Hinweis schließen",
+    status: { error: "Fehler", warning: "Warnung", info: "Information", success: "Erledigt" },
+    ids: {},
+  },
 };
 
 const dictionaries = { en, de } satisfies Record<string, Messages>;
@@ -1413,4 +1436,14 @@ applySettings(storedSettings());
 
 export function messagesFor(l: Lang): Messages {
   return dictionaries[l];
+}
+
+/**
+ * The translateWithId prop for Carbon components that ask for their texts by
+ * message id (for example "carbon.table.batch.cancel"): the text from
+ * t.carbon.ids in the current language. A missing id shows as itself, so the
+ * German rendering tests of each component find it.
+ */
+export function translateWithId(id: string): string {
+  return t.carbon.ids[id] ?? id;
 }

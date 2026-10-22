@@ -47,6 +47,18 @@ for dates and numbers is one more entry in `formatChoices`
 pnpm refuses packages released less than a day ago (supply-chain protection).
 Keep it that way instead of adding exceptions.
 
+The UI moves to the Carbon Design System (`@carbon/react`, #168). Carbon's
+packages and IBM Plex run a telemetry script after install that reports to
+IBM; `web/pnpm-workspace.yaml` blocks the install scripts of all of them, and
+the install fails when a new dependency brings a script that is not listed
+there. Set `IBM_TELEMETRY_DISABLED=true` as well (the `Makefile`, CI and the
+`Dockerfile` do). The fonts are bundled (`web/src/fonts.css`): Carbon's CSS
+loads them from IBM's CDN, so the build uses a copy without those rules
+(`web/build/stripRemoteFonts.ts` writes `web/src/vendor/carbon.css` when
+Vite starts), and `pnpm build` fails if the result refers to another host
+(`web/scripts/check-dist.mjs`). Carbon's built-in English texts get German
+ones from the `carbon` section of `i18n.ts`.
+
 ### End-to-end tests
 
 `web/e2e` holds a Playwright suite that drives the UI in Chromium against

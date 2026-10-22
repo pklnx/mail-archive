@@ -9,7 +9,11 @@ WORKDIR /src/web
 # Node 25+ no longer bundles corepack. It installs pnpm in the exact version
 # and hash from package.json ("packageManager").
 RUN npm install -g corepack@0.36.0 && corepack enable
-COPY web/package.json web/pnpm-lock.yaml ./
+# The Carbon and IBM Plex packages report usage to IBM after install.
+# pnpm-workspace.yaml blocks their install scripts (without it, the install
+# would ignore that list); the variable is a second guard.
+ENV IBM_TELEMETRY_DISABLED=true
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
