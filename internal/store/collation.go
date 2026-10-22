@@ -82,17 +82,21 @@ func (c CollationState) MarkerCommand() string {
 
 func (c CollationState) psql(sql string) string {
 	return fmt.Sprintf(`docker compose exec -T postgres psql -U %s -d %s -c "%s"`,
-		shellDQ(c.User), shellDQ(c.Database), shellDQ(sql))
+		shellWord(c.User), shellWord(c.Database), shellDQ(sql))
 }
 
-var plainIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+// sqlIdent quotes a name for SQL. Always quoted, so reserved words such as
+// "user" work too.
+func sqlIdent(name string) string { return pgx.Identifier{name}.Sanitize() }
 
-// sqlIdent quotes a name for SQL only when it needs it.
-func sqlIdent(name string) string {
-	if plainIdent.MatchString(name) {
-		return name
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9._/@+-]+$`)
+
+// shellWord quotes s as one word for a POSIX shell when it needs it.
+func shellWord(s string) string {
+	if shellSafe.MatchString(s) {
+		return s
 	}
-	return pgx.Identifier{name}.Sanitize()
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // shellDQ escapes s for use inside double quotes in a POSIX shell.

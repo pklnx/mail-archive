@@ -67,8 +67,8 @@ func TestRebuildError(t *testing.T) {
 	}
 	msg = store.RebuildError(c, &pgconn.PgError{Code: "42501", Message: "must be owner of database mailarchive"}).Error()
 	for _, want := range []string{"nothing was migrated", "must be owner", "as a superuser",
-		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "REINDEX DATABASE mailarchive"`,
-		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE mailarchive SET mail_archive.collation_reindexed = '2.41'"`} {
+		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "REINDEX DATABASE \"mailarchive\""`,
+		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE \"mailarchive\" SET mail_archive.collation_reindexed = '2.41'"`} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("rights: %q lacks %q", msg, want)
 		}
@@ -85,7 +85,7 @@ func TestMarkerError(t *testing.T) {
 	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
 	msg := store.MarkerError(c, &pgconn.PgError{Code: "42501", Message: `permission denied to set parameter "mail_archive.collation_reindexed"`}).Error()
 	for _, want := range []string{"index rebuild is done", "recording it failed", "nothing was migrated", "permission denied", "as a superuser",
-		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE mailarchive SET mail_archive.collation_reindexed = '2.41'"`} {
+		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE \"mailarchive\" SET mail_archive.collation_reindexed = '2.41'"`} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("%q lacks %q", msg, want)
 		}
@@ -96,11 +96,27 @@ func TestMarkerError(t *testing.T) {
 }
 
 func TestManualCommandQuoting(t *testing.T) {
-	c := store.CollationState{Database: `Mail"$x`, User: "ma", ActualVersion: strp("2'41")}
-	got := c.MarkerCommand()
-	want := `docker compose exec -T postgres psql -U ma -d Mail\"\$x -c "ALTER DATABASE \"Mail\"\"\$x\" SET mail_archive.collation_reindexed = '2''41'"`
-	if got != want {
-		t.Errorf("got  %s\nwant %s", got, want)
+	cases := []struct {
+		c    store.CollationState
+		want string
+	}{
+		{store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")},
+			`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE \"mailarchive\" SET mail_archive.collation_reindexed = '2.41'"`},
+		// A reserved word as the database name.
+		{store.CollationState{Database: "user", User: "ma", ActualVersion: strp("2.41")},
+			`docker compose exec -T postgres psql -U ma -d user -c "ALTER DATABASE \"user\" SET mail_archive.collation_reindexed = '2.41'"`},
+		// Shell and SQL metacharacters, spaces and quotes.
+		{store.CollationState{Database: `Mail "x" $y's`, User: "my user", ActualVersion: strp("2'41")},
+			`docker compose exec -T postgres psql -U 'my user' -d 'Mail "x" $y'\''s' -c "ALTER DATABASE \"Mail \"\"x\"\" \$y's\" SET mail_archive.collation_reindexed = '2''41'"`},
+	}
+	for _, tc := range cases {
+		if got := tc.c.MarkerCommand(); got != tc.want {
+			t.Errorf("got  %s\nwant %s", got, tc.want)
+		}
+	}
+	c := cases[1].c
+	if got := c.ManualCommand(); !strings.Contains(got, `-d user -c "REINDEX DATABASE \"user\""`) {
+		t.Errorf("REINDEX: %s", got)
 	}
 }
 
@@ -279,7 +295,8 @@ func TestRebuildMarkerNeedsSuperuser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = admin.Close(ctx) }()
+	// Cleanups run last in, first out: this one after the drops below.
+	t.Cleanup(func() { _ = admin.Close(ctx) })
 	var super bool
 	if err := admin.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
 		t.Fatal(err)
@@ -334,7 +351,7 @@ func TestRebuildMarkerNeedsSuperuser(t *testing.T) {
 	if after := indexFiles(t, conn); after[idx] == before[idx] {
 		t.Errorf("%s was not rebuilt", idx)
 	}
-	for _, want := range []string{"index rebuild is done", "recording it failed", "as a superuser", "ALTER DATABASE " + name + " SET mail_archive.collation_reindexed = '"} {
+	for _, want := range []string{"index rebuild is done", "recording it failed", "as a superuser", `ALTER DATABASE \"` + name + `\" SET mail_archive.collation_reindexed = '`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("%q lacks %q", err, want)
 		}
