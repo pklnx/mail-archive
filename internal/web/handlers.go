@@ -214,12 +214,16 @@ type locationJSON struct {
 	LastSeenAt time.Time `json:"lastSeenAt"`
 	// Envelope of a location in an smtp account; null for other kinds.
 	Envelope *envelopeJSON `json:"envelope"`
-	// Filled: a location in an smtp account copied from IMAP by a fill, not
-	// received over SMTP; it has no envelope, so BCC recipients are unknown.
+	// Filled: a location in an smtp account copied from IMAP by a fill or
+	// imported from files, not received over SMTP; it has no envelope, so
+	// BCC recipients are unknown.
 	Filled bool `json:"filled"`
 	// Fill is the fill a filled location came from: the mailbox it was
 	// imported from. Null for other locations and when it is unknown.
 	Fill *locationFillJSON `json:"fill"`
+	// Import is the import of files a filled location came from: its
+	// label. Null for other locations and when it is unknown.
+	Import *locationImportJSON `json:"import"`
 	// RetainUntil: when the location's retention period ends; null when no
 	// rule covers it (kept for ever).
 	RetainUntil *time.Time `json:"retainUntil"`
@@ -232,6 +236,12 @@ type locationFillJSON struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
 	Host     string `json:"host"`
+}
+
+// locationImportJSON is the import of files a location came from.
+type locationImportJSON struct {
+	ID    int64  `json:"id"`
+	Label string `json:"label"`
 }
 
 // envelopeJSON is the SMTP envelope a message arrived with. Recipients are
@@ -324,6 +334,9 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		if f := l.Fill; f != nil {
 			lj.Fill = &locationFillJSON{ID: f.ID, Username: f.Username, Host: f.Host}
+		}
+		if i := l.Import; i != nil {
+			lj.Import = &locationImportJSON{ID: i.ID, Label: i.Label}
 		}
 		if admin {
 			held := l.OnHold

@@ -566,6 +566,9 @@ func TestRecurringFillMigration(t *testing.T) {
 	if err := st.FinishFill(ctx, f.ID, store.FillOK, ""); err != nil {
 		t.Fatal(err)
 	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00029_smtp_imports") {
+		t.Fatalf("down the smtp imports: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00028_recurring_fills") {
 		t.Fatalf("down: %q, %v", m, err)
 	}

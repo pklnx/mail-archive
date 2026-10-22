@@ -3510,7 +3510,7 @@ components:
           type: boolean
     Location:
       type: object
-      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, filled, fill, retainUntil]
+      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, filled, fill, import, retainUntil]
       properties:
         account:
           type: string
@@ -3543,8 +3543,8 @@ components:
         filled:
           type: boolean
           description: >-
-            A location in an smtp account that a fill copied from IMAP. It
-            has no envelope, so BCC recipients are unknown.
+            A location in an smtp account without an envelope: imported by
+            a fill or from files, so BCC recipients are unknown.
         fill:
           description: >-
             The fill a filled location came from: the IMAP mailbox it was
@@ -3552,6 +3552,14 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/LocationFill"
+        import:
+          description: >-
+            The import of files (`import --journal`) a filled location came
+            from: its label. Null for other locations, and when it is not
+            known.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/LocationImport"
         retainUntil:
           type: [string, "null"]
           format: date-time
@@ -3569,6 +3577,15 @@ components:
         username:
           type: string
         host:
+          type: string
+    LocationImport:
+      type: object
+      required: [id, label]
+      properties:
+        id:
+          type: integer
+          format: int64
+        label:
           type: string
     DeletionRun:
       type: object

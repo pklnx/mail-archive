@@ -3,11 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -206,4 +212,147 @@ func TestImportEMLCommand(t *testing.T) {
 	if code := exitCodeOf(err); code != 1 || !strings.Contains(out, "partial: read 3, added 2 (2 new to the archive), 0 already there, 1 skipped") {
 		t.Fatalf("import: exit %d %v\n%s", code, err, out)
 	}
+}
+
+func TestImportJournalCommand(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	dataDir := t.TempDir()
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv("MAIL_ARCHIVE_DATA_DIR", dataDir)
+	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	key, _ := crypto.GenerateKey()
+	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	ctx := context.Background()
+	anna, err := st.CreateUser(ctx, "anna", "h", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := &store.Account{Name: "alice@example.com", Enabled: true, OwnerID: &anna.ID}
+	if err := st.CreateSMTPAccount(ctx, journal, []string{"journal@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAccount(ctx, &store.Account{Kind: store.KindImport, Name: "piler", OwnerID: &anna.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAccount(ctx, &store.Account{Name: "server", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", OwnerID: &anna.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// tb2 of the fixture was journaled, with other bytes.
+	blobs, err := openBlobs(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, created, err := blobs.Put(strings.NewReader("Received: by mx\r\nMessage-ID: <tb2@example.com>\r\nSubject: Second message\r\n\r\nx\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReceiveMessage(ctx, journal.ID, meta, store.Envelope{MailFrom: "a@example.com", RcptTo: []string{"b@example.com"}, ReceivedAt: time.Now()},
+		func() bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	// A disabled account still takes the import: disabling stops receiving.
+	conn := connectDB(t, url)
+	if _, err := conn.Exec(ctx, "UPDATE accounts SET enabled = FALSE WHERE id = $1", journal.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		cmd := newImportCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		err := runCmd(t, cmd, "", args...)
+		return out.String(), err
+	}
+	accounts := func() int {
+		t.Helper()
+		accs, err := st.ListAccounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(accs)
+	}
+
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"alice@example.com", "--journal", "--folder", "x"}, "--folder is not allowed with --journal"},
+		{[]string{"other", "--label", "x"}, "--label needs --journal"},
+		{[]string{"alice@example.com"}, `"alice@example.com" is an smtp account; add --journal`},
+		{[]string{"piler", "--journal"}, `"piler" is an import account`},
+		{[]string{"server", "--journal"}, `"server" is an IMAP account`},
+		{[]string{"missing", "--journal"}, `no smtp account "missing"`},
+		{[]string{"missing", "--journal", "--dry-run"}, `no smtp account "missing"`},
+		{[]string{"alice@example.com", "--journal", "--label", "bad\x01label"}, "--label"},
+		{[]string{"alice@example.com", "--journal", "--label", ""}, "--label"},
+	} {
+		args := append(c.args, "--from", tbFixture, "--format", "mbox")
+		if _, err := run(args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: %v, want %q", c.args, err, c.want)
+		}
+	}
+	if n := accounts(); n != 3 {
+		t.Fatalf("%d accounts", n)
+	}
+
+	out, err := run("alice@example.com", "--journal", "--user", "anna", "--from", tbFixture, "--format", "mbox", "--label", "thunderbird", "--dry-run")
+	if err != nil || !strings.Contains(out, "4 message(s) in 2 folder(s); nothing was stored") || !strings.Contains(out, `into JOURNAL of smtp account "alice@example.com"`) {
+		t.Fatalf("dry run: %v\n%s", err, out)
+	}
+	var imports int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM smtp_imports").Scan(&imports); err != nil || imports != 0 {
+		t.Fatalf("dry run recorded %d imports, %v", imports, err)
+	}
+
+	out, err = run("alice@example.com", "--journal", "--from", tbFixture, "--format", "mbox", "--label", "thunderbird")
+	if err != nil || !regexpMatch(`FOLDER\s+READ\s+ADDED\s+NEW\s+PRESENT\s+JOURNALED\s+SKIPPED`, out) ||
+		!strings.Contains(out, "ok: read 4, added 3 (3 new to the archive), 0 already there, 1 already journaled, 0 skipped") {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	if n := accounts(); n != 3 {
+		t.Fatalf("%d accounts after the import", n)
+	}
+	var importID int64
+	var label, source string
+	if err := conn.QueryRow(ctx, "SELECT id, label, source FROM smtp_imports WHERE account_id = $1", journal.ID).Scan(&importID, &label, &source); err != nil ||
+		label != "thunderbird" || source != tbFixture {
+		t.Fatalf("import row %d %q %q, %v", importID, label, source, err)
+	}
+	var details []byte
+	if err := conn.QueryRow(ctx, "SELECT details FROM audit_log WHERE action = 'data.import' AND target_id = $1", strconv.FormatInt(journal.ID, 10)).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(details, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d["format"] != "mbox" || d["source"] != tbFixture || d["folders"] != float64(2) || d["into"] != "JOURNAL" ||
+		d["label"] != "thunderbird" || d["import"] != float64(importID) {
+		t.Errorf("audit details %s", details)
+	}
+
+	// Again, with the default label: nothing added.
+	out, err = run("alice@example.com", "--journal", "--from", tbFixture, "--format", "mbox")
+	if err != nil || !strings.Contains(out, "added 0 (0 new to the archive), 3 already there, 1 already journaled") {
+		t.Fatalf("again: %v\n%s", err, out)
+	}
+	if err := conn.QueryRow(ctx, "SELECT label FROM smtp_imports ORDER BY id DESC LIMIT 1").Scan(&label); err != nil || label != tbFixture {
+		t.Errorf("default label %q, %v", label, err)
+	}
+}
+
+func connectDB(t *testing.T, url string) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	return conn
 }

@@ -271,10 +271,12 @@ export interface Location {
   lastSeenAt: string;
   /** smtp accounts: the envelope the message arrived with. */
   envelope: Envelope | null;
-  /** smtp accounts: copied from IMAP by a fill, so there is no envelope. */
+  /** smtp accounts: copied from IMAP by a fill or imported from files, so there is no envelope. */
   filled: boolean;
   /** The fill a filled location came from, with its mailbox; null when unknown. */
   fill: LocationFill | null;
+  /** The import of files a filled location came from, with its label; null when unknown. */
+  import: LocationImport | null;
   /** When the retention period ends; null without a rule (kept for ever). */
   retainUntil: string | null;
   /** On legal hold; only sent to admins. */
@@ -286,6 +288,12 @@ export interface LocationFill {
   id: number;
   username: string;
   host: string;
+}
+
+/** The import of files a location came from (`import --journal`). */
+export interface LocationImport {
+  id: number;
+  label: string;
 }
 
 /** The SMTP envelope of a received message; the recipients include BCC. */

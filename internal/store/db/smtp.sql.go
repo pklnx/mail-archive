@@ -170,8 +170,8 @@ func (q *Queries) InsertEnvelope(ctx context.Context, arg InsertEnvelopeParams) 
 }
 
 const insertFilledLocation = `-- name: InsertFilledLocation :exec
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, import_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertFilledLocationParams struct {
@@ -182,10 +182,12 @@ type InsertFilledLocationParams struct {
 	Flags         []string
 	InternalDate  *time.Time
 	FillID        *int64
+	ImportID      *int64
 }
 
-// A location a fill imported into the journal folder: no ON CONFLICT, the
-// UIDs come from AllocateUIDs under the folder row lock.
+// A location a fill or an import of files added to the journal folder: no
+// ON CONFLICT, the UIDs come from AllocateUIDs under the folder row lock.
+// It names its fill or its import; the other is NULL.
 func (q *Queries) InsertFilledLocation(ctx context.Context, arg InsertFilledLocationParams) error {
 	_, err := q.db.Exec(ctx, insertFilledLocation,
 		arg.MessageSha256,
@@ -195,6 +197,7 @@ func (q *Queries) InsertFilledLocation(ctx context.Context, arg InsertFilledLoca
 		arg.Flags,
 		arg.InternalDate,
 		arg.FillID,
+		arg.ImportID,
 	)
 	return err
 }
@@ -242,6 +245,37 @@ func (q *Queries) InsertSMTPAddress(ctx context.Context, arg InsertSMTPAddressPa
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const insertSMTPImport = `-- name: InsertSMTPImport :one
+INSERT INTO smtp_imports (account_id, label, format, source)
+VALUES ($1, $2, $3, $4)
+RETURNING id, created_at
+`
+
+type InsertSMTPImportParams struct {
+	AccountID int64
+	Label     string
+	Format    string
+	Source    string
+}
+
+type InsertSMTPImportRow struct {
+	ID        int64
+	CreatedAt time.Time
+}
+
+// A run of `import --journal` into an smtp account.
+func (q *Queries) InsertSMTPImport(ctx context.Context, arg InsertSMTPImportParams) (InsertSMTPImportRow, error) {
+	row := q.db.QueryRow(ctx, insertSMTPImport,
+		arg.AccountID,
+		arg.Label,
+		arg.Format,
+		arg.Source,
+	)
+	var i InsertSMTPImportRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
+	return i, err
 }
 
 const lastReceived = `-- name: LastReceived :many

@@ -455,12 +455,42 @@ func (s *Store) UpdateFillFolder(ctx context.Context, ff *FillFolder) error {
 // attestation fence.
 func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []MessageMeta, locs []Location) (SaveResult, error) {
 	before := ff.Counts
-	metas, locs = sortBatch(metas, locs)
-	var res SaveResult
-	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
-		res = SaveResult{}
+	fillID := ff.FillID
+	res, _, err := s.saveIntoJournal(ctx, ff.FolderID, ff.FolderName, metas, locs, &fillID, nil,
+		func(q *db.Queries, res SaveResult, present int) error {
+			ff.Counts = before
+			ff.Counts.Deleted += res.Skipped
+			ff.Counts.Present += present
+			ff.Counts.Imported -= res.Skipped + present
+			ff.Counts.New += res.New
+			return updateFillFolder(ctx, q, ff)
+		})
+	if err != nil {
 		ff.Counts = before
-		folder, err := q.LockFolderByID(ctx, ff.FolderID)
+		return SaveResult{}, err
+	}
+	return res, nil
+}
+
+// saveIntoJournal is the core of SaveFillBatch and SaveJournalImportBatch:
+// it stores a batch, in the order of the hashes, in a folder that
+// deliveries over SMTP write into too. In one transaction it takes the
+// folder's row lock, leaves out messages deleted by retention (res.Skipped)
+// and those the folder holds already (present, checked again under the
+// lock), numbers the new locations with AllocateUIDs and calls done, if
+// set, with the outcome. The locations name the fill or the import; the
+// UIDs and UIDVALIDITY in locs are ignored. The caller holds the blob lock,
+// so the transaction takes only the attestation fence.
+func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName string, metas []MessageMeta, locs []Location,
+	fillID, importID *int64, done func(q *db.Queries, res SaveResult, present int) error) (SaveResult, int, error) {
+	metas, locs = sortBatch(metas, locs)
+	var (
+		res     SaveResult
+		present int
+	)
+	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
+		res, present = SaveResult{}, 0
+		folder, err := q.LockFolderByID(ctx, folderID)
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
 		}
@@ -478,21 +508,18 @@ func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []Messa
 			m := &metas[i]
 			if skip[m.SHA256] {
 				res.Skipped++
-				ff.Counts.Deleted++
-				ff.Counts.Imported--
 				continue
 			}
 			// Under the row lock no delivery can add a location meanwhile.
-			present := seen[m.SHA256]
-			if !present {
-				if present, err = q.LocationInFolder(ctx, db.LocationInFolderParams{FolderID: folder.ID, Sha256: m.SHA256}); err != nil {
+			there := seen[m.SHA256]
+			if !there {
+				if there, err = q.LocationInFolder(ctx, db.LocationInFolderParams{FolderID: folder.ID, Sha256: m.SHA256}); err != nil {
 					return err
 				}
 			}
 			seen[m.SHA256] = true
-			if present {
-				ff.Counts.Present++
-				ff.Counts.Imported--
+			if there {
+				present++
 				continue
 			}
 			n, err := q.InsertMessage(ctx, insertMessageParams(m))
@@ -502,16 +529,14 @@ func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []Messa
 			res.New += int(n)
 			add = append(add, pending{m, locs[i]})
 		}
-		ff.Counts.New += res.New
 		if len(add) > 0 {
 			last, err := q.AllocateUIDs(ctx, db.AllocateUIDsParams{ID: folder.ID, N: int64(len(add))})
 			if err != nil {
 				return err
 			}
 			if last > math.MaxUint32 {
-				return fmt.Errorf("the folder %s has no UIDs left", ff.FolderName)
+				return fmt.Errorf("the folder %s has no UIDs left", folderName)
 			}
-			fillID := ff.FillID
 			first := last - int64(len(add)) + 1
 			for i, p := range add {
 				flags := p.loc.Flags
@@ -524,20 +549,22 @@ func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []Messa
 				}
 				err := q.InsertFilledLocation(ctx, db.InsertFilledLocationParams{
 					MessageSha256: p.meta.SHA256, FolderID: folder.ID, Uidvalidity: folder.Uidvalidity, Uid: first + int64(i),
-					Flags: flags, InternalDate: internal, FillID: &fillID,
+					Flags: flags, InternalDate: internal, FillID: fillID, ImportID: importID,
 				})
 				if err != nil {
 					return fmt.Errorf("insert location: %w", err)
 				}
 			}
 		}
-		return updateFillFolder(ctx, q, ff)
+		if done != nil {
+			return done(q, res, present)
+		}
+		return nil
 	})
 	if err != nil {
-		ff.Counts = before
-		return SaveResult{}, err
+		return SaveResult{}, 0, err
 	}
-	return res, nil
+	return res, present, nil
 }
 
 // sortBatch returns the messages of a batch and their locations ordered by

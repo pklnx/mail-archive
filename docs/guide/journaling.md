@@ -303,6 +303,17 @@ was running when it stopped keeps its encrypted password and continues at the
 next start. So does a fill whose command-line process died without Ctrl-C:
 the web server picks it up within a minute.
 
+**From files (piler, mbox, Maildir).** Mail that is no longer in an IMAP
+mailbox, such as a [piler](./importing#piler-into-a-journaled-mailbox)
+export, goes into the same account with `import --journal`, with the rules of
+a fill: what the account received over SMTP is left out by its Message-ID,
+and the origin row says "Imported from files: LABEL". See
+[Into an smtp account](./importing#into-an-smtp-account).
+
+```sh
+./ma import journal --journal --format eml --from /import/piler-alice --label piler
+```
+
 **Retention.** A rule on the folder `JOURNAL`, or an account-wide one, covers
 journaled and imported mail alike. Folders of older fills are covered by an
 account-wide rule or by rules of their own. See
@@ -426,5 +437,7 @@ retention has usually ended too, so the next deletion run lists it.
 A message that is also in an IMAP account is usually stored twice: the copy
 in the mailbox carries one more `Received:` line, added by the server that
 delivered it there, so its bytes differ. Search finds both. The same is true
-for mail imported from piler. A [fill](#bring-in-the-mail-from-before-journaling)
-avoids this inside an smtp account by checking the Message-ID.
+for mail imported from piler into an import account. A
+[fill](#bring-in-the-mail-from-before-journaling) and
+[`import --journal`](./importing#into-an-smtp-account) avoid this inside an
+smtp account by checking the Message-ID.

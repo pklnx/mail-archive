@@ -242,6 +242,7 @@ type MessageLocation struct {
 	LastSeenAt    time.Time
 	GoneAt        *time.Time
 	FillID        *int64
+	ImportID      *int64
 }
 
 type Passkey struct {
@@ -334,6 +335,15 @@ type SmtpFillHealth struct {
 	NotifyFirstErrorAt *time.Time
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
+}
+
+type SmtpImport struct {
+	ID        int64
+	AccountID int64
+	Label     string
+	Format    string
+	Source    string
+	CreatedAt time.Time
 }
 
 type SyncRun struct {
