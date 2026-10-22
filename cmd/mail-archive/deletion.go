@@ -331,7 +331,7 @@ func newRetentionSweepCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sweep",
 		Short: "Remove the files of deleted messages whose grace period ended",
-		Long: `Remove the files of messages deleted by retention once
+		Long: `Remove the files of messages deleted by retention or an account purge once
 MAIL_ARCHIVE_RETENTION_FILE_GRACE has passed. The web server does this every
 hour. A file whose message was archived again stays.`,
 		Args: cobra.NoArgs,

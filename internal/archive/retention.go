@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -219,9 +220,9 @@ func SweepBlobs(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 }
 
 // Retention is the retention job of the web server: it resumes a
-// confirmed deletion run (interrupted, or confirmed in the web UI) and
-// sweeps the files whose grace period ended, at start, every CheckEvery,
-// and when woken.
+// confirmed deletion run (interrupted, or confirmed in the web UI), then a
+// confirmed account purge, and sweeps the files whose grace period ended,
+// at start, every CheckEvery, and when woken.
 type Retention struct {
 	Store      *store.Store
 	Blobs      *blobstore.Store
@@ -266,8 +267,8 @@ func (r *Retention) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce executes a confirmed run, if any, then sweeps. Errors are
-// logged; the next check retries.
+// RunOnce executes a confirmed run, if any, then a confirmed purge, then
+// sweeps. Errors are logged; the next check retries.
 func (r *Retention) RunOnce(ctx context.Context) {
 	log := r.Logger
 	if log == nil {
@@ -294,6 +295,7 @@ func (r *Retention) RunOnce(ctx context.Context) {
 			log.Error("retention check failed", "err", err)
 		}
 	}
+	r.resumePurge(ctx, log)
 	audit := func() *store.AuditEntry {
 		return &store.AuditEntry{Actor: store.ActorCLI, Action: "retention.sweep", Details: map[string]any{"by": "web server"}}
 	}
@@ -303,5 +305,37 @@ func (r *Retention) RunOnce(ctx context.Context) {
 		} else {
 			log.Error("file sweep failed", "err", err)
 		}
+	}
+}
+
+// resumePurge executes a confirmed account purge, if there is one.
+func (r *Retention) resumePurge(ctx context.Context, log *slog.Logger) {
+	p, err := r.Store.OpenAccountPurge(ctx)
+	if err != nil {
+		log.Error("purge check failed", "err", err)
+		return
+	}
+	if p == nil {
+		return
+	}
+	audit := func(action string) *store.AuditEntry {
+		e := &store.AuditEntry{Actor: store.ActorCLI, Action: action, Details: map[string]any{"by": "web server"}}
+		e.SetTarget(store.TargetAccount, strconv.FormatInt(p.AccountID, 10), p.Account)
+		return e
+	}
+	done, err := ExecutePurge(ctx, r.Store, p.ID, PurgeOptions{Grace: r.Grace, Audit: audit, Logger: log})
+	var cancelled *PurgeCancelledError
+	switch {
+	case errors.Is(err, ErrPurgeRunning):
+		log.Debug("purge executed elsewhere", "purge", p.ID)
+	case errors.Is(err, ErrSyncRunning):
+		log.Info("purge postponed: the account is being synced, filled or imported into", "purge", p.ID, "account", p.Account)
+	case errors.As(err, &cancelled):
+		log.Warn("purge cancelled", "purge", p.ID, "account", p.Account, "reason", cancelled.Err.Error())
+	case err != nil && ctx.Err() == nil:
+		log.Error("purge failed; it resumes at the next check", "purge", p.ID, "account", p.Account, "err", err)
+	case err == nil:
+		log.Info("account deleted completely", "purge", p.ID, "account", p.Account, "locations", done.Locations,
+			"deleted", done.Deleted, "kept", done.Kept)
 	}
 }

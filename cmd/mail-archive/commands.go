@@ -235,6 +235,7 @@ func newAccountCmd() *cobra.Command {
 		newAccountEnableCmd(true),
 		newAccountEnableCmd(false),
 		newAccountRemoveCmd(),
+		newAccountPurgeCmd(),
 		newAccountMoveCmd(),
 	)
 	cmd.PersistentFlags().String("user", "", userFlagHelp)
@@ -440,6 +441,10 @@ func newAccountListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			purge, err := a.store.OpenAccountPurge(cmd.Context())
+			if err != nil {
+				return err
+			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tOWNER\tSERVER\tLOGIN\tSTATE\tINCLUDE\tEXCLUDE")
 			for _, acc := range accounts {
@@ -448,6 +453,8 @@ func newAccountListCmd() *cobra.Command {
 				}
 				state := "enabled"
 				switch {
+				case acc.RemovedAt != nil && purge != nil && purge.AccountID == acc.ID:
+					state = "removed (being deleted)"
 				case acc.RemovedAt != nil:
 					state = "removed"
 				case acc.Kind == store.KindImport:
@@ -731,7 +738,8 @@ func newAccountRemoveCmd() *cobra.Command {
 		Long: `Remove an account. If mail from it is already archived, the mail stays
 searchable and keeps showing where it came from; the account's password is
 deleted and it is never synced again. An account without archived mail is
-deleted completely.`,
+deleted completely; a removed account with archived mail can be deleted
+completely afterwards with "account purge NAME".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, acc, err := loadAccount(cmd, args[0])
@@ -756,6 +764,7 @@ deleted completely.`,
 				fmt.Printf("account %q deleted\n", acc.Name)
 			} else {
 				fmt.Printf("account %q removed; its archived mail is kept\n", acc.Name)
+				fmt.Printf("delete it completely with: account purge %s%s\n", shellQuote(acc.Name), userArg(cmd))
 			}
 			return nil
 		},

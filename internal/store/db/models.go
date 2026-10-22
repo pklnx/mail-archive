@@ -29,6 +29,25 @@ type Account struct {
 	SyncIntervalSeconds *int32
 }
 
+type AccountPurge struct {
+	ID             int64
+	AccountID      int64
+	AccountName    string
+	AccountKind    string
+	AccountVersion int64
+	OwnerID        *int64
+	OwnerName      *string
+	State          string
+	Expected       int32
+	CreatedAt      time.Time
+	CreatedBy      *int64
+	FinishedAt     *time.Time
+	Locations      int64
+	Deleted        int32
+	Kept           int32
+	Note           *string
+}
+
 type AccountSyncHealth struct {
 	AccountID          int64
 	FailureStreak      int32
@@ -108,10 +127,11 @@ type DeletedMessage struct {
 	Size        int64
 	MessageSeq  int64
 	ArchivedAt  time.Time
-	RetainUntil time.Time
+	RetainUntil *time.Time
 	Locations   int32
-	RunID       int64
+	RunID       *int64
 	DeletedAt   time.Time
+	PurgeID     *int64
 }
 
 type DeletionCandidate struct {

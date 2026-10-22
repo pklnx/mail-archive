@@ -18,7 +18,10 @@ with your tax adviser or data protection officer, not an answer.
   nothing. Only an admin adds rules, for an account or one of its folders.
 - **The longest period wins.** A message is deleted only when **every** place
   it was found, in every user's accounts, has a rule whose period has ended.
-  One unruled copy keeps it.
+  One unruled copy keeps it. To drop the copies of a removed account
+  deliberately, [delete the account
+  completely](./accounts#deleting-a-removed-account-completely) with
+  `./ma account purge NAME`; its rules must be removed first.
 - **Deletion is reviewed.** `retention preview` (or *New deletion run* in the
   web UI) lists what may go; nothing happens until an admin confirms with the
   number of messages. Every message is checked again when it is deleted.
