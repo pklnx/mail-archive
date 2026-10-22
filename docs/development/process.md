@@ -19,8 +19,7 @@ Every change starts as a GitHub issue:
 ## 2. Plan
 
 The maintainer labels an issue **`plan`** to ask for an implementation plan
-from a Claude session, or **`needs-plan`** to have the Claude GitHub Action
-write it. The plan is posted as a `## Plan` comment on the issue, and the label
+from a Claude session. The plan is posted as a `## Plan` comment on the issue, and the label
 changes to **`review`**. A plan covers:
 
 - the approach and the files or components it touches,
@@ -33,10 +32,7 @@ changes to **`review`**. A plan covers:
 
 An independent plan-reviewer agent (never the planner) reviews the plan and
 the maintainer may read it too; both can ask questions or for changes in the
-issue, and the plan is updated in place. The label **`plan-review`** has the
-Claude GitHub Action review it: it posts `## Independent plan review` with a
-verdict, and removes `plan-review` (keeping `review` when it asks for
-changes). When the plan is good, the reviewer or the maintainer replaces
+issue, and the plan is updated in place. When the plan is good, the reviewer or the maintainer replaces
 `review` with **`ready`**. Only `ready` issues are implemented.
 
 A plan with several parts gets one sub-issue per part, titled
@@ -56,59 +52,20 @@ an approving review and green required checks, the coordinator merges with
 squash; there is no auto-merge.
 
 Risky pull requests (deletes, schema changes, rewriting user data) get a
-second review from the Claude GitHub Action: the coordinator adds the label
-**`second-review`** to each of them. Pull requests that change
-`internal/store/migrations` get it automatically when they are opened,
-reopened or marked ready for review, and on the push that brings the first
-migration change into a pull request (not on other pushes; the check reads
-at most 300 files of the earlier state, so a very large pull request may get
-one review more). The Action only comments; it never pushes.
+second, independent reviewer agent in a Claude session.
 
 Go toolchain bumps change the `toolchain` line in `go.mod` and the `golang` tag
 in the `Dockerfile` together, in one pull request: the image build fails when
 they differ (`scripts/check-go-toolchain.sh`), also on a Dependabot bump of
 only one of them.
 
-## Claude GitHub Action
-
-`.github/workflows/claude.yml` runs
-[claude-code-action](https://github.com/anthropics/claude-code-action) on the
-repository secret `ANTHROPIC_API_KEY`:
-
-| Trigger | Result |
-|---|---|
-| `needs-plan` on an issue | `## Plan` comment; `needs-plan` becomes `review`. |
-| `plan-review` on an issue | `## Independent plan review` with verdict; approve sets `ready`. |
-| `second-review` or `db-migration` on a PR, or a PR with a migration (opened, ready, or first migration push) | One `## Review` comment. |
-| `@claude` in a comment or review | An answer; it never edits or pushes (implementation runs in Claude sessions). |
-
-Only users with write access start it (the Action checks the user who added
-the label or wrote the comment; `@claude` also needs the author association
-owner, member or collaborator). Planner and reviewers run with a read-only
-token and read tools only; a separate step posts their comment and sets the
-labels. All jobs use the workflow's `GITHUB_TOKEN` with per-job permissions;
-no GitHub App is needed. A missing `ANTHROPIC_API_KEY` fails the run with a
-clear error.
-
-Labels set with a user's token (the maintainer's, also through Claude
-sessions) start the workflow; labels set with `GITHUB_TOKEN` (the labeler
-workflow, this workflow) start nothing, so there are no loops. Its comments
-come from `github-actions[bot]`, with at-mentions broken so they notify
-nobody. A failed run (no result, turn limit, timeout) posts a short comment
-and removes its trigger label; adding the label again retries. Issue, pull
-request and comment content is data to the Action, never instructions. Its texts end with `— Claude (Action), <role>`.
-After changes to the workflow, the coordinator tests each trigger once.
-
 ## Labels
 
 | Label | Set by | Meaning |
 |---|---|---|
 | `plan` | maintainer | Please write an implementation plan (Claude session). |
-| `needs-plan` | maintainer | Please write an implementation plan (Claude GitHub Action). |
 | `review` | planner | The plan is posted and waits for review. |
-| `plan-review` | maintainer or coordinator | Claude GitHub Action reviews the plan. |
 | `ready` | plan reviewer or maintainer | The plan is approved; the issue may be implemented. |
-| `second-review` | coordinator or maintainer | Claude GitHub Action reviews the pull request as second reviewer. |
 | `db-migration` | automatically | Schema change (see Releases). |
 | `breaking` | by hand | Manual upgrade steps (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change. |
