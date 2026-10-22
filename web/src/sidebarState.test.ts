@@ -6,7 +6,7 @@ const f = (name: string): Folder => ({ name, delimiter: "/", messages: 1, lastSy
 
 function account(name: string, folders: string[]): Account {
   return {
-    name, kind: "imap", enabled: true, removed: false, purging: false, host: "h", port: 993, tls: "tls", username: "u",
+    name, kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: folders.map(f), goneMessages: 0, lastReconciledAt: null,
     addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },

@@ -263,8 +263,10 @@ const en = {
     n === 1
       ? `1 message (${size}) is only in this account and is deleted, like a retention deletion.`
       : `${s} messages (${size}) are only in this account and are deleted, like a retention deletion.`,
-  purgeFiles: (grace: string) => `Their files are removed after ${grace}, so restoring the last dump still works.`,
-  purgeFilesLater: "Their files are removed after the grace period, so restoring the last dump still works.",
+  purgeFiles: (n: number, grace: string) =>
+    `${n === 1 ? "Its file is" : "Their files are"} removed after ${grace}, so restoring the last dump still works.`,
+  purgeFilesLater: (n: number) =>
+    `${n === 1 ? "Its file is" : "Their files are"} removed after the grace period, so restoring the last dump still works.`,
   purgeKept: (n: number, s: string) =>
     n === 1 ? "1 message is also in other accounts and stays there:" : `${s} messages are also in other accounts and stay there:`,
   purgeAccountGone: "Then its folders and the account are deleted; its name is free again. This cannot be undone.",
@@ -282,8 +284,9 @@ const en = {
   purgeFixRules: "Remove the retention rules on the Retention page first.",
   purgeFixHolds: "Active legal holds must be released on the Retention page first.",
   purgeRunning: "Being deleted completely…",
-  purgeProgress: (deleted: number, expected: number, kept: number) =>
-    `Being deleted completely: ${deleted} of ${expected} messages deleted, ${kept} kept in other accounts…`,
+  purgeProgress: (deleted: string, expected: string, kept: string) =>
+    `${deleted} of ${expected} messages deleted, ${kept} kept in other accounts.`,
+  purgeCancelled: "The complete deletion was cancelled. The account stays removed with the rest of its mail; the log says why.",
   fieldName: "Name",
   nameHint: "Shown in the archive and used in commands like ./ma sync --account NAME.",
   fieldHost: "IMAP server",
@@ -905,8 +908,10 @@ const de: Messages = {
     n === 1
       ? `1 Nachricht (${size}) ist nur in diesem Konto und wird gelöscht, wie beim Löschen nach Ablauf der Aufbewahrung.`
       : `${s} Nachrichten (${size}) sind nur in diesem Konto und werden gelöscht, wie beim Löschen nach Ablauf der Aufbewahrung.`,
-  purgeFiles: (grace) => `Ihre Dateien werden nach ${grace} entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
-  purgeFilesLater: "Ihre Dateien werden nach der Karenzzeit entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.",
+  purgeFiles: (n, grace) =>
+    `${n === 1 ? "Ihre Datei wird" : "Ihre Dateien werden"} nach ${grace} entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
+  purgeFilesLater: (n) =>
+    `${n === 1 ? "Ihre Datei wird" : "Ihre Dateien werden"} nach der Karenzzeit entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
   purgeKept: (n, s) =>
     n === 1 ? "1 Nachricht ist auch in anderen Konten und bleibt dort:" : `${s} Nachrichten sind auch in anderen Konten und bleiben dort:`,
   purgeAccountGone: "Danach werden seine Ordner und das Konto gelöscht; der Name ist wieder frei. Das lässt sich nicht rückgängig machen.",
@@ -924,8 +929,8 @@ const de: Messages = {
   purgeFixRules: "Zuerst die Aufbewahrungsregeln auf der Seite Aufbewahrung entfernen.",
   purgeFixHolds: "Aktive Legal Holds müssen zuerst auf der Seite Aufbewahrung aufgehoben werden.",
   purgeRunning: "Wird vollständig gelöscht…",
-  purgeProgress: (deleted, expected, kept) =>
-    `Wird vollständig gelöscht: ${deleted} von ${expected} Nachrichten gelöscht, ${kept} bleiben in anderen Konten…`,
+  purgeProgress: (deleted, expected, kept) => `${deleted} von ${expected} Nachrichten gelöscht, ${kept} bleiben in anderen Konten.`,
+  purgeCancelled: "Das vollständige Löschen wurde abgebrochen. Das Konto bleibt mit seinen übrigen Mails entfernt; der Grund steht im Protokoll.",
   fieldName: "Name",
   nameHint: "Wird im Archiv angezeigt und in Befehlen wie ./ma sync --account NAME verwendet.",
   fieldHost: "IMAP-Server",

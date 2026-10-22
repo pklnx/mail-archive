@@ -41,6 +41,8 @@ export interface Account {
   removed: boolean;
   /** The removed account is being deleted completely (a confirmed purge). */
   purging: boolean;
+  /** The progress of that purge; null when none runs. */
+  purge: AccountPurge | null;
   host: string;
   port: number;
   tls: TLSMode;
@@ -449,6 +451,15 @@ export const accountsApi = {
   purge: async (name: string, count: number) => (await send<{ purge: number }>("POST", `${accountPath(name)}/purge`, { count }))!.purge,
 };
 
+/** The progress of an account's confirmed purge: messages deleted of those confirmed, locations removed, messages kept. */
+export interface AccountPurge {
+  id: number;
+  expected: number;
+  locations: number;
+  deleted: number;
+  kept: number;
+}
+
 /** What deleting a removed account completely would do, and what keeps it from it. */
 export interface PurgePreview {
   account: string;
@@ -462,7 +473,7 @@ export interface PurgePreview {
   /** Messages also in other accounts: they stay there. */
   kept: number;
   keptIn: { owner: string; account: string; messages: number }[];
-  /** How long the files of deleted messages are kept, a Go duration ("720h0m0s"); empty if unknown. */
+  /** How long the files of deleted messages are kept, a Go duration ("168h0m0s"); empty if unknown. */
   grace: string;
   blockers: PurgeBlockers;
   /** The account's confirmed purge while it is being executed. */

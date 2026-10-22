@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -161,7 +163,7 @@ func TestPurgePreviewAndConfirm(t *testing.T) {
 	if b := p.Blockers; b.NotRemoved || b.Syncing || b.PurgeOpen || len(b.Rules) != 0 || len(b.Holds) != 0 || len(b.Messages) != 0 {
 		t.Fatalf("blockers %+v", b)
 	}
-	if f.listed()["old"].Purging {
+	if o := f.listed()["old"]; o.Purging || o.Purge != nil {
 		t.Fatal("purging before the confirmation")
 	}
 
@@ -186,8 +188,12 @@ func TestPurgePreviewAndConfirm(t *testing.T) {
 	if _, err := f.st.GetAccount(ctx, f.old.ID); err != nil {
 		t.Fatalf("deleted by the request: %v", err)
 	}
-	if !f.listed()["old"].Purging || f.listed()["live"].Purging {
-		t.Fatal("purging not listed")
+	listed := f.listed()
+	if o := listed["old"]; !o.Purging || o.Purge == nil || *o.Purge != (accountPurgeJSON{ID: id, Expected: 1}) {
+		t.Fatalf("purging not listed: %+v", o.Purge)
+	}
+	if l := listed["live"]; l.Purging || l.Purge != nil {
+		t.Fatalf("live purging: %+v", l)
 	}
 	if p := f.preview("old"); p.Purge == nil || p.Purge.ID != id || p.Purge.State != store.PurgeConfirmed || p.Purge.Expected != 1 {
 		t.Fatalf("preview while purging %+v", p.Purge)
@@ -297,4 +303,30 @@ func TestPurgeWithoutRetentionJob(t *testing.T) {
 		t.Fatalf("preview %s", s)
 	}
 	f.expect("POST", "/api/accounts/old/purge", map[string]any{"count": 0}, 503)
+}
+
+func TestPurgeStaleAccount(t *testing.T) {
+	f := newPurgeFixture(t)
+	ctx := context.Background()
+	f.loginOK("admin", keyPassword)
+	// The account changes between loading it and confirming the purge.
+	// It runs in the handler's goroutine: report errors, never Fatal.
+	f.server.beforeConfirmPurge = func() {
+		conn, err := pgx.Connect(ctx, f.dbURL)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, "UPDATE accounts SET version = version + 1 WHERE id = $1", f.old.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	body := f.expect("POST", "/api/accounts/old/purge", map[string]any{"count": 1}, 409)
+	if body["error"] != store.ErrStale.Error() {
+		t.Fatalf("stale account: %v", body)
+	}
+	if open, err := f.st.OpenAccountPurge(ctx); err != nil || open != nil {
+		t.Fatalf("confirmed a stale account: %+v %v", open, err)
+	}
 }

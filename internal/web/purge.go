@@ -67,7 +67,7 @@ type purgePreviewJSON struct {
 	DeletedBytes int64           `json:"deletedBytes"`
 	Kept         int64           `json:"kept"`
 	KeptIn       []purgeKeptJSON `json:"keptIn"`
-	// Grace is MAIL_ARCHIVE_RETENTION_FILE_GRACE ("720h0m0s"): how long
+	// Grace is MAIL_ARCHIVE_RETENTION_FILE_GRACE ("168h0m0s"): how long
 	// the files of deleted messages are kept.
 	Grace    string            `json:"grace"`
 	Blockers purgeBlockersJSON `json:"blockers"`
@@ -158,6 +158,9 @@ func (s *Server) handleConfirmPurge(w http.ResponseWriter, r *http.Request) {
 		// Nothing would execute it until the next start.
 		s.fail(w, r, http.StatusServiceUnavailable, "this server does not execute purges; use the command line: account purge NAME", nil)
 		return
+	}
+	if s.beforeConfirmPurge != nil {
+		s.beforeConfirmPurge()
 	}
 	by := userID(r)
 	purge, err := s.store.ConfirmPurge(withAudit(r, s.auditEntry(r, "account.purge")), a.Ref(), *in.Count, &by)

@@ -78,6 +78,7 @@ type authFixture struct {
 	secretKey    []byte
 	adminSecrets map[string]string
 	clock        *testClock
+	server       *Server
 }
 
 func newAuthFixture(t *testing.T) *authFixture {
@@ -120,7 +121,7 @@ func newAuthFixtureLog(t *testing.T, opts Options, w io.Writer) *authFixture {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &authFixture{t: t, st: st, dbURL: dbURL, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
+	return &authFixture{server: s, t: t, st: st, dbURL: dbURL, srv: srv, client: &http.Client{Jar: jar}, sealer: sealer, secretKey: key, adminSecrets: map[string]string{}, clock: clock}
 }
 
 func (f *authFixture) addUser(name, password string, admin bool) *store.User {

@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from "react";
-import { accountsApi, type PurgeBlockers, type PurgePreview } from "./api";
+import { useEffect, useId, useRef, useState } from "react";
+import { accountsApi, type AccountPurge, type PurgeBlockers, type PurgePreview } from "./api";
 import { fileSize, formatCount, formatDuration } from "./format";
 import { button, input } from "./formStyles";
 import { t } from "./i18n";
@@ -43,19 +43,26 @@ interface ReviewProps {
 export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: ReviewProps) {
   const [count, setCount] = useState("");
   const id = useId();
+  const heading = useRef<HTMLParagraphElement>(null);
+  const field = useRef<HTMLInputElement>(null);
   const blocked = purgeBlocked(p.blockers);
   // An exact match only: an empty field is not "0".
   const matches = count.trim() === String(p.deleted);
+  // Focus moves into the dialog when it opens: to the field, or to the
+  // heading when something blocks the deletion.
+  useEffect(() => {
+    (field.current ?? heading.current)?.focus();
+  }, []);
   return (
     <div className="flex flex-col gap-2 rounded-md border border-danger-line p-3 text-sm" role="group" aria-labelledby={`${id}-title`}>
-      <p id={`${id}-title`} className="font-semibold">
+      <p id={`${id}-title`} ref={heading} tabIndex={-1} className="font-semibold outline-none">
         {t.purgeTitle(p.account)}
       </p>
       <ul className="list-disc pl-5">
         <li>{t.purgeLocations(p.locations, formatCount(p.locations))}</li>
         <li>
           {t.purgeDeleted(p.deleted, formatCount(p.deleted), fileSize(p.deletedBytes))}{" "}
-          {p.grace ? t.purgeFiles(formatDuration(p.grace)) : t.purgeFilesLater}
+          {p.grace ? t.purgeFiles(p.deleted, formatDuration(p.grace)) : t.purgeFilesLater(p.deleted)}
         </li>
         {p.kept > 0 && (
           <li>
@@ -94,6 +101,7 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
           <label className="flex flex-col gap-1">
             {t.purgeTypeCount(p.deleted)}
             <input
+              ref={field}
               className={`${input} w-32`}
               inputMode="numeric"
               autoComplete="off"
@@ -177,21 +185,20 @@ export function PurgeDialog({ name, onClose, onConfirmed }: DialogProps) {
   return <PurgeReview key={tick} preview={preview} busy={busy} error={error} onConfirm={(n) => void confirm(n)} onCancel={onClose} />;
 }
 
-/** "Being deleted…", with the counts for admins (refreshed whenever the account list is). */
-export function PurgeProgress({ name, admin, refresh }: { name: string; admin: boolean; refresh: unknown }) {
-  const [purge, setPurge] = useState<PurgePreview["purge"]>(null);
-  useEffect(() => {
-    if (!admin) return;
-    const ctrl = new AbortController();
-    accountsApi.purgePreview(name, ctrl.signal).then(
-      (p) => setPurge(p.purge),
-      () => {},
-    );
-    return () => ctrl.abort();
-  }, [name, admin, refresh]);
+/**
+ * "Being deleted completely…", with the counts from the account list. Only
+ * the unchanging status line is live, so screen readers announce the state
+ * once and not every count update.
+ */
+export function PurgeProgress({ purge }: { purge: AccountPurge | null }) {
   return (
-    <p className="text-sm font-medium text-danger" aria-live="polite">
-      {purge ? t.purgeProgress(purge.deleted, purge.expected, purge.kept) : t.purgeRunning}
-    </p>
+    <div className="flex flex-col gap-1 text-sm">
+      <p role="status" className="font-medium text-danger">
+        {t.purgeRunning}
+      </p>
+      {purge && (
+        <p className="text-ink-muted">{t.purgeProgress(formatCount(purge.deleted), formatCount(purge.expected), formatCount(purge.kept))}</p>
+      )}
+    </div>
   );
 }

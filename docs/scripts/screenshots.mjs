@@ -154,7 +154,8 @@ for (const scheme of ["light", "dark"]) {
   await p.getByRole("button", { name: "Delete completely…" }).click();
   const purge = p.getByRole("group", { name: /Delete “old-provider” completely\?/ });
   await purge.getByLabel(/^Type \d+ to confirm$/).waitFor();
-  await purge.scrollIntoViewIfNeeded();
+  // The whole card, its bottom edge included, at the bottom of the window.
+  await purge.evaluate((el) => el.parentElement.scrollIntoView({ block: "end" }));
   await p.screenshot({ path: `${out}/account-purge.png` });
   await purge.getByRole("button", { name: "Cancel" }).click();
 

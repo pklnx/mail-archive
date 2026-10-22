@@ -65,6 +65,9 @@ type Server struct {
 	// purgeGrace is how long the retention job keeps the files of deleted
 	// messages; nil without the job.
 	purgeGrace *time.Duration
+	// beforeConfirmPurge, for tests, runs after a purge's account was
+	// loaded and before it is confirmed.
+	beforeConfirmPurge func()
 	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
 	// is off.
 	smtpListen string

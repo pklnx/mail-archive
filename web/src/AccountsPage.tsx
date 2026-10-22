@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { accountsApi, folderQuestion, type Account, type AccountInput, type AccountsResponse, type ServerFolder, type TLSMode } from "./api";
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
@@ -150,7 +150,7 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
           <section className="flex flex-col gap-2">
             <h2 className="mt-2 text-sm font-semibold text-ink-muted">{t.removedAccounts}</h2>
             {removed.map((a) => (
-              <RemovedCard key={a.name} account={a} admin={admin} refresh={data} onChanged={reload} />
+              <RemovedCard key={a.name} account={a} admin={admin} onChanged={reload} />
             ))}
           </section>
         )}
@@ -161,10 +161,33 @@ export function AccountsPage({ accounts, admin, close, renamed, showGone }: Prop
 
 /**
  * A removed account. Admins can delete their own removed accounts
- * completely; the server then deletes in the background.
+ * completely; the server then deletes in the background. A purge open
+ * elsewhere (another tab, the command line) shows as progress, never as
+ * the form.
  */
-export function RemovedCard({ account: a, admin, refresh, onChanged }: { account: Account; admin: boolean; refresh: unknown; onChanged: () => void }) {
+export function RemovedCard({ account: a, admin, onChanged }: { account: Account; admin: boolean; onChanged: () => void }) {
   const [reviewing, setReviewing] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+  const start = useRef<HTMLButtonElement>(null);
+  const wasReviewing = useRef(false);
+  const wasPurging = useRef(a.purging);
+
+  useEffect(() => {
+    // Still listed after its purge ended: it was cancelled.
+    if (wasPurging.current && !a.purging) setCancelled(true);
+    if (a.purging) {
+      setReviewing(false);
+      setCancelled(false);
+    }
+    wasPurging.current = a.purging;
+  }, [a.purging]);
+
+  useEffect(() => {
+    // Closing the dialog returns the focus to the button that opened it.
+    if (wasReviewing.current && !reviewing) start.current?.focus();
+    wasReviewing.current = reviewing;
+  }, [reviewing]);
+
   return (
     <Card>
       <div className="flex flex-wrap items-baseline gap-x-3">
@@ -172,10 +195,15 @@ export function RemovedCard({ account: a, admin, refresh, onChanged }: { account
         <span className="text-sm text-ink-muted">{t.messageCount(messageCount(a), formatCount(messageCount(a)))}</span>
       </div>
       {a.purging ? (
-        <PurgeProgress name={a.name} admin={admin} refresh={refresh} />
+        <PurgeProgress purge={a.purge} />
       ) : (
         <>
           <p className="text-sm text-ink-muted">{t.removedNote}</p>
+          {cancelled && (
+            <p role="status" className="text-sm text-warning">
+              {t.purgeCancelled}
+            </p>
+          )}
           {admin && reviewing && (
             <PurgeDialog
               name={a.name}
@@ -188,7 +216,15 @@ export function RemovedCard({ account: a, admin, refresh, onChanged }: { account
           )}
           {admin && !reviewing && (
             <div>
-              <button type="button" className={`${button} text-danger`} onClick={() => setReviewing(true)}>
+              <button
+                ref={start}
+                type="button"
+                className={`${button} text-danger`}
+                onClick={() => {
+                  setCancelled(false);
+                  setReviewing(true);
+                }}
+              >
                 {t.purgeStart}
               </button>
             </div>

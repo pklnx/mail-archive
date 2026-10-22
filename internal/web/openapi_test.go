@@ -384,6 +384,7 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{firstReceivedJSON{}, "FirstReceived", true},
 		{locationJSON{}, "Location", true},
 		{purgePreviewJSON{}, "PurgePreview", true},
+		{accountPurgeJSON{}, "AccountPurge", true},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {

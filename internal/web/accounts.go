@@ -61,14 +61,15 @@ type accountJSON struct {
 	Enabled bool   `json:"enabled"`
 	Removed bool   `json:"removed"`
 	// Purging: the removed account is being deleted completely (a
-	// confirmed purge).
-	Purging         bool     `json:"purging"`
-	Host            string   `json:"host"`
-	Port            int      `json:"port"`
-	TLS             string   `json:"tls"`
-	Username        string   `json:"username"`
-	IncludedFolders []string `json:"includedFolders"`
-	ExcludedFolders []string `json:"excludedFolders"`
+	// confirmed purge); Purge has its progress, null otherwise.
+	Purging         bool              `json:"purging"`
+	Purge           *accountPurgeJSON `json:"purge"`
+	Host            string            `json:"host"`
+	Port            int               `json:"port"`
+	TLS             string            `json:"tls"`
+	Username        string            `json:"username"`
+	IncludedFolders []string          `json:"includedFolders"`
+	ExcludedFolders []string          `json:"excludedFolders"`
 	// SyncInterval is the account's own sync interval: "default" (the
 	// server's), "manual" (not on the schedule) or a duration ("30m0s").
 	// Always "default" for import and smtp accounts.
@@ -91,6 +92,17 @@ type accountJSON struct {
 	Fill          *fillJSON          `json:"fill"`
 	Fills         []*fillJSON        `json:"fills"`
 	FirstReceived *firstReceivedJSON `json:"firstReceived"`
+}
+
+// accountPurgeJSON is the progress of an account's confirmed purge: the
+// messages it deletes (expected), those deleted so far, the locations
+// removed and the messages kept because they are also elsewhere.
+type accountPurgeJSON struct {
+	ID        int64 `json:"id"`
+	Expected  int   `json:"expected"`
+	Locations int64 `json:"locations"`
+	Deleted   int   `json:"deleted"`
+	Kept      int   `json:"kept"`
 }
 
 type folderJSON struct {
@@ -278,6 +290,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 			if first != nil {
 				aj.FirstReceived = &firstReceivedJSON{At: first.ReceivedAt, Subject: first.Subject}
+			}
+		}
+		if aj.Purging {
+			aj.Purge = &accountPurgeJSON{
+				ID: purge.ID, Expected: purge.Expected, Locations: purge.Locations, Deleted: purge.Deleted, Kept: purge.Kept,
 			}
 		}
 		if aj.Folders == nil {
