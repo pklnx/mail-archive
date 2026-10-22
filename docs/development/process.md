@@ -12,8 +12,9 @@ Every change starts as a GitHub issue:
   (steps and version for bugs, problem and "done when" for features).
 - Findings from test reports become issues, one per topic, with a link to
   the report.
-- Security problems are issues with the label `security` (the repository
-  is private; see `SECURITY.md`).
+- Security problems go to the
+  [private vulnerability report](https://github.com/pklnx/mail-archive/security/advisories/new),
+  not to a public issue.
 
 ## 2. Plan
 

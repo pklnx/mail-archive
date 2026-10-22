@@ -119,7 +119,7 @@ version you skip: they list database migrations and manual steps. Then, in
 the directory that holds your `mail-archive/` directory:
 
 ```sh
-gh release download --repo pklnx/mail-archive --pattern mail-archive.tar.gz --clobber && tar -xzf mail-archive.tar.gz
+curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
 cd mail-archive
 ./ma migrate              # apply new database migrations with the new image
 docker compose up -d web  # restart the web server with the new image
@@ -128,10 +128,8 @@ docker compose up -d web  # restart the web server with the new image
 
 The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
 `README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
-`.env` for new settings. A specific version instead of the latest: name its tag, for example
-`gh release download v26.10-1 --repo pklnx/mail-archive --pattern mail-archive.tar.gz --clobber && tar -xzf mail-archive.tar.gz`.
-The download and the image pulls need the GitHub CLI sign-in and `docker login ghcr.io` from
-[Install](./getting-started#install).
+`.env` for new settings. A specific version instead of the latest:
+`https://github.com/pklnx/mail-archive/releases/download/v26.10-1/mail-archive.tar.gz`.
 
 With a clone of the repository (see [From source](./getting-started#install)),
 `git pull` replaces the download, and `./ma migrate` rebuilds the image for

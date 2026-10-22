@@ -2,8 +2,9 @@
 
 ## Reporting a vulnerability
 
-The repository is private, so only its collaborators can read its issues.
-Report security problems as an issue with the label `security`.
+Please report security problems **privately** through
+[GitHub's private vulnerability reporting](https://github.com/pklnx/mail-archive/security/advisories/new).
+Do not open a public issue.
 
 Include what you found, how to reproduce it and what an attacker could do with it.
 
@@ -16,7 +17,7 @@ maintained older versions.
 
 This is a hobby project maintained in spare time. Reports are handled on a
 best-effort basis, without fixed response times. You will be credited in the
-fix unless you prefer otherwise.
+advisory unless you prefer otherwise.
 
 CI scans every pull request and every push to `main` for committed
 credentials (gitleaks, check `secret-scan`).

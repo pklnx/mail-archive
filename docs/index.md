@@ -12,6 +12,9 @@ hero:
     - theme: brand
       text: Get started
       link: /guide/getting-started
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/pklnx/mail-archive
 
 features:
   - title: Read-only
