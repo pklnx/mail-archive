@@ -393,18 +393,25 @@ func TestPurgeWithWaitingWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer small.Close()
+	t.Cleanup(small.Close)
 	observer, err := pgx.Connect(ctx, s.url)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = observer.Close(context.Background()) }()
+	t.Cleanup(func() { _ = observer.Close(context.Background()) })
 	bobMail, err := small.GetOwnedAccount(ctx, s.bob.ID, "mail")
 	if err != nil {
 		t.Fatal(err)
 	}
 	writer := make(chan error, 1)
 	started := false
+	// The writer is collected before the small store closes, also when
+	// the test fails: pgxpool.Close waits for every connection.
+	t.Cleanup(func() {
+		if started {
+			<-writer
+		}
+	})
 	p, err := ExecutePurge(ctx, small, id, PurgeOptions{
 		BatchSize: 1,
 		// Called with the blob lock held, before the batch.
@@ -424,9 +431,7 @@ func TestPurgeWithWaitingWriter(t *testing.T) {
 					writer <- err
 				}()
 				for ctx.Err() == nil {
-					var n int
-					if err := observer.QueryRow(ctx, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = $1 AND NOT granted",
-						0x6d62).Scan(&n); err != nil || n > 0 {
+					if waitingForBlobs(ctx, observer) != 0 {
 						break
 					}
 				}
@@ -437,7 +442,9 @@ func TestPurgeWithWaitingWriter(t *testing.T) {
 	if err != nil || p.State != store.PurgeDone {
 		t.Fatalf("purge with a waiting writer: %+v %v", p, err)
 	}
-	if err := <-writer; err != nil {
+	err = <-writer
+	started = false
+	if err != nil {
 		t.Fatalf("writer: %v", err)
 	}
 }

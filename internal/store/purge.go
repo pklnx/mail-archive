@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
@@ -401,9 +400,11 @@ func setPurgeTarget(e *AuditEntry, accountID int64, name string) {
 	}
 }
 
-// AccountPurge returns a purge; unknown IDs are ErrNotFound.
+// AccountPurge returns a purge; unknown IDs are ErrNotFound. It runs on
+// the pool, or on the dedicated connection of ctx (withConn), as at the
+// end of PurgeSession.Finish.
 func (s *Store) AccountPurge(ctx context.Context, id int64) (*AccountPurge, error) {
-	r, err := s.q.GetAccountPurge(ctx, id)
+	r, err := s.qFor(ctx).GetAccountPurge(ctx, id)
 	if isNoRows(err) {
 		return nil, ErrNotFound
 	}
@@ -431,49 +432,26 @@ func (s *Store) TryLockPurge(ctx context.Context) (unlock func(), ok bool, err e
 	return s.tryLockClass(ctx, purgeLockClass)
 }
 
-// connKey marks a context whose store transactions run on a dedicated
-// connection instead of the pool.
-type connKey struct{}
-
-func withConn(ctx context.Context, c *pgxpool.Conn) context.Context {
-	return context.WithValue(ctx, connKey{}, c)
-}
-
-func connFrom(ctx context.Context) *pgxpool.Conn {
-	c, _ := ctx.Value(connKey{}).(*pgxpool.Conn)
-	return c
-}
-
 // PurgeSession holds the locks of a purge's execution on one dedicated
 // connection, and runs its batches on that connection too: the purge lock,
-// the account's sync lock and, per batch, the blob lock. While it holds
-// the blob lock exclusively, writers wait for it with a connection of the
-// pool each; a batch that needed another connection could wait for them
-// for ever. So the execution uses this connection and at most one more,
-// for reads without the blob lock.
+// the account's sync lock and, per batch, the blob lock (TryLockBlobs,
+// UnlockBlobs). While it holds the blob lock exclusively, writers wait for
+// it with a connection of the pool each; a batch that needed another
+// connection could wait for them for ever. So the execution uses this
+// connection and at most one more, for reads without the blob lock. See
+// locksession.go.
 type PurgeSession struct {
-	s    *Store
-	conn *pgxpool.Conn
+	lockConn
 }
 
 // StartPurgeSession takes the purge lock on a dedicated connection. It
 // returns false if another session holds it.
 func (s *Store) StartPurgeSession(ctx context.Context) (*PurgeSession, bool, error) {
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return nil, false, err
+	l, ok, err := s.startLockConn(ctx, purgeLockClass)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
-	var ok bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, 0)", purgeLockClass).Scan(&ok); err != nil {
-		_ = conn.Conn().Close(context.WithoutCancel(ctx))
-		conn.Release()
-		return nil, false, err
-	}
-	if !ok {
-		conn.Release()
-		return nil, false, nil
-	}
-	return &PurgeSession{s: s, conn: conn}, true, nil
+	return &PurgeSession{lockConn: *l}, true, nil
 }
 
 // TryLockSync takes the account's sync lock (see Store.TryLockSync) on the
@@ -482,44 +460,17 @@ func (p *PurgeSession) TryLockSync(ctx context.Context, accountID int64) (bool, 
 	if accountID < 1 || accountID > math.MaxInt32 {
 		return false, fmt.Errorf("account id %d out of range for the sync lock", accountID)
 	}
-	var ok bool
-	err := p.conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, $2)", syncLockClass, int32(accountID)).Scan(&ok) //nolint:gosec // range checked above
-	return ok, err
-}
-
-// TryLockBlobs takes the blob lock exclusively on the session's
-// connection, without waiting. It returns false while a writer holds it.
-func (p *PurgeSession) TryLockBlobs(ctx context.Context) (bool, error) {
-	var ok bool
-	err := p.conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, 0)", blobLockClass).Scan(&ok)
-	return ok, err
-}
-
-// UnlockBlobs releases the blob lock taken by TryLockBlobs.
-func (p *PurgeSession) UnlockBlobs(ctx context.Context) error {
-	_, err := p.conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1, 0)", blobLockClass)
-	return err
+	return p.tryLock(ctx, syncLockClass, int32(accountID)) //nolint:gosec // range checked above
 }
 
 // Batch is Store.PurgeBatch on the session's connection.
 func (p *PurgeSession) Batch(ctx context.Context, purgeID int64, limit int, grace time.Duration) (PurgeBatchResult, error) {
-	return p.s.PurgeBatch(withConn(ctx, p.conn), purgeID, limit, grace)
+	return p.s.PurgeBatch(p.on(ctx), purgeID, limit, grace)
 }
 
 // Finish is Store.FinishPurge on the session's connection.
 func (p *PurgeSession) Finish(ctx context.Context, purgeID int64) (*AccountPurge, error) {
-	return p.s.FinishPurge(withConn(ctx, p.conn), purgeID)
-}
-
-// Close releases every lock of the session and its connection. If the
-// locks cannot be released, the connection is closed, which releases
-// them.
-func (p *PurgeSession) Close(ctx context.Context) {
-	bg := context.WithoutCancel(ctx)
-	if _, err := p.conn.Exec(bg, "SELECT pg_advisory_unlock_all()"); err != nil {
-		_ = p.conn.Conn().Close(bg)
-	}
-	p.conn.Release()
+	return p.s.FinishPurge(p.on(ctx), purgeID)
 }
 
 // PurgeStaleError is returned when the account of a confirmed purge was
