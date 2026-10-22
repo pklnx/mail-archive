@@ -12,7 +12,10 @@ import (
 )
 
 // addMessage stores a message in an account's folder, like a sync, under
-// the given name.
+// the given name. A folder without a UIDVALIDITY yet gets 1, as after a
+// first sync, so the location is current (not superseded). A folder that
+// already has one keeps it and its last UID. Use renumberFolder for
+// superseded locations on purpose.
 func (f *apiFixture) addMessage(account, folder, name, raw string, uid uint32) {
 	f.t.Helper()
 	ctx := context.Background()
@@ -24,6 +27,13 @@ func (f *apiFixture) addMessage(account, folder, name, raw string, uid uint32) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	if fo.UIDValidity == 0 {
+		// Not for a folder that has one: ResetFolder also zeroes last_uid.
+		if err := f.st.ResetFolder(ctx, fo.ID, 1); err != nil {
+			f.t.Fatal(err)
+		}
+		fo.UIDValidity = 1
+	}
 	blob, _, err := f.blobs.Put(strings.NewReader(raw))
 	if err != nil {
 		f.t.Fatal(err)
@@ -32,11 +42,77 @@ func (f *apiFixture) addMessage(account, folder, name, raw string, uid uint32) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	loc := store.Location{FolderID: fo.ID, UIDValidity: 1, UID: uid}
+	loc := store.Location{FolderID: fo.ID, UIDValidity: fo.UIDValidity, UID: uid}
 	if _, err := f.st.SaveBatch(ctx, fo.ID, uid, []store.MessageMeta{meta}, []store.Location{loc}); err != nil {
 		f.t.Fatal(err)
 	}
 	f.ids[name] = blob.SHA256
+}
+
+// renumberFolder gives a folder a new UIDVALIDITY, as a server-side change
+// does. Locations stored under the old value then read superseded. Like
+// ResetFolder it also resets the folder's last_uid to 0.
+func (f *apiFixture) renumberFolder(account, folder string, uidValidity uint32) {
+	f.t.Helper()
+	ctx := context.Background()
+	acc, err := accountByName(f.st, account)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	fo, err := f.st.GetOrCreateFolder(ctx, acc.ID, folder)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.st.ResetFolder(ctx, fo.ID, uidValidity); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestAddMessageLocations(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	detail := func(name string) messageJSON {
+		t.Helper()
+		var m messageJSON
+		f.getJSON("/api/messages/"+f.ids[name], 200, &m)
+		if len(m.Locations) != 1 {
+			t.Fatalf("%s locations = %+v", name, m.Locations)
+		}
+		return m
+	}
+
+	// A new folder gets a UIDVALIDITY, so its location is current.
+	f.addMessage("bob", "Drafts", "draft", reply("draft@x", "meeting@x", "Re: draft", "Fri, 9 Oct 2026 10:00:00 +0000"), 1)
+	if m := detail("draft"); m.Locations[0].Superseded {
+		t.Errorf("new folder: location superseded: %+v", m.Locations[0])
+	}
+
+	// An existing folder is not rewound.
+	alice, err := accountByName(f.st, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := f.st.GetOrCreateFolder(ctx, alice.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.addMessage("alice", "INBOX", "later", reply("later@x", "meeting@x", "Re: later", "Sat, 10 Oct 2026 10:00:00 +0000"), 10)
+	after, err := f.st.GetOrCreateFolder(ctx, alice.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UIDValidity != 1 || after.LastUID < before.LastUID {
+		t.Errorf("alice/INBOX before %+v, after %+v", before, after)
+	}
+	if m := detail("later"); m.Locations[0].Superseded {
+		t.Errorf("existing folder: location superseded: %+v", m.Locations[0])
+	}
+
+	// renumberFolder makes superseded locations on purpose.
+	f.renumberFolder("bob", "Drafts", 2)
+	if m := detail("draft"); !m.Locations[0].Superseded {
+		t.Errorf("after renumber: location not superseded: %+v", m.Locations[0])
+	}
 }
 
 func reply(id, to, subject, date string) string {
