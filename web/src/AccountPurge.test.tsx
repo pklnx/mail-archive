@@ -41,7 +41,8 @@ describe("PurgeReview", () => {
     render(<PurgeReview preview={preview()} busy={false} error="" onConfirm={onConfirm} onCancel={() => {}} />);
     expect(screen.getByText(t.purgeTitle("old"))).toBeTruthy();
     expect(screen.getByText(t.purgeLocations(5, "5"))).toBeTruthy();
-    expect(screen.getByText(new RegExp(`^${t.purgeDeleted(3, "3", "2.0 KB").replace(/[().]/g, "\\$&")}`))).toBeTruthy();
+    const deleted = t.purgeDeleted(3, "3", "2.0 KB");
+    expect(screen.getByText((_, el) => el?.tagName === "LI" && (el.textContent ?? "").startsWith(deleted))).toBeTruthy();
     expect(screen.getByText(/7 days/)).toBeTruthy();
     expect(screen.getByText(t.purgeKept(1, "1"))).toBeTruthy();
     expect(screen.getByText("alice / work")).toBeTruthy();
