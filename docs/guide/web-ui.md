@@ -35,6 +35,12 @@ everyone's entries in the log. Below it are your name, which opens your
   and for removed accounts, the list stays flat. The accounts are listed
   under **Accounts**, the pages to manage them and the archive under
   **Manage**.
+
+  The sidebar's width is yours to set. Drag the handle on its right edge,
+  or focus it and use the arrow keys. A double-click on the handle resets
+  the width. The **«** button at the top collapses the sidebar to a narrow
+  rail of account labels; **»** expands it again. Width and state are
+  remembered per browser.
 - **Message list:** newest first, with search at the top. More messages load
   as you scroll. A line above the list counts what is loaded ("42 messages",
   "More than 50 matches" while more can load). Headings group the messages
@@ -271,8 +277,7 @@ phone. The choice is remembered in the browser.
 ![Dark mode](/screenshots/mail-dark.png)
 
 The UI is in German or English. Each user chooses the language and the
-format of dates and numbers in their profile, under **Language and
-formats**. The choice is stored on the server, so it follows you to other
+format of dates and numbers in their profile, on the **Display** tab. The choice is stored on the server, so it follows you to other
 browsers and devices.
 
 - **Automatic (browser)**, the default, takes the language from the

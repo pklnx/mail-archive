@@ -9,6 +9,7 @@ The issue {{ISSUE}} with its comments: the "## Plan" comment, its reviews and ma
 
 ## Rules
 - Tests never touch real data, credentials or network. Bug fix → regression test that fails without the fix. Wait for signals, never time.
+- A PR that changes the web UI updates the affected docs screenshots (`make docs-screenshots`) and the docs text that describes the changed UI.
 - Unclear plan or product decision → stop and report.
 - Branch `{{BRANCH}}`; own build/log folders; run only the tests of changed code (`TEST_DATABASE_URL=postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable go test -race -count=1 ./internal/<pkg>/ -run <filter>`), plus lint/format checks.
 - Commits end with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`. Open the PR with title "<what> (#{{ISSUE}}, part N)" and body: plan link, changes, tests, results, open manual checks; "Closes #<sub-issue>." / "Part N of #{{ISSUE}}." or "Closes #{{ISSUE}}."; then `— Claude (<model>), implementer`. Then set its label (default `feature`, fixes `bug`; see the GitHub operations table).
