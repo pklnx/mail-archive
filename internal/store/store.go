@@ -58,8 +58,14 @@ func Open(ctx context.Context, url string) (*Store, error) {
 // Close releases all connections.
 func (s *Store) Close() { s.pool.Close() }
 
-// Migrate applies all pending schema migrations.
+// Migrate rebuilds the indexes if the database needs it (see
+// RebuildIndexesIfNeeded) and then applies all pending schema migrations.
+// The rebuild runs first because pending migrations would already write
+// through misordered indexes. If it fails, nothing is migrated.
 func (s *Store) Migrate(ctx context.Context) ([]string, error) {
+	if _, err := s.RebuildIndexesIfNeeded(ctx, nil); err != nil {
+		return nil, err
+	}
 	var applied []string
 	err := s.withMigrations(func(p *goose.Provider) error {
 		results, err := p.Up(ctx)

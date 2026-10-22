@@ -7,3 +7,6 @@ func SetMaxEnvelopeMatches(n int) (restore func()) {
 	maxEnvelopeMatches = n
 	return func() { maxEnvelopeMatches = old }
 }
+
+// RebuildError builds the error of a failed index rebuild.
+var RebuildError = rebuildError

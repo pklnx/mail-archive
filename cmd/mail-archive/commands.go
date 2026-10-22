@@ -29,7 +29,16 @@ type app struct {
 	store *store.Store
 }
 
-func openApp(ctx context.Context) (*app, error) {
+// openApp opens the database for a command. It refuses while the database
+// needs a one-time index rebuild (see checkIndexRebuild).
+func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, true) }
+
+// openAppForMigrate opens the database without the index rebuild check and
+// without touching it, for `migrate` (which runs the rebuild before it
+// creates the audit log partitions) and the read-only `migrate status`.
+func openAppForMigrate(ctx context.Context) (*app, error) { return openAppChecked(ctx, false) }
+
+func openAppChecked(ctx context.Context, normal bool) (*app, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
@@ -38,19 +47,55 @@ func openApp(ctx context.Context) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	ensureAuditPartitions(ctx, st)
+	if normal {
+		// Before anything else touches the database.
+		if err := checkIndexRebuild(ctx, st); err != nil {
+			st.Close()
+			return nil, err
+		}
+		ensureAuditPartitions(ctx, st)
+	}
 	return &app{cfg: cfg, store: st}, nil
+}
+
+// checkIndexRebuild refuses while the database was created by the
+// postgres:18-alpine image and its indexes were not rebuilt for the
+// current collation: lookups and unique checks through text indexes can
+// miss rows until then. `migrate` runs the rebuild.
+func checkIndexRebuild(ctx context.Context, st *store.Store) error {
+	c, err := st.Collation(ctx)
+	if err != nil {
+		return err
+	}
+	if !c.NeedsIndexRebuild() {
+		return nil
+	}
+	return fmt.Errorf("the database needs a one-time index rebuild: run %s migrate first (%s; see docs/guide/operations.md)",
+		commandName(), c.Reason())
+}
+
+// indexRebuildNotice is printed before migrate rebuilds the indexes.
+func indexRebuildNotice(c store.CollationState) string {
+	return fmt.Sprintf("rebuilding all database indexes once (%s; this is not `reindex`, see docs/guide/operations.md) ...", c.Reason())
 }
 
 func (a *app) close() { a.store.Close() }
 
 func newMigrateCmd() *cobra.Command {
 	runUp := func(cmd *cobra.Command, _ []string) error {
-		a, err := openApp(cmd.Context())
+		a, err := openAppForMigrate(cmd.Context())
 		if err != nil {
 			return err
 		}
 		defer a.close()
+		// The index rebuild first, before anything writes; Migrate checks
+		// again and finds nothing left to do.
+		if _, err := a.store.RebuildIndexesIfNeeded(cmd.Context(), func(c store.CollationState) {
+			fmt.Println(indexRebuildNotice(c))
+		}); err != nil {
+			return err
+		}
+		ensureAuditPartitions(cmd.Context(), a.store)
 		applied, err := a.store.Migrate(cmd.Context())
 		if err != nil {
 			return err
@@ -132,7 +177,7 @@ func newMigrateStatusCmd() *cobra.Command {
 		Short: "Show applied and pending migrations",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			a, err := openAppForMigrate(cmd.Context())
 			if err != nil {
 				return err
 			}
