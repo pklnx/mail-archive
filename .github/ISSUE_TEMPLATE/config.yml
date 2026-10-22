@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/pklnx/mail-archive/blob/main/SECURITY.md
-    about: Open an issue with the label security (the repository is private).
+    url: https://github.com/pklnx/mail-archive/security/advisories/new
+    about: Report security problems privately, not in a public issue.
   - name: Documentation
     url: https://pklnx.github.io/mail-archive/
     about: Setup, configuration and usage.

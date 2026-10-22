@@ -38,20 +38,8 @@ copy**: the servers are never modified.
 
 ## Quick start
 
-The repository and its images on `ghcr.io` are private. Downloads need the
-[GitHub CLI](https://cli.github.com/) signed in to an account with access,
-with the `read:packages` scope for the images:
-
 ```sh
-gh auth login
-gh auth refresh -s read:packages
-gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
-```
-
-Then:
-
-```sh
-gh release download --repo pklnx/mail-archive --pattern mail-archive.tar.gz --clobber && tar -xzf mail-archive.tar.gz
+curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
 cd mail-archive
 cp .env.example .env    # set POSTGRES_PASSWORD and MAIL_ARCHIVE_SECRET_KEY
 ./ma migrate

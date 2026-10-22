@@ -1,5 +1,7 @@
 import { defineConfig } from "vitepress";
 
+const repo = "https://github.com/pklnx/mail-archive";
+
 export default defineConfig({
   title: "mail-archive",
   description: "A read-only, deduplicated archive of your IMAP mailboxes, with full-text search and a web UI.",
@@ -57,6 +59,8 @@ export default defineConfig({
         ],
       },
     ],
+    socialLinks: [{ icon: "github", link: repo }],
+    editLink: { pattern: `${repo}/edit/main/docs/:path`, text: "Edit this page on GitHub" },
     search: { provider: "local" },
     outline: { level: [2, 3] },
     footer: {

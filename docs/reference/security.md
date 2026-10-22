@@ -288,5 +288,6 @@ in [Tamper evidence](../guide/tamper-evidence).
 
 ## Reporting a vulnerability
 
-The repository is private, so only its collaborators can read its issues.
-Report security problems there as an issue with the label `security`.
+Please use GitHub's private vulnerability reporting on the
+[repository](https://github.com/pklnx/mail-archive/security) instead of a
+public issue.
