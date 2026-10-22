@@ -4,6 +4,7 @@ import { applySettings, canonical, languages, lang, messagesFor, needsReload, se
 import { ApiKeySection } from "./ApiKeys";
 import { PageHeader } from "./PageHeader";
 import { PasskeySection } from "./Passkeys";
+import { Tabs } from "./Tabs";
 import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
 
 const primary = "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
@@ -164,31 +165,49 @@ export function DisplaySettings({ reload = () => location.reload() }: { reload?:
   );
 }
 
+type ProfileTab = "display" | "security" | "apiKeys";
+
 export function ProfilePage({ name, close }: { name: string; close: () => void }) {
   const [changed, setChanged] = useState(false);
+  const [tab, setTab] = useState<ProfileTab>("display");
+  // Counts 2FA changes, so the sections that ask for a code read the status again.
+  const [twoFactorVersion, setTwoFactorVersion] = useState(0);
+  const twoFactorChanged = () => setTwoFactorVersion((v) => v + 1);
   return (
     <div className="mx-auto flex h-full max-w-md flex-col gap-4 overflow-y-auto p-4">
       <PageHeader title={t.profile} close={close} />
       <p className="text-sm text-ink-muted">{t.loggedInAs(name)}</p>
-      <h2 className="font-semibold">{t.displaySettings}</h2>
-      <DisplaySettings />
-      <h2 className="font-semibold">{t.changePassword}</h2>
-      {changed && (
-        <p role="status" className="text-sm text-ok">
-          {t.passwordChanged}
-        </p>
-      )}
-      <PasswordForm done={() => setChanged(true)} />
-      <h2 className="font-semibold">{t.twoFactor}</h2>
-      <TwoFactorSetup user={name} />
-      <h2 className="font-semibold">{t.passkeys}</h2>
-      <PasskeySection />
-      <h2 className="font-semibold">{t.apiKeys}</h2>
-      <ApiKeySection />
+      <Tabs
+        label={t.profileSections}
+        selected={tab}
+        onSelect={setTab}
+        tabs={[
+          { id: "display", label: t.tabDisplay, panel: <DisplaySettings /> },
+          {
+            id: "security",
+            label: t.tabSecurity,
+            panel: (
+              <>
+                <h2 className="font-semibold">{t.changePassword}</h2>
+                {changed && (
+                  <p role="status" className="text-sm text-ok">
+                    {t.passwordChanged}
+                  </p>
+                )}
+                <PasswordForm done={() => setChanged(true)} />
+                <h2 className="font-semibold">{t.twoFactor}</h2>
+                <TwoFactorSetup user={name} onChange={twoFactorChanged} />
+                <h2 className="font-semibold">{t.passkeys}</h2>
+                <PasskeySection twoFactorVersion={twoFactorVersion} />
+              </>
+            ),
+          },
+          { id: "apiKeys", label: t.apiKeys, panel: <ApiKeySection twoFactorVersion={twoFactorVersion} /> },
+        ]}
+      />
     </div>
   );
 }
-
 
 function twoFactorError(err: unknown): string {
   const wait = retryAfter(err);
@@ -222,7 +241,12 @@ export function RecoveryCodes({ sheet, done }: { sheet: RecoverySheet; done: () 
   );
 }
 
-export function TwoFactorSetup({ user, onDone }: { user: string; onDone?: () => void }) {
+/**
+ * Turns two-factor authentication on or off. onChange is called with the new
+ * state after confirming or disabling; onDone after the recovery codes of a
+ * new setup were saved.
+ */
+export function TwoFactorSetup({ user, onDone, onChange }: { user: string; onDone?: () => void; onChange?: (enabled: boolean) => void }) {
   const [state, setState] = useState<TwoFactorSetupState | null>(null);
   const [setup, setSetup] = useState<TwoFactorSetupState | null>(null);
   const [recovery, setRecovery] = useState<RecoverySheet | null>(null);
@@ -254,6 +278,7 @@ export function TwoFactorSetup({ user, onDone }: { user: string; onDone?: () => 
       // onDone only after the recovery codes were shown (see below).
       setRecovery(sheetFor(result!.recoveryCodes));
       setSetup(null); setCode(""); setState((s) => s ? { ...s, enabled: true, setupPending: false } : s);
+      onChange?.(true);
     } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };
@@ -263,6 +288,7 @@ export function TwoFactorSetup({ user, onDone }: { user: string; onDone?: () => 
     try {
       await profileApi.twoFactor.disable(password, code);
       setPassword(""); setCode(""); setState((s) => s ? { ...s, enabled: false } : s);
+      onChange?.(false);
     } catch (err) { setError(twoFactorError(err)); }
     finally { setBusy(false); }
   };

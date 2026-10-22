@@ -31,8 +31,13 @@ export function registrationError(err: unknown, max: number): string {
   return t.failed(err instanceof Error ? err.message : String(err));
 }
 
-/** The user's passkeys on the profile page: list, add, remove. */
-export function PasskeySection() {
+/**
+ * The user's passkeys on the profile page: list, add, remove.
+ * twoFactorVersion changes when two-factor authentication was turned on or
+ * off elsewhere on the page; the section then asks the server again whether
+ * a code is needed.
+ */
+export function PasskeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: number }) {
   const [list, setList] = useState<PasskeyList | null>(null);
   const [twoFactor, setTwoFactor] = useState(false);
   const [name, setName] = useState("");
@@ -44,9 +49,15 @@ export function PasskeySection() {
 
   const load = useCallback(() => {
     passkeyApi.list().then(setList, (err: unknown) => setError(t.failed(err instanceof Error ? err.message : String(err))));
-    profileApi.twoFactor.get().then((s) => setTwoFactor(s.enabled), () => undefined);
   }, []);
   useEffect(load, [load]);
+  useEffect(() => {
+    let current = true;
+    profileApi.twoFactor.get().then((s) => current && setTwoFactor(s.enabled), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [twoFactorVersion]);
 
   if (!list) return error ? <p role="alert" className="text-sm text-danger">{error}</p> : <p className="text-sm text-ink-muted">{t.loading}</p>;
   if (!list.available) return <p className="text-sm text-ink-muted">{t.passkeysUnavailable}</p>;

@@ -77,8 +77,13 @@ export function NewKeyPanel({ created, done }: { created: NewApiKey; done: () =>
   );
 }
 
-/** The user's API keys on the profile page: list, create, revoke. */
-export function ApiKeySection() {
+/**
+ * The user's API keys on the profile page: list, create, revoke.
+ * twoFactorVersion changes when two-factor authentication was turned on or
+ * off elsewhere on the page; the section then asks the server again whether
+ * a code is needed.
+ */
+export function ApiKeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: number }) {
   const [list, setList] = useState<ApiKeyList | null>(null);
   const [twoFactor, setTwoFactor] = useState(false);
   const [name, setName] = useState("");
@@ -92,9 +97,15 @@ export function ApiKeySection() {
 
   const load = useCallback(() => {
     apiKeyApi.list().then(setList, (err: unknown) => setError(t.failed(err instanceof Error ? err.message : String(err))));
-    profileApi.twoFactor.get().then((s) => setTwoFactor(s.enabled), () => undefined);
   }, []);
   useEffect(load, [load]);
+  useEffect(() => {
+    let current = true;
+    profileApi.twoFactor.get().then((s) => current && setTwoFactor(s.enabled), () => undefined);
+    return () => {
+      current = false;
+    };
+  }, [twoFactorVersion]);
 
   if (!list) return error ? <p role="alert" className="text-sm text-danger">{error}</p> : <p className="text-sm text-ink-muted">{t.loading}</p>;
 
