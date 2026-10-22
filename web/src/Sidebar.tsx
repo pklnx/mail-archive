@@ -289,20 +289,18 @@ export function SidebarPanel({ layout, controls, ...props }: PanelProps) {
     toggled.current = true;
     setCollapsed(c);
   };
-  if (collapsed) {
-    return (
-      <>
-        <SidebarRail state={props.state} accounts={props.accounts} select={props.select} controls={controls} expandRef={expandButton} onExpand={() => toggle(false)} />
-        <div className="h-full lg:hidden">
-          <Sidebar {...props} />
-        </div>
-      </>
-    );
-  }
+  // The full sidebar keeps its place in the tree, so collapsing and
+  // expanding does not remount it: its scroll position and the folders the
+  // user collapsed stay as they were.
   return (
     <>
-      <Sidebar {...props} onCollapse={() => toggle(true)} collapseRef={collapseButton} controls={controls} />
-      <SidebarResizer layout={layout} controls={controls} onCollapse={() => toggle(true)} />
+      {collapsed && (
+        <SidebarRail state={props.state} accounts={props.accounts} select={props.select} controls={controls} expandRef={expandButton} onExpand={() => toggle(false)} />
+      )}
+      <div className={collapsed ? "h-full lg:hidden" : "h-full"}>
+        <Sidebar {...props} onCollapse={collapsed ? undefined : () => toggle(true)} collapseRef={collapseButton} controls={controls} />
+      </div>
+      {!collapsed && <SidebarResizer layout={layout} controls={controls} onCollapse={() => toggle(true)} />}
     </>
   );
 }

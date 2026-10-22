@@ -272,6 +272,19 @@ describe("Sidebar rail", () => {
     expect(stored()).toBeNull();
   });
 
+  it("keeps the full sidebar mounted across collapse and expand", () => {
+    render(<Panel state={view("work", "Archive/2024")} />);
+    const nav = screen.getByRole("button", { name: t.manageAccounts }).closest("nav");
+    // The selected folder's parent was revealed; the user collapses it again.
+    expect(toggleFor("Archive").getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggleFor("Archive"));
+    fireEvent.click(collapseButton());
+    fireEvent.click(expandButton());
+    expect(toggleFor("Archive").getAttribute("aria-expanded")).toBe("false");
+    // Same element, so its scroll position is kept too.
+    expect(screen.getByRole("button", { name: t.manageAccounts }).closest("nav")).toBe(nav);
+  });
+
   it("collapses with Enter on the separator and focuses the expand button", () => {
     render(<Panel />);
     separator().focus();
