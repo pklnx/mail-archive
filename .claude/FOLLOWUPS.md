@@ -16,3 +16,10 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 | #135 Action review | `.gitleaksignore` and `.gitleaks.toml` are read from the PR's own checkout, so a PR could add a secret together with its allowlist entry. Require an explicit maintainer OK for changes to either file (CODEOWNERS or a reviewer-brief line). | done (#144, PR #147) |
 | #135 Action review | The Action reviewer could not read checks (`gh pr checks`: "Resource not accessible by integration" via GraphQL). Fix with #128. | obsolete: Claude Action removed |
 | #140 review | `.claude/briefs/implementer.md`: PR step read as if title and body were set after the label. | done (handover PR after #142) |
+| #153 reviews | `internal/archive/journal_import.go:130-133`: a second copy of the same bytes in one batch counts as present even when the first copy is left out as journaled or deleted by retention. Counts only. | open |
+| #153 second review | `docs/guide/importing.md:159-162`: "nothing is stored twice inside the account" overstates it; messages without Message-ID and the delivery race can give two copies. | open |
+| #153 second review | `cmd/mail-archive/import.go:184-190`: without `--label`, a `--from` path over 200 characters fails with a `--label:` error the user cannot place; truncate the default or name `--from`. | open |
+| #153 second review | `cmd/mail-archive/import.go:304-305`: a removed smtp account without `--journal` gets the hint "add --journal", which then says removed. Cosmetic. | open |
+| #153 second review | Optional: `CHECK (fill_id IS NULL OR import_id IS NULL)` on `message_locations`. | open |
+| #153 second review | `docs/guide/operations.md` 00029 row: deliveries wait while the ALTER holds its lock; suggest stopping the web server on very large archives, like the 00027 row. | open |
+| #153 first review | `TestFillCancelAndResume` (`internal/web/fills_test.go:292-304`) races: the fill status turns ok before `data.fill_done` is written (`internal/archive/fillrunner.go:235`) and the test polls with `time.Sleep`. Wait for the audit entry (e.g. via `AfterRun`). Failed once locally, not in CI. | open |
