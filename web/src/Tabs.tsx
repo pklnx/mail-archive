@@ -57,7 +57,7 @@ export function Tabs<Id extends string>({
   return (
     <>
       {/* Vertical padding keeps the focus ring inside the scrolling list. */}
-      <div role="tablist" aria-label={label} className="-mx-1 flex gap-1 overflow-x-auto p-1" onKeyDown={onKeyDown}>
+      <div role="tablist" aria-label={label} className="-mx-1 flex shrink-0 gap-1 overflow-x-auto p-1" onKeyDown={onKeyDown}>
         {tabs.map((x) => (
           <button
             key={x.id}

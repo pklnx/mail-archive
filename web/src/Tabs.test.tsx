@@ -35,6 +35,13 @@ function setup() {
 afterEach(cleanup);
 
 describe("Tabs", () => {
+  it("keeps the tablist from shrinking in a short flex column", () => {
+    // jsdom has no layout: this only checks the class that prevents the bar
+    // from collapsing when the panel is taller than its scrolling container.
+    setup();
+    expect(screen.getByRole("tablist", { name: "Sections" }).classList.contains("shrink-0")).toBe(true);
+  });
+
   it("renders a tablist with linked tabs and panels", () => {
     setup();
     expect(screen.getByRole("tablist", { name: "Sections" })).toBeTruthy();

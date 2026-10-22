@@ -193,6 +193,16 @@ for (const scheme of ["light", "dark"]) {
   await p.goto(base + "/?view=profile");
   await p.getByRole("heading", { name: "Profile" }).waitFor();
   await p.screenshot({ path: `${out}/profile.png` });
+  // The security tab. The panel is taller than the window; the top shows.
+  await p.getByRole("tab", { name: "Sign-in & security" }).click();
+  await p.getByRole("tabpanel", { name: "Sign-in & security" }).waitFor();
+  await p.mouse.move(0, 0);
+  await p.screenshot({ path: `${out}/profile-security.png`, animations: "disabled" });
+  // The API keys tab.
+  await p.getByRole("tab", { name: "API keys" }).click();
+  await p.getByRole("tabpanel", { name: "API keys" }).waitFor();
+  await p.mouse.move(0, 0);
+  await p.screenshot({ path: `${out}/profile-api-keys.png`, animations: "disabled" });
   await p.context().close();
 }
 

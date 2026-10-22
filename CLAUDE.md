@@ -35,6 +35,7 @@ Blocking in reviews only: crash, data loss/corruption, hang, wrong result in a m
 - Tests never touch real user data, real credentials or the network; secrets only in the secret store, never in chat or files.
 - Every behaviour change has tests; a bug fix has a regression test that fails without the fix. Tests wait for signals, never for time (no sleeps/fixed delays).
 - Locally run only the tests of what changed; CI runs everything.
+- A PR that changes the web UI updates the affected docs screenshots (`make docs-screenshots`) and the docs text that describes the changed UI in the same PR.
 - Agents never watch CI: push, open the PR, report. The coordinator gets woken per PR when the checks finish (wait until the checks appear first; see GitHub operations).
 - ≤3 tickets in parallel, ≤2 PRs in CI at a time.
 - A flaky-test rerun gets a row in `docs/development/flaky-tests.md`; a test listed twice is fixed right away.

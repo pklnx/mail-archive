@@ -74,20 +74,29 @@ their own entries there too.
 
 ## Your profile
 
-Click your name at the bottom of the sidebar to open your profile. There you
-choose the [language and formats](./web-ui#appearance-and-language) of the
-web UI and change your password. For the password you need the current one.
-Other devices are logged out; the one you use stays logged in.
+Click your name at the bottom of the sidebar to open your profile. It has
+three tabs:
 
-![Profile page](/screenshots/profile.png)
+- **Display:** the [language and formats](./web-ui#appearance-and-language)
+  of the web UI.
+- **Sign-in & security:** your password, [2FA](#two-factor-authentication)
+  and [passkeys](#passkeys).
+- **API keys:** [keys for scripts](#api-keys).
+
+To change your password you need the current one. Other devices are logged
+out; the one you use stays logged in.
+
+![Profile page, tab Display](/screenshots/profile.png)
+
+![Profile page, tab Sign-in & security](/screenshots/profile-security.png)
 
 Wrong current passwords count like failed logins: after 5 within 15 minutes,
 you have to wait.
 
 ## Two-factor authentication
 
-In your profile, **Set up 2FA** shows a QR code. Scan it with an
-authenticator app (for example Aegis, 2FAS or Google Authenticator) or type
+In your profile, on the **Sign-in & security** tab, **Set up 2FA** shows a
+QR code. Scan it with an authenticator app (for example Aegis, 2FAS or Google Authenticator) or type
 the key below it, then enter the 6-digit code from the app.
 
 You then get 10 recovery codes, shown **once**. Keep them somewhere safe:
@@ -118,8 +127,8 @@ key, without password and code. It works only at the address in
 `MAIL_ARCHIVE_PUBLIC_URL` (see [Configuration](../reference/configuration)),
 over HTTPS or on `localhost`.
 
-In your profile, enter a name for the passkey (like *iPhone*), your
-password and, if you use 2FA, a code, then click **Add passkey** and confirm
+On the **Sign-in & security** tab, enter a name for the passkey (like
+*iPhone*), your password and, if you use 2FA, a code, then click **Add passkey** and confirm
 on your device. You can have up to 10 passkeys.
 
 At the login, click **Sign in with a passkey**, or pick the passkey in the
@@ -140,7 +149,7 @@ Scripts, cron jobs and other tools use an API key instead of your login.
 This also works for admins and everyone with 2FA or passkeys: the second
 factor is checked when the key is created, not on every use.
 
-In your profile under **API keys**, enter a name (like *backup script*),
+In your profile, on the **API keys** tab, enter a name (like *backup script*),
 choose the scopes and when the key expires, confirm with your password and,
 if you use 2FA, a code, then click **Create API key**. The key is shown
 once: copy it right away. It cannot be shown again; create a new one if it
@@ -157,6 +166,8 @@ user management, also for an admin. How to use a key is described in the
 The list shows each key with its last 4 characters, when it expires and
 when it was last used. **Revoke** stops a key at once. You can have up to 20
 active keys; revoked and expired keys stay listed for 30 days.
+
+![Profile page, tab API keys](/screenshots/profile-api-keys.png)
 
 Changing your password keeps your keys, so scripts do not break. Revoke a
 key if it may be known to others.
