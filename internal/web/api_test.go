@@ -101,6 +101,7 @@ type apiFixture struct {
 	st     *store.Store
 	blobs  *blobstore.Store
 	srv    *httptest.Server
+	bare   http.Handler // the server's handler without the fixture's session cookie
 	dbURL  string
 	cookie string            // session token; empty means the fixture's own user
 	ids    map[string]string // name -> sha256
@@ -168,7 +169,8 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		}
 	}
 	s := New(st, blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}})
-	f.srv = httptest.NewServer(loggedIn(t, st, s.Handler()))
+	f.bare = s.Handler()
+	f.srv = httptest.NewServer(loggedIn(t, st, f.bare))
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -364,14 +366,35 @@ func TestMessageHTML(t *testing.T) {
 	if strings.Contains(csp, "allow-scripts") || bareScheme.MatchString(csp) {
 		t.Errorf("CSP too permissive: %q", csp)
 	}
-	if !bytes.Contains(body, []byte(`src="parts/1"`)) || !bytes.HasPrefix(body, []byte(`<base target="_blank">`)) {
+	// The cid: logo is embedded; the frame makes no request for it.
+	if !bytes.Contains(body, []byte(`<img src="data:image/png;base64,iVBORw0KGgo=">`)) ||
+		!bytes.HasPrefix(body, []byte(`<base target="_blank">`)) ||
+		bytes.Contains(body, []byte("parts/")) || bytes.Contains(body, []byte("cid:")) {
 		t.Errorf("body = %s", body)
+	}
+	if got := cspDirective(csp, "img-src"); got != "data:" {
+		t.Errorf("img-src = %q, want data:", got)
+	}
+	if !strings.Contains(csp, "; sandbox allow-popups allow-popups-to-escape-sandbox") || strings.Contains(csp, "allow-same-origin") {
+		t.Errorf("sandbox changed: %q", csp)
 	}
 
 	resp = f.get("/api/messages/" + f.ids["rich"] + "/html?images=1")
-	if csp := resp.Header.Get("Content-Security-Policy"); !bareScheme.MatchString(csp) {
+	csp = resp.Header.Get("Content-Security-Policy")
+	if !bareScheme.MatchString(csp) || cspDirective(csp, "img-src") != "data: https: http:" ||
+		strings.Contains(csp, "allow-scripts") || strings.Contains(csp, "allow-same-origin") {
 		t.Errorf("images=1 CSP = %q", csp)
 	}
+}
+
+// cspDirective returns the sources of one directive of a CSP header.
+func cspDirective(csp, name string) string {
+	for _, d := range strings.Split(csp, ";") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(d), name+" "); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 func TestRawAndParts(t *testing.T) {

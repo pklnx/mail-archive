@@ -30,9 +30,9 @@ Each event writes exactly one entry.
 | `auth.logout` | A valid session logged out. |
 | `message.search` | A list with a search or filter: `q`, `from`, `to`, `attachment`, `after`, `before` or `has`. The details hold every parameter that was set. |
 | `message.open` | A message was opened. |
-| `message.html` | Its HTML body was loaded; `images: true` with remote images. |
+| `message.html` | Its HTML body was loaded; `images: true` with remote images. `inline_images` counts the embedded images (`cid:` references) shown, `inline_omitted` those shown empty (unknown, not an image type that is shown, past the 10 MiB limit, or unreadable). |
 | `message.raw` | The `.eml` file was downloaded. |
-| `message.part` | An attachment or inline image was loaded; `index`, `content_type` and `inline`. |
+| `message.part` | An attachment was loaded; `index`, `content_type` and `inline`. In older entries also an inline image of an HTML message. |
 | `sync.start` | A sync was started by hand, for one account (`reconcile`) or all (`accounts`, the number queued). |
 | `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. |
 | `account.purge`, `account.purge_batch`, `account.purge_finish`, `account.purge_cancel` | A removed account [deleted completely](./accounts#deleting-a-removed-account-completely): confirmed (`purge_id`, `owner`, `kind`, `locations`, `messages`, `deleted`, `kept`), each batch (`locations`, `deleted`, `kept`), its end with the totals, and a cancellation with its `note`. The deleted messages themselves are recorded per message in the deletion records. Purges resumed by the web server are written with actor `cli` and `by: web server`. |
@@ -61,8 +61,8 @@ Not recorded:
   grow the log. The login limits bound the failures that are recorded.
 
 Some reading writes several entries. Opening a message with an HTML body
-writes `message.open`, `message.html`, and one `message.part` per inline
-image. The search box searches as you type: a pause of 300 ms in "invoice"
+writes `message.open` and `message.html`; its inline images are counted on
+`message.html`. The search box searches as you type: a pause of 300 ms in "invoice"
 can write "inv" and "invoice". Each download request is recorded, also a
 repeated or resumed one. The entries record what the browser asked for;
 whether it was shown cannot be known.
@@ -145,7 +145,8 @@ the message.
 
 Two kinds of rows are folded, so that the list reads like what happened:
 
-- the inline images of an HTML message go under its "Showed HTML" row;
+- in older entries, the inline images of an HTML message (written as
+  `message.part`) go under its "Showed HTML" row;
 - searches typed into the search box, which writes one row per pause
   ("inv", "invoice"), go under the last search when each is the start of
   the next and they are less than 10 seconds apart.

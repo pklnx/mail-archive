@@ -2388,7 +2388,11 @@ paths:
       summary: The HTML body
       description: |
         For a sandboxed iframe. The Content-Security-Policy blocks scripts and
-        remote content; remote images only with `images=1`.
+        remote content; remote images only with `images=1`. Inline images
+        (`cid:` references to PNG, JPEG, GIF or WebP parts, up to 10 MiB of
+        `data:` URLs per response) are embedded as `data:` URLs; other,
+        unknown or omitted references become `data:,`. The frame needs no
+        request to the parts endpoint.
       parameters:
         - name: images
           in: query
