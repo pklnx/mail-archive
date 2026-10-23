@@ -46,3 +46,5 @@ Blocking in reviews only: crash, data loss/corruption, hang, wrong result in a m
 At session start read `.claude/HANDOVER.md` and `.claude/FOLLOWUPS.md`. Update `HANDOVER.md` before a session ends.
 
 Pointers: [`docs/development/process.md`](docs/development/process.md), [`.claude/briefs/implementer.md`](.claude/briefs/implementer.md), [`.claude/briefs/reviewer.md`](.claude/briefs/reviewer.md).
+
+Coordination rules and model allocation: [pklnx/dev-process](https://github.com/pklnx/dev-process).

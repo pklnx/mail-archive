@@ -200,6 +200,7 @@ in `CLAUDE.md` at the repository root.
 | Label | Meaning |
 |---|---|
 | `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). `feature` makes at least a minor release. |
+| `security` | Security hardening (never an undisclosed vulnerability; set by hand). Kind label; does not change the version (a patch release unless other labels raise it). |
 | `dependencies` | Dependency update (set by Dependabot). |
 | `db-migration` | Changes the database schema (set automatically). Back up before upgrading. Makes at least a minor release. |
 | `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
