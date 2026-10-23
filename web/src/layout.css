@@ -416,6 +416,40 @@ body,
   }
 }
 
+/* The open message scrolls as one unit (#200): from 48rem the reading pane
+   below its bar is the one scroller; it is a size container, so the HTML
+   frame can be exactly as tall as its visible area (100cqh). */
+@media (min-width: 48rem) {
+  .reader-scroll {
+    overflow-y: auto;
+    container-type: size;
+  }
+  .reader-scroll:focus-visible {
+    outline: 2px solid var(--cds-focus);
+    outline-offset: -2px;
+  }
+}
+/* Phones: the page scrolls while a message is open, with the browser's own
+   momentum and its collapsing address bar. The shell grows with the
+   message instead of filling the screen, and the reader bar stays below
+   Carbon's fixed header. The list keeps its own scroller. */
+@media (max-width: 47.98rem) {
+  #root:has(> .app-shell--page-scroll),
+  .app-shell--page-scroll {
+    height: auto;
+    min-height: 100%;
+  }
+  .app-shell--page-scroll .app-view {
+    grid-template-rows: auto;
+  }
+  .app-shell--page-scroll .reader-bar {
+    position: sticky;
+    z-index: 1;
+    inset-block-start: calc(3rem + env(safe-area-inset-top));
+    background-color: var(--cds-background);
+  }
+}
+
 /* Phones: where the user is, above the search. */
 .mail-place {
   display: flex;
@@ -816,11 +850,11 @@ body,
   color: var(--cds-text-secondary);
 }
 
-/* A message: its header, the conversation, then the body. */
+/* A message: its header, the conversation, then the body. It flows: the
+   reading pane or the page scrolls it as one (#200). */
 .message {
   display: flex;
   flex-direction: column;
-  block-size: 100%;
 }
 .message__note {
   padding: 1.5rem;
@@ -885,6 +919,44 @@ body,
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+}
+/* Phones: the actions as icons and Details in one row (#200); it wraps
+   only below about 375px. The icon buttons bring their own space. */
+.message__actions--compact {
+  gap: 0;
+}
+.message__actions--compact .cds--btn--tertiary {
+  padding-inline: 0.75rem;
+}
+.message__details-toggle.cds--btn {
+  flex: none;
+  margin-inline-start: auto;
+}
+.message__details:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+@media (pointer: coarse) {
+  .message__actions--compact .cds--btn--sm {
+    align-items: center;
+    min-block-size: 2.5rem;
+    padding-block: 0;
+  }
+}
+/* Phones: tighter, so the body starts on the first screen. */
+@media (max-width: 47.98rem) {
+  .message__header {
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+  .message__fields {
+    row-gap: 0.125rem;
+  }
+  .message__attachments {
+    margin-inline: -0.75rem;
+    padding-inline: 0.75rem;
+  }
 }
 .message__attachments {
   display: flex;
@@ -955,38 +1027,55 @@ body,
 
 /* The HTML body in its sandboxed frame. HTML mail brings its own colors,
    so the frame keeps the white paper in both themes; in dark mode it sits
-   as a sheet on the dark background instead of filling the pane. */
+   as a sheet on the dark background instead of filling the pane.
+   The frame cannot be as tall as its content (no script and no same
+   origin in it), so it is as tall as the visible area (#200): the pane
+   below its bar from 48rem, the screen below the fixed header and the
+   reader bar (3rem each) on phones. Scrolled to its end, the frame fills
+   that area and the mail scrolls inside it like a page of its own. svh:
+   the frame does not change while the address bar collapses. */
 .message__html {
+  --message-visible: calc(100svh - 6rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  --message-sheet: 0px;
   display: flex;
-  flex: 1;
   flex-direction: column;
-  min-block-size: 0;
+  padding: var(--message-sheet);
 }
 .message__frame {
-  flex: 1;
-  min-block-size: 0;
+  display: block;
   inline-size: 100%;
+  block-size: calc(var(--message-visible) - 2 * var(--message-sheet));
   border: 0;
   /* HTML mail stays on white in both themes: it brings its own colors. */
   background-color: #ffffff;
 }
 .cds--g100 .message__html {
-  padding: 0.75rem;
+  --message-sheet: 0.75rem;
 }
 .cds--g100 .message__frame {
   border: 1px solid var(--cds-border-subtle-01);
 }
 @media (min-width: 48rem) {
-  .cds--g100 .message__html {
-    padding: 1rem;
+  .message__html {
+    --message-visible: 100cqh;
   }
+  .cds--g100 .message__html {
+    --message-sheet: 1rem;
+  }
+}
+/* "Show full message" while the frame is gated: at the bottom of the
+   visible area (sticky), over the frame; the margins take its place back,
+   so the frame still ends where the scroller does. */
+.message__full.cds--btn {
+  position: sticky;
+  z-index: 1;
+  align-self: center;
+  margin-block: -3.5rem 1rem;
+  inset-block-end: calc(1rem + env(safe-area-inset-bottom));
 }
 
 /* The plain-text body, set for reading. */
 .message__text {
-  overflow: auto;
-  flex: 1;
-  min-block-size: 0;
   padding: 1rem;
 }
 @media (min-width: 48rem) {
@@ -1051,11 +1140,9 @@ body,
   margin-block-start: 0.5rem;
 }
 
-/* The other messages of the conversation, above the body. */
+/* The other messages of the conversation, above the body. No scroller of
+   its own: from 4 messages on it is folded around the open one (#200). */
 .conversation {
-  overflow-y: auto;
-  flex: none;
-  max-block-size: 12rem;
   padding: 0.5rem 1rem;
   border-block-end: 1px solid var(--cds-border-subtle-01);
 }
@@ -1072,6 +1159,18 @@ body,
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.32px;
+}
+/* Show n earlier / later messages: one compact row, wrapping only when
+   they do not fit; their text lines up with the entries'. */
+.conversation__toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.25rem;
+  margin-block-start: 0.25rem;
+  margin-inline-start: -0.25rem;
+}
+.conversation__toggles .cds--btn {
+  padding-inline: 0.5rem;
 }
 .conversation__list {
   margin: 0.25rem 0 0;

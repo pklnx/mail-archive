@@ -2,10 +2,13 @@
 // frame exactly as before #168 (the regression test below), remote images
 // stay blocked until asked for, and journal mail shows its envelope in an
 // accordion. The API is a stub; no network.
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+// #200: on phones the header is compact (the rest behind Details), the
+// conversation is folded around the open message, and the HTML frame is
+// gated until the page or pane is scrolled to its end.
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageView } from "./MessageView";
-import type { Location, MessageDetail } from "./api";
+import type { ConversationEntry, Location, MessageDetail } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
 
 const id = "a".repeat(64);
@@ -26,14 +29,34 @@ function message(over: Partial<MessageDetail> = {}): MessageDetail {
   };
 }
 
+/** matchMedia that answers the two-pane query (48rem): the desktop layout, or the phone one. */
+function twoPane(on: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) =>
+    ({
+      matches: on && query.includes("48rem"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList,
+  );
+}
+
 let detail: MessageDetail;
+let conversation: ConversationEntry[];
 beforeEach(() => {
   applySettings({ language: "en", locale: "en" });
   detail = message();
+  conversation = [];
+  // The desktop layout unless a test says otherwise.
+  twoPane(true);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string) => {
-      const body = path.endsWith("/conversation") ? { messages: [], total: 0, truncated: false } : detail;
+      const body = path.endsWith("/conversation") ? { messages: conversation, total: conversation.length, truncated: false } : detail;
       return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
     }),
   );
@@ -157,5 +180,189 @@ describe("the message header", () => {
       expect(html, s).not.toContain(`>${s}`);
     }
     for (const s of ["Remote images can", "The server renumbered", "very large"]) expect(html, s).not.toContain(s);
+  });
+});
+
+describe("the compact header on phones (#200)", () => {
+  beforeEach(() => twoPane(false));
+
+  it("shows subject, From and Date, and puts the rest behind a closed Details toggle", async () => {
+    detail = message({
+      cc: "robin@example.org",
+      locations: [location({ account: "journal", envelope: { mailFrom: "sam@example.org", rcptTo: ["alex@example.org"], receivedAt: "2026-10-01T09:00:01Z", clientIp: "", helo: "" } })],
+    });
+    const article = await show();
+    expect(within(article).getByRole("heading", { level: 1 }).textContent).toBe(detail.subject);
+    const terms = () => within(article).queryAllByRole("term").map((el) => el.textContent);
+    expect(terms()).toEqual([t.from, t.date]);
+    const toggle = within(article).getByRole("button", { name: t.details });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(panel.hidden).toBe(true);
+    expect(within(article).queryByRole("button", { name: t.envelope("journal") })).toBeNull();
+    const values = () => within(article).queryAllByRole("definition").map((el) => el.textContent);
+    expect(values()).not.toContain("alex@example.org");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.hidden).toBe(false);
+    expect(terms()).toEqual([t.from, t.date, t.to, t.cc, t.foundIn, t.retentionEnds]);
+    expect(values()).toContain("alex@example.org");
+    expect(within(article).getByText("journal / INBOX")).toBeTruthy();
+    expect(within(article).getByRole("button", { name: t.envelope("journal") })).toBeTruthy();
+    // Each field once: no hidden copy for the other layout.
+    expect(within(article).getAllByText("robin@example.org")).toHaveLength(1);
+  });
+
+  it("has the actions in one row: icon buttons named as before, remote images as text", async () => {
+    const article = await show();
+    const toggle = within(article).getByRole("button", { name: t.showText });
+    expect(within(article).getByRole("button", { name: t.loadRemoteImages }).textContent).toBe(t.loadRemoteImages);
+    const download = within(article).getByRole("link", { name: t.downloadEml });
+    expect(download.getAttribute("href")).toBe(`/api/messages/${id}/raw`);
+    expect(download.hasAttribute("download")).toBe(true);
+    fireEvent.click(toggle);
+    expect(within(article).getByRole("button", { name: t.showHTML })).toBeTruthy();
+    expect(within(article).queryByTitle(t.messageContent)).toBeNull();
+  });
+
+  it("keeps the desktop header without Details", async () => {
+    twoPane(true);
+    const article = await show();
+    expect(within(article).queryByRole("button", { name: t.details })).toBeNull();
+    expect(within(article).getAllByRole("term").map((el) => el.textContent)).toEqual([t.from, t.to, t.date, t.foundIn, t.retentionEnds]);
+    expect(within(article).getByRole("button", { name: t.showText }).textContent).toBe(t.showText);
+  });
+});
+
+describe("the conversation fold (#200)", () => {
+  const entry = (n: number, relation: ConversationEntry["relation"] = "thread"): ConversationEntry => ({
+    id: relation === "self" ? id : String(n).repeat(64).slice(0, 64),
+    subject: `Message ${n}`,
+    from: "Sam Taylor <sam@example.org>",
+    sentAt: `2026-10-0${n}T09:00:00Z`,
+    sortAt: `2026-10-0${n}T09:00:00Z`,
+    relation,
+  });
+  const rows = async () => {
+    const section = await screen.findByRole("region", { name: t.conversation });
+    return { section, entries: () => within(section).getAllByRole("listitem").map((li) => li.textContent) };
+  };
+
+  it("shows the open message with one neighbour on each side, the rest behind the toggles", async () => {
+    conversation = [1, 2, 3, 4, 5, 6].map((n) => entry(n, n === 4 ? "self" : "thread"));
+    await show();
+    const { section, entries } = await rows();
+    expect(entries()).toHaveLength(3);
+    expect(entries()[0]).toContain("Message 3");
+    expect(entries()[2]).toContain("Message 5");
+    const earlier = within(section).getByRole("button", { name: "Show 2 earlier messages" });
+    expect(within(section).getByRole("button", { name: "Show 1 later message" })).toBeTruthy();
+
+    fireEvent.click(earlier);
+    expect(entries()).toHaveLength(5);
+    expect(entries()[0]).toContain("Message 1");
+    expect(within(section).queryByRole("button", { name: /earlier/ })).toBeNull();
+    // The toggle is gone; the focus moves to the first message it revealed.
+    expect(document.activeElement?.textContent).toContain("Message 1");
+
+    fireEvent.click(within(section).getByRole("button", { name: "Show 1 later message" }));
+    expect(entries()).toHaveLength(6);
+    expect(within(section).queryByRole("button", { name: /^Show/ })).toBeNull();
+  });
+
+  it("shows a conversation of 3 in full, without toggles", async () => {
+    conversation = [1, 2, 3].map((n) => entry(n, n === 3 ? "self" : "thread"));
+    await show();
+    const { section, entries } = await rows();
+    expect(entries()).toHaveLength(3);
+    expect(within(section).queryByRole("button", { name: /^Show/ })).toBeNull();
+  });
+});
+
+describe("the frame gate (#200)", () => {
+  // The page is the scroller here (no ancestor scrolls on its own); jsdom has no layout, so its sizes are set.
+  const page = document.scrollingElement ?? document.documentElement;
+  let top = 0;
+  beforeEach(() => {
+    top = 0;
+    Object.defineProperty(page, "scrollHeight", { configurable: true, get: () => 2000 });
+    Object.defineProperty(page, "clientHeight", { configurable: true, get: () => 600 });
+    Object.defineProperty(page, "scrollTop", { configurable: true, get: () => top, set: (v: number) => (top = Math.min(v, 1400)) });
+  });
+  afterEach(() => {
+    for (const p of ["scrollHeight", "clientHeight", "scrollTop"]) delete (page as unknown as Record<string, unknown>)[p];
+  });
+  const frame = (article: HTMLElement) => within(article).getByTitle(t.messageContent) as HTMLIFrameElement;
+
+  it("takes no pointer events and shows the hint until the scroller is at its end", async () => {
+    const article = await show();
+    expect(frame(article).style.pointerEvents).toBe("none");
+    expect(within(article).getByRole("button", { name: t.showFullMessage })).toBeTruthy();
+
+    act(() => {
+      top = 1399.5;
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(frame(article).style.pointerEvents).toBe("");
+    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
+
+    // Back up: gated again.
+    act(() => {
+      top = 100;
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(frame(article).style.pointerEvents).toBe("none");
+  });
+
+  it("scrolls to the end on a click on the hint or on the gated frame", async () => {
+    const article = await show();
+    fireEvent.click(within(article).getByRole("button", { name: t.showFullMessage }));
+    expect(top).toBe(1400);
+    act(() => void window.dispatchEvent(new Event("scroll")));
+    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
+
+    act(() => {
+      top = 0;
+      window.dispatchEvent(new Event("scroll"));
+    });
+    // A click on the frame lands on its box: the frame takes no pointer events.
+    fireEvent.click(frame(article).parentElement!);
+    expect(top).toBe(1400);
+  });
+
+  it("does not take the focus back to a revealed conversation entry when the gate flips (regression)", async () => {
+    const n = (i: number) => String(i).repeat(64).slice(0, 64);
+    conversation = [1, 2, 3, 4, 5, 6].map((i) => ({
+      id: i === 4 ? id : n(i), subject: `Message ${i}`, from: "Sam Taylor <sam@example.org>",
+      sentAt: `2026-10-0${i}T09:00:00Z`, sortAt: `2026-10-0${i}T09:00:00Z`, relation: i === 4 ? "self" : "thread",
+    }));
+    const article = await show();
+    const section = await screen.findByRole("region", { name: t.conversation });
+    fireEvent.click(within(section).getByRole("button", { name: "Show 2 earlier messages" }));
+    const entry = document.activeElement;
+    expect(entry?.textContent).toContain("Message 1");
+
+    // The user moves on: the hint scrolls to the end, the gate opens and the message re-renders.
+    const hint = within(article).getByRole("button", { name: t.showFullMessage });
+    hint.focus();
+    fireEvent.click(hint);
+    act(() => void window.dispatchEvent(new Event("scroll")));
+    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
+    expect(document.activeElement).not.toBe(entry);
+    expect(top).toBe(1400);
+
+    // And again on the way back up.
+    act(() => {
+      top = 0;
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(document.activeElement).not.toBe(entry);
+  });
+
+  it("does not gate the plain-text body", async () => {
+    detail = message({ hasHtml: false });
+    const article = await show();
+    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
   });
 });

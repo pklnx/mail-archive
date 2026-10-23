@@ -228,11 +228,21 @@ export function App({ user, logout }: Props) {
     return () => window.removeEventListener("keydown", onKey, true);
   });
 
+  // Each message starts at its top: j/k and the conversation would open
+  // the next one scrolled as far as the last (the pane, or the page on phones).
+  const readerScroll = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (readerScroll.current) readerScroll.current.scrollTop = 0;
+    // The page scrolls only on phones; on desktop this is a no-op today.
+    if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+  }, [state.m]);
+
   const gone = accounts.data?.accounts.reduce((n, a) => n + a.goneMessages, 0) ?? 0;
   const pageInert = hide;
 
   return (
-    <div className="app-shell">
+    // While a message is open on a phone the page scrolls, not a box inside it (#200; layout.css).
+    <div className={`app-shell${reading && mailView ? " app-shell--page-scroll" : ""}`}>
       {/* Usable next to the SideNav overlay (its menu button closes it); inert behind the folder overlay. */}
       {/* Header passes inert on to its <header>; its types only lack the attribute. */}
       <Header aria-label={t.appName} {...({ inert: foldersOpen || undefined } as object)}>
@@ -473,7 +483,13 @@ export function App({ user, logout }: Props) {
                     </div>
                   )}
                 </div>
-                <div className="mail-pane__fill">
+                {/* From 48rem the one scroller of the message (layout.css); on phones the page scrolls.
+                    A region in the tab order there, so the keyboard can scroll it. */}
+                <div
+                  ref={readerScroll}
+                  className="mail-pane__fill reader-scroll"
+                  {...(!phone && { tabIndex: 0, role: "region", "aria-label": t.readingPane })}
+                >
                   <MessageView id={state.m} open={(m) => update({ m })} />
                 </div>
               </>
