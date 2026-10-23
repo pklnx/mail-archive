@@ -42,7 +42,7 @@ func loggedIn(t *testing.T, st *store.Store, h http.Handler) http.Handler {
 		t.Fatal(err)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if sessionToken(r) == "" {
+		if len(allSessionTokens(r)) == 0 {
 			r.AddCookie(&http.Cookie{Name: cookieName, Value: token})
 		}
 		h.ServeHTTP(w, r)

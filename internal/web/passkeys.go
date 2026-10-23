@@ -431,7 +431,7 @@ func (s *Server) handleRemovePasskey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := currentSession(r)
-	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.auditEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(sessionToken(r)))
+	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.auditEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(s.sessionToken(r)))
 	if err != nil {
 		s.failStore(w, r, err)
 		return

@@ -48,7 +48,6 @@ const hstsValue = "max-age=31536000"
 
 func (s *Server) protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.warnUntrustedForwardedProto(r)
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
@@ -66,6 +65,9 @@ func (s *Server) protect(next http.Handler) http.Handler {
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
 		}
+		// After the host check: a scanner or a client with a wrong Host must
+		// not use up the one warning and get its address named as the proxy.
+		s.warnUntrustedForwardedProto(r)
 		// Before the routes: a refused request writes no audit entry.
 		if !fetchMetadataAllowed(r) {
 			s.log.Debug("request refused by its fetch metadata", "path", r.URL.Path,

@@ -308,7 +308,7 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.auditEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(sessionToken(r))); err != nil {
+	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.auditEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(s.sessionToken(r))); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, "two-factor authentication changed meanwhile; reload and try again", nil)
 			return

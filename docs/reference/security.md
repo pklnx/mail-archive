@@ -106,7 +106,13 @@ reach it. To use it from your home network or a VPN:
    below ([Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy)
    shows how to find it). Until then logging in works, but the cookie lacks
    `Secure` and the `__Host-` prefix and no HSTS is sent; the server logs a
-   warning once, naming the address the header came from.
+   warning once, naming the address the header came from. Over HTTPS only
+   the `__Host-` cookie logs in, never the plain one: a plain cookie can be
+   planted over plain HTTP or from another host name of the domain, and must
+   not log the browser into someone else's session. HSTS covers the host
+   name, all ports, for a year: do not serve the same name over plain HTTP
+   later (for LAN access, for example), because browsers that saw HSTS
+   refuse it until the year is over.
 2. **Allow the host name** you type in the browser in
    `MAIL_ARCHIVE_ALLOWED_HOSTS` (comma-separated, without port). Requests with
    other names are rejected with `host not allowed` and logged.

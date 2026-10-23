@@ -100,11 +100,14 @@ func TestSecureCookie(t *testing.T) {
 		secure bool
 	}{
 		{"trusted proxy", "10.1.2.3:4000", "https", false, true},
+		{"IPv4-mapped trusted proxy", "[::ffff:10.1.2.3]:4000", "https", false, true},
 		{"loopback proxy", "127.0.0.1:4000", "https", false, true},
 		{"IPv6 loopback proxy", "[::1]:4000", "https", false, true},
+		{"IPv4-mapped loopback proxy", "[::ffff:127.0.0.1]:4000", "https", false, true},
 		{"direct tls", "192.0.2.1:1234", "", true, true},
 		// Anybody else could set the header: it does not count.
 		{"untrusted peer", "192.0.2.1:1234", "https", false, false},
+		{"IPv4-mapped untrusted peer", "[::ffff:192.0.2.1]:1234", "https", false, false},
 		{"plain http", "10.1.2.3:4000", "", false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -156,10 +159,12 @@ func TestWarnUntrustedForwardedProto(t *testing.T) {
 		}
 		return strings.Count(buf.String(), msg), buf.String()
 	}
-	n, logged := run(nil, "192.0.2.1:1234", "https", false)
-	if n != 1 || !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, "peer=192.0.2.1") ||
-		!strings.Contains(logged, config.EnvTrustedProxies) || strings.Contains(logged, "198.51.100.7") {
-		t.Fatalf("untrusted peer: %d warnings: %s", n, logged)
+	for _, remote := range []string{"192.0.2.1:1234", "[::ffff:192.0.2.1]:1234"} {
+		n, logged := run(nil, remote, "https", false)
+		if n != 1 || !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, "peer=192.0.2.1") ||
+			!strings.Contains(logged, config.EnvTrustedProxies) || strings.Contains(logged, "198.51.100.7") {
+			t.Fatalf("untrusted peer %s: %d warnings: %s", remote, n, logged)
+		}
 	}
 	for _, c := range []struct {
 		name    string
@@ -170,6 +175,7 @@ func TestWarnUntrustedForwardedProto(t *testing.T) {
 	}{
 		{"loopback", nil, "127.0.0.1:1234", "https", false},
 		{"IPv6 loopback", nil, "[::1]:1234", "https", false},
+		{"IPv4-mapped loopback", nil, "[::ffff:127.0.0.1]:1234", "https", false},
 		{"trusted proxy", []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}, "192.0.2.1:1234", "https", false},
 		{"without the header", nil, "192.0.2.1:1234", "", false},
 		{"http", nil, "192.0.2.1:1234", "http", false},
@@ -223,10 +229,80 @@ func TestLogoutExpiresBothCookies(t *testing.T) {
 	}
 }
 
+// A request with a Host that is not allowed does not use up the one
+// warning: a scanner or a LAN client would otherwise get its address named
+// as the proxy, and the real misconfiguration would log nothing.
+func TestWarnUntrustedForwardedProtoAfterHostCheck(t *testing.T) {
+	const msg = "X-Forwarded-Proto from a peer that is neither loopback nor a trusted proxy is ignored"
+	var buf bytes.Buffer
+	h := New(nil, nil, slog.New(slog.NewTextHandler(&buf, nil)), Options{AllowedHosts: []string{"mail.example"}}).Handler()
+	wrong := httptest.NewRequest("GET", "https://scanner.example/healthz", nil)
+	wrong.TLS, wrong.RemoteAddr = nil, "198.51.100.9:1234"
+	wrong.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, wrong)
+	if rec.Code != 403 || strings.Contains(buf.String(), msg) {
+		t.Fatalf("wrong host: %d, log: %s", rec.Code, buf.String())
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, hardeningRequest("GET", "/healthz", "", "192.0.2.1:1234", "https", false))
+	if rec.Code != 200 || strings.Count(buf.String(), msg) != 1 || !strings.Contains(buf.String(), "peer=192.0.2.1") ||
+		strings.Contains(buf.String(), "peer=198.51.100.9") {
+		t.Fatalf("allowed host: %d, log: %s", rec.Code, buf.String())
+	}
+}
+
+// On a request over HTTPS only the __Host- cookie logs in, on a plain
+// request only the plain one. A plain cookie planted over plain HTTP or
+// from a sibling host name next to a __Host- cookie of an ended session
+// must not log the user into the planter's session (login CSRF).
+func TestSessionCookieOfTheScheme(t *testing.T) {
+	s, st := hardeningServer(t, io.Discard)
+	h := s.Handler()
+	ctx := context.Background()
+	alice, err := st.GetUserByName(ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mallory, err := st.CreateUser(ctx, "mallory", "unused", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planted := &http.Cookie{Name: cookieName, Value: newSession(t, st, mallory.ID)}
+	stale := &http.Cookie{Name: secureCookieName, Value: "stale-token-of-an-ended-session"}
+	own := newSession(t, st, alice.ID)
+	const loopback, direct = "127.0.0.1:4000", "192.0.2.1:1234"
+	for _, c := range []struct {
+		name    string
+		remote  string
+		proto   string
+		cookies []*http.Cookie
+		want    int
+	}{
+		{"secure: planted plain next to a stale __Host-", loopback, "https", []*http.Cookie{stale, planted}, 401},
+		{"secure: planted plain alone", loopback, "https", []*http.Cookie{planted}, 401},
+		{"secure: own session in a plain cookie", loopback, "https", []*http.Cookie{{Name: cookieName, Value: own}}, 401},
+		{"secure: own session in __Host- next to a planted plain", loopback, "https", []*http.Cookie{planted, {Name: secureCookieName, Value: own}}, 200},
+		{"plain: own session in a __Host- cookie", direct, "", []*http.Cookie{{Name: secureCookieName, Value: own}}, 401},
+		{"plain: own session in a plain cookie next to a stale __Host-", direct, "", []*http.Cookie{stale, {Name: cookieName, Value: own}}, 200},
+	} {
+		for _, path := range []string{"/api/session", "/api/status"} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, hardeningRequest("GET", path, "", c.remote, c.proto, false, c.cookies...))
+			if rec.Code != c.want {
+				t.Errorf("%s, %s: %d, want %d: %s", c.name, path, rec.Code, c.want, rec.Body)
+			}
+			if strings.Contains(rec.Body.String(), "mallory") {
+				t.Errorf("%s, %s: logged in as the planter: %s", c.name, path, rec.Body)
+			}
+		}
+	}
+}
+
 // A browser behind a proxy that no longer counts (not trusted, not
 // loopback, such as the Compose gateway) still holds a __Host- cookie of an
-// ended session next to the plain one: the valid one counts, and logout
-// expires both.
+// ended session next to the plain one: the plain one counts there, and
+// logout expires both.
 func TestStaleSecureCookie(t *testing.T) {
 	s, _ := hardeningServer(t, io.Discard)
 	h := s.Handler()
@@ -266,18 +342,18 @@ func TestStaleSecureCookie(t *testing.T) {
 	}
 }
 
-// addStaleCookie adds a __Host- cookie of an ended session to f's browser,
-// next to its session cookie. Over plain HTTP the test's jar sends it only
-// without Secure.
+// addStaleCookie adds a plain session cookie of an ended session for the
+// path /api to f's browser. The browser sends it before its session cookie
+// for /, which has the same name.
 func (f *authFixture) addStaleCookie() {
 	f.t.Helper()
-	u, err := url.Parse(f.srv.URL)
+	u, err := url.Parse(f.srv.URL + "/api/status")
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.client.Jar.SetCookies(u, []*http.Cookie{{Name: secureCookieName, Value: "stale-token-of-an-ended-session", Path: "/"}})
-	if n := len(f.client.Jar.Cookies(u)); n != 2 {
-		f.t.Fatalf("%d cookies in the browser, want 2", n)
+	f.client.Jar.SetCookies(u, []*http.Cookie{{Name: cookieName, Value: "stale-token-of-an-ended-session", Path: "/api"}})
+	if cookies := f.client.Jar.Cookies(u); len(cookies) != 2 || cookies[0].Value != "stale-token-of-an-ended-session" {
+		f.t.Fatalf("cookies in the browser: %+v, want the stale one first", cookies)
 	}
 }
 
@@ -516,9 +592,10 @@ func TestNewHTTPServer(t *testing.T) {
 	}
 }
 
-// Both session cookie names count, the __Host- one first, without empty
-// values or duplicates and at most maxSessionCookies per name: each token
-// costs a database lookup.
+// A login and logout end the sessions of both session cookie names, the
+// __Host- one first, without empty values or duplicates and at most
+// maxSessionCookies per name: each token costs a database lookup. Only the
+// name of the request's scheme logs in.
 func TestSessionTokens(t *testing.T) {
 	plain := func(v string) *http.Cookie { return &http.Cookie{Name: cookieName, Value: v} }
 	secure := func(v string) *http.Cookie { return &http.Cookie{Name: secureCookieName, Value: v} }
@@ -537,7 +614,24 @@ func TestSessionTokens(t *testing.T) {
 		for _, k := range c.cookies {
 			r.AddCookie(k)
 		}
-		if got := strings.Join(sessionTokens(r), ","); got != c.want {
+		if got := strings.Join(allSessionTokens(r), ","); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	s := &Server{}
+	for _, c := range []struct {
+		name   string
+		remote string
+		proto  string
+		want   string
+	}{
+		{"secure", "127.0.0.1:4000", "https", "s1,s2"},
+		{"plain", "192.0.2.1:1234", "", "1,2"},
+		{"untrusted proxy", "192.0.2.1:1234", "https", "1,2"},
+	} {
+		r := hardeningRequest("GET", "/", "", c.remote, c.proto, false,
+			plain("1"), plain("2"), plain("3"), secure("s1"), secure("s2"), secure("s3"))
+		if got := strings.Join(s.sessionTokens(r), ","); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
