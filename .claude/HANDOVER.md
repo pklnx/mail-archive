@@ -68,6 +68,7 @@ State of the work for the next session. Update before a session ends.
 - 2026-10-22: correction to #145: the production install runs `postgres:18-alpine` (bundles up to 26.10-6), so the premise of PR #149 was wrong. The REINDEX row is back in `docs/guide/operations.md` (PR #151, `breaking`); #150 stays open for the release notes and the optional migrate guard.
 - 2026-10-22: #152 (import files into an smtp account's `JOURNAL` folder, `./ma import ACCOUNT --journal [--label TEXT]`, migration 00029 `smtp_imports`, origin row "Imported from files: <label>"), PR #153. Plan reviewed (one blocking finding fixed: Message-ID parsed from the blob), two independent Opus reviews, both approve.
 - 2026-10-22: #150 closed (release notes of 26.10-7/-8 edited by the maintainer; PR #159: `./ma migrate` rebuilds indexes of an Alpine-built database, other commands refuse until then). #156 (PR #158, profile tabs; tab bar shrink fix in PR #161). #157 (PR #160, resizable and collapsible sidebar). PR #161: screenshots regenerated, new rule: UI PRs update screenshots and docs text.
+- 2026-10-23: #215 (process hygiene): the label `second-review` is back (marker for risky PRs that get an independent second session review; defined in `.github/labels.json`, created by `labels.yml` on merge). GitHub texts are signed `— Claude, <role>` without model names.
 
 ## Maintainer actions
 - Check release 26.10-11 on a real iPhone (message view, compact header, conversation overlay, link blocking).

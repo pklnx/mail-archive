@@ -51,8 +51,13 @@ the issue. Labels follow the [label table](./#pull-requests-and-labels). After
 an approving review and green required checks, the coordinator merges with
 squash; there is no auto-merge.
 
-Risky pull requests (deletes, schema changes, rewriting user data) get a
-second, independent reviewer agent in a Claude session.
+Every pull request with app code gets a session review. Risky pull requests
+(deletes, schema changes, rewriting user data) also get a second, independent
+session review: a separate reviewer agent that does not see the first review
+beforehand. The coordinator adds the label **`second-review`** to each of them,
+including every pull request that changes `internal/store/migrations`; the
+label is a marker and triggers nothing. Pull requests without app code (docs,
+CI, test-only) need one session review and green required checks.
 
 Pull requests that can weaken the secret scan are merged only after the
 maintainer's explicit OK, noted on the pull request. This covers
@@ -74,6 +79,7 @@ only one of them.
 | `plan` | maintainer | Please write an implementation plan (Claude session). |
 | `review` | planner | The plan is posted and waits for review. |
 | `ready` | plan reviewer or maintainer | The plan is approved; the issue may be implemented. |
+| `second-review` | coordinator or maintainer | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
 | `db-migration` | automatically | Schema change (see Releases). |
 | `breaking` | by hand | Manual upgrade steps (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change. |
@@ -84,30 +90,37 @@ Label changes do not notify anyone by themselves: after setting `plan` or
 
 ## Releases
 
-Versions follow [semantic versioning](https://semver.org/). Before 1.0, the
-minor version goes up for new features and breaking changes, the patch
-version for fixes.
+Releases are published from `main` by hand: **Actions → Release → Run
+workflow** (`.github/workflows/release.yml`), after CI on `main` is green. A
+dry run builds everything without pushing an image or creating a release.
 
-To release:
+The version is `YY.MM-N`: year and month (UTC) and a build number that starts
+at 1 each month (`scripts/next-version.sh`), for example `26.10-11`. The
+workflow builds the image for `linux/amd64` and `linux/arm64`, pushes it to
+`ghcr.io/pklnx/mail-archive` with the tags `YY.MM-N`, `YY.MM` and `latest`,
+creates the tag `vYY.MM-N` and a GitHub release with `mail-archive.tar.gz` (the
+Docker Compose bundle, `scripts/release-bundle.sh`) and `SHA256SUMS`. The notes
+are grouped by label (breaking changes, database migrations, features, fixes,
+documentation, dependencies, maintenance; see `.github/release.yml`). A pull
+request without a kind label lands under "Maintenance", so a risky pull request
+needs a kind label in addition to `second-review`.
 
-1. Check that CI on `main` is green.
-2. On GitHub: **Releases → Draft a new release → Choose a tag**, type the new
-   version (for example `v0.2.0`) and create it on `main`.
-3. Click **Generate release notes**. Pull requests are grouped by label
-   (breaking changes, database migrations, features, fixes, documentation,
-   dependencies, maintenance; see `.github/release.yml`). Add upgrade notes
-   for `breaking` and `db-migration` entries.
-4. Publish.
+The workflow writes an upgrade paragraph into every release's notes. It links
+the [Upgrades guide](../guide/operations#upgrades), and the generated notes
+list the `breaking` and `db-migration` pull requests first. Add manual upgrade
+notes only when a change needs more than these generic steps.
 
-`./ma --version` and `mail-archive --version` show the version, taken from
-`git describe` when the image or binary is built: a release tag such as
-`v0.2.0`, or `v0.2.0-3-gabc1234` for commits after it.
+`./ma --version` and `mail-archive --version` show the version. The release
+image shows `YY.MM-N` (for example `26.10-11`). A build from a clone shows
+`git describe`: the tag `v26.10-11`, or `v26.10-11-3-gabc1234` for commits
+after it.
 
-To run a release instead of the latest `main`:
+To run a release, follow [Upgrades](../guide/operations#upgrades), which uses
+the release bundle. From a clone instead of the latest `main`:
 
 ```sh
 git fetch --tags
-git checkout v0.2.0
+git checkout v26.10-11
 ./ma migrate
 docker compose up -d web
 ```
