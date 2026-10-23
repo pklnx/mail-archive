@@ -134,11 +134,12 @@ func TestRecurringFillAPI(t *testing.T) {
 
 	// An ended one-time fill is switched on with its password; trash and
 	// spam folders it did not copy need a yes. CreateFill inserts it as
-	// running, so the fill runner picks it up: it is created and cancelled
-	// under the account's lock (as by the command line), where a run of it
-	// is skipped as busy and not audited. Without the lock, that run ends
-	// it as failed with a data.fill_done entry, or before CancelFill, which
-	// then fails (#213). The test waits until the runner has tried it.
+	// running, so the fill runner picks it up. Without the account's lock,
+	// that run could end it: a CancelFill during the run left a
+	// data.fill_done entry, one after it failed with ErrFillNotRunning
+	// (#213). It is created and cancelled under the lock (as by the
+	// command line), where a run of it is skipped as busy and not audited;
+	// waiting until the runner has tried it makes that a regression test.
 	unlock, ok, err := f.st.TryLockSyncForWrite(ctx, acc.ID)
 	if err != nil || !ok {
 		t.Fatal(ok, err)
