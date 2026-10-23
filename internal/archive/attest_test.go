@@ -348,6 +348,9 @@ func TestAttestConcurrentWriters(t *testing.T) {
 						attestSHA(1000+w*perWriter+i)); err != nil {
 						return err
 					}
+					// A deliberate stall, not a wait: the writer holds the
+					// fence for a random while, so attestations run
+					// against open writer transactions.
 					time.Sleep(time.Duration(rand.IntN(40)) * time.Millisecond)
 					return nil
 				})

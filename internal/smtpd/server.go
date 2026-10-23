@@ -62,6 +62,9 @@ type Server struct {
 	WriteTimeout  time.Duration
 	Now           func() time.Time
 
+	// slotFreed, if set, is called after a connection's slot (MaxConns)
+	// is free again; tests set it.
+	slotFreed func()
 	// receive stores a message for one account; tests replace it.
 	receive func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error)
 	// inflight counts messages being stored, so that Serve can wait for
@@ -126,7 +129,9 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	srv.ErrorLog = slogPrinter{s.Logger}
 
 	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(newGate(l, s.Allowed, s.MaxConns, s.Hostname, s.Logger)) }()
+	g := newGate(l, s.Allowed, s.MaxConns, s.Hostname, s.Logger)
+	g.slotFreed = s.slotFreed
+	go func() { errc <- srv.Serve(g) }()
 	select {
 	case err := <-errc:
 		s.inflight.Wait()

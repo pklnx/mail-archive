@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applySettings, messagesFor, settings, t } from "./i18n";
-import { DisplaySettings, ProfilePage, RecoveryCodes, formatChoices, formatLabel } from "./Profile";
+import { DisplaySettings, ProfilePage, RecoveryCodes, TwoFactorSetup, formatChoices, formatLabel } from "./Profile";
 
 const codes = Array.from({ length: 10 }, (_, i) => `abcd-efgh-jkmn-pqr${i}`);
 const sheet = { user: "patrick", origin: "https://mail.example.org", createdAt: new Date(2026, 9, 12), codes };
@@ -259,6 +259,27 @@ describe("ProfilePage", () => {
     open(t.apiKeys);
     expect(await within(screen.getByRole("tabpanel", { name: t.apiKeys })).findByRole("button", { name: t.apiKeyCreate })).toBeTruthy();
     expect(screen.queryByRole("button", { name: t.changePassword })).toBeNull();
+  });
+
+  it("keeps one primary button in the Security tab, and the 2FA steps primary on their own (#211)", async () => {
+    const kind = (name: string) => screen.getByRole("button", { name }).className;
+    renderPage();
+    await startSetup();
+    const panel = screen.getByRole("tabpanel", { name: t.tabSecurity });
+    expect(kind(t.changePassword)).toContain("cds--btn--primary");
+    expect(kind(t.twoFactorConfirm)).toContain("cds--btn--tertiary");
+    // The CodeSnippet's copy button has the primary class too, but Carbon styles it as a copy button.
+    expect(panel.querySelectorAll(".cds--btn--primary:not(.cds--copy-btn)")).toHaveLength(1);
+    cleanup();
+
+    // The forced setup after login (Auth) shows TwoFactorSetup without status:
+    // its steps are the screen's main action.
+    render(<TwoFactorSetup user="patrick" />);
+    expect(await screen.findByRole("button", { name: t.twoFactorSetup })).toBeTruthy();
+    expect(kind(t.twoFactorSetup)).toContain("cds--btn--primary");
+    fireEvent.click(screen.getByRole("button", { name: t.twoFactorSetup }));
+    expect(await screen.findByText("JBSWY3DPEHPK3PXP")).toBeTruthy();
+    expect(kind(t.twoFactorConfirm)).toContain("cds--btn--primary");
   });
 
   const startSetup = async () => {

@@ -129,7 +129,7 @@ docker compose up -d web  # restart the web server with the new image
 The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
 `README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
 `.env` for new settings. A specific version instead of the latest:
-`https://github.com/pklnx/mail-archive/releases/download/v26.10-1/mail-archive.tar.gz`.
+`https://github.com/pklnx/mail-archive/releases/download/v1.0.0/mail-archive.tar.gz`.
 
 With a clone of the repository (see [From source](./getting-started#install)),
 `git pull` replaces the download, and `./ma migrate` rebuilds the image for
@@ -150,18 +150,32 @@ so stop it before `./ma migrate` when the release notes say so.
 
 ### Versions
 
-Versions are named after the year and month of the release, plus a build
-number that starts at 1 each month: `26.10-1` is the first release of
-October 2026, `26.10-2` the second, `26.11-1` the first of November. They
-are tagged `v26.10-1` in the repository. Each release publishes
-`ghcr.io/pklnx/mail-archive` for `linux/amd64` and `linux/arm64` with three
+Versions follow [semantic versioning](https://semver.org/), `X.Y.Z`, from
+`1.0.0` on:
+
+- a **major** release (`2.0.0`) has a breaking change that needs manual steps
+  when upgrading (see the release notes);
+- a **minor** release (`1.5.0`) adds features or changes the database schema,
+  so it needs `./ma migrate`;
+- a **patch** release (`1.4.3`) has fixes only, without a migration or a
+  breaking change.
+
+Releases are tagged `v1.0.0` in the repository. Each release publishes
+`ghcr.io/pklnx/mail-archive` for `linux/amd64` and `linux/arm64` with four
 tags:
 
-| Tag | Points to |
-|---|---|
-| `26.10-1` | Exactly this build. The bundle's `docker-compose.yml` uses it. |
-| `26.10` | The newest build of that month. |
-| `latest` | The newest release. |
+| Tag | Points to | Brings |
+|---|---|---|
+| `1.4.2` | Exactly this build. The bundle's `docker-compose.yml` uses it. | Nothing new. |
+| `1.4` | The newest `1.4.x` release. | Patch updates only: no migration, no breaking change. |
+| `1` | The newest `1.x.y` release. | Features and migrations too, so run `./ma migrate` after each update; no breaking change. |
+| `latest` | The newest release. | Everything, breaking changes included. |
+
+Releases before 1.0.0 were named after the year and month, plus a build
+number (`26.10-1` to `26.10-11`). Their tags and images stay. The image tag
+`26.10` stays on `26.10-11` and gets no more updates. Tools that update images
+automatically (Watchtower, Renovate, Diun) may rank `26.10` above `1.0.0`:
+switch them once to `1`, `1.0` or an exact version.
 
 Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build;
 pinning an exact version is safer than `latest`, because migrations only run

@@ -478,7 +478,7 @@ export function GeneratedPanel({ value, done }: { value: GeneratedPassword; done
       </CodeSnippet>
       <p>{t.generatedHint}</p>
       <div>
-        <Button kind="primary" size="md" onClick={done}>
+        <Button kind="tertiary" size="md" onClick={done}>
           {t.done}
         </Button>
       </div>

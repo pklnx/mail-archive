@@ -99,21 +99,15 @@ jobs:
       # docker-compose.yml must work without the source and without a build.
       - name: Release bundle
         run: |
-          scripts/release-bundle.sh 99.01-1 "$RUNNER_TEMP/dist"
+          scripts/release-bundle.sh 99.0.0 "$RUNNER_TEMP/dist"
           # No entry may carry the runner's UID.
           tar -tvzf "$RUNNER_TEMP/dist/mail-archive.tar.gz" | awk '$2 != "0/0" { print; bad = 1 } END { exit bad }'
           tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/dist/mail-archive.tar.gz"
           SMOKE_DIR="$RUNNER_TEMP/mail-archive" MAIL_ARCHIVE_IMAGE=mail-archive:smoke scripts/compose-smoke-test.sh
+      # The semver rules of scripts/next-version.sh, with JSON fixtures
+      # instead of the GitHub API.
       - name: Release version numbers
-        run: |
-          set -eu
-          git init -q "$RUNNER_TEMP/tags" && cd "$RUNNER_TEMP/tags"
-          git -c user.name=ci -c user.email=ci@example.com commit -q --allow-empty -m tags
-          check() { got=$("$GITHUB_WORKSPACE/scripts/next-version.sh" "$1"); [ "$got" = "$2" ] || { echo "$1: got $got, want $2"; exit 1; }; }
-          check 26.10 26.10-1
-          git tag v26.10-1 && git tag v26.10-3 && git tag v26.09-7 && git tag v26.10-rc
-          check 26.10 26.10-4
-          check 26.11 26.11-1
+        run: scripts/next-version-test.sh
 
   web:
     runs-on: ubuntu-latest

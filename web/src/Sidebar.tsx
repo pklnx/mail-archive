@@ -129,7 +129,8 @@ export function FolderTree({ state, accounts, select, show, collapsed, onCollaps
       {data && data.accounts.length === 0 && (
         <div className="folder-tree__note">
           <p className="app-text-secondary">{t.noAccounts}</p>
-          <Button size="sm" onClick={() => show("accounts")}>
+          {/* The mail view's only primary; other views have their own. */}
+          <Button size="sm" kind={mail ? "primary" : "tertiary"} onClick={() => show("accounts")}>
             {t.addAccount}
           </Button>
         </div>

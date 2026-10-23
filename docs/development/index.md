@@ -60,6 +60,28 @@ Vite starts), and `pnpm build` fails if the result refers to another host
 (`web/scripts/check-dist.mjs`). Carbon's built-in English texts get German
 ones from the `carbon` section of `i18n.ts`.
 
+The colours come from the pklnx design system
+([pklnx/design-system](https://github.com/pklnx/design-system), #211):
+Carbon v11 unchanged, with Purple instead of Blue as the interactive colour
+(buttons, links, focus in light mode, interactive borders).
+`web/src/index.css` imports its generated theme,
+`@pklnx/design-system/theme/pklnx-carbon.css`, right after Carbon's CSS and
+in the same `carbon` layer. Its rules use the theme classes `theme.ts` sets
+on `<html>` (`cds--white`, `cds--g100`) with the same specificity as
+Carbon's, so they replace Carbon's token values; light and dark mode need
+nothing else, and the file has no URLs, so `check-dist` is unaffected. No
+colour value is copied into this repository. The package is a tarball
+attached to the design system's GitHub release, so `web/package.json` names
+the release asset's URL and `web/pnpm-lock.yaml` pins its integrity; it
+needs no registry account, has no install script, and pnpm's one-day
+release age does not apply to it. Rules of the design system:
+
+- At most one `kind="primary"` button per view (a tab panel and a modal
+  each count as one view; Carbon's `Button` is primary without a `kind`).
+  The others are `secondary`, `tertiary` or `ghost`.
+- Do not use `support-caution-undefined`: it is Purple in Carbon and would
+  look like the interactive colour.
+
 ### End-to-end tests
 
 `web/e2e` holds a Playwright suite that drives the UI in Chromium against
@@ -164,10 +186,10 @@ in `CLAUDE.md` at the repository root.
 
 | Label | Meaning |
 |---|---|
-| `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). |
+| `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). `feature` makes at least a minor release. |
 | `dependencies` | Dependency update (set by Dependabot). |
-| `db-migration` | Changes the database schema (set automatically). Back up before upgrading. |
-| `breaking` | Needs manual steps when upgrading (set by hand). |
+| `db-migration` | Changes the database schema (set automatically). Back up before upgrading. Makes at least a minor release. |
+| `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
 | `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
 | `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
 
@@ -187,6 +209,15 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
 - Dependabot opens weekly update pull requests for Go modules, npm packages
   (UI and docs), GitHub Actions and Docker images. PostgreSQL major versions
   are excluded because they need a data migration.
+- Dependabot does not update URL dependencies such as
+  `@pklnx/design-system` (the theme, see [Web UI](#web-ui)): bump them by
+  hand in a pull request. Download the new release's tarball, verify it
+  with `gh attestation verify pklnx-design-system-X.Y.Z.tgz --repo
+  pklnx/design-system --source-ref refs/heads/main`, change the URL in
+  `web/package.json`, run `pnpm install`, and compare the `integrity` line
+  in `web/pnpm-lock.yaml` with the one in the release notes (and its
+  SHA256 with the release's `SHA256SUMS`). Note the check in the pull
+  request.
 - GitHub Actions are pinned to commit SHAs; workflows run with read-only
   permissions unless a job needs more.
 - Direct Go dependencies are few: go-imap v2 (still in beta) with go-sasl,

@@ -259,10 +259,11 @@ func TestNotificationLeaseExpires(t *testing.T) {
 	ctx := context.Background()
 	a := createAccount(t, st, "a")
 	finishRun(t, st, a.ID, "failed", store.HealthFailure)
-	if got, err := st.ClaimNotifications(ctx, []byte("old"), time.Millisecond, 1, 50); err != nil || len(got) != 1 {
+	// A lease that has run out already (negative: a zero lease could end
+	// at the same now() as the next claim's check).
+	if got, err := st.ClaimNotifications(ctx, []byte("old"), -time.Second, 1, 50); err != nil || len(got) != 1 {
 		t.Fatalf("claim: %v %v", got, err)
 	}
-	time.Sleep(20 * time.Millisecond)
 	if got, err := st.ClaimNotifications(ctx, []byte("new"), time.Minute, 1, 50); err != nil || len(got) != 1 {
 		t.Fatalf("reclaim: %v %v", got, err)
 	}

@@ -1,11 +1,16 @@
 # Third-party notices
 
-The project itself is under [LICENSE](LICENSE). This file holds the license
-of the fonts that the web UI bundles as files of their own.
+The project itself is under [LICENSE](LICENSE). This file names the
+third-party packages in the web UI and holds the license of the fonts that
+it bundles as files of their own.
 
-The web UI's JavaScript and CSS also contain third-party packages, among
-them React (MIT) and the Carbon Design System (`@carbon/*`, Apache-2.0),
-with their dependencies. They are listed with exact versions in
+The web UI's JavaScript and CSS contain third-party packages, among them
+React (MIT), the Carbon Design System (`@carbon/*`, Apache-2.0) and the
+pklnx design system's Carbon theme (`@pklnx/design-system`,
+`MIT AND Apache-2.0 AND OFL-1.1`: MIT for its own code, Apache-2.0 for the
+Carbon values it builds on, OFL-1.1 for the IBM Plex fonts it ships, which
+the web UI takes from the `@ibm/plex-*` packages below instead), with their
+dependencies. They are listed with exact versions in
 `web/package.json` and `web/pnpm-lock.yaml`; each package's license text is
 in its folder under `web/node_modules` after `pnpm install`.
 
