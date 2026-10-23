@@ -209,6 +209,17 @@ describe("Folder tree account state", () => {
     expect(show).toHaveBeenCalledWith("accounts");
   });
 
+  it("makes Add account primary only in the mail view (#211)", () => {
+    const d = data();
+    d.accounts = [];
+    const kind = () => screen.getByRole("button", { name: t.addAccount }).className;
+    const r = render(<Harness state={view()} d={d} select={() => {}} />);
+    expect(kind()).toContain("cds--btn--primary");
+    // The Accounts page has its own primary button next to the column.
+    r.rerender(<Harness state={{ ...view(), view: "accounts" }} d={d} select={() => {}} />);
+    expect(kind()).toContain("cds--btn--tertiary");
+  });
+
   it("shows Carbon's tree in German", () => {
     applySettings({ language: "de", locale: "de" });
     try {

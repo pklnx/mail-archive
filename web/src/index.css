@@ -1,10 +1,13 @@
 /* Layer order (#168): Carbon below the app's page layout, so a layout.css
    class always beats Carbon's element reset. Unlayered rules would beat
    every layer, so every rule is in one; fonts.css holds only @font-face.
-   - carbon: @carbon/styles, precompiled, with its CDN fonts removed
+   - carbon: @carbon/styles, precompiled, with its CDN fonts removed, then
+     the pklnx design system theme (#211): same selectors and specificity as
+     Carbon's theme rules, later in the layer, so its tokens win
    - app: layout.css, the page layout */
 @layer carbon, app;
 @import "./fonts.css";
 /* Written by build/stripRemoteFonts.ts when Vite starts (not committed). */
 @import "./vendor/carbon.css" layer(carbon);
+@import "@pklnx/design-system/theme/pklnx-carbon.css" layer(carbon);
 @import "./layout.css" layer(app);

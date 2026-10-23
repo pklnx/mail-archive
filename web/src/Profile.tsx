@@ -336,6 +336,9 @@ export function TwoFactorSetup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const id = useId();
+  // One primary per view: in the profile's Security tab (status) the password
+  // form's Save is the primary; on the forced setup screen this is the action.
+  const actionKind = status ? "tertiary" : "primary";
 
   // Dated when the codes arrive, so every download shows the same time.
   const sheetFor = (codes: string[]): RecoverySheet => ({ user, origin: window.location.origin, createdAt: new Date(), codes });
@@ -414,7 +417,7 @@ export function TwoFactorSetup({
         {tag}
         <p className="app-text-secondary">{t.twoFactorSetupText}</p>
         <div>
-          <Button onClick={start} disabled={busy}>{t.twoFactorSetup}</Button>
+          <Button kind={actionKind} onClick={start} disabled={busy}>{t.twoFactorSetup}</Button>
         </div>
         <FormError text={error} />
       </div>
@@ -440,7 +443,7 @@ export function TwoFactorSetup({
           {codeInput("confirm", false)}
           <FormError text={error} />
           <div>
-            <Button type="submit" disabled={busy}>{t.twoFactorConfirm}</Button>
+            <Button type="submit" kind={actionKind} disabled={busy}>{t.twoFactorConfirm}</Button>
           </div>
         </Form>
       </div>

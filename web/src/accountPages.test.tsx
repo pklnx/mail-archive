@@ -151,6 +151,21 @@ describe("page details", () => {
     const message = await screen.findByText(/login failed/);
     expect(message.className).toBe("app-text-error");
   });
+
+  it("keep one primary button while the trash/spam question is open (#211)", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(JSON.stringify({ error: "confirm", suggestedExclusions: ["Trash"] }), { status: 409 }));
+    show("/?view=accounts&add=1", data([]), false);
+    const kind = (name: string) => screen.getByRole("button", { name }).className;
+    expect(kind(t.save)).toContain("cds--btn--primary");
+    fireEvent.change(screen.getByLabelText(t.fieldHost), { target: { value: "imap.example.com" } });
+    fireEvent.change(screen.getByLabelText(t.fieldUsername), { target: { value: "alice@example.com" } });
+    fireEvent.change(screen.getByLabelText(t.fieldPassword), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: t.save }));
+    await screen.findByRole("button", { name: t.saveWithout });
+    expect(kind(t.saveWithout)).toContain("cds--btn--primary");
+    expect(kind(t.save)).toContain("cds--btn--tertiary");
+    expect(document.querySelectorAll(".cds--btn--primary")).toHaveLength(1);
+  });
 });
 
 describe("confirmations on the list", () => {
