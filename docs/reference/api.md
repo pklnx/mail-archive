@@ -145,6 +145,25 @@ Requests with an API key need neither: the key is a header that a web page
 on another site cannot add, unlike a cookie, which the browser sends on its
 own. A body, where an endpoint reads one, must still be JSON.
 
+## Browser requests
+
+A browser says with its [Fetch Metadata](https://developer.mozilla.org/en-US/docs/Glossary/Fetch_metadata_request_header)
+headers what a request is for. Requests to `/api` answer `403`
+`{"error": "request not allowed from this context"}` when they are
+
+- a prefetch (`Sec-Purpose: prefetch`),
+- a navigation (`Sec-Fetch-Mode: navigate`, or `Sec-Fetch-Dest` `document`,
+  `iframe`, `frame`, `embed` or `object`), except a `GET` or `HEAD` of
+  `/api/messages/{id}/html`, `/api/messages/{id}/raw`,
+  `/api/messages/{id}/parts/{n}` and `/api/openapi.json`, or
+- for anything but a fetch (`Sec-Fetch-Dest` other than `empty`: an image,
+  a style sheet, a font and so on).
+
+The check comes first, so such a request writes no audit entry. It keeps an
+HTML mail, which runs with the app's origin, from reaching the API; see
+[HTML mail](./security#html-mail). Requests without these headers, from
+curl, scripts and API clients, are not affected.
+
 ## Audit log
 
 Searches, opened messages, downloads, logins and changes are recorded in the
@@ -187,7 +206,7 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | `GET /api/messages` | List or search messages, newest first. |
 | `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account without an envelope: a [fill](#fills) copied it from IMAP or [`import --journal`](../guide/importing#into-an-smtp-account) imported it from files, so BCC recipients are unknown. `fill` names that fill and its mailbox, `{"id", "username", "host"}`; `import` names that import of files and its label, `{"id", "label"}`. Both are `null` for other locations, and when unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
-| `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked; remote images only with `images=1`. Inline `cid:` images (PNG, JPEG, GIF, WebP; up to 10 MiB per message) are embedded as `data:` URLs; others become `data:,`. |
+| `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked (`script-src 'none'`); the sandbox allows the same origin, so the web UI can size the frame to the mail, but never scripts. Remote images only with `images=1`. Inline `cid:` images (PNG, JPEG, GIF, WebP; up to 10 MiB per message) are embedded as `data:` URLs; others become `data:,`. Requests the frame makes to `/api` (images, links) are refused with `403`; see [Browser requests](#browser-requests). |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
 | `GET /api/messages/{id}/parts/{n}` | One attachment. PNG, JPEG, GIF and WebP are shown inline; everything else is a download. |
 

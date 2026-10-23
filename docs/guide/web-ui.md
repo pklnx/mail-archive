@@ -133,14 +133,12 @@ folder is compared once a day. See [Reconcile](./syncing#reconcile).
 A message scrolls as one unit: the reading pane next to the list, or the
 whole page on a phone. Header, conversation and text move together.
 
-HTML mail is shown in a sandboxed frame: no scripts, no forms, no plugins.
-The frame cannot grow with the mail, so it is as tall as the visible area.
-Scroll down until it fills that area; from there the mail scrolls inside
-it. Until then the frame does not react to the mouse or touch: scrolling
-over it moves the message, and **Show full message** at the bottom, or a
-click on the mail, scrolls it fully into view first. So the first click
-on a link or the start of a text selection in a mail that is not fully
-shown only scrolls; the next one works as usual.
+HTML mail is shown in a sandboxed frame that grows with the mail: no
+scripts, no forms, no plugins. The message scrolls as one page, and links
+in the mail work on the first click; they open in a new tab. Links from a
+mail into the archive itself are not followed. A few mails are taller than
+any frame (for example a picture as high as the window); those, and very
+long ones, keep the height of the visible area and scroll inside it.
 **Remote images stay blocked** because they tell the sender that you opened
 the message (tracking pixels). Click **Load remote images** for one message
 to allow them. Images embedded in the message (`cid:`) are always shown if
