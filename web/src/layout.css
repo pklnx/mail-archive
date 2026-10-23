@@ -881,6 +881,33 @@ body,
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
+.message__subject:focus {
+  outline: none;
+}
+.message__subject:focus-visible {
+  outline: 2px solid var(--cds-focus);
+}
+/* Phones: two lines until Details opens; screen readers hear it in full. */
+.message__subject--clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+/* Phones: "Sender · time", the name shortened to one line. */
+.message__byline {
+  display: flex;
+  min-inline-size: 0;
+  margin: 0;
+  color: var(--cds-text-secondary);
+  white-space: pre;
+}
+.message__sender {
+  overflow: hidden;
+  min-inline-size: 0;
+  color: var(--cds-text-primary);
+  text-overflow: ellipsis;
+}
 .message__fields {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -914,23 +941,26 @@ body,
 .message__delivery .cds--accordion__content p {
   margin: 0;
 }
+/* One row (#203): Text/HTML and Download as icons, remote images as text,
+   Conversation and Details at the end. It wraps rather than overflows. The
+   icon buttons bring their own space. */
 .message__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0 0.25rem;
 }
-/* Phones: the actions as icons and Details in one row (#200); it wraps
-   only below about 375px. The icon buttons bring their own space. */
-.message__actions--compact {
-  gap: 0;
-}
-.message__actions--compact .cds--btn--tertiary {
-  padding-inline: 0.75rem;
-}
-.message__details-toggle.cds--btn {
+.message__actions-end {
+  display: flex;
   flex: none;
+  align-items: center;
   margin-inline-start: auto;
+}
+/* Phones: the conversation's icon with its count. */
+.message__count-toggle.cds--btn {
+  gap: 0.25rem;
+  inline-size: auto;
+  padding-inline: 0.75rem;
 }
 .message__details:not([hidden]) {
   display: flex;
@@ -938,7 +968,7 @@ body,
   gap: 0.5rem;
 }
 @media (pointer: coarse) {
-  .message__actions--compact .cds--btn--sm {
+  .message__actions .cds--btn--sm {
     align-items: center;
     min-block-size: 2.5rem;
     padding-block: 0;
@@ -947,8 +977,15 @@ body,
 /* Phones: tighter, so the body starts on the first screen. */
 @media (max-width: 47.98rem) {
   .message__header {
-    gap: 0.5rem;
-    padding: 0.75rem;
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .message__subject {
+    font-size: 1.125rem;
+    line-height: 1.333;
+  }
+  .message__actions .cds--btn--tertiary {
+    padding-inline: 0.75rem;
   }
   .message__fields {
     row-gap: 0.125rem;
@@ -1131,16 +1168,46 @@ body,
   margin-block-start: 0.5rem;
 }
 
-/* The other messages of the conversation, above the body. No scroller of
-   its own: from 4 messages on it is folded around the open one (#200). */
+/* The conversation over the message (#203): a panel under its toggle in
+   the reading pane, a sheet below the reader bar on phones. Its list
+   scrolls inside it; the scrim over the rest of the pane closes it. */
+.mail-pane--reader {
+  position: relative;
+}
+.conversation-overlay__scrim {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+}
 .conversation {
+  position: absolute;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  inline-size: min(32rem, calc(100% - 2rem));
   padding: 0.5rem 1rem;
-  border-block-end: 1px solid var(--cds-border-subtle-01);
+  overflow-y: auto;
+  background-color: var(--cds-layer-01);
+  box-shadow: 0 2px 6px var(--cds-shadow, rgba(0, 0, 0, 0.3));
+}
+.conversation-overlay--sheet .conversation-overlay__scrim {
+  position: fixed;
+  z-index: 6900;
+  inset: calc(3rem + env(safe-area-inset-top)) 0 0;
+  background-color: var(--cds-overlay);
+}
+.conversation-overlay--sheet .conversation {
+  position: fixed;
+  z-index: 7000;
+  inset-block-start: calc(6rem + env(safe-area-inset-top));
+  inset-inline: 0;
+  inline-size: auto;
+  max-block-size: calc(100svh - 6rem - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 3rem);
+  padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
 }
 .conversation__note {
   margin: 0;
-  padding: 0.5rem 1rem;
-  border-block-end: 1px solid var(--cds-border-subtle-01);
   font-size: 0.75rem;
 }
 .conversation__title {
@@ -1150,18 +1217,6 @@ body,
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.32px;
-}
-/* Show n earlier / later messages: one compact row, wrapping only when
-   they do not fit; their text lines up with the entries'. */
-.conversation__toggles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 0.25rem;
-  margin-block-start: 0.25rem;
-  margin-inline-start: -0.25rem;
-}
-.conversation__toggles .cds--btn {
-  padding-inline: 0.5rem;
 }
 .conversation__list {
   margin: 0.25rem 0 0;

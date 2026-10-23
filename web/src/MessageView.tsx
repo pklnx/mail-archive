@@ -1,12 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Accordion, AccordionItem, Button, IconButton, OperationalTag, SkeletonText, Tag, Tooltip } from "@carbon/react";
-import { ChevronDown, ChevronUp, Document, Download, Html, Image, TextAlignLeft } from "@carbon/icons-react";
-import { getConversation, getMessage, messageURL, type ConversationEntry, type Location, type MessageDetail, type Part } from "./api";
+import { ChevronDown, ChevronUp, Document, Download, Forum, Html, Image, TextAlignLeft } from "@carbon/icons-react";
+import { getConversation, getMessage, messageURL, type Conversation, type ConversationEntry, type Location, type MessageDetail, type Part } from "./api";
 import { fileSize, locationLabel, longDate, originText, retentionDay, senderName, shortDate } from "./format";
 import { attachmentKind, parseMailText, splitLinks, type TextBlock } from "./mailText";
 import { useAsync } from "./useAsync";
 import { twoPane, useMediaQuery } from "./breakpoints";
-import { foldConversation } from "./conversationFold";
 import { attachFrameFit } from "./frameFit";
 import { t } from "./i18n";
 
@@ -18,10 +18,24 @@ interface Props {
 
 export function MessageView({ id, open }: Props) {
   const res = useAsync((signal) => getMessage(id, signal), [id]);
+  // Set when a message is picked in the conversation: its subject gets the
+  // focus once it shows, so the new message is announced.
+  const focusSubject = useRef(false);
   if (res.status === "loading") return <MessageSkeleton />;
   if (res.status === "error") return <p className="message__note app-text-error">{t.loadMessageFailed(res.error.message)}</p>;
-  // key: reset view options (HTML/text, images) for each message.
-  return <Message key={id} msg={res.data} open={open} />;
+  // key: reset view options (HTML/text, images) for each message. The
+  // loaded message's id: right after id changes, res still holds the last one.
+  return (
+    <Message
+      key={res.data.id}
+      msg={res.data}
+      focusSubject={focusSubject}
+      open={(m) => {
+        focusSubject.current = true;
+        open(m);
+      }}
+    />
+  );
 }
 
 /** The header and first lines of a message while it loads. Screen readers hear "Loading" instead. */
@@ -36,14 +50,33 @@ function MessageSkeleton() {
   );
 }
 
-function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void }) {
+function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: string) => void; focusSubject: RefObject<boolean> }) {
   const [showHTML, setShowHTML] = useState(msg.hasHtml);
   const [images, setImages] = useState(false);
-  // Phones (one pane): a compact header, the rest behind "Details" (#200).
-  // Follows rotation; each field is rendered once, for either layout.
+  // A compact header (#203): the subject, From and Date (on phones a byline),
+  // one action row; the rest behind "Details". Follows rotation; each field
+  // is rendered once, for either layout.
   const wide = useMediaQuery(twoPane);
   const [details, setDetails] = useState(false);
   const detailsId = useId();
+  // The conversation loads on its own, so the message shows first and an
+  // error there does not hide it; its toggle shows once it has loaded.
+  const conversation = useAsync((signal) => getConversation(msg.id, signal), [msg.id]);
+  const [conversationOpen, setConversationOpen] = useState(false);
+  const conversationToggle = useRef<HTMLButtonElement>(null);
+  // Back to the toggle once the panel is gone and the pane no longer inert.
+  const refocusToggle = useRef(false);
+  useEffect(() => {
+    if (conversationOpen || !refocusToggle.current) return;
+    refocusToggle.current = false;
+    conversationToggle.current?.focus();
+  }, [conversationOpen]);
+  const subject = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!focusSubject.current) return;
+    focusSubject.current = false;
+    subject.current?.focus();
+  }, [focusSubject]);
   const attachments = msg.parts.filter((p) => p.attachment);
   // Journal mail has its envelope, filled and imported mail its origin.
   const delivery = msg.locations.filter((l) => l.envelope || l.filled);
@@ -136,63 +169,97 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
     </Tooltip>
   );
 
+  const conv = conversation.status === "ok" && conversation.data.messages.length >= 2 ? conversation.data : null;
+  const from = (
+    <>
+      <dt>{t.from}</dt>
+      <dd>{msg.from}</dd>
+    </>
+  );
+
   return (
     <article className="message">
       <header className="message__header">
-        <h1 className="message__subject">{msg.subject || t.noSubject}</h1>
+        <h1 ref={subject} tabIndex={-1} className={`message__subject${!wide && !details ? " message__subject--clamped" : ""}`}>
+          {msg.subject || t.noSubject}
+        </h1>
         {wide ? (
-          <>
-            <dl className="message__fields">
-              <dt>{t.from}</dt>
-              <dd>{msg.from}</dd>
-              {recipients}
-              {date}
-              {place}
-            </dl>
-            {deliveryInfo}
-            <div className="message__actions">
-              {msg.hasHtml && (
-                <Button kind="tertiary" size="sm" onClick={() => setShowHTML(!showHTML)}>
-                  {showHTML ? t.showText : t.showHTML}
-                </Button>
-              )}
-              {remoteImages}
-              <Button as="a" kind="ghost" size="sm" renderIcon={Download} href={messageURL.raw(msg.id)} download>
-                {t.downloadEml}
-              </Button>
-            </div>
-          </>
+          <dl className="message__fields">
+            {from}
+            {date}
+          </dl>
         ) : (
-          <>
-            <dl className="message__fields">
-              <dt>{t.from}</dt>
-              <dd>{msg.from}</dd>
-              {date}
-            </dl>
-            {/* One row; Details comes last, so its content follows it. */}
-            <div className="message__actions message__actions--compact">
-              {msg.hasHtml && (
-                <IconButton kind="ghost" size="md" align="bottom-start" label={showHTML ? t.showText : t.showHTML} onClick={() => setShowHTML(!showHTML)}>
-                  {showHTML ? <TextAlignLeft /> : <Html />}
+          <p className="message__byline">
+            <span className="message__sender">{senderName(msg.from)}</span>
+            {(msg.sentAt || msg.dateHeader) && (
+              <>
+                {" · "}
+                {msg.sentAt ? (
+                  <time dateTime={msg.sentAt} title={longDate(msg.sentAt)}>
+                    {shortDate(msg.sentAt)}
+                  </time>
+                ) : (
+                  <span>{msg.dateHeader}</span>
+                )}
+              </>
+            )}
+          </p>
+        )}
+        {/* One row, the same order everywhere; Conversation and Details at
+            the end, so they can appear late without moving the others.
+            Details comes last, so its content follows it. */}
+        <div className="message__actions">
+          {msg.hasHtml && (
+            <IconButton kind="ghost" size={wide ? "sm" : "md"} align="bottom-start" label={showHTML ? t.showText : t.showHTML} onClick={() => setShowHTML(!showHTML)}>
+              {showHTML ? <TextAlignLeft /> : <Html />}
+            </IconButton>
+          )}
+          {/* Button, not IconButton: its types have no download. */}
+          <Button
+            as="a"
+            kind="ghost"
+            size={wide ? "sm" : "md"}
+            hasIconOnly
+            iconDescription={t.downloadEml}
+            tooltipPosition="bottom"
+            renderIcon={Download}
+            href={messageURL.raw(msg.id)}
+            download
+          />
+          {remoteImages}
+          <span className="message__actions-end">
+            {conv &&
+              (wide ? (
+                <Button
+                  ref={conversationToggle}
+                  kind="ghost"
+                  size="sm"
+                  aria-haspopup="dialog"
+                  aria-expanded={conversationOpen}
+                  onClick={() => setConversationOpen(true)}
+                >
+                  {t.conversationCount(conv.total)}
+                </Button>
+              ) : (
+                <IconButton
+                  ref={conversationToggle}
+                  kind="ghost"
+                  size="md"
+                  align="bottom-end"
+                  label={t.conversationCount(conv.total)}
+                  className="message__count-toggle"
+                  aria-haspopup="dialog"
+                  aria-expanded={conversationOpen}
+                  onClick={() => setConversationOpen(true)}
+                >
+                  <Forum />
+                  <span aria-hidden>{conv.total}</span>
                 </IconButton>
-              )}
-              {/* Button, not IconButton: its types have no download. */}
-              <Button
-                as="a"
-                kind="ghost"
-                size="md"
-                hasIconOnly
-                iconDescription={t.downloadEml}
-                tooltipPosition="bottom"
-                renderIcon={Download}
-                href={messageURL.raw(msg.id)}
-                download
-              />
-              {remoteImages}
+              ))}
+            {wide ? (
               <Button
                 kind="ghost"
                 size="sm"
-                className="message__details-toggle"
                 renderIcon={details ? ChevronUp : ChevronDown}
                 aria-expanded={details}
                 aria-controls={detailsId}
@@ -200,16 +267,31 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
               >
                 {t.details}
               </Button>
-            </div>
-            <div id={detailsId} className="message__details" hidden={!details}>
-              <dl className="message__fields">
-                {recipients}
-                {place}
-              </dl>
-              {deliveryInfo}
-            </div>
-          </>
-        )}
+            ) : (
+              <IconButton
+                kind="ghost"
+                size="md"
+                align="bottom-end"
+                label={t.details}
+                aria-expanded={details}
+                aria-controls={detailsId}
+                onClick={() => setDetails(!details)}
+              >
+                {details ? <ChevronUp /> : <ChevronDown />}
+              </IconButton>
+            )}
+          </span>
+        </div>
+        <div id={detailsId} className="message__details" hidden={!details}>
+          <dl className="message__fields">
+            {!wide && from}
+            {recipients}
+            {!wide && date}
+            {place}
+          </dl>
+          {deliveryInfo}
+        </div>
+        {conversation.status === "error" && <p className="conversation__note app-text-error">{t.loadConversationFailed(conversation.error.message)}</p>}
         {attachments.length > 0 && (
           <ul aria-label={t.attachments} className="message__attachments">
             {attachments.map((p) => (
@@ -221,7 +303,18 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
         )}
         {msg.truncated && <p className="app-text-warning app-text-small">{t.truncated}</p>}
       </header>
-      <ConversationSection id={msg.id} open={open} />
+      {conv && conversationOpen && (
+        <ConversationPanel
+          conversation={conv}
+          wide={wide}
+          toggle={conversationToggle}
+          open={open}
+          close={(refocus) => {
+            refocusToggle.current = refocus;
+            setConversationOpen(false);
+          }}
+        />
+      )}
       {html ? (
         // In dark mode the mail's own (mostly white) page sits as a sheet on
         // the dark background instead of filling the pane edge to edge.
@@ -338,99 +431,148 @@ function relationLabel(r: ConversationEntry["relation"]): string | undefined {
 }
 
 /**
- * The other messages of the conversation, oldest first. It loads on its own,
- * so the message shows first and an error here does not hide it. From 4
- * messages on it is folded around the open one (conversationFold.ts).
+ * The messages of the conversation, oldest first, in a modal panel over the
+ * message (#203): under the toggle on desktop, a sheet below the reader bar
+ * on phones. It pushes nothing down, so it shows all the server returned.
+ * The rest of the reading pane is inert and a scrim over it closes the panel
+ * (a click into the mail frame never reaches the app's window otherwise).
+ * Tab and the arrow keys stay in it; Escape, the scrim and focus or a click
+ * elsewhere close it. The shortcuts are off meanwhile (dialogs.ts).
  */
-function ConversationSection({ id, open }: { id: string; open: (id: string) => void }) {
-  const res = useAsync((signal) => getConversation(id, signal), [id]);
-  const [showEarlier, setShowEarlier] = useState(false);
-  const [showLater, setShowLater] = useState(false);
-  // The first message a toggle reveals gets the focus: the toggle goes away.
-  // Once: later renders of the message must not take it back.
-  const [focusId, setFocusId] = useState("");
-  const list = useRef<HTMLOListElement>(null);
+function ConversationPanel({
+  conversation: c,
+  wide,
+  toggle,
+  open,
+  close,
+}: {
+  conversation: Conversation;
+  wide: boolean;
+  toggle: RefObject<HTMLButtonElement | null>;
+  open: (id: string) => void;
+  close: (refocus: boolean) => void;
+}) {
+  const overlay = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  // In the reading pane, next to its bar and scroller, which go inert.
+  const [host] = useState(() => toggle.current?.closest<HTMLElement>(".mail-pane--reader") ?? document.body);
+  // Desktop: under the toggle, end-aligned to it, in the pane's box.
+  const [at, setAt] = useState<{ top: number; end: number } | null>(null);
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const b = toggle.current?.getBoundingClientRect();
+      const h = host.getBoundingClientRect();
+      // The panel's width is min(32rem, pane − 2rem) (layout.css): it stays in the pane.
+      const width = Math.min(32 * parseFloat(getComputedStyle(document.documentElement).fontSize || "16"), h.width - 32);
+      if (b) setAt({ top: b.bottom - h.top + 4, end: Math.max(16, Math.min(h.right - b.right, h.width - width - 16)) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [host, toggle]);
+
   useEffect(() => {
-    if (!focusId) return;
-    list.current?.querySelector<HTMLElement>(`[data-id="${focusId}"]`)?.focus();
-    setFocusId("");
-  }, [focusId]);
-  if (res.status === "loading") return null;
-  if (res.status === "error") {
-    return <p className="conversation__note app-text-error">{t.loadConversationFailed(res.error.message)}</p>;
-  }
-  const c = res.data;
-  if (c.messages.length < 2) return null;
+    // Everything else in the pane is inert while the panel is open.
+    const others = [...host.children].filter((el) => el !== overlay.current && !el.hasAttribute("inert"));
+    for (const el of others) el.setAttribute("inert", "");
+    const self = panel.current?.querySelector<HTMLElement>('[aria-current="true"]') ?? entries(panel.current)[0];
+    self?.focus();
+    self?.scrollIntoView?.({ block: "nearest" });
+    // A click or the focus outside the panel and its scrim closes it.
+    const outside = (e: Event) => {
+      if (e.target instanceof Node && !overlay.current?.contains(e.target)) closeRef.current(false);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("focusin", outside);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("focusin", outside);
+      for (const el of others) el.removeAttribute("inert");
+    };
+  }, [host]);
+
+  const onKey = (e: ReactKeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      close(true);
+      return;
+    }
+    const list = entries(panel.current);
+    const i = list.indexOf(document.activeElement as HTMLElement);
+    const to =
+      e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)
+        ? (i + 1) % list.length
+        : e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)
+          ? (i - 1 + list.length) % list.length
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? list.length - 1
+              : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    list[to]?.focus();
+  };
+
   const hidden = c.total - c.messages.length;
-  const fold = foldConversation(c.messages, id);
-  const earlier = showEarlier ? [] : fold.earlier;
-  const later = showLater ? [] : fold.later;
-  const shown = c.messages.filter((m) => !earlier.includes(m) && !later.includes(m));
-  return (
-    <section aria-label={t.conversation} className="conversation">
-      <h2 className="conversation__title">{t.conversation}</h2>
-      {c.truncated && <p className="app-text-secondary app-text-small">{t.earlierNotShown(hidden)}</p>}
-      {(earlier.length > 0 || later.length > 0) && (
-        <div className="conversation__toggles">
-          {earlier.length > 0 && (
-            <Button
-              kind="ghost"
-              size="sm"
-              onClick={() => {
-                setShowEarlier(true);
-                setFocusId(earlier[0]!.id);
-              }}
-            >
-              {t.showConversation(earlier.length)}
-            </Button>
-          )}
-          {later.length > 0 && (
-            <Button
-              kind="ghost"
-              size="sm"
-              onClick={() => {
-                setShowLater(true);
-                setFocusId(later[0]!.id);
-              }}
-            >
-              {t.showLaterMessages(later.length)}
-            </Button>
-          )}
-        </div>
-      )}
-      <ol ref={list} className="conversation__list">
-        {shown.map((m) => {
-          const self = m.relation === "self";
-          const label = relationLabel(m.relation);
-          const line = (
-            <>
-              <time className="conversation__date" dateTime={m.sortAt}>
-                {shortDate(m.sentAt ?? m.sortAt)}
-              </time>
-              <span className="conversation__from">{senderName(m.from)}</span>
-              <span className="conversation__subject">{m.subject || t.noSubject}</span>
-              {label && (
-                <Tag as="span" size="sm" type="gray" className="conversation__tag">
-                  {label}
-                </Tag>
-              )}
-            </>
-          );
-          return (
-            <li key={m.id}>
-              {self ? (
-                <div aria-current="true" className="conversation__entry conversation__entry--self">
-                  {line}
-                </div>
-              ) : (
-                <button type="button" className="conversation__entry" data-id={m.id} onClick={() => open(m.id)}>
-                  {line}
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </section>
+  return createPortal(
+    <div ref={overlay} className={`conversation-overlay${wide ? "" : " conversation-overlay--sheet"}`}>
+      <div aria-hidden className="conversation-overlay__scrim" onClick={() => close(true)} />
+      <div
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t.conversation}
+        className="conversation"
+        style={wide && at ? { insetBlockStart: at.top, insetInlineEnd: at.end, maxBlockSize: `min(28rem, ${Math.max(0, host.clientHeight - at.top - 16)}px)` } : undefined}
+        onKeyDown={onKey}
+      >
+        <h2 className="conversation__title">{t.conversation}</h2>
+        {c.truncated && <p className="app-text-secondary app-text-small">{t.earlierNotShown(hidden)}</p>}
+        <ol className="conversation__list">
+          {c.messages.map((m) => {
+            const self = m.relation === "self";
+            const label = relationLabel(m.relation);
+            const line = (
+              <>
+                <time className="conversation__date" dateTime={m.sortAt}>
+                  {shortDate(m.sentAt ?? m.sortAt)}
+                </time>
+                <span className="conversation__from">{senderName(m.from)}</span>
+                <span className="conversation__subject">{m.subject || t.noSubject}</span>
+                {label && (
+                  <Tag as="span" size="sm" type="gray" className="conversation__tag">
+                    {label}
+                  </Tag>
+                )}
+              </>
+            );
+            return (
+              <li key={m.id}>
+                {self ? (
+                  <div aria-current="true" tabIndex={-1} className="conversation__entry conversation__entry--self">
+                    {line}
+                  </div>
+                ) : (
+                  <button type="button" className="conversation__entry" data-id={m.id} onClick={() => open(m.id)}>
+                    {line}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </div>,
+    host,
   );
+}
+
+/** The entries of the panel, in order: the open message's too, so the keys reach it. */
+function entries(panel: HTMLElement | null): HTMLElement[] {
+  return panel ? [...panel.querySelectorAll<HTMLElement>(".conversation__entry")] : [];
 }

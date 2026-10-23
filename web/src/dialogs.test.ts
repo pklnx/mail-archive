@@ -56,12 +56,14 @@ describe("ownedByWidget", () => {
 });
 
 describe("dialogOpen", () => {
-  it("sees a visible Carbon Modal and the folder overlay, not a closed Modal", () => {
+  it("sees a visible Carbon Modal, the folder overlay and the conversation overlay, not a closed Modal", () => {
     document.body.innerHTML = '<div class="cds--modal"></div>';
     expect(dialogOpen()).toBe(false);
     document.body.innerHTML = '<div class="cds--modal is-visible"></div>';
     expect(dialogOpen()).toBe(true);
     document.body.innerHTML = '<aside class="folder-pane folder-pane--overlay"></aside>';
+    expect(dialogOpen()).toBe(true);
+    document.body.innerHTML = '<div class="conversation-overlay"><div role="dialog" aria-modal="true"></div></div>';
     expect(dialogOpen()).toBe(true);
   });
 });
