@@ -7,9 +7,10 @@ name: Release
 # semver release is 1.0.0. The input `version` overrides the proposal. It
 # builds and pushes the image for linux/amd64 and linux/arm64 to ghcr.io with
 # the tags X.Y.Z, X.Y, X and latest, then creates the tag vX.Y.Z and a GitHub
-# release with notes grouped by label (.github/release.yml) and the Docker
-# Compose bundle (scripts/release-bundle.sh). Run it after CI on main is
-# green; a dry run shows the proposed version and the pull requests behind it.
+# release with the Docker Compose bundle (scripts/release-bundle.sh) and notes:
+# a head from scripts/release-notes.sh, then the pull requests grouped by
+# label (.github/release.yml). Run it after CI on main is green; a dry run
+# shows the proposed version, the pull requests behind it and the notes head.
 
 on:
   workflow_dispatch:
@@ -103,6 +104,12 @@ jobs:
             echo "**No release:** $(cat "$err")" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          # A version input below the proposal: the text holds only
+          # validated X.Y.Z values.
+          if [ -s "$err" ]; then
+            echo "::warning::$(cat "$err")"
+            echo "**Warning:** $(cat "$err")" >> "$GITHUB_STEP_SUMMARY"
+          fi
           image="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           {
             echo "version=$version"
@@ -142,6 +149,21 @@ jobs:
           IMAGE: ${{ steps.version.outputs.image }}
         run: scripts/release-bundle.sh "$VERSION" dist "$IMAGE"
 
+      # The head of the notes, before the generated list. Also in dry runs,
+      # so the summary shows it before the release.
+      - name: Release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ${{ steps.version.outputs.image }}
+          LAST: ${{ steps.version.outputs.last }}
+        run: |
+          scripts/release-notes.sh "$VERSION" "$IMAGE" "$LAST" > "$RUNNER_TEMP/notes.md"
+          {
+            echo "### Release notes (before the generated list)"
+            echo
+            cat "$RUNNER_TEMP/notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to ghcr.io
@@ -179,7 +201,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
-          IMAGE: ${{ steps.version.outputs.image }}
           BASE: ${{ steps.version.outputs.base }}
         run: |
           set -euo pipefail
@@ -188,17 +209,10 @@ jobs:
             echo "::error::tag v$VERSION exists"
             exit 1
           fi
-          cat > notes.md <<EOF
-          Image: \`$IMAGE:$VERSION\` (linux/amd64, linux/arm64), also tagged \`${VERSION%.*}\`, \`${VERSION%%.*}\` and \`latest\`.
-
-          **New installation:** download \`mail-archive.tar.gz\` below, extract it and follow \`README.txt\` or the [getting started guide](https://pklnx.github.io/mail-archive/guide/getting-started).
-
-          **Upgrade:** back up, extract \`mail-archive.tar.gz\` in the directory above your \`mail-archive/\` directory (it keeps \`.env\` and \`data/\`), then \`./ma migrate\` and \`docker compose up -d web\`. Read the database migrations and breaking changes below first; see [Upgrades](https://pklnx.github.io/mail-archive/guide/operations#upgrades).
-          EOF
           start=()
           if [ -n "$BASE" ]; then
             start=(--notes-start-tag "$BASE")
           fi
           gh release create "v$VERSION" dist/mail-archive.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "mail-archive $VERSION" --notes-file notes.md --generate-notes "${start[@]}"
+            --title "mail-archive $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes "${start[@]}"
