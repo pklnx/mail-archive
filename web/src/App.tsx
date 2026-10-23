@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
-import { Header, HeaderGlobalBar, HeaderMenuButton, HeaderName } from "@carbon/react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton } from "@carbon/react";
+import { Folders, Keyboard, Logout, UserAvatar } from "@carbon/icons-react";
 import { AccountsPage } from "./AccountsPage";
 import { isPlainClick } from "./clicks";
 import { dialogOpen } from "./dialogs";
@@ -13,8 +14,10 @@ import { MessageView } from "./MessageView";
 import { SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
+import { ShellNav } from "./ShellNav";
 import { ThemeToggle } from "./ThemeToggle";
-import { BackIcon, DownIcon, FilterIcon, FolderIcon, InboxIcon, MoreIcon, ServerIcon, UpIcon, iconButton } from "./icons";
+import { lg, useMediaQuery } from "./breakpoints";
+import { BackIcon, DownIcon, FilterIcon, UpIcon, iconButton } from "./icons";
 import { FilterChips } from "./FilterChips";
 import { Sheet } from "./Sheet";
 import { primary } from "./formStyles";
@@ -35,16 +38,28 @@ interface Props {
 export function App({ user, logout }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
+  // Below lg the shell's SideNav (menuOpen) and the folder column
+  // (foldersOpen) open as overlays, never both. From lg up both are always
+  // on screen, the SideNav as Carbon's rail.
+  const wide = useMediaQuery(lg);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  useEffect(() => {
+    if (wide) {
+      setMenuOpen(false);
+      setFoldersOpen(false);
+    }
+  }, [wide]);
   // Phones show the filters as chips and a sheet; the filter button is
   // highlighted while a prefix or grouping is set.
   const prefixed = hasPrefix(query) || state.group === "1";
-  const [sheet, setSheet] = useState<"" | "filters" | "more" | "shortcuts">("");
+  const [sheet, setSheet] = useState<"" | "filters" | "shortcuts">("");
   const closeSheet = useCallback(() => setSheet(""), []);
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
   const layout = useSidebarLayout(user.name);
   const asideId = useId();
+  const navId = useId();
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -66,6 +81,9 @@ export function App({ user, logout }: Props) {
     gone: state.gone === "1",
   };
   const reading = state.m !== "";
+  const page =
+    state.view === "profile" || state.view === "log" || state.view === "accounts" || (user.admin && (state.view === "users" || state.view === "retention"));
+  const mailView = !page;
 
   // Previous and next message in list order. Paging replaces the history
   // entry, so Back still returns to the list.
@@ -102,31 +120,49 @@ export function App({ user, logout }: Props) {
   const show = (view: string) => {
     update({ view, m: "" });
     setMenuOpen(false);
+    setFoldersOpen(false);
     setSheet("");
   };
-
-  // The drawer: focus moves into it and back to where it was; the rest of
-  // the page is inert meanwhile (see below), so Tab stays inside.
-  const aside = useRef<HTMLElement>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  // The folder overlay belongs to the mail view.
   useEffect(() => {
-    if (menuOpen) {
+    if (!mailView) setFoldersOpen(false);
+  }, [mailView]);
+
+  // The overlays: focus moves into them and back to where it was, and the
+  // rest of the page is inert meanwhile (below), so Tab stays inside. The
+  // header stays usable next to the SideNav, so its menu button closes it.
+  // The folder overlay is modal: the header is inert too, so nothing behind
+  // it opens another overlay.
+  const aside = useRef<HTMLElement>(null);
+  const sideNav = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const overlay = menuOpen ? "menu" : foldersOpen ? "folders" : "";
+  useEffect(() => {
+    if (overlay) {
       opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      // The drawer becomes visible as its transition starts, a frame later;
-      // hidden elements cannot take focus.
-      let frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => drawerFocusTarget(aside.current)?.focus());
-      });
-      return () => cancelAnimationFrame(frame);
+      const target = overlay === "menu" ? sideNav.current?.querySelector<HTMLElement>("a[href]") : drawerFocusTarget(aside.current);
+      target?.focus();
     } else if (opener.current) {
       opener.current.focus();
       opener.current = null;
     }
-  }, [menuOpen]);
-  const hide = menuOpen || undefined;
+  }, [overlay]);
+  const hide = overlay !== "" || undefined;
+  const closeFolders = useCallback(() => setFoldersOpen(false), []);
+  // Escape closes the folder overlay. In the capture phase: Carbon's
+  // TreeView keeps the keys it gets from bubbling.
+  const foldersKey = (e: ReactKeyboardEvent) => {
+    if (foldersOpen && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFolders();
+    }
+  };
 
-  // Keyboard shortcuts (? lists them). Not while typing or in a dialog
-  // (the sheets, or a Carbon Modal).
+  // Keyboard shortcuts (? lists them). Not while typing or in a dialog (the
+  // sheets, a Carbon Modal, the folder overlay). In the capture phase, so
+  // they also work while a folder in Carbon's TreeView has focus: the tree
+  // keeps its keys from bubbling.
   const search = useRef<HTMLInputElement>(null);
   const chord = useRef(0);
   useEffect(() => {
@@ -173,21 +209,26 @@ export function App({ user, logout }: Props) {
           break;
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   });
+
+  const gone = accounts.data?.accounts.reduce((n, a) => n + a.goneMessages, 0) ?? 0;
+  const pageInert = hide;
 
   return (
     <div className="app-shell">
-      {/* Stays usable while the drawer is open: its menu button closes it. */}
-      <Header aria-label={t.appName}>
-        {/* Below lg it opens the drawer with accounts and folders (#168 part 4a brings Carbon's SideNav). */}
+      {/* Usable next to the SideNav overlay (its menu button closes it); inert behind the folder overlay. */}
+      {/* Header passes inert on to its <header>; its types only lack the attribute. */}
+      <Header aria-label={t.appName} {...({ inert: foldersOpen || undefined } as object)}>
+        {/* Below lg (Carbon's breakpoint) it opens the SideNav; Carbon hides it from lg up. */}
         <HeaderMenuButton
           aria-label={menuOpen ? t.hideMenu : t.showMenu}
-          aria-controls={asideId}
+          aria-controls={navId}
           aria-expanded={menuOpen}
           isActive={menuOpen}
-          onClick={() => setMenuOpen((open) => !open)}
+          // Never from behind the folder overlay (inert there anyway): one overlay does not open another.
+          onClick={() => !foldersOpen && setMenuOpen((open) => !open)}
         />
         <HeaderName
           href="/"
@@ -205,11 +246,42 @@ export function App({ user, logout }: Props) {
           {t.appName}
         </HeaderName>
         <HeaderGlobalBar>
+          <span className="app-header__user" aria-hidden>
+            {user.name}
+          </span>
+          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={() => setSheet("shortcuts")}>
+            <Keyboard size={20} />
+          </HeaderGlobalAction>
           <ThemeToggle header />
+          <HeaderGlobalAction
+            aria-label={t.profileOf(user.name)}
+            isActive={state.view === "profile"}
+            onClick={() => show("profile")}
+          >
+            <UserAvatar size={20} />
+          </HeaderGlobalAction>
+          <HeaderGlobalAction aria-label={t.logOut} tooltipAlignment="end" onClick={logout}>
+            <Logout size={20} />
+          </HeaderGlobalAction>
         </HeaderGlobalBar>
       </Header>
+      <ShellNav
+        ref={sideNav}
+        id={navId}
+        state={state}
+        admin={user.admin}
+        gone={gone}
+        rail={wide}
+        expanded={menuOpen && !wide}
+        onClose={() => setMenuOpen(false)}
+        go={(patch) => {
+          update(patch);
+          setFoldersOpen(false);
+          setSheet("");
+        }}
+      />
       <div className="app-shell__body">
-      <div inert={hide}>
+      <div inert={pageInert}>
         <HealthBanner
           data={accounts.data}
           admin={user.admin}
@@ -217,80 +289,72 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
-      {/* The views not converted to Carbon yet (#168 parts 4 to 6) carry
-          .legacy each, for the reset in index.css; the converted Accounts
-          page does not, so the reset never reaches its Carbon markup. */}
-      <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[var(--sidebar-w)_minmax(18rem,26rem)_1fr]"
-        // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
-        style={{ "--sidebar-w": `${layout.collapsed ? railWidth : layout.width}rem` } as CSSProperties}
-      >
-        {/* Sidebar: always visible on large screens, a drawer on small ones. */}
-        <aside
-          ref={aside}
-          id={asideId}
-          // Below the fixed header, which keeps its menu button usable to close the drawer.
-          className={`legacy text-ink fixed top-[calc(3rem+env(safe-area-inset-top))] bottom-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
-            menuOpen ? "visible translate-x-0" : "invisible -translate-x-full"
-          } lg:visible lg:relative lg:top-0 lg:w-auto lg:min-w-0 lg:translate-x-0 lg:shadow-none lg:transition-none`}
-        >
-          <SidebarPanel
-            layout={layout}
-            controls={asideId}
-            state={state}
+      {/* The views not converted to Carbon yet (#168 parts 4b to 6) carry
+          .legacy each, for the reset in index.css; the converted markup
+          (Accounts, the folder column) does not, so the reset never reaches
+          Carbon's. */}
+      {state.view === "profile" ? (
+        <main inert={pageInert} className="legacy text-ink app-view">
+          <ProfilePage name={user.name} close={() => update({ view: "" })} />
+        </main>
+      ) : state.view === "users" && user.admin ? (
+        <main inert={pageInert} className="legacy text-ink app-view">
+          <UsersPage close={() => update({ view: "" })} />
+        </main>
+      ) : state.view === "retention" && user.admin ? (
+        <main inert={pageInert} className="legacy text-ink app-view">
+          <RetentionPage close={() => update({ view: "" })} />
+        </main>
+      ) : state.view === "log" ? (
+        <main inert={pageInert} className="legacy text-ink app-view">
+          <LogPage admin={user.admin} close={() => update({ view: "" })} open={(m) => update({ view: "", m })} />
+        </main>
+      ) : state.view === "accounts" ? (
+        <main inert={pageInert} className="app-view">
+          <AccountsPage
+            admin={user.admin}
             accounts={accounts}
-            user={user}
-            logout={logout}
-            collapsed={collapsed}
-            select={(account, folder) => {
-              update({ account, folder, gone: "", m: "", view: "" });
-              setMenuOpen(false);
+            renamed={(from, to) => {
+              collapsed.rename(from, to);
+              if (state.account === from) update({ account: to }, { replace: true });
             }}
-            selectGone={() => {
-              update({ account: "", folder: "", gone: "1", m: "", view: "" });
-              setMenuOpen(false);
-            }}
-            show={show}
+            showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}
           />
-        </aside>
+        </main>
+      ) : (
         <div
-          aria-hidden
-          className={`fixed inset-0 z-10 bg-scrim transition-opacity duration-200 motion-reduce:transition-none lg:hidden ${menuOpen ? "opacity-100" : "pointer-events-none opacity-0"}`}
-          onClick={() => setMenuOpen(false)}
-        />
-
-        {state.view === "profile" ? (
-          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
-            <ProfilePage name={user.name} close={() => update({ view: "" })} />
-          </main>
-        ) : state.view === "users" && user.admin ? (
-          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
-            <UsersPage close={() => update({ view: "" })} />
-          </main>
-        ) : state.view === "retention" && user.admin ? (
-          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
-            <RetentionPage close={() => update({ view: "" })} />
-          </main>
-        ) : state.view === "log" ? (
-          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
-            <LogPage admin={user.admin} close={() => update({ view: "" })} open={(m) => update({ view: "", m })} />
-          </main>
-        ) : state.view === "accounts" ? (
-          <main inert={hide} className="min-h-0 md:col-span-2">
-            <AccountsPage
-              admin={user.admin}
+          className="app-view mail-view"
+          // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
+          style={{ "--sidebar-w": `${layout.collapsed ? railWidth : layout.width}rem` } as CSSProperties}
+        >
+          {/* Folder column from lg up; below lg an overlay, a modal dialog. */}
+          <aside
+            ref={aside}
+            id={asideId}
+            className={foldersOpen ? "folder-pane folder-pane--overlay" : "folder-pane"}
+            inert={menuOpen || undefined}
+            role={foldersOpen ? "dialog" : undefined}
+            aria-modal={foldersOpen || undefined}
+            aria-label={foldersOpen ? t.navFolders : undefined}
+            onKeyDownCapture={foldersKey}
+          >
+            <SidebarPanel
+              layout={layout}
+              controls={asideId}
+              state={state}
               accounts={accounts}
-              renamed={(from, to) => {
-                collapsed.rename(from, to);
-                if (state.account === from) update({ account: to }, { replace: true });
+              collapsed={collapsed}
+              select={(account, folder) => {
+                update({ account, folder, gone: "", m: "", view: "" });
+                setFoldersOpen(false);
               }}
-              showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}
+              show={show}
+              onClose={closeFolders}
             />
-          </main>
-        ) : (
-          <>
-          <section inert={hide} className={`legacy text-ink min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
+          </aside>
+          {foldersOpen && <div aria-hidden className="folder-pane__scrim" onClick={closeFolders} />}
+
+          <section inert={pageInert} className={`legacy text-ink min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
             {/* Phones: where the user is, the search below at full width. Menu
                 and theme are in the header. */}
             <div className="flex min-h-12 shrink-0 flex-col justify-center border-b border-line px-3 py-1 md:hidden">
@@ -298,6 +362,22 @@ export function App({ user, logout }: Props) {
               {place.sub && <p className="truncate text-xs text-ink-muted">{place.sub}</p>}
             </div>
             <div className="flex items-center gap-2 border-b border-line p-2">
+              {/* Below lg: opens the folder column as an overlay. */}
+              <div className="folder-pane__open">
+                <IconButton
+                  kind="ghost"
+                  size="md"
+                  align="bottom-start"
+                  label={t.navFolders}
+                  aria-haspopup="dialog"
+                  aria-expanded={foldersOpen}
+                  aria-controls={asideId}
+                  // Never from behind the SideNav overlay (inert there anyway).
+                  onClick={() => !menuOpen && setFoldersOpen(true)}
+                >
+                  <Folders />
+                </IconButton>
+              </div>
               <input
                 ref={search}
                 type="search"
@@ -345,7 +425,7 @@ export function App({ user, logout }: Props) {
             </div>
           </section>
 
-          <main inert={hide} className={`legacy text-ink min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
+          <main inert={pageInert} className={`legacy text-ink min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
             {reading ? (
               <>
                 {/* Back on phones, previous and next everywhere (when the message is in the list). */}
@@ -392,18 +472,7 @@ export function App({ user, logout }: Props) {
               </div>
             )}
           </main>
-          </>
-        )}
-      </div>
-
-      {/* Phones: the main places within thumb reach; hidden while reading. */}
-      {!(reading && state.view === "") && (
-        <nav inert={hide} aria-label={t.mainNavigation} className="legacy text-ink grid h-14 shrink-0 grid-cols-4 border-t border-line bg-bg md:hidden">
-          <NavButton icon={<InboxIcon />} label={t.navMail} on={state.view === ""} onClick={() => show("")} />
-          <NavButton icon={<FolderIcon />} label={t.navFolders} on={menuOpen} onClick={() => setMenuOpen(true)} />
-          <NavButton icon={<ServerIcon />} label={t.navAccounts} on={state.view === "accounts"} onClick={() => show("accounts")} />
-          <NavButton icon={<MoreIcon />} label={t.navMore} on={["log", "users", "retention", "profile"].includes(state.view)} onClick={() => setSheet("more")} />
-        </nav>
+        </div>
       )}
 
       <div className="legacy text-ink contents">
@@ -412,30 +481,6 @@ export function App({ user, logout }: Props) {
         <button type="button" className={`${primary} self-end`} onClick={closeSheet}>
           {t.done}
         </button>
-      </Sheet>
-      <Sheet open={sheet === "more"} onClose={closeSheet} title={t.navMore}>
-        <ul className="-mx-2 flex flex-col">
-          {[
-            ["log", t.log],
-            ...(user.admin ? [["users", t.users], ["retention", t.retention]] : []),
-            ["profile", `${t.profile} (${user.name})`],
-          ].map(([view, label]) => (
-            <li key={view}>
-              <button type="button" className={moreItem} onClick={() => show(view ?? "")}>
-                {label}
-              </button>
-            </li>
-          ))}
-          <li className="flex items-center justify-between px-2">
-            <span className="text-sm text-ink-muted">{t.appearance}</span>
-            <ThemeToggle />
-          </li>
-          <li>
-            <button type="button" className={`${moreItem} text-danger`} onClick={logout}>
-              {t.logOut}
-            </button>
-          </li>
-        </ul>
       </Sheet>
       <Sheet open={sheet === "shortcuts"} onClose={closeSheet} title={t.shortcuts}>
         <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
@@ -464,24 +509,8 @@ export function App({ user, logout }: Props) {
       </Sheet>
       </div>
       </div>
-      </div>
     </div>
   );
 }
 
 const kbd = "inline-grid min-w-6 place-items-center rounded border border-b-2 border-line-control bg-bg px-1.5 font-mono text-xs leading-5";
-const moreItem = "flex min-h-11 w-full items-center rounded-md px-2 text-left hover:bg-surface-hover";
-
-function NavButton({ icon, label, on, onClick }: { icon: ReactNode; label: string; on: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-current={on ? "page" : undefined}
-      className={`flex flex-col items-center justify-center gap-0.5 text-[11px] ${on ? "font-semibold text-accent-soft-ink" : "text-ink-muted"}`}
-      onClick={onClick}
-    >
-      <span className={`grid h-7 w-13 place-items-center rounded-full transition-colors ${on ? "bg-accent-soft" : ""}`}>{icon}</span>
-      {label}
-    </button>
-  );
-}

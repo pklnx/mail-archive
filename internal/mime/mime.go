@@ -179,6 +179,66 @@ func OpenPart(r io.Reader, index int, maxSize int64) (Part, []byte, error) {
 	return Part{}, nil, ErrNoPart
 }
 
+// InlineParts returns the decoded bodies of the leaf parts that want
+// selects, keyed by part index, in one walk over the message. Indexes are
+// the same as in Parse; parts beyond its limits are never seen.
+//
+// maxTotal bounds the decoded bytes held in memory: each wanted part is read
+// through a limit of what is left of maxTotal, and a part that does not fit
+// is skipped (at most the remaining budget plus one byte of it is read), so
+// later, smaller parts may still be returned.
+//
+// A part whose body cannot be decoded (for example corrupt base64) is
+// skipped too. The first such error is returned together with the parts
+// that were read; callers that show a message can treat the missing parts
+// as unavailable.
+func InlineParts(r io.Reader, want func(Part) bool, maxTotal int64) (map[int][]byte, error) {
+	return inlineParts(r, want, maxTotal, func(b io.Reader) io.Reader { return b })
+}
+
+// inlineParts is InlineParts; wrap wraps each wanted part's body, so tests
+// can count what is read from it.
+func inlineParts(r io.Reader, want func(Part) bool, maxTotal int64, wrap func(io.Reader) io.Reader) (map[int][]byte, error) {
+	out := map[int][]byte{}
+	ent, err := message.Read(r)
+	if ent == nil {
+		return out, err
+	}
+	var (
+		index   int
+		left    = maxTotal
+		partErr error
+	)
+	err = ent.Walk(func(path []int, part *message.Entity, _ error) error {
+		if err := guard(path, part, index); err != nil {
+			return err
+		}
+		if part.MultipartReader() != nil {
+			return nil
+		}
+		p := describe(part, index)
+		index++
+		if left <= 0 || !want(p) {
+			return nil
+		}
+		b, err := io.ReadAll(io.LimitReader(wrap(part.Body), left+1))
+		switch {
+		case err != nil:
+			if partErr == nil {
+				partErr = err
+			}
+		case int64(len(b)) <= left:
+			out[p.Index] = b
+			left -= int64(len(b))
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errLimit) {
+		return out, err
+	}
+	return out, partErr
+}
+
 // Indexed is what search stores about a message's body and parts.
 type Indexed struct {
 	// Text is the text body, or the HTML body converted to text, truncated

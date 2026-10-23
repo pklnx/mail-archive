@@ -121,7 +121,9 @@ folder is compared once a day. See [Reconcile](./syncing#reconcile).
 HTML mail is shown in a sandboxed frame: no scripts, no forms, no plugins.
 **Remote images stay blocked** because they tell the sender that you opened
 the message (tracking pixels). Click **Load remote images** for one message
-to allow them. Images embedded in the message are always shown. In dark
+to allow them. Images embedded in the message (`cid:`) are always shown if
+they are PNG, JPEG, GIF or WebP, up to 10 MiB per message; other types such
+as SVG, and images past that limit, show as a broken image. In dark
 mode, the mail keeps its own colors and is shown as a white sheet on the
 dark background, since most HTML mail is designed for white.
 

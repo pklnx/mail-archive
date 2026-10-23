@@ -6,7 +6,7 @@ import { fromMailFrame } from "./fixtures";
 
 const frame = `${origin}/api/messages/${"ab".repeat(32)}/html`;
 const pixel = "https://tracker.example/pixel.gif";
-const policy = `"img-src 'self' ${origin} https://localhost:18181 data:"`;
+const policy = `"img-src data:"`;
 // Chromium 156 (Playwright's headless shell) and Chromium 141.
 const blocked = `Loading the image '${pixel}' violates the following Content Security Policy directive: ${policy}. The action has been blocked.`;
 const refused = `Refused to load the image '${pixel}' because it violates the following Content Security Policy directive: ${policy}.\n`;
@@ -27,6 +27,9 @@ base("other CSP violations still fail", () => {
   // An image from the demo server itself is not "remote".
   expect(fromMailFrame(frame, blocked.replace(pixel, `${origin}/logo.png`))).toBe(false);
   expect(fromMailFrame(frame, blocked.replace(pixel, "http://127.0.0.1:18181/logo.png"))).toBe(false);
+  // A part the frame would load: inline images are embedded as data: URLs,
+  // so a blocked part request is an error again (#182).
+  expect(fromMailFrame(`${origin}/api/messages/${"ab".repeat(32)}/parts/1`, "Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE.NotSameOrigin")).toBe(false);
   // Inline script, fonts, connections.
   expect(fromMailFrame(frame, `Refused to execute inline script because it violates the following Content Security Policy directive: "script-src 'none'".`)).toBe(false);
   expect(fromMailFrame(frame, `Loading the font 'https://fonts.example/x.woff2' violates the following Content Security Policy directive: "font-src 'none'". The action has been blocked.`)).toBe(false);

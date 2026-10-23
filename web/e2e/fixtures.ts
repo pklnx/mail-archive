@@ -38,11 +38,6 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
     text: new RegExp(`^Blocked script execution in '${message}/html[^']*' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\\.$`),
     url: /.*/, // reported with or without the frame's URL
   },
-  // An inline (cid:) image of the mail: its part URL answers with
-  // Cross-Origin-Resource-Policy: same-origin, and the sandboxed frame has
-  // an opaque origin, so the image does not show. A known app issue, left
-  // for a follow-up; this suite does not change app behaviour.
-  { text: /^Failed to load resource: net::ERR_BLOCKED_BY_RESPONSE\.NotSameOrigin$/, url: new RegExp(`^${message}/parts/\\d+$`) },
 ];
 
 export function fromMailFrame(url: string, text: string): boolean {

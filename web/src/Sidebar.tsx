@@ -1,13 +1,16 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
+// The mail view's folder column: accounts and their folders in Carbon's
+// TreeView. From lg up it is a column that can be resized and collapsed to a
+// rail of short account labels (#160); below lg it opens as an overlay from
+// the mail toolbar's Folders button (App).
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref, type SyntheticEvent } from "react";
+import { Button, FeatureFlags, IconButton, SkeletonText, TreeNode, TreeView } from "@carbon/react";
+import { Close, SidePanelClose, SidePanelOpen, WarningFilled } from "@carbon/icons-react";
 import { t } from "./i18n";
 import { railLabel } from "./accountName";
-import { CollapseIcon, ExpandIcon, InboxIcon, iconButton } from "./icons";
 import { maxWidth, minWidth, step, type SidebarLayout } from "./sidebarLayout";
-import { SidebarSkeleton } from "./Skeleton";
-import { primary } from "./formStyles";
 import type { AccountsState } from "./useAccounts";
 import type { ViewState } from "./urlState";
-import type { Account, User } from "./api";
+import type { Account } from "./api";
 import { buildFolderTree, subtreeMessages, type FolderNode } from "./folderTree";
 import type { CollapsedState } from "./sidebarState";
 
@@ -15,48 +18,52 @@ interface Props {
   state: ViewState;
   accounts: AccountsState;
   select: (account: string, folder: string) => void;
-  /** Lists the messages no longer on any server. */
-  selectGone: () => void;
-  /** Opens a page: "accounts", "users", "retention", "log" or "profile". */
+  /** Opens a page, here only "accounts" (no accounts yet). */
   show: (view: string) => void;
-  user: User;
-  logout: () => void;
   /** Which accounts and folders are collapsed. */
   collapsed: CollapsedState;
-  /** Collapses the sidebar to the rail (lg and up); no button without it. */
+  /** Collapses the column to the rail (lg and up); no button without it. */
   onCollapse?: () => void;
   collapseRef?: Ref<HTMLButtonElement>;
   /** The id of the element the collapse button controls. */
   controls?: string;
+  /** Closes the overlay (below lg); no close button without it. */
+  onClose?: () => void;
 }
 
-const item = "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-left text-sm pointer-coarse:min-h-11";
-const active = "bg-accent-soft font-semibold text-accent-soft-ink";
-const idle = "hover:bg-surface-hover";
-/** A collapsed node that contains the selection. */
-const within = "text-accent-soft-ink";
-/** A heading over a group of entries. */
-const section = "px-2 pt-2 text-xs font-semibold tracking-wide text-ink-muted uppercase";
-/** Deeper levels are not indented further, so names keep some room. */
-const maxIndent = 6;
+/** A DOM id from any text: its UTF-8 bytes in hex, so names with spaces or quotes stay valid in id references. */
+function hex(s: string): string {
+  return Array.from(new TextEncoder().encode(s), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-function Chevron({ open }: { open: boolean }) {
+/** Node ids: the account, its "All folders" node, and a folder path in it. */
+export function nodeIds(base: string) {
+  return {
+    account: (a: string) => `${base}-a${hex(a)}`,
+    all: (a: string) => `${base}-a${hex(a)}-all`,
+    folder: (a: string, path: string) => `${base}-a${hex(a)}-f${hex(path)}`,
+  };
+}
+
+/** A node's name and count; the space keeps them apart in the accessible name and in the tooltip. */
+function Label({ name, count, title, countTitle }: { name: string; count?: number; title?: string; countTitle?: string }) {
   return (
-    <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={open ? "" : "-rotate-90"}>
-      <path d="M6 9l6 6 6-6" />
-    </svg>
+    <span className="folder-tree__label" title={title}>
+      <span className="folder-tree__name">{name}</span>
+      {count !== undefined && " "}
+      {count !== undefined && (
+        <span className={`folder-tree__count${countTitle ? " folder-tree__count--subtree" : ""}`} title={countTitle}>
+          {count}
+        </span>
+      )}
+    </span>
   );
 }
 
-const toggleClass = "relative flex size-6 shrink-0 items-center justify-center rounded text-ink-muted hover:bg-surface-hover hover:text-ink pointer-coarse:after:absolute pointer-coarse:after:-inset-2.5";
-
-export function Sidebar({ state, accounts, select, selectGone, show, user, logout, collapsed, onCollapse, collapseRef, controls }: Props) {
+export function FolderTree({ state, accounts, select, show, collapsed, onCollapse, collapseRef, controls, onClose }: Props) {
   const { data, error } = accounts;
   const mail = state.view === "" && state.gone !== "1";
-  const all = mail && !state.account && !state.folder;
-  const gone = data?.accounts.reduce((n, a) => n + a.goneMessages, 0) ?? 0;
-  const goneOn = state.view === "" && state.gone === "1";
-  const baseId = useId();
+  const ids = nodeIds(useId());
 
   // The selected folder stays visible: its path is expanded once when the
   // selection changes, or when the folder first shows up in the data. Not
@@ -71,208 +78,216 @@ export function Sidebar({ state, accounts, select, selectGone, show, user, logou
     revealed.current = selection;
     reveal(state.account, state.folder);
   }, [state.account, state.folder, data, reveal]);
+
+  const selectedAccount = mail ? data?.accounts.find((a) => a.name === state.account) : undefined;
+  const selected = !selectedAccount
+    ? ""
+    : state.folder
+      ? ids.folder(selectedAccount.name, state.folder)
+      : selectedAccount.folders.length
+        ? ids.all(selectedAccount.name)
+        : ids.account(selectedAccount.name);
+
   return (
-    <nav aria-label={t.accountsAndFolders} className="flex h-full flex-col gap-3 overflow-y-auto p-3">
-      <div className="flex items-center gap-1">
-        <button type="button" data-drawer-focus className={`${item} font-medium ${all ? active : idle}`} onClick={() => select("", "")}>
-          {t.allMail}
-        </button>
+    <nav aria-label={t.accountsAndFolders} className="folder-tree">
+      <div className="folder-tree__head">
+        <h2 className="folder-tree__title">{t.navFolders}</h2>
         {onCollapse && (
-          // Only where the sidebar is always visible; the drawer closes instead.
-          <div className="hidden lg:block">
-            <button
-              ref={collapseRef}
-              type="button"
-              className={iconButton}
-              aria-label={t.collapseSidebar}
-              title={t.collapseSidebar}
-              aria-expanded="true"
-              aria-controls={controls}
-              onClick={onCollapse}
-            >
-              <CollapseIcon />
-            </button>
-          </div>
+          // Only where the column is always visible; the overlay closes instead.
+          <IconButton
+            ref={collapseRef}
+            kind="ghost"
+            size="sm"
+            align="bottom"
+            label={t.collapseSidebar}
+            wrapperClasses="folder-tree__collapse"
+            aria-expanded="true"
+            aria-controls={controls}
+            onClick={onCollapse}
+          >
+            <SidePanelClose />
+          </IconButton>
+        )}
+        {onClose && (
+          <IconButton kind="ghost" size="sm" align="bottom-end" label={t.closeFolders} wrapperClasses="folder-tree__close" data-drawer-focus onClick={onClose}>
+            <Close />
+          </IconButton>
         )}
       </div>
-      {(gone > 0 || goneOn) && (
-        <button
-          type="button"
-          className={`${item} -mt-2 ${goneOn ? active : idle}`}
-          title={t.onlyInArchiveHint}
-          onClick={selectGone}
-        >
-          <span className="truncate">{t.onlyInArchive}</span>
-          <span className={`text-xs tabular-nums ${goneOn ? "" : "text-ink-muted"}`}>{gone}</span>
-        </button>
-      )}
-      {data && data.accounts.length > 0 && <h2 className={section}>{t.sectionAccounts}</h2>}
       {data && data.accounts.some((a) => a.folders.length > 0) && (
-        <div className="-mt-2 flex gap-3 px-2 text-xs">
-          <button type="button" className="text-accent-ink hover:underline disabled:text-ink-muted disabled:no-underline pointer-coarse:min-h-11" disabled={!collapsed.canCollapse} onClick={collapsed.collapseAll}>
+        <div className="folder-tree__actions">
+          <Button kind="ghost" size="sm" disabled={!collapsed.canCollapse} onClick={collapsed.collapseAll}>
             {t.collapseAll}
-          </button>
-          <button type="button" className="text-accent-ink hover:underline disabled:text-ink-muted disabled:no-underline pointer-coarse:min-h-11" disabled={!collapsed.canExpand} onClick={collapsed.expandAll}>
+          </Button>
+          <Button kind="ghost" size="sm" disabled={!collapsed.canExpand} onClick={collapsed.expandAll}>
             {t.expandAll}
-          </button>
+          </Button>
         </div>
       )}
-      {!data && !error && <SidebarSkeleton />}
-      {error && !data && <p className="px-2 text-sm text-danger">{t.loadAccountsFailed(error)}</p>}
+      {!data && !error && <SkeletonText className="folder-tree__skeleton" paragraph lineCount={5} />}
+      {error && !data && <p className="folder-tree__note app-text-error">{t.loadAccountsFailed(error)}</p>}
       {data && data.accounts.length === 0 && (
-        <div className="flex flex-col items-start gap-2 px-2 text-sm text-ink-muted">
-          <p>{t.noAccounts}</p>
-          <button type="button" className={primary} onClick={() => show("accounts")}>
+        <div className="folder-tree__note">
+          <p className="app-text-secondary">{t.noAccounts}</p>
+          <Button size="sm" onClick={() => show("accounts")}>
             {t.addAccount}
-          </button>
+          </Button>
         </div>
       )}
-      {data?.accounts.map((a, ai) => {
-        const open = !collapsed.isCollapsed(a.name, "");
-        const listId = `${baseId}-${ai}`;
-        const selected = mail && state.account === a.name;
-        return (
-          <div key={a.name}>
-            <div className="flex items-center gap-0.5">
-              {a.folders.length > 0 ? (
-                <button
-                  type="button"
-                  className={toggleClass}
-                  aria-expanded={open}
-                  aria-controls={listId}
-                  aria-label={t.foldersIn(a.name)}
-                  title={t.foldersIn(a.name)}
-                  onClick={() => collapsed.toggle(a.name, "")}
-                >
-                  <Chevron open={open} />
-                </button>
-              ) : (
-                <span className="size-6 shrink-0" />
-              )}
-              <button
-                type="button"
-                className={`${item} min-w-0 font-semibold ${selected && !state.folder ? active : selected && !open ? within : idle}`}
-                onClick={() => select(a.name, "")}
-              >
-                <span className="truncate">{a.name}</span>
-                <AccountState a={a} />
-              </button>
-            </div>
-            {a.folders.length > 0 && (
-              <FolderList
-                id={listId}
-                hidden={!open}
-                nodes={buildFolderTree(a.folders, a.kind)}
-                account={a.name}
-                depth={0}
-                selected={selected ? state.folder : null}
-                select={select}
-                collapsed={collapsed}
-              />
-            )}
-          </div>
-        );
-      })}
-      <h2 className={`${section} mt-auto`}>{t.sectionManage}</h2>
-      <button
-        type="button"
-        className={`${item} -mt-2 ${state.view === "accounts" ? active : idle}`}
-        aria-current={state.view === "accounts" ? "page" : undefined}
-        onClick={() => show("accounts")}
-      >
-        <span className="flex items-center gap-2">
-          <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-          </svg>
-          {t.manageAccounts}
-        </span>
-      </button>
-      {user.admin && (
-        <button
-          type="button"
-          className={`${item} ${state.view === "users" ? active : idle}`}
-          aria-current={state.view === "users" ? "page" : undefined}
-          onClick={() => show("users")}
-        >
-          <span className="flex items-center gap-2">
-            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="9" cy="8" r="3.5" />
-              <path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14a6 6 0 0 1 3 6" />
-            </svg>
-            {t.users}
-          </span>
-        </button>
+      {data && data.accounts.length > 0 && (
+        // Controlled: the selection follows the URL, and the expanded nodes
+        // follow sidebarState (saved per user).
+        <FeatureFlags enableTreeviewControllable>
+          <TreeView className="folder-tree__tree" label={t.accountsAndFolders} hideLabel size="xs" selected={selected ? [selected] : []} active={selected}>
+            {data.accounts.map((a) => (
+              <AccountNode key={a.name} a={a} ids={ids} state={state} mail={mail} select={select} collapsed={collapsed} />
+            ))}
+          </TreeView>
+        </FeatureFlags>
       )}
-      {user.admin && (
-        <button
-          type="button"
-          className={`${item} ${state.view === "retention" ? active : idle}`}
-          aria-current={state.view === "retention" ? "page" : undefined}
-          onClick={() => show("retention")}
-        >
-          <span className="flex items-center gap-2">
-            <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="5" rx="1" />
-              <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
-            </svg>
-            {t.retention}
-          </span>
-        </button>
-      )}
-      <button
-        type="button"
-        className={`${item} ${state.view === "log" ? active : idle}`}
-        aria-current={state.view === "log" ? "page" : undefined}
-        onClick={() => show("log")}
-      >
-        <span className="flex items-center gap-2">
-          <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-            <path d="M14 3v6h6M8 13h8M8 17h5" />
-          </svg>
-          {t.log}
-        </span>
-      </button>
-      <div className="flex items-center justify-between gap-2 border-t border-line px-2 pt-2 text-sm">
-        <button
-          type="button"
-          className={`truncate hover:underline pointer-coarse:min-h-11 ${state.view === "profile" ? "font-semibold" : "text-ink-muted"}`}
-          title={`${t.loggedInAs(user.name)} · ${t.profile}`}
-          aria-current={state.view === "profile" ? "page" : undefined}
-          onClick={() => show("profile")}
-        >
-          {user.name}
-        </button>
-        <button type="button" className="shrink-0 text-accent-ink hover:underline pointer-coarse:min-h-11" onClick={logout}>
-          {t.logOut}
-        </button>
-      </div>
     </nav>
   );
 }
 
+type Ids = ReturnType<typeof nodeIds>;
+
 /**
- * What the drawer focuses when it opens below lg: "All mail" of the full
- * sidebar. Not simply the first button: the rail and the collapse button
- * come first in the page but are not displayed below lg, and a hidden
- * button cannot take focus.
+ * Carbon calls a node's onSelect for a click and for Enter or Space. On a
+ * node with children Enter also toggles it, so a node that only toggles
+ * leaves Enter to that.
+ */
+const isEnter = (e: SyntheticEvent) => e.type === "keydown" && (e as KeyboardEvent).key === "Enter";
+
+function AccountNode({ a, ids, state, mail, select, collapsed }: { a: Account; ids: Ids; state: ViewState; mail: boolean; select: Props["select"]; collapsed: CollapsedState }) {
+  const open = !collapsed.isCollapsed(a.name, "");
+  const id = ids.account(a.name);
+  const selectedHere = mail && state.account === a.name;
+  const nodes = a.folders.length ? buildFolderTree(a.folders, a.kind) : [];
+  return (
+    <TreeNode
+      id={id}
+      aria-labelledby={`${id}__label`}
+      className={selectedHere && !open && a.folders.length ? "folder-tree__node--within" : undefined}
+      label={<AccountLabel a={a} />}
+      isExpanded={open}
+      onToggle={() => collapsed.toggle(a.name, "")}
+      onSelect={() => select(a.name, "")}
+    >
+      {nodes.length > 0 && [
+        <TreeNode
+          key="\0all"
+          id={ids.all(a.name)}
+          aria-labelledby={`${ids.all(a.name)}__label`}
+          label={<Label name={t.allFolders} />}
+          isExpanded
+          onSelect={() => select(a.name, "")}
+        />,
+        ...nodes.map((n) => <FolderItem key={n.path} node={n} account={a.name} ids={ids} selected={selectedHere ? state.folder : null} select={select} collapsed={collapsed} />),
+      ]}
+    </TreeNode>
+  );
+}
+
+/** The account's name with its state: syncing or importing, removed, imported, receiving, disabled, failing. */
+function AccountLabel({ a }: { a: Account }) {
+  const states: { text: string; title?: string }[] = [];
+  if (a.sync.state !== "idle") states.push({ text: a.kind !== "imap" ? t.importing : t.syncing });
+  if (a.removed) states.push({ text: t.removed });
+  else if (a.kind === "import") states.push({ text: t.imported });
+  else if (!a.enabled) states.push({ text: t.disabled });
+  else if (a.kind === "smtp") states.push({ text: t.receiving, title: t.sourceCompleteHint });
+  const failing = a.sync.health === "failing";
+  return (
+    <span className="folder-tree__label">
+      <span className="folder-tree__name folder-tree__name--account">{a.name}</span>
+      {states.map((s) => (
+        <Fragment key={s.text}>
+          {" "}
+          <span className="folder-tree__state" title={s.title}>
+            {s.text}
+          </span>
+        </Fragment>
+      ))}
+      {failing && " "}
+      {failing && (
+        <span className="folder-tree__state folder-tree__state--failing">
+          <WarningFilled aria-hidden className="folder-tree__warning" />
+          {t.tagFailing}
+        </span>
+      )}
+    </span>
+  );
+}
+
+interface ItemProps {
+  node: FolderNode;
+  account: string;
+  ids: Ids;
+  /** The selected folder in this account, or null. */
+  selected: string | null;
+  select: (account: string, folder: string) => void;
+  collapsed: CollapsedState;
+}
+
+function FolderItem({ node, account, ids, selected, select, collapsed }: ItemProps) {
+  const parent = node.children.length > 0;
+  const open = !parent || !collapsed.isCollapsed(account, node.path);
+  const f = node.folder;
+  // The selection inside a collapsed node: show where it is.
+  const inside = !open && selected !== null && contains(node, selected);
+  const id = ids.folder(account, node.path);
+  // A collapsed parent shows the sum of its subtree; a path part only then.
+  const count = !open ? subtreeMessages(node) : f ? f.messages : undefined;
+  const countTitle = open ? undefined : t.subtreeCount(subtreeMessages(node));
+  return (
+    <TreeNode
+      id={id}
+      aria-labelledby={`${id}__label`}
+      className={[f ? "" : "folder-tree__node--path", inside ? "folder-tree__node--within" : ""].filter(Boolean).join(" ") || undefined}
+      label={<Label name={node.label} count={count} title={f ? f.name : node.path} countTitle={countTitle} />}
+      // Always a boolean: Carbon's controlled state must not switch to
+      // uncontrolled when a folder gains or loses subfolders.
+      isExpanded={open}
+      onToggle={() => collapsed.toggle(account, node.path)}
+      onSelect={(e: SyntheticEvent) => {
+        if (f) select(account, f.name);
+        // Only a path part: no messages of its own, nothing to select. It toggles.
+        else if (!isEnter(e)) collapsed.toggle(account, node.path);
+      }}
+    >
+      {parent ? node.children.map((c) => <FolderItem key={c.path} node={c} account={account} ids={ids} selected={selected} select={select} collapsed={collapsed} />) : undefined}
+    </TreeNode>
+  );
+}
+
+function contains(node: FolderNode, folder: string): boolean {
+  return node.children.some((c) => c.folder?.name === folder || contains(c, folder));
+}
+
+/**
+ * What the overlay focuses when it opens: the selected node, else the first
+ * node, else its close button. Not simply the first button: the rail and
+ * the collapse button come first in the page but are not displayed below
+ * lg, and a hidden element cannot take focus.
  */
 export function drawerFocusTarget(root: ParentNode | null | undefined): HTMLElement | null {
-  return root?.querySelector<HTMLElement>("[data-drawer-focus]") ?? null;
+  if (!root) return null;
+  const visible = (el: HTMLElement) => !el.closest(".cds--tree-node--hidden");
+  const nodes = Array.from(root.querySelectorAll<HTMLElement>(".folder-pane__full [role=treeitem]")).filter(visible);
+  return nodes.find((n) => n.getAttribute("aria-selected") === "true") ?? nodes[0] ?? root.querySelector<HTMLElement>(".folder-pane__full [data-drawer-focus]");
 }
 
 type PanelProps = Omit<Props, "onCollapse" | "collapseRef" | "controls"> & {
   layout: SidebarLayout;
-  /** The id of the aside, for aria-controls. */
+  /** The id of the column, for aria-controls. */
   controls: string;
 };
 
 /**
- * The content of the sidebar's aside. From lg up: the full sidebar with its
- * resize handle, or the rail when collapsed. Below lg the aside is a drawer
- * that always shows the full sidebar. A CSS switch only, so the first paint
- * is final.
+ * The content of the folder column. From lg up: the full tree with its
+ * resize handle, or the rail when collapsed. Below lg the column is an
+ * overlay that always shows the full tree. A CSS switch only, so the first
+ * paint is final.
  */
 export function SidebarPanel({ layout, controls, ...props }: PanelProps) {
   const collapseButton = useRef<HTMLButtonElement>(null);
@@ -289,23 +304,20 @@ export function SidebarPanel({ layout, controls, ...props }: PanelProps) {
     toggled.current = true;
     setCollapsed(c);
   };
-  // The full sidebar keeps its place in the tree, so collapsing and
-  // expanding does not remount it: its scroll position and the folders the
-  // user collapsed stay as they were.
+  // The full tree keeps its place, so collapsing and expanding does not
+  // remount it: its scroll position and the folders the user collapsed stay.
   return (
     <>
-      {collapsed && (
-        <SidebarRail state={props.state} accounts={props.accounts} select={props.select} controls={controls} expandRef={expandButton} onExpand={() => toggle(false)} />
-      )}
-      <div className={collapsed ? "h-full lg:hidden" : "h-full"}>
-        <Sidebar {...props} onCollapse={collapsed ? undefined : () => toggle(true)} collapseRef={collapseButton} controls={controls} />
+      {collapsed && <SidebarRail state={props.state} accounts={props.accounts} select={props.select} controls={controls} expandRef={expandButton} onExpand={() => toggle(false)} />}
+      <div className={collapsed ? "folder-pane__full folder-pane__full--collapsed" : "folder-pane__full"}>
+        <FolderTree {...props} onCollapse={collapsed ? undefined : () => toggle(true)} collapseRef={collapseButton} controls={controls} />
       </div>
       {!collapsed && <SidebarResizer layout={layout} controls={controls} onCollapse={() => toggle(true)} />}
     </>
   );
 }
 
-/** The drag handle on the sidebar's right edge (window-splitter pattern). */
+/** The drag handle on the column's right edge (window-splitter pattern). */
 function SidebarResizer({ layout, controls, onCollapse }: { layout: SidebarLayout; controls: string; onCollapse: () => void }) {
   const { width, setWidth, commitWidth, resetWidth } = layout;
   const [dragging, setDragging] = useState(false);
@@ -371,20 +383,13 @@ function SidebarResizer({ layout, controls, onCollapse }: { layout: SidebarLayou
       aria-valuenow={width}
       aria-valuetext={t.sidebarWidth(width)}
       tabIndex={0}
-      className="group absolute inset-y-0 -right-1 z-10 hidden w-2 cursor-col-resize touch-none outline-none select-none lg:block pointer-coarse:-right-3 pointer-coarse:w-6"
+      className={dragging ? "folder-pane__resizer folder-pane__resizer--dragging" : "folder-pane__resizer"}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       onDoubleClick={resetWidth}
-    >
-      <div
-        aria-hidden
-        className={`mx-auto h-full group-hover:w-0.5 group-hover:bg-accent group-focus-visible:w-0.5 group-focus-visible:bg-focus ${dragging ? "w-0.5 bg-accent" : "w-px bg-transparent"}`}
-      />
-    </div>
+    />
   );
 }
-
-const railButton = "relative flex size-10 shrink-0 items-center justify-center rounded-md text-xs pointer-coarse:size-11";
 
 interface RailProps {
   state: ViewState;
@@ -395,36 +400,16 @@ interface RailProps {
   onExpand: () => void;
 }
 
-/** The collapsed sidebar: a short label per account. The manage links are reached by expanding. */
+/** The collapsed column: a short label per account. Its folders are reached by expanding. */
 function SidebarRail({ state, accounts, select, controls, expandRef, onExpand }: RailProps) {
   const mail = state.view === "" && state.gone !== "1";
-  const all = mail && !state.account && !state.folder;
   return (
-    <nav aria-label={t.accountsAndFolders} className="hidden h-full flex-col items-center gap-2 p-2 lg:flex pointer-coarse:p-1.5">
-      <button
-        ref={expandRef}
-        type="button"
-        className={iconButton}
-        aria-label={t.expandSidebar}
-        title={t.expandSidebar}
-        aria-expanded="false"
-        aria-controls={controls}
-        onClick={onExpand}
-      >
-        <ExpandIcon />
-      </button>
-      <button
-        type="button"
-        className={`${railButton} ${all ? active : `text-ink-muted ${idle}`}`}
-        aria-label={t.allMail}
-        title={t.allMail}
-        aria-current={all ? "true" : undefined}
-        onClick={() => select("", "")}
-      >
-        <InboxIcon />
-      </button>
-      {/* Only the accounts scroll, so » stays reachable with many of them. */}
-      <ul className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto py-0.5">
+    <nav aria-label={t.accountsAndFolders} className="folder-rail">
+      <IconButton ref={expandRef} kind="ghost" size="sm" align="right" label={t.expandSidebar} aria-expanded="false" aria-controls={controls} onClick={onExpand}>
+        <SidePanelOpen />
+      </IconButton>
+      {/* Only the accounts scroll, so the expand button stays reachable with many of them. */}
+      <ul className="folder-rail__accounts">
         {accounts.data?.accounts.map((a) => (
           <li key={a.name}>
             <RailAccount a={a} selected={mail && state.account === a.name} select={select} />
@@ -449,151 +434,16 @@ export function railState(a: Account): string[] {
 function RailAccount({ a, selected, select }: { a: Account; selected: boolean; select: (account: string, folder: string) => void }) {
   const label = [a.name, ...railState(a)].join(", ");
   const off = a.removed || !a.enabled;
+  const cls = ["folder-rail__account", selected ? "folder-rail__account--selected" : "", off ? "folder-rail__account--off" : ""].filter(Boolean).join(" ");
   return (
-    <button
-      type="button"
-      className={`${railButton} font-semibold ${selected ? active : idle} ${off ? "border border-dashed border-line-control opacity-60" : ""}`}
-      aria-label={label}
-      title={label}
-      aria-current={selected ? "true" : undefined}
-      onClick={() => select(a.name, "")}
-    >
-      <span aria-hidden className="whitespace-nowrap">
-        {railLabel(a.name)}
-      </span>
+    <button type="button" className={cls} aria-label={label} title={label} aria-current={selected ? "true" : undefined} onClick={() => select(a.name, "")}>
+      <span aria-hidden>{railLabel(a.name)}</span>
       {a.sync.state !== "idle" && (
-        <span aria-hidden className="absolute -top-0.5 -right-0.5 inline-block animate-spin text-[10px] leading-none font-normal motion-reduce:animate-none">
+        <span aria-hidden className="folder-rail__busy">
           ↻
         </span>
       )}
-      {a.sync.health !== "ok" && (
-        <span aria-hidden className={`absolute right-0.5 bottom-0.5 size-2 rounded-full ${a.sync.health === "failing" ? "bg-danger" : "bg-warning"}`} />
-      )}
+      {a.sync.health !== "ok" && <span aria-hidden className={`folder-rail__dot folder-rail__dot--${a.sync.health}`} />}
     </button>
   );
-}
-
-function AccountState({ a }: { a: Account }) {
-  if (a.sync.state !== "idle") {
-    return (
-      <span className="text-xs font-normal opacity-70" title={a.kind !== "imap" ? t.importing : t.syncing}>
-        <span aria-hidden className="inline-block animate-spin">↻</span>
-        <span className="sr-only">{a.kind !== "imap" ? t.importing : t.syncing}</span>
-      </span>
-    );
-  }
-  if (a.removed) return <span className="text-xs font-normal opacity-70">{t.removed}</span>;
-  if (a.kind === "import") return <span className="text-xs font-normal opacity-70">{t.imported}</span>;
-  if (a.kind === "smtp" && a.enabled) {
-    return (
-      <span className="text-xs font-normal opacity-70" title={t.sourceCompleteHint}>
-        {t.receiving}
-      </span>
-    );
-  }
-  return !a.enabled ? <span className="text-xs font-normal opacity-70">{t.disabled}</span> : null;
-}
-
-interface ListProps {
-  id: string;
-  hidden: boolean;
-  nodes: FolderNode[];
-  account: string;
-  depth: number;
-  /** The selected folder in this account, or null. */
-  selected: string | null;
-  select: (account: string, folder: string) => void;
-  collapsed: CollapsedState;
-}
-
-/** The folders of one level. Collapsed lists stay in the page, hidden, so aria-controls always has a target. */
-function FolderList({ id, hidden, nodes, depth, ...rest }: ListProps) {
-  return (
-    <ul id={id} hidden={hidden} className={`mt-0.5 flex flex-col gap-0.5 ${depth > 0 && depth <= maxIndent ? "ml-2" : ""}`}>
-      {nodes.map((n, i) => (
-        <FolderItem key={n.path} node={n} id={`${id}-${i}`} depth={depth} {...rest} />
-      ))}
-    </ul>
-  );
-}
-
-function FolderItem({ node, id, account, depth, selected, select, collapsed }: Omit<ListProps, "nodes" | "hidden"> & { node: FolderNode }) {
-  const parent = node.children.length > 0;
-  const open = !parent || !collapsed.isCollapsed(account, node.path);
-  const f = node.folder;
-  const on = f !== null && selected === f.name;
-  // The selection inside a collapsed node: show where it is.
-  const inside = !open && selected !== null && contains(node, selected);
-  const count = open ? (f?.messages ?? 0) : subtreeMessages(node);
-  const countLabel = open ? undefined : t.subtreeCount(subtreeMessages(node));
-  const chevron = (
-    <button
-      type="button"
-      className={toggleClass}
-      aria-expanded={open}
-      aria-controls={`${id}-c`}
-      aria-label={t.foldersIn(node.path)}
-      title={t.foldersIn(node.path)}
-      onClick={() => collapsed.toggle(account, node.path)}
-    >
-      <Chevron open={open} />
-    </button>
-  );
-  return (
-    <li>
-      {f ? (
-        <div className="flex items-center gap-0.5">
-          {parent ? chevron : <span className="size-6 shrink-0" />}
-          <button
-            type="button"
-            className={`${item} min-w-0 ${on ? active : inside ? within : idle}`}
-            title={f.name}
-            onClick={() => select(account, f.name)}
-          >
-            <span className="truncate">{node.label}</span>
-            <span className={`text-xs tabular-nums ${on ? "" : "text-ink-muted"} ${open ? "" : "italic"}`} title={countLabel}>
-              {count}
-            </span>
-          </button>
-        </div>
-      ) : (
-        // Only a path part: no messages of its own, nothing to select. The
-        // whole row toggles.
-        <button
-          type="button"
-          className={`flex w-full items-center gap-0.5 rounded-md py-1 pr-2 text-left text-sm pointer-coarse:min-h-11 ${inside ? within : `text-ink-muted ${idle}`}`}
-          aria-expanded={open}
-          aria-controls={`${id}-c`}
-          title={node.path}
-          onClick={() => collapsed.toggle(account, node.path)}
-        >
-          <span className="flex size-6 shrink-0 items-center justify-center text-ink-muted">
-            <Chevron open={open} />
-          </span>
-          <span className="min-w-0 flex-1 truncate">{node.label}</span>
-          {!open && (
-            <span className="text-xs tabular-nums text-ink-muted italic" title={countLabel}>
-              {count}
-            </span>
-          )}
-        </button>
-      )}
-      {parent && (
-        <FolderList
-          id={`${id}-c`}
-          hidden={!open}
-          nodes={node.children}
-          account={account}
-          depth={depth + 1}
-          selected={selected}
-          select={select}
-          collapsed={collapsed}
-        />
-      )}
-    </li>
-  );
-}
-
-function contains(node: FolderNode, folder: string): boolean {
-  return node.children.some((c) => c.folder?.name === folder || contains(c, folder));
 }

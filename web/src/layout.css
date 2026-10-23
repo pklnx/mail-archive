@@ -64,13 +64,342 @@ select:not([multiple], [size], .cds--select-input) {
   height: 1.25rem;
   margin-inline-end: 0.5rem;
 }
-/* The drawer is permanent from 64rem on (the unconverted sidebar's lg), so
-   the menu button hides there too, not only from Carbon's 66rem. Part 4a
-   moves the navigation to Carbon's SideNav and breakpoints. */
-@media (min-width: 64rem) {
-  .app-shell .cds--header__menu-toggle {
+/* The header's user name, from Carbon's md up; the shortcuts button only
+   there too, where a keyboard is likely. */
+.app-header__user {
+  display: none;
+  align-self: center;
+  padding-inline: 0.5rem;
+  color: var(--cds-text-secondary);
+  font-size: 0.875rem;
+  letter-spacing: 0.16px;
+  white-space: nowrap;
+}
+.app-shell .app-header__shortcuts {
+  display: none;
+}
+@media (min-width: 42rem) {
+  .app-header__user {
+    display: block;
+  }
+  .app-shell .app-header__shortcuts {
+    display: flex;
+  }
+}
+
+/* The shell's SideNav sits below the header, which reaches under the notch.
+   Carbon shows the menu button and the overlay below lg (66rem) and hides
+   the button from lg up, where the SideNav is a rail that expands over the
+   page on hover and focus. The page makes room for the collapsed rail. */
+.app-shell > .cds--side-nav {
+  /* A divider that keeps Carbon's widths (3rem, 16rem) exact. */
+  box-shadow: inset -1px 0 0 var(--cds-border-subtle-01);
+  inset-block-start: calc(3rem + env(safe-area-inset-top));
+  block-size: calc(100% - 3rem - env(safe-area-inset-top));
+  padding-block-end: env(safe-area-inset-bottom);
+}
+.app-shell > .cds--side-nav__overlay {
+  inset-block-start: calc(3rem + env(safe-area-inset-top));
+}
+.shell-nav__count {
+  color: var(--cds-text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+@media (min-width: 66rem) {
+  .app-shell__body {
+    margin-inline-start: 3rem;
+  }
+}
+
+/* A view below the header: one cell that fills the rest of the screen, so
+   pages scroll inside it. */
+.app-view {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-block-size: 0;
+}
+.app-view > * {
+  min-block-size: 0;
+}
+/* The mail view: list, then the reading pane from 48rem (the unconverted
+   list's md), and the folder column first from lg. */
+@media (min-width: 48rem) {
+  .mail-view {
+    grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
+  }
+}
+@media (min-width: 66rem) {
+  .mail-view {
+    grid-template-columns: var(--sidebar-w) minmax(18rem, 26rem) minmax(0, 1fr);
+  }
+}
+
+/* The folder column. Below lg it is hidden until the Folders button opens
+   it as a modal overlay with a scrim; from lg up it is the first column. */
+.folder-pane {
+  display: none;
+  min-inline-size: 0;
+  background-color: var(--cds-layer-01);
+  color: var(--cds-text-primary);
+  border-inline-end: 1px solid var(--cds-border-subtle-01);
+}
+.folder-pane--overlay {
+  position: fixed;
+  z-index: 7000;
+  display: block;
+  inset-block: calc(3rem + env(safe-area-inset-top)) 0;
+  inset-inline-start: 0;
+  inline-size: min(20rem, calc(100vw - 3rem));
+  padding-block-end: env(safe-area-inset-bottom);
+  padding-inline-start: env(safe-area-inset-left);
+  box-shadow: 0 2px 6px var(--cds-shadow, rgba(0, 0, 0, 0.3));
+}
+.folder-pane__scrim {
+  position: fixed;
+  z-index: 6900;
+  inset: calc(3rem + env(safe-area-inset-top)) 0 0;
+  background-color: var(--cds-overlay);
+}
+.folder-pane__full {
+  block-size: 100%;
+}
+.folder-pane__open {
+  display: flex;
+  flex: none;
+}
+@media (min-width: 66rem) {
+  .folder-pane {
+    position: relative;
+    display: block;
+  }
+  .folder-pane__full--collapsed,
+  .folder-pane__open,
+  .folder-tree__close {
     display: none;
   }
+}
+@media (max-width: 65.98rem) {
+  .folder-rail,
+  .folder-pane__resizer,
+  .folder-tree__collapse {
+    display: none;
+  }
+}
+
+/* The resize handle on the column's edge (#160): thin, wider for touch. */
+.folder-pane__resizer {
+  position: absolute;
+  z-index: 10;
+  inset-block: 0;
+  inset-inline-end: -0.25rem;
+  inline-size: 0.5rem;
+  cursor: col-resize;
+  outline: none;
+  touch-action: none;
+  user-select: none;
+}
+.folder-pane__resizer::after {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(50% - 1px);
+  inline-size: 2px;
+  content: "";
+}
+.folder-pane__resizer:hover::after,
+.folder-pane__resizer--dragging::after {
+  background-color: var(--cds-border-interactive);
+}
+.folder-pane__resizer:focus-visible::after {
+  background-color: var(--cds-focus);
+}
+@media (pointer: coarse) {
+  .folder-pane__resizer {
+    inset-inline-end: -0.75rem;
+    inline-size: 1.5rem;
+  }
+}
+
+/* The tree: heading row, collapse and expand all, then the accounts. */
+.folder-tree {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  overflow-y: auto;
+  padding-block-end: 1rem;
+  font-size: 0.875rem;
+  letter-spacing: 0.16px;
+}
+.folder-tree__head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-block-size: 2.5rem;
+  padding-inline: 1rem 0.25rem;
+}
+.folder-tree__title {
+  /* heading-compact-01 */
+  flex: 1;
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.28572;
+  letter-spacing: 0.16px;
+}
+.folder-tree__actions {
+  display: flex;
+  flex-wrap: wrap;
+  padding-inline: 0.5rem;
+}
+.folder-tree__note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.5rem 1rem;
+}
+.folder-tree__skeleton {
+  padding-inline: 1rem;
+}
+.folder-tree__tree {
+  padding-block-start: 0.25rem;
+}
+.folder-tree__label {
+  display: flex;
+  min-inline-size: 0;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.folder-tree__name {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-tree__name--account {
+  font-weight: 600;
+}
+.folder-tree__count,
+.folder-tree__state {
+  flex: none;
+  color: var(--cds-text-secondary);
+  font-size: 0.75rem;
+  letter-spacing: 0.32px;
+  white-space: nowrap;
+}
+.folder-tree__count {
+  font-variant-numeric: tabular-nums;
+}
+.folder-tree__count--subtree {
+  font-style: italic;
+}
+.folder-tree__state--failing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--cds-text-error);
+}
+.folder-tree__warning {
+  fill: var(--cds-support-error);
+}
+.folder-tree__node--path > .cds--tree-node__label {
+  color: var(--cds-text-secondary);
+}
+/* A collapsed node that holds the selection. */
+.folder-tree__node--within > .cds--tree-node__label {
+  box-shadow: inset 3px 0 0 var(--cds-border-interactive);
+}
+/* The label's own spacing: the count sits at the right edge. */
+.folder-tree .cds--tree-node__label__details {
+  flex: 1;
+  min-inline-size: 0;
+}
+.folder-tree .cds--tree-node__label__text {
+  display: block;
+  flex: 1;
+  min-inline-size: 0;
+  padding-inline-end: 0.75rem;
+}
+
+/* The collapsed column: a short label per account (#160). */
+.folder-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  block-size: 100%;
+  padding-block: 0.25rem;
+}
+.folder-rail__accounts {
+  display: flex;
+  overflow: hidden auto;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  min-block-size: 0;
+  inline-size: 100%;
+  margin: 0;
+  padding: 0.125rem 0;
+  list-style: none;
+}
+.folder-rail__account {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  block-size: 2.5rem;
+  inline-size: 2.5rem;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--cds-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.folder-rail__account:hover {
+  background-color: var(--cds-layer-hover-01);
+}
+.folder-rail__account:focus-visible {
+  outline: 2px solid var(--cds-focus);
+  outline-offset: -2px;
+}
+.folder-rail__account--selected {
+  background-color: var(--cds-layer-selected-01);
+  box-shadow: inset 3px 0 0 var(--cds-border-interactive);
+}
+.folder-rail__account--off {
+  border: 1px dashed var(--cds-border-strong-01);
+  opacity: 0.6;
+}
+.folder-rail__busy {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0.125rem;
+  font-size: 0.625rem;
+  font-weight: 400;
+  line-height: 1;
+}
+.folder-rail__dot {
+  position: absolute;
+  inset-block-end: 0.125rem;
+  inset-inline-end: 0.125rem;
+  block-size: 0.5rem;
+  inline-size: 0.5rem;
+  border-radius: 50%;
+}
+.folder-rail__dot--failing {
+  background-color: var(--cds-support-error);
+}
+.folder-rail__dot--stale {
+  background-color: var(--cds-support-warning);
 }
 
 /* The health banner under the header: notifications at full width. */

@@ -210,8 +210,15 @@ applies.
 HTML bodies are served for an iframe with a strict Content-Security-Policy
 and the `sandbox` directive: no scripts, no forms, no plugins, no access to
 the API. Remote content is blocked unless you click **Load remote images**
-for one message. Attachments are served with `sandbox` as well; only common
-image types are shown inline, everything else is a download.
+for one message. Images embedded in the mail (`cid:`) are written into the
+HTML as `data:` URLs, so the frame makes no request to the server for them;
+`img-src` allows only `data:` (and `https:`/`http:` after **Load remote
+images**). Only PNG, JPEG, GIF and WebP are embedded, up to 10 MiB per
+message; SVG and every other type become an empty image. The frame has no
+origin of its own, so its requests carry no session cookie: the parts
+endpoint still requires a login and answers them with `401`.
+Attachments are served with `sandbox` as well; only common image types are
+shown inline, everything else is a download.
 
 ### Login checks
 
