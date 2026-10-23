@@ -111,17 +111,19 @@ The first semver release is `1.0.0`, whatever the labels; its range starts at
 the last `vYY.MM-N` tag (`v26.10-11`). The old `vYY.MM-N` tags and images stay
 and are never renamed. The workflow lists the first-parent commits since the
 last release and asks the GitHub API for each commit's pull request. A dry
-run shows the proposed version and a table of the pull requests with their
-labels and their effect in the run summary; a pull request without a kind
-label (`breaking`, `feature`, `bug`, `chore`, `docs`, `dependencies`) is
-marked "no kind label", which is a warning, not a block. The run fails when:
+run shows the proposed version, a table of the pull requests with their
+labels and their effect, and the head of the release notes in the run
+summary; a pull request without a kind label (`breaking`, `feature`, `bug`,
+`chore`, `docs`, `dependencies`) is marked "no kind label", which is a
+warning, not a block. The run fails when:
 
 - nothing was merged since the last release, also with the `version` input;
 - a commit has no merged pull request (a direct push): check it, then set the
   `version` input;
 - the `version` input is not `X.Y.Z` (no `v`, no leading zeros, no suffix) or
   not greater than the last version (for the first release: at least
-  `1.0.0`). It may be lower than the proposal;
+  `1.0.0`). It may be lower than the proposal (the run then shows a
+  warning);
 - the tag `vX.Y.Z` or its release exists already;
 - it runs on another branch than `main`.
 
@@ -139,10 +141,47 @@ maintenance; see `.github/release.yml`). A pull request without a kind label
 lands under "Maintenance", so a risky pull request needs a kind label in
 addition to `second-review`.
 
-The workflow writes an upgrade paragraph into every release's notes. It links
-the [Upgrades guide](../guide/operations#upgrades), and the generated notes
-list the `breaking` and `db-migration` pull requests first. Add manual upgrade
-notes only when a change needs more than these generic steps.
+If the run fails in or after "Build and push" (in "Create the release"), the
+image tags `X.Y.Z`, `X.Y`, `X` and `latest` may already point to the new
+build (a push that failed partway may have moved only some of them), but
+there is no release. To finish the release:
+
+1. Fix the cause.
+2. Delete the draft release `vX.Y.Z` if the Releases page shows one (the
+   check "Tag and release do not exist yet" stops at it).
+3. If the tag `vX.Y.Z` exists without a release, delete the tag too (it
+   points to this run's commit). Do not follow the run's advice to set the
+   `version` input: that ships the next version and leaves the stray tag.
+4. Use **Re-run failed jobs** on the same run. It uses the same commit and
+   inputs, overwrites the four image tags with a build of the same commit and
+   creates the release. It computes the same version only while the labels
+   of the pull requests in the range are unchanged (they are read from the
+   API again): compare the version in the re-run's summary with the first
+   attempt.
+
+To abandon the release instead, point the floating tags back to the previous
+release by hand and delete the new package version (package settings on
+GitHub, "Manage versions"). Moving a tag needs a `docker login ghcr.io` with
+a token that has `write:packages`:
+
+```sh
+docker buildx imagetools create -t ghcr.io/pklnx/mail-archive:latest ghcr.io/pklnx/mail-archive:26.10-11
+```
+
+For 1.0.0, move `latest` back to `26.10-11`, then delete the package version
+that carries `1.0.0`; that removes `1.0.0`, `1.0` and `1`, which did not exist
+before. For a later release, also move `X` and `X.Y` back to the previous
+release if it has them (abandoning `1.3.0` after `1.2.4`: `latest` and `1` to
+`1.2.4`; `1.3` goes with the package version).
+
+The workflow writes an upgrade paragraph into every release's notes
+(`scripts/release-notes.sh`). It links the
+[Upgrades guide](../guide/operations#upgrades), and the generated notes list
+the `breaking` and `db-migration` pull requests first. Add manual upgrade notes
+only when a change needs more than these generic steps. The first semver
+release (no `vX.Y.Z` tag before it) also gets a paragraph for automatic image
+updaters: the tag `26.10` stays on `26.10-11`, and tools should switch to an
+exact version, `1.0` or `1`.
 
 `./ma --version` and `mail-archive --version` show the version. The release
 image shows `X.Y.Z` (for example `1.0.0`). A build from a clone shows

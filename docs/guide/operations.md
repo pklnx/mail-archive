@@ -164,10 +164,14 @@ Versions follow [semantic versioning](https://semver.org/), `X.Y.Z`, from
 
 - a **major** release (`2.0.0`) has a breaking change that needs manual steps
   when upgrading (see the release notes);
-- a **minor** release (`1.5.0`) adds features or changes the database schema,
-  so it needs `./ma migrate`;
-- a **patch** release (`1.4.3`) has fixes only, without a migration or a
-  breaking change.
+- a **minor** release (`1.5.0`) adds features and may change the database
+  schema; then it needs `./ma migrate`;
+- a **patch** release (`1.4.3`) normally has fixes only, without a migration
+  or a breaking change.
+
+The maintainer can release with a lower version than the labels propose, so
+read the release notes: they list database migrations and breaking changes
+under their own headings.
 
 Releases are tagged `v1.0.0` in the repository. Each release publishes
 `ghcr.io/pklnx/mail-archive` for `linux/amd64` and `linux/arm64` with four
@@ -176,15 +180,17 @@ tags:
 | Tag | Points to | Brings |
 |---|---|---|
 | `1.4.2` | Exactly this build. The bundle's `docker-compose.yml` uses it. | Nothing new. |
-| `1.4` | The newest `1.4.x` release. | Patch updates only: no migration, no breaking change. |
-| `1` | The newest `1.x.y` release. | Features and migrations too, so run `./ma migrate` after each update; no breaking change. |
+| `1.4` | The newest `1.4.x` release. | Patch updates: normally no migration and no breaking change. |
+| `1` | The newest `1.x.y` release. | Features, and migrations when there are any, so run `./ma migrate` after each update; normally no breaking change. |
 | `latest` | The newest release. | Everything, breaking changes included. |
 
 Releases before 1.0.0 were named after the year and month, plus a build
 number (`26.10-1` to `26.10-11`). Their tags and images stay. The image tag
 `26.10` stays on `26.10-11` and gets no more updates. Tools that update images
 automatically (Watchtower, Renovate, Diun) may rank `26.10` above `1.0.0`:
-switch them once to `1`, `1.0` or an exact version.
+switch them once to an exact version, `1.0` or `1` (`1` also brings
+migrations, which need `./ma migrate`). A tool on `latest` installs breaking
+changes without their upgrade steps.
 
 Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build;
 pinning an exact version is safer than `latest`, because migrations only run

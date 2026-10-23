@@ -24,7 +24,8 @@
 #   scripts/next-version.sh next LAST [OVERRIDE] < prs.tsv
 #       The next version after LAST (empty for the first semver release),
 #       from the lines of `pr`. OVERRIDE (X.Y.Z, greater than LAST) replaces
-#       the proposal; an empty OVERRIDE means none.
+#       the proposal; an empty OVERRIDE means none. An OVERRIDE below the
+#       proposal prints a warning on stderr (exit 0).
 #   scripts/next-version.sh summary < prs.tsv
 #       A Markdown table of the pull requests, their labels and their effect.
 #
@@ -176,27 +177,33 @@ cmd_next() {
 		die "commits without a merged pull request:$without; check them and set the version input"
 	fi
 
-	if [ -n "$override" ]; then
-		if [ -z "$last" ]; then
-			[ "${override%%.*}" -ge 1 ] || die "the first semver release must be at least 1.0.0, not $override"
-		else
-			gt "$override" "$last" || die "version $override is not greater than the last version $last"
-		fi
-		echo "$override"
-		return
+	if [ -n "$without" ]; then
+		proposal=
+	elif [ -z "$last" ]; then
+		proposal=1.0.0
+	else
+		major=${last%%.*} patch=${last##*.} minor=${last#*.}
+		minor=${minor%.*}
+		case $rank in
+		3) proposal="$((major + 1)).0.0" ;;
+		2) proposal="$major.$((minor + 1)).0" ;;
+		*) proposal="$major.$minor.$((patch + 1))" ;;
+		esac
 	fi
 
-	if [ -z "$last" ]; then
-		echo 1.0.0
+	if [ -z "$override" ]; then
+		echo "$proposal"
 		return
 	fi
-	major=${last%%.*} patch=${last##*.} minor=${last#*.}
-	minor=${minor%.*}
-	case $rank in
-	3) echo "$((major + 1)).0.0" ;;
-	2) echo "$major.$((minor + 1)).0" ;;
-	*) echo "$major.$minor.$((patch + 1))" ;;
-	esac
+	if [ -z "$last" ]; then
+		[ "${override%%.*}" -ge 1 ] || die "the first semver release must be at least 1.0.0, not $override"
+	else
+		gt "$override" "$last" || die "version $override is not greater than the last version $last"
+	fi
+	if [ -n "$proposal" ] && gt "$proposal" "$override"; then
+		echo "next-version: warning: version $override is lower than the proposal $proposal" >&2
+	fi
+	echo "$override"
 }
 
 # md TEXT: TEXT for a Markdown table cell.
