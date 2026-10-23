@@ -1,29 +1,53 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import {
+  Button,
+  Checkbox,
+  CodeSnippet,
+  FeatureFlags,
+  MenuItem,
+  MenuItemDivider,
+  OverflowMenu,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableExpandedRow,
+  TableExpandHeader,
+  TableExpandRow,
+  TableHead,
+  TableHeader,
+  TableRow,
+  Tag,
+  TextInput,
+  Tile,
+} from "@carbon/react";
+import { Add } from "@carbon/icons-react";
 import { ApiKeyItems } from "./ApiKeys";
 import { apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
+import { AppModal, DangerModal } from "./DangerModal";
 import { relativeTime } from "./format";
 import { t } from "./i18n";
-import { PageHeader } from "./PageHeader";
-
-const button =
-  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const primary = "rounded-md bg-accent px-3 py-1 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const input =
-  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 const message = (err: unknown) => t.failed(err instanceof Error ? err.message : String(err));
 
+/** A confirmation that is open: what it does, and for whom. */
+type Asking = { kind: "reset" | "lock" | "twoFactor" | "passkeys" | "remove"; user: ManagedUser } | null;
+
 /** User management for admins: logins only, never other users' mail. */
-export function UsersPage({ close }: { close: () => void }) {
+export function UsersPage() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [generated, setGenerated] = useState<GeneratedPassword | null>(null);
-  // The user whose password reset waits for confirmation.
-  const [resetting, setResetting] = useState<ManagedUser | null>(null);
-  // The user whose API keys are shown, and every user's keys.
-  const [showKeys, setShowKeys] = useState("");
+  const [asking, setAsking] = useState<Asking>(null);
+  // The users whose API keys are shown, and every user's keys.
+  const [showKeys, setShowKeys] = useState<Set<string>>(new Set());
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  const id = useId();
+  // The menu buttons by user, so the focus can go back to one after a
+  // confirmation (its menu item is gone by then).
+  const menus = useRef(new Map<string, HTMLElement>());
+  const heading = useRef<HTMLHeadingElement>(null);
 
   const reload = useCallback(() => {
     usersApi.list().then(
@@ -47,20 +71,179 @@ export function UsersPage({ close }: { close: () => void }) {
     reload();
   };
 
-  return (
-    <div className="mx-auto flex h-full max-w-3xl flex-col gap-4 overflow-y-auto p-4">
-      <PageHeader title={t.usersTitle} close={close}>
-        {!adding && (
-          <button type="button" className={primary} onClick={() => setAdding(true)}>
-            {t.addUser}
-          </button>
-        )}
-      </PageHeader>
-      <p className="text-sm text-ink-muted">{t.adminsSeeNoMail}</p>
+  const toggleKeys = (name: string) =>
+    setShowKeys((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(name)) next.add(name);
+      return next;
+    });
 
-      {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
+  const ask = (kind: NonNullable<Asking>["kind"], user: ManagedUser) => setAsking({ kind, user });
+  const focusBack = () => (asking && menus.current.get(asking.user.name)?.querySelector<HTMLButtonElement>("button")) ?? heading.current;
+
+  return (
+    <div className="accounts-page">
+      <div className="page page--wide">
+        <header className="page-header">
+          <div className="page-header__row">
+            <h1 ref={heading} tabIndex={-1} className="page-header__title type-heading-04 users-page__heading">
+              {t.usersTitle}
+            </h1>
+            <div className="page-header__actions">
+              <Button kind="primary" renderIcon={Add} onClick={() => setAdding(true)}>
+                {t.addUser}
+              </Button>
+            </div>
+          </div>
+          <p className="page-header__intro app-text-secondary">{t.adminsSeeNoMail}</p>
+        </header>
+
+        {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        )}
+        {!users && !error && <p className="app-text-secondary">{t.loading}</p>}
+
+        {users && (
+          // The OverflowMenu of Carbon v12 (on Menu): the older one adds two
+          // tab stops named "Focus sentinel" to every open menu.
+          <FeatureFlags enableV12Overflowmenu>
+          <TableContainer className="users-table">
+            <Table aria-label={t.usersTitle} size="lg" overflowMenuOnHover={false}>
+              <TableHead>
+                <TableRow>
+                  <TableExpandHeader id={`${id}-expand`}>
+                    <span className="cds--visually-hidden">{t.showApiKeys}</span>
+                  </TableExpandHeader>
+                  <TableHeader>{t.colUser}</TableHeader>
+                  <TableHeader>{t.colRole}</TableHeader>
+                  <TableHeader>{t.colState}</TableHeader>
+                  <TableHeader>{t.colSignIn}</TableHeader>
+                  <TableHeader>{t.colAccounts}</TableHeader>
+                  <TableHeader>{t.colLastLogin}</TableHeader>
+                  <TableHeader>
+                    <span className="cds--visually-hidden">{t.colActions}</span>
+                  </TableHeader>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {users.map((u, i) => {
+                  const own = keys.filter((k) => k.user === u.name);
+                  const open = showKeys.has(u.name);
+                  const cells = (
+                    <>
+                      <TableCell>
+                        <span className="users-table__name">{u.name}</span>
+                        {u.self && <span className="app-text-secondary"> ({t.you})</span>}
+                        {u.self && <span className="users-table__hint app-text-secondary app-text-small">{t.selfHint}</span>}
+                      </TableCell>
+                      <TableCell>
+                        <Tag size="sm" type={u.admin ? "purple" : "gray"}>
+                          {u.admin ? t.roleAdmin : t.roleUser}
+                        </Tag>
+                      </TableCell>
+                      <TableCell>
+                        {u.locked ? (
+                          <Tag size="sm" type="red">
+                            {t.stateLocked}
+                          </Tag>
+                        ) : u.mustChangePassword ? (
+                          <Tag size="sm" type="warm-gray">
+                            {t.stateMustChange}
+                          </Tag>
+                        ) : (
+                          <Tag size="sm" type="green">
+                            {t.stateActive}
+                          </Tag>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <span className="users-table__lines">
+                          <span>{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
+                          {u.passkeys > 0 && <span className="app-text-secondary">{t.passkeyCount(u.passkeys)}</span>}
+                          {u.apiKeys > 0 && <span className="app-text-secondary">{t.apiKeyCount(u.apiKeys)}</span>}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="users-table__lines">
+                          <span className="app-tabular">{u.accounts}</span>
+                          {u.failingAccounts > 0 && (
+                            <span>
+                              <Tag size="sm" type="red">
+                                {t.failingCount(u.failingAccounts)}
+                              </Tag>
+                            </span>
+                          )}
+                        </span>
+                      </TableCell>
+                      <TableCell>{u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}</TableCell>
+                      <TableCell className="cds--table-column-menu">
+                        {!u.self && (
+                          <OverflowMenu
+                            ref={(el: HTMLElement | null) => {
+                              if (el) menus.current.set(u.name, el);
+                              else menus.current.delete(u.name);
+                            }}
+                            label={t.userActions(u.name)}
+                            size="lg"
+                            menuAlignment="bottom-end"
+                            tooltipAlignment="left"
+                          >
+                            <MenuItem label={t.resetPassword} onClick={() => ask("reset", u)} />
+                            <MenuItem
+                              label={u.locked ? t.unlock : t.lock}
+                              onClick={() => (u.locked ? void run(() => usersApi.setLocked(u.name, false)) : ask("lock", u))}
+                            />
+                            <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => usersApi.setAdmin(u.name, !u.admin))} />
+                            {u.twoFactorEnabled && <MenuItem label={t.twoFactorReset} onClick={() => ask("twoFactor", u)} />}
+                            {u.passkeys > 0 && <MenuItem label={t.removePasskeys} onClick={() => ask("passkeys", u)} />}
+                            <MenuItemDivider />
+                            <MenuItem label={t.removeUser} kind="danger" onClick={() => ask("remove", u)} />
+                          </OverflowMenu>
+                        )}
+                      </TableCell>
+                    </>
+                  );
+                  if (own.length === 0) {
+                    return (
+                      <TableRow key={u.name}>
+                        <TableCell headers={`${id}-expand`} />
+                        {cells}
+                      </TableRow>
+                    );
+                  }
+                  return (
+                    <Fragment key={u.name}>
+                      <TableExpandRow
+                        aria-label={t.apiKeysOf(u.name)}
+                        // Names the key list only while it exists.
+                        aria-controls={open ? `${id}-keys-${i}` : undefined}
+                        expandHeader={`${id}-expand`}
+                        expandIconDescription={open ? t.hideApiKeys : t.apiKeysOf(u.name)}
+                        isExpanded={open}
+                        onExpand={() => toggleKeys(u.name)}
+                      >
+                        {cells}
+                      </TableExpandRow>
+                      {open && (
+                        <TableExpandedRow colSpan={8} id={`${id}-keys-${i}`}>
+                          <ApiKeyItems keys={own} revoke={(k) => void run(() => apiKeyApi.revokeAny(k.id))} />
+                        </TableExpandedRow>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          </FeatureFlags>
+        )}
+      </div>
+
       {adding && (
-        <AddUserForm
+        <AddUserModal
           cancel={() => setAdding(false)}
           added={(g) => {
             setAdding(false);
@@ -69,97 +252,71 @@ export function UsersPage({ close }: { close: () => void }) {
           }}
         />
       )}
-      {error && (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
+      {asking?.kind === "reset" && (
+        <ResetPasswordModal
+          user={asking.user}
+          returnFocus={focusBack}
+          cancel={() => setAsking(null)}
+          confirm={(removePasskeys, revokeApiKeys) => {
+            const name = asking.user.name;
+            setAsking(null);
+            void run(async () => setGenerated(await usersApi.resetPassword(name, removePasskeys, revokeApiKeys)));
+          }}
+        />
       )}
-      {!users && !error && <p className="text-sm text-ink-muted">{t.loading}</p>}
-
-      <ul className="flex flex-col gap-3">
-        {users?.map((u) => (
-          <li key={u.name} className="flex flex-col gap-2 rounded-lg border border-line p-3">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-semibold">{u.name}</span>
-              {u.self && <span className="text-sm text-ink-muted">({t.you})</span>}
-              <span className="text-sm text-ink-muted">{u.admin ? t.roleAdmin : t.roleUser}</span>
-              <span className={`text-sm ${u.locked ? "text-danger" : "text-ink-muted"}`}>
-                {u.locked ? t.stateLocked : u.mustChangePassword ? t.stateMustChange : t.stateActive}
-              </span>
-              <span className="text-sm text-ink-muted">{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
-              {u.passkeys > 0 && <span className="text-sm text-ink-muted">{t.passkeyCount(u.passkeys)}</span>}
-              {u.apiKeys > 0 && <span className="text-sm text-ink-muted">{t.apiKeyCount(u.apiKeys)}</span>}
-              {u.failingAccounts > 0 && <span className="text-sm font-medium text-danger">{t.failingCount(u.failingAccounts)}</span>}
-              <span className="ml-auto text-sm text-ink-muted">
-                {t.colAccounts}: {u.accounts} · {t.colLastLogin}: {u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}
-              </span>
-            </div>
-            {keys.some((k) => k.user === u.name) && (
-              <button type="button" className={`${button} self-start`} onClick={() => setShowKeys(showKeys === u.name ? "" : u.name)}>
-                {showKeys === u.name ? t.hideApiKeys : t.showApiKeys}
-              </button>
-            )}
-            {showKeys === u.name && (
-              <ApiKeyItems keys={keys.filter((k) => k.user === u.name)} revoke={(k) => void run(() => apiKeyApi.revokeAny(k.id))} />
-            )}
-            {u.self ? (
-              <p className="text-sm text-ink-muted">{t.selfHint}</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {u.twoFactorEnabled && (
-                  <button
-                    type="button"
-                    className={button}
-                    onClick={() => window.confirm(t.twoFactorResetConfirm(u.name)) && run(() => usersApi.reset2FA(u.name))}
-                  >
-                    {t.twoFactorReset}
-                  </button>
-                )}
-                {u.passkeys > 0 && (
-                  <button
-                    type="button"
-                    className={button}
-                    onClick={() => window.confirm(t.confirmRemovePasskeys(u.name, u.passkeys)) && run(() => usersApi.removePasskeys(u.name))}
-                  >
-                    {t.removePasskeys}
-                  </button>
-                )}
-                <button type="button" className={button} onClick={() => setResetting(u)}>
-                  {t.resetPassword}
-                </button>
-                <button
-                  type="button"
-                  className={button}
-                  onClick={() => (u.locked || window.confirm(t.confirmLock(u.name))) && run(() => usersApi.setLocked(u.name, !u.locked))}
-                >
-                  {u.locked ? t.unlock : t.lock}
-                </button>
-                <button type="button" className={button} onClick={() => run(() => usersApi.setAdmin(u.name, !u.admin))}>
-                  {u.admin ? t.removeAdmin : t.makeAdmin}
-                </button>
-                <button
-                  type="button"
-                  className={`${button} text-danger`}
-                  onClick={() => window.confirm(t.confirmRemoveUser(u.name)) && run(() => usersApi.remove(u.name))}
-                >
-                  {t.removeUser}
-                </button>
-              </div>
-            )}
-            {resetting?.name === u.name && (
-              <ResetPasswordConfirm
-                user={u}
-                cancel={() => setResetting(null)}
-                confirm={(removePasskeys, revokeApiKeys) => {
-                  setResetting(null);
-                  void run(async () => setGenerated(await usersApi.resetPassword(u.name, removePasskeys, revokeApiKeys)));
-                }}
-              />
-            )}
-          </li>
-        ))}
-      </ul>
+      {asking && asking.kind !== "reset" && (
+        <ConfirmUser
+          asking={asking}
+          returnFocus={focusBack}
+          cancel={() => setAsking(null)}
+          confirm={() => {
+            const { kind, user } = asking;
+            setAsking(null);
+            const name = user.name;
+            if (kind === "lock") void run(() => usersApi.setLocked(name, true));
+            else if (kind === "twoFactor") void run(() => usersApi.reset2FA(name));
+            else if (kind === "passkeys") void run(() => usersApi.removePasskeys(name));
+            else void run(() => usersApi.remove(name));
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** The danger confirmations without options: lock, reset 2FA, remove passkeys, remove. */
+function ConfirmUser({
+  asking,
+  returnFocus,
+  cancel,
+  confirm,
+}: {
+  asking: NonNullable<Asking>;
+  returnFocus: () => HTMLElement | null | undefined;
+  cancel: () => void;
+  confirm: () => void;
+}) {
+  const { kind, user } = asking;
+  const [heading, text, action] =
+    kind === "lock"
+      ? [t.lockTitle(user.name), t.lockText, t.lock]
+      : kind === "twoFactor"
+        ? [t.twoFactorResetTitle(user.name), t.twoFactorResetText, t.twoFactorReset]
+        : kind === "passkeys"
+          ? [t.removePasskeysTitle(user.name, user.passkeys), t.removePasskeysText, t.removePasskeys]
+          : [t.removeUserTitle(user.name), t.removeUserText, t.removeUser];
+  return (
+    <DangerModal
+      size="xs"
+      modalHeading={heading}
+      primaryButtonText={action}
+      secondaryButtonText={t.cancel}
+      returnFocus={returnFocus}
+      onRequestClose={cancel}
+      onRequestSubmit={confirm}
+    >
+      <p>{text}</p>
+    </DangerModal>
   );
 }
 
@@ -168,52 +325,75 @@ export function UsersPage({ close }: { close: () => void }) {
  * by default: after a compromise, a new password alone would not lock the
  * attacker out.
  */
-function ResetPasswordConfirm({
+export function ResetPasswordModal({
   user,
+  returnFocus,
   cancel,
   confirm,
 }: {
   user: ManagedUser;
+  returnFocus?: () => HTMLElement | null | undefined;
   cancel: () => void;
   confirm: (removePasskeys: boolean, revokeApiKeys: boolean) => void;
 }) {
   const [removePasskeys, setRemovePasskeys] = useState(true);
   const [revokeApiKeys, setRevokeApiKeys] = useState(true);
+  const id = useId();
   return (
-    <div role="group" className="flex flex-col gap-2 rounded-md border border-warning-line bg-warning-soft p-3 text-sm">
-      <p>{t.confirmResetPassword(user.name)}</p>
-      {user.passkeys > 0 && (
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={removePasskeys} onChange={(e) => setRemovePasskeys(e.target.checked)} />
-          {t.resetAlsoPasskeys(user.passkeys)}
-        </label>
-      )}
-      {user.apiKeys > 0 && (
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={revokeApiKeys} onChange={(e) => setRevokeApiKeys(e.target.checked)} />
-          {t.resetAlsoApiKeys(user.apiKeys)}
-        </label>
-      )}
-      <div className="flex gap-2">
-        <button type="button" className={primary} onClick={() => confirm(user.passkeys > 0 && removePasskeys, revokeApiKeys)}>
-          {t.confirmReset}
-        </button>
-        <button type="button" className={button} onClick={cancel}>
-          {t.cancel}
-        </button>
+    <DangerModal
+      size="sm"
+      modalHeading={t.resetPasswordTitle(user.name)}
+      primaryButtonText={t.confirmReset}
+      secondaryButtonText={t.cancel}
+      returnFocus={returnFocus}
+      onRequestClose={cancel}
+      onRequestSubmit={() => confirm(user.passkeys > 0 && removePasskeys, revokeApiKeys)}
+    >
+      <div className="modal-stack">
+        <p>{t.resetPasswordText}</p>
+        {(user.passkeys > 0 || user.apiKeys > 0) && (
+          <div className="checkbox-list">
+            {user.passkeys > 0 && (
+              <Checkbox
+                id={`${id}-passkeys`}
+                labelText={t.resetAlsoPasskeys(user.passkeys)}
+                checked={removePasskeys}
+                onChange={(_, { checked }) => setRemovePasskeys(checked)}
+              />
+            )}
+            {user.apiKeys > 0 && (
+              <Checkbox
+                id={`${id}-apikeys`}
+                labelText={t.resetAlsoApiKeys(user.apiKeys)}
+                checked={revokeApiKeys}
+                onChange={(_, { checked }) => setRevokeApiKeys(checked)}
+              />
+            )}
+          </div>
+        )}
       </div>
-    </div>
+    </DangerModal>
   );
 }
 
-function AddUserForm({ cancel, added }: { cancel: () => void; added: (g: GeneratedPassword) => void }) {
+/** Add user: a name and the admin choice; the server makes the password. */
+function AddUserModal({ cancel, added }: { cancel: () => void; added: (g: GeneratedPassword) => void }) {
   const [name, setName] = useState("");
   const [admin, setAdmin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [tried, setTried] = useState(false);
+  const id = useId();
+  const field = useRef<HTMLInputElement>(null);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    setTried(true);
+    if (!name.trim()) {
+      field.current?.focus();
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -225,52 +405,66 @@ function AddUserForm({ cancel, added }: { cancel: () => void; added: (g: Generat
   };
 
   return (
-    <form className="flex flex-col gap-3 rounded-lg border border-line p-3 text-sm" onSubmit={submit}>
-      <label className="flex flex-col gap-1">
-        {t.userName}
-        <input className={input} required autoFocus autoCapitalize="none" spellCheck={false} value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label className="flex items-center gap-2">
-        <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />
-        {t.userIsAdmin}
-      </label>
-      {error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-      )}
-      <div className="flex gap-2">
-        <button type="submit" className={primary} disabled={busy}>
-          {t.addUser}
-        </button>
-        <button type="button" className={button} onClick={cancel}>
-          {t.cancel}
-        </button>
-      </div>
-    </form>
+    <AppModal
+      size="sm"
+      modalHeading={t.addUser}
+      primaryButtonText={t.addUser}
+      secondaryButtonText={t.cancel}
+      loadingStatus={busy ? "active" : "inactive"}
+      loadingDescription={t.addUser}
+      loadingIconDescription={t.loading}
+      preventCloseOnClickOutside
+      onRequestClose={() => {
+        if (!busy) cancel();
+      }}
+      onRequestSubmit={() => void submit()}
+    >
+      <form className="modal-stack" onSubmit={(e) => void submit(e)} noValidate>
+        <TextInput
+          id={`${id}-name`}
+          ref={field}
+          data-modal-primary-focus=""
+          labelText={t.userName}
+          autoCapitalize="none"
+          autoComplete="off"
+          spellCheck={false}
+          required
+          invalid={tried && !name.trim()}
+          invalidText={t.userNameRequired}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <Checkbox id={`${id}-admin`} labelText={t.userIsAdmin} checked={admin} onChange={(_, { checked }) => setAdmin(checked)} />
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        )}
+      </form>
+    </AppModal>
   );
 }
 
 /** Shows a generated password once, with a copy button. */
-function GeneratedPanel({ value, done }: { value: GeneratedPassword; done: () => void }) {
-  const [copied, setCopied] = useState(false);
+export function GeneratedPanel({ value, done }: { value: GeneratedPassword; done: () => void }) {
   return (
-    <div role="status" className="flex flex-col gap-2 rounded-lg border border-warning-line bg-warning-soft p-3 text-sm">
-      <p className="font-semibold">{t.generatedFor(value.name)}</p>
-      <code className="w-fit rounded bg-field px-2 py-1 font-mono text-base select-all">{value.password}</code>
+    <Tile role="status" className="generated">
+      <p className="generated__title">{t.generatedFor(value.name)}</p>
+      <CodeSnippet
+        type="single"
+        className="generated__code"
+        aria-label={t.carbon.copy}
+        copyButtonDescription={t.carbon.copy}
+        feedback={t.carbon.copied}
+      >
+        {value.password}
+      </CodeSnippet>
       <p>{t.generatedHint}</p>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          className={button}
-          onClick={() => navigator.clipboard?.writeText(value.password).then(() => setCopied(true), () => setCopied(false))}
-        >
-          {copied ? t.copied : t.copy}
-        </button>
-        <button type="button" className={primary} onClick={done}>
+      <div>
+        <Button kind="primary" size="md" onClick={done}>
           {t.done}
-        </button>
+        </Button>
       </div>
-    </div>
+    </Tile>
   );
 }

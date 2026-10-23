@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Button } from "@carbon/react";
 import { ApiError, apiKeyApi, profileApi, retryAfter, type ApiKey, type ApiKeyList, type ApiKeyScope, type NewApiKey } from "./api";
+import { DangerModal } from "./DangerModal";
 import { relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 
@@ -33,24 +35,46 @@ export function apiKeyDetails(k: ApiKey): string {
   return parts.join(" · ");
 }
 
-/** A list of keys with a revoke button for the active ones. */
+/**
+ * A list of keys with a revoke button for the active ones; revoking asks
+ * in a danger Modal first.
+ */
 export function ApiKeyItems({ keys, revoke }: { keys: ApiKey[]; revoke: (k: ApiKey) => void }) {
+  const [asking, setAsking] = useState<ApiKey | null>(null);
   return (
-    <ul className="flex flex-col gap-2">
-      {keys.map((k) => (
-        <li key={k.id} className="flex items-center gap-3 rounded-md border border-line px-3 py-2">
-          <div className={`mr-auto flex flex-col ${k.state === "active" ? "" : "opacity-60"}`}>
-            <span className="font-medium">{k.name}</span>
-            <span className="text-xs text-ink-muted">{apiKeyDetails(k)}</span>
-          </div>
-          {k.state === "active" && (
-            <button type="button" className={button} onClick={() => window.confirm(t.apiKeyRevokeConfirm(k.name)) && revoke(k)}>
-              {t.apiKeyRevoke}
-            </button>
-          )}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="api-key-list">
+        {keys.map((k) => (
+          <li key={k.id} className={`api-key-list__item${k.state === "active" ? "" : " api-key-list__item--off"}`}>
+            <div className="api-key-list__text">
+              <span className="api-key-list__name">{k.name}</span>
+              <span className="app-text-secondary app-text-small app-break-words">{apiKeyDetails(k)}</span>
+            </div>
+            {k.state === "active" && (
+              <Button kind="danger--ghost" size="sm" onClick={() => setAsking(k)}>
+                {t.apiKeyRevoke}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {asking && (
+        <DangerModal
+          size="xs"
+          modalHeading={t.apiKeyRevokeTitle(asking.name)}
+          primaryButtonText={t.apiKeyRevoke}
+          secondaryButtonText={t.cancel}
+          onRequestClose={() => setAsking(null)}
+          onRequestSubmit={() => {
+            const k = asking;
+            setAsking(null);
+            revoke(k);
+          }}
+        >
+          <p>{t.apiKeyRevokeText}</p>
+        </DangerModal>
+      )}
+    </>
   );
 }
 

@@ -450,3 +450,53 @@ describe("the filter panel's first state", () => {
     expect(panel()).not.toBeNull();
   });
 });
+
+describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
+  const shortcutsDialog = () => screen.queryByRole("dialog", { name: t.shortcuts });
+
+  beforeEach(() => {
+    screenWidth(true);
+    const base = fetch as unknown as (path: string) => Promise<Response>;
+    const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { "Content-Type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => {
+        if (path === "/api/users") {
+          return json({ users: [{ name: "bob", admin: false, locked: false, mustChangePassword: false, twoFactorEnabled: false, passkeys: 0, apiKeys: 0, accounts: 0, failingAccounts: 0, createdAt: "2026-10-01T00:00:00Z", lastLoginAt: null, self: false }] });
+        }
+        if (path === "/api/api-keys") return json({ keys: [] });
+        if (path === "/api/retention/rules") return json({ rules: [], accounts: [], minYears: 6, defaultTimeZone: "Europe/Berlin" });
+        return base(path);
+      }),
+    );
+  });
+
+  it("leaves the keys to the actions menu and to the danger Modal on Users", async () => {
+    window.history.replaceState(null, "", "/?view=users");
+    render(<App user={user(true)} logout={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: t.userActions("bob") }));
+    const item = screen.getByRole("menuitem", { name: t.removeUser });
+    key(item, "?");
+    expect(shortcutsDialog()).toBeNull();
+    fireEvent.click(item);
+    const dialog = screen.getByRole("dialog", { name: t.removeUserTitle("bob") });
+    key(dialog, "?");
+    key(dialog, "g");
+    key(dialog, "a");
+    expect(shortcutsDialog()).toBeNull();
+    expect(window.location.search).toBe("?view=users");
+    // Outside a widget the shortcuts still work on this page.
+    fireEvent.click(within(dialog).getByRole("button", { name: t.cancel }));
+    key(document.body, "?");
+    expect(shortcutsDialog()).not.toBeNull();
+  });
+
+  it("leaves the keys to the fields of Retention", async () => {
+    window.history.replaceState(null, "", "/?view=retention");
+    render(<App user={user(true)} logout={() => {}} />);
+    const years = await screen.findByLabelText(t.ruleYears);
+    years.focus();
+    key(years, "?");
+    expect(shortcutsDialog()).toBeNull();
+  });
+});

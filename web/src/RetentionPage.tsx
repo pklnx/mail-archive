@@ -1,4 +1,34 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import {
+  Accordion,
+  AccordionItem,
+  Button,
+  Checkbox,
+  Form,
+  InlineNotification,
+  Layer,
+  NumberInput,
+  Select,
+  SelectItem,
+  Tab,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Tabs,
+  Tag,
+  TextArea,
+  TextInput,
+  Tile,
+  Toggle,
+} from "@carbon/react";
+import { Add } from "@carbon/icons-react";
 import {
   retentionApi,
   usersApi,
@@ -9,17 +39,10 @@ import {
   type RetentionAccount,
   type RetentionRules,
 } from "./api";
+import { AppModal, DangerModal } from "./DangerModal";
 import { day, fileSize } from "./format";
-import { t } from "./i18n";
-import { PageHeader } from "./PageHeader";
+import { t, translateWithId } from "./i18n";
 import { parseQuery } from "./searchSyntax";
-
-const button =
-  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const primary = "rounded-md bg-accent px-3 py-1 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const input =
-  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
-const tab = "rounded-md px-3 py-1 text-sm pointer-coarse:min-h-11";
 
 const message = (err: unknown) => t.failed(err instanceof Error ? err.message : String(err));
 
@@ -44,9 +67,24 @@ export function holdScope(h: LegalHold): string {
   return parts.length ? parts.join(", ") : t.holdScopeAll;
 }
 
-/** Retention rules and legal holds, for admins. */
-export function RetentionPage({ close }: { close: () => void }) {
-  const [view, setView] = useState<"rules" | "holds" | "runs">("rules");
+/** Whether a run is still open: proposed, or confirmed and being deleted. */
+export function runOpen(r: Pick<DeletionRun, "state">): boolean {
+  return r.state === "proposed" || r.state === "confirmed";
+}
+
+/**
+ * Whether the typed count confirms a deletion run: the exact number, so an
+ * empty field is not "0" and "2.0" or "1e1" are not a count.
+ */
+export function countMatches(typed: string, candidates: number): boolean {
+  return typed.trim() === String(candidates);
+}
+
+const views = ["rules", "holds", "runs"] as const;
+
+/** Retention rules, legal holds and deletion runs, for admins. */
+export function RetentionPage() {
+  const [view, setView] = useState<(typeof views)[number]>("rules");
   const [data, setData] = useState<RetentionRules | null>(null);
   const [error, setError] = useState("");
 
@@ -61,32 +99,64 @@ export function RetentionPage({ close }: { close: () => void }) {
   }, []);
   useEffect(reload, [reload]);
 
-  return (
-    <div className="mx-auto flex h-full max-w-4xl flex-col gap-4 overflow-y-auto p-4">
-      <PageHeader title={t.retentionTitle} close={close} />
-      <div role="tablist" className="flex gap-1">
-        {(["rules", "holds", "runs"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={view === v}
-            className={`${tab} ${view === v ? "bg-line font-medium" : "hover:bg-surface-hover"}`}
-            onClick={() => setView(v)}
-          >
-            {v === "rules" ? t.retentionRulesTab : v === "holds" ? t.retentionHoldsTab : t.runsTab}
-          </button>
-        ))}
-      </div>
+  const status = (
+    <>
       {error && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="app-text-error">
           {error}
         </p>
       )}
-      {!data && !error && <p className="text-sm text-ink-muted">{t.loading}</p>}
-      {data && view === "rules" && <RulesTab data={data} reload={reload} />}
-      {data && view === "holds" && <HoldsTab accounts={data.accounts} />}
-      {view === "runs" && <RunsTab />}
+      {!data && !error && <p className="app-text-secondary">{t.loading}</p>}
+    </>
+  );
+
+  return (
+    <div className="accounts-page">
+      <div className="page">
+        <header className="page-header">
+          <h1 className="page-header__title type-heading-04">{t.retentionTitle}</h1>
+        </header>
+        {/* Only the open tab is mounted: each one loads its data when it is shown. */}
+        <Tabs selectedIndex={views.indexOf(view)} onChange={({ selectedIndex }) => setView(views[selectedIndex] ?? "rules")}>
+          <TabList
+            aria-label={t.retentionTitle}
+            contained
+            leftOverflowButtonProps={{ "aria-label": t.carbon.scrollLeft }}
+            rightOverflowButtonProps={{ "aria-label": t.carbon.scrollRight }}
+          >
+            <Tab>{t.retentionRulesTab}</Tab>
+            <Tab>{t.retentionHoldsTab}</Tab>
+            <Tab>{t.runsTab}</Tab>
+          </TabList>
+          {/* A contained tab's panel is a layer of its own: the tiles and
+              fields in it sit on the next one. */}
+          <TabPanels>
+            <TabPanel className="retention-panel">
+              {view === "rules" && (
+                <Layer>
+                  {status}
+                  {data && <RulesTab data={data} reload={reload} />}
+                </Layer>
+              )}
+            </TabPanel>
+            <TabPanel className="retention-panel">
+              {view === "holds" && (
+                <Layer>
+                  {status}
+                  {data && <HoldsTab accounts={data.accounts} />}
+                </Layer>
+              )}
+            </TabPanel>
+            <TabPanel className="retention-panel">
+              {view === "runs" && (
+                <Layer>
+                  <RunsTab />
+                </Layer>
+              )}
+            </TabPanel>
+          </TabPanels>
+        </Tabs>
+      </div>
     </div>
   );
 }
@@ -99,14 +169,16 @@ function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }
   const [timeZone, setTimeZone] = useState(data.defaultTimeZone);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  // A period shorter than the legal minimum waits for its confirmation.
+  const [short, setShort] = useState<number | null>(null);
+  const [removing, setRemoving] = useState<{ id: number; what: string } | null>(null);
+  const id = useId();
   const account = data.accounts.find((a) => String(a.id) === accountId);
+  const n = Number(years);
+  const tooShort = years !== "" && Number.isFinite(n) && n >= 1 && n < data.minYears;
 
-  const add = async (e: FormEvent) => {
-    e.preventDefault();
+  const send = async (n: number, force: boolean) => {
     if (!account) return;
-    const n = Number(years);
-    const force = n < data.minYears;
-    if (force && !window.confirm(t.ruleShort(n, data.minYears))) return;
     setBusy(true);
     setError("");
     try {
@@ -121,8 +193,15 @@ function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }
     }
   };
 
-  const remove = async (id: number, what: string) => {
-    if (!window.confirm(t.ruleRemoveConfirm(what))) return;
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    if (!account || busy) return;
+    const n = Number(years);
+    if (n < data.minYears) setShort(n);
+    else void send(n, false);
+  };
+
+  const remove = async (id: number) => {
     setError("");
     try {
       await retentionApi.removeRule(id);
@@ -133,79 +212,134 @@ function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }
   };
 
   return (
-    <section className="flex flex-col gap-4">
-      <p className="text-sm text-ink-muted">{t.retentionNote}</p>
-      <p className="text-sm text-ink-muted">{t.retentionLegal}</p>
+    <section className="retention-section">
+      <p className="app-text-secondary">{t.retentionNote}</p>
+      <p className="app-text-secondary">{t.retentionLegal}</p>
       {data.rules.length === 0 ? (
-        <p className="text-sm">{t.ruleNone}</p>
+        <p>{t.ruleNone}</p>
       ) : (
-        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
+        <ul className="retention-list">
           {data.rules.map((r) => {
             const what = `${accountLabel({ owner: r.owner, name: r.account, removed: r.accountRemoved })} / ${r.folder || t.ruleAllFolders}`;
             return (
-              <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-                <span className="min-w-0 flex-1">
-                  <span className="font-medium">{what}</span>
-                  <span className="text-ink-muted">
-                    {" · "}
-                    {t.ruleYearsCount(r.years)} · {r.timeZone}
-                  </span>
-                  {r.note && <span className="block text-ink-muted">{r.note}</span>}
-                  <span className="block text-xs text-ink-muted">{t.ruleCreated(r.createdBy, day(r.createdAt))}</span>
-                </span>
-                <button type="button" className={button} onClick={() => void remove(r.id, what)}>
-                  {t.ruleRemove}
-                </button>
+              <li key={r.id}>
+                <Tile className="retention-tile">
+                  <div className="retention-tile__body">
+                    <h2 className="retention-tile__name">{what}</h2>
+                    <p>
+                      {t.ruleYearsCount(r.years)} · {r.timeZone}
+                    </p>
+                    {r.note && <p className="app-text-secondary app-break-words">{r.note}</p>}
+                    <p className="app-text-secondary app-text-small">{t.ruleCreated(r.createdBy, day(r.createdAt))}</p>
+                  </div>
+                  <div className="retention-tile__actions">
+                    <Button kind="danger--tertiary" size="sm" onClick={() => setRemoving({ id: r.id, what })}>
+                      {t.ruleRemove}
+                    </Button>
+                  </div>
+                </Tile>
               </li>
             );
           })}
         </ul>
       )}
+      {error && (
+        <p role="alert" className="app-text-error">
+          {error}
+        </p>
+      )}
 
-      <form onSubmit={(e) => void add(e)} className="grid gap-3 rounded-lg border border-line p-3 text-sm sm:grid-cols-2">
-        <label className="flex flex-col gap-1">
-          {t.ruleAccount}
-          <select className={input} value={accountId} onChange={(e) => (setAccountId(e.target.value), setFolder(""))} required>
-            <option value="" />
-            {data.accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {accountLabel(a)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          {t.ruleFolder}
-          <select className={input} value={folder} onChange={(e) => setFolder(e.target.value)} disabled={!account}>
-            <option value="">{t.ruleAllFolders}</option>
-            {account?.folders.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          {t.ruleYears}
-          <input className={input} type="number" min={1} max={100} value={years} onChange={(e) => setYears(e.target.value)} required />
-        </label>
-        <label className="flex flex-col gap-1">
-          {t.ruleTimeZone}
-          <input className={input} value={timeZone} onChange={(e) => setTimeZone(e.target.value)} required />
-        </label>
-        <label className="flex flex-col gap-1 sm:col-span-2">
-          {t.ruleNote}
-          <input className={input} value={note} maxLength={500} placeholder={t.ruleNotePlaceholder} onChange={(e) => setNote(e.target.value)} />
-        </label>
-        {error && (
-          <p role="alert" className="text-danger sm:col-span-2">
-            {error}
-          </p>
-        )}
-        <button type="submit" className={`${primary} justify-self-start`} disabled={busy || !account}>
-          {t.ruleAdd}
-        </button>
-      </form>
+      <section className="page__section retention-form">
+        <h2 className="type-heading-03">{t.ruleAdd}</h2>
+        <Form onSubmit={add} className="page-form">
+          <div className="form-row form-row--two">
+            <Select
+              id={`${id}-account`}
+              labelText={t.ruleAccount}
+              value={accountId}
+              required
+              onChange={(e) => {
+                setAccountId(e.target.value);
+                setFolder("");
+              }}
+            >
+              <SelectItem value="" text="" />
+              {data.accounts.map((a) => (
+                <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
+              ))}
+            </Select>
+            <Select id={`${id}-folder`} labelText={t.ruleFolder} value={folder} disabled={!account} onChange={(e) => setFolder(e.target.value)}>
+              <SelectItem value="" text={t.ruleAllFolders} />
+              {account?.folders.map((f) => (
+                <SelectItem key={f} value={f} text={f} />
+              ))}
+            </Select>
+          </div>
+          <div className="form-row form-row--two">
+            <NumberInput
+              id={`${id}-years`}
+              label={t.ruleYears}
+              min={1}
+              max={100}
+              allowEmpty
+              required
+              value={years}
+              invalidText={t.ruleYearsInvalid}
+              warn={tooShort}
+              warnText={t.ruleShortWarn(data.minYears)}
+              translateWithId={translateWithId}
+              onChange={(_, { value }) => setYears(String(value))}
+            />
+            <TextInput id={`${id}-tz`} labelText={t.ruleTimeZone} value={timeZone} required onChange={(e) => setTimeZone(e.target.value)} />
+          </div>
+          <TextInput
+            id={`${id}-note`}
+            labelText={t.ruleNote}
+            value={note}
+            maxLength={500}
+            placeholder={t.ruleNotePlaceholder}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <div className="form-actions">
+            <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || !account}>
+              {t.ruleAdd}
+            </Button>
+          </div>
+        </Form>
+      </section>
+
+      {short !== null && (
+        <DangerModal
+          size="sm"
+          modalHeading={t.ruleShortTitle}
+          primaryButtonText={t.ruleAddAnyway}
+          secondaryButtonText={t.cancel}
+          onRequestClose={() => setShort(null)}
+          onRequestSubmit={() => {
+            const n = short;
+            setShort(null);
+            void send(n, true);
+          }}
+        >
+          <p>{t.ruleShort(short, data.minYears)}</p>
+        </DangerModal>
+      )}
+      {removing && (
+        <DangerModal
+          size="sm"
+          modalHeading={t.ruleRemoveTitle(removing.what)}
+          primaryButtonText={t.ruleRemove}
+          secondaryButtonText={t.cancel}
+          onRequestClose={() => setRemoving(null)}
+          onRequestSubmit={() => {
+            const { id } = removing;
+            setRemoving(null);
+            void remove(id);
+          }}
+        >
+          <p>{t.ruleRemoveText}</p>
+        </DangerModal>
+      )}
     </section>
   );
 }
@@ -216,6 +350,8 @@ function HoldsTab({ accounts }: { accounts: RetentionAccount[] }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [releasing, setReleasing] = useState<LegalHold | null>(null);
+  const id = useId();
 
   const reload = useCallback(() => {
     retentionApi.holds(released).then(setHolds, (err: unknown) => setError(message(err)));
@@ -225,12 +361,10 @@ function HoldsTab({ accounts }: { accounts: RetentionAccount[] }) {
     usersApi.list().then(setUsers, () => setUsers([]));
   }, []);
 
-  const release = async (h: LegalHold) => {
-    const note = window.prompt(t.holdReleaseNote);
-    if (!note?.trim()) return;
+  const release = async (h: LegalHold, note: string) => {
     setError("");
     try {
-      await retentionApi.releaseHold(h.id, note.trim());
+      await retentionApi.releaseHold(h.id, note);
     } catch (err) {
       setError(message(err));
     }
@@ -238,36 +372,62 @@ function HoldsTab({ accounts }: { accounts: RetentionAccount[] }) {
   };
 
   return (
-    <section className="flex flex-col gap-4">
-      <p className="text-sm text-ink-muted">{t.holdNote}</p>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={released} onChange={(e) => setReleased(e.target.checked)} />
-        {t.holdShowReleased}
-      </label>
+    <section className="retention-section">
+      <p className="app-text-secondary">{t.holdNote}</p>
+      <Toggle
+        id={`${id}-released`}
+        size="sm"
+        labelText={t.holdShowReleased}
+        labelA={t.carbon.toggleOff}
+        labelB={t.carbon.toggleOn}
+        toggled={released}
+        onToggle={setReleased}
+      />
       {error && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="app-text-error">
           {error}
         </p>
       )}
-      {notice && <p className="text-sm text-ok">{notice}</p>}
-      {holds && holds.length === 0 && <p className="text-sm">{t.holdNone}</p>}
+      {notice && (
+        <InlineNotification
+          kind="success"
+          lowContrast
+          hideCloseButton
+          role="status"
+          className="notification--full"
+          statusIconDescription={t.carbon.status.success}
+          title={notice}
+        />
+      )}
+      {holds && holds.length === 0 && <p>{t.holdNone}</p>}
       {holds && holds.length > 0 && (
-        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
+        <ul className="retention-list">
           {holds.map((h) => (
-            <li key={h.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 ${h.releasedAt ? "text-ink-muted" : ""}`}>
-              <span className="min-w-0 flex-1">
-                <span className="font-medium">{h.name}</span>
-                <span className="text-ink-muted"> · {holdScope(h)}</span>
-                {h.reason && <span className="block text-ink-muted">{h.reason}</span>}
-                <span className="block text-xs text-ink-muted">
-                  {h.releasedAt ? t.holdReleased(h.releasedBy, day(h.releasedAt), h.releaseNote) : t.ruleCreated(h.createdBy, day(h.createdAt))}
-                </span>
-              </span>
-              {!h.releasedAt && (
-                <button type="button" className={button} onClick={() => void release(h)}>
-                  {t.holdRelease}
-                </button>
-              )}
+            <li key={h.id}>
+              <Tile className={`retention-tile${h.releasedAt ? " retention-tile--off" : ""}`}>
+                <div className="retention-tile__body">
+                  <div className="retention-tile__head">
+                    <h2 className="retention-tile__name">{h.name}</h2>
+                    {h.releasedAt && (
+                      <Tag size="sm" type="gray">
+                        {t.holdReleasedTag}
+                      </Tag>
+                    )}
+                  </div>
+                  <p className="app-break-words">{holdScope(h)}</p>
+                  {h.reason && <p className="app-text-secondary app-break-words">{h.reason}</p>}
+                  <p className="app-text-secondary app-text-small app-break-words">
+                    {h.releasedAt ? t.holdReleased(h.releasedBy, day(h.releasedAt), h.releaseNote) : t.ruleCreated(h.createdBy, day(h.createdAt))}
+                  </p>
+                </div>
+                {!h.releasedAt && (
+                  <div className="retention-tile__actions">
+                    <Button kind="danger--tertiary" size="sm" onClick={() => setReleasing(h)}>
+                      {t.holdRelease}
+                    </Button>
+                  </div>
+                )}
+              </Tile>
             </li>
           ))}
         </ul>
@@ -280,7 +440,52 @@ function HoldsTab({ accounts }: { accounts: RetentionAccount[] }) {
           reload();
         }}
       />
+      {releasing && (
+        <ReleaseHoldModal
+          hold={releasing}
+          cancel={() => setReleasing(null)}
+          confirm={(note) => {
+            const h = releasing;
+            setReleasing(null);
+            void release(h, note);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+/** Releasing a hold asks for the note that is kept with it; an empty note sends nothing. */
+export function ReleaseHoldModal({ hold, cancel, confirm }: { hold: LegalHold; cancel: () => void; confirm: (note: string) => void }) {
+  const [note, setNote] = useState("");
+  const id = useId();
+  const ok = note.trim() !== "";
+  const submit = () => {
+    if (ok) confirm(note.trim());
+  };
+  return (
+    <DangerModal
+      size="sm"
+      modalHeading={t.holdReleaseTitle(hold.name)}
+      primaryButtonText={t.holdRelease}
+      primaryButtonDisabled={!ok}
+      secondaryButtonText={t.cancel}
+      onRequestClose={cancel}
+      onRequestSubmit={submit}
+    >
+      <div className="modal-stack">
+        <p>{t.holdReleaseText}</p>
+        <TextArea
+          id={`${id}-note`}
+          data-modal-primary-focus=""
+          labelText={t.holdReleaseNote}
+          rows={3}
+          required
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </div>
+    </DangerModal>
   );
 }
 
@@ -293,6 +498,7 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
   const [all, setAll] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const id = useId();
   const p = parseQuery(query);
   const filter = p.text || p.from || p.to || p.attachment || p.hasAttachment
     ? { q: p.text, from: p.from, to: p.to, attachment: p.attachment, hasAttachment: p.hasAttachment }
@@ -301,6 +507,7 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy || (unscoped && !all)) return;
     setBusy(true);
     setError("");
     try {
@@ -328,89 +535,85 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
   };
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="grid gap-3 rounded-lg border border-line p-3 text-sm sm:grid-cols-2">
-      <label className="flex flex-col gap-1">
-        {t.holdName}
-        <input className={input} value={name} maxLength={200} onChange={(e) => setName(e.target.value)} required />
-      </label>
-      <label className="flex flex-col gap-1">
-        {t.holdReason}
-        <input className={input} value={reason} maxLength={2000} onChange={(e) => setReason(e.target.value)} required />
-      </label>
-      <label className="flex flex-col gap-1">
-        {t.holdUser}
-        <select className={input} value={user} onChange={(e) => setUser(e.target.value)}>
-          <option value="">{t.holdAnyUser}</option>
-          {users.map((u) => (
-            <option key={u.name} value={u.name}>
-              {u.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        {t.holdAccount}
-        <select className={input} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-          <option value="">{t.holdAnyAccount}</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {accountLabel(a)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1 sm:col-span-2">
-        {t.holdFilter}
-        <input className={input} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.holdFilterHint} />
-      </label>
-      {unscoped && (
-        <label className="flex items-center gap-2 sm:col-span-2">
-          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
-          <span>
-            {t.holdAll}
-            <span className="block text-xs text-ink-muted">{t.holdAllNeeded}</span>
-          </span>
-        </label>
-      )}
-      {error && (
-        <p role="alert" className="text-danger sm:col-span-2">
-          {error}
-        </p>
-      )}
-      <button type="submit" className={`${primary} justify-self-start`} disabled={busy || (unscoped && !all)}>
-        {t.holdAdd}
-      </button>
-    </form>
+    <section className="page__section retention-form">
+      <h2 className="type-heading-03">{t.holdAdd}</h2>
+      <Form onSubmit={(e) => void submit(e)} className="page-form">
+        <div className="form-row form-row--two">
+          <TextInput id={`${id}-name`} labelText={t.holdName} value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
+          <TextInput id={`${id}-reason`} labelText={t.holdReason} value={reason} maxLength={2000} required onChange={(e) => setReason(e.target.value)} />
+        </div>
+        <div className="form-row form-row--two">
+          <Select id={`${id}-user`} labelText={t.holdUser} value={user} onChange={(e) => setUser(e.target.value)}>
+            <SelectItem value="" text={t.holdAnyUser} />
+            {users.map((u) => (
+              <SelectItem key={u.name} value={u.name} text={u.name} />
+            ))}
+          </Select>
+          <Select id={`${id}-account`} labelText={t.holdAccount} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <SelectItem value="" text={t.holdAnyAccount} />
+            {accounts.map((a) => (
+              <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
+            ))}
+          </Select>
+        </div>
+        <TextInput id={`${id}-filter`} labelText={t.holdFilter} helperText={t.holdFilterHint} value={query} onChange={(e) => setQuery(e.target.value)} />
+        {unscoped && (
+          <Checkbox
+            id={`${id}-all`}
+            labelText={t.holdAll}
+            helperText={t.holdAllNeeded}
+            checked={all}
+            onChange={(_, { checked }) => setAll(checked)}
+          />
+        )}
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        )}
+        <div className="form-actions">
+          <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || (unscoped && !all)}>
+            {t.holdAdd}
+          </Button>
+        </div>
+      </Form>
+    </section>
   );
 }
 
-/** Whether a run is still open: proposed, or confirmed and being deleted. */
-export function runOpen(r: Pick<DeletionRun, "state">): boolean {
-  return r.state === "proposed" || r.state === "confirmed";
-}
+const runTag = { proposed: "blue", confirmed: "magenta", done: "green", cancelled: "gray" } as const;
 
 function RunsTab() {
   const [runs, setRuns] = useState<DeletionRun[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const reviewButtons = useRef(new Map<number, HTMLButtonElement>());
 
-  const reload = useCallback(() => {
-    retentionApi.runs().then(
-      (r) => {
-        setRuns(r);
-        setError("");
-        setSelected((cur) => cur ?? r.find(runOpen)?.id ?? null);
-      },
-      (err: unknown) => setError(message(err)),
-    );
-  }, []);
-  useEffect(reload, [reload]);
+  // The runs as loaded, or null when loading them failed.
+  const reload = useCallback(
+    () =>
+      retentionApi.runs().then(
+        (r) => {
+          setRuns(r);
+          setError("");
+          return r;
+        },
+        (err: unknown) => {
+          setError(message(err));
+          return null;
+        },
+      ),
+    [],
+  );
+  useEffect(() => {
+    void reload();
+  }, [reload]);
   // A confirmed run deletes in the background: poll until it is done.
   const deleting = runs?.some((r) => r.state === "confirmed") ?? false;
   useEffect(() => {
     if (!deleting) return;
-    const id = setInterval(reload, 3000);
+    const id = setInterval(() => void reload(), 3000);
     return () => clearInterval(id);
   }, [deleting, reload]);
 
@@ -425,166 +628,295 @@ function RunsTab() {
     } finally {
       setBusy(false);
     }
-    reload();
+    void reload();
   };
 
   const open = runs?.find(runOpen);
+  const shown = runs?.find((r) => r.id === selected);
   return (
-    <section className="flex flex-col gap-4">
-      <p className="text-sm text-ink-muted">{t.runsNote}</p>
-      <p className="text-sm text-ink-muted">{t.runsCLI}</p>
+    <section className="retention-section">
+      <p className="app-text-secondary">{t.runsNote}</p>
+      <p className="app-text-secondary">{t.runsCLI}</p>
       {!open && (
-        <button type="button" className={`${primary} self-start`} disabled={busy || !runs} onClick={() => void propose()}>
-          {t.runPropose}
-        </button>
+        <div>
+          <Button kind="primary" renderIcon={Add} disabled={busy || !runs} onClick={() => void propose()}>
+            {t.runPropose}
+          </Button>
+        </div>
       )}
       {error && (
-        <p role="alert" className="text-sm text-danger">
+        <p role="alert" className="app-text-error">
           {error}
         </p>
       )}
-      {runs && runs.length === 0 && <p className="text-sm">{t.runNone}</p>}
+      {runs && runs.length === 0 && <p>{t.runNone}</p>}
       {runs && runs.length > 0 && (
-        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
-          {runs.map((r) => (
-            <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-              <span className="min-w-0 flex-1">
-                <span className="font-medium">{t.runLine(r.id, r.candidates, fileSize(r.bytes))}</span>
-                <span className="text-ink-muted"> · {t.runState(r.state)}</span>
-                {(r.state === "done" || r.deleted + r.kept > 0) && (
-                  <span className="text-ink-muted"> · {t.runResult(r.deleted, r.kept)}</span>
-                )}
-                <span className="block text-xs text-ink-muted">{t.runProposedBy(r.createdBy, day(r.createdAt))}</span>
-              </span>
-              {selected !== r.id && (
-                <button type="button" className={button} onClick={() => setSelected(r.id)}>
-                  {t.runShow}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <TableContainer className="runs-table">
+          <Table aria-label={t.runsTab} size="md">
+            <TableHead>
+              <TableRow>
+                <TableHeader>{t.runColRun}</TableHeader>
+                <TableHeader>{t.runColState}</TableHeader>
+                <TableHeader>{t.runColResult}</TableHeader>
+                <TableHeader>{t.runColProposed}</TableHeader>
+                <TableHeader>
+                  <span className="cds--visually-hidden">{t.colActions}</span>
+                </TableHeader>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {runs.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell>{t.runLine(r.id, r.candidates, fileSize(r.bytes))}</TableCell>
+                  <TableCell>
+                    <Tag size="sm" type={runTag[r.state as keyof typeof runTag] ?? "gray"}>
+                      {t.runState(r.state)}
+                    </Tag>
+                  </TableCell>
+                  <TableCell>{r.state === "done" || r.deleted + r.kept > 0 ? t.runResult(r.deleted, r.kept) : ""}</TableCell>
+                  <TableCell className="app-text-secondary">{t.runProposedBy(r.createdBy, day(r.createdAt))}</TableCell>
+                  <TableCell className="runs-table__action">
+                    <Button
+                      ref={(el: HTMLButtonElement | null) => {
+                        if (el) reviewButtons.current.set(r.id, el);
+                        else reviewButtons.current.delete(r.id);
+                      }}
+                      kind={r.state === "proposed" ? "tertiary" : "ghost"}
+                      size="sm"
+                      onClick={() => setSelected(r.id)}
+                    >
+                      {t.runShow}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
-      {selected !== null && <RunReview key={`${selected}-${runs?.find((r) => r.id === selected)?.state}`} id={selected} changed={reload} />}
+      {selected !== null && (
+        <RunReview
+          key={selected}
+          id={selected}
+          state={shown?.state}
+          title={shown ? t.runLine(shown.id, shown.candidates, fileSize(shown.bytes)) : t.runShow}
+          returnFocus={() => reviewButtons.current.get(selected)}
+          changed={reload}
+          close={() => setSelected(null)}
+        />
+      )}
     </section>
   );
 }
 
-function RunReview({ id, changed }: { id: number; changed: () => void }) {
+/** The states a run must reach for an action to have done what was asked. */
+const reached = { confirm: ["confirmed", "done"], cancel: ["cancelled"] } as const;
+
+/**
+ * The review of a deletion run in a Modal: the groups, the hashes and, for a
+ * proposed run, the typed-count confirmation and Cancel run. Delete is
+ * enabled only by the exact count. Closing the Modal changes nothing.
+ * state is the run's state in the polled list: the review loads again when
+ * it changes, so a deletion that finishes shows its hashes' states.
+ */
+export function RunReview({
+  id,
+  state,
+  title,
+  returnFocus,
+  changed,
+  close,
+}: {
+  id: number;
+  state?: string;
+  title: string;
+  returnFocus?: () => HTMLElement | null | undefined;
+  changed: () => Promise<DeletionRun[] | null>;
+  close: () => void;
+}) {
   const [review, setReview] = useState<DeletionReview | null>(null);
   const [count, setCount] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // After an action whose outcome could not be loaded: nothing more is sent.
+  const [unknown, setUnknown] = useState(false);
+  // The run's state after an action that did not reach it, when it changed elsewhere.
+  const [nowState, setNowState] = useState<string | null>(null);
+  const field = useRef<HTMLInputElement>(null);
+  const fieldId = useId();
 
   useEffect(() => {
-    retentionApi.run(id).then(setReview, (err: unknown) => setError(message(err)));
-  }, [id]);
+    let current = true;
+    retentionApi.run(id).then(
+      (r) => {
+        if (current) setReview(r);
+      },
+      (err: unknown) => {
+        if (current) setError((e) => e || message(err));
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [id, state]);
 
-  const act = async (action: () => Promise<unknown>) => {
+  const run = review?.run;
+  const proposed = run?.state === "proposed";
+  const confirmable = proposed && run.candidates > 0;
+  const matches = confirmable && !unknown && countMatches(count, run.candidates);
+  useLayoutEffect(() => {
+    if (confirmable) field.current?.focus();
+  }, [confirmable]);
+
+  // After Delete or Cancel run the list is loaded again, and the run's new
+  // state decides: the server answers a confirm with 202 and no body, which
+  // the client reads as an error (api.ts is unchanged in this part). The
+  // review closes only when the run reached the state of the chosen action:
+  // confirmed or done after Delete, cancelled after Cancel run. Otherwise it
+  // stays open with the error and the state the run has now, for example
+  // when another admin confirmed it while this one cancelled it. When the
+  // state cannot be loaded, it says so and sends nothing more.
+  const act = async (kind: keyof typeof reached, action: () => Promise<unknown>) => {
+    if (busy || unknown || !run) return;
     setBusy(true);
     setError("");
+    setNowState(null);
+    let failed = "";
     try {
       await action();
     } catch (err) {
-      setError(message(err));
-    } finally {
-      setBusy(false);
+      failed = message(err);
     }
-    changed();
+    const runs = await changed();
+    const now = runs?.find((r) => r.id === run.id);
+    setBusy(false);
+    if (now && (reached[kind] as readonly string[]).includes(now.state)) {
+      close();
+      return;
+    }
+    if (!now) {
+      setUnknown(true);
+      setError(t.runStateUnknown);
+      return;
+    }
+    setError(failed);
+    if (now.state !== "proposed" || !failed) setNowState(now.state);
   };
+  // The error, and the state the run has now if it changed elsewhere; that
+  // line follows the polled state (confirmed, later done).
+  // A run never goes back to proposed, so a polled "proposed" is older than nowState.
+  const nowLine = nowState ? t.runNowState(t.runState(state && state !== "proposed" ? state : nowState)) : "";
+  const shownError = [error, nowLine].filter(Boolean).join(" ");
+  const confirm = () => {
+    if (run && matches && !busy) void act("confirm", () => retentionApi.confirm(run.id, Number(count.trim())));
+  };
+  const cancelRun = () => {
+    if (run && proposed && !busy && !unknown) void act("cancel", () => retentionApi.cancel(run.id));
+  };
+  const heading = run ? `${t.runLine(run.id, run.candidates, fileSize(run.bytes))} · ${t.runState(run.state)}` : title;
 
-  if (error && !review) {
-    return (
-      <p role="alert" className="text-sm text-danger">
-        {error}
-      </p>
-    );
-  }
-  if (!review) return <p className="text-sm text-ink-muted">{t.loading}</p>;
-  const { run } = review;
+  const footer = !proposed
+    ? { passiveModal: true }
+    : confirmable
+      ? {
+          primaryButtonText: t.runConfirm,
+          primaryButtonDisabled: !matches,
+          secondaryButtons: [
+            { buttonText: t.close, onClick: () => !busy && close() },
+            { buttonText: t.runCancel, onClick: cancelRun },
+          ],
+          onRequestSubmit: confirm,
+        }
+      : {
+          primaryButtonText: t.runCancel,
+          primaryButtonDisabled: unknown,
+          secondaryButtonText: t.close,
+          onRequestSubmit: cancelRun,
+        };
+
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-line p-3 text-sm">
-      <p className="font-medium">
-        {t.runLine(run.id, run.candidates, fileSize(run.bytes))} · {t.runState(run.state)}
-      </p>
-      {review.groups.length > 0 && (
-        // Below 640px each row is a small block of label and value.
-        <table className="w-full text-left max-sm:block">
-          <thead className="text-ink-muted max-sm:hidden">
-            <tr>
-              <th className="py-1 font-normal">{t.runGroupsHead}</th>
-              <th className="py-1 font-normal">{t.runYear}</th>
-              <th className="py-1 text-right font-normal">{t.runMessages}</th>
-            </tr>
-          </thead>
-          <tbody className="max-sm:block">
-            {review.groups.map((g) => (
-              <tr
-                key={`${g.owner}/${g.account}/${g.folder}/${g.year}`}
-                className="border-t border-line max-sm:grid max-sm:grid-cols-[auto_1fr] max-sm:gap-x-3 max-sm:py-2"
-              >
-                <td data-label={t.runGroupsHead} className="py-1 max-sm:contents max-sm:before:text-ink-muted max-sm:before:content-[attr(data-label)]">
-                  <span className="max-sm:break-all">
-                    {g.owner || "-"} / {g.account} / {g.folder}
-                  </span>
-                </td>
-                <td data-label={t.runYear} className="py-1 tabular-nums max-sm:contents max-sm:before:text-ink-muted max-sm:before:content-[attr(data-label)]">
-                  <span>{g.year}</span>
-                </td>
-                <td data-label={t.runMessages} className="py-1 text-right tabular-nums max-sm:text-left max-sm:contents max-sm:before:text-ink-muted max-sm:before:content-[attr(data-label)]">
-                  <span>{g.messages}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {review.candidates.length > 0 && (
-        <details>
-          <summary className="cursor-pointer text-ink-muted">{t.runHashes(review.listed, run.candidates)}</summary>
-          <ul className="mt-2 max-h-64 overflow-y-auto font-mono text-xs">
-            {review.candidates.map((c) => (
-              <li key={c.sha256} className={c.state === "kept" ? "text-ink-muted" : ""}>
-                {c.sha256} {c.state !== "pending" && `(${c.state})`}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-      {run.state === "proposed" && run.candidates === 0 && <p>{t.runEmpty}</p>}
-      {run.state === "proposed" && (
-        <div className="flex flex-wrap items-end gap-2">
-          {run.candidates > 0 && (
-            <form
-              className="flex flex-wrap items-end gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void act(() => retentionApi.confirm(run.id, Number(count)));
-              }}
-            >
-              <label className="flex flex-col gap-1">
-                {t.runConfirmPrompt(run.candidates)}
-                <input className={`${input} w-32`} inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} />
-              </label>
-              <button
-                type="submit"
-                className="rounded-md bg-danger-solid px-3 py-1 text-sm font-medium text-on-accent hover:bg-danger-solid-hover disabled:opacity-50 pointer-coarse:min-h-11"
-                disabled={busy || Number(count) !== run.candidates}
-              >
-                {t.runConfirm}
-              </button>
-            </form>
-          )}
-          <button type="button" className={button} disabled={busy} onClick={() => void act(() => retentionApi.cancel(run.id))}>
-            {t.runCancel}
-          </button>
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-      )}
-    </div>
+    <AppModal
+      danger={confirmable}
+      size="md"
+      aria-label={heading}
+      modalHeading={heading}
+      hasScrollingContent
+      preventCloseOnClickOutside
+      returnFocus={returnFocus}
+      loadingStatus={busy ? "active" : "inactive"}
+      loadingDescription={t.loading}
+      loadingIconDescription={t.loading}
+      onRequestClose={() => {
+        if (!busy) close();
+      }}
+      {...footer}
+    >
+      <div className="modal-stack">
+        {!review && !error && <p className="app-text-secondary">{t.loading}</p>}
+        {review && review.groups.length > 0 && (
+          <TableContainer>
+            <Table size="sm" aria-label={t.runGroupsHead}>
+              <TableHead>
+                <TableRow>
+                  <TableHeader>{t.runGroupsHead}</TableHeader>
+                  <TableHeader>{t.runYear}</TableHeader>
+                  <TableHeader className="runs-table__number">{t.runMessages}</TableHeader>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {review.groups.map((g) => (
+                  <TableRow key={`${g.owner}/${g.account}/${g.folder}/${g.year}`}>
+                    <TableCell className="app-break-all">
+                      {g.owner || "-"} / {g.account} / {g.folder}
+                    </TableCell>
+                    <TableCell className="app-tabular">{g.year}</TableCell>
+                    <TableCell className="app-tabular runs-table__number">{g.messages}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+        {review && run && review.candidates.length > 0 && (
+          <Accordion>
+            <AccordionItem title={t.runHashes(review.listed, run.candidates)}>
+              <ul className="run-hashes">
+                {review.candidates.map((c) => (
+                  <li key={c.sha256} className={c.state === "kept" ? "app-text-secondary" : undefined}>
+                    {c.sha256} {c.state !== "pending" && `(${c.state})`}
+                  </li>
+                ))}
+              </ul>
+            </AccordionItem>
+          </Accordion>
+        )}
+        {proposed && run.candidates === 0 && <p>{t.runEmpty}</p>}
+        {confirmable && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              confirm();
+            }}
+          >
+            <TextInput
+              id={`${fieldId}-count`}
+              ref={field}
+              data-modal-primary-focus=""
+              className="purge__count"
+              labelText={t.runConfirmPrompt(run.candidates)}
+              inputMode="numeric"
+              autoComplete="off"
+              value={count}
+              onChange={(e) => setCount(e.target.value)}
+            />
+          </form>
+        )}
+        {shownError && (
+          <p role="alert" className="app-text-error">
+            {shownError}
+          </p>
+        )}
+      </div>
+    </AppModal>
   );
 }
