@@ -38,13 +38,27 @@ type FillRunner struct {
 	// one minute).
 	CheckEvery time.Duration
 	// AfterRun, if set, is called after each run, for example to deliver
-	// notifications right away.
+	// notifications right away. The fill's claim (see Pending) has ended
+	// by then.
 	AfterRun func()
+	// BeforeRun, if set, is called for tests once Run has taken a fill
+	// from the queue (it is claimed) and before it runs. A hook that
+	// blocks must also return when ctx is done.
+	BeforeRun func(ctx context.Context, fillID int64)
 
 	mu     sync.Mutex
 	queue  []int64         // fill IDs
 	queued map[int64]int64 // fill ID -> account ID
-	wake   chan struct{}
+	// claimed holds the fills Run has taken from the queue and whose run
+	// has not returned yet, by fill ID.
+	claimed map[int64]fillClaim
+	wake    chan struct{}
+}
+
+// fillClaim is a fill Run took from the queue: its account, and when.
+type fillClaim struct {
+	account int64
+	at      time.Time
 }
 
 // Enqueue queues a running fill of the account. A fill already waiting is
@@ -63,26 +77,46 @@ func (r *FillRunner) Enqueue(fillID, accountID int64) {
 	}
 }
 
-// Queued reports the accounts whose fill waits to start.
-func (r *FillRunner) Queued() map[int64]bool {
+// Pending reports the accounts whose fill this runner works on: waiting
+// in the queue, or taken from it and not done yet (claimed). A fill taken
+// from the queue is claimed in the same step, so it is in one of the two
+// sets until its run has returned. The value is when Run took the
+// account's fill from the queue (Now), zero while it only waits in the
+// queue.
+func (r *FillRunner) Pending() map[int64]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[int64]bool, len(r.queued))
+	out := make(map[int64]time.Time, len(r.queued)+len(r.claimed))
 	for _, acc := range r.queued {
-		out[acc] = true
+		if _, ok := out[acc]; !ok {
+			out[acc] = time.Time{}
+		}
+	}
+	for _, c := range r.claimed {
+		out[c.account] = c.at
 	}
 	return out
 }
 
-// QueuedFills reports the fills that wait to start, by fill ID.
-func (r *FillRunner) QueuedFills() map[int64]bool {
+// PendingFills is Pending by fill ID.
+func (r *FillRunner) PendingFills() map[int64]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[int64]bool, len(r.queued))
+	out := make(map[int64]time.Time, len(r.queued)+len(r.claimed))
 	for id := range r.queued {
-		out[id] = true
+		out[id] = time.Time{}
+	}
+	for id, c := range r.claimed {
+		out[id] = c.at
 	}
 	return out
+}
+
+// release ends the claim that next took on the fill.
+func (r *FillRunner) release(id int64) {
+	r.mu.Lock()
+	delete(r.claimed, id)
+	r.mu.Unlock()
 }
 
 func (r *FillRunner) now() time.Time {
@@ -101,6 +135,7 @@ func (r *FillRunner) held() bool {
 func (r *FillRunner) init() {
 	if r.queued == nil {
 		r.queued = map[int64]int64{}
+		r.claimed = map[int64]fillClaim{}
 		r.wake = make(chan struct{}, 1)
 	}
 }
@@ -113,6 +148,7 @@ func (r *FillRunner) next() (int64, bool) {
 	}
 	id := r.queue[0]
 	r.queue = slices.Delete(r.queue, 0, 1)
+	r.claimed[id] = fillClaim{account: r.queued[id], at: r.now()}
 	delete(r.queued, id)
 	return id, true
 }
@@ -141,7 +177,13 @@ func (r *FillRunner) Run(ctx context.Context) {
 		if err := r.enqueueDue(ctx); err != nil && ctx.Err() == nil {
 			log.Error("check the schedule of recurring fills", "err", err)
 		}
-		for id, ok := r.next(); ok && ctx.Err() == nil; id, ok = r.next() {
+		// ctx is checked before next, which claims the fill, so no fill
+		// is claimed without runOne, which ends every claim.
+		for ctx.Err() == nil {
+			id, ok := r.next()
+			if !ok {
+				break
+			}
 			r.runOne(ctx, id)
 		}
 		select {
@@ -198,35 +240,49 @@ func dueFills(fills []store.Fill, s Schedule, now, holdUntil time.Time) []store.
 	return due
 }
 
+// runOne runs a claimed fill; its claim has ended before AfterRun.
 func (r *FillRunner) runOne(ctx context.Context, id int64) {
+	if r.runClaimed(ctx, id) && r.AfterRun != nil {
+		r.AfterRun()
+	}
+}
+
+// runClaimed runs a claimed fill. The claim ends when it returns, on every
+// path: the hold, a skipped or interrupted fill, ctx was cancelled, a
+// panic. It reports whether the fill was run.
+func (r *FillRunner) runClaimed(ctx context.Context, id int64) bool {
+	defer r.release(id)
+	if r.BeforeRun != nil {
+		r.BeforeRun(ctx, id)
+	}
+	if ctx.Err() != nil {
+		return false
+	}
 	log := r.Filler.logger().With("fill", id)
 	if r.held() {
 		// Queued directly (a new or resumed recurring fill): it runs once
 		// the hold is over, picked up as a running fill.
 		if f, err := r.Filler.Store.GetFill(ctx, id); err == nil && f.Recurring() {
 			log.Info("recurring fill waits for the hold after the start", "until", r.HoldUntil)
-			return
+			return false
 		}
 	}
 	fill, err := r.Filler.Run(ctx, id)
-	if r.AfterRun != nil {
-		defer r.AfterRun()
-	}
 	switch {
 	case errors.Is(err, ErrFillBusy), errors.Is(err, ErrFillSkipped), errors.Is(err, store.ErrFillNotRunning),
 		errors.Is(err, store.ErrNotFound):
 		log.Debug("fill skipped", "reason", err)
-		return
+		return true
 	case ctx.Err() != nil:
 		// Shutting down: the fill stays running and continues at the next start.
 		log.Info("fill interrupted; it continues at the next start")
-		return
+		return true
 	case err != nil:
 		log.Error("fill failed", "err", err)
-		return
+		return true
 	case fill.Recurring():
 		// Like scheduled syncs, runs of a recurring fill are not audited.
-		return
+		return true
 	}
 	name := ""
 	if a, err := r.Filler.Store.GetAccount(ctx, fill.AccountID); err == nil {
@@ -235,6 +291,7 @@ func (r *FillRunner) runOne(ctx context.Context, id int64) {
 	if err := r.Filler.Store.Audit(context.WithoutCancel(ctx), FillDoneEntry(fill, name, "web server")); err != nil {
 		log.Error("audit entry of the fill's end lost", "err", err)
 	}
+	return true
 }
 
 // FillTotals sums the counts of a fill's folders.

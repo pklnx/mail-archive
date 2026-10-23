@@ -137,9 +137,9 @@ func TestReconcileButton(t *testing.T) {
 }
 
 // waitNewRun waits for a finished run other than the one that started at
-// after. The account can look idle with the previous run after the request
-// queued a new one: the runner takes it off the queue before the new run
-// holds the sync lock, and only then is it shown as running.
+// after. Since #187 the account no longer shows idle with the previous run
+// after the request queued a new one (TestSyncStateNeverIdle); the check
+// for a new run stays as a guard.
 func waitNewRun(f *manageFixture, name, after string) accountJSON {
 	f.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

@@ -25,13 +25,23 @@ type Runner struct {
 	// CheckEvery is how often the schedule is checked (default one minute).
 	CheckEvery time.Duration
 	// AfterSync, if set, is called after each sync, for example to deliver
-	// notifications right away.
+	// notifications right away. The account's claim (see Pending) has
+	// ended by then.
 	AfterSync func()
+	// BeforeSync, if set, is called for tests once Run has taken an
+	// account from the queue (it is claimed) and before the account is
+	// loaded. A hook that blocks must also return when ctx is done.
+	BeforeSync func(ctx context.Context, id int64)
 
 	mu     sync.Mutex
 	queue  []int64
 	queued map[int64]SyncOptions
-	wake   chan struct{}
+	// claimed holds the accounts Run has taken from the queue and whose
+	// sync has not returned yet: it waits for or holds the account's sync
+	// lock, or waits for the blob lock (parked). The value is when Run
+	// took it.
+	claimed map[int64]time.Time
+	wake    chan struct{}
 }
 
 // Enqueue adds accounts to the sync queue. Accounts already waiting are not
@@ -62,22 +72,45 @@ func (r *Runner) EnqueueWith(opts SyncOptions, ids ...int64) {
 	}
 }
 
-// Queued reports which accounts wait for their sync to start.
-func (r *Runner) Queued() map[int64]bool {
+// Pending reports the accounts this runner works on: waiting in the queue,
+// or taken from it and not done yet (claimed). An account taken from the
+// queue is claimed in the same step, so it is in one of the two sets until
+// its sync has returned; by then its sync lock is released and the run's
+// row is finished. The value is when Run took the account from the queue
+// (Now), zero while it only waits in the queue.
+func (r *Runner) Pending() map[int64]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[int64]bool, len(r.queued))
+	out := make(map[int64]time.Time, len(r.queued)+len(r.claimed))
 	for id := range r.queued {
-		out[id] = true
+		out[id] = time.Time{}
+	}
+	for id, at := range r.claimed {
+		out[id] = at
 	}
 	return out
+}
+
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func (r *Runner) init() {
 	if r.queued == nil {
 		r.queued = map[int64]SyncOptions{}
+		r.claimed = map[int64]time.Time{}
 		r.wake = make(chan struct{}, 1)
 	}
+}
+
+// release ends the claim that next took on the account.
+func (r *Runner) release(id int64) {
+	r.mu.Lock()
+	delete(r.claimed, id)
+	r.mu.Unlock()
 }
 
 func (r *Runner) next() (int64, SyncOptions, bool) {
@@ -90,6 +123,7 @@ func (r *Runner) next() (int64, SyncOptions, bool) {
 	r.queue = slices.Delete(r.queue, 0, 1)
 	opts := r.queued[id]
 	delete(r.queued, id)
+	r.claimed[id] = r.now()
 	return id, opts, true
 }
 
@@ -112,7 +146,13 @@ func (r *Runner) Run(ctx context.Context) {
 				log.Error("check sync schedule", "err", err)
 			}
 		}
-		for id, opts, ok := r.next(); ok && ctx.Err() == nil; id, opts, ok = r.next() {
+		// ctx is checked before next, which claims the account, so no
+		// account is claimed without syncOne, which ends every claim.
+		for ctx.Err() == nil {
+			id, opts, ok := r.next()
+			if !ok {
+				break
+			}
 			r.syncOne(ctx, id, opts)
 		}
 		select {
@@ -135,11 +175,7 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now
-	if r.Now != nil {
-		now = r.Now
-	}
-	if due := dueAccounts(accounts, runs, r.Schedule, now()); len(due) > 0 {
+	if due := dueAccounts(accounts, runs, r.Schedule, r.now()); len(due) > 0 {
 		r.Enqueue(due...)
 	}
 	return nil
@@ -161,25 +197,44 @@ func dueAccounts(accounts []*store.Account, runs map[int64]store.LastRun, s Sche
 	return due
 }
 
+// syncOne syncs a claimed account; its claim has ended before AfterSync.
 func (r *Runner) syncOne(ctx context.Context, id int64, opts SyncOptions) {
-	log := r.Syncer.logger()
-	a, err := r.Syncer.Store.GetAccount(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		log.Debug("sync skipped: account deleted while queued", "id", id)
+	a, res, ok := r.syncClaimed(ctx, id, opts)
+	if !ok {
 		return
 	}
-	if err != nil {
-		log.Error("load account for sync", "id", id, "err", err)
-		return
-	}
-	res := r.Syncer.SyncAccountWith(ctx, a, opts)
 	if r.AfterSync != nil {
 		r.AfterSync()
 	}
+	log := r.Syncer.logger()
 	switch {
 	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrNoServer):
 		log.Debug("sync skipped", "account", a.Name, "reason", res.Err)
 	case res.Err != nil:
 		log.Error("sync failed", "account", a.Name, "err", res.Err)
 	}
+}
+
+// syncClaimed syncs a claimed account. The claim ends when it returns, on
+// every path: the account was removed or could not be loaded, ctx was
+// cancelled, a panic. ok is false when no sync ran.
+func (r *Runner) syncClaimed(ctx context.Context, id int64, opts SyncOptions) (_ *store.Account, _ AccountResult, ok bool) {
+	defer r.release(id)
+	if r.BeforeSync != nil {
+		r.BeforeSync(ctx, id)
+	}
+	if ctx.Err() != nil {
+		return nil, AccountResult{}, false
+	}
+	log := r.Syncer.logger()
+	a, err := r.Syncer.Store.GetAccount(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		log.Debug("sync skipped: account deleted while queued", "id", id)
+		return nil, AccountResult{}, false
+	}
+	if err != nil {
+		log.Error("load account for sync", "id", id, "err", err)
+		return nil, AccountResult{}, false
+	}
+	return a, r.Syncer.SyncAccountWith(ctx, a, opts), true
 }
