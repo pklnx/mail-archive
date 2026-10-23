@@ -5,15 +5,20 @@
 # plus OUTDIR/SHA256SUMS.
 #
 # Usage: scripts/release-bundle.sh VERSION OUTDIR [IMAGE]
-#   VERSION  YY.MM-N, for example 26.10-1
+#   VERSION  X.Y.Z, for example 1.0.0
 #   IMAGE    default ghcr.io/pklnx/mail-archive
 set -eu
 
 version=${1:?usage: release-bundle.sh VERSION OUTDIR [IMAGE]}
 out=${2:?usage: release-bundle.sh VERSION OUTDIR [IMAGE]}
 image=${3:-ghcr.io/pklnx/mail-archive}
-if ! echo "$version" | grep -Eq '^[0-9]{2}\.[0-1][0-9]-[1-9][0-9]*$'; then
-	echo "not a release version (YY.MM-N): $version" >&2
+# The case rejects newlines, which grep would treat as separate lines.
+case $version in
+'' | *[!0-9.]*) bad=1 ;;
+*) bad= ;;
+esac
+if [ -n "$bad" ] || ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+	echo "not a release version (X.Y.Z): $version" >&2
 	exit 2
 fi
 

@@ -1,12 +1,15 @@
 name: Release
 
 # Publishes a release from main, started by hand (Actions → Release → Run
-# workflow). The version is YY.MM-N: year and month (UTC) and a build number
-# that starts at 1 each month (scripts/next-version.sh). It builds and pushes
-# the image for linux/amd64 and linux/arm64 to ghcr.io with the tags YY.MM-N,
-# YY.MM and latest, then creates the tag vYY.MM-N and a GitHub release with
-# notes grouped by label (.github/release.yml) and the Docker Compose bundle
-# (scripts/release-bundle.sh). Run it after CI on main is green.
+# workflow). The version is semantic, X.Y.Z (scripts/next-version.sh): the
+# labels of the pull requests merged since the last release decide the bump
+# (breaking → major, feature or db-migration → minor, else patch); the first
+# semver release is 1.0.0. The input `version` overrides the proposal. It
+# builds and pushes the image for linux/amd64 and linux/arm64 to ghcr.io with
+# the tags X.Y.Z, X.Y, X and latest, then creates the tag vX.Y.Z and a GitHub
+# release with notes grouped by label (.github/release.yml) and the Docker
+# Compose bundle (scripts/release-bundle.sh). Run it after CI on main is
+# green; a dry run shows the proposed version and the pull requests behind it.
 
 on:
   workflow_dispatch:
@@ -15,6 +18,11 @@ on:
         description: Build everything, but push no image and create no release
         type: boolean
         default: false
+      version:
+        description: Override the proposed version, X.Y.Z, greater than the last release
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -25,31 +33,114 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write # the tag and the release
       packages: write # the image on ghcr.io
+      pull-requests: read # the pull requests behind the commits, for the version
     steps:
+      # No job-level `if:`: a run from another ref fails here visibly instead
+      # of a silent green skip. It runs before the checkout.
+      - name: Started on main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::release.yml runs only on main, not on '$GITHUB_REF'"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # the tags, for the build number
+          fetch-depth: 0 # the tags and the history since the last release
           persist-credentials: false
 
+      # Lists the first-parent commits since the last release, finds each
+      # one's pull request and lets scripts/next-version.sh decide the
+      # version. The summary table is written before the version can fail.
       - name: Version
         id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
-          version=$(scripts/next-version.sh)
+          set -euo pipefail
+          base=$(scripts/next-version.sh base)
+          last=$(scripts/next-version.sh last)
+          range="${base:+$base..}HEAD"
+          if ! shas=$(git rev-list --first-parent "$range"); then
+            echo "::error::git rev-list $range failed"
+            exit 1
+          fi
+          prs="$RUNNER_TEMP/prs.tsv"
+          : > "$prs"
+          for sha in $shas; do
+            gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls?per_page=100" |
+              scripts/next-version.sh pr "$sha" >> "$prs"
+          done
+
+          err="$RUNNER_TEMP/next-version.err"
+          if proposal=$(scripts/next-version.sh next "$last" "" < "$prs" 2> "$err"); then
+            from="proposal $proposal"
+          else
+            from="no proposal: $(cat "$err")"
+          fi
+          if [ -n "$VERSION_INPUT" ]; then
+            from="override $VERSION_INPUT, $from"
+          fi
+          {
+            echo "### Release version"
+            echo
+            echo "- From: $from"
+            echo "- Last version: ${last:-none (first semver release)}"
+            echo "- Range: $range"
+            echo
+            scripts/next-version.sh summary < "$prs"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if ! version=$(scripts/next-version.sh next "$last" "$VERSION_INPUT" < "$prs" 2> "$err"); then
+            echo "::error::$(cat "$err")"
+            echo "**No release:** $(cat "$err")" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           image="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           {
             echo "version=$version"
+            echo "last=$last"
+            echo "base=$base"
             echo "image=$image"
-            echo "tags=$image:$version,$image:${version%-*},$image:latest"
+            echo "tags=$image:$version,$image:${version%.*},$image:${version%%.*},$image:latest"
           } >> "$GITHUB_OUTPUT"
-          echo "Releasing $version as $image" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Releasing $version** as $image" >> "$GITHUB_STEP_SUMMARY"
+
+      # Also stops a re-run of a finished release before anything is built
+      # or pushed.
+      - name: Tag and release do not exist yet
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          refs=$(git ls-remote --tags origin "refs/tags/v$VERSION")
+          if [ -n "$refs" ]; then
+            echo "::error::tag v$VERSION exists; set the version input"
+            exit 1
+          fi
+          if out=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1); then
+            echo "::error::release v$VERSION exists; set the version input"
+            exit 1
+          fi
+          if [ "$out" != "release not found" ]; then
+            echo "::error::could not check for release v$VERSION: $out"
+            exit 1
+          fi
 
       - name: Compose bundle
-        run: scripts/release-bundle.sh "${{ steps.version.outputs.version }}" dist "${{ steps.version.outputs.image }}"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: scripts/release-bundle.sh "$VERSION" dist "$IMAGE"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -78,20 +169,36 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
 
+      # gh release create would use an existing tag as it is (--target
+      # ignored), so the tag check is repeated after the build. matching-refs
+      # is a prefix match (v1.0.0 also finds v1.0.0-rc1), so the refs are
+      # compared exactly.
       - name: Create the release
         if: ${{ !inputs.dry_run }}
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           IMAGE: ${{ steps.version.outputs.image }}
+          BASE: ${{ steps.version.outputs.base }}
         run: |
+          set -euo pipefail
+          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$VERSION" --jq '.[].ref')
+          if grep -qxF "refs/tags/v$VERSION" <<< "$refs"; then
+            echo "::error::tag v$VERSION exists"
+            exit 1
+          fi
           cat > notes.md <<EOF
-          Image: \`$IMAGE:$VERSION\` (linux/amd64, linux/arm64), also tagged \`${VERSION%-*}\` and \`latest\`.
+          Image: \`$IMAGE:$VERSION\` (linux/amd64, linux/arm64), also tagged \`${VERSION%.*}\`, \`${VERSION%%.*}\` and \`latest\`.
 
           **New installation:** download \`mail-archive.tar.gz\` below, extract it and follow \`README.txt\` or the [getting started guide](https://pklnx.github.io/mail-archive/guide/getting-started).
 
           **Upgrade:** back up, extract \`mail-archive.tar.gz\` in the directory above your \`mail-archive/\` directory (it keeps \`.env\` and \`data/\`), then \`./ma migrate\` and \`docker compose up -d web\`. Read the database migrations and breaking changes below first; see [Upgrades](https://pklnx.github.io/mail-archive/guide/operations#upgrades).
           EOF
+          start=()
+          if [ -n "$BASE" ]; then
+            start=(--notes-start-tag "$BASE")
+          fi
           gh release create "v$VERSION" dist/mail-archive.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "mail-archive $VERSION" --notes-file notes.md --generate-notes
+            --title "mail-archive $VERSION" --notes-file notes.md --generate-notes "${start[@]}"
