@@ -114,7 +114,11 @@ func TestLegalHoldsAPI(t *testing.T) {
 	id := itoa(int64(all["id"].(float64)))
 	f.expect("POST", "/api/legal-holds/"+id+"/release", map[string]any{"note": ""}, 400)
 	f.expect("POST", "/api/legal-holds/"+id+"/release", map[string]any{"note": "closed"}, 204)
-	f.expect("POST", "/api/legal-holds/"+id+"/release", map[string]any{"note": "again"}, 409)
+	// Releasing it again answers a fixed text and a code, not the store's.
+	if again := f.expect("POST", "/api/legal-holds/"+id+"/release", map[string]any{"note": "again"}, 409); again["error"] != "this legal hold is already released" ||
+		again["code"] != "released" {
+		t.Fatalf("release twice: %v", again)
+	}
 	f.expect("POST", "/api/legal-holds/999/release", map[string]any{"note": "x"}, 404)
 	if s := toJSON(f.expect("GET", "/api/legal-holds", nil, 200)); strings.Contains(s, `"everything"`) {
 		t.Fatalf("released hold listed %s", s)
@@ -126,9 +130,10 @@ func TestLegalHoldsAPI(t *testing.T) {
 
 	// A user named by a hold cannot be removed, even without accounts.
 	f.addUser("carol", keyPassword, false)
-	f.expect("POST", "/api/legal-holds", map[string]any{"name": "carol", "reason": "audit", "user": "carol"}, 201)
+	carolHold := f.expect("POST", "/api/legal-holds", map[string]any{"name": "carol", "reason": "audit", "user": "carol"}, 201)
 	body := f.expect("DELETE", "/api/users/carol", nil, 409)
-	if !strings.Contains(body["error"].(string), "legal hold") {
+	if !strings.Contains(body["error"].(string), "legal hold") || body["code"] != "on_hold" ||
+		toJSON(body["holdIds"]) != toJSON([]any{carolHold["id"]}) || strings.Contains(body["error"].(string), "lock the user instead") {
 		t.Fatalf("remove held user: %v", body)
 	}
 }

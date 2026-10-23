@@ -22,6 +22,9 @@ var dist embed.FS
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
 	"frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
+// permissionsPolicy turns off browser features the UI never uses.
+const permissionsPolicy = "camera=(), microphone=(), geolocation=()"
+
 // rootFiles are served from the build root (web/public): the web app manifest
 // and its icons, which browsers fetch by fixed names. Everything else that is
 // not under /assets/ gets index.html.
@@ -67,6 +70,7 @@ func Handler() http.Handler {
 		h := w.Header()
 		h.Set("Content-Security-Policy", contentSecurityPolicy)
 		h.Set("X-Frame-Options", "DENY")
+		h.Set("Permissions-Policy", permissionsPolicy)
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			// File names contain a content hash, so they never change.
 			h.Set("Cache-Control", "public, max-age=31536000, immutable")

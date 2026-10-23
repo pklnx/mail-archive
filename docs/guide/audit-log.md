@@ -187,7 +187,12 @@ proxy (Caddy, nginx, `tailscale serve`) that is the proxy, and with Docker's
 port publishing on `127.0.0.1` it is the gateway of the Compose network.
 List the proxy in `MAIL_ARCHIVE_TRUSTED_PROXIES`: then the client's address
 is taken from the proxy's `X-Forwarded-For` header, and the login limits
-count per client again.
+count per client again (IPv6 per `/64`). The same setting decides whether
+the proxy's `X-Forwarded-Proto: https` counts, which makes the session
+cookie `Secure` and sends HSTS (see [Network
+access](../reference/security#network-access)); from loopback it always
+counts. Until the proxy is listed, the server logs a warning once that names
+the address the proxy connects from.
 
 For Caddy on the same computer in front of Docker Compose, trust the
 gateway of the Compose network. `docker network ls` lists it, usually as

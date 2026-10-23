@@ -21,7 +21,7 @@ answer `404`.
 | `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true, "language": "auto", "locale": "auto"}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists, `passkeyOrigin` says where passkeys work (missing when they are off). |
 | `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user, `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
 | `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge, `429` like the password step. |
-| `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` after 30 starts per minute from one address. |
+| `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` after 30 starts per minute from one address (IPv6: one `/64`). |
 | `POST /api/session/passkey/finish` | `{"token": "...", "credential": {...}}` with the browser's answer in JSON. Answers like `POST /api/session` and sets the cookie. `401` for a passkey that is not accepted or an expired token; for an unknown passkey also `"unknownCredential": true` with `credentialId` and `rpId`. `403` for a locked user. |
 | `DELETE /api/session` | Log out (`204`). |
 
@@ -74,7 +74,7 @@ admin's own accounts, like a session.
 | Endpoint outside the key's scopes | `403` `{"error": "this API key lacks the sync scope", "scope": "sync"}` |
 | Endpoint for sessions only | `403` `{"error": "not available with an API key"}` |
 | The owner must change their password or set up 2FA | `403` with `passwordChangeRequired` or `twoFactorSetupRequired`, as for a session |
-| More than 600 requests per key and minute, or more than 30 invalid keys per client address and minute | `429` with `Retry-After` |
+| More than 600 requests per key and minute, or more than 30 invalid keys per client address (IPv6: per `/64`) and minute | `429` with `Retry-After` |
 
 A request with `Authorization: Bearer ma_…` never uses the session cookie,
 also when the key is invalid. Other `Authorization` headers, such as Basic

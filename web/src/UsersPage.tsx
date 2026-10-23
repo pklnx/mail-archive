@@ -23,12 +23,22 @@ import {
 } from "@carbon/react";
 import { Add } from "@carbon/icons-react";
 import { ApiKeyItems } from "./ApiKeys";
-import { apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
+import { ApiError, apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
 import { AppModal, DangerModal } from "./DangerModal";
 import { relativeTime } from "./format";
 import { t } from "./i18n";
 
-const message = (err: unknown) => t.failed(err instanceof Error ? err.message : String(err));
+/**
+ * The text of a failed request. A user named by a legal hold gets a sentence
+ * of its own with the holds' IDs (holdIds), not the server's text.
+ */
+const message = (err: unknown) => {
+  if (err instanceof ApiError && err.body.code === "on_hold") {
+    const ids = Array.isArray(err.body.holdIds) ? err.body.holdIds.filter((id): id is number => typeof id === "number") : [];
+    return t.userOnHold(ids);
+  }
+  return t.failed(err instanceof Error ? err.message : String(err));
+};
 
 /** A confirmation that is open: what it does, and for whom. */
 type Asking = { kind: "reset" | "lock" | "twoFactor" | "passkeys" | "remove"; user: ManagedUser } | null;
@@ -50,7 +60,7 @@ export function UsersPage() {
   const heading = useRef<HTMLHeadingElement>(null);
 
   const reload = useCallback(() => {
-    usersApi.list().then(
+    const listed = usersApi.list().then(
       (u) => {
         setUsers(u);
         setError("");
@@ -58,17 +68,24 @@ export function UsersPage() {
       (err: unknown) => setError(message(err)),
     );
     apiKeyApi.listAll().then(setKeys, () => setKeys([]));
+    return listed;
   }, []);
-  useEffect(reload, [reload]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
+  // The error of a failed action is set after the reload, whose success
+  // would clear it otherwise.
   const run = async (action: () => Promise<unknown>) => {
     setError("");
+    let failure = "";
     try {
       await action();
     } catch (err) {
-      setError(message(err));
+      failure = message(err);
     }
-    reload();
+    await reload();
+    if (failure) setError(failure);
   };
 
   const toggleKeys = (name: string) =>

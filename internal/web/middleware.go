@@ -43,12 +43,23 @@ func (s *Server) hostAllowed(r *http.Request) bool {
 	return false
 }
 
+// hstsValue is the Strict-Transport-Security header: one year.
+const hstsValue = "max-age=31536000"
+
 func (s *Server) protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.warnUntrustedForwardedProto(r)
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		// HSTS only where the request came over HTTPS (secureRequest): over
+		// plain HTTP browsers ignore it, and behind an untrusted proxy it
+		// would be wrong. No includeSubDomains or preload: the domain may
+		// have other services.
+		if s.secureRequest(r) {
+			h.Set("Strict-Transport-Security", hstsValue)
+		}
 
 		if !s.hostAllowed(r) {
 			s.log.Info("host not allowed; add it to "+config.EnvAllowedHosts+" if it is yours", "host", r.Host)

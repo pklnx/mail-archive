@@ -43,6 +43,9 @@ info:
     the audit log. If an entry cannot be written, the request answers `503`
     with "the audit log cannot be written; nothing was done", and nothing
     happens.
+
+    Unknown paths under `/api/`, and unknown methods on known paths, answer
+    `404` with an `Error` (`401` without a login, `403` with an API key).
   license:
     name: MIT
     identifier: MIT
@@ -893,7 +896,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The user still owns accounts, or is the last admin.
+          description: |
+            The user still owns accounts, is the last admin, or is named by a
+            legal hold (`code: on_hold`, with the holds' IDs in `holdIds`).
           content:
             application/json:
               schema:
@@ -1259,7 +1264,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Released already.
+          description: "Released already (`code: released`)."
           content:
             application/json:
               schema:
@@ -2649,6 +2654,21 @@ components:
       properties:
         error:
           type: string
+        code:
+          type: string
+          enum: [on_hold, conflict, released]
+          description: |
+            A stable, machine-readable reason, for clients that explain the
+            error in their own words; `error` is English text that may
+            change. `on_hold`: a legal hold names what the request would
+            remove. `conflict`: the thing already exists. `released`: the
+            legal hold is released already.
+        holdIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+          description: With `on_hold`, the IDs of the legal holds in the way, when they are known.
         passwordChangeRequired:
           type: boolean
           description: In a `403`, the user must change the generated password first.
