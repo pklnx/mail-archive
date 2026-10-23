@@ -4,11 +4,10 @@
   margin: 48px auto 24px;
   padding: 0 24px;
 }
+/* Square frames, as everywhere in the pklnx theme. */
 .screenshot img {
   width: 100%;
   border: 1px solid var(--vp-c-divider);
-  border-radius: 12px;
-  box-shadow: var(--vp-shadow-3);
 }
 .dark .screenshot .light-only,
 html:not(.dark) .screenshot .dark-only {
@@ -18,5 +17,13 @@ html:not(.dark) .screenshot .dark-only {
 /* Screenshots in guide pages get a frame so they stand out from the page. */
 .vp-doc img {
   border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
+}
+
+/* vitepress-openapi's CSS (bundled into the site's one stylesheet) brings
+   Tailwind's preflight in a cascade layer declared after VitePress's own, so
+   its html font stack (--font-sans, a system stack) would win over the
+   theme's IBM Plex on every page. Point Tailwind's font tokens at the theme's. */
+:root {
+  --font-sans: var(--vp-font-family-base);
+  --font-mono: var(--vp-font-family-mono);
 }

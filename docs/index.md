@@ -5,8 +5,9 @@ hero:
   name: mail-archive
   text: All your mailboxes, one read-only archive
   image:
-    src: /logo.svg
-    alt: mail-archive logo
+    light: /mail-archive-mark-light.svg
+    dark: /mail-archive-mark-dark.svg
+    alt: ""
   tagline: Copies mail from IMAP accounts into deduplicated .eml files and PostgreSQL, with full-text search and a web UI. The servers are never modified.
   actions:
     - theme: brand

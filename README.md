@@ -1,6 +1,9 @@
-<img src="docs/public/logo.svg" alt="" width="80">
-
-# mail-archive
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/public/mail-archive-lockup-dark.svg">
+    <img src="docs/public/mail-archive-lockup-light.svg" alt="mail-archive" height="40">
+  </picture>
+</h1>
 
 > [!WARNING]
 > **This project is entirely vibe-coded.** All code, configuration and
@@ -62,4 +65,5 @@ documentation sources are in [`docs/`](docs/).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The logo and app icons are not under the MIT License; they
+are covered by [BRAND-ASSETS.md](BRAND-ASSETS.md).

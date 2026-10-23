@@ -9,7 +9,9 @@
     <!-- Browser and status bar color; theme.ts sets both to the chosen theme. -->
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#161616" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" type="image/svg+xml" href="/src/logo.svg" />
+    <!-- The mail-archive tile (BRAND-ASSETS.md): PNG for browsers without SVG favicons (Safari), SVG for the rest. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/svg+xml" href="/src/brand/mail-archive-tile.svg" />
     <!-- Installable as an app (home screen, dock); served from the build root, see internal/web/ui. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

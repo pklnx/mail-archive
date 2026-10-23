@@ -19,7 +19,7 @@ import { ShellNav } from "./ShellNav";
 import { ThemeToggle } from "./ThemeToggle";
 import { lg, matchesNow, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
-import logo from "./logo.svg";
+import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
 import { useCollapsed } from "./sidebarState";
 import { railWidth, useSidebarLayout } from "./sidebarLayout";
@@ -267,7 +267,7 @@ export function App({ user, logout }: Props) {
             setMenuOpen(false);
           }}
         >
-          <img src={logo} alt="" className="app-header__logo" />
+          <ProductMark className="app-header__logo" />
           {t.appName}
         </HeaderName>
         <HeaderGlobalBar>
@@ -495,7 +495,7 @@ export function App({ user, logout }: Props) {
               </>
             ) : (
               <div className="reader-empty">
-                <img src={logo} alt="" className="reader-empty__logo" />
+                <ProductMark className="reader-empty__logo" />
                 <p className="app-text-secondary">{t.selectMessage}</p>
                 <Button kind="ghost" size="sm" className="reader-empty__shortcuts" onClick={() => setShortcuts(true)}>
                   {t.shortcutsHint}&nbsp;<kbd className="kbd">?</kbd>

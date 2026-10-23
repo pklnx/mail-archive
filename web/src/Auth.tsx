@@ -4,7 +4,7 @@ import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unkno
 import { PasswordForm, TwoFactorSetup } from "./Profile";
 import { ThemeToggle } from "./ThemeToggle";
 import { applySettings, t } from "./i18n";
-import logo from "./logo.svg";
+import { ProductMark } from "./ProductMark";
 import { autofillSupported, browserError, credentialJSON, forgetPasskey, passkeysSupported, requestOptions } from "./webauthn";
 
 type GateState = SessionState | { loading: true } | { error: string };
@@ -114,7 +114,7 @@ function Centered({ children }: { children: ReactNode }) {
 function Brand() {
   return (
     <div className="auth-page__brand">
-      <img src={logo} alt="" width={40} height={40} />
+      <ProductMark size={40} />
       <h1 className="type-heading-04">{t.appName}</h1>
     </div>
   );

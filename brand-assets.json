@@ -1,0 +1,76 @@
+{
+  "repository": "https://github.com/pklnx/design-system",
+  "commit": "a2201c2fdb7dd2dabb594a9c7aa945b5c9ea3180",
+  "files": [
+    {
+      "path": "web/src/brand/mail-archive-tile.svg",
+      "source": "project/assets/Logos/products/mail-archive-tile.svg",
+      "sha256": "cce68cf8f3f028042971038a7067694e53a112cc4a301e9360d35a0fc28a0ad1"
+    },
+    {
+      "path": "web/src/brand/mail-archive-mark-dark.svg",
+      "source": "project/assets/Logos/products/mail-archive-mark-dark.svg",
+      "sha256": "abbae744125ac65cf5e5f03c95e19d271f1f8f6fbaa17bc4eecebbbebe302d71"
+    },
+    {
+      "path": "web/src/brand/mail-archive-mark-light.svg",
+      "source": "project/assets/Logos/products/mail-archive-mark-light.svg",
+      "sha256": "04c4922f1e3e5e1b18b583f1e676c106ebc5b5ccfdc6af531217039bdd45d7af"
+    },
+    {
+      "path": "web/public/favicon-32.png",
+      "source": "project/assets/Logos/products/mail-archive-favicon-32.png",
+      "sha256": "c894edea9198cbde4a5137d50041ae3a6159f305e78faa9f9a397162b21569f7"
+    },
+    {
+      "path": "web/public/apple-touch-icon.png",
+      "source": "project/assets/Logos/products/mail-archive-apple-touch-icon.png",
+      "sha256": "63dd36c58e6b428e5564780c762f0645e8dc7afa82b9f8e84811b2f5e4c6460e"
+    },
+    {
+      "path": "web/public/icon-192.png",
+      "source": "project/assets/Logos/products/mail-archive-icon-192.png",
+      "sha256": "89a52f4c50928a4634a8c9e216f0a0a7182ac09d031cc63931a97ae85fe20523"
+    },
+    {
+      "path": "web/public/icon-512.png",
+      "source": "project/assets/Logos/products/mail-archive-icon-512.png",
+      "sha256": "23c21d214a15d31348adff180c2f91fb89efa4e236d43f4c5e8b0b2249ba0cf4"
+    },
+    {
+      "path": "web/public/icon-maskable-512.png",
+      "source": "project/assets/Logos/products/mail-archive-icon-maskable-512.png",
+      "sha256": "1c6e22e743f0a3bf4ffda4d9982c728734557300a685b090c9434ed6d4dd7435"
+    },
+    {
+      "path": "docs/public/mail-archive-tile.svg",
+      "source": "project/assets/Logos/products/mail-archive-tile.svg",
+      "sha256": "cce68cf8f3f028042971038a7067694e53a112cc4a301e9360d35a0fc28a0ad1"
+    },
+    {
+      "path": "docs/public/mail-archive-favicon-32.png",
+      "source": "project/assets/Logos/products/mail-archive-favicon-32.png",
+      "sha256": "c894edea9198cbde4a5137d50041ae3a6159f305e78faa9f9a397162b21569f7"
+    },
+    {
+      "path": "docs/public/mail-archive-mark-dark.svg",
+      "source": "project/assets/Logos/products/mail-archive-mark-dark.svg",
+      "sha256": "abbae744125ac65cf5e5f03c95e19d271f1f8f6fbaa17bc4eecebbbebe302d71"
+    },
+    {
+      "path": "docs/public/mail-archive-mark-light.svg",
+      "source": "project/assets/Logos/products/mail-archive-mark-light.svg",
+      "sha256": "04c4922f1e3e5e1b18b583f1e676c106ebc5b5ccfdc6af531217039bdd45d7af"
+    },
+    {
+      "path": "docs/public/mail-archive-lockup-dark.svg",
+      "source": "project/assets/Logos/products/mail-archive-lockup-dark.svg",
+      "sha256": "1340324bbd2b56be143402558ca771bf5332258d7cd46e7393c535dc694c3972"
+    },
+    {
+      "path": "docs/public/mail-archive-lockup-light.svg",
+      "source": "project/assets/Logos/products/mail-archive-lockup-light.svg",
+      "sha256": "434eed27203f7066f1eee3c26b505b457bfe9c1693298feb6f83dc05341193b0"
+    }
+  ]
+}

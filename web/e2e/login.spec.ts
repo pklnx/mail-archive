@@ -68,3 +68,23 @@ test("login errors: wrong password and locked user", async ({ page, guards }) =>
   await expect(loginError(page)).toHaveText("ErrorThis user is locked. Ask an admin to unlock it.");
   await expect(page.getByRole("heading", { name: "Enter your authentication code" })).toHaveCount(0);
 });
+
+test("the login page shows the product mark for the theme, and the PNG favicon is served", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  const brand = page.locator(".auth-page__brand img");
+  await expect(brand).toHaveClass(/(^|\s)app-mark--light(\s|$)/);
+  // Decorative: the heading next to it is the name.
+  await expect(brand).toHaveAttribute("alt", "");
+  expect(await brand.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+
+  // theme.ts follows the system: the mark follows with it.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(brand).toHaveClass(/(^|\s)app-mark--dark(\s|$)/);
+  await expect.poll(() => brand.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+
+  // The PNG favicon index.html links: served by its fixed name (#237).
+  const favicon = await page.request.get("/favicon-32.png");
+  expect(favicon.status()).toBe(200);
+  expect(favicon.headers()["content-type"]).toBe("image/png");
+});
