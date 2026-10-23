@@ -6,14 +6,17 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Next tickets
-- #168 Carbon Design System migration. Plan revised and approved (`ready`). Maintainer decisions 2026-10-22: account add, edit and import are pages; the shell SideNav holds the app sections as a rail, accounts and folders go in a page-level TreeView column that keeps #160; phones get Carbon's hamburger overlay and the bottom bar is dropped in 4a; screenshot exception: docs screenshots and docs text are updated only in part 6.
-  - Parts 1-3 are merged: #169 (PR #181), #170 (PR #186), #171 (PR #188). **Part 3 is the maintainer's evaluation point.** Parts 4a #172, 4b #177 (created when the plan revision split part 4), 5 #173 and 6 #174 wait for the maintainer's sign-off on look and effort.
-- Unplanned bugs, label `bug` only, wait for `plan`:
-  - #182: inline `cid:` images are blocked in the sandboxed frame by CORP; the e2e guard allows that console message for now.
-  - #187: an account shows `idle` between leaving the sync queue and taking the sync lock; may have widened with #183.
-- Optional release: since 26.10-8, main has #155, #166, #176, #169 (e2e) and Carbon parts 2-3. No release without the maintainer.
+- #200 (in planning): the message view has nested scroll areas, so the mail body is too small to read, on phone and desktop. It blocks release 26.10-10. Maintainer decisions are on the issue: fix now, then release; fold the conversation list as before Carbon.
 
-## Done (2026-10-22/23)
+## Done (2026-10-23)
+- #182: inline `cid:` images as `data:` URLs (PR #192).
+- #187: a claimed sync stays queued, with a stale bound via the claim time (PR #193).
+- #190: `web-e2e` is skipped on docs-only PRs (PR #194). The maintainer added `web-e2e` to the required checks.
+- Carbon parts 4a #172 (PR #191), 4b #177 (PR #195), 5 #173 (PR #197) and 6 #174 (PR #198), which completes #168.
+- #196: phone quick filters and an "Edit filters" button (PR #199).
+- Release v26.10-9, published 2026-10-23 and verified (checksum, ghcr tags `26.10-9`/`26.10`/`latest` on one digest).
+
+## Done (2026-10-22/23, before the Carbon parts)
 - #155 complete account purge: CLI PR #165, web UI PR #167.
 - #166 deletion run and blob sweep on dedicated session connections (PR #180).
 - #176 bounded blob lock waits: #178 PR #183 (one wait slot per process); account delete/remove on one connection: #179 PR #184.
@@ -44,17 +47,12 @@ State of the work for the next session. Update before a session ends.
 - 2026-10-22: #150 closed (release notes of 26.10-7/-8 edited by the maintainer; PR #159: `./ma migrate` rebuilds indexes of an Alpine-built database, other commands refuse until then). #156 (PR #158, profile tabs; tab bar shrink fix in PR #161). #157 (PR #160, resizable and collapsible sidebar). PR #161: screenshots regenerated, new rule: UI PRs update screenshots and docs text.
 
 ## Maintainer actions
-- Add `web-e2e` to the required checks in the ruleset (the coordinator must not change rulesets).
-- Sign off part 3 (look and effort): screenshots are in the session; the PR #188 body has an effort note (the merged PR: 19 files, +1955/-755).
-- Release decision.
+- Release 26.10-10 after #200 is fixed.
 
 ## Manual checks for the maintainer
-- #155: a real purge on a copy of the piler case.
-- #168 parts 2-3: browser check of the Carbon login, accounts pages and purge modal (EN/DE, light/dark, phone).
-- #186: a real passkey login and the setup screen's CodeSnippet copy button.
 - #186: `docker build`, confirming no postinstall or telemetry runs.
 - #181: first-run timing of `web-e2e` in CI, under 5 minutes.
-- #159: upgrade a real volume created by `postgres:18-alpine` (bundle ≤ 26.10-6): `./ma status` refuses, `./ma migrate` rebuilds and records the marker, then commands work.
+- #159: upgrade a real volume created by `postgres:18-alpine` (bundle <= 26.10-6): `./ma status` refuses, `./ma migrate` rebuilds and records the marker, then commands work.
 - #158/#160: look at the profile tabs and the sidebar in a browser (EN/DE, light/dark, 320 px and 1024 px width, touch drag, many accounts).
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.
 - #125/#127 (needs a Docker daemon): change the build tag to `golang:1.27.2-alpine` and confirm `docker build .` fails at the toolchain guard.
@@ -62,4 +60,5 @@ State of the work for the next session. Update before a session ends.
 - #153: time `./ma migrate` (00029 reads `message_locations` once) on a large archive.
 
 ## Environment
-- pnpm via corepack is broken in cloud sessions. Use `node /root/.cache/node/corepack/v1/pnpm/12.9.1/bin/pnpm.mjs`.
+- pnpm via corepack is broken in cloud sessions (corepack points to a missing pnpm version). Use `node /root/.cache/node/corepack/v1/pnpm/12.9.1/bin/pnpm.mjs`.
+- The e2e suite needs `DEMO_DATABASE_URL` (a Postgres the suite may write to).
