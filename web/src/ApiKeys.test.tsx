@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiKey } from "./api";
-import { apiKeyDetails, apiKeyError, ApiKeyItems, NewKeyPanel } from "./ApiKeys";
+import { apiKeyDetails, apiKeyError, ApiKeyItems, ApiKeyTable, NewKeyPanel } from "./ApiKeys";
 import { t } from "./i18n";
 
 const key: ApiKey = {
@@ -12,19 +12,44 @@ const key: ApiKey = {
 afterEach(cleanup);
 
 describe("NewKeyPanel", () => {
-  it("shows the key once, copies it and hides it when done", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  it("shows the key once, with a copy button, and hides it when done", () => {
     const done = vi.fn();
     const secret = "ma_" + "a".repeat(52);
     render(<NewKeyPanel created={{ ...key, key: secret }} done={done} />);
     expect(screen.getByText(secret)).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain(t.apiKeyCreated("backup"));
-    fireEvent.click(screen.getByText(t.copy));
-    expect(writeText).toHaveBeenCalledWith(secret);
-    expect(await screen.findByText(t.copied)).toBeTruthy();
-    fireEvent.click(screen.getByText(t.done));
+    expect(screen.getByRole("button", { name: t.carbon.copy })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: t.done }));
     expect(done).toHaveBeenCalled();
+  });
+});
+
+describe("ApiKeyTable", () => {
+  it("shows scopes, state, expiry and use, and revokes only active keys after asking", () => {
+    const revoke = vi.fn();
+    const expired = { ...key, id: 2, name: "old", state: "expired" as const, expiresAt: "2026-01-01T00:00:00Z" };
+    render(<ApiKeyTable keys={[key, expired]} revoke={revoke} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]!).getByText("read, sync")).toBeTruthy();
+    expect(within(rows[0]!).getByText(t.apiKeyState("active"))).toBeTruthy();
+    expect(within(rows[0]!).getByText(t.apiKeyExpiryNever)).toBeTruthy();
+    expect(within(rows[0]!).getByText(t.apiKeyNeverUsed)).toBeTruthy();
+    expect(within(rows[1]!).getByText(t.apiKeyState("expired"))).toBeTruthy();
+    expect(within(rows[1]!).queryByRole("button")).toBeNull();
+    // Only the hint of a key, never more.
+    expect(screen.getAllByText("ma_…abcd")).toHaveLength(2);
+
+    fireEvent.click(within(rows[0]!).getByRole("button", { name: t.apiKeyRevoke }));
+    expect(revoke).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: t.apiKeyRevokeTitle("backup") });
+    expect(dialog.closest(".cds--modal")!.className).toContain("cds--modal--danger");
+    fireEvent.click(within(dialog).getByRole("button", { name: t.cancel }));
+    expect(revoke).not.toHaveBeenCalled();
+
+    fireEvent.click(within(rows[0]!).getByRole("button", { name: t.apiKeyRevoke }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.apiKeyRevoke }));
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(key);
   });
 });
 

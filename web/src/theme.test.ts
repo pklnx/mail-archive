@@ -24,8 +24,8 @@ const classes = () => document.documentElement.classList;
 const barColors = () => [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => m.getAttribute("content"));
 
 function expectTheme(theme: "light" | "dark") {
-  // Tailwind's class for the unconverted markup, and Carbon's theme on <html>.
-  expect(classes().contains("dark")).toBe(theme === "dark");
+  // Carbon's theme class on <html>, and no other class.
+  expect(classes().contains("dark")).toBe(false);
   expect(classes().contains("cds--g100")).toBe(theme === "dark");
   expect(classes().contains("cds--white")).toBe(theme === "light");
   expect(document.documentElement.style.colorScheme).toBe(theme);

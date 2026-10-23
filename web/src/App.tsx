@@ -290,12 +290,9 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
-      {/* The view not converted to Carbon yet (#168 part 6) carries
-          .legacy, for the reset in index.css; the converted markup does
-          not, so the reset never reaches Carbon's. */}
       {state.view === "profile" ? (
-        <main inert={pageInert} className="legacy text-ink app-view">
-          <ProfilePage name={user.name} close={() => update({ view: "" })} />
+        <main inert={pageInert} className="app-view">
+          <ProfilePage name={user.name} />
         </main>
       ) : state.view === "users" && user.admin ? (
         <main inert={pageInert} className="app-view">

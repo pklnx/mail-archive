@@ -67,8 +67,7 @@ export function AuthGate({ children }: Props) {
         <Centered>
           <Brand />
           <Heading title={t.chooseOwnPassword} text={t.chooseOwnPasswordText} />
-          {/* Profile's form, converted in #168 part 6. */}
-          <div className="legacy text-sm">
+          <div className="auth-page__form">
             <PasswordForm done={() => setState({ user: { ...user, mustChangePassword: false } })} />
           </div>
           <div>
@@ -84,7 +83,7 @@ export function AuthGate({ children }: Props) {
         <Centered>
           <Brand />
           <Heading title={t.twoFactorSetup} text={t.twoFactorRequired} />
-          <div className="legacy text-sm">
+          <div className="auth-page__form">
             <TwoFactorSetup user={state.user.name} onDone={() => check()} />
           </div>
           <div>

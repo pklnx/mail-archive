@@ -1,14 +1,23 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ApiError, passkeyApi, profileApi, retryAfter, type PasskeyList } from "./api";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import {
+  Button,
+  PasswordInput,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TextInput,
+} from "@carbon/react";
+import { Add } from "@carbon/icons-react";
+import { ApiError, passkeyApi, profileApi, retryAfter, type Passkey, type PasskeyList } from "./api";
+import { AppModal, DangerModal } from "./DangerModal";
 import { relativeTime } from "./format";
 import { t } from "./i18n";
+import { FormError, Success } from "./notices";
 import { browserError, creationOptions, credentialJSON, forgetPasskey, passkeysSupported } from "./webauthn";
-
-const primary = "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const button =
-  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const input =
-  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 /** The message for a failed registration. */
 export function registrationError(err: unknown, max: number): string {
@@ -40,12 +49,11 @@ export function registrationError(err: unknown, max: number): string {
 export function PasskeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: number }) {
   const [list, setList] = useState<PasskeyList | null>(null);
   const [twoFactor, setTwoFactor] = useState(false);
-  const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<Passkey | null>(null);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const addButton = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(() => {
     passkeyApi.list().then(setList, (err: unknown) => setError(t.failed(err instanceof Error ? err.message : String(err))));
@@ -59,38 +67,13 @@ export function PasskeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: nu
     };
   }, [twoFactorVersion]);
 
-  if (!list) return error ? <p role="alert" className="text-sm text-danger">{error}</p> : <p className="text-sm text-ink-muted">{t.loading}</p>;
-  if (!list.available) return <p className="text-sm text-ink-muted">{t.passkeysUnavailable}</p>;
+  if (!list) return error ? <FormError text={error} /> : <p className="app-text-secondary">{t.loading}</p>;
+  if (!list.available) return <p className="app-text-secondary">{t.passkeysUnavailable}</p>;
 
   const here = list.origin === window.location.origin;
   const canAdd = here && passkeysSupported() && list.passkeys.length < list.max;
 
-  const add = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    setStatus("");
-    try {
-      const { token, publicKey } = await passkeyApi.beginRegistration(name.trim(), password, code);
-      const cred = (await navigator.credentials.create({ publicKey: creationOptions(publicKey) })) as PublicKeyCredential | null;
-      if (!cred) throw new DOMException("no passkey", "NotAllowedError");
-      await passkeyApi.finishRegistration(token, credentialJSON(cred));
-      setStatus(t.passkeyAdded(name.trim()));
-      setName("");
-      setPassword("");
-      setCode("");
-      load();
-    } catch (err) {
-      setError(registrationError(err, list.max));
-      setPassword("");
-      setCode("");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async (id: number, passkeyName: string) => {
-    if (!window.confirm(t.passkeyRemoveConfirm(passkeyName))) return;
+  const remove = async (id: number) => {
     setError("");
     setStatus("");
     try {
@@ -103,65 +86,194 @@ export function PasskeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: nu
   };
 
   return (
-    <div className="flex flex-col gap-3 text-sm">
-      <p className="text-ink-muted">{t.passkeysText}</p>
+    <div className="profile-form">
+      <p className="app-text-secondary">{t.passkeysText}</p>
       {list.passkeys.length === 0 ? (
-        <p className="text-ink-muted">{t.passkeyNone}</p>
+        <p className="app-text-secondary">{t.passkeyNone}</p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {list.passkeys.map((p) => (
-            <li key={p.id} className="flex items-center gap-3 rounded-md border border-line px-3 py-2">
-              <div className="mr-auto flex flex-col">
-                <span className="font-medium">{p.name}</span>
-                <span className="text-xs text-ink-muted">{p.lastUsedAt ? t.passkeyUsed(relativeTime(p.lastUsedAt)) : t.passkeyNeverUsed}</span>
-              </div>
-              <button type="button" className={button} onClick={() => void remove(p.id, p.name)}>
-                {t.passkeyRemove}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <TableContainer className="profile-table">
+          <Table aria-label={t.passkeys} size="md">
+            <TableHead>
+              <TableRow>
+                <TableHeader>{t.colName}</TableHeader>
+                <TableHeader>{t.colLastUsed}</TableHeader>
+                <TableHeader>
+                  <span className="cds--visually-hidden">{t.colActions}</span>
+                </TableHeader>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {list.passkeys.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    <span className="profile-table__name">{p.name}</span>
+                  </TableCell>
+                  <TableCell>{p.lastUsedAt ? relativeTime(p.lastUsedAt) : t.passkeyNeverUsed}</TableCell>
+                  <TableCell className="profile-table__action">
+                    <Button kind="danger--ghost" size="sm" onClick={() => setRemoving(p)}>
+                      {t.passkeyRemove}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
-      {status && (
-        <p role="status" className="text-ok">
-          {status}
-        </p>
-      )}
-      {!here && <p className="text-ink-muted">{t.passkeysOtherOrigin(list.origin ?? "")}</p>}
-      {here && !passkeysSupported() && <p className="text-ink-muted">{t.passkeysUnsupported}</p>}
-      {here && list.passkeys.length >= list.max && <p className="text-ink-muted">{t.passkeyLimit(list.max)}</p>}
+      {status && <Success text={status} />}
+      {!here && <p className="app-text-secondary">{t.passkeysOtherOrigin(list.origin ?? "")}</p>}
+      {here && !passkeysSupported() && <p className="app-text-secondary">{t.passkeysUnsupported}</p>}
+      {here && list.passkeys.length >= list.max && <p className="app-text-secondary">{t.passkeyLimit(list.max)}</p>}
+      <FormError text={error} />
       {canAdd && (
-        <form className="flex flex-col gap-3 border-t border-line pt-3" onSubmit={add}>
-          <label className="flex flex-col gap-1">
-            {t.passkeyName}
-            <input className={input} required maxLength={64} placeholder={t.passkeyNameHint} value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <p className="text-ink-muted">{twoFactor ? t.passkeyConfirm2FA : t.passkeyConfirm}</p>
-          <label className="flex flex-col gap-1">
-            {t.currentPassword}
-            <input className={input} type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </label>
-          {twoFactor && (
-            <label className="flex flex-col gap-1">
-              {t.twoFactorCode}
-              <input className={input} required autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} />
-            </label>
-          )}
-          {error && (
-            <p role="alert" className="text-danger">
-              {error}
-            </p>
-          )}
-          <button type="submit" className={`${primary} self-start`} disabled={busy}>
+        <div>
+          <Button
+            ref={addButton}
+            kind="tertiary"
+            renderIcon={Add}
+            onClick={() => {
+              setError("");
+              setStatus("");
+              setAdding(true);
+            }}
+          >
             {t.passkeyAdd}
-          </button>
-        </form>
+          </Button>
+        </div>
       )}
-      {!canAdd && error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
+      {adding && (
+        <AddPasskeyModal
+          twoFactor={twoFactor}
+          max={list.max}
+          returnFocus={() => addButton.current}
+          cancel={() => setAdding(false)}
+          added={(name) => {
+            setAdding(false);
+            setStatus(t.passkeyAdded(name));
+            load();
+          }}
+        />
+      )}
+      {removing && (
+        <DangerModal
+          size="xs"
+          modalHeading={t.passkeyRemoveTitle(removing.name)}
+          primaryButtonText={t.passkeyRemove}
+          secondaryButtonText={t.cancel}
+          onRequestClose={() => setRemoving(null)}
+          onRequestSubmit={() => {
+            const id = removing.id;
+            setRemoving(null);
+            void remove(id);
+          }}
+        >
+          <p>{t.passkeyRemoveText}</p>
+        </DangerModal>
       )}
     </div>
+  );
+}
+
+/**
+ * Adds a passkey: a name, the password and (with 2FA) a code, then the
+ * browser's passkey dialog. A failure keeps the Modal open with the name and
+ * clears password and code.
+ */
+export function AddPasskeyModal({
+  twoFactor,
+  max,
+  returnFocus,
+  cancel,
+  added,
+}: {
+  twoFactor: boolean;
+  max: number;
+  returnFocus?: () => HTMLElement | null | undefined;
+  cancel: () => void;
+  added: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const id = useId();
+  const complete = name.trim() !== "" && password !== "" && (!twoFactor || code !== "");
+
+  const add = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy || !complete) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { token, publicKey } = await passkeyApi.beginRegistration(name.trim(), password, code);
+      const cred = (await navigator.credentials.create({ publicKey: creationOptions(publicKey) })) as PublicKeyCredential | null;
+      if (!cred) throw new DOMException("no passkey", "NotAllowedError");
+      await passkeyApi.finishRegistration(token, credentialJSON(cred));
+      added(name.trim());
+    } catch (err) {
+      setError(registrationError(err, max));
+      setPassword("");
+      setCode("");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AppModal
+      size="sm"
+      modalHeading={t.passkeyAdd}
+      primaryButtonText={t.passkeyAdd}
+      secondaryButtonText={t.cancel}
+      primaryButtonDisabled={!complete}
+      loadingStatus={busy ? "active" : "inactive"}
+      loadingDescription={t.passkeyAdd}
+      loadingIconDescription={t.loading}
+      preventCloseOnClickOutside
+      returnFocus={returnFocus}
+      onRequestClose={() => {
+        if (!busy) cancel();
+      }}
+      onRequestSubmit={() => void add()}
+    >
+      <form className="modal-stack" onSubmit={(e) => void add(e)}>
+        <TextInput
+          id={`${id}-name`}
+          data-modal-primary-focus=""
+          labelText={t.passkeyName}
+          placeholder={t.passkeyNameHint}
+          required
+          maxLength={64}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <p>{twoFactor ? t.passkeyConfirm2FA : t.passkeyConfirm}</p>
+        <PasswordInput
+          id={`${id}-password`}
+          labelText={t.currentPassword}
+          showPasswordLabel={t.carbon.showPassword}
+          hidePasswordLabel={t.carbon.hidePassword}
+          required
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        {twoFactor && (
+          <TextInput
+            id={`${id}-code`}
+            labelText={t.twoFactorCode}
+            required
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+        )}
+        <FormError text={error} />
+        {/* Enter in a field submits; the Modal's own button is outside the form. */}
+        <button type="submit" className="cds--visually-hidden" tabIndex={-1} aria-hidden />
+      </form>
+    </AppModal>
   );
 }

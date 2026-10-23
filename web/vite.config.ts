@@ -1,13 +1,12 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import { carbonStyles } from "./build/stripRemoteFonts.ts";
 
 // The build is embedded into the Go binary (internal/web/ui).
 export default defineConfig({
   // carbonStyles writes src/vendor/carbon.css (Carbon without its CDN fonts)
-  // before Tailwind's plugin inlines it into index.css.
-  plugins: [carbonStyles(), react(), tailwindcss()],
+  // before Vite inlines it into index.css.
+  plugins: [carbonStyles(), react()],
   build: {
     outDir: "../internal/web/ui/dist",
     emptyOutDir: true,

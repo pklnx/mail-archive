@@ -1,17 +1,28 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
+import {
+  Button,
+  CodeSnippet,
+  Form,
+  Layer,
+  PasswordInput,
+  Select,
+  SelectItem,
+  Tab,
+  TabList,
+  TabPanel,
+  TabPanels,
+  Tabs,
+  Tag,
+  TextInput,
+} from "@carbon/react";
+import { Document, DocumentPdf } from "@carbon/icons-react";
 import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetupState } from "./api";
 import { applySettings, canonical, languages, lang, messagesFor, needsReload, settings, t, type Settings } from "./i18n";
 import { ApiKeySection } from "./ApiKeys";
-import { PageHeader } from "./PageHeader";
+import { AppModal } from "./DangerModal";
+import { FormError, Success } from "./notices";
 import { PasskeySection } from "./Passkeys";
-import { Tabs } from "./Tabs";
 import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
-
-const primary = "rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-accent hover:bg-accent-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const secondary =
-  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover pointer-coarse:min-h-11";
-const input =
-  "w-full rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
 
 /** Same rule as the server (auth.MinPasswordLength), checked early for a localized message. */
 const minLength = 12;
@@ -30,6 +41,7 @@ export function PasswordForm({ done }: { done: () => void }) {
   const [repeat, setRepeat] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const id = useId();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -50,30 +62,41 @@ export function PasswordForm({ done }: { done: () => void }) {
     }
   };
 
+  const password = { showPasswordLabel: t.carbon.showPassword, hidePasswordLabel: t.carbon.hidePassword, required: true };
   return (
-    <form className="flex flex-col gap-3 text-sm" onSubmit={submit}>
-      <label className="flex flex-col gap-1">
-        {t.currentPassword}
-        <input className={input} type="password" required autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
-      </label>
-      <label className="flex flex-col gap-1">
-        {t.newPassword}
-        <input className={input} type="password" required autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
-      </label>
-      <label className="flex flex-col gap-1">
-        {t.repeatPassword}
-        <input className={input} type="password" required autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
-      </label>
-      <p className="text-ink-muted">{t.passwordRules}</p>
-      {error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-      )}
-      <button type="submit" className={`${primary} self-start`} disabled={busy}>
-        {t.changePassword}
-      </button>
-    </form>
+    <Form className="profile-form" onSubmit={submit}>
+      <PasswordInput
+        id={`${id}-current`}
+        labelText={t.currentPassword}
+        autoComplete="current-password"
+        value={current}
+        onChange={(e) => setCurrent(e.target.value)}
+        {...password}
+      />
+      <PasswordInput
+        id={`${id}-new`}
+        labelText={t.newPassword}
+        helperText={t.passwordRules}
+        autoComplete="new-password"
+        value={next}
+        onChange={(e) => setNext(e.target.value)}
+        {...password}
+      />
+      <PasswordInput
+        id={`${id}-repeat`}
+        labelText={t.repeatPassword}
+        autoComplete="new-password"
+        value={repeat}
+        onChange={(e) => setRepeat(e.target.value)}
+        {...password}
+      />
+      <FormError text={error} />
+      <div>
+        <Button type="submit" disabled={busy}>
+          {t.changePassword}
+        </Button>
+      </div>
+    </Form>
   );
 }
 
@@ -111,6 +134,7 @@ export function DisplaySettings({ reload = () => location.reload() }: { reload?:
   const [current, setCurrent] = useState<Settings>(settings);
   const [pending, setPending] = useState<Settings | null>(null);
   const [error, setError] = useState("");
+  const id = useId();
   const value = shown(pending ?? current);
   const formats = value.locale === "auto" || formatChoices.includes(value.locale) ? formatChoices : [...formatChoices, value.locale];
 
@@ -132,79 +156,98 @@ export function DisplaySettings({ reload = () => location.reload() }: { reload?:
   };
 
   return (
-    <div className="flex flex-col gap-3 text-sm">
-      <label className="flex flex-col gap-1">
-        {t.language}
-        <select className={input} value={value.language} disabled={pending !== null} onChange={(e) => void change("language", e.target.value)}>
-          <option value="auto">{t.settingAuto}</option>
-          {languages.map((l) => (
-            <option key={l} value={l} lang={l}>
-              {messagesFor(l).languageName}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        {t.formats}
-        <select className={input} value={value.locale} disabled={pending !== null} onChange={(e) => void change("locale", e.target.value)}>
-          <option value="auto">{t.settingAuto}</option>
-          {formats.map((f) => (
-            <option key={f} value={f}>
-              {formatLabel(f)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <p className="text-ink-muted">{t.formatsHint}</p>
-      {error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-      )}
+    <div className="profile-form">
+      <Select
+        id={`${id}-language`}
+        labelText={t.language}
+        value={value.language}
+        disabled={pending !== null}
+        onChange={(e) => void change("language", e.target.value)}
+      >
+        <SelectItem value="auto" text={t.settingAuto} />
+        {languages.map((l) => (
+          <SelectItem key={l} value={l} lang={l} text={messagesFor(l).languageName} />
+        ))}
+      </Select>
+      <Select
+        id={`${id}-formats`}
+        labelText={t.formats}
+        helperText={t.formatsHint}
+        value={value.locale}
+        disabled={pending !== null}
+        onChange={(e) => void change("locale", e.target.value)}
+      >
+        <SelectItem value="auto" text={t.settingAuto} />
+        {formats.map((f) => (
+          <SelectItem key={f} value={f} text={formatLabel(f)} />
+        ))}
+      </Select>
+      <FormError text={error} />
     </div>
   );
 }
 
 type ProfileTab = "display" | "security" | "apiKeys";
+const tabs: ProfileTab[] = ["display", "security", "apiKeys"];
 
-export function ProfilePage({ name, close }: { name: string; close: () => void }) {
+export function ProfilePage({ name }: { name: string }) {
   const [changed, setChanged] = useState(false);
   const [tab, setTab] = useState<ProfileTab>("display");
   // Counts 2FA changes, so the sections that ask for a code read the status again.
   const [twoFactorVersion, setTwoFactorVersion] = useState(0);
   const twoFactorChanged = () => setTwoFactorVersion((v) => v + 1);
   return (
-    <div className="mx-auto flex h-full max-w-md flex-col gap-4 overflow-y-auto p-4">
-      <PageHeader title={t.profile} close={close} />
-      <p className="text-sm text-ink-muted">{t.loggedInAs(name)}</p>
-      <Tabs
-        label={t.profileSections}
-        selected={tab}
-        onSelect={setTab}
-        tabs={[
-          { id: "display", label: t.tabDisplay, panel: <DisplaySettings /> },
-          {
-            id: "security",
-            label: t.tabSecurity,
-            panel: (
-              <>
-                <h2 className="font-semibold">{t.changePassword}</h2>
-                {changed && (
-                  <p role="status" className="text-sm text-ok">
-                    {t.passwordChanged}
-                  </p>
-                )}
-                <PasswordForm done={() => setChanged(true)} />
-                <h2 className="font-semibold">{t.twoFactor}</h2>
-                <TwoFactorSetup user={name} onChange={twoFactorChanged} />
-                <h2 className="font-semibold">{t.passkeys}</h2>
-                <PasskeySection twoFactorVersion={twoFactorVersion} />
-              </>
-            ),
-          },
-          { id: "apiKeys", label: t.apiKeys, panel: <ApiKeySection twoFactorVersion={twoFactorVersion} /> },
-        ]}
-      />
+    <div className="accounts-page">
+      <div className="page">
+        <header className="page-header">
+          <h1 className="page-header__title type-heading-04">{t.profile}</h1>
+          <p className="page-header__intro app-text-secondary">{t.loggedInAs(name)}</p>
+        </header>
+        {/* Every panel stays mounted (Carbon hides the inactive ones), so a
+            started 2FA setup or a new key survives a switch of tabs. */}
+        <Tabs selectedIndex={tabs.indexOf(tab)} onChange={({ selectedIndex }) => setTab(tabs[selectedIndex] ?? "display")}>
+          <TabList
+            aria-label={t.profileSections}
+            contained
+            leftOverflowButtonProps={{ "aria-label": t.carbon.scrollLeft }}
+            rightOverflowButtonProps={{ "aria-label": t.carbon.scrollRight }}
+          >
+            <Tab>{t.tabDisplay}</Tab>
+            <Tab>{t.tabSecurity}</Tab>
+            <Tab>{t.apiKeys}</Tab>
+          </TabList>
+          {/* A contained tab's panel is a layer of its own: the fields in it sit on the next one. */}
+          <TabPanels>
+            <TabPanel className="profile-panel">
+              <Layer>
+                <DisplaySettings />
+              </Layer>
+            </TabPanel>
+            <TabPanel className="profile-panel">
+              <Layer>
+                <section className="page__section">
+                  <h2 className="type-heading-03">{t.changePassword}</h2>
+                  {changed && <Success text={t.passwordChanged} />}
+                  <PasswordForm done={() => setChanged(true)} />
+                </section>
+                <section className="page__section">
+                  <h2 className="type-heading-03">{t.twoFactor}</h2>
+                  <TwoFactorSetup user={name} status onChange={twoFactorChanged} />
+                </section>
+                <section className="page__section">
+                  <h2 className="type-heading-03">{t.passkeys}</h2>
+                  <PasskeySection twoFactorVersion={twoFactorVersion} />
+                </section>
+              </Layer>
+            </TabPanel>
+            <TabPanel className="profile-panel">
+              <Layer>
+                <ApiKeySection twoFactorVersion={twoFactorVersion} />
+              </Layer>
+            </TabPanel>
+          </TabPanels>
+        </Tabs>
+      </div>
     </div>
   );
 }
@@ -217,36 +260,74 @@ function twoFactorError(err: unknown): string {
 }
 
 /**
- * The new recovery codes, shown once, with downloads made in the browser.
- * Only "I have saved the codes" leaves the view.
+ * The new recovery codes, shown once in a Modal, with downloads made in the
+ * browser. Only "I have saved the codes" leaves it: Escape, a click outside
+ * and the (hidden) close button do nothing.
  */
 export function RecoveryCodes({ sheet, done }: { sheet: RecoverySheet; done: () => void }) {
   return (
-    <div className="flex flex-col gap-3">
-      <h3 className="font-semibold">{t.twoFactorRecovery}</h3>
-      <p className="text-sm text-ink-muted">{t.twoFactorRecoveryText}</p>
-      <pre className="rounded-md bg-surface-hover p-3 text-xs">{sheet.codes.join("\n")}</pre>
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className={secondary}
-          onClick={() => saveFile(recoveryPdf(sheet), recoveryFileName(sheet.user, sheet.createdAt, "pdf"), "application/pdf")}>
-          {t.twoFactorDownloadPdf}
-        </button>
-        <button type="button" className={secondary}
-          onClick={() => saveFile(recoveryText(sheet), recoveryFileName(sheet.user, sheet.createdAt, "txt"), "text/plain;charset=utf-8")}>
-          {t.twoFactorDownloadTxt}
-        </button>
+    <AppModal
+      size="sm"
+      className="recovery-modal"
+      modalHeading={t.twoFactorRecovery}
+      primaryButtonText={t.twoFactorCodesSaved}
+      preventCloseOnClickOutside
+      onRequestClose={() => undefined}
+      onRequestSubmit={done}
+    >
+      <div className="modal-stack">
+        <p>{t.twoFactorRecoveryText}</p>
+        <CodeSnippet
+          type="multi"
+          className="recovery-modal__codes"
+          copyText={sheet.codes.join("\n")}
+          aria-label={t.twoFactorRecovery}
+          copyButtonDescription={t.carbon.copy}
+          feedback={t.carbon.copied}
+          showMoreText={t.carbon.showMore}
+          showLessText={t.carbon.showLess}
+        >
+          {sheet.codes.join("\n")}
+        </CodeSnippet>
+        <div className="profile-actions">
+          <Button
+            kind="tertiary"
+            size="md"
+            renderIcon={DocumentPdf}
+            onClick={() => saveFile(recoveryPdf(sheet), recoveryFileName(sheet.user, sheet.createdAt, "pdf"), "application/pdf")}
+          >
+            {t.twoFactorDownloadPdf}
+          </Button>
+          <Button
+            kind="tertiary"
+            size="md"
+            renderIcon={Document}
+            onClick={() => saveFile(recoveryText(sheet), recoveryFileName(sheet.user, sheet.createdAt, "txt"), "text/plain;charset=utf-8")}
+          >
+            {t.twoFactorDownloadTxt}
+          </Button>
+        </div>
       </div>
-      <button type="button" className={`${primary} self-start`} onClick={done}>{t.twoFactorCodesSaved}</button>
-    </div>
+    </AppModal>
   );
 }
 
 /**
  * Turns two-factor authentication on or off. onChange is called with the new
  * state after confirming or disabling; onDone after the recovery codes of a
- * new setup were saved.
+ * new setup were saved. status shows a tag with the current state.
  */
-export function TwoFactorSetup({ user, onDone, onChange }: { user: string; onDone?: () => void; onChange?: (enabled: boolean) => void }) {
+export function TwoFactorSetup({
+  user,
+  status = false,
+  onDone,
+  onChange,
+}: {
+  user: string;
+  status?: boolean;
+  onDone?: () => void;
+  onChange?: (enabled: boolean) => void;
+}) {
   const [state, setState] = useState<TwoFactorSetupState | null>(null);
   const [setup, setSetup] = useState<TwoFactorSetupState | null>(null);
   const [recovery, setRecovery] = useState<RecoverySheet | null>(null);
@@ -254,6 +335,7 @@ export function TwoFactorSetup({ user, onDone, onChange }: { user: string; onDon
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const id = useId();
 
   // Dated when the codes arrive, so every download shows the same time.
   const sheetFor = (codes: string[]): RecoverySheet => ({ user, origin: window.location.origin, createdAt: new Date(), codes });
@@ -302,56 +384,99 @@ export function TwoFactorSetup({ user, onDone, onChange }: { user: string; onDon
     finally { setBusy(false); }
   };
 
-  if (!state) return <p className="text-sm text-ink-muted">{t.loading}</p>;
-  if (recovery) return <RecoveryCodes sheet={recovery} done={() => { setRecovery(null); onDone?.(); }} />;
+  if (!state) return error ? <FormError text={error} /> : <p className="app-text-secondary">{t.loading}</p>;
+  const tag = status && (
+    <div>
+      <Tag size="md" type={state.enabled ? "green" : "gray"}>
+        {state.enabled ? t.twoFactorStateOn : t.twoFactorStateOff}
+      </Tag>
+    </div>
+  );
+  // The codes sit in a Modal above the page; the section below already
+  // shows the new state.
+  const codes = recovery && <RecoveryCodes sheet={recovery} done={() => { setRecovery(null); onDone?.(); }} />;
+  const codeInput = (suffix: string, recoveryCodes: boolean) => (
+    <TextInput
+      id={`${id}-${suffix}`}
+      labelText={t.twoFactorCode}
+      required
+      autoComplete="one-time-code"
+      {...(recoveryCodes ? { autoCapitalize: "none", spellCheck: false } : { inputMode: "numeric" as const })}
+      value={code}
+      onChange={(e) => setCode(e.target.value)}
+    />
+  );
+
   if (!state.enabled) {
     if (!setup) return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-ink-muted">{t.twoFactorSetupText}</p>
-        <button type="button" className={primary} onClick={start} disabled={busy}>{t.twoFactorSetup}</button>
-        {error && <p role="alert" className="text-danger">{error}</p>}
+      <div className="profile-form">
+        {codes}
+        {tag}
+        <p className="app-text-secondary">{t.twoFactorSetupText}</p>
+        <div>
+          <Button onClick={start} disabled={busy}>{t.twoFactorSetup}</Button>
+        </div>
+        <FormError text={error} />
       </div>
     );
     return (
-      <div className="flex flex-col gap-3">
-        {setup.qrDataUrl && <img src={setup.qrDataUrl} alt={t.twoFactorQR} className="h-56 w-56 self-center rounded bg-white p-2" />}
-        <p className="text-sm text-ink-muted">{t.twoFactorSetupText}</p>
-        <p className="text-sm text-ink-muted">{t.twoFactorManualKey}</p>
-        <code className="break-all rounded-md bg-surface-hover p-2 font-mono text-xs select-all">{setup.secret}</code>
-        <form className="flex flex-col gap-3" onSubmit={confirm}>
-          <label className="flex flex-col gap-1">{t.twoFactorCode}
-            <input className={input} inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} />
-          </label>
-          {error && <p role="alert" className="text-danger">{error}</p>}
-          <button type="submit" className={primary} disabled={busy}>{t.twoFactorConfirm}</button>
-        </form>
+      <div className="profile-form">
+        {codes}
+        {tag}
+        {setup.qrDataUrl && <img src={setup.qrDataUrl} alt={t.twoFactorQR} className="two-factor__qr" />}
+        <p className="app-text-secondary">{t.twoFactorSetupText}</p>
+        <p className="app-text-secondary">{t.twoFactorManualKey}</p>
+        <CodeSnippet
+          type="single"
+          className="two-factor__key"
+          copyText={setup.secret}
+          aria-label={t.twoFactorManualKey}
+          copyButtonDescription={t.carbon.copy}
+          feedback={t.carbon.copied}
+        >
+          {setup.secret}
+        </CodeSnippet>
+        <Form className="profile-form" onSubmit={confirm}>
+          {codeInput("confirm", false)}
+          <FormError text={error} />
+          <div>
+            <Button type="submit" disabled={busy}>{t.twoFactorConfirm}</Button>
+          </div>
+        </Form>
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm text-ok">{t.twoFactorOn}</p>
-      {state.admin ? <p className="text-sm text-ink-muted">{t.twoFactorAdminRequired}</p> : (
+    <div className="profile-form">
+      {codes}
+      {tag}
+      {state.admin ? <p className="app-text-secondary">{t.twoFactorAdminRequired}</p> : (
         <>
-          <form className="flex flex-col gap-3" onSubmit={regenerate}>
-            <label className="flex flex-col gap-1">{t.twoFactorCode}
-              <input className={input} inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} />
-            </label>
-            <button type="submit" className={primary} disabled={busy}>{t.twoFactorRegenerate}</button>
-          </form>
-          <form className="flex flex-col gap-3 border-t border-line pt-4" onSubmit={disable}>
-            <p className="text-sm text-ink-muted">{t.twoFactorDisableText}</p>
-            <label className="flex flex-col gap-1">{t.currentPassword}
-              <input className={input} type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1">{t.twoFactorCode}
-              <input className={input} required autoComplete="one-time-code" autoCapitalize="none" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} />
-            </label>
-            <button type="submit" className="self-start rounded-md border border-danger-line px-3 py-1.5 text-sm text-danger hover:bg-danger-soft" disabled={busy}>{t.twoFactorDisable}</button>
-          </form>
+          <Form className="profile-form" onSubmit={regenerate}>
+            {codeInput("regenerate", false)}
+            <div>
+              <Button type="submit" kind="secondary" disabled={busy}>{t.twoFactorRegenerate}</Button>
+            </div>
+          </Form>
+          <Form className="profile-form profile-form--divided" onSubmit={disable}>
+            <p className="app-text-secondary">{t.twoFactorDisableText}</p>
+            <PasswordInput
+              id={`${id}-password`}
+              labelText={t.currentPassword}
+              showPasswordLabel={t.carbon.showPassword}
+              hidePasswordLabel={t.carbon.hidePassword}
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            {codeInput("disable", true)}
+            <div>
+              <Button type="submit" kind="danger--tertiary" disabled={busy}>{t.twoFactorDisable}</Button>
+            </div>
+          </Form>
         </>
       )}
-      {error && <p role="alert" className="text-danger">{error}</p>}
+      <FormError text={error} />
     </div>
   );
 }

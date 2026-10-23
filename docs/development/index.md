@@ -25,7 +25,8 @@ create a throwaway database per test; the user in `TEST_DATABASE_URL` needs
 
 ## Web UI
 
-The UI lives in `web/`: React, TypeScript, Vite and Tailwind CSS, with pnpm
+The UI lives in `web/`: React, TypeScript, Vite and the Carbon Design System
+(`@carbon/react`; page layout in `web/src/layout.css`), with pnpm
 through corepack. `make web` builds it into `internal/web/ui/dist`, which is
 embedded into the binary; a plain `go build` without it serves a hint page.
 
