@@ -6,10 +6,12 @@
 //
 // Measuring: the frame is set to height 0 and the document's scroll height
 // read. At any other height, content sized relative to the frame (100vh,
-// height:100%) would grow with each fit. Every mail renders in quirks mode
-// (the server's <base> precedes any doctype), where document.scrollingElement
-// is the body, not <html>. While measuring, the box around the frame keeps
-// its height, so the scroller around it does not lose its scroll position.
+// height:100%) would grow with each fit. A mail with a doctype renders in
+// standards mode (the server puts its <base> after the doctype), one without
+// in quirks mode. document.scrollingElement is <html> in the one and the body
+// in the other, so the measuring goes by it. While measuring, the box around
+// the frame keeps its height, so the scroller around it does not lose its
+// scroll position.
 
 /** Above this many CSS pixels the frame keeps the visible-area height and scrolls on its own. */
 export const FRAME_CAP = 50_000;
@@ -163,7 +165,7 @@ export interface FrameFit {
  * content resizes (images, fonts, details opening), on a width change of the
  * frame (window resize, rotation, the dark sheet's padding), on late image
  * loads and on details toggles (closing one does not resize the stretched
- * quirks-mode root). After LOOP_LIMIT height-changing fits in a row on
+ * root in quirks mode). After LOOP_LIMIT height-changing fits in a row on
  * content resizes alone (a CSS animation, say), it stops observing them and
  * keeps its height. It also installs the same-origin link blocker (click,
  * auxclick, dragstart).

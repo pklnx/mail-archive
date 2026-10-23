@@ -394,6 +394,56 @@ func TestMessageHTML(t *testing.T) {
 	}
 }
 
+// A mail with a doctype gets the preamble after it, so it renders in
+// standards mode (#206); the CSP and the sandbox are the same as without.
+func TestMessageHTMLDoctype(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	raw := crlf(`Message-ID: <doctype@x>
+From: Bob <bob@example.com>
+To: carol@example.com
+Subject: With doctype
+Date: Thu, 8 Oct 2026 10:00:00 +0000
+Content-Type: text/html; charset=utf-8
+
+<!DOCTYPE html>
+<html><body><p>Hi</p></body></html>
+`)
+	accs, err := f.st.ListAccountsByName(ctx, "alice")
+	if err != nil || len(accs) != 1 {
+		t.Fatalf("alice: %v %v", accs, err)
+	}
+	folder, err := f.st.GetOrCreateFolder(ctx, accs[0].ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, _, err := f.blobs.Put(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := store.Location{FolderID: folder.ID, UIDValidity: 1, UID: 10, Flags: []string{`\Seen`}}
+	if _, err := f.st.SaveBatch(ctx, folder.ID, 10, []store.MessageMeta{meta}, []store.Location{loc}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := f.get("/api/messages/" + blob.SHA256 + "/html")
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.HasPrefix(string(body), "<!DOCTYPE html>"+htmlPreamble) || !strings.Contains(string(body), "<html><body><p>Hi</p>") {
+		t.Errorf("body = %q", body)
+	}
+	csp := resp.Header.Get("Content-Security-Policy")
+	if got := cspDirective(csp, "sandbox"); got != "allow-same-origin allow-popups allow-popups-to-escape-sandbox" {
+		t.Errorf("sandbox = %q", got)
+	}
+	if got := cspDirective(csp, "base-uri"); got != "'none'" {
+		t.Errorf("base-uri = %q", got)
+	}
+}
+
 // cspDirective returns the sources of one directive of a CSP header.
 func cspDirective(csp, name string) string {
 	for _, d := range strings.Split(csp, ";") {

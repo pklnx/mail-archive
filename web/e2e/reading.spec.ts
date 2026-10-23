@@ -89,8 +89,9 @@ async function addToMail(page: Page, markup: string, where: "start" | "end", ima
   await page.route(images ? /\/api\/messages\/[0-9a-f]{64}\/html\?images=1$/ : /\/api\/messages\/[0-9a-f]{64}\/html(\?[^#]*)?$/, async (route) => {
     const response = await route.fetch();
     const body = await response.text();
-    // The preamble (<base> and the height reset) is the first line.
-    const at = body.indexOf("\n") + 1;
+    // The preamble (<base> and the height reset) ends with its own line; it follows the mail's doctype, if any.
+    const end = "</style>\n";
+    const at = body.indexOf(end) + end.length;
     await route.fulfill({ response, body: where === "start" ? body.slice(0, at) + markup + body.slice(at) : body + markup });
   });
 }
@@ -146,7 +147,7 @@ async function scrollers(page: Page): Promise<string[]> {
 interface Fit {
   /** The frame's inner height (its document's viewport). */
   frame: number;
-  /** The document's scroll height (quirks mode: the body's). */
+  /** The document's scroll height (the scrolling element's: <html>, or the body in quirks mode). */
   content: number;
   /** What the document could scroll inside the frame. */
   overflow: number;
@@ -180,6 +181,18 @@ async function fitted(page: Page): Promise<Fit> {
     })
     .toBe(true);
   return (await fitOf(page))!;
+}
+
+/** The frame's document: its rendering mode, the element that scrolls it and the head's first elements. */
+function modeOf(page: Page) {
+  return frameOf(page).evaluate((f: HTMLIFrameElement) => {
+    const doc = f.contentDocument!;
+    return {
+      compat: doc.compatMode,
+      scroller: doc.scrollingElement!.tagName,
+      head: [...doc.head.children].slice(0, 2).map((e) => e.tagName + (e.getAttribute("target") ?? "")),
+    };
+  });
 }
 
 const rect = (page: Page, selector: string) => page.locator(selector).first().evaluate((e) => e.getBoundingClientRect().toJSON() as DOMRect);
@@ -251,6 +264,26 @@ for (const size of sizes) {
       await expect(conversation.getByRole("button", { name: /earlier/ })).toHaveCount(0);
       // The longer conversation pushes the frame down; it keeps its height.
       expect((await fitted(page)).frame).toBe(fit.frame);
+    });
+
+    test("a mail with a doctype renders in standards mode and the frame fits it", async ({ page }) => {
+      await openLong(page);
+      // The preamble follows the doctype: <base target> and the reset style open the head.
+      await expect.poll(() => modeOf(page)).toEqual({ compat: "CSS1Compat", scroller: "HTML", head: ["BASE_blank", "STYLE"] });
+      const fit = await fitted(page);
+      expect(fit.frame).toBeGreaterThan(await page.evaluate(() => window.innerHeight));
+    });
+
+    test("a mail without a doctype renders in quirks mode and the frame fits it", async ({ page }) => {
+      await page.goto("/?q=weekend");
+      const list = page.getByRole("list", { name: "Messages" });
+      await expect(list.getByRole("button")).toHaveCount(1);
+      await list.getByRole("button").click();
+      // A single message has no conversation: wait for the heading and the frame's content.
+      await expect(page.getByRole("article").getByRole("heading", { level: 1 })).toHaveText(/^Photos from the weekend/);
+      await mailReady(page);
+      await expect.poll(() => modeOf(page)).toMatchObject({ compat: "BackCompat", scroller: "BODY" });
+      await fitted(page);
     });
 
     test("a wheel over the frame moves the message, and a link in the mail works on the first click", async ({ page, context }) => {
