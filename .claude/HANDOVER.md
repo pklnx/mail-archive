@@ -6,11 +6,17 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Open tickets
-- #209: neutralize declarative shadow roots on the server, and block links before the frame's `load`. No other open tickets.
+- #209: neutralize declarative shadow roots on the server, and block links before the frame's `load`.
+- #211: design system theme; waits for `@pklnx/design-system` to be published.
+- #213: `TestRecurringFillAPI` is flaky on main; replace the sleep polls.
+- #214: port the web hardening and the migration lock from paperless-go.
+- #215: process hygiene (release section, labels, `second-review` marker, signature rule).
+- #211 and #213-#215 belong to a separate cross-repository coordinator session (a comparison report with paperless-go and design-system); their plan and review flow is described in the issues.
+- That session relabelled #207, #210, #203-#205 and #209 from `enhancement` to `feature`.
 
 ## State (2026-10-23 evening)
 - Release v26.10-10 is out (#200, message view scrolling).
-- Release v26.10-11 is out on main e88dc92, image digest sha256:eeab5d41.... It contains:
+- Release v26.10-11 is out on main e88dc92, image digest sha256:eeab5d412f2a0013d0c162f274f8ff06192a38993fe56e057f602f5b3533361f. It contains:
   - #207, #203 part 1: a same-origin mail frame without scripts, a parent-side auto-height (`frameFit.ts`), a same-origin link blocker (click/auxclick/dragstart, `composedPath`), and a Fetch Metadata guard with a navigation allowlist in `protect`.
   - #210, #203 part 2: a compact header and the conversation overlay.
   - #208, #206: standards mode for mails with a doctype.
@@ -20,6 +26,7 @@ State of the work for the next session. Update before a session ends.
 - Stacking PRs on an in-review PR and rebasing them with `--onto` after the squash merge worked well under deadline.
 - e2e must never evaluate inside the sandboxed frame (`contentFrame`/`frame.evaluate`). It causes CI-only "Blocked script execution in 'about:blank'" failures. Read via `iframe.contentDocument` from the parent page.
 - Port 18181 contention between parallel agents: wait, never kill.
+- Two coordinator sessions are active on this repo. Check open issues and PRs before starting work, to avoid overlapping changes.
 
 ## Done (2026-10-23, evening)
 - Release v26.10-10: #200 (message view scrolling).
