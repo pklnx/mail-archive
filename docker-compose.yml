@@ -21,6 +21,11 @@ services:
       POSTGRES_DB: mailarchive
       POSTGRES_USER: mailarchive
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # PostgreSQL's builtin C.UTF-8 locale for a NEW database: how text sorts
+      # no longer depends on the image's C library, so an image update cannot
+      # invalidate the indexes (#145). Read only when the volume is empty; an
+      # existing database keeps its locale. See docs/guide/operations.md.
+      POSTGRES_INITDB_ARGS: --locale-provider=builtin --locale=C.UTF-8
     volumes:
       # PostgreSQL 18+ images keep data in a versioned subdirectory
       # (/var/lib/postgresql/<major>/docker), so the volume is mounted one
@@ -46,9 +51,21 @@ services:
     image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
     restart: unless-stopped
     command: ["serve", "--listen", ":8080"]
+    # Docker's default of 10 s is too short for `serve`: on SIGTERM it gives
+    # open HTTP requests 10 s and SMTP connections 30 s, then stores a message
+    # still in transfer and records the outcome of syncs and fills it cut off.
+    # 30 s plus 15 s for those last writes. See docs/guide/operations.md.
+    stop_grace_period: 45s
+    # No process in the container can gain privileges (setuid binaries).
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
+        # `docker compose up -d` and `docker compose restart postgres` restart
+        # web when postgres is recreated or restarted, so its start-up checks
+        # run again. `./ma` starts only postgres and does not trigger this.
+        restart: true
     environment:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
@@ -102,6 +119,9 @@ services:
     image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
     # One-shot CLI: not started by `docker compose up`, use `docker compose run`.
     profiles: ["cli"]
+    # No process in the container can gain privileges (setuid binaries).
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy

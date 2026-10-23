@@ -5,7 +5,8 @@ the web server, and a one-shot container for commands.
 
 ## Requirements
 
-- Docker with a current Docker Compose plugin. Images are published for
+- Docker with Docker Compose 2.19 or later (`docker compose version`); `./ma`
+  uses its `--progress` option. Images are published for
   `linux/amd64` and `linux/arm64`, so Apple Silicon Macs and a Raspberry Pi
   with a 64-bit system run them natively.
 - IMAP access to your mailboxes. Some providers need it enabled first or an
