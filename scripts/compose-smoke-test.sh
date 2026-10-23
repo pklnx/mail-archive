@@ -92,8 +92,25 @@ if [ "$(uname -s)" = Linux ]; then
 	fi
 fi
 
+echo "== hardening settings"
+# A new database uses PostgreSQL's builtin locale (POSTGRES_INITDB_ARGS), not
+# the image's C library.
+docker compose --progress quiet exec -T postgres psql -U mailarchive -d mailarchive -Atc \
+	"SELECT datlocprovider::text || '|' || COALESCE(datlocale, '') FROM pg_database WHERE datname = 'mailarchive'" > "$work/out"
+expect "$work/out" '^b\|C\.UTF-8$'
+# The one-shot CLI container (also in the release bundle's docker-compose.yml).
+docker compose --progress quiet --profile cli config mail-archive > "$work/out"
+expect "$work/out" 'no-new-privileges:true'
+
 echo "== first start, as in README.txt"
 docker compose --progress quiet up -d --wait web
+# The web container's settings; its ID is kept for the exit code after `stop`,
+# because stopped containers are not listed by `docker compose ps -q`.
+web_id=$(docker compose ps -q web)
+docker inspect -f '{{.HostConfig.SecurityOpt}}' "$web_id" > "$work/out"
+expect "$work/out" 'no-new-privileges:true'
+docker inspect -f '{{.Config.StopTimeout}}' "$web_id" > "$work/out"
+expect "$work/out" '^45$'
 WEB_PORT=$(docker compose port web 8080 | sed 's/.*://')
 status=$(curl -s -o /dev/null -w '%{http_code}' --retry 10 --retry-delay 1 --retry-all-errors "http://localhost:$WEB_PORT/api/status")
 if [ "$status" != 401 ]; then
@@ -103,6 +120,9 @@ fi
 # Stop it again: its scheduler would sync the test account on its own and
 # race ./ma sync below. The web API step starts it again.
 docker compose --progress quiet stop web
+# serve ended on SIGTERM by itself; 137 would mean Docker killed it.
+docker inspect -f '{{.State.ExitCode}}' "$web_id" > "$work/out"
+expect "$work/out" '^0$'
 
 docker run -d --rm --name "$imap" --network "${COMPOSE_PROJECT_NAME}_default" \
 	-v "$work/imap-testserver:/imap-testserver:ro" \
