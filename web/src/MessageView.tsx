@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Accordion, AccordionItem, Button, IconButton, OperationalTag, SkeletonText, Tag, Tooltip } from "@carbon/react";
 import { ArrowDown, ChevronDown, ChevronUp, Document, Download, Html, Image, TextAlignLeft } from "@carbon/icons-react";
 import { getConversation, getMessage, messageURL, type ConversationEntry, type Location, type MessageDetail, type Part } from "./api";
@@ -396,7 +396,14 @@ function ConversationSection({ id, open }: { id: string; open: (id: string) => v
   const [showEarlier, setShowEarlier] = useState(false);
   const [showLater, setShowLater] = useState(false);
   // The first message a toggle reveals gets the focus: the toggle goes away.
+  // Once: later renders (the gate flips on every scroll) must not take it back.
   const [focusId, setFocusId] = useState("");
+  const list = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    if (!focusId) return;
+    list.current?.querySelector<HTMLElement>(`[data-id="${focusId}"]`)?.focus();
+    setFocusId("");
+  }, [focusId]);
   if (res.status === "loading") return null;
   if (res.status === "error") {
     return <p className="conversation__note app-text-error">{t.loadConversationFailed(res.error.message)}</p>;
@@ -440,7 +447,7 @@ function ConversationSection({ id, open }: { id: string; open: (id: string) => v
           )}
         </div>
       )}
-      <ol className="conversation__list">
+      <ol ref={list} className="conversation__list">
         {shown.map((m) => {
           const self = m.relation === "self";
           const label = relationLabel(m.relation);
@@ -465,12 +472,7 @@ function ConversationSection({ id, open }: { id: string; open: (id: string) => v
                   {line}
                 </div>
               ) : (
-                <button
-                  type="button"
-                  className="conversation__entry"
-                  ref={m.id === focusId ? (el) => el?.focus() : undefined}
-                  onClick={() => open(m.id)}
-                >
+                <button type="button" className="conversation__entry" data-id={m.id} onClick={() => open(m.id)}>
                   {line}
                 </button>
               )}

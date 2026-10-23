@@ -233,6 +233,7 @@ export function App({ user, logout }: Props) {
   const readerScroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (readerScroll.current) readerScroll.current.scrollTop = 0;
+    // The page scrolls only on phones; on desktop this is a no-op today.
     if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
   }, [state.m]);
 

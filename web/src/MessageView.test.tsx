@@ -331,6 +331,35 @@ describe("the frame gate (#200)", () => {
     expect(top).toBe(1400);
   });
 
+  it("does not take the focus back to a revealed conversation entry when the gate flips (regression)", async () => {
+    const n = (i: number) => String(i).repeat(64).slice(0, 64);
+    conversation = [1, 2, 3, 4, 5, 6].map((i) => ({
+      id: i === 4 ? id : n(i), subject: `Message ${i}`, from: "Sam Taylor <sam@example.org>",
+      sentAt: `2026-10-0${i}T09:00:00Z`, sortAt: `2026-10-0${i}T09:00:00Z`, relation: i === 4 ? "self" : "thread",
+    }));
+    const article = await show();
+    const section = await screen.findByRole("region", { name: t.conversation });
+    fireEvent.click(within(section).getByRole("button", { name: "Show 2 earlier messages" }));
+    const entry = document.activeElement;
+    expect(entry?.textContent).toContain("Message 1");
+
+    // The user moves on: the hint scrolls to the end, the gate opens and the message re-renders.
+    const hint = within(article).getByRole("button", { name: t.showFullMessage });
+    hint.focus();
+    fireEvent.click(hint);
+    act(() => void window.dispatchEvent(new Event("scroll")));
+    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
+    expect(document.activeElement).not.toBe(entry);
+    expect(top).toBe(1400);
+
+    // And again on the way back up.
+    act(() => {
+      top = 0;
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(document.activeElement).not.toBe(entry);
+  });
+
   it("does not gate the plain-text body", async () => {
     detail = message({ hasHtml: false });
     const article = await show();

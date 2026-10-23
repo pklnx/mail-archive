@@ -143,6 +143,12 @@ for (const size of sizes) {
       await conversation.getByRole("button", { name: "Show 2 earlier messages" }).click();
       await expect(conversation.getByRole("listitem")).toHaveCount(5);
       await expect(conversation.getByRole("button", { name: /earlier/ })).toHaveCount(0);
+      // The revealed entry got the focus once; it does not pull the view
+      // back when the hint scrolls to the end (regression).
+      await hint.click();
+      await expect(hint).toHaveCount(0);
+      expect(await scrollTop(page, phone)).toBeGreaterThan(0);
+      await expect(page.locator(".conversation__entry:focus")).toHaveCount(0);
     });
 
     test("the frame is gated until the scroller is at its end, and the next message starts at the top", async ({ page }) => {
