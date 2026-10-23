@@ -30,6 +30,15 @@ info:
     `"twoFactorSetupRequired": true` everywhere except the 2FA setup
     endpoints.
 
+    Browser requests to `/api` answer `403` by their Fetch Metadata when
+    they are a prefetch (`Sec-Purpose: prefetch`), a navigation
+    (`Sec-Fetch-Mode: navigate`, or `Sec-Fetch-Dest` `document`, `iframe`,
+    `frame`, `embed` or `object`) other than a `GET` or `HEAD` of
+    `/api/messages/{sha}/html`, `/raw`, `/parts/{n}` or `/api/openapi.json`,
+    or for anything but a fetch (`Sec-Fetch-Dest` other than `empty`). Such
+    a request is refused before anything is done or logged. Requests
+    without these headers are not affected.
+
     Searches, opened messages, downloads, logins and changes are recorded in
     the audit log. If an entry cannot be written, the request answers `503`
     with "the audit log cannot be written; nothing was done", and nothing
@@ -2387,12 +2396,16 @@ paths:
         - apiKey: [read]
       summary: The HTML body
       description: |
-        For a sandboxed iframe. The Content-Security-Policy blocks scripts and
-        remote content; remote images only with `images=1`. Inline images
+        For a sandboxed iframe. The Content-Security-Policy blocks scripts
+        (`script-src 'none'`) and remote content; remote images only with
+        `images=1`. Its sandbox allows the same origin, so the web UI can
+        size the frame to the mail, but never scripts. Inline images
         (`cid:` references to PNG, JPEG, GIF or WebP parts, up to 10 MiB of
         `data:` URLs per response) are embedded as `data:` URLs; other,
         unknown or omitted references become `data:,`. The frame needs no
-        request to the parts endpoint.
+        request to the parts endpoint; requests it makes to `/api` (images,
+        links) are refused with `403` by their Fetch Metadata (see the API
+        description).
       parameters:
         - name: images
           in: query

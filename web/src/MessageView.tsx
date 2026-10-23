@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Accordion, AccordionItem, Button, IconButton, OperationalTag, SkeletonText, Tag, Tooltip } from "@carbon/react";
-import { ArrowDown, ChevronDown, ChevronUp, Document, Download, Html, Image, TextAlignLeft } from "@carbon/icons-react";
+import { ChevronDown, ChevronUp, Document, Download, Html, Image, TextAlignLeft } from "@carbon/icons-react";
 import { getConversation, getMessage, messageURL, type ConversationEntry, type Location, type MessageDetail, type Part } from "./api";
 import { fileSize, locationLabel, longDate, originText, retentionDay, senderName, shortDate } from "./format";
 import { attachmentKind, parseMailText, splitLinks, type TextBlock } from "./mailText";
 import { useAsync } from "./useAsync";
 import { twoPane, useMediaQuery } from "./breakpoints";
 import { foldConversation } from "./conversationFold";
+import { attachFrameFit } from "./frameFit";
 import { t } from "./i18n";
 
 interface Props {
@@ -48,7 +49,19 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
   const delivery = msg.locations.filter((l) => l.envelope || l.filled);
   const html = msg.hasHtml && showHTML;
   const body = useRef<HTMLDivElement>(null);
-  const gate = useFrameGate(body, html);
+  // The frame grows with the mail (frameFit.ts). A replaced frame (images
+  // toggle, text and back) starts at the last fitted height.
+  const fitted = useRef("");
+  useLayoutEffect(() => {
+    const box = body.current;
+    const frame = box?.querySelector("iframe");
+    if (!box || !frame) return;
+    const fit = attachFrameFit(frame, box, fitted.current);
+    return () => {
+      fitted.current = fit.height();
+      fit.detach();
+    };
+  }, [html, images]);
 
   const recipients = (
     <>
@@ -212,30 +225,24 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
       {html ? (
         // In dark mode the mail's own (mostly white) page sits as a sheet on
         // the dark background instead of filling the pane edge to edge.
-        // A click on the gated frame lands here (the frame takes no pointer
-        // events) and shows the whole frame first.
-        <div ref={body} className="message__html" onClick={gate.gated ? gate.showAll : undefined}>
-          {/* No allow-scripts and no allow-same-origin: the mail's HTML runs with
-              an opaque origin and cannot reach the API. The server's CSP adds
-              another layer (no scripts, no forms, no remote content). */}
+        <div ref={body} className="message__html">
+          {/* The same origin, so the app can measure the document and size the
+              frame to it (#203); never allow-scripts, which together with the
+              same origin would undo the sandbox. No script runs in the mail:
+              the sandbox, and the server's CSP (script-src 'none', no forms,
+              no remote content) as a second layer. Its requests to the API
+              are refused by the server (Fetch Metadata) and its links into
+              the app by frameFit.ts. The same sandbox as the server's CSP. */}
           <iframe
             // A new element per mode: changing src would add a browser history
             // entry, so Back would toggle images instead of leaving the message.
             key={images ? "with-images" : "no-images"}
             title={t.messageContent}
             className="message__frame"
-            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
             referrerPolicy="no-referrer"
             src={messageURL.html(msg.id, images)}
-            // Until the frame fills the visible area, wheel and touch over it
-            // move the page or pane, not the mail inside it (#200).
-            style={gate.gated ? { pointerEvents: "none" } : undefined}
           />
-          {gate.gated && (
-            <Button kind="secondary" size="md" className="message__full" renderIcon={ArrowDown} onClick={gate.showAll}>
-              {t.showFullMessage}
-            </Button>
-          )}
         </div>
       ) : (
         <div className="message__text">
@@ -244,62 +251,6 @@ function Message({ msg, open }: { msg: MessageDetail; open: (id: string) => void
       )}
     </article>
   );
-}
-
-/**
- * The element the message scrolls in: the nearest ancestor that scrolls on
- * its own (the reading pane from 48rem), else the page (phones).
- */
-function mainScroller(el: Element): Element {
-  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
-    const y = getComputedStyle(p).overflowY;
-    if (y === "auto" || y === "scroll") return p;
-  }
-  return document.scrollingElement ?? document.documentElement;
-}
-
-/** Whether a scroller is at its end (1px slack for fractional sizes). */
-function atEnd(s: Element): boolean {
-  return s.scrollTop >= s.scrollHeight - s.clientHeight - 1;
-}
-
-/**
- * The gate of the HTML frame (#200). The frame is as tall as the visible
- * area, below the header, so it fills that area exactly when the main
- * scroller is at its end. Until then it is gated: it takes no pointer
- * events, so wheel and touch over it move the main scroller, and a click
- * on it, or on the hint, scrolls to the end first. The frame has no script
- * and no same origin, so this is all on the parent's side. Keyboard focus
- * into the frame is not affected.
- */
-function useFrameGate(box: RefObject<HTMLElement | null>, on: boolean) {
-  const [gated, setGated] = useState(true);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!on || !el) return;
-    const check = () => setGated(!atEnd(mainScroller(el)));
-    check();
-    // Capture: element scrolls do not bubble. The page's scroll reaches window too.
-    window.addEventListener("scroll", check, { capture: true, passive: true });
-    window.addEventListener("resize", check);
-    // The content grows when the conversation loads or Details opens.
-    const ro = new ResizeObserver(check);
-    ro.observe(el.closest("article") ?? el);
-    return () => {
-      window.removeEventListener("scroll", check, { capture: true });
-      window.removeEventListener("resize", check);
-      ro.disconnect();
-    };
-  }, [box, on]);
-  const showAll = useCallback(() => {
-    const el = box.current;
-    if (!el) return;
-    // To the end, not frame.scrollIntoView: the dark sheet's padding and the
-    // safe area below the page would leave the scroller short of its end.
-    const s = mainScroller(el);
-    s.scrollTop = s.scrollHeight;
-  }, [box]);
-  return { gated: on && gated, showAll };
 }
 
 /**
@@ -396,7 +347,7 @@ function ConversationSection({ id, open }: { id: string; open: (id: string) => v
   const [showEarlier, setShowEarlier] = useState(false);
   const [showLater, setShowLater] = useState(false);
   // The first message a toggle reveals gets the focus: the toggle goes away.
-  // Once: later renders (the gate flips on every scroll) must not take it back.
+  // Once: later renders of the message must not take it back.
   const [focusId, setFocusId] = useState("");
   const list = useRef<HTMLOListElement>(null);
   useEffect(() => {

@@ -208,17 +208,68 @@ applies.
 ### HTML mail
 
 HTML bodies are served for an iframe with a strict Content-Security-Policy
-and the `sandbox` directive: no scripts, no forms, no plugins, no access to
-the API. Remote content is blocked unless you click **Load remote images**
-for one message. Images embedded in the mail (`cid:`) are written into the
-HTML as `data:` URLs, so the frame makes no request to the server for them;
-`img-src` allows only `data:` (and `https:`/`http:` after **Load remote
-images**). Only PNG, JPEG, GIF and WebP are embedded, up to 10 MiB per
-message; SVG and every other type become an empty image. The frame has no
-origin of its own, so its requests carry no session cookie: the parts
-endpoint still requires a login and answers them with `401`.
+(`default-src 'none'; script-src 'none'`, no forms, no plugins) and the
+`sandbox` directive. Remote content is blocked unless you click **Load
+remote images** for one message. Images embedded in the mail (`cid:`) are
+written into the HTML as `data:` URLs, so the frame makes no request to the
+server for them; `img-src` allows only `data:` (and `https:`/`http:` after
+**Load remote images**). Only PNG, JPEG, GIF and WebP are embedded, up to
+10 MiB per message; SVG and every other type become an empty image.
 Attachments are served with `sandbox` as well; only common image types are
 shown inline, everything else is a download.
+
+The sandbox allows the frame the app's origin (`allow-same-origin`) but
+never scripts, in the iframe's attribute and in the response's own CSP,
+which also applies when the URL is opened on its own. The web UI needs the
+same origin to read the height of the mail and make the frame as tall as
+it, so the message scrolls as one page. No script runs in the mail: the
+sandbox has no `allow-scripts`, and `script-src 'none'` is a second layer.
+The accepted cost: if a browser bug ever ran script in the frame, it would
+run with the app's origin and could use the API.
+
+With the same origin, requests the mail itself makes to the server carry
+the session cookie: an image on the app's own address (after **Load remote
+images**, `https:` matches it) or a link to it. Nobody can read the
+answers, but they would leave audit entries in your name, and some open
+IMAP connections. Two layers stop them:
+
+- The server refuses `/api` requests by their
+  [Fetch Metadata](https://developer.mozilla.org/en-US/docs/Glossary/Fetch_metadata_request_header)
+  with `403`, before anything is done or logged: every request that is not
+  a fetch of the app (an image, style, font, prefetch and so on), and every
+  navigation (a link, a frame) except to the routes a browser opens:
+  `GET /api/messages/{id}/html`, `…/raw`, `…/parts/{n}` and
+  `/api/openapi.json`. Requests without these headers (scripts, API
+  clients) are not affected.
+- The web UI cancels clicks, middle clicks and drags of links in the mail
+  that point into the app, also inside open shadow roots, and of
+  `javascript:`, `data:` and `vbscript:` links.
+
+What remains:
+
+- The context menu's "Open link in new tab" cannot be intercepted. On the
+  four routes above it can open or download a message, a part or an
+  `.eml` whose id (SHA-256) the mail's author already knows. That writes an
+  audit entry in your name and saves a file to your device. It reveals no
+  more to the author than clicking an external link in the mail would
+  (opening `/html?images=1` of the author's own mail loads its remote
+  images).
+- The web UI cannot see into a closed declarative shadow root
+  (`<template shadowrootmode="closed">`) in the mail, so one click on a
+  link inside it is a real navigation and reaches the four routes above,
+  with the same effect as the context menu; every other route answers
+  `403`. Neutralizing `shadowrootmode` on the server is a planned
+  follow-up.
+- Links before the frame's `load`: the link blocker is installed when the
+  frame has loaded. A remote image that never answers (after **Load remote
+  images**) delays `load`; until then a click on a same-origin link is a
+  real navigation, which the server's rule above still limits to the four
+  routes. The frame also keeps its earlier height until then.
+- Browsers without Fetch Metadata (Safari before 16.4) do not send the
+  headers, so the server cannot tell these requests apart: there, after
+  **Load remote images**, an image in the mail can make such requests, and
+  so can a link the web UI cannot cancel (the context menu, a closed shadow
+  root, before `load`).
 
 ### Login checks
 

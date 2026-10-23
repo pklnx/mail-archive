@@ -357,32 +357,39 @@ func TestMessageHTML(t *testing.T) {
 	resp := f.get("/api/messages/" + f.ids["rich"] + "/html")
 	body, _ := io.ReadAll(resp.Body)
 	csp := resp.Header.Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "sandbox", "form-action 'none'"} {
-		if !strings.Contains(csp, want) {
-			t.Errorf("CSP %q lacks %q", csp, want)
-		}
+	// Exactly: no scripts (also explicitly), no forms, no remote content; the
+	// sandbox allows the same origin (the app measures the frame) and popups
+	// (links), never scripts.
+	const want = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:" +
+		"; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'" +
+		"; sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+	if csp != want {
+		t.Errorf("CSP\n got %q\nwant %q", csp, want)
 	}
 	// Remote images are blocked: no bare scheme sources like "https:".
 	if strings.Contains(csp, "allow-scripts") || bareScheme.MatchString(csp) {
 		t.Errorf("CSP too permissive: %q", csp)
 	}
+	if got := cspDirective(csp, "sandbox"); got != "allow-same-origin allow-popups allow-popups-to-escape-sandbox" {
+		t.Errorf("sandbox = %q", got)
+	}
+	// The preamble: links in a new tab, and the height reset; then the mail.
 	// The cid: logo is embedded; the frame makes no request for it.
-	if !bytes.Contains(body, []byte(`<img src="data:image/png;base64,iVBORw0KGgo=">`)) ||
-		!bytes.HasPrefix(body, []byte(`<base target="_blank">`)) ||
+	if !bytes.HasPrefix(body, []byte(`<base target="_blank"><style>html,body{height:auto!important;min-height:0!important}</style>`+"\n")) ||
+		!bytes.Contains(body, []byte(`<img src="data:image/png;base64,iVBORw0KGgo=">`)) ||
 		bytes.Contains(body, []byte("parts/")) || bytes.Contains(body, []byte("cid:")) {
 		t.Errorf("body = %s", body)
 	}
-	if got := cspDirective(csp, "img-src"); got != "data:" {
-		t.Errorf("img-src = %q, want data:", got)
-	}
-	if !strings.Contains(csp, "; sandbox allow-popups allow-popups-to-escape-sandbox") || strings.Contains(csp, "allow-same-origin") {
-		t.Errorf("sandbox changed: %q", csp)
+	if got := resp.Header.Get("X-Frame-Options"); got != "SAMEORIGIN" {
+		t.Errorf("X-Frame-Options = %q", got)
 	}
 
 	resp = f.get("/api/messages/" + f.ids["rich"] + "/html?images=1")
 	csp = resp.Header.Get("Content-Security-Policy")
-	if !bareScheme.MatchString(csp) || cspDirective(csp, "img-src") != "data: https: http:" ||
-		strings.Contains(csp, "allow-scripts") || strings.Contains(csp, "allow-same-origin") {
+	if want := strings.Replace(want, "img-src data:", "img-src data: https: http:", 1); csp != want {
+		t.Errorf("images=1 CSP\n got %q\nwant %q", csp, want)
+	}
+	if strings.Contains(csp, "allow-scripts") || cspDirective(csp, "script-src") != "'none'" {
 		t.Errorf("images=1 CSP = %q", csp)
 	}
 }
