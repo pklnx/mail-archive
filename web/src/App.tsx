@@ -12,7 +12,7 @@ import { MessageList } from "./MessageList";
 import { LogPage } from "./LogPage";
 import { RetentionPage } from "./RetentionPage";
 import { MessageView } from "./MessageView";
-import { ActiveFilters, SearchFilters } from "./SearchFilters";
+import { ActiveFilters, QuickFilters, SearchFilters, editTarget, type FocusRequest } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
@@ -53,6 +53,19 @@ export function App({ user, logout }: Props) {
   // Open from the two-pane width up, closed on phones (maintainer decision on #195).
   const [filtersOpen, setFiltersOpen] = useState(() => matchesNow(twoPane));
   const filtersId = useId();
+  // Phones (one pane): the yes/no filters are one-tap quick filters and
+  // have no tag of their own. Follows rotation.
+  const phone = !useMediaQuery(twoPane);
+  // "Edit filters" opens the panel and asks it to focus the first visible
+  // tag's field; focusDone is the last request the panel has handled.
+  const [focusRequest, setFocusRequest] = useState<FocusRequest>({ field: "from", n: 0 });
+  const [focusDone, setFocusDone] = useState(0);
+  const editFilters = () => {
+    const field = editTarget(query, state.group === "1", phone);
+    if (!field) return;
+    setFiltersOpen(true);
+    setFocusRequest((r) => ({ field, n: r.n + 1 }));
+  };
   const [shortcuts, setShortcuts] = useState(false);
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
@@ -404,8 +417,19 @@ export function App({ user, logout }: Props) {
                 <Filter />
               </IconButton>
             </div>
-            {filtersOpen && <SearchFilters id={filtersId} query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />}
-            <ActiveFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
+            {phone && <QuickFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />}
+            {filtersOpen && (
+              <SearchFilters
+                id={filtersId}
+                query={query}
+                setQuery={setQuery}
+                group={state.group === "1"}
+                setGroup={setGroup}
+                focus={focusRequest.n > focusDone ? focusRequest : undefined}
+                onFocused={setFocusDone}
+              />
+            )}
+            <ActiveFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} quick={phone} onEdit={editFilters} />
             <div className="mail-pane__fill">
               <MessageList
                 filter={filter}

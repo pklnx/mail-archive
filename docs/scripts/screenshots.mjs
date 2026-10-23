@@ -290,6 +290,18 @@ for (const scheme of ["light", "dark"]) {
   await p.context().close();
 }
 
+{
+  // A phone: the list with the quick filter "Has attachment" selected and a
+  // From filter set, its tag next to "Edit filters".
+  const p = await page("light", phoneSize, { phone: true });
+  await p.goto(base + "/?q=from%3Asam%20has%3Aattachment");
+  await p.getByRole("group", { name: "Quick filters" }).getByRole("button", { name: "Has attachment", pressed: true }).waitFor();
+  await p.getByRole("list", { name: "Active filters" }).getByRole("button", { name: "Edit filters" }).waitFor();
+  await p.getByRole("list", { name: "Messages" }).getByRole("button", { name: /Photos from the weekend/ }).waitFor();
+  await shot(p, "mail-phone-filters");
+  await p.context().close();
+}
+
 await browser.close();
 if (errors.length) {
   console.error(errors.join("\n"));
