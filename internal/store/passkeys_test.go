@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,11 +107,14 @@ func sessionHash(t *testing.T) []byte {
 	return hash
 }
 
-// Logins with the same passkey and the same sign count at once. The check
-// is slow on purpose: without the row locks every login would read the old
-// count and succeed.
+// Two logins with the same passkey and the same sign count: the second
+// waits for the first (row locks) and is checked against the count the
+// first stored. The first holds inside its check until the second waits
+// for the lock; without the locks both would read the old count and
+// succeed.
 func TestPasskeyLoginsSerialized(t *testing.T) {
-	st := storetest.New(t)
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
 	ctx := context.Background()
 	alice, err := st.CreateUser(ctx, "alice", "h", false)
 	if err != nil {
@@ -120,32 +123,37 @@ func TestPasskeyLoginsSerialized(t *testing.T) {
 	if err := registerFake(t, st, alice.ID, "Phone", "cred-1"); err != nil {
 		t.Fatal(err)
 	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
 	verify := func(_, _, raw []byte) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
 		var c fakeCred
 		if err := json.Unmarshal(raw, &c); err != nil {
 			return nil, err
 		}
-		time.Sleep(50 * time.Millisecond)
 		if c.Count >= 1 {
 			return nil, errors.New("sign count did not increase")
 		}
 		return json.Marshal(fakeCred{Count: 1})
 	}
-	const n = 5
-	tokens := make([]string, n)
-	for i := range tokens {
-		if tokens[i], err = st.BeginPasskeyLogin(ctx, []byte(`{}`), time.Now().Add(time.Minute)); err != nil {
-			t.Fatal(err)
+	login := func() error {
+		token, err := st.BeginPasskeyLogin(ctx, []byte(`{}`), time.Now().Add(time.Minute))
+		if err != nil {
+			return err
 		}
+		_, err = st.CompletePasskeyLogin(ctx, token, []byte("cred-1"), verify, sessionHash(t), time.Now().Add(time.Hour), "")
+		return err
 	}
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	for i, token := range tokens {
-		wg.Go(func() {
-			_, errs[i] = st.CompletePasskeyLogin(ctx, token, []byte("cred-1"), verify, sessionHash(t), time.Now().Add(time.Hour), "")
-		})
-	}
-	wg.Wait()
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() { first <- login() }()
+	<-entered
+	go func() { second <- login() }()
+	waitForLockWait(t, conn, second)
+	close(release)
+	errs := []error{<-first, <-second}
 	ok := 0
 	for _, err := range errs {
 		switch {
@@ -155,15 +163,17 @@ func TestPasskeyLoginsSerialized(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	}
-	if ok != 1 {
-		t.Fatalf("%d of %d logins succeeded, want 1: %v", ok, n, errs)
+	if ok != 1 || errs[0] != nil {
+		t.Fatalf("logins: %v, want only the first to succeed", errs)
 	}
 }
 
-// Registrations at 9 passkeys at once, with a slow check: the user row is
-// locked, so only one gets the 10th place.
+// Two registrations at 9 passkeys: the user row is locked, so the second
+// waits for the first and then finds the limit reached. The first holds
+// inside its check until the second waits for the lock.
 func TestPasskeyLimitSerialized(t *testing.T) {
-	st := storetest.New(t)
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
 	ctx := context.Background()
 	alice, err := st.CreateUser(ctx, "alice", "h", false)
 	if err != nil {
@@ -174,8 +184,7 @@ func TestPasskeyLimitSerialized(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const n = 5
-	tokens := make([]string, n)
+	tokens := make([]string, 2)
 	for i := range tokens {
 		tokens[i], err = st.BeginPasskeyRegistration(ctx, alice.ID, fmt.Sprintf("New %d", i), time.Now().Add(time.Minute),
 			func(_ []byte, _ [][]byte) ([]byte, error) { return []byte(`{}`), nil })
@@ -183,17 +192,24 @@ func TestPasskeyLimitSerialized(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	for i, token := range tokens {
-		wg.Go(func() {
-			_, errs[i] = st.FinishPasskeyRegistration(ctx, alice.ID, token, func(_, _ []byte) ([]byte, []byte, error) {
-				time.Sleep(50 * time.Millisecond)
-				return fmt.Appendf(nil, "new-%d", i), []byte(`{}`), nil
-			})
+	entered, release := make(chan struct{}), make(chan struct{})
+	finish := func(i int, hold bool) error {
+		_, err := st.FinishPasskeyRegistration(ctx, alice.ID, tokens[i], func(_, _ []byte) ([]byte, []byte, error) {
+			if hold {
+				close(entered)
+				<-release
+			}
+			return fmt.Appendf(nil, "new-%d", i), []byte(`{}`), nil
 		})
+		return err
 	}
-	wg.Wait()
+	first, second := make(chan error, 1), make(chan error, 1)
+	go func() { first <- finish(0, true) }()
+	<-entered
+	go func() { second <- finish(1, false) }()
+	waitForLockWait(t, conn, second)
+	close(release)
+	errs := []error{<-first, <-second}
 	ok := 0
 	for _, err := range errs {
 		switch {
@@ -203,8 +219,8 @@ func TestPasskeyLimitSerialized(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 	}
-	if ok != 1 {
-		t.Fatalf("%d registrations succeeded, want 1: %v", ok, errs)
+	if ok != 1 || errs[0] != nil {
+		t.Fatalf("registrations: %v, want only the first to succeed", errs)
 	}
 }
 

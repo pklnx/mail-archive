@@ -81,14 +81,18 @@ func TestUntilFailsBeforeDeadline(t *testing.T) {
 
 func TestLimit(t *testing.T) {
 	near := func(got, want time.Duration) bool { return got <= want && got > want-time.Second }
-	if got := limit(&fakeTB{TB: t}); got != noDeadline {
+	if got := Limit(&fakeTB{TB: t}); got != noDeadline {
 		t.Errorf("no deadline: %v, want %v", got, noDeadline)
 	}
-	if got := limit(&fakeTB{TB: t, deadline: time.Now().Add(time.Minute)}); !near(got, time.Minute-margin) {
+	if got := Limit(&fakeTB{TB: t, deadline: time.Now().Add(time.Minute)}); !near(got, time.Minute-margin) {
 		t.Errorf("a minute left: %v, want %v", got, time.Minute-margin)
 	}
+	// Far from the deadline: a minute at most.
+	if got := Limit(&fakeTB{TB: t, deadline: time.Now().Add(time.Hour)}); got != maxWait {
+		t.Errorf("an hour left: %v, want %v", got, maxWait)
+	}
 	// Close to the deadline: half of what is left.
-	if got := limit(&fakeTB{TB: t, deadline: time.Now().Add(4 * time.Second)}); !near(got, 2*time.Second) {
+	if got := Limit(&fakeTB{TB: t, deadline: time.Now().Add(4 * time.Second)}); !near(got, 2*time.Second) {
 		t.Errorf("4 s left: %v, want 2 s", got)
 	}
 }

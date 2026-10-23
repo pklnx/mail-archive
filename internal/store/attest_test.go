@@ -12,6 +12,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // fenceClass is the attestation fence's lock class (attestFenceClass).
@@ -228,25 +229,31 @@ func TestAttestSnapshotLockTimeoutReleases(t *testing.T) {
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared($1, 0)", fenceClass); err != nil {
 		t.Fatal(err)
 	}
-	// A cancelled wait for the fence leaves no lock behind.
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		cancel()
-	}()
-	if err := st.WithAttestSnapshot(ctx, func(*store.AttestSnapshot) error { return nil }); err == nil {
+	// A cancelled wait for the fence leaves no lock behind. The snapshot
+	// is cancelled once it waits for the fence.
+	watch := connect(t, url)
+	done := make(chan error, 1)
+	go func() { done <- st.WithAttestSnapshot(ctx, func(*store.AttestSnapshot) error { return nil }) }()
+	waitForRow(t, watch, done, "the snapshot to wait for the fence", `SELECT count(*) FROM pg_locks
+		WHERE locktype = 'advisory' AND classid = $1 AND NOT granted
+		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, fenceClass)
+	cancel()
+	if err := <-done; err == nil {
 		t.Fatal("snapshot taken while a writer held the fence")
 	}
 	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// The closed connection's backend exits shortly after.
+	// The closed connection's backend exits shortly after. PostgreSQL
+	// gives no signal for that, so this polls, bounded by the test's wait
+	// limit.
 	var left int
-	for range 50 {
+	for deadline := time.Now().Add(testwait.Limit(t)); ; {
 		if err := writer.QueryRow(context.Background(),
 			"SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = $1", fenceClass).Scan(&left); err != nil {
 			t.Fatal(err)
 		}
-		if left == 0 {
+		if left == 0 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)

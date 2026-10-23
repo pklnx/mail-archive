@@ -3,6 +3,7 @@ package archive_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 func TestSyncSkipsLockedAndRemovedAccounts(t *testing.T) {
@@ -73,27 +75,38 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	}
 
 	// The clock jumps 20 minutes once the first syncs are done: then the
-	// 15-minute account is due again, the hourly one is not.
+	// 15-minute account is due again, the hourly one is not. Only the
+	// runner reads this clock; each read is counted and signalled.
 	var later atomic.Bool
+	var reads atomic.Int64
+	var read, synced testwait.Signal
 	now := func() time.Time {
+		reads.Add(1)
+		read.Notify()
 		if later.Load() {
 			return time.Now().Add(20 * time.Minute)
 		}
 		return time.Now()
 	}
 	r := &archive.Runner{Syncer: f.syncer, Schedule: archive.Schedule{Sync: time.Hour, SyncMin: 5 * time.Minute},
-		CheckEvery: 10 * time.Millisecond, Now: now}
+		CheckEvery: 10 * time.Millisecond, Now: now, AfterSync: synced.Notify}
 	ctx, cancel := context.WithCancel(f.ctx)
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
 
-	// The schedule syncs the enabled account once: its next run is due in
-	// an hour.
+	// The schedule syncs the enabled accounts once: the next run of "on"
+	// is due in an hour.
 	on, _ := f.account("on")
-	waitForRun(t, f, on.ID, "ok")
+	waitForRun(t, f, &synced, on.ID, "ok")
+	waitForRun(t, f, &synced, fast.ID, "ok")
 	first, _ := f.store.LastRuns(f.ctx)
-	time.Sleep(100 * time.Millisecond)
+	// Three more clock reads: with both syncs done, the runner reads the
+	// clock once per schedule check (dueAccounts) and once per account it
+	// takes from the queue. Had a check queued "on" again, its sync would
+	// have run before the third read (the next check).
+	from := reads.Load()
+	testwait.Until(t, &read, "three schedule checks", func() bool { return reads.Load() >= from+3 })
 	again, _ := f.store.LastRuns(f.ctx)
 	if !again[on.ID].StartedAt.Equal(first[on.ID].StartedAt) {
 		t.Fatal("account synced again before its interval")
@@ -104,22 +117,16 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	if _, ok := again[manual.ID]; ok {
 		t.Fatal("account not on the schedule synced by the schedule")
 	}
-	waitForRun(t, f, fast.ID, "ok")
-	fastFirst, _ := f.store.LastRuns(f.ctx)
 	later.Store(true)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		runs, _ := f.store.LastRuns(f.ctx)
-		if runs[fast.ID].StartedAt.After(fastFirst[fast.ID].StartedAt) && runs[fast.ID].FinishedAt != nil {
-			if !runs[on.ID].StartedAt.Equal(first[on.ID].StartedAt) {
-				t.Fatal("hourly account synced again after 20 minutes")
-			}
-			break
+	testwait.Until(t, &synced, "the 15-minute account's sync after 20 minutes", func() bool {
+		runs, err := f.store.LastRuns(f.ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("15-minute account not synced again after 20 minutes")
-		}
-		time.Sleep(20 * time.Millisecond)
+		return runs[fast.ID].StartedAt.After(first[fast.ID].StartedAt) && runs[fast.ID].FinishedAt != nil
+	})
+	if runs, _ := f.store.LastRuns(f.ctx); !runs[on.ID].StartedAt.Equal(first[on.ID].StartedAt) {
+		t.Fatal("hourly account synced again after 20 minutes")
 	}
 	// The other accounts read the same mailbox, so "on" may find the
 	// messages already archived.
@@ -129,26 +136,26 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 
 	// A request syncs even a disabled account.
 	r.Enqueue(off.ID)
-	waitForRun(t, f, off.ID, "ok")
+	waitForRun(t, f, &synced, off.ID, "ok")
 }
 
-func waitForRun(t *testing.T, f *fixture, accountID int64, status string) {
+// waitForRun waits until the account has a finished run and checks its
+// status. synced is the runner's AfterSync: the run is finished before.
+func waitForRun(t *testing.T, f *fixture, synced *testwait.Signal, accountID int64, status string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	var last store.LastRun
+	testwait.Until(t, synced, fmt.Sprintf("a finished run of account %d", accountID), func() bool {
 		runs, err := f.store.LastRuns(f.ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r, ok := runs[accountID]; ok && r.FinishedAt != nil {
-			if r.Status != status {
-				t.Fatalf("run status = %s (%s), want %s", r.Status, r.Error, status)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+		r, ok := runs[accountID]
+		last = r
+		return ok && r.FinishedAt != nil
+	})
+	if last.Status != status {
+		t.Fatalf("run status = %s (%s), want %s", last.Status, last.Error, status)
 	}
-	t.Fatalf("no finished run for account %d", accountID)
 }
 
 // A request to reconcile upgrades a queued sync instead of adding another.
@@ -160,7 +167,10 @@ func TestRunnerUpgradesQueuedSync(t *testing.T) {
 	f.addAccount("acc", "u", "pw")
 	acc, _ := f.account("acc")
 
-	r := &archive.Runner{Syncer: f.syncer, CheckEvery: 10 * time.Millisecond}
+	var syncs atomic.Int32
+	var synced testwait.Signal
+	r := &archive.Runner{Syncer: f.syncer, CheckEvery: 10 * time.Millisecond,
+		AfterSync: func() { syncs.Add(1); synced.Notify() }}
 	r.Enqueue(acc.ID)
 	r.EnqueueWith(archive.SyncOptions{Reconcile: true}, acc.ID)
 	r.Enqueue(acc.ID) // does not downgrade it
@@ -171,13 +181,17 @@ func TestRunnerUpgradesQueuedSync(t *testing.T) {
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
-	waitForRun(t, f, acc.ID, "ok")
+	waitForRun(t, f, &synced, acc.ID, "ok")
 	runs, _ := f.store.LastRuns(f.ctx)
 	if got := runs[acc.ID].Reconcile.Folders; got != 1 {
 		t.Fatalf("reconciled folders = %d, want 1", got)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if again, _ := f.store.LastRuns(f.ctx); !again[acc.ID].StartedAt.Equal(runs[acc.ID].StartedAt) {
-		t.Fatal("queued twice")
+	// Once the runner holds nothing, a second entry for the account would
+	// have been queued, claimed or synced: its sync is in LastRuns then.
+	testwait.Until(t, &synced, "the end of the sync's claim", func() bool {
+		return syncs.Load() >= 1 && len(r.Pending()) == 0
+	})
+	if again, _ := f.store.LastRuns(f.ctx); !again[acc.ID].StartedAt.Equal(runs[acc.ID].StartedAt) || syncs.Load() != 1 {
+		t.Fatalf("queued twice: %d syncs", syncs.Load())
 	}
 }

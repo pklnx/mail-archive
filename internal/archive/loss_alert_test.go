@@ -69,14 +69,15 @@ func (f *lossFixture) expunge(mailbox string, from, to uint32) {
 	imaptest.Expunge(f.t, f.host, f.port, "alice", "pw", mailbox, uids...)
 }
 
-// alerts returns the pending loss alerts, claimed with a throwaway lease.
+// alerts returns the pending loss alerts, claimed with a throwaway lease
+// that has run out already (negative: a zero lease could end at the same
+// now() as the next claim's check), so the next call claims them again.
 func (f *lossFixture) alerts() []store.PendingLossAlert {
 	f.t.Helper()
-	got, err := f.store.ClaimLossAlerts(f.ctx, []byte(time.Now().String()), time.Millisecond, store.LossAlertMaxAge, 50)
+	got, err := f.store.ClaimLossAlerts(f.ctx, []byte(time.Now().String()), -time.Second, store.LossAlertMaxAge, 50)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	time.Sleep(5 * time.Millisecond) // let the lease run out
 	return got
 }
 

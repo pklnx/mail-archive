@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 func runAttestCmd(t *testing.T, args ...string) (string, error) {
@@ -87,7 +88,8 @@ func TestStartAttester(t *testing.T) {
 	}
 	defer a.close()
 	var logs bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logs, nil))
+	var written testwait.Signal
+	log := slog.New(notifyHandler{Handler: slog.NewTextHandler(&logs, nil), msg: "attestation written", sig: &written})
 
 	// No key: serve starts without attestations.
 	startAttester(ctx, a, log)()
@@ -101,16 +103,13 @@ func TestStartAttester(t *testing.T) {
 	logs.Reset()
 	a.cfg.AttestInterval = time.Hour
 	stop := startAttester(ctx, a, log)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if n, _ := a.store.CountAttestations(ctx); n == 1 {
-			break
+	testwait.Until(t, &written, "the first attestation", func() bool {
+		n, err := a.store.CountAttestations(ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("no attestation written:\n%s", logs.String())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		return n == 1
+	})
 	stop()
 	if !strings.Contains(logs.String(), "attestations on") {
 		t.Errorf("on:\n%s", logs.String())
@@ -128,6 +127,30 @@ func TestStartAttester(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(a.cfg.AttestDir(), attest.ChainFile)); err != nil {
 		t.Error(err)
 	}
+}
+
+// notifyHandler passes records on to Handler and notifies sig after each
+// one whose message is msg.
+type notifyHandler struct {
+	slog.Handler
+	msg string
+	sig *testwait.Signal
+}
+
+func (h notifyHandler) Handle(ctx context.Context, r slog.Record) error {
+	err := h.Handler.Handle(ctx, r)
+	if r.Message == h.msg {
+		h.sig.Notify()
+	}
+	return err
+}
+
+func (h notifyHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return notifyHandler{Handler: h.Handler.WithAttrs(attrs), msg: h.msg, sig: h.sig}
+}
+
+func (h notifyHandler) WithGroup(name string) slog.Handler {
+	return notifyHandler{Handler: h.Handler.WithGroup(name), msg: h.msg, sig: h.sig}
 }
 
 func TestAttestCheckAndVerify(t *testing.T) {

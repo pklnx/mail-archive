@@ -17,6 +17,9 @@ type gate struct {
 	slots    chan struct{}
 	hostname string
 	log      *slog.Logger
+	// slotFreed, if set, is called after a connection's slot is free
+	// again, for tests.
+	slotFreed func()
 }
 
 func newGate(l net.Listener, allowed []netip.Prefix, maxConns int, hostname string, log *slog.Logger) *gate {
@@ -37,11 +40,19 @@ func (g *gate) Accept() (net.Conn, error) {
 		}
 		select {
 		case g.slots <- struct{}{}:
-			return &gatedConn{Conn: c, release: func() { <-g.slots }}, nil
+			return &gatedConn{Conn: c, release: g.release}, nil
 		default:
 			g.log.Warn("smtp connection refused", "code", 421, "client_ip", ip.String(), "reason", "too many connections")
 			go reply(c, "421 4.7.0 "+g.hostname+" too many connections, try again later")
 		}
+	}
+}
+
+// release frees a connection's slot.
+func (g *gate) release() {
+	<-g.slots
+	if g.slotFreed != nil {
+		g.slotFreed()
 	}
 }
 

@@ -37,7 +37,13 @@ type manageFixture struct {
 	port       int
 	runnerDone chan struct{}
 	// changed is notified after each sync and fill run, once its claim
-	// has ended; the wait helpers wake on it.
+	// has ended; the wait helpers wake on it. A run here is one the runner
+	// tried (AfterSync, AfterRun), also one skipped as busy; a claim
+	// released without a try (the account deleted, the context done, a
+	// recurring fill held after the start) does not notify it, nor does a
+	// test's own change such as unlock(). Such a change wakes no wait: a
+	// wait after it needs a later run of the runners to notify, or a state
+	// that already holds at its first check.
 	changed *testwait.Signal
 }
 
