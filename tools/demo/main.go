@@ -460,6 +460,44 @@ func reply(id, from, to, subject string, date time.Time, body string, refs ...st
 		id, links, from, to, subject, date.Format(time.RFC1123Z), body))
 }
 
+// htmlReply is reply with an HTML body.
+func htmlReply(id, from, to, subject string, date time.Time, html string, refs ...string) string {
+	return strings.Replace(reply(id, from, to, subject, date, html, refs...), "Content-Type: text/plain", "Content-Type: text/html", 1)
+}
+
+// offsite is a six-message conversation in work / INBOX whose 4th message
+// is a long HTML mail, for the message view's scrolling and fold (#200,
+// web/e2e/reading.spec.ts). Its subject wraps on a phone. Only the long
+// mail has the word "itinerary". It sits between the newsletters of weeks
+// 34 and 33, below the rows of the list screenshots.
+func offsite(day func(days, hours int) time.Time) []message {
+	const subject = "Offsite planning: agenda, venue and travel"
+	priya := "Priya Shah <priya.shah@work.example>"
+	jonas := "Jonas Berg <jonas.berg@work.example>"
+	to := "Alex Morgan <alex.morgan@work.example>"
+	var long strings.Builder
+	long.WriteString(`<html><body style="font-family:Arial,sans-serif;color:#222;line-height:1.5">`)
+	long.WriteString(`<p>Hi Alex, here is the full itinerary for the offsite, day by day.</p>`)
+	for i := 1; i <= 60; i++ {
+		fmt.Fprintf(&long, "<p><b>Item %d.</b> Session %d of the offsite: we meet in room %d, review the open points of the quarter and agree on the next steps before the break.</p>", i, i, 100+i)
+	}
+	long.WriteString(`<p>See you there,<br>Priya</p></body></html>`)
+	ids := []string{"offsite-1@work.example", "offsite-2@work.example", "offsite-3@work.example", "offsite-4@work.example", "offsite-5@work.example", "offsite-6@work.example"}
+	return []message{
+		{"work", "INBOX", reply(ids[0], priya, to, subject, day(12, 10),
+			"Hi Alex,\n\nwe are planning the team offsite. Which dates work for you?\n\nPriya")},
+		{"work", "INBOX", reply(ids[1], jonas, to, "Re: "+subject, day(12, 8),
+			"Hi both,\n\nthe second week of November works for me.\n\nJonas", ids[0])},
+		{"work", "INBOX", htmlReply(ids[2], priya, to, "Re: "+subject, day(12, 6),
+			`<html><body style="font-family:Arial,sans-serif;color:#222"><p>Thanks, Jonas. I booked the venue by the lake for November 12 and 13.</p><p>Priya</p></body></html>`, ids[0], ids[1])},
+		{"work", "INBOX", htmlReply(ids[3], priya, to, "Re: "+subject, day(12, 4), long.String(), ids[0], ids[1], ids[2])},
+		{"work", "INBOX", reply(ids[4], jonas, to, "Re: "+subject, day(12, 2),
+			"Great, thanks Priya. I will book the train.\n\nJonas", ids[0], ids[1], ids[2], ids[3])},
+		{"work", "INBOX", reply(ids[5], priya, to, "Re: "+subject, day(12, 1),
+			"Perfect. The room for item 12 changed to 214.\n\nPriya", ids[0], ids[1], ids[2], ids[3], ids[4])},
+	}
+}
+
 // A 16x16 blue square as an inline image.
 const logoPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGNQTX5NEmIY1TCqYfhqAAB2SXMQ7mVTQgAAAABJRU5ErkJggg=="
 
@@ -560,6 +598,7 @@ Content-Transfer-Encoding: base64
 		{"old-provider", "INBOX", plain("Welcome Team <welcome@oldmail.example>", "alex@oldmail.example", "Welcome to Oldmail", ago(900, 0),
 			"Thanks for signing up. Your mailbox is ready.")},
 	}
+	msgs = append(msgs, offsite(ago)...)
 	for i := range 25 {
 		msgs = append(msgs, message{"work", "INBOX", plain("Newsletter <news@shop.example>", "alex.morgan@work.example",
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})
