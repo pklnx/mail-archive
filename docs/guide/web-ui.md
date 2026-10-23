@@ -90,11 +90,14 @@ scrolls as one page. The arrow at the top left leads back to the list, the
 arrows on the right page through it; this bar stays at the top while you
 scroll.
 
-On a phone the header of a message is compact: the subject, **From** and
-**Date**, and one row of actions. In that row the icons switch between the
-HTML and the text version and download the `.eml`, next to **Load remote
-images** for HTML mail. **Details** at the end of the row shows the rest:
-**To**, **Cc**, **Found in**, **Retention** and the envelope or origin.
+On a phone the header of a message is more compact still: the subject on
+up to two lines, then the sender's name and the time (the date for older
+mail), and one row of actions (see [Reading mail](#reading-mail)). There
+**Details** and the conversation are icons too; the conversation's icon
+shows the number of its messages. **Details** shows the whole subject,
+**From** with the address, **To**, **Cc**, the full **Date**, **Found in**,
+**Retention** and the envelope or origin. The conversation opens as a sheet
+below the bar at the top; a tap outside it closes it.
 
 <img src="/screenshots/mail-phone.png" alt="A message on a phone" width="320">
 <img src="/screenshots/mail-phone-nav.png" alt="The navigation on a phone, opened with the menu button" width="320">
@@ -131,7 +134,14 @@ folder is compared once a day. See [Reconcile](./syncing#reconcile).
 ## Reading mail
 
 A message scrolls as one unit: the reading pane next to the list, or the
-whole page on a phone. Header, conversation and text move together.
+whole page on a phone. Header and text move together.
+
+The header is compact: the subject, **From** and **Date**, and one row of
+actions. In that row the icons switch between the HTML and the text
+version and download the `.eml`, next to **Load remote images** for HTML
+mail. At the end of the row, **Conversation (n)** opens the conversation
+(see [Conversations](#conversations)) and **Details** shows the rest:
+**To**, **Cc**, **Found in**, **Retention** and the envelope or origin.
 
 HTML mail is shown in a sandboxed frame that grows with the mail: no
 scripts, no forms, no plugins. The message scrolls as one page, and links
@@ -157,17 +167,16 @@ clickable and open in a new tab.
 
 <!-- screenshot: a plain-text reply with an indented quote, a folded older quote and a signature -->
 
-**Found in** lists every folder that holds the message. For a copy an smtp
+**Found in** (under **Details**) lists every folder that holds the message. For a copy an smtp
 account received, an **Envelope** section shows the sender and recipients the
 mail server delivered it to, BCC included; for a copy it imported from IMAP
 ([fill](./journaling#bring-in-the-mail-from-before-journaling)), an **Origin**
 section names the mailbox it came from and says that there is no envelope.
 Both are folded; a click on the title opens them.
 
-**Show text** switches to the plain-text version. **Download .eml** saves the
-original message, which any mail client opens. On a phone both are icons,
-and **Found in** and the envelope or origin are behind **Details** (see
-[Layout](#layout)).
+**Show text** (an icon, its name in the tooltip) switches to the plain-text
+version. **Download .eml** (an icon too) saves the original message, which
+any mail client opens. For the header on a phone, see [Layout](#layout).
 
 Attachments are tiles below the headers, with the file type (such as PDF or
 DOCX), the name and the size; on a phone they scroll sideways. A tile is a
@@ -247,16 +256,17 @@ filters and full-text search find them; see [Upgrades](./operations#upgrades).
 
 ## Conversations
 
-A message that belongs to a conversation shows it above its text, oldest
-first, with date, sender and subject. A conversation of up to three
-messages shows in full. A longer one shows the message before and after
-the open one; the others are behind **Show n earlier messages** and **Show
-n later messages**.
-The message it answers is marked "In reply to", answers to it "Reply", and
-the open message "This message". Select one to open it. Messages from INBOX
-and Sent come together here, also from different accounts.
+When a message belongs to a conversation, **Conversation (n)** in its
+action row opens the list over the message, oldest first, with date,
+sender and subject, and with the open message selected. It shows all
+messages of the conversation; for a very long one the oldest are left out,
+and a note says how many. The message it answers is marked "In reply to",
+answers to it "Reply", and the open message "This message". Pick one to
+open it; a click or tap outside the list or <kbd>Esc</kbd> closes it. The
+arrow keys move through the list. Messages from INBOX and Sent come
+together here, also from different accounts.
 
-![A reply with its conversation above the text](/screenshots/conversation.png)
+![A reply with its conversation open over the text](/screenshots/conversation.png)
 
 "Group by conversation" in the filter panel (on a phone also a tag below
 the search field) lists one row per conversation:
