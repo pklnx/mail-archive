@@ -63,9 +63,16 @@ test("add an IMAP account, choose folders, sync, remove it, delete it completely
   await expect(card.getByText(/^Last sync .*: 0 new$/)).toBeVisible();
   await expect(card.getByText("4 messages", { exact: true })).toBeVisible();
 
-  // The account also shows in the sidebar, with its folders.
-  const nav = page.getByRole("navigation", { name: "Accounts and folders" });
-  await expect(nav.getByRole("button", { name: `Folders in ${name}` })).toBeVisible();
+  // The account also shows in the mail view's folder tree, with its folders.
+  const nav = page.getByRole("navigation", { name: "Main navigation" });
+  const tree = page.getByRole("tree", { name: "Accounts and folders" });
+  const accountNode = (label: RegExp) => tree.getByRole("treeitem", { name: label });
+  await nav.getByRole("link", { name: "All mail" }).click();
+  const node = accountNode(new RegExp(`^${name}$`));
+  await expect(node).toHaveAttribute("aria-expanded", "true");
+  await expect(node.getByRole("treeitem", { name: /^INBOX \d+$/ })).toBeVisible();
+  await nav.getByRole("link", { name: "Accounts" }).click();
+  await expect(page).toHaveURL(/\?view=accounts$/);
 
   // Removing asks first, in a danger dialog; the mail stays in the archive.
   await card.getByRole("button", { name: "Remove", exact: true }).click();
@@ -84,7 +91,14 @@ test("add an IMAP account, choose folders, sync, remove it, delete it completely
   await expect(card.getByRole("button", { name: "Edit" })).toHaveCount(0);
   await expect(card.getByText("Removed. Its mail stays in the archive.")).toBeVisible();
   await expect(card.getByText("4 messages", { exact: true })).toBeVisible();
-  await expect(nav.getByRole("button", { name: new RegExp(`^${name} removed$`) })).toBeVisible();
+  await nav.getByRole("link", { name: "All mail" }).click();
+  await expect(accountNode(new RegExp(`^${name} removed$`))).toBeVisible();
+  await nav.getByRole("link", { name: "Accounts" }).click();
+  // Back on a fresh Accounts page, the removed accounts start folded.
+  const removedAccounts = main.getByRole("button", { name: /^Removed accounts \(\d+\)$/ });
+  await expect(removedAccounts).toHaveAttribute("aria-expanded", "false");
+  await removedAccounts.click();
+  await expect(removedAccounts).toHaveAttribute("aria-expanded", "true");
 
   // Deleting completely needs the exact count, typed into the dialog.
   await card.getByRole("button", { name: "Delete completely…" }).click();
@@ -107,5 +121,7 @@ test("add an IMAP account, choose folders, sync, remove it, delete it completely
   await expect(dialog).toHaveCount(0);
   // The server deletes in the background; then the account is gone.
   await expect(card).toHaveCount(0);
-  await expect(nav.getByRole("button", { name: new RegExp(`^${name} removed$`) })).toHaveCount(0);
+  await nav.getByRole("link", { name: "All mail" }).click();
+  await expect(accountNode(/^work$/)).toBeVisible();
+  await expect(accountNode(new RegExp(`^${name}( removed)?$`))).toHaveCount(0);
 });

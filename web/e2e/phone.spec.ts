@@ -1,23 +1,60 @@
 import { devices } from "@playwright/test";
 import { expect, test } from "./fixtures";
 
-// A phone with a touch screen: one column at a time, the sidebar a drawer.
+// A phone with a touch screen: one column at a time; the side navigation
+// and the folder tree are overlays.
 const { defaultBrowserType: _, ...phone } = devices["Pixel 7"];
 test.use(phone);
 
-test("phone: open the navigation, open a message, back to the list", async ({ page }) => {
+test("phone: the navigation and the folders, open a message, back to the list", async ({ page }) => {
   await page.goto("/");
   const list = page.getByRole("list", { name: "Messages" });
   await expect(list.getByRole("button").first()).toBeVisible();
-  const nav = page.getByRole("navigation", { name: "Accounts and folders" });
-  // The drawer is closed: its navigation is not shown.
-  await expect(nav).toBeHidden();
+  // No bottom bar: the sections are behind the menu button.
+  await expect(page.getByRole("button", { name: "More", exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Show accounts and folders" }).click();
-  await expect(nav).toBeVisible();
-  // personal / Sent (3 messages; work's Sent has 1). Choosing it closes the drawer.
-  await nav.getByRole("button", { name: "Sent 3" }).click();
-  await expect(nav).toBeHidden();
+  // The menu button opens Carbon's SideNav over the page; Escape closes it
+  // and focus returns to the button.
+  const nav = page.getByRole("navigation", { name: "Main navigation" });
+  const menu = page.getByRole("button", { name: "Open navigation" });
+  // Closed, it is zero wide and inert (out of the tab order).
+  const closed = async () => {
+    await expect(nav).not.toHaveClass(/cds--side-nav--expanded/);
+    await expect(nav).toHaveAttribute("inert", "");
+    // Clipped by the zero-wide SideNav (its own box is not empty).
+    await expect(nav.getByRole("link", { name: "Accounts" })).not.toBeInViewport();
+  };
+  await closed();
+  await menu.click();
+  await expect(nav.getByRole("link", { name: "All mail" })).toBeFocused();
+  for (const name of ["Accounts", "Users", "Log", "Retention", "Profile"]) await expect(nav.getByRole("link", { name })).toBeInViewport();
+  await page.keyboard.press("Escape");
+  await closed();
+  await expect(menu).toBeFocused();
+
+  // A section from the SideNav; it closes on the way.
+  await menu.click();
+  await nav.getByRole("link", { name: "Log" }).click();
+  await expect(page).toHaveURL(/\?view=log$/);
+  await closed();
+  await menu.click();
+  await nav.getByRole("link", { name: "All mail" }).click();
+  await expect(page).toHaveURL(/\/$/);
+
+  // The Folders button opens the tree as a modal overlay; Escape closes it.
+  const folders = page.getByRole("button", { name: "Folders", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Folders" });
+  await folders.click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("treeitem").first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(folders).toBeFocused();
+
+  // personal / Sent (3 messages; work's Sent has 1). Choosing it closes the overlay.
+  await folders.click();
+  await dialog.getByRole("treeitem", { name: "Sent 3" }).click();
+  await expect(dialog).toHaveCount(0);
   await expect(page).toHaveURL(/[?&]account=personal/);
   await expect(page).toHaveURL(/[?&]folder=Sent/);
   await expect(page.getByRole("heading", { name: "Sent", level: 1 })).toBeVisible();
