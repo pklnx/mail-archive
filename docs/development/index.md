@@ -114,11 +114,12 @@ The tests fail on page errors, console errors, CSP violations and requests
 to any other host (`web/e2e/fixtures.ts`). They use role and label queries,
 wait for elements and responses, never for time, and run without retries.
 Names a test creates are unique per run, and no test depends on another.
-CI runs the suite in the `web-e2e` job. The job usually takes about two
-minutes, but its `playwright install --with-deps` step installs Chromium's
-system libraries and fonts with apt, and when the runner's apt mirror is slow
-that step alone takes 8 to 13 minutes. The job's timeout is 30 minutes for
-that reason.
+CI runs the suite in the `web-e2e` job, which usually takes about two
+minutes. It installs only Playwright's headless Chromium, without apt, and
+checks its libraries (`scripts/ci-playwright-chromium.sh`): the runner image
+has them. If one is missing, the run shows a warning and installs them with
+apt, which can take 8 to 13 minutes when the runner's apt mirror is slow. The
+job's timeout is 20 minutes so that this fallback fits.
 
 The job is skipped on docs-only pull requests, where only `docs/**`,
 `.claude/**` or `*.md` files change (`*.md` also matches in code
