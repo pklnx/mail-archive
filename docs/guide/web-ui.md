@@ -83,12 +83,15 @@ closes it again.
 
 On a phone the list and the message are separate screens. Above the list
 the current folder shows, with its account below it, or **All mail**; the
-search field takes the full width below it. An open message fills the
-screen. The arrow at the top left leads back to the list, the arrows on the
-right page through it.
+search field takes the full width below it, and under it the quick filters
+**Has attachment** and **Group by conversation**, which one tap turns on or
+off (see [Filters](#filters)). An open message fills the screen. The arrow
+at the top left leads back to the list, the arrows on the right page
+through it.
 
 <img src="/screenshots/mail-phone.png" alt="A message on a phone" width="320">
 <img src="/screenshots/mail-phone-nav.png" alt="The navigation on a phone, opened with the menu button" width="320">
+<img src="/screenshots/mail-phone-filters.png" alt="The list on a phone with the quick filter Has attachment selected and a From filter set" width="320">
 
 ## Sync problems
 
@@ -204,6 +207,14 @@ filters.
 
 Every filter that is set also shows as a tag below the search field, with
 its value, for example `From: sam`; the × on a tag removes that filter.
+**Edit filters** after the tags opens the filter panel and moves the focus
+to the field of the first tag, in the panel's order (From, To or Cc, the
+date range, attachments, grouping).
+
+On a phone, **Has attachment** and **Group by conversation** are two tags
+of their own right below the search field: one tap turns the filter on or
+off, without opening the panel. A selected one is highlighted, and these
+two filters do not show again among the tags of set filters.
 
 A message has an attachment when a part is marked as one, or when it is a
 named file that is not text, such as a PDF that Apple Mail sends inline.
@@ -225,7 +236,8 @@ and Sent come together here, also from different accounts.
 
 ![A reply with its conversation above the text](/screenshots/conversation.png)
 
-"Group by conversation" in the filter panel lists one row per conversation:
+"Group by conversation" in the filter panel (on a phone also a tag below
+the search field) lists one row per conversation:
 its newest message, with the number of its messages as a badge. The arrow
 on the right shows the earlier ones below it. With a search or filters, a
 row is the newest message that matches, the badge counts the matches, and

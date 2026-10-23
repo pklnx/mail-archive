@@ -71,3 +71,50 @@ test("phone: the navigation and the folders, open a message, back to the list", 
   await expect(list).toBeVisible();
   await expect(item).toBeVisible();
 });
+
+test("phone: the quick filters toggle with one tap, Edit filters opens the panel", async ({ page }) => {
+  await page.goto("/");
+  const list = page.getByRole("list", { name: "Messages" });
+  const rows = list.getByRole("button");
+  await expect(rows.first()).toBeVisible();
+  const count = page.locator(".mail-list__count > span").first();
+  const all = await count.textContent();
+  const quick = page.getByRole("group", { name: "Quick filters" });
+  const attachment = quick.getByRole("button", { name: "Has attachment" });
+  const grouping = quick.getByRole("button", { name: "Group by conversation" });
+  const panel = page.getByRole("group", { name: "Filters", exact: true });
+  const tags = page.getByRole("list", { name: "Active filters" });
+  // The panel stays closed; the quick filters are under the search.
+  await expect(panel).toHaveCount(0);
+  await expect(attachment).toHaveAttribute("aria-pressed", "false");
+
+  await attachment.click();
+  await expect(page).toHaveURL(/[?&]q=has%3Aattachment/);
+  await expect(attachment).toHaveAttribute("aria-pressed", "true");
+  await expect(count).not.toHaveText(all!);
+  for (const row of await rows.all()) await expect(row.getByRole("img", { name: "Has attachment" })).toBeVisible();
+  // No tag repeats it, and the state survives a reload.
+  await expect(tags).toHaveCount(0);
+  await page.reload();
+  await expect(attachment).toHaveAttribute("aria-pressed", "true");
+  await attachment.click();
+  await expect(page).not.toHaveURL(/has%3Aattachment/);
+  await expect(count).toHaveText(all!);
+
+  await grouping.click();
+  await expect(page).toHaveURL(/[?&]group=1/);
+  await expect(grouping).toHaveAttribute("aria-pressed", "true");
+  await grouping.click();
+  await expect(page).not.toHaveURL(/group=1/);
+
+  // A set filter's tag: "Edit filters" opens the panel at its field, the × removes it.
+  await page.goto("/?q=from%3Asam");
+  await expect(rows.first()).toBeVisible();
+  await expect(panel).toHaveCount(0);
+  await tags.getByRole("button", { name: "Edit filters" }).click();
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("textbox", { name: "From" })).toBeFocused();
+  await tags.getByRole("button", { name: "Remove filter: From" }).click();
+  await expect(tags).toHaveCount(0);
+  await expect(page).not.toHaveURL(/from%3Asam/);
+});

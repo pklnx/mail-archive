@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Account, AccountsResponse, Folder, MessageDetail, MessageSummary, User } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
+import { twoPane as twoPaneQuery } from "./breakpoints";
 
 const f = (name: string, messages = 1): Folder => ({ name, delimiter: "/", messages, lastSyncedAt: null, lastReconciledAt: null });
 
@@ -448,6 +449,186 @@ describe("the filter panel's first state", () => {
     expect(button().getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(button());
     expect(panel()).not.toBeNull();
+  });
+});
+
+describe("quick filters on phones and the Edit filters button (#196)", () => {
+  beforeEach(() => {
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  const panel = () => screen.queryByRole("group", { name: t.filters });
+  const filtersButton = () => screen.getByRole("button", { name: t.filters });
+  const quickGroup = () => screen.queryByRole("group", { name: t.quickFilters });
+  const quick = (name: string) => within(quickGroup()!).getByRole("button", { name });
+  const tagList = () => screen.queryByRole("list", { name: t.activeFilters });
+  const editButton = () => screen.queryByRole("button", { name: t.editFilters });
+  const params = () => new URLSearchParams(window.location.search);
+  const listReady = () => screen.findByRole("button", { name: /First/ });
+
+  /** matchMedia whose width can change while the app runs; changed() tells the listeners. */
+  function resizable(twoPane: boolean) {
+    const state = { twoPane };
+    const listeners = new Set<(e: { matches: boolean; media: string }) => void>();
+    window.matchMedia = (query: string) =>
+      ({
+        get matches() {
+          return state.twoPane && query.includes("48rem");
+        },
+        media: query,
+        onchange: null,
+        // Only the two-pane query changes here.
+        addEventListener: (_: string, l: () => void) => query.includes("48rem") && listeners.add(l),
+        removeEventListener: (_: string, l: () => void) => listeners.delete(l),
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList;
+    return (next: boolean) =>
+      act(() => {
+        state.twoPane = next;
+        listeners.forEach((l) => l({ matches: next, media: twoPaneQuery }));
+      });
+  }
+
+  it("toggles the attachment and the grouping with one tap on a phone, through the URL, with no history entry", async () => {
+    screenWidth(false, false);
+    await renderApp();
+    await listReady();
+    expect(panel()).toBeNull();
+    const entries = window.history.length;
+    expect(quick(t.hasAttachment).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(quick(t.hasAttachment));
+    expect(quick(t.hasAttachment).getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(params().get("q")).toBe("has:attachment"));
+    fireEvent.click(quick(t.groupByConversation));
+    expect(params().get("group")).toBe("1");
+    expect(quick(t.groupByConversation).getAttribute("aria-pressed")).toBe("true");
+    // The pressed quick filters are the state; no tag repeats them.
+    expect(tagList()).toBeNull();
+    expect(editButton()).toBeNull();
+    expect(panel()).toBeNull();
+    fireEvent.click(quick(t.hasAttachment));
+    await waitFor(() => expect(params().get("q")).toBeNull());
+    fireEvent.click(quick(t.groupByConversation));
+    expect(params().get("group")).toBeNull();
+    expect(window.history.length).toBe(entries);
+  });
+
+  it("has no quick filters from 48rem; the attachment and the grouping are tags there", async () => {
+    window.history.replaceState(null, "", "/?q=has%3Aattachment&group=1");
+    screenWidth(false, true);
+    await renderApp();
+    expect(quickGroup()).toBeNull();
+    expect(within(tagList()!).getByRole("button", { name: t.removeFilter(t.hasAttachment) })).toBeTruthy();
+    expect(within(tagList()!).getByRole("button", { name: t.removeFilter(t.conversation) })).toBeTruthy();
+  });
+
+  it("swaps the quick filters and the tags when the width changes, without a reload", async () => {
+    window.history.replaceState(null, "", "/?q=has%3Aattachment&group=1");
+    const resize = resizable(false);
+    await renderApp();
+    expect(quickGroup()).not.toBeNull();
+    expect(tagList()).toBeNull();
+    resize(true);
+    expect(quickGroup()).toBeNull();
+    expect(within(tagList()!).getByRole("button", { name: t.removeFilter(t.hasAttachment) })).toBeTruthy();
+    resize(false);
+    expect(quickGroup()).not.toBeNull();
+    expect(tagList()).toBeNull();
+  });
+
+  it("opens the closed panel with Edit filters and focuses the first tag's field; j types there and Escape leaves it", async () => {
+    window.history.replaceState(null, "", "/?q=from%3Asam%20after%3A2026-01-01");
+    screenWidth(false, false);
+    await renderApp();
+    await listReady();
+    // First j works outside a field (the app has the list's ids), and u goes back.
+    await waitFor(() => {
+      key(document.body, "j");
+      expect(params().get("m")).toBe("m1");
+    });
+    key(document.body, "u");
+    expect(params().get("m")).toBeNull();
+    expect(panel()).toBeNull();
+    fireEvent.click(editButton()!);
+    expect(filtersButton().getAttribute("aria-expanded")).toBe("true");
+    const from = within(panel()!).getByRole("textbox", { name: t.from });
+    expect(document.activeElement).toBe(from);
+    // A field owns its keys: j does not open a message.
+    key(from, "j");
+    expect(params().get("m")).toBeNull();
+    key(from, "Escape");
+    expect(document.activeElement).not.toBe(from);
+    // A second press with the panel open focuses again.
+    fireEvent.click(editButton()!);
+    expect(document.activeElement).toBe(from);
+    // Closing and reopening the panel with its button takes no focus.
+    from.blur();
+    fireEvent.click(filtersButton());
+    expect(panel()).toBeNull();
+    fireEvent.click(filtersButton());
+    expect(panel()).not.toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("only moves the focus when the panel is already open, to Before or the checkbox by the rule", async () => {
+    window.history.replaceState(null, "", "/?q=before%3A2026-02-01");
+    screenWidth(true);
+    await renderApp();
+    expect(panel()).not.toBeNull();
+    fireEvent.click(editButton()!);
+    expect(document.activeElement).toBe(within(panel()!).getByLabelText(t.before));
+    expect(filtersButton().getAttribute("aria-expanded")).toBe("true");
+    cleanup();
+    window.history.replaceState(null, "", "/?q=has%3Aattachment");
+    await renderApp();
+    fireEvent.click(editButton()!);
+    expect(document.activeElement).toBe(within(panel()!).getByRole("checkbox", { name: t.hasAttachment }));
+  });
+
+  it("still removes exactly one filter with a tag's ×, and leaves the panel as it was", async () => {
+    window.history.replaceState(null, "", "/?q=from%3Asam%20to%3Aoffice");
+    screenWidth(false, false);
+    await renderApp();
+    fireEvent.click(within(tagList()!).getByRole("button", { name: t.removeFilter(t.from) }));
+    await waitFor(() => expect(params().get("q")).toBe("to:office"));
+    expect(panel()).toBeNull();
+    expect(within(tagList()!).getByRole("button", { name: t.removeFilter(t.toOrCc) })).toBeTruthy();
+  });
+
+  it("keeps j working on a focused quick filter: it opens the first message", async () => {
+    screenWidth(false, false);
+    await renderApp();
+    await listReady();
+    const tag = quick(t.hasAttachment);
+    act(() => tag.focus());
+    // The list hands its ids to the app after it renders; until then j has
+    // nothing to open, so it is pressed until the app has them.
+    await waitFor(() => {
+      key(tag, "j");
+      expect(params().get("m")).toBe("m1");
+    });
+  });
+
+  it("speaks German in the quick filters and the tag row", async () => {
+    applySettings({ language: "de", locale: "de" });
+    window.history.replaceState(null, "", "/?q=from%3Asam&group=1");
+    screenWidth(false, false);
+    try {
+      const de = messagesFor("de");
+      await renderApp();
+      const group = screen.getByRole("group", { name: de.quickFilters });
+      expect(within(group).getByRole("button", { name: de.hasAttachment })).toBeTruthy();
+      expect(within(group).getByRole("button", { name: de.groupByConversation }).getAttribute("aria-pressed")).toBe("true");
+      const list = screen.getByRole("list", { name: de.activeFilters });
+      expect(within(list).getByRole("button", { name: de.editFilters })).toBeTruthy();
+      expect(within(list).getByRole("button", { name: de.removeFilter(de.from) })).toBeTruthy();
+      const html = document.body.innerHTML;
+      for (const s of ["Quick filters", "Edit filters", "Remove filter", "Has attachment", "Group by conversation"]) expect(html, s).not.toContain(s);
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
   });
 });
 

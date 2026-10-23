@@ -481,10 +481,23 @@ body,
 .search-filters .cds--form-item.cds--checkbox-wrapper {
   margin: 0;
 }
+/* Phones: the two yes/no filters as one-tap tags, in their own row. */
+.quick-filters {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-block-end: 1px solid var(--cds-border-subtle-01);
+}
+.quick-filters .cds--tag {
+  margin: 0;
+}
 .active-filters {
   display: flex;
   flex: none;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.25rem;
   margin: 0;
   padding: 0.25rem 0.5rem;
