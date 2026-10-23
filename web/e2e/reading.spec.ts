@@ -20,12 +20,48 @@ const sizes = [
 const sandbox = "allow-same-origin allow-popups allow-popups-to-escape-sandbox";
 const frameOf = (page: Page) => page.getByRole("article").getByTitle("Message content");
 
+// Everything about the mail's document is read from the parent page through
+// iframe.contentDocument (the frame is same-origin), and clicks into it are
+// mouse clicks at coordinates: no Playwright locator or evaluate runs inside
+// the frame. Such a call initializes the frame's main world, and with it the
+// guards' init script, which the sandbox blocks and the browser logs; if the
+// frame is still its initial about:blank, the guards fail the test.
+
+/** Whether the frame shows a loaded mail (not its initial about:blank), and its text matches if asked. */
+function mailLoaded(page: Page, text?: RegExp): Promise<boolean> {
+  return frameOf(page).evaluate(
+    (f: HTMLIFrameElement, src) => {
+      const doc = f.contentDocument;
+      if (!doc || !/\/api\/messages\/[0-9a-f]{64}\/html$/.test(new URL(doc.URL).pathname) || doc.readyState !== "complete") return false;
+      return src === null || new RegExp(src).test(doc.body.textContent ?? "");
+    },
+    text ? text.source : null,
+  );
+}
+
+/** Waits until the frame shows a loaded mail (and the text, if asked). */
+async function mailReady(page: Page, text?: RegExp) {
+  await expect.poll(() => mailLoaded(page, text)).toBe(true);
+}
+
+/** The center of the mail's link with this text (also in an open shadow root), in page coordinates (the frame's box plus the link's box in it). */
+function linkCenter(page: Page, name: string): Promise<{ x: number; y: number }> {
+  return frameOf(page).evaluate((f: HTMLIFrameElement, name) => {
+    const doc = f.contentDocument!;
+    const roots = [doc, ...[...doc.querySelectorAll("*")].flatMap((e) => (e.shadowRoot ? [e.shadowRoot] : []))];
+    const a = roots.flatMap((r) => [...r.querySelectorAll("a")]).find((e) => e.textContent === name)!;
+    const r = a.getBoundingClientRect();
+    const box = f.getBoundingClientRect();
+    return { x: box.left + f.clientLeft + r.left + r.width / 2, y: box.top + f.clientTop + r.top + r.height / 2 };
+  }, name);
+}
+
 /** Waits until the open message is laid out: heading, conversation (it loads on its own) and the frame's content. */
 async function ready(page: Page, subject: RegExp) {
   const article = page.getByRole("article");
   await expect(article.getByRole("heading", { level: 1 })).toHaveText(subject);
   await expect(article.getByRole("region", { name: "Conversation" })).toBeVisible();
-  await expect(frameOf(page).contentFrame().locator("p").first()).toBeAttached();
+  await mailReady(page);
 }
 
 /**
@@ -83,9 +119,13 @@ async function firstLine(page: Page, html: boolean): Promise<{ top: number; bott
     return { top: r.top, bottom: r.bottom };
   };
   if (!html) return page.locator(".mail-text__para").first().evaluate(lineIn);
-  const line = await frameOf(page).contentFrame().locator("p").first().evaluate(lineIn);
-  const top = await frameOf(page).evaluate((f) => f.getBoundingClientRect().top + f.clientTop);
-  return { top: top + line.top, bottom: top + line.bottom };
+  return frameOf(page).evaluate((f: HTMLIFrameElement) => {
+    const range = f.contentDocument!.createRange();
+    range.selectNodeContents(f.contentDocument!.querySelector("p")!);
+    const r = range.getClientRects()[0]!;
+    const top = f.getBoundingClientRect().top + f.clientTop;
+    return { top: top + r.top, bottom: top + r.bottom };
+  });
 }
 
 /** Elements of the reading pane, its ancestors and the page that scroll vertically and have something to scroll. */
@@ -115,9 +155,11 @@ interface Fit {
 }
 
 /** The frame and its document's geometry, read from the parent (same origin). */
-function fitOf(page: Page): Promise<Fit> {
+function fitOf(page: Page): Promise<Fit | null> {
   return frameOf(page).evaluate((f: HTMLIFrameElement) => {
-    const doc = f.contentDocument!;
+    const doc = f.contentDocument;
+    // Not yet the mail (the initial about:blank) or not loaded: nothing to compare.
+    if (!doc || !/\/html$/.test(new URL(doc.URL).pathname) || doc.readyState !== "complete") return null;
     const se = doc.scrollingElement!;
     const bottoms = [...doc.body.querySelectorAll("*")].map((e) => e.getBoundingClientRect().bottom);
     return { frame: f.clientHeight, content: se.scrollHeight, overflow: se.scrollHeight - se.clientHeight, below: f.clientHeight - Math.max(0, ...bottoms) };
@@ -134,10 +176,10 @@ async function fitted(page: Page): Promise<Fit> {
   await expect
     .poll(async () => {
       const f = await fitOf(page);
-      return f.overflow <= 1 && Math.abs(f.frame - f.content) <= 1 && f.below >= 0 && f.below <= 40;
+      return f !== null && f.overflow <= 1 && Math.abs(f.frame - f.content) <= 1 && f.below >= 0 && f.below <= 40;
     })
     .toBe(true);
-  return fitOf(page);
+  return (await fitOf(page))!;
 }
 
 const rect = (page: Page, selector: string) => page.locator(selector).first().evaluate((e) => e.getBoundingClientRect().toJSON() as DOMRect);
@@ -201,7 +243,7 @@ for (const size of sizes) {
       // Back to HTML: the new frame starts at the last height and is fitted to the same.
       await article.getByRole("button", { name: "Show HTML" }).click();
       expect(await frame.evaluate((f) => f.style.blockSize)).toBe(`${fit.frame}px`);
-      await expect(frame.contentFrame().locator("p").first()).toBeAttached();
+      await mailReady(page);
       expect((await fitted(page)).frame).toBe(fit.frame);
 
       await conversation.getByRole("button", { name: "Show 2 earlier messages" }).click();
@@ -230,16 +272,11 @@ for (const size of sizes) {
       // At scroll 0 a pointer on the link reaches the frame, and the click
       // opens the link in a new tab right away.
       await scrollTop(page, phone, "start");
-      const link = frame.contentFrame().getByRole("link", { name: "Agenda" });
-      const at = await link.evaluate((a) => {
-        const r = a.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      });
-      const start = (await frame.boundingBox())!;
-      const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, { x: start.x + at.x, y: start.y + at.y });
+      const at = await linkCenter(page, "Agenda");
+      const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, at);
       expect(hit).toBe("message__frame");
       const opened = context.waitForEvent("page");
-      await link.click();
+      await page.mouse.click(at.x, at.y);
       const tab = await opened;
       await expect.poll(() => tab.url()).toBe("https://links.example/agenda");
       // The frame still shows the mail.
@@ -274,7 +311,7 @@ for (const size of sizes) {
       await page.keyboard.press("j");
       await expect(page).not.toHaveURL(url);
       await expect(article.getByRole("region", { name: "Conversation" })).toBeVisible();
-      await expect(frameOf(page).contentFrame().getByText(/I booked the venue/)).toBeAttached();
+      await mailReady(page, /I booked the venue/);
       expect(await scrollTop(page, phone)).toBe(0);
       expect((await fitted(page)).frame).toBeLessThan(300);
     });
@@ -296,7 +333,7 @@ test.describe("the frame's sandbox and the API guard", () => {
     const frame = frameOf(page);
     await expect(frame).toHaveAttribute("sandbox", sandbox);
     // The frame's load has fired (it is fitted after it): the scripts and the handler had their chance.
-    await expect.poll(() => frame.evaluate((f: HTMLIFrameElement) => f.contentDocument!.readyState)).toBe("complete");
+    await mailReady(page);
     await fitted(page);
     expect(await frame.evaluate((f: HTMLIFrameElement) => ({ ...f.contentDocument!.documentElement.dataset }))).toEqual({});
   });
@@ -332,7 +369,7 @@ test.describe("the frame's sandbox and the API guard", () => {
 
     // The image arrives: the frame grows by its 300px (and the margin before it at most).
     release();
-    await expect.poll(async () => (await fitOf(page)).frame - before.frame).toBeGreaterThanOrEqual(300);
+    await expect.poll(async () => ((await fitOf(page))?.frame ?? 0) - before.frame).toBeGreaterThanOrEqual(300);
     expect((await fitted(page)).frame - before.frame).toBeLessThanOrEqual(320);
   });
 
@@ -340,27 +377,34 @@ test.describe("the frame's sandbox and the API guard", () => {
     await addToMail(
       page,
       `<p><a href="/api/status" target="_self">Status here</a> <a href="/api/status">Status tab</a> <a href="/api/messages?q=x">Search</a> ` +
-        `<a href="https://links.example/agenda">Agenda</a></p>`,
+        `<a href="https://links.example/agenda">Agenda</a></p>` +
+        // An open declarative shadow root: the blocker finds the link through the event's composed path.
+        `<div><template shadowrootmode="open"><p><a href="/api/openapi.json">Spec</a></p></template></div>`,
       "start",
     );
     await context.route("https://links.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>agenda</p>" }));
     const appRequests: string[] = [];
     context.on("request", (r) => {
       const u = new URL(r.url());
-      if (u.pathname === "/api/status" || (u.pathname === "/api/messages" && u.search === "?q=x")) appRequests.push(r.url());
+      if (u.pathname === "/api/status" || u.pathname === "/api/openapi.json" || (u.pathname === "/api/messages" && u.search === "?q=x")) appRequests.push(r.url());
     });
     await openLong(page);
     const pages: string[] = [];
     context.on("page", (p) => pages.push(p.url()));
-    const mail = frameOf(page).contentFrame();
     await fitted(page);
-    await mail.getByRole("link", { name: "Status here" }).click();
-    await mail.getByRole("link", { name: "Status tab" }).click();
-    await mail.getByRole("link", { name: "Status tab" }).click({ button: "middle" });
-    await mail.getByRole("link", { name: "Search" }).click();
+    const click = async (name: string, button: "left" | "middle" = "left") => {
+      const at = await linkCenter(page, name);
+      await page.mouse.click(at.x, at.y, { button });
+    };
+    await click("Status here");
+    await click("Status tab");
+    await click("Status tab", "middle");
+    await click("Search");
+    await click("Spec");
+    await click("Spec", "middle");
     // An external link opens: the signal that the clicks before it were handled.
     const opened = context.waitForEvent("page");
-    await mail.getByRole("link", { name: "Agenda" }).click();
+    await click("Agenda");
     await opened;
     expect(appRequests).toEqual([]);
     expect(pages).toHaveLength(1);
