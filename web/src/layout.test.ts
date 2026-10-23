@@ -1,7 +1,10 @@
 // @vitest-environment node
 // The views use Carbon and layout.css only (#168). Every class name in the
 // source is Carbon's (cds--) or defined in layout.css: a utility class left
-// over from Tailwind, or a typo, would style nothing.
+// over from Tailwind, or a typo, would style nothing. It reads only the
+// className= attributes of the top-level .tsx files in src: class names set
+// another way (props such as Carbon's renderIcon, classList, other folders)
+// are not checked.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

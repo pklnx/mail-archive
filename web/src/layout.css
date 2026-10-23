@@ -954,7 +954,8 @@ body,
   min-block-size: 0;
   inline-size: 100%;
   border: 0;
-  background-color: var(--color-paper, #ffffff);
+  /* HTML mail stays on white in both themes: it brings its own colors. */
+  background-color: #ffffff;
 }
 .cds--g100 .message__html {
   padding: 0.75rem;

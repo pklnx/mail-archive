@@ -466,6 +466,7 @@ export function TwoFactorSetup({
               showPasswordLabel={t.carbon.showPassword}
               hidePasswordLabel={t.carbon.hidePassword}
               required
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />

@@ -1,15 +1,13 @@
 # Third-party notices
 
-The web UI that the `mail-archive` binary and image embed contains these
-third-party works. Their licenses apply to them; the rest of the project is
-under [LICENSE](LICENSE).
+The project itself is under [LICENSE](LICENSE). This file holds the license
+of the fonts that the web UI bundles as files of their own.
 
-## Carbon Design System
-
-`@carbon/react`, `@carbon/styles` and `@carbon/icons-react` (IBM) are
-licensed under the Apache License, Version 2.0
-(<https://www.apache.org/licenses/LICENSE-2.0>). Their compiled code and
-styles are part of the bundled web UI.
+The web UI's JavaScript and CSS also contain third-party packages, among
+them React (MIT) and the Carbon Design System (`@carbon/*`, Apache-2.0),
+with their dependencies. They are listed with exact versions in
+`web/package.json` and `web/pnpm-lock.yaml`; each package's license text is
+in its folder under `web/node_modules` after `pnpm install`.
 
 ## IBM Plex Sans and IBM Plex Mono
 

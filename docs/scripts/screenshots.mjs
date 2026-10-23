@@ -148,7 +148,10 @@ for (const scheme of ["light", "dark"]) {
     const row = el.closest("li");
     let box = row.parentElement;
     while (box && !(box.scrollHeight > box.clientHeight && getComputedStyle(box).overflowY !== "visible")) box = box.parentElement;
-    box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    // The date heading stays at the top while the list scrolls: start below it.
+    const heading = box.querySelector(".mail-list__group");
+    const covered = heading ? heading.getBoundingClientRect().height : 0;
+    box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top - covered;
   });
   await shot(p, "grouped");
   await p.context().close();
@@ -194,15 +197,15 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // Editing the IMAP account "personal": its own page, with the folders.
-  const p = await page("light");
+  // Editing the IMAP account "personal": its own page, with the folders. A
+  // taller window shows the whole page, from its heading to the folders.
+  const p = await page("light", { width: 1280, height: 1100 });
   await p.goto(base + "/?view=accounts&edit=personal");
   const main = p.getByRole("main");
   await main.getByRole("heading", { name: "Edit “personal”" }).waitFor();
   await main.getByRole("button", { name: "Choose folders" }).click();
-  const folders = main.getByRole("heading", { name: "Folders", level: 2 });
   await main.getByRole("checkbox").first().waitFor();
-  await folders.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await main.getByRole("button", { name: "Save folder selection" }).waitFor();
   await shot(p, "account-edit");
   await p.context().close();
 }

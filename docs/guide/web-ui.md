@@ -21,8 +21,9 @@ labels when you point at it or move the focus into it.
   its folders and message counts. A count is the number of distinct
   messages in the folder, as in its list; messages no longer on the server
   still count. Next to an account its state shows: *receiving* for an smtp
-  account, *failing*, *removed*, *disabled* or *imported*; a spinner marks
-  an account that is syncing. **All folders** under an account lists all of
+  account, *failing*, *removed*, *disabled* or *imported*, and *syncing*
+  while an IMAP account syncs (*importing* while mail is imported into
+  another account). **All folders** under an account lists all of
   its mail. Once a [reconcile](./syncing#reconcile) found messages deleted
   on all your servers, **Only in archive** in the navigation lists them,
   with their number.
@@ -224,7 +225,7 @@ and Sent come together here, also from different accounts.
 
 ![A reply with its conversation above the text](/screenshots/conversation.png)
 
-"Group by conversation" in the filter row lists one row per conversation:
+"Group by conversation" in the filter panel lists one row per conversation:
 its newest message, with the number of its messages as a badge. The arrow
 on the right shows the earlier ones below it. With a search or filters, a
 row is the newest message that matches, the badge counts the matches, and
