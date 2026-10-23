@@ -85,9 +85,16 @@ On a phone the list and the message are separate screens. Above the list
 the current folder shows, with its account below it, or **All mail**; the
 search field takes the full width below it, and under it the quick filters
 **Has attachment** and **Group by conversation**, which one tap turns on or
-off (see [Filters](#filters)). An open message fills the screen. The arrow
-at the top left leads back to the list, the arrows on the right page
-through it.
+off (see [Filters](#filters)). An open message fills the screen and
+scrolls as one page. The arrow at the top left leads back to the list, the
+arrows on the right page through it; this bar stays at the top while you
+scroll.
+
+On a phone the header of a message is compact: the subject, **From** and
+**Date**, and one row of actions. In that row the icons switch between the
+HTML and the text version and download the `.eml`, next to **Load remote
+images** for HTML mail. **Details** at the end of the row shows the rest:
+**To**, **Cc**, **Found in**, **Retention** and the envelope or origin.
 
 <img src="/screenshots/mail-phone.png" alt="A message on a phone" width="320">
 <img src="/screenshots/mail-phone-nav.png" alt="The navigation on a phone, opened with the menu button" width="320">
@@ -123,7 +130,17 @@ folder is compared once a day. See [Reconcile](./syncing#reconcile).
 
 ## Reading mail
 
+A message scrolls as one unit: the reading pane next to the list, or the
+whole page on a phone. Header, conversation and text move together.
+
 HTML mail is shown in a sandboxed frame: no scripts, no forms, no plugins.
+The frame cannot grow with the mail, so it is as tall as the visible area.
+Scroll down until it fills that area; from there the mail scrolls inside
+it. Until then the frame does not react to the mouse or touch: scrolling
+over it moves the message, and **Show full message** at the bottom, or a
+click on the mail, scrolls it fully into view first. So the first click
+on a link or the start of a text selection in a mail that is not fully
+shown only scrolls; the next one works as usual.
 **Remote images stay blocked** because they tell the sender that you opened
 the message (tracking pixels). Click **Load remote images** for one message
 to allow them. Images embedded in the message (`cid:`) are always shown if
@@ -148,7 +165,9 @@ section names the mailbox it came from and says that there is no envelope.
 Both are folded; a click on the title opens them.
 
 **Show text** switches to the plain-text version. **Download .eml** saves the
-original message, which any mail client opens.
+original message, which any mail client opens. On a phone both are icons,
+and **Found in** and the envelope or origin are behind **Details** (see
+[Layout](#layout)).
 
 Attachments are tiles below the headers, with the file type (such as PDF or
 DOCX), the name and the size; on a phone they scroll sideways. A tile is a
@@ -228,8 +247,11 @@ filters and full-text search find them; see [Upgrades](./operations#upgrades).
 
 ## Conversations
 
-A message that belongs to a conversation shows it above its text: the
-messages before and after it, oldest first, with date, sender and subject.
+A message that belongs to a conversation shows it above its text, oldest
+first, with date, sender and subject. A conversation of up to three
+messages shows in full. A longer one shows the message before and after
+the open one; the others are behind **Show n earlier messages** and **Show
+n later messages**.
 The message it answers is marked "In reply to", answers to it "Reply", and
 the open message "This message". Select one to open it. Messages from INBOX
 and Sent come together here, also from different accounts.
