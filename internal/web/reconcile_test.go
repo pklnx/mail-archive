@@ -2,9 +2,9 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -142,15 +142,11 @@ func TestReconcileButton(t *testing.T) {
 // for a new run stays as a guard.
 func waitNewRun(f *manageFixture, name, after string) accountJSON {
 	f.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		a := f.account(name)
-		if a.Sync.State == "idle" && a.Sync.LastRun != nil && a.Sync.LastRun.FinishedAt != nil &&
-			a.Sync.LastRun.StartedAt.String() != after {
-			return a
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	f.t.Fatalf("no new run of %s after %s", name, after)
-	return accountJSON{}
+	var a accountJSON
+	f.until(fmt.Sprintf("a new run of %s after %s", name, after), func() bool {
+		a = f.account(name)
+		return a.Sync.State == "idle" && a.Sync.LastRun != nil && a.Sync.LastRun.FinishedAt != nil &&
+			a.Sync.LastRun.StartedAt.String() != after
+	}, func() any { return a.Sync })
+	return a
 }

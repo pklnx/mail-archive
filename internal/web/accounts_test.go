@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 type manageFixture struct {
@@ -34,6 +36,9 @@ type manageFixture struct {
 	host       string
 	port       int
 	runnerDone chan struct{}
+	// changed is notified after each sync and fill run, once its claim
+	// has ended; the wait helpers wake on it.
+	changed *testwait.Signal
 }
 
 func newManageFixture(t *testing.T, users ...*imapmemserver.User) *manageFixture {
@@ -80,13 +85,28 @@ func newManageFixtureWith(t *testing.T, o manageOptions, users ...*imapmemserver
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// The signal exists before the runners start: their first run may
+	// come before newManageFixtureWith returns.
+	changed := &testwait.Signal{}
+	afterSync := func() {
+		if o.afterSync != nil {
+			o.afterSync()
+		}
+		changed.Notify()
+	}
+	afterRun := func() {
+		if o.afterRun != nil {
+			o.afterRun()
+		}
+		changed.Notify()
+	}
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
 	runner := &archive.Runner{Syncer: syncer, Schedule: sched, CheckEvery: 10 * time.Millisecond,
-		BeforeSync: o.beforeSync, AfterSync: o.afterSync}
+		BeforeSync: o.beforeSync, AfterSync: afterSync}
 	fills := &archive.FillRunner{Filler: &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}, Schedule: sched, CheckEvery: 10 * time.Millisecond,
-		BeforeRun: o.beforeRun, AfterRun: o.afterRun}
+		BeforeRun: o.beforeRun, AfterRun: afterRun}
 	ctx, cancel := context.WithCancel(context.Background())
-	f := &manageFixture{t: t, st: st, dbURL: dbURL, blobs: blobs, runnerDone: make(chan struct{})}
+	f := &manageFixture{t: t, st: st, dbURL: dbURL, blobs: blobs, runnerDone: make(chan struct{}), changed: changed}
 	fillsDone := make(chan struct{})
 	go func() { runner.Run(ctx); close(f.runnerDone) }()
 	go func() { fills.Run(ctx); close(fillsDone) }()
@@ -152,16 +172,26 @@ func (f *manageFixture) account(name string) accountJSON {
 // waitIdle waits until the account's sync finished and returns it.
 func (f *manageFixture) waitIdle(name string) accountJSON {
 	f.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		a := f.account(name)
-		if a.Sync.State == "idle" && a.Sync.LastRun != nil && a.Sync.LastRun.FinishedAt != nil {
-			return a
+	var a accountJSON
+	f.until(fmt.Sprintf("the sync of %q to finish", name), func() bool {
+		a = f.account(name)
+		return a.Sync.State == "idle" && a.Sync.LastRun != nil && a.Sync.LastRun.FinishedAt != nil
+	}, func() any { return a.Sync })
+	return a
+}
+
+// until waits until cond holds, woken after each run of the runners. If it
+// times out, it logs last's value, the state cond saw last.
+func (f *manageFixture) until(what string, cond func() bool, last func() any) {
+	f.t.Helper()
+	done := false
+	defer func() {
+		if !done {
+			f.t.Logf("last seen: %+v", last())
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	f.t.Fatalf("sync of %q did not finish", name)
-	return accountJSON{}
+	}()
+	testwait.Until(f.t, f.changed, what, cond)
+	done = true
 }
 
 func (f *manageFixture) newAccount(name, user, password string) map[string]any {

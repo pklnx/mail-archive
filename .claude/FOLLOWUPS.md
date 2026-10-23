@@ -22,7 +22,7 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 | #153 second review | `cmd/mail-archive/import.go:304-305`: a removed smtp account without `--journal` gets the hint "add --journal", which then says removed. Cosmetic. | open |
 | #153 second review | Optional: `CHECK (fill_id IS NULL OR import_id IS NULL)` on `message_locations`. | open |
 | #153 second review | `docs/guide/operations.md` 00029 row: deliveries wait while the ALTER holds its lock; suggest stopping the web server on very large archives, like the 00027 row. | open |
-| #153 first review | `TestFillCancelAndResume` (`internal/web/fills_test.go:292-304`) races: the fill status turns ok before `data.fill_done` is written (`internal/archive/fillrunner.go:235`) and the test polls with `time.Sleep`. Wait for the audit entry (e.g. via `AfterRun`). Failed once locally, not in CI. | open |
+| #153 first review | `TestFillCancelAndResume` (`internal/web/fills_test.go:292-304`) races: the fill status turns ok before `data.fill_done` is written (`internal/archive/fillrunner.go:235`) and the test polls with `time.Sleep`. Wait for the audit entry (e.g. via `AfterRun`). Failed once locally, not in CI. | done: waits for the `data.fill_done` entry, then for ok and idle (#220) |
 | #158 review | Move `RetentionPage` onto the shared `Tabs` component. | done: Carbon `Tabs` (#173) |
 | #160 review | `sidebarWidth` aria text is not locale-formatted ("13.25 rem" in German); a 28 rem sidebar at 1024 px leaves the reader narrow. | open |
 | #161 review | `docs/guide/web-ui.md` does not name the width bounds (12–28 rem) or Home/End/Enter on the handle. | done (#174) |
