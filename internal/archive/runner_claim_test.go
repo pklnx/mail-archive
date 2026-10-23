@@ -22,6 +22,15 @@ func runRunner(t *testing.T, ctx context.Context, run func(context.Context)) (st
 	return stop
 }
 
+// ids is the set of a Pending result's keys.
+func ids(m map[int64]time.Time) map[int64]bool {
+	out := make(map[int64]bool, len(m))
+	for id := range m {
+		out[id] = true
+	}
+	return out
+}
+
 func claimUser(t *testing.T) *imapmemserver.User {
 	u := imapmemserver.NewUser("u", "pw")
 	createMailboxes(t, u, "INBOX")
@@ -43,25 +52,35 @@ func TestRunnerClaimsUntilSyncReturns(t *testing.T) {
 	afterSync := make(chan map[int64]bool, 2)
 	r := &archive.Runner{Syncer: f.syncer, CheckEvery: time.Hour}
 	r.BeforeSync = func(ctx context.Context, id int64) {
-		entered <- r.Pending()
+		entered <- ids(r.Pending())
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
 	}
-	r.AfterSync = func() { afterSync <- r.Pending() }
+	r.AfterSync = func() { afterSync <- ids(r.Pending()) }
+	claimAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	r.Now = func() time.Time { return claimAt }
 	r.Enqueue(acc.ID)
+	// Only queued: no claim time.
+	if at, ok := r.Pending()[acc.ID]; !ok || !at.IsZero() {
+		t.Fatalf("queued: pending %v %v, want a zero claim time", at, ok)
+	}
 	runRunner(t, f.ctx, r.Run)
 
 	if p := <-entered; !maps.Equal(p, map[int64]bool{acc.ID: true}) {
 		t.Fatalf("pending in BeforeSync = %v, want the claimed account", p)
 	}
-	if p := r.Pending(); !p[acc.ID] {
-		t.Fatalf("pending while claimed = %v", p)
+	if at := r.Pending()[acc.ID]; !at.Equal(claimAt) {
+		t.Fatalf("claimed: claim time %v, want %v", at, claimAt)
 	}
-	// Queued again while it is claimed: one more sync, not two.
+	// Queued again while it is claimed: one more sync, not two. It keeps
+	// the time of its claim.
 	r.Enqueue(acc.ID)
 	r.Enqueue(acc.ID)
+	if at := r.Pending()[acc.ID]; !at.Equal(claimAt) {
+		t.Fatalf("claimed and queued again: claim time %v, want %v", at, claimAt)
+	}
 	release <- struct{}{}
 	if p := <-afterSync; !maps.Equal(p, map[int64]bool{acc.ID: true}) {
 		t.Fatalf("pending after the first sync = %v, want the queued account", p)
@@ -88,10 +107,10 @@ func TestRunnerReleasesClaimOfRemovedAccount(t *testing.T) {
 	r := &archive.Runner{Syncer: f.syncer, CheckEvery: time.Hour}
 	r.BeforeSync = func(_ context.Context, id int64) {
 		if id == acc.ID {
-			entered <- r.Pending()
+			entered <- ids(r.Pending())
 		}
 	}
-	r.AfterSync = func() { afterSync <- r.Pending() }
+	r.AfterSync = func() { afterSync <- ids(r.Pending()) }
 	r.Enqueue(gone.ID, acc.ID)
 	if _, err := f.store.DeleteOrRemoveAccount(f.ctx, gone.Ref()); err != nil {
 		t.Fatal(err)
@@ -125,14 +144,14 @@ func TestRunnerReleasesClaimOnCancel(t *testing.T) {
 			<-ctx.Done()
 		}
 	}
-	r.AfterSync = func() { afterSync <- r.Pending() }
+	r.AfterSync = func() { afterSync <- ids(r.Pending()) }
 	r.Enqueue(first.ID, second.ID)
 	stop := runRunner(t, f.ctx, r.Run)
 	if id := <-entered; id != first.ID {
 		t.Fatalf("first claimed %d, want %d", id, first.ID)
 	}
 	stop()
-	if p := r.Pending(); !maps.Equal(p, map[int64]bool{second.ID: true}) {
+	if p := ids(r.Pending()); !maps.Equal(p, map[int64]bool{second.ID: true}) {
 		t.Fatalf("pending after cancel = %v, want only the queued %d", p, second.ID)
 	}
 	if len(afterSync) != 0 {
@@ -157,23 +176,25 @@ func TestFillRunnerClaimsUntilRunReturns(t *testing.T) {
 	acc := f.smtpAccount()
 	fill := f.createFill(acc, "secret", "Spam")
 
-	entered := make(chan [2]map[int64]bool, 1)
+	entered := make(chan [2]map[int64]time.Time, 1)
 	release := make(chan struct{})
 	afterRun := make(chan [2]map[int64]bool, 1)
-	r := &archive.FillRunner{Filler: f.filler(), CheckEvery: time.Hour}
+	claimAt := time.Now().Add(-time.Minute).Truncate(time.Second)
+	r := &archive.FillRunner{Filler: f.filler(), CheckEvery: time.Hour, Now: func() time.Time { return claimAt }}
 	r.BeforeRun = func(ctx context.Context, id int64) {
-		entered <- [2]map[int64]bool{r.Pending(), r.PendingFills()}
+		entered <- [2]map[int64]time.Time{r.Pending(), r.PendingFills()}
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
 	}
-	r.AfterRun = func() { afterRun <- [2]map[int64]bool{r.Pending(), r.PendingFills()} }
+	r.AfterRun = func() { afterRun <- [2]map[int64]bool{ids(r.Pending()), ids(r.PendingFills())} }
 	runRunner(t, f.ctx, r.Run) // picks up the running fill
 
+	// Pending by account and by fill, with the time of the claim.
 	p := <-entered
-	if !maps.Equal(p[0], map[int64]bool{acc.ID: true}) || !maps.Equal(p[1], map[int64]bool{fill.ID: true}) {
-		t.Fatalf("pending in BeforeRun = %v, want account %d and fill %d", p, acc.ID, fill.ID)
+	if !maps.Equal(p[0], map[int64]time.Time{acc.ID: claimAt}) || !maps.Equal(p[1], map[int64]time.Time{fill.ID: claimAt}) {
+		t.Fatalf("pending in BeforeRun = %v, want account %d and fill %d claimed at %v", p, acc.ID, fill.ID, claimAt)
 	}
 	close(release)
 	if p := <-afterRun; len(p[0])+len(p[1]) != 0 {
@@ -189,13 +210,13 @@ func TestFillRunnerReleasesClaim(t *testing.T) {
 		acc := f.smtpAccount()
 		afterRun := make(chan map[int64]bool, 1)
 		r := &archive.FillRunner{Filler: f.filler(), CheckEvery: time.Hour}
-		r.AfterRun = func() { afterRun <- r.PendingFills() }
+		r.AfterRun = func() { afterRun <- ids(r.PendingFills()) }
 		r.Enqueue(999999, acc.ID)
 		runRunner(t, f.ctx, r.Run)
 		if p := <-afterRun; len(p) != 0 {
 			t.Fatalf("pending fills after the skipped run = %v", p)
 		}
-		if p := r.Pending(); len(p) != 0 {
+		if p := ids(r.Pending()); len(p) != 0 {
 			t.Fatalf("pending accounts after the skipped run = %v", p)
 		}
 	})
@@ -212,7 +233,7 @@ func TestFillRunnerReleasesClaim(t *testing.T) {
 		stop := runRunner(t, f.ctx, r.Run)
 		<-entered
 		stop()
-		if p, q := r.Pending(), r.PendingFills(); len(p)+len(q) != 0 {
+		if p, q := ids(r.Pending()), ids(r.PendingFills()); len(p)+len(q) != 0 {
 			t.Fatalf("pending after cancel = %v %v, want none", p, q)
 		}
 	})

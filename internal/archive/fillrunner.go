@@ -50,9 +50,15 @@ type FillRunner struct {
 	queue  []int64         // fill IDs
 	queued map[int64]int64 // fill ID -> account ID
 	// claimed holds the fills Run has taken from the queue and whose run
-	// has not returned yet (fill ID -> account ID).
-	claimed map[int64]int64
+	// has not returned yet, by fill ID.
+	claimed map[int64]fillClaim
 	wake    chan struct{}
+}
+
+// fillClaim is a fill Run took from the queue: its account, and when.
+type fillClaim struct {
+	account int64
+	at      time.Time
 }
 
 // Enqueue queues a running fill of the account. A fill already waiting is
@@ -74,30 +80,34 @@ func (r *FillRunner) Enqueue(fillID, accountID int64) {
 // Pending reports the accounts whose fill this runner works on: waiting
 // in the queue, or taken from it and not done yet (claimed). A fill taken
 // from the queue is claimed in the same step, so it is in one of the two
-// sets until its run has returned.
-func (r *FillRunner) Pending() map[int64]bool {
+// sets until its run has returned. The value is when Run took the
+// account's fill from the queue (Now), zero while it only waits in the
+// queue.
+func (r *FillRunner) Pending() map[int64]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[int64]bool, len(r.queued)+len(r.claimed))
+	out := make(map[int64]time.Time, len(r.queued)+len(r.claimed))
 	for _, acc := range r.queued {
-		out[acc] = true
+		if _, ok := out[acc]; !ok {
+			out[acc] = time.Time{}
+		}
 	}
-	for _, acc := range r.claimed {
-		out[acc] = true
+	for _, c := range r.claimed {
+		out[c.account] = c.at
 	}
 	return out
 }
 
 // PendingFills is Pending by fill ID.
-func (r *FillRunner) PendingFills() map[int64]bool {
+func (r *FillRunner) PendingFills() map[int64]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[int64]bool, len(r.queued)+len(r.claimed))
+	out := make(map[int64]time.Time, len(r.queued)+len(r.claimed))
 	for id := range r.queued {
-		out[id] = true
+		out[id] = time.Time{}
 	}
-	for id := range r.claimed {
-		out[id] = true
+	for id, c := range r.claimed {
+		out[id] = c.at
 	}
 	return out
 }
@@ -125,7 +135,7 @@ func (r *FillRunner) held() bool {
 func (r *FillRunner) init() {
 	if r.queued == nil {
 		r.queued = map[int64]int64{}
-		r.claimed = map[int64]int64{}
+		r.claimed = map[int64]fillClaim{}
 		r.wake = make(chan struct{}, 1)
 	}
 }
@@ -138,7 +148,7 @@ func (r *FillRunner) next() (int64, bool) {
 	}
 	id := r.queue[0]
 	r.queue = slices.Delete(r.queue, 0, 1)
-	r.claimed[id] = r.queued[id]
+	r.claimed[id] = fillClaim{account: r.queued[id], at: r.now()}
 	delete(r.queued, id)
 	return id, true
 }

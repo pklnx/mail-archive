@@ -274,14 +274,16 @@ An account counts as **failing** when its last
 the schedule, a button or `./ma sync` alike. It counts as **stale** when no
 sync succeeded within two of its sync intervals, at least one interval plus
 an hour (counted from when it was added, if it never did). A sync that is
-running or waiting in the queue makes no account stale; a running one counts
-from its start, so a sync that hangs is still reported. Waiting includes a
-sync of the web server that waits for a `./ma verify` or a deletion to
-finish with the archive's files: the account
-shows "Waiting to sync…" and does not turn stale for as long as that takes.
-A sync that `./ma sync` started waits the same way, but the web server does
-not see it while it waits. Accounts the
-schedule does not sync are never stale. Both show in the web UI and in
+running or waiting makes no account stale for a while: a running one
+counts from its start, and one the web server has taken from the queue
+counts from then, also while it waits for a `./ma verify` or a deletion to
+finish with the archive's files (the account shows "Waiting to sync…"). So
+a sync that hangs, or waits for ever behind a verify that hangs, is still
+reported; a normal verify ends well before that. An account that only
+waits in the queue counts from now, because the sync ahead of it is
+reported. A sync that `./ma sync` started waits for a verify the same way,
+but the web server does not see it while it waits. Accounts the schedule
+does not sync are never stale. Both show in the web UI and in
 [`/healthz/sync`](./operations#healthz-sync); a failing account also sends an
 alert if a [webhook](./operations#webhook-alerts) is set up.
 

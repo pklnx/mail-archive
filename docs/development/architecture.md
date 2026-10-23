@@ -166,11 +166,12 @@ and imports read the account again. So a parked sync holds no account
 lock: `SyncingAccounts` does not report it. The web server shows its own
 parked syncs and fills as `queued`, because its runners claim an account
 or fill from the moment they take it off the queue until its run has
-returned (`Runner.Pending`, `FillRunner.Pending`; see `loadBusy`), and
-`queued` keeps the account from turning stale meanwhile. A parked sync of
-the CLI is not shown: it holds no lock and the web server does not know
-of it. The account can be deleted meanwhile, and the CLI's "is being synced ... by another
-process" can also mean that it lost that race after waiting. The sweep
+returned (`Runner.Pending`, `FillRunner.Pending`; see `loadBusy`). Its
+health counts from the claim, so a sync parked behind a verify that hangs
+turns stale after `StaleAfter`. A parked sync of the CLI is not shown: it
+holds no lock and the web server does not know of it. The account can be
+deleted meanwhile, and the CLI's "is being synced ... by another process"
+can also mean that it lost that race after waiting. The sweep
 takes its session connection anew for each try of the lock, so it keeps
 no connection while it waits either.
 

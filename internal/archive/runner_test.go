@@ -164,7 +164,7 @@ func TestRunnerUpgradesQueuedSync(t *testing.T) {
 	r.Enqueue(acc.ID)
 	r.EnqueueWith(archive.SyncOptions{Reconcile: true}, acc.ID)
 	r.Enqueue(acc.ID) // does not downgrade it
-	if q := r.Pending(); len(q) != 1 || !q[acc.ID] {
+	if q := ids(r.Pending()); len(q) != 1 || !q[acc.ID] {
 		t.Fatalf("queued = %v", q)
 	}
 	ctx, cancel := context.WithCancel(f.ctx)

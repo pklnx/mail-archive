@@ -122,10 +122,15 @@ type busyState struct {
 	// does not hold the sync lock: it waits in the queue, for the
 	// account's lock or, parked, for the blob lock.
 	queued map[int64]bool
-	runs   map[int64]store.LastRun
+	// claimedAt: when this server's runners took the account's sync or
+	// fill from the queue, for the claimed ones (also while they run).
+	claimedAt map[int64]time.Time
+	runs      map[int64]store.LastRun
 	// fillsQueued: fills this server's fill runner works on (waiting,
-	// claimed or running), by fill ID.
-	fillsQueued map[int64]bool
+	// claimed or running), by fill ID; fillsClaimedAt: when it took the
+	// claimed ones from the queue.
+	fillsQueued    map[int64]bool
+	fillsClaimedAt map[int64]time.Time
 	// holdUntil: until then recurring fills wait after this server's
 	// start (archive.RecurringStartHold).
 	holdUntil time.Time
@@ -142,20 +147,32 @@ type busyState struct {
 // poll sees the finished run as queued, so a sync can show running, then
 // queued, then idle.
 func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
-	b := busyState{}
-	var pending map[int64]bool
+	b := busyState{claimedAt: map[int64]time.Time{}, fillsClaimedAt: map[int64]time.Time{}}
+	pending := map[int64]bool{}
+	// claim keeps the earliest claim of an account.
+	claim := func(m map[int64]time.Time, id int64, at time.Time) {
+		if cur, ok := m[id]; !at.IsZero() && (!ok || at.Before(cur)) {
+			m[id] = at
+		}
+	}
 	if s.runner != nil {
-		pending = s.runner.Pending()
+		for id, at := range s.runner.Pending() {
+			pending[id] = true
+			claim(b.claimedAt, id, at)
+		}
 	}
 	if s.fills != nil {
 		// A pending fill shows as a sync of its smtp account.
-		if pending == nil {
-			pending = map[int64]bool{}
-		}
-		for id := range s.fills.Pending() {
+		for id, at := range s.fills.Pending() {
 			pending[id] = true
+			claim(b.claimedAt, id, at)
 		}
-		b.fillsQueued = s.fills.PendingFills()
+		fills := s.fills.PendingFills()
+		b.fillsQueued = make(map[int64]bool, len(fills))
+		for id, at := range fills {
+			b.fillsQueued[id] = true
+			claim(b.fillsClaimedAt, id, at)
+		}
 		b.holdUntil = s.fills.HoldUntil
 	}
 	var err error
@@ -165,27 +182,40 @@ func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 	if b.runs, err = s.store.LastRuns(ctx); err != nil {
 		return b, err
 	}
-	if pending != nil {
-		b.queued = map[int64]bool{}
-		for id := range pending {
-			if !b.running[id] {
-				b.queued[id] = true
-			}
+	b.queued = map[int64]bool{}
+	for id := range pending {
+		if !b.running[id] {
+			b.queued[id] = true
 		}
 	}
 	return b, nil
 }
 
+// claimedSince is when a runner took the work from the queue, or now while
+// it only waits in it. So a claimed sync or fill that waits for the blob
+// lock for ever (a hung verify) still turns stale once it has waited longer
+// than StaleAfter; the work queued behind it counts from now, since the
+// claimed one is reported.
+func claimedSince(claimedAt map[int64]time.Time, id int64, now time.Time) *time.Time {
+	if at, ok := claimedAt[id]; ok {
+		return &at
+	}
+	return &now
+}
+
 // fillSince is when a recurring fill became busy: the start of its run
-// while one is in progress (or waits to start, or to be continued); now
-// while it waits in the queue or behind another run of its account (the
-// account's sync lock is held); the server's start during the hold after
-// it, when no recurring fill runs; nil otherwise.
+// while one is in progress (or waits to start, or to be continued); when
+// the fill runner took it from the queue while it waits for the locks
+// (claimedSince), now while it waits in the queue or behind another run of
+// its account (the account's sync lock is held); the server's start during
+// the hold after it, when no recurring fill runs; nil otherwise.
 func (b busyState) fillSince(h *store.FillHealth, now time.Time) *time.Time {
 	switch {
 	case h.Running && h.RunStartedAt != nil && !now.Before(b.holdUntil):
 		return h.RunStartedAt
-	case b.fillsQueued[h.FillID], b.running[h.AccountID]:
+	case b.fillsQueued[h.FillID]:
+		return claimedSince(b.fillsClaimedAt, h.FillID, now)
+	case b.running[h.AccountID]:
 		return &now
 	case now.Before(b.holdUntil):
 		start := b.holdUntil.Add(-archive.RecurringStartHold)
@@ -204,17 +234,20 @@ func (s *Server) fillHealthState(h *store.FillHealth, busy busyState, now time.T
 	return h.State(s.alertAfter, s.schedule().Every(h.Interval), busy.fillSince(h, now), now)
 }
 
-// since is when the account became busy: the start of its running sync,
-// or now while it waits; nil when it is idle.
+// since is when the account became busy: the start of its running sync;
+// before its run's row is written, or while it waits for the locks, when
+// this server's runner took it from the queue (claimedSince); now while it
+// waits in the queue, or while the CLI holds its lock before writing the
+// row; nil when it is idle.
 func (b busyState) since(id int64, now time.Time) *time.Time {
 	switch {
 	case b.running[id]:
 		if run, ok := b.runs[id]; ok && run.FinishedAt == nil {
 			return &run.StartedAt
 		}
-		return &now // the run's row is not written yet
+		return claimedSince(b.claimedAt, id, now) // the run's row is not written yet
 	case b.queued[id]:
-		return &now
+		return claimedSince(b.claimedAt, id, now)
 	}
 	return nil
 }

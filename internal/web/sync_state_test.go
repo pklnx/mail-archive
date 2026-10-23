@@ -164,12 +164,28 @@ func TestParkedSyncShowsQueued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	later := time.Now().Add(48 * time.Hour)
-	if got := h.State(f.server.alertAfter, time.Hour, busy.since(id, later), later); got == store.HealthStale {
-		t.Errorf("parked sync: health %s, want not stale", got)
+	claimedAt, ok := busy.claimedAt[id]
+	if !ok || claimedAt.Before(old) || claimedAt.After(time.Now()) {
+		t.Fatalf("claim time %v (%v), want between the last run %v and now", claimedAt, ok, old)
 	}
-	if got := h.State(f.server.alertAfter, time.Hour, busyState{}.since(id, later), later); got != store.HealthStale {
+	// Seen from shortly after the claim, with the last success long ago:
+	// the parked sync counts from its claim, so the account is not stale,
+	// while an idle one would be.
+	every := time.Hour
+	longAgo := claimedAt.Add(-48 * time.Hour)
+	h.LastSuccessAt, h.CreatedAt = &longAgo, longAgo
+	soon := claimedAt.Add(time.Minute)
+	if got := h.State(f.server.alertAfter, every, busy.since(id, soon), soon); got == store.HealthStale {
+		t.Errorf("recently parked sync: health %s, want not stale", got)
+	}
+	if got := h.State(f.server.alertAfter, every, busyState{}.since(id, soon), soon); got != store.HealthStale {
 		t.Fatalf("idle control: health %s, want stale", got)
+	}
+	// A sync parked for longer than StaleAfter (a verify that hangs) turns
+	// the account stale again.
+	stuck := claimedAt.Add(store.StaleAfter(every) + time.Minute)
+	if got := h.State(f.server.alertAfter, every, busy.since(id, stuck), stuck); got != store.HealthStale {
+		t.Errorf("sync parked for longer than %v: health %s, want stale", store.StaleAfter(every), got)
 	}
 
 	if _, err := observer.Exec(ctx, "SELECT pg_advisory_unlock($1, 0)", blobLockKey); err != nil {
@@ -191,8 +207,8 @@ func TestParkedSyncShowsQueued(t *testing.T) {
 
 // TestClaimedFillShowsQueued (#187): a fill the fill runner took from the
 // queue shows its account as queued until the run holds the account's
-// lock, and counts as busy for its health: from now while it waits, from
-// its run's start while it runs.
+// lock, and counts as busy for its health: from its claim while it waits,
+// from its run's start while it runs.
 func TestClaimedFillShowsQueued(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -231,9 +247,13 @@ func TestClaimedFillShowsQueued(t *testing.T) {
 	}
 	now := time.Now()
 	started := now.Add(-time.Hour)
+	claimedAt, ok := busy.fillsClaimedAt[fillID]
+	if !ok || claimedAt.After(now) {
+		t.Fatalf("fill claim time %v (%v), want one before now", claimedAt, ok)
+	}
 	h := &store.FillHealth{FillID: fillID, AccountID: acc.ID}
-	if got := busy.fillSince(h, now); got == nil || !got.Equal(now) {
-		t.Errorf("waiting fill: since %v, want now", got)
+	if got := busy.fillSince(h, now); got == nil || !got.Equal(claimedAt) {
+		t.Errorf("claimed fill before its run: since %v, want its claim %v", got, claimedAt)
 	}
 	// Claimed for the whole run: a running fill keeps counting from its
 	// run's start.
@@ -250,5 +270,44 @@ func TestClaimedFillShowsQueued(t *testing.T) {
 	}
 	if a := f.account("journal"); a.Sync.State != "idle" || a.Fill == nil || a.Fill.Status != store.FillOK {
 		t.Fatalf("after the fill: state %s, fill %+v", a.Sync.State, a.Fill)
+	}
+}
+
+// TestBusySinceUsesClaimTime (#187): a sync of this server counts from its
+// run's start once the row is written; before that, and while it waits for
+// the locks, from when the runner claimed it; work that only waits in the
+// queue, and the CLI before its row, count from now.
+func TestBusySinceUsesClaimTime(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	claimed, started := now.Add(-3*time.Hour), now.Add(-2*time.Hour)
+	finished := now.Add(-time.Hour)
+	for _, c := range []struct {
+		name string
+		b    busyState
+		want *time.Time
+	}{
+		{"idle", busyState{}, nil},
+		{"queued", busyState{queued: map[int64]bool{1: true}}, &now},
+		{"claimed or parked", busyState{queued: map[int64]bool{1: true}, claimedAt: map[int64]time.Time{1: claimed}}, &claimed},
+		{"running before its row", busyState{running: map[int64]bool{1: true}, claimedAt: map[int64]time.Time{1: claimed},
+			runs: map[int64]store.LastRun{1: {StartedAt: now.Add(-5 * time.Hour), FinishedAt: &finished}}}, &claimed},
+		{"running", busyState{running: map[int64]bool{1: true}, claimedAt: map[int64]time.Time{1: claimed},
+			runs: map[int64]store.LastRun{1: {StartedAt: started}}}, &started},
+		{"CLI before its row", busyState{running: map[int64]bool{1: true}}, &now},
+	} {
+		got := c.b.since(1, now)
+		if (got == nil) != (c.want == nil) || got != nil && !got.Equal(*c.want) {
+			t.Errorf("%s: since %v, want %v", c.name, got, c.want)
+		}
+	}
+	// The same for a recurring fill between runs.
+	h := &store.FillHealth{FillID: 7, AccountID: 1}
+	b := busyState{fillsQueued: map[int64]bool{7: true}, fillsClaimedAt: map[int64]time.Time{7: claimed}}
+	if got := b.fillSince(h, now); got == nil || !got.Equal(claimed) {
+		t.Errorf("claimed fill: since %v, want %v", got, claimed)
+	}
+	b.fillsClaimedAt = nil
+	if got := b.fillSince(h, now); got == nil || !got.Equal(now) {
+		t.Errorf("queued fill: since %v, want now", got)
 	}
 }

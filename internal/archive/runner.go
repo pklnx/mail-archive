@@ -38,8 +38,9 @@ type Runner struct {
 	queued map[int64]SyncOptions
 	// claimed holds the accounts Run has taken from the queue and whose
 	// sync has not returned yet: it waits for or holds the account's sync
-	// lock, or waits for the blob lock (parked).
-	claimed map[int64]bool
+	// lock, or waits for the blob lock (parked). The value is when Run
+	// took it.
+	claimed map[int64]time.Time
 	wake    chan struct{}
 }
 
@@ -75,24 +76,32 @@ func (r *Runner) EnqueueWith(opts SyncOptions, ids ...int64) {
 // or taken from it and not done yet (claimed). An account taken from the
 // queue is claimed in the same step, so it is in one of the two sets until
 // its sync has returned; by then its sync lock is released and the run's
-// row is finished.
-func (r *Runner) Pending() map[int64]bool {
+// row is finished. The value is when Run took the account from the queue
+// (Now), zero while it only waits in the queue.
+func (r *Runner) Pending() map[int64]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make(map[int64]bool, len(r.queued)+len(r.claimed))
+	out := make(map[int64]time.Time, len(r.queued)+len(r.claimed))
 	for id := range r.queued {
-		out[id] = true
+		out[id] = time.Time{}
 	}
-	for id := range r.claimed {
-		out[id] = true
+	for id, at := range r.claimed {
+		out[id] = at
 	}
 	return out
+}
+
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func (r *Runner) init() {
 	if r.queued == nil {
 		r.queued = map[int64]SyncOptions{}
-		r.claimed = map[int64]bool{}
+		r.claimed = map[int64]time.Time{}
 		r.wake = make(chan struct{}, 1)
 	}
 }
@@ -114,7 +123,7 @@ func (r *Runner) next() (int64, SyncOptions, bool) {
 	r.queue = slices.Delete(r.queue, 0, 1)
 	opts := r.queued[id]
 	delete(r.queued, id)
-	r.claimed[id] = true
+	r.claimed[id] = r.now()
 	return id, opts, true
 }
 
@@ -166,11 +175,7 @@ func (r *Runner) enqueueDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now
-	if r.Now != nil {
-		now = r.Now
-	}
-	if due := dueAccounts(accounts, runs, r.Schedule, now()); len(due) > 0 {
+	if due := dueAccounts(accounts, runs, r.Schedule, r.now()); len(due) > 0 {
 		r.Enqueue(due...)
 	}
 	return nil
