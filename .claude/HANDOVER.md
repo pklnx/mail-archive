@@ -45,7 +45,7 @@ State of the work for the next session. Update before a session ends.
 
 ## Maintainer actions
 - Add `web-e2e` to the required checks in the ruleset (the coordinator must not change rulesets).
-- Sign off part 3 (look and effort): screenshots are in the session; the PR #188 body has an effort note (18 files, +1881/-755).
+- Sign off part 3 (look and effort): screenshots are in the session; the PR #188 body has an effort note (the merged PR: 19 files, +1955/-755).
 - Release decision.
 
 ## Manual checks for the maintainer
