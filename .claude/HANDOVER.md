@@ -5,8 +5,25 @@ State of the work for the next session. Update before a session ends.
 ## Open PRs
 - None besides this handover update.
 
-## Next tickets
-- #200 (in planning): the message view has nested scroll areas, so the mail body is too small to read, on phone and desktop. It blocks release 26.10-10. Maintainer decisions are on the issue: fix now, then release; fold the conversation list as before Carbon.
+## Open tickets
+- #209: neutralize declarative shadow roots on the server, and block links before the frame's `load`. No other open tickets.
+
+## State (2026-10-23 evening)
+- Release v26.10-10 is out (#200, message view scrolling).
+- Release v26.10-11 is out on main e88dc92, image digest sha256:eeab5d41.... It contains:
+  - #207, #203 part 1: a same-origin mail frame without scripts, a parent-side auto-height (`frameFit.ts`), a same-origin link blocker (click/auxclick/dragstart, `composedPath`), and a Fetch Metadata guard with a navigation allowlist in `protect`.
+  - #210, #203 part 2: a compact header and the conversation overlay.
+  - #208, #206: standards mode for mails with a doctype.
+- The maintainer checks 26.10-11 on a real iPhone after the release.
+
+## Lessons (2026-10-23)
+- Stacking PRs on an in-review PR and rebasing them with `--onto` after the squash merge worked well under deadline.
+- e2e must never evaluate inside the sandboxed frame (`contentFrame`/`frame.evaluate`). It causes CI-only "Blocked script execution in 'about:blank'" failures. Read via `iframe.contentDocument` from the parent page.
+- Port 18181 contention between parallel agents: wait, never kill.
+
+## Done (2026-10-23, evening)
+- Release v26.10-10: #200 (message view scrolling).
+- Release v26.10-11: #207 and #210 (#203 parts 1 and 2), #208 (#206). See State above.
 
 ## Done (2026-10-23)
 - #182: inline `cid:` images as `data:` URLs (PR #192).
@@ -47,11 +64,11 @@ State of the work for the next session. Update before a session ends.
 - 2026-10-22: #150 closed (release notes of 26.10-7/-8 edited by the maintainer; PR #159: `./ma migrate` rebuilds indexes of an Alpine-built database, other commands refuse until then). #156 (PR #158, profile tabs; tab bar shrink fix in PR #161). #157 (PR #160, resizable and collapsible sidebar). PR #161: screenshots regenerated, new rule: UI PRs update screenshots and docs text.
 
 ## Maintainer actions
-- Release 26.10-10 after #200 is fixed.
+- Check release 26.10-11 on a real iPhone (message view, compact header, conversation overlay, link blocking).
 
 ## Manual checks for the maintainer
 - #186: `docker build`, confirming no postinstall or telemetry runs.
-- #181: first-run timing of `web-e2e` in CI, under 5 minutes.
+- #181: first-run timing of `web-e2e` in CI, under 5 minutes (PR #210 took 11 minutes, see FOLLOWUPS).
 - #159: upgrade a real volume created by `postgres:18-alpine` (bundle <= 26.10-6): `./ma status` refuses, `./ma migrate` rebuilds and records the marker, then commands work.
 - #158/#160: look at the profile tabs and the sidebar in a browser (EN/DE, light/dark, 320 px and 1024 px width, touch drag, many accounts).
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.

@@ -75,4 +75,17 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 | #198 reviews ([1](https://github.com/pklnx/mail-archive/pull/198#issuecomment-6361774762), [2](https://github.com/pklnx/mail-archive/pull/198#issuecomment-6361858196), [3](https://github.com/pklnx/mail-archive/pull/198#issuecomment-6361973290)) | `web-ui.md` wording: "into an smtp or import account". | open |
 | #199 review ([1](https://github.com/pklnx/mail-archive/pull/199#issuecomment-6362951495)) | Focus after dismissing the last filter tag. | open |
 | #199 review ([1](https://github.com/pklnx/mail-archive/pull/199#issuecomment-6362951495)) | Optional: one-line "Edit filters" in the narrow desktop column. | open |
+| #207 reviews | Fits that leave the height unchanged do not reset the loop-guard count. | open |
+| #207 reviews | No unit test for the "already loaded when attached" branch. | open |
+| #207 reviews | No dark-theme geometry check in e2e. | open |
+| #208 reviews | The fuzz round-trip can report a false positive when a comment holds the preamble text. | open |
+| #208 reviews | Chromium skips NUL before a doctype, but `withPreamble` treats it as text. | open |
+| #208 reviews | With a BOM and no doctype, the preamble goes in front of the BOM. | open |
+| #210 reviews | Escape does nothing when focus fell to `body` after a click on a non-focusable part of the panel. | open |
+| #210 reviews | The subject-focus flag stays set if the picked message fails to load. | open |
+| #210 reviews | The e2e scrim click only runs at scroll 0. | open |
+| #210 reviews | The panel position updates only on window resize, not on a pane resize. | open |
+| CI (PR #210) | The `web-e2e` job took 11 minutes instead of about 2; check for Playwright retries hiding flakiness. | open |
+| Older (2026-10-23) | A phone swipe over the SideNav scrim can scroll the page behind while a message is open. | open |
+| Older (2026-10-23) | WebKit is not in CI (iPhone checks are manual). | open |
 | Environment (2026-10-23) | The e2e suite needs `DEMO_DATABASE_URL`. The pnpm wrapper is needed because corepack points to a missing pnpm version (see HANDOVER, Environment). | note |
