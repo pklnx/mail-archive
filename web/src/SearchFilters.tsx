@@ -1,3 +1,5 @@
+import { Checkbox, DismissibleTag, Layer, TextInput } from "@carbon/react";
+import { day } from "./format";
 import { parseQuery, setToken, type TokenKey } from "./searchSyntax";
 import { t } from "./i18n";
 
@@ -10,37 +12,66 @@ interface Props {
   setGroup: (on: boolean) => void;
 }
 
-const field =
-  "w-full min-w-0 rounded border border-line-control bg-field px-2 py-1 text-xs pointer-coarse:min-h-11";
-
 /**
- * Filters under the search field, for people who do not type prefixes.
- * They edit the prefix tokens in the search text, so both stay in sync.
- * Attachment names (attachment:) are typed only.
+ * The filter panel under the search field, for people who do not type
+ * prefixes. The filter button toggles it, on phones and desktops alike.
+ * The fields edit the prefix tokens in the search text, so both stay in
+ * sync. Attachment names (attachment:) are typed only.
  */
-export function SearchFilters({ query, setQuery, group, setGroup }: Props) {
+export function SearchFilters({ id, query, setQuery, group, setGroup }: Props & { id?: string }) {
   const p = parseQuery(query);
   const set = (key: TokenKey, value: string) => setQuery(setToken(query, key, value));
   const input = (key: "from" | "to" | "after" | "before", label: string, type: "text" | "date") => (
-    <label className="flex min-w-0 flex-col gap-0.5">
-      <span className="text-ink-muted">{label}</span>
-      <input type={type} className={field} value={p[key]} onChange={(e) => set(key, e.target.value)} />
-    </label>
+    <TextInput id={`${id ?? "filters"}-${key}`} size="sm" type={type} labelText={label} value={p[key]} onChange={(e) => set(key, e.target.value)} />
   );
   return (
-    <div role="group" aria-label={t.filters} className="grid grid-cols-2 gap-x-2 gap-y-1.5 border-b border-line p-2 text-xs">
+    // A layer up from the list, so the fields contrast with the panel.
+    <Layer id={id} role="group" aria-label={t.filters} className="search-filters">
       {input("from", t.from, "text")}
       {input("to", t.toOrCc, "text")}
       {input("after", t.since, "date")}
       {input("before", t.before, "date")}
-      <label className="flex items-center gap-2 pointer-coarse:min-h-11">
-        <input type="checkbox" checked={p.hasAttachment} onChange={(e) => set("has", e.target.checked ? "attachment" : "")} />
-        {t.hasAttachment}
-      </label>
-      <label className="flex items-center gap-2 pointer-coarse:min-h-11">
-        <input type="checkbox" checked={group} onChange={(e) => setGroup(e.target.checked)} />
-        {t.groupByConversation}
-      </label>
-    </div>
+      <Checkbox
+        id={`${id ?? "filters"}-has`}
+        labelText={t.hasAttachment}
+        checked={p.hasAttachment}
+        onChange={(_, { checked }) => set("has", checked ? "attachment" : "")}
+      />
+      <Checkbox id={`${id ?? "filters"}-group`} labelText={t.groupByConversation} checked={group} onChange={(_, { checked }) => setGroup(checked)} />
+    </Layer>
+  );
+}
+
+/**
+ * The filters that are set, as tags under the search field; each one's
+ * dismiss button removes it from the search text (or the grouping). A date
+ * range is one tag for both ends.
+ */
+export function ActiveFilters({ query, setQuery, group, setGroup }: Props) {
+  const p = parseQuery(query);
+  const clear = (...keys: TokenKey[]) => setQuery(keys.reduce((q, k) => setToken(q, k, ""), query));
+  const range = p.after || p.before ? `${p.after ? day(p.after) : "…"} – ${p.before ? day(p.before) : "…"}` : "";
+  const tags: { label: string; text: string; remove: () => void }[] = [];
+  if (p.hasAttachment) tags.push({ label: t.hasAttachment, text: t.hasAttachment, remove: () => clear("has") });
+  if (range) tags.push({ label: t.dateRange, text: `${t.dateRange}: ${range}`, remove: () => clear("after", "before") });
+  if (p.from) tags.push({ label: t.from, text: `${t.from}: ${p.from}`, remove: () => clear("from") });
+  if (p.to) tags.push({ label: t.toOrCc, text: `${t.toOrCc}: ${p.to}`, remove: () => clear("to") });
+  if (group) tags.push({ label: t.conversation, text: t.groupByConversation, remove: () => setGroup(false) });
+  if (!tags.length) return null;
+  return (
+    <ul aria-label={t.activeFilters} className="active-filters">
+      {tags.map((tag) => (
+        <li key={tag.label}>
+          <DismissibleTag
+            size="sm"
+            type="gray"
+            text={tag.text}
+            title={t.removeFilter(tag.label)}
+            dismissTooltipLabel={t.removeFilter(tag.label)}
+            onClose={tag.remove}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }

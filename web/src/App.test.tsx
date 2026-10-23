@@ -4,7 +4,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { Account, AccountsResponse, Folder, User } from "./api";
+import type { Account, AccountsResponse, Folder, MessageDetail, MessageSummary, User } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
 
 const f = (name: string, messages = 1): Folder => ({ name, delimiter: "/", messages, lastSyncedAt: null, lastReconciledAt: null });
@@ -40,13 +40,32 @@ function screenWidth(wide: boolean) {
     }) as MediaQueryList;
 }
 
+const summary = (id: string, subject: string): MessageSummary => ({
+  id, size: 1, subject, from: "Sam <sam@example.org>", sentAt: "2026-10-01T09:00:00Z", sortAt: "2026-10-01T09:00:00Z", hasAttachment: false,
+});
+const detail = (id: string): MessageDetail => ({
+  ...summary(id, `Subject ${id}`), messageId: `<${id}@example.org>`, to: "alice@example.org", cc: "", dateHeader: "", text: "Hello",
+  hasHtml: false, truncated: false, parts: [], locations: [], retainUntil: null,
+});
+/** The messages the list gets; none unless a test sets them. */
+let listed: MessageSummary[] = [];
+
 const original = window.matchMedia;
 beforeEach(() => {
+  listed = [];
   window.history.replaceState(null, "", "/");
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string) => {
-      const body = path.startsWith("/api/accounts") ? accounts : path.startsWith("/api/messages") ? { messages: [], nextCursor: null } : {};
+      const body = path.startsWith("/api/accounts")
+        ? accounts
+        : path.startsWith("/api/messages?")
+          ? { messages: listed, nextCursor: null }
+          : path.endsWith("/conversation")
+            ? { messages: [], total: 0, truncated: false }
+            : path.startsWith("/api/messages/")
+              ? detail(path.split("/")[3]!)
+              : {};
       return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
     }),
   );
@@ -137,7 +156,8 @@ describe("phone navigation (below lg)", () => {
     dialog.querySelector<HTMLElement>("[role=treeitem]")!.focus();
     // The shortcuts are off while it is open.
     key(document.activeElement!, "?");
-    expect(document.querySelector("dialog[open]")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull();
+    expect(document.querySelector(".cds--modal")).toBeNull();
     // Escape on a tree node: Carbon's TreeView keeps the key from bubbling.
     key(document.activeElement!, "Escape");
     expect(foldersDialog()).toBeNull();
@@ -236,5 +256,164 @@ describe("desktop navigation (lg and up)", () => {
     key(search, "g");
     key(search, "a");
     expect(window.location.search).toBe("?account=work");
+  });
+});
+
+describe("keyboard shortcuts in the mail view", () => {
+  beforeEach(() => {
+    screenWidth(true);
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  const searchbox = () => screen.getByRole("searchbox", { name: t.searchMail }) as HTMLInputElement;
+  const shortcutsDialog = () => screen.queryByRole("dialog", { name: t.shortcuts });
+  const listReady = () => screen.findByRole("button", { name: /First/ });
+  const params = () => new URLSearchParams(window.location.search);
+
+  it("opens the shortcuts as a passive Carbon Modal; the shortcuts are off while it is open", async () => {
+    await renderApp();
+    await listReady();
+    const node = screen.getByRole("treeitem", { name: "INBOX 5" });
+    node.focus();
+    key(node, "?");
+    const dialog = shortcutsDialog()!;
+    expect(dialog.closest(".cds--modal")?.className).toContain("is-visible");
+    // Passive: no buttons but its close button.
+    expect(within(dialog).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([t.carbon.closeModal]);
+    expect(within(dialog).getByText(t.keyNext)).toBeTruthy();
+    // Focus is in the Modal (Carbon moves it there).
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    key(document.activeElement!, "j");
+    expect(params().get("m")).toBeNull();
+    key(document.activeElement!, "Escape");
+    await waitFor(() => expect(shortcutsDialog()).toBeNull());
+    expect(document.activeElement).toBe(node);
+  });
+
+  it("ignores ?, j and k while the search field has focus", async () => {
+    window.history.replaceState(null, "", "/?m=m1");
+    await renderApp();
+    await listReady();
+    const search = searchbox();
+    search.focus();
+    key(search, "?");
+    expect(shortcutsDialog()).toBeNull();
+    key(search, "j");
+    key(search, "k");
+    expect(params().get("m")).toBe("m1");
+    // The same keys outside a field work.
+    const node = screen.getByRole("treeitem", { name: "INBOX 5" });
+    node.focus();
+    key(node, "j");
+    expect(params().get("m")).toBe("m2");
+    key(node, "k");
+    expect(params().get("m")).toBe("m1");
+  });
+
+  it("clears the search with Escape without leaving the open message", async () => {
+    window.history.replaceState(null, "", "/?m=m1");
+    await renderApp();
+    await screen.findByRole("article");
+    const search = searchbox();
+    search.focus();
+    fireEvent.change(search, { target: { value: "invoice" } });
+    expect(search.value).toBe("invoice");
+    key(search, "Escape");
+    expect(search.value).toBe("");
+    expect(document.activeElement).toBe(search);
+    expect(params().get("m")).toBe("m1");
+    expect(screen.getByRole("article")).toBeTruthy();
+    // In the empty field Escape leaves it; then Escape closes the message.
+    key(search, "Escape");
+    expect(document.activeElement).not.toBe(search);
+    expect(params().get("m")).toBe("m1");
+    key(document.body, "Escape");
+    expect(params().get("m")).toBeNull();
+  });
+
+  it("leaves Escape to the SideNav rail and to an open tooltip: the message stays open", async () => {
+    window.history.replaceState(null, "", "/?m=m1");
+    await renderApp();
+    await listReady();
+    await screen.findByRole("article");
+    const link = within(sideNav()).getByRole("link", { name: t.log });
+    link.focus();
+    key(link, "Escape");
+    expect(params().get("m")).toBe("m1");
+    // An icon button shows its tooltip on keyboard focus; the first Escape closes it.
+    const pager = screen.getByRole("button", { name: t.nextMessage });
+    act(() => pager.focus());
+    await waitFor(() => expect(document.querySelector(".cds--popover--open")).not.toBeNull());
+    key(pager, "Escape");
+    expect(params().get("m")).toBe("m1");
+    await waitFor(() => expect(document.querySelector(".cds--popover--open")).toBeNull());
+    key(pager, "Escape");
+    expect(params().get("m")).toBeNull();
+  });
+
+  it("toggles the filter panel with the filter button and shows the set filters as tags", async () => {
+    window.history.replaceState(null, "", "/?q=from%3Asam%20invoice");
+    await renderApp();
+    const button = screen.getByRole("button", { name: t.filters });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("group", { name: t.filters })).toBeNull();
+    const tags = screen.getByRole("list", { name: t.activeFilters });
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    const panel = screen.getByRole("group", { name: t.filters });
+    expect(button.getAttribute("aria-controls")).toBe(panel.id);
+    expect((within(panel).getByRole("textbox", { name: t.from }) as HTMLInputElement).value).toBe("sam");
+    fireEvent.click(within(tags).getByRole("button", { name: t.removeFilter(t.from) }));
+    expect(searchbox().value).toBe("invoice");
+    expect(screen.queryByRole("list", { name: t.activeFilters })).toBeNull();
+    fireEvent.click(button);
+    expect(screen.queryByRole("group", { name: t.filters })).toBeNull();
+  });
+
+  it("speaks German in the list, the search, the filters and the shortcuts", async () => {
+    applySettings({ language: "de", locale: "de" });
+    window.history.replaceState(null, "", "/?q=has%3Aattachment&group=1");
+    try {
+      const de = messagesFor("de");
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      expect(screen.getByRole("searchbox", { name: de.searchMail })).toBeTruthy();
+      expect(screen.getByRole("button", { name: de.carbon.clearSearch })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.filters }));
+      expect(screen.getByRole("group", { name: de.filters })).toBeTruthy();
+      expect(screen.getByRole("button", { name: de.removeFilter(de.hasAttachment) })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.shortcuts }));
+      expect(screen.getByRole("dialog", { name: de.shortcuts })).toBeTruthy();
+      expect(screen.getByRole("button", { name: de.carbon.closeModal })).toBeTruthy();
+      const html = document.body.innerHTML;
+      for (const s of ["Clear search input", "Clear the search field", "Dismiss", "Close", "Filters", "Search mail", "Keyboard shortcuts", "Next message", "Messages", "Group by conversation", "Newest first"]) {
+        expect(html, s).not.toContain(s);
+      }
+      expect(html).not.toContain('placeholder="Search"');
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
+  });
+});
+
+describe("keyboard shortcuts while the SideNav overlay is open (below lg)", () => {
+  beforeEach(() => {
+    screenWidth(false);
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  it("does nothing but close it on Escape", async () => {
+    await renderApp();
+    await screen.findByRole("button", { name: /First/ });
+    menuButton().focus();
+    fireEvent.click(menuButton());
+    const link = within(sideNav()).getByRole("link", { name: t.allMail });
+    expect(document.activeElement).toBe(link);
+    for (const k of ["?", "j", "/", "g", "a"]) key(link, k);
+    expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull();
+    expect(window.location.search).toBe("");
+    expect(document.activeElement).toBe(link);
+    key(link, "Escape");
+    expect(sideNav().className).not.toContain("cds--side-nav--expanded");
   });
 });
