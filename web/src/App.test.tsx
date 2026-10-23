@@ -25,11 +25,11 @@ const accounts: AccountsResponse = {
 
 const user = (admin = false): User => ({ name: "alice", admin, mustChangePassword: false, twoFactorEnabled: false, twoFactorRequired: false, language: "auto", locale: "auto" });
 
-/** matchMedia that answers the lg query (Carbon's 66rem) with wide. */
-function screenWidth(wide: boolean) {
+/** matchMedia that answers the lg query (Carbon's 66rem) with wide and the two-pane query (48rem) with twoPane. */
+function screenWidth(wide: boolean, twoPane = wide) {
   window.matchMedia = (query: string) =>
     ({
-      matches: wide && query.includes("66rem"),
+      matches: (wide && query.includes("66rem")) || (twoPane && query.includes("48rem")),
       media: query,
       onchange: null,
       addEventListener: () => {},
@@ -355,6 +355,9 @@ describe("keyboard shortcuts in the mail view", () => {
     window.history.replaceState(null, "", "/?q=from%3Asam%20invoice");
     await renderApp();
     const button = screen.getByRole("button", { name: t.filters });
+    // Open on a desktop to start with (below).
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("group", { name: t.filters })).toBeNull();
     const tags = screen.getByRole("list", { name: t.activeFilters });
@@ -379,7 +382,8 @@ describe("keyboard shortcuts in the mail view", () => {
       await screen.findByRole("button", { name: /First/ });
       expect(screen.getByRole("searchbox", { name: de.searchMail })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.carbon.clearSearch })).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: de.filters }));
+      // Open on a desktop from the start.
+      expect(screen.getByRole("button", { name: de.filters }).getAttribute("aria-expanded")).toBe("true");
       expect(screen.getByRole("group", { name: de.filters })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.removeFilter(de.hasAttachment) })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: de.shortcuts }));
@@ -415,5 +419,34 @@ describe("keyboard shortcuts while the SideNav overlay is open (below lg)", () =
     expect(document.activeElement).toBe(link);
     key(link, "Escape");
     expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+  });
+});
+
+describe("the filter panel's first state", () => {
+  const panel = () => screen.queryByRole("group", { name: t.filters });
+  const button = () => screen.getByRole("button", { name: t.filters });
+
+  it("starts open from 48rem (two panes), also below lg", async () => {
+    screenWidth(false, true);
+    await renderApp();
+    expect(panel()).not.toBeNull();
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(button());
+    expect(panel()).toBeNull();
+  });
+
+  it("starts open on a desktop (lg)", async () => {
+    screenWidth(true);
+    await renderApp();
+    expect(panel()).not.toBeNull();
+  });
+
+  it("starts closed on phones, and the button opens it", async () => {
+    screenWidth(false, false);
+    await renderApp();
+    expect(panel()).toBeNull();
+    expect(button().getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(button());
+    expect(panel()).not.toBeNull();
   });
 });

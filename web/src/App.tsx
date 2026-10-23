@@ -17,7 +17,7 @@ import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
 import { ThemeToggle } from "./ThemeToggle";
-import { lg, useMediaQuery } from "./breakpoints";
+import { lg, matchesNow, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import logo from "./logo.svg";
 import { useAccounts } from "./useAccounts";
@@ -50,7 +50,8 @@ export function App({ user, logout }: Props) {
   // The filter button toggles the filter panel under the search; the set
   // filters show as tags either way. It is marked while one is set.
   const prefixed = hasPrefix(query) || state.group === "1";
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Open from the two-pane width up, closed on phones (maintainer decision on #195).
+  const [filtersOpen, setFiltersOpen] = useState(() => matchesNow(twoPane));
   const filtersId = useId();
   const [shortcuts, setShortcuts] = useState(false);
   const accounts = useAccounts();

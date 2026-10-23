@@ -6,6 +6,14 @@ import { useSyncExternalStore } from "react";
 
 export const lg = "(min-width: 66rem)";
 
+/** From here up the mail view shows the list and the reading pane side by side (layout.css). */
+export const twoPane = "(min-width: 48rem)";
+
+/** Whether a media query matches right now. False without matchMedia. */
+export function matchesNow(query: string): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia(query).matches;
+}
+
 /** Whether a media query matches, following changes (resize, rotation). False without matchMedia. */
 export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(
