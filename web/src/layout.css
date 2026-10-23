@@ -167,49 +167,52 @@ select:not([multiple], [size], .cds--select-input) {
   --app-text-warning: #f1c21b;
 }
 
-/* Text helpers for the converted pages; colors are Carbon's tokens. */
-.text-secondary {
+/* Text helpers for the converted pages; colors are Carbon's tokens. The
+   app- prefix keeps them apart from Tailwind's utilities (text-warning,
+   break-words …), which the unconverted views still use: this layer is
+   above Tailwind's. */
+.app-text-secondary {
   color: var(--cds-text-secondary);
 }
-.text-error {
+.app-text-error {
   color: var(--cds-text-error);
 }
-.text-warning {
+.app-text-warning {
   color: var(--app-text-warning);
 }
-.text-small {
+.app-text-small {
   /* label-01 */
   font-size: 0.75rem;
   line-height: 1.33333;
   letter-spacing: 0.32px;
 }
-.text-truncate {
+.app-text-truncate {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.break-words {
+.app-break-words {
   overflow-wrap: anywhere;
 }
-.break-all {
+.app-break-all {
   word-break: break-all;
 }
-.tabular {
+.app-tabular {
   font-variant-numeric: tabular-nums;
 }
-.inline-list {
+.app-inline-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0 0.75rem;
 }
-.bullet-list {
+.app-bullet-list {
   padding-inline-start: 1.25rem;
   list-style: disc;
 }
-.bullet-list > li + li {
+.app-bullet-list > li + li {
   margin-block-start: 0.25rem;
 }
-.bullet-list--nested {
+.app-bullet-list--nested {
   margin-block-start: 0.25rem;
   list-style: circle;
 }

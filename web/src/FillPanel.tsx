@@ -71,28 +71,28 @@ function FillBlock({ account: a, fill: f, data, manage, onChanged }: { account: 
 
   return (
     <section className="fill" aria-label={t.importFromIMAP}>
-      <p className={status.error || health ? "text-error" : "text-secondary"} aria-live="polite">
+      <p className={status.error || health ? "app-text-error" : "app-text-secondary"} aria-live="polite">
         {status.text}
       </p>
       {running && <ProgressBar size="small" hideLabel label={t.fillProgress} />}
-      <p className="text-secondary text-truncate">{t.fillSource(f.username, f.host, prefixed ? `${f.folderPrefix}/…` : "JOURNAL")}</p>
+      <p className="app-text-secondary app-text-truncate">{t.fillSource(f.username, f.host, prefixed ? `${f.folderPrefix}/…` : "JOURNAL")}</p>
       {health && (
-        <p className={health.state === "failing" ? "text-error" : "text-warning"}>
+        <p className={health.state === "failing" ? "app-text-error" : "app-text-warning"}>
           {health.state === "failing" ? t.fillFailing(health.failureStreak) : t.fillStale}
         </p>
       )}
-      {status.error && <p className="text-error text-small break-words">{status.error}</p>}
+      {status.error && <p className="app-text-error app-text-small app-break-words">{status.error}</p>}
       {f.folders.length > 0 && (
-        <ul className="inline-list text-small text-secondary" title={f.recurringSince ? t.recurringCountsHint : undefined}>
+        <ul className="app-inline-list app-text-small app-text-secondary" title={f.recurringSince ? t.recurringCountsHint : undefined}>
           {f.folders.map((ff) => (
-            <li key={ff.source} title={ff.error || undefined} className={ff.error ? "text-error" : undefined}>
-              {prefixed ? ff.folder : ff.source} <span className="tabular">({formatCount(ff.imported)})</span>
+            <li key={ff.source} title={ff.error || undefined} className={ff.error ? "app-text-error" : undefined}>
+              {prefixed ? ff.folder : ff.source} <span className="app-tabular">({formatCount(ff.imported)})</span>
               {!ff.done && !ff.error && running && " …"}
             </li>
           ))}
         </ul>
       )}
-      {f.unconfirmedFolders.length > 0 && <p className="text-warning text-small">{t.fillUnconfirmed(f.unconfirmedFolders.join(", "))}</p>}
+      {f.unconfirmedFolders.length > 0 && <p className="app-text-warning app-text-small">{t.fillUnconfirmed(f.unconfirmedFolders.join(", "))}</p>}
       {manage && stoppable(f) && (
         <div className="fill__row">
           <Button kind="danger--tertiary" size="sm" disabled={busy} onClick={() => setAsking(true)}>
@@ -187,11 +187,11 @@ function FillBlock({ account: a, fill: f, data, manage, onChanged }: { account: 
             )}
             {busy && <InlineLoading className="inline-loading--auto" description={t.checkingLogin} iconDescription={t.loading} />}
           </div>
-          {confirm && <p className="text-warning">{t.keepRunningTrashSpam(confirm.join(", "))}</p>}
+          {confirm && <p className="app-text-warning">{t.keepRunningTrashSpam(confirm.join(", "))}</p>}
         </form>
       )}
       {error && (
-        <p role="alert" className="text-error break-words">
+        <p role="alert" className="app-text-error app-break-words">
           {error}
         </p>
       )}
@@ -269,8 +269,8 @@ export function FillForm({ account, data, onCancel, onStarted }: { account: Acco
 
   return (
     <Form onSubmit={submit} className="page-form">
-      <p className="text-secondary">{t.fillIntro}</p>
-      <p className="text-secondary">
+      <p className="app-text-secondary">{t.fillIntro}</p>
+      <p className="app-text-secondary">
         {account.firstReceived ? t.firstReceived(longDate(account.firstReceived.at), account.firstReceived.subject) : t.noneReceived}
       </p>
       <div className="form-row form-row--server">
@@ -370,13 +370,21 @@ export function FillForm({ account, data, onCancel, onStarted }: { account: Acco
             type="datetime-local"
             value={cutoff}
             onChange={(e) => setCutoff(e.target.value)}
-            helperText={t.cutoffHint}
+            // Our own hint, not helperText: the gap warning below belongs to the field's description too.
+            aria-describedby={cutoff ? `${id}-cutoff-hint ${id}-cutoff-gap` : `${id}-cutoff-hint`}
           />
-          {cutoff && <p className="text-warning text-small field-note">{t.cutoffGap}</p>}
+          <p id={`${id}-cutoff-hint`} className="cds--form__helper-text">
+            {t.cutoffHint}
+          </p>
+          {cutoff && (
+            <p id={`${id}-cutoff-gap`} className="app-text-warning app-text-small field-note">
+              {t.cutoffGap}
+            </p>
+          )}
         </div>
       )}
       {error && (
-        <p role="alert" className="text-error break-words">
+        <p role="alert" className="app-text-error app-break-words">
           {error}
         </p>
       )}

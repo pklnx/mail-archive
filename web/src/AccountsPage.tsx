@@ -118,7 +118,7 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
   if (page.kind === "list" || unknown) {
     content = <AccountList data={data} error={error} reload={reload} admin={admin} manage={manage} active={active} go={go} showGone={showGone} />;
   } else if (!data || waiting) {
-    content = <p className="text-secondary">{t.loading}</p>;
+    content = <p className="app-text-secondary">{t.loading}</p>;
   } else if (page.kind === "add") {
     content = (
       <>
@@ -173,7 +173,7 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
       <>
         {crumb(t.importFromIMAP)}
         <h1 className="page__title type-heading-04">{t.importFromIMAP}</h1>
-        <p className="page__subtitle text-secondary">{target.name}</p>
+        <p className="page__subtitle app-text-secondary">{target.name}</p>
         <FillForm
           account={target}
           data={data}
@@ -242,7 +242,7 @@ function AccountList({ data, error, reload, admin, manage, active, go, showGone 
           )}
         </div>
         {data && (
-          <p className="page-header__intro text-secondary">
+          <p className="page-header__intro app-text-secondary">
             {!manage ? t.manageOff : data.syncInterval ? t.schedule(formatEvery(data.syncInterval)) : t.scheduleOff}
             {manage && " " + (data.reconcileInterval ? t.reconcileSchedule(formatInterval(data.reconcileInterval)) : t.reconcileOff)}
           </p>
@@ -251,7 +251,7 @@ function AccountList({ data, error, reload, admin, manage, active, go, showGone 
       {error && !data && <ErrorText text={t.loadAccountsFailed(error)} />}
       {actionError && <ErrorText text={actionError} alert />}
 
-      {data && active.length === 0 && <p className="text-secondary">{t.noAccounts}</p>}
+      {data && active.length === 0 && <p className="app-text-secondary">{t.noAccounts}</p>}
 
       <div className="account-list">
         {active.map((a) => (
@@ -326,7 +326,7 @@ function AccountList({ data, error, reload, admin, manage, active, go, showGone 
 /** A short error: the plain text, so screen readers read it as it is. */
 function ErrorText({ text, alert }: { text: string; alert?: boolean }) {
   return (
-    <p role={alert ? "alert" : undefined} className="text-error break-words">
+    <p role={alert ? "alert" : undefined} className="app-text-error app-break-words">
       {text}
     </p>
   );
@@ -368,9 +368,9 @@ export function RemovedCard({ account: a, admin, onChanged }: { account: Account
         <PurgeProgress purge={a.purge} />
       ) : (
         <>
-          <p className="text-secondary">{t.removedNote}</p>
+          <p className="app-text-secondary">{t.removedNote}</p>
           {cancelled && (
-            <p role="status" className="text-warning">
+            <p role="status" className="app-text-warning">
               {t.purgeCancelled}
             </p>
           )}
@@ -545,7 +545,7 @@ function StatusLine({ status, busy }: { status: { text: string; error?: string }
     return <InlineLoading className="inline-loading--auto" status="active" description={status.text} iconDescription={t.loading} aria-live="polite" />;
   }
   return (
-    <p className={status.error ? "text-error" : "text-secondary"} aria-live="polite">
+    <p className={status.error ? "app-text-error" : "app-text-secondary"} aria-live="polite">
       {status.text}
     </p>
   );
@@ -609,9 +609,9 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
           </>
         }
       >
-        <p className="text-secondary break-words">{t.receivesFor(a.addresses.join(", "))}</p>
-        <p className="text-secondary">{receiveStatus(a)}</p>
-        {!a.enabled && <p className="text-warning">{t.smtpDisabledNote}</p>}
+        <p className="app-text-secondary app-break-words">{t.receivesFor(a.addresses.join(", "))}</p>
+        <p className="app-text-secondary">{receiveStatus(a)}</p>
+        {!a.enabled && <p className="app-text-warning">{t.smtpDisabledNote}</p>}
         {!data.smtp && <Notice kind="warning" text={t.smtpServerOffCard} />}
         <div className="account-tile__actions">
           <Button kind="tertiary" size="sm" aria-expanded={showSetup} aria-controls={setupId} onClick={() => setShowSetup(!showSetup)}>
@@ -647,12 +647,12 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
         }
       >
         <StatusLine status={status} busy={busy} />
-        {status.error && <p className="text-error text-small break-words">{status.error}</p>}
+        {status.error && <p className="app-text-error app-text-small app-break-words">{status.error}</p>}
         {a.folders.length > 0 && (
-          <ul className="inline-list text-small text-secondary">
+          <ul className="app-inline-list app-text-small app-text-secondary">
             {a.folders.map((f) => (
               <li key={f.name}>
-                {f.name} <span className="tabular">({formatCount(f.messages)})</span>
+                {f.name} <span className="app-tabular">({formatCount(f.messages)})</span>
               </li>
             ))}
           </ul>
@@ -677,16 +677,16 @@ function AccountCard({ account: a, data, manage, onSync, onReconcile, onShowGone
         </>
       }
     >
-      <p className="text-secondary text-truncate">
+      <p className="app-text-secondary app-text-truncate">
         {a.username} · {a.host}
       </p>
       <StatusLine status={status} busy={busy} />
-      {status.error && <p className="text-error text-small break-words">{status.error}</p>}
+      {status.error && <p className="app-text-error app-text-small app-break-words">{status.error}</p>}
       {health && <Notice kind={health.failing ? "error" : "warning"} text={health.text} />}
-      {!a.enabled && <p className="text-warning">{t.disabledNote}</p>}
-      {schedule && <p className="text-secondary">{schedule}</p>}
+      {!a.enabled && <p className="app-text-warning">{t.disabledNote}</p>}
+      {schedule && <p className="app-text-secondary">{schedule}</p>}
       {reconcile && (
-        <p className="text-secondary">
+        <p className="app-text-secondary">
           {reconcile.gone && (
             <>
               <Link
@@ -1079,7 +1079,7 @@ export function PostfixPanel({ addresses }: { addresses: string[] }) {
       >
         {setup.text}
       </CodeSnippet>
-      <p className="text-secondary text-small">
+      <p className="app-text-secondary app-text-small">
         {t.setupTarget}{" "}
         <Link href={guideURL} target="_blank" rel="noreferrer" inline size="sm">
           {t.journalingGuide}
@@ -1139,7 +1139,8 @@ export function SchedulePicker({ account, data, onSaved }: { account: Account; d
         </Button>
       </div>
       {message && (
-        <p role="status" className="text-secondary">
+        // Saved, or the failure in the error colour.
+        <p role="status" className={message === t.saved ? "app-text-secondary" : "app-text-error"}>
           {message}
         </p>
       )}
@@ -1191,7 +1192,7 @@ function FolderPicker({ account, onSaved }: { account: Account; onSaved: () => v
         </div>
       ) : (
         <>
-          <p className="text-secondary">{t.foldersHint}</p>
+          <p className="app-text-secondary">{t.foldersHint}</p>
           <div className="checkbox-list">
             {folders.map((f, i) => (
               <Checkbox
@@ -1211,7 +1212,8 @@ function FolderPicker({ account, onSaved }: { account: Account; onSaved: () => v
         </>
       )}
       {message && (
-        <p role="status" className="text-secondary">
+        // Saved, or the failure in the error colour.
+        <p role="status" className={message === t.saved ? "app-text-secondary" : "app-text-error"}>
           {message}
         </p>
       )}

@@ -85,7 +85,7 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
       onRequestSubmit={confirm}
     >
       <div className="purge">
-        <ul className="bullet-list">
+        <ul className="app-bullet-list">
           <li>{t.purgeLocations(p.locations, formatCount(p.locations))}</li>
           <li>
             {t.purgeDeleted(p.deleted, formatCount(p.deleted), fileSize(p.deletedBytes))}{" "}
@@ -94,10 +94,10 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
           {p.kept > 0 && (
             <li>
               {t.purgeKept(p.kept, formatCount(p.kept))}
-              <ul className="bullet-list bullet-list--nested">
+              <ul className="app-bullet-list app-bullet-list--nested">
                 {p.keptIn.map((k) => (
                   <li key={`${k.owner}/${k.account}`}>
-                    <span className="break-all">
+                    <span className="app-break-all">
                       {k.owner || "-"} / {k.account}
                     </span>
                     : {t.messageCount(k.messages, formatCount(k.messages))}
@@ -118,7 +118,7 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
             statusIconDescription={t.carbon.status.error}
             title={t.purgeBlocked}
           >
-            <ul className="bullet-list">
+            <ul className="app-bullet-list">
               {purgeBlockerLines(p.blockers).map((line) => (
                 <li key={line}>{line}</li>
               ))}
@@ -145,7 +145,7 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
           </form>
         )}
         {error && (
-          <p role="alert" className="text-error">
+          <p role="alert" className="app-text-error">
             {error}
           </p>
         )}
@@ -202,11 +202,11 @@ export function PurgeDialog({ name, onClose, onConfirmed, onConflict }: DialogPr
     return (
       <DangerModal aria-label={t.purgeTitle(name)} modalHeading={t.purgeTitle(name)} size="sm" passiveModal preventCloseOnClickOutside onRequestClose={onClose}>
         {error ? (
-          <p role="alert" className="text-error">
+          <p role="alert" className="app-text-error">
             {error}
           </p>
         ) : (
-          <p className="text-secondary">{t.loading}</p>
+          <p className="app-text-secondary">{t.loading}</p>
         )}
       </DangerModal>
     );
@@ -234,7 +234,7 @@ export function PurgeProgress({ purge }: { purge: AccountPurge | null }) {
         value={purge && purge.expected > 0 ? purge.deleted : undefined}
         max={purge && purge.expected > 0 ? purge.expected : undefined}
       />
-      {purge && <p className="text-secondary">{t.purgeProgress(formatCount(purge.deleted), formatCount(purge.expected), formatCount(purge.kept))}</p>}
+      {purge && <p className="app-text-secondary">{t.purgeProgress(formatCount(purge.deleted), formatCount(purge.expected), formatCount(purge.kept))}</p>}
     </div>
   );
 }

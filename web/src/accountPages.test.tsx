@@ -134,6 +134,25 @@ describe("the pages under Accounts", () => {
   });
 });
 
+describe("page details", () => {
+  it("describe the cut-off with its hint and, once set, the gap warning", () => {
+    show("/?view=accounts&import=journal", data([smtp("journal")]));
+    const cutoff = screen.getByLabelText(t.fieldCutoff);
+    const described = () => (cutoff.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent);
+    expect(described()).toEqual([t.cutoffHint]);
+    fireEvent.change(cutoff, { target: { value: "2026-10-01T08:30" } });
+    expect(described()).toEqual([t.cutoffHint, t.cutoffGap]);
+  });
+
+  it("show a failed folder load in the error colour", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(JSON.stringify({ error: "login failed" }), { status: 502 }));
+    show("/?view=accounts&edit=work", data([account("work")]));
+    fireEvent.click(screen.getByRole("button", { name: t.loadFolders }));
+    const message = await screen.findByText(/login failed/);
+    expect(message.className).toBe("app-text-error");
+  });
+});
+
 describe("confirmations on the list", () => {
   const card = (name: string) => within(screen.getByRole("region", { name }));
   const dialog = () => within(screen.getByRole("dialog"));
