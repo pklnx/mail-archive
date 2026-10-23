@@ -31,8 +31,9 @@ type inlineResult struct {
 }
 
 // inlineImages replaces every cid: reference in html with a data: URL of the
-// referenced part, so the sandboxed frame (an opaque origin without the
-// session cookie) needs no request to show it. Only parts of inlineTypes
+// referenced part, so the sandboxed frame needs no request to show it (its
+// img-src has no 'self', and the Fetch Metadata guard refuses image
+// requests to the API). Only parts of inlineTypes
 // are inlined, within maxInlineBytes in document order; unknown references,
 // other types (SVG, HTML, ...), references past the budget and parts that
 // cannot be read become emptyImage.

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -51,7 +50,7 @@ func (f *apiFixture) htmlBody(name string) (string, store.AuditRecord) {
 	if len(got) != 1 || got[0].Action != "message.html" {
 		f.t.Fatalf("html of %s: audit %+v", name, got)
 	}
-	rest, ok := strings.CutPrefix(string(body), `<base target="_blank">`+"\n")
+	rest, ok := strings.CutPrefix(string(body), htmlPreamble)
 	if !ok {
 		f.t.Fatalf("html of %s: no <base>: %s", name, body)
 	}
@@ -187,24 +186,26 @@ func TestInlineCIDAuditFailClosed(t *testing.T) {
 	}
 }
 
-// The request the sandboxed frame used to make for a cid: image: cross-site,
-// no-cors, without the SameSite=Strict session cookie. The parts endpoint
-// was not opened up for it: 401, and no CORP or CORS relaxation.
+// The request the frame makes for an image on the app's own origin (after
+// "Load remote images", img-src https: matches it): same-origin, no-cors,
+// with the SameSite=Strict session cookie, since the frame shares the app's
+// origin (#203). The Fetch Metadata guard refuses it before the handler, so
+// it writes no audit entry, and the parts endpoint is not opened up: no
+// CORP or CORS relaxation.
 func TestPartRequestFromFrameStaysBlocked(t *testing.T) {
 	f := newAPIFixture(t)
-	srv := httptest.NewServer(f.bare)
-	t.Cleanup(srv.Close)
-	req, _ := http.NewRequest("GET", srv.URL+"/api/messages/"+f.ids["rich"]+"/parts/1", nil)
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	n := len(auditLog(t, f.st))
+	req, _ := http.NewRequest("GET", f.srv.URL+"/api/messages/"+f.ids["rich"]+"/parts/1", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Sec-Fetch-Mode", "no-cors")
 	req.Header.Set("Sec-Fetch-Dest", "image")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) // f.srv adds the session cookie
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusUnauthorized || strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
+	if resp.StatusCode != http.StatusForbidden || strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
 		t.Errorf("status %d, type %q: %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 	}
 	if got := resp.Header.Get("Cross-Origin-Resource-Policy"); got != "same-origin" {
@@ -212,5 +213,20 @@ func TestPartRequestFromFrameStaysBlocked(t *testing.T) {
 	}
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := newEntries(t, f.st, n); len(got) != 0 {
+		t.Errorf("audit entries %+v", got)
+	}
+
+	// The same request as a fetch of the app passes: the cookie is valid.
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("fetch: status %d", resp2.StatusCode)
 	}
 }

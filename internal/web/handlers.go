@@ -385,11 +385,31 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"messages": items, "total": c.Total, "truncated": c.Truncated})
 }
 
+// frameSandbox is the sandbox of the HTML mail frame, the same as the
+// iframe's attribute in the web UI (MessageView.tsx): the same origin, so
+// the app can measure the document, and popups, so links open in a new
+// tab. Never allow-scripts: with the same origin it would undo the sandbox.
+const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+
+// htmlPreamble goes in front of every HTML mail. Links open in a new tab
+// instead of inside the viewer frame. The style keeps height:100% chains on
+// html and body from tying the content to the frame's height, so the app
+// can size the frame to the content.
+const htmlPreamble = `<base target="_blank"><style>html,body{height:auto!important;min-height:0!important}</style>` + "\n"
+
 // handleMessageHTML serves the HTML body for display in a sandboxed iframe.
 // The Content-Security-Policy forbids scripts, forms, plugins and remote
 // content; inline cid: images are embedded as data: URLs. Remote images stay
 // blocked (they reveal that a mail was opened) unless the client asks for
 // them with ?images=1.
+//
+// The sandbox allows the same origin, never scripts (#203): the app reads
+// the document's height to size the frame to its content. So the mail runs
+// with the app's origin, but no script runs in it (no allow-scripts, and
+// script-src 'none' as a second layer). Its same-origin requests (images
+// after "Load remote images", links) carry the session cookie; the Fetch
+// Metadata guard in protect refuses them, and the app blocks clicks on
+// same-origin links in the frame.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -409,9 +429,9 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusNotFound, "message has no HTML body", nil)
 		return
 	}
-	// Inline images (cid:...) are embedded as data: URLs: the sandboxed
-	// frame has an opaque origin, so its requests carry no session cookie
-	// and could not load them from the parts endpoint.
+	// Inline images (cid:...) are embedded as data: URLs: img-src has no
+	// 'self', and the Fetch Metadata guard refuses image requests to the
+	// API, so the frame could not load them from the parts endpoint.
 	inl, err := inlineImages(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
 	if err != nil {
 		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
@@ -437,12 +457,13 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src "+img+
+	// The sandbox here, not only the iframe's attribute: the browser applies
+	// both, and it also holds when the URL is opened on its own.
+	h.Set("Content-Security-Policy", "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src "+img+
 		"; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"+
-		"; sandbox allow-popups allow-popups-to-escape-sandbox")
+		"; sandbox "+frameSandbox)
 	h.Set("X-Frame-Options", "SAMEORIGIN")
-	// Links open in a new tab instead of inside the viewer frame.
-	_, _ = io.WriteString(w, `<base target="_blank">`+"\n"+inl.HTML)
+	_, _ = io.WriteString(w, htmlPreamble+inl.HTML)
 }
 
 func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
