@@ -438,7 +438,13 @@ Each account in `GET /api/accounts` has a `sync` object:
 ```
 
 `state` is `idle`, `queued` or `running` (also when the command line syncs
-the account). `status` of the last run is `running`, `ok`, `partial` or
+the account). `queued` covers a sync or fill of the web server from the
+request until its run has finished, whenever it does not hold the
+account's sync lock: in the queue, taken from it and about to take the
+lock, or waiting for the blob lock (during a verify or a deletion). So after a `202` from the sync endpoint the account does not
+show `idle` again until the new run has finished; right after the run,
+`queued` can briefly follow `running`. A sync of the command line that
+waits for the blob lock shows `idle`. `status` of the last run is `running`, `ok`, `partial` or
 `failed`, with `error` set for the latter two. `failureStreak` counts the
 failed syncs in a row and `failingSince` is when the first of them started
 (`null` without a streak). `health` is `failing` when the last `alertAfter`

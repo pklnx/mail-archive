@@ -33,6 +33,10 @@ type lastRunJSON struct {
 
 type syncJSON struct {
 	// State is "idle", "queued" or "running" (also when the CLI syncs).
+	// "queued" covers a sync of this server from its request until its
+	// run has finished, whenever it does not hold the account's sync lock:
+	// in the queue, taken from it and about to take the lock, or parked
+	// for the blob lock (see loadBusy).
 	State   string       `json:"state"`
 	LastRun *lastRunJSON `json:"lastRun"`
 	// FailureStreak counts the failed syncs in a row; FailingSince is when

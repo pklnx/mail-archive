@@ -26,6 +26,8 @@ import (
 type manageFixture struct {
 	t          *testing.T
 	st         *store.Store
+	dbURL      string
+	server     *Server
 	blobs      *blobstore.Store
 	srv        *httptest.Server
 	cookie     string // session token; empty means the fixture's own user
@@ -49,7 +51,24 @@ func newManageFixtureWithRoles(t *testing.T, roles map[string]imap.MailboxAttr, 
 // newManageFixtureOpts also sets the runner's schedule.
 func newManageFixtureOpts(t *testing.T, roles map[string]imap.MailboxAttr, sched archive.Schedule, users ...*imapmemserver.User) *manageFixture {
 	t.Helper()
-	st := storetest.New(t)
+	return newManageFixtureWith(t, manageOptions{roles: roles, sched: sched}, users...)
+}
+
+// manageOptions configure newManageFixtureWith.
+type manageOptions struct {
+	roles map[string]imap.MailboxAttr
+	sched archive.Schedule
+	// Test hooks of the runners, set before they run.
+	beforeSync func(ctx context.Context, id int64)
+	afterSync  func()
+	beforeRun  func(ctx context.Context, fillID int64)
+	afterRun   func()
+}
+
+func newManageFixtureWith(t *testing.T, o manageOptions, users ...*imapmemserver.User) *manageFixture {
+	t.Helper()
+	roles, sched := o.roles, o.sched
+	st, dbURL := storetest.NewWithURL(t)
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -62,10 +81,12 @@ func newManageFixtureOpts(t *testing.T, roles map[string]imap.MailboxAttr, sched
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
-	runner := &archive.Runner{Syncer: syncer, Schedule: sched, CheckEvery: 10 * time.Millisecond}
-	fills := &archive.FillRunner{Filler: &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}, Schedule: sched, CheckEvery: 10 * time.Millisecond}
+	runner := &archive.Runner{Syncer: syncer, Schedule: sched, CheckEvery: 10 * time.Millisecond,
+		BeforeSync: o.beforeSync, AfterSync: o.afterSync}
+	fills := &archive.FillRunner{Filler: &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}, Schedule: sched, CheckEvery: 10 * time.Millisecond,
+		BeforeRun: o.beforeRun, AfterRun: o.afterRun}
 	ctx, cancel := context.WithCancel(context.Background())
-	f := &manageFixture{t: t, st: st, blobs: blobs, runnerDone: make(chan struct{})}
+	f := &manageFixture{t: t, st: st, dbURL: dbURL, blobs: blobs, runnerDone: make(chan struct{})}
 	fillsDone := make(chan struct{})
 	go func() { runner.Run(ctx); close(f.runnerDone) }()
 	go func() { fills.Run(ctx); close(fillsDone) }()
@@ -76,6 +97,7 @@ func newManageFixtureOpts(t *testing.T, roles map[string]imap.MailboxAttr, sched
 		f.host, f.port = imaptest.Start(t, users...)
 	}
 	s := New(st, blobs, log, Options{AllowedHosts: []string{"127.0.0.1"}, Syncer: syncer, Runner: runner, Fills: fills})
+	f.server = s
 	f.srv = httptest.NewServer(loggedIn(t, st, s.Handler()))
 	t.Cleanup(f.srv.Close)
 	return f

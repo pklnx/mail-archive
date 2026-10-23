@@ -85,7 +85,7 @@ func TestFillRunnerQueue(t *testing.T) {
 	r.Enqueue(7, 3)
 	r.Enqueue(7, 3)
 	r.Enqueue(8, 4)
-	if q := r.Queued(); len(q) != 2 || !q[3] || !q[4] {
+	if q := r.Pending(); len(q) != 2 || !q[3] || !q[4] {
 		t.Errorf("queued %v", q)
 	}
 }

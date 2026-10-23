@@ -29,12 +29,18 @@ func fillFixture(t *testing.T) (*manageFixture, *store.Account) {
 // fillFixtureOpts is fillFixture with the runners' schedule.
 func fillFixtureOpts(t *testing.T, sched archive.Schedule) (*manageFixture, *store.Account) {
 	t.Helper()
-	roles := map[string]imap.MailboxAttr{"INBOX": "", "Spam": imap.MailboxAttrJunk}
+	return fillFixtureWith(t, manageOptions{sched: sched})
+}
+
+// fillFixtureWith is fillFixture with options; it sets the roles.
+func fillFixtureWith(t *testing.T, o manageOptions) (*manageFixture, *store.Account) {
+	t.Helper()
+	o.roles = map[string]imap.MailboxAttr{"INBOX": "", "Spam": imap.MailboxAttrJunk}
 	u := imapmemserver.NewUser("alice@example.com", "secret")
 	imaptest.CreateMailboxes(t, u, "INBOX", "Spam")
 	imaptest.AppendAt(t, u, "INBOX", []byte(msgInvoice), time.Now().Add(-48*time.Hour))
 	imaptest.AppendAt(t, u, "Spam", []byte(msgNewsletter), time.Now().Add(-48*time.Hour))
-	f := newManageFixtureOpts(t, roles, sched, u)
+	f := newManageFixtureWith(t, o, u)
 	ctx := context.Background()
 	tester, err := f.st.GetUserByName(ctx, "tester")
 	if err != nil {

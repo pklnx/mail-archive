@@ -117,17 +117,47 @@ func (s *Server) schedule() archive.Schedule {
 // runs or waits makes no account stale (see store.SyncHealth.State). So
 // does a run of a recurring fill.
 type busyState struct {
-	running     map[int64]bool // the sync lock is held, also by the CLI
-	queued      map[int64]bool // waiting in this server's queue
-	runs        map[int64]store.LastRun
-	fillsQueued map[int64]bool // fills waiting in this server's queue, by fill ID
+	running map[int64]bool // the sync lock is held, also by the CLI
+	// queued: this server's runners work on the account (Pending) and it
+	// does not hold the sync lock: it waits in the queue, for the
+	// account's lock or, parked, for the blob lock.
+	queued map[int64]bool
+	runs   map[int64]store.LastRun
+	// fillsQueued: fills this server's fill runner works on (waiting,
+	// claimed or running), by fill ID.
+	fillsQueued map[int64]bool
 	// holdUntil: until then recurring fills wait after this server's
 	// start (archive.RecurringStartHold).
 	holdUntil time.Time
 }
 
+// loadBusy reads the runners' pending sets first, then the held sync
+// locks, then the last runs. A runner claims an account in the same step
+// that takes it from the queue and ends the claim only after the sync
+// returned (lock released, run finished), so an account read as not
+// pending has no sync of this server left to show, and the runs read
+// after that already hold its finished run: it never shows idle with the
+// previous run while its sync is still to come. The other way round is
+// harmless: between the release of the lock and the end of the claim a
+// poll sees the finished run as queued, so a sync can show running, then
+// queued, then idle.
 func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 	b := busyState{}
+	var pending map[int64]bool
+	if s.runner != nil {
+		pending = s.runner.Pending()
+	}
+	if s.fills != nil {
+		// A pending fill shows as a sync of its smtp account.
+		if pending == nil {
+			pending = map[int64]bool{}
+		}
+		for id := range s.fills.Pending() {
+			pending[id] = true
+		}
+		b.fillsQueued = s.fills.PendingFills()
+		b.holdUntil = s.fills.HoldUntil
+	}
 	var err error
 	if b.running, err = s.store.SyncingAccounts(ctx); err != nil {
 		return b, err
@@ -135,19 +165,13 @@ func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 	if b.runs, err = s.store.LastRuns(ctx); err != nil {
 		return b, err
 	}
-	if s.runner != nil {
-		b.queued = s.runner.Queued()
-	}
-	if s.fills != nil {
-		// A queued fill shows as a queued sync of its smtp account.
-		if b.queued == nil {
-			b.queued = map[int64]bool{}
+	if pending != nil {
+		b.queued = map[int64]bool{}
+		for id := range pending {
+			if !b.running[id] {
+				b.queued[id] = true
+			}
 		}
-		for id := range s.fills.Queued() {
-			b.queued[id] = true
-		}
-		b.fillsQueued = s.fills.QueuedFills()
-		b.holdUntil = s.fills.HoldUntil
 	}
 	return b, nil
 }
