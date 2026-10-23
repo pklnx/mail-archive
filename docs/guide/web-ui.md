@@ -320,6 +320,11 @@ Light and dark mode follow the system. The sun/moon button in the header
 overrides it, also on the login page. The choice is remembered in the
 browser.
 
+The colours are those of the pklnx design system: IBM's Carbon with Purple
+as the interactive colour of buttons, links and selected items, in both
+modes. The keyboard focus is outlined in Purple in light mode and in white
+in dark mode.
+
 ![Dark mode](/screenshots/mail-dark.png)
 
 The UI is in German or English. Each user chooses the language and the

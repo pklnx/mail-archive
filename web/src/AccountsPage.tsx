@@ -858,7 +858,9 @@ function AccountForm({ account, onCancel, onSaved }: FormProps) {
         <Button kind="secondary" onClick={onCancel} disabled={busy}>
           {t.cancel}
         </Button>
-        <Button type="submit" kind="primary" disabled={busy}>
+        {/* One primary per view: while the trash/spam question is open, its
+            answer is the primary action. */}
+        <Button type="submit" kind={question ? "tertiary" : "primary"} disabled={busy}>
           {t.save}
         </Button>
         {busy && <InlineLoading className="inline-loading--auto" description={t.checkingLogin} iconDescription={t.loading} />}

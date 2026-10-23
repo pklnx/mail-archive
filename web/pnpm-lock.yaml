@@ -181,6 +181,9 @@ importers:
       '@ibm/plex-sans':
         specifier: 1.1.0
         version: 1.1.0
+      '@pklnx/design-system':
+        specifier: https://github.com/pklnx/design-system/releases/download/v0.1.1/pklnx-design-system-0.1.1.tgz
+        version: https://github.com/pklnx/design-system/releases/download/v0.1.1/pklnx-design-system-0.1.1.tgz(@carbon/styles@1.118.0)
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -415,6 +418,12 @@ packages:
 
   '@oxc-project/types@0.152.0':
     resolution: {integrity: sha512-oM/5rLBm2tPkg0iBgkH/FOeR3PCDpY19GTgAZjMFM8h9WI9VW7cLgzp6nwtarYKmovavIQZ+Fe/RKX/8C8O/Rw==}
+
+  '@pklnx/design-system@https://github.com/pklnx/design-system/releases/download/v0.1.1/pklnx-design-system-0.1.1.tgz':
+    resolution: {integrity: sha512-QIl8XOq/8UqptUSyl54TTmR4iUbd482ZMInvKzDw8hnEENdInW7HaZieRQ1WZkcyHbJMwgUcat6DQLneRvOQEw==, tarball: https://github.com/pklnx/design-system/releases/download/v0.1.1/pklnx-design-system-0.1.1.tgz}
+    version: 0.1.1
+    peerDependencies:
+      '@carbon/styles': ^1.118.0
 
   '@playwright/test@1.64.1':
     resolution: {integrity: sha512-IaYGml/nSOiZWROfPtuIL7neuu9qDOZ3TNvNljUIrhDMxiGTgPjzj/g9p9RxpS2tSepPDRY+UwAaEeiKtUvIAg==}
@@ -1470,6 +1479,10 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.6.0
 
   '@oxc-project/types@0.152.0': {}
+
+  '@pklnx/design-system@https://github.com/pklnx/design-system/releases/download/v0.1.1/pklnx-design-system-0.1.1.tgz(@carbon/styles@1.118.0)':
+    dependencies:
+      '@carbon/styles': 1.118.0
 
   '@playwright/test@1.64.1':
     dependencies:

@@ -182,7 +182,7 @@ export function NewKeyPanel({ created, done }: { created: NewApiKey; done: () =>
         {created.key}
       </CodeSnippet>
       <div>
-        <Button kind="primary" size="md" onClick={done}>
+        <Button kind="tertiary" size="md" onClick={done}>
           {t.done}
         </Button>
       </div>
