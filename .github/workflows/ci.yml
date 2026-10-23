@@ -112,9 +112,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: "PROOF (temporary): block mirror.gcr.io"
+        run: |
+          echo "0.0.0.0 mirror.gcr.io" | sudo tee -a /etc/hosts
+          # A pull from the mirror must fail now.
+          if docker pull --quiet mirror.gcr.io/library/busybox:1.37; then echo "mirror block is not effective" >&2; exit 1; fi
+          echo "mirror.gcr.io is blocked"
       - run: scripts/ci-docker-mirror.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
+          # PROOF (temporary): the builder container shares the host's /etc/hosts.
+          driver-opts: network=host
           # BuildKit in the builder container pulls the Dockerfile's images
           # (and its # syntax frontend) through the mirror, falling back to
           # Docker Hub when the mirror fails or lacks a tag.
@@ -143,6 +151,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: "PROOF (temporary): block mirror.gcr.io"
+        run: |
+          echo "0.0.0.0 mirror.gcr.io" | sudo tee -a /etc/hosts
+          # A pull from the mirror must fail now.
+          if docker pull --quiet mirror.gcr.io/library/busybox:1.37; then echo "mirror block is not effective" >&2; exit 1; fi
+          echo "mirror.gcr.io is blocked"
       - run: scripts/ci-docker-mirror.sh
       # The base images and postgres:18 with retries; the smoke test's build
       # then takes them from the local store.
