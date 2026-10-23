@@ -169,6 +169,7 @@ in `CLAUDE.md` at the repository root.
 | `db-migration` | Changes the database schema (set automatically). Back up before upgrading. |
 | `breaking` | Needs manual steps when upgrading (set by hand). |
 | `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
+| `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
 
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.

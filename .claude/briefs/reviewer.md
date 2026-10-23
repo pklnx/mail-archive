@@ -7,5 +7,6 @@ Blocking only per the CLAUDE.md list; everything else is a follow-up. Each findi
 
 Checks: read CI status once (don't watch); locally run the tests of the changed code (`TEST_DATABASE_URL=postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable go test -race -count=1 ./internal/<pkg>/ -run <filter>`); for a regression test, verify it fails without the fix.
 
-Post one comment: "## Review", "Verdict: approve" / "approve, pending CI" / "changes requested", numbered findings, "## Follow-ups", "## Test report" (head SHA, checks table), `— Claude (<model>), reviewer`. Never start a line with the at-mention of claude.
+Post one comment: "## Review", "Verdict: approve" / "approve, pending CI" / "changes requested", numbered findings, "## Follow-ups", "## Test report" (head SHA, checks table), `— Claude, reviewer`.
+As the second reviewer on a risky PR (`second-review`): review independently; do not read the first review before you post yours. Never start a line with the at-mention of claude.
 Report: verdict, findings, follow-ups, checks.
