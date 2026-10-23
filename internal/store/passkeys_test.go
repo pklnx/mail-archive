@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -124,6 +125,10 @@ func TestPasskeyLoginsSerialized(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	// A failed wait must not leave the first caller holding its
+	// transaction: the store's cleanup, registered earlier, runs after.
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
 	var calls atomic.Int32
 	verify := func(_, _, raw []byte) ([]byte, error) {
 		if calls.Add(1) == 1 {
@@ -152,7 +157,7 @@ func TestPasskeyLoginsSerialized(t *testing.T) {
 	<-entered
 	go func() { second <- login() }()
 	waitForLockWait(t, conn, second)
-	close(release)
+	free()
 	errs := []error{<-first, <-second}
 	ok := 0
 	for _, err := range errs {
@@ -193,6 +198,10 @@ func TestPasskeyLimitSerialized(t *testing.T) {
 		}
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	// A failed wait must not leave the first caller holding its
+	// transaction: the store's cleanup, registered earlier, runs after.
+	free := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(free)
 	finish := func(i int, hold bool) error {
 		_, err := st.FinishPasskeyRegistration(ctx, alice.ID, tokens[i], func(_, _ []byte) ([]byte, []byte, error) {
 			if hold {
@@ -208,7 +217,7 @@ func TestPasskeyLimitSerialized(t *testing.T) {
 	<-entered
 	go func() { second <- finish(1, false) }()
 	waitForLockWait(t, conn, second)
-	close(release)
+	free()
 	errs := []error{<-first, <-second}
 	ok := 0
 	for _, err := range errs {

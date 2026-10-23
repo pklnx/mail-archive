@@ -443,11 +443,17 @@ func TestFillRunnerRecurring(t *testing.T) {
 	// the test read c directly), so the test can wait until the runner has
 	// looked at the schedule: checks waits for twice the reads of one loop
 	// iteration in the runner's configuration, so at least one whole
-	// iteration read the clock after the change before it.
-	var runs, reads atomic.Int64
+	// iteration read the clock after the change before it. A fill an
+	// iteration queued is claimed before the next iteration, so after the
+	// reads it is either still held (PendingFills) or its run has begun
+	// (BeforeRun).
+	var runs, reads, began atomic.Int64
 	var ran, read testwait.Signal
+	var cur *archive.FillRunner
 	start := func(r *archive.FillRunner) func() {
+		cur = r
 		r.Filler, r.CheckEvery = filler, 10*time.Millisecond
+		r.BeforeRun = func(context.Context, int64) { began.Add(1) }
 		r.Now = func() time.Time {
 			reads.Add(1)
 			read.Notify()
@@ -461,8 +467,12 @@ func TestFillRunnerRecurring(t *testing.T) {
 	}
 	checks := func(perIteration int64, what string) {
 		t.Helper()
+		before := began.Load()
 		from := reads.Load()
 		testwait.Until(t, &read, what, func() bool { return reads.Load() >= from+2*perIteration })
+		if n, pending := began.Load(), cur.PendingFills(); n != before || len(pending) != 0 {
+			t.Fatalf("%s: %d runs began, pending %v", what, n-before, pending)
+		}
 	}
 	lastStart := func() time.Time {
 		got, _ := f.store.GetFill(f.ctx, fill.ID)

@@ -88,8 +88,10 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 		}
 		return time.Now()
 	}
+	var began atomic.Int64
 	r := &archive.Runner{Syncer: f.syncer, Schedule: archive.Schedule{Sync: time.Hour, SyncMin: 5 * time.Minute},
-		CheckEvery: 10 * time.Millisecond, Now: now, AfterSync: synced.Notify}
+		CheckEvery: 10 * time.Millisecond, Now: now, AfterSync: synced.Notify,
+		BeforeSync: func(context.Context, int64) { began.Add(1) }}
 	ctx, cancel := context.WithCancel(f.ctx)
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
@@ -100,16 +102,18 @@ func TestRunnerScheduleAndQueue(t *testing.T) {
 	on, _ := f.account("on")
 	waitForRun(t, f, &synced, on.ID, "ok")
 	waitForRun(t, f, &synced, fast.ID, "ok")
+	syncs := began.Load()
 	first, _ := f.store.LastRuns(f.ctx)
 	// Three more clock reads: with both syncs done, the runner reads the
 	// clock once per schedule check (dueAccounts) and once per account it
-	// takes from the queue. Had a check queued "on" again, its sync would
-	// have run before the third read (the next check).
+	// takes from the queue. A check that queued "on" again is followed by
+	// its claim before the next check; after the reads that claim is
+	// either still held (Pending) or its sync has begun (BeforeSync).
 	from := reads.Load()
 	testwait.Until(t, &read, "three schedule checks", func() bool { return reads.Load() >= from+3 })
 	again, _ := f.store.LastRuns(f.ctx)
-	if !again[on.ID].StartedAt.Equal(first[on.ID].StartedAt) {
-		t.Fatal("account synced again before its interval")
+	if n := began.Load(); n != syncs || len(r.Pending()) != 0 || !again[on.ID].StartedAt.Equal(first[on.ID].StartedAt) {
+		t.Fatalf("account synced again before its interval: %d syncs began, pending %v", n-syncs, r.Pending())
 	}
 	if _, ok := again[off.ID]; ok {
 		t.Fatal("disabled account synced by the schedule")

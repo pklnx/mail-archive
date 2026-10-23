@@ -250,7 +250,8 @@ func TestAttestSnapshotLockTimeoutReleases(t *testing.T) {
 	var left int
 	for deadline := time.Now().Add(testwait.Limit(t)); ; {
 		if err := writer.QueryRow(context.Background(),
-			"SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = $1", fenceClass).Scan(&left); err != nil {
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = $1
+			  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, fenceClass).Scan(&left); err != nil {
 			t.Fatal(err)
 		}
 		if left == 0 || time.Now().After(deadline) {
