@@ -88,6 +88,15 @@ func newMigrateCmd() *cobra.Command {
 			return err
 		}
 		defer a.close()
+		// The whole command runs under the migration lock: a second
+		// migrate waits until this one is done. unlock is deferred after
+		// a.close, so it runs first: closing the store waits for the
+		// lock's connection.
+		unlock, err := lockMigrations(cmd, a.store)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		// The index rebuild first, before anything writes; Migrate checks
 		// again and finds nothing left to do.
 		if _, err := a.store.RebuildIndexesIfNeeded(cmd.Context(), func(c store.CollationState) {
@@ -139,6 +148,15 @@ func newMigrateCmd() *cobra.Command {
 	return cmd
 }
 
+// lockMigrations takes the migration lock for a migrate command (see
+// store.LockMigrations). While another migrate holds it, it says so and
+// waits; Ctrl-C ends the wait.
+func lockMigrations(cmd *cobra.Command, st *store.Store) (unlock func(), err error) {
+	return st.LockMigrations(cmd.Context(), func() {
+		fmt.Fprintln(cmd.OutOrStdout(), "another migrate is running; waiting for it (Ctrl-C to stop) ...")
+	})
+}
+
 func newMigrateDownCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
@@ -159,6 +177,11 @@ development; in production, prefer restoring a backup.`,
 				return err
 			}
 			defer a.close()
+			unlock, err := lockMigrations(cmd, a.store)
+			if err != nil {
+				return err
+			}
+			defer unlock()
 			rolledBack, err := a.store.MigrateDown(cmd.Context())
 			if err != nil {
 				return err

@@ -136,6 +136,18 @@ With a clone of the repository (see [From source](./getting-started#install)),
 every service, so the web server and a cron job that uses `docker compose
 run` both run the new version afterwards.
 
+Two `./ma migrate` (or `migrate down`) runs at the same time wait for each
+other: the second prints `another migrate is running; waiting for it` and
+starts once the first is done, also after a long index rebuild. Ctrl-C stops
+the wait. The lock covers the whole command (the index rebuild, the
+migrations, the audit log partitions and the password upgrade).
+`./ma migrate status` and `./ma backup` do not wait for a running migration.
+If a `migrate` is killed during a long statement (an index rebuild, for
+example), PostgreSQL keeps its locks until that statement ends, so the next
+`migrate` waits until then.
+The web server is not covered: it neither waits for nor blocks a migration,
+so stop it before `./ma migrate` when the release notes say so.
+
 ### Versions
 
 Versions are named after the year and month of the release, plus a build
