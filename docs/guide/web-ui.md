@@ -136,9 +136,11 @@ whole page on a phone. Header, conversation and text move together.
 HTML mail is shown in a sandboxed frame that grows with the mail: no
 scripts, no forms, no plugins. The message scrolls as one page, and links
 in the mail work on the first click; they open in a new tab. Links from a
-mail into the archive itself are not followed. A few mails are taller than
-any frame (for example a picture as high as the window); those, and very
-long ones, keep the height of the visible area and scroll inside it.
+mail into the archive itself are blocked where possible, and the server
+refuses most of them in any case (see [HTML mail](../reference/security#html-mail)).
+A few mails are taller than any frame (for example a picture as high as
+the window); those, and very long ones, keep the height of the visible
+area and scroll inside it.
 **Remote images stay blocked** because they tell the sender that you opened
 the message (tracking pixels). Click **Load remote images** for one message
 to allow them. Images embedded in the message (`cid:`) are always shown if

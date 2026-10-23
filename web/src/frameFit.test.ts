@@ -41,9 +41,11 @@ function setup(mail: Mail, visible = 700) {
   Object.defineProperty(doc, "scrollingElement", { get: () => (mail.quirks === false ? doc.documentElement : doc.body) });
   Object.defineProperty(doc.documentElement, "scrollHeight", {
     get: () => (record(), mail.quirks === false ? Math.max(mail.content(h()), h()) : h()),
+    configurable: true,
   });
   Object.defineProperty(doc.body, "scrollHeight", {
     get: () => (record(), mail.quirks === false ? mail.content(h()) - 16 : Math.max(mail.content(h()), h())),
+    configurable: true,
   });
   Object.defineProperty(frame, "contentDocument", { get: () => doc, configurable: true });
   frame.getBoundingClientRect = () => ({ height: h(), width: 600 }) as DOMRect;
@@ -94,6 +96,27 @@ describe("fit", () => {
     frame.style.border = "1px solid";
     expect(fit(frame, box, origin)).toBe(1200);
     expect(frame.style.getPropertyValue("block-size")).toBe("1202px");
+  });
+
+  it("adds a horizontal scrollbar's height once, so nothing is left to scroll vertically", () => {
+    // A mail wider than the frame: a classic 15px scrollbar takes its height from the viewport.
+    const { box, frame, doc } = setup({ content: () => 1200 });
+    const viewport = () => parseFloat(frame.style.getPropertyValue("block-size") || "0");
+    Object.defineProperty(doc, "defaultView", { value: { get innerHeight() { return viewport(); } } });
+    Object.defineProperty(doc.body, "clientHeight", { get: () => viewport() - 15 });
+    // The scroll height is the content or the client area (without the scrollbar), whichever is more.
+    Object.defineProperty(doc.body, "scrollHeight", { get: () => Math.max(1200, viewport() - 15) });
+    Object.defineProperty(doc.documentElement, "scrollHeight", { get: () => viewport() });
+    expect(fit(frame, box, origin)).toBe(1215);
+    expect(frame.style.getPropertyValue("block-size")).toBe("1215px");
+    // Stable: the next fit measures the same.
+    expect(fit(frame, box, origin)).toBe(1215);
+
+    // Overlay scrollbars (or none): nothing added.
+    const plain = setup({ content: () => 1200 });
+    Object.defineProperty(plain.doc, "defaultView", { value: { get innerHeight() { return parseFloat(plain.frame.style.getPropertyValue("block-size")); } } });
+    Object.defineProperty(plain.doc.body, "clientHeight", { get: () => parseFloat(plain.frame.style.getPropertyValue("block-size")) });
+    expect(fit(plain.frame, plain.box, origin)).toBe(1200);
   });
 
   it("keeps the visible area over the cap, where the frame scrolls on its own", () => {
@@ -279,6 +302,25 @@ describe("attachFrameFit", () => {
     expect(click.defaultPrevented).toBe(false);
   });
 
+  it("cancels dragging a link into the app, not an external one (dragging to the tab bar opens it)", () => {
+    const { box, frame, doc } = setup({ content: () => 1200 });
+    const f = attachFrameFit(frame, box, "", origin);
+    frame.dispatchEvent(new Event("load"));
+    const drag = (href: string) => {
+      const a = doc.createElement("a");
+      a.setAttribute("href", href);
+      doc.body.append(a);
+      const e = new Event("dragstart", { bubbles: true, cancelable: true, composed: true });
+      a.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    expect(drag("/api/status")).toBe(true);
+    expect(drag("javascript:void(0)")).toBe(true);
+    expect(drag("https://example.org/")).toBe(false);
+    f.detach();
+    expect(drag("/api/status")).toBe(false);
+  });
+
   it("installs the link blocker for click and auxclick on each load", () => {
     const { box, frame, doc } = setup({ content: () => 1200 });
     const f = attachFrameFit(frame, box, "", origin);
@@ -306,7 +348,8 @@ describe("blockAppLinks", () => {
   const { doc } = setup({ content: () => 0 });
   /** Whether a click on el is cancelled. */
   const blocked = (el: Element, type = "click") => {
-    const e = new MouseEvent(type, { bubbles: true, cancelable: true });
+    // composed, like the browser's: the event leaves shadow roots.
+    const e = new MouseEvent(type, { bubbles: true, cancelable: true, composed: true });
     const listener = (ev: Event) => blockAppLinks(ev, origin);
     doc.addEventListener(type, listener, true);
     el.dispatchEvent(e);
@@ -389,6 +432,31 @@ describe("blockAppLinks", () => {
     for (const href of ["javascript:void(0)", " JavaScript:alert(1)", "JAVASCRIPT:alert(1)", "java\tscript:alert(1)", "data:text/html,x", "DATA:text/html,x", "vbscript:msgbox(1)", "VBScript:msgbox(1)"]) {
       expect(blocked(html(`<a href="${href}">x</a>`).firstElementChild!), href).toBe(true);
     }
+  });
+
+  it("cancels a link into the app inside an open shadow root (declarative or attached)", () => {
+    const host = doc.createElement("div");
+    doc.body.append(host);
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `<a href="/api/openapi.json"><span>spec</span></a><a href="https://example.org/">out</a>`;
+    expect(blocked(root.querySelector("span")!)).toBe(true);
+    expect(blocked(root.querySelector('a[href^="https"]')!)).toBe(false);
+  });
+
+  it("does not see into a closed shadow root (a documented residual; the server refuses most routes)", () => {
+    const host = doc.createElement("div");
+    doc.body.append(host);
+    const root = host.attachShadow({ mode: "closed" });
+    root.innerHTML = `<a href="/api/status">x</a>`;
+    expect(blocked(root.querySelector("a")!)).toBe(false);
+  });
+
+  it("walks the target's ancestors when the event has no composed path", () => {
+    const span = html(`<a href="/api/status"><span>x</span></a>`).querySelector("span")!;
+    let prevented = false;
+    const e = { target: span, composedPath: () => [], preventDefault: () => (prevented = true) } as unknown as Event;
+    blockAppLinks(e, origin);
+    expect(prevented).toBe(true);
   });
 
   it("cancels a link whose URL does not parse", () => {

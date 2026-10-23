@@ -43,7 +43,8 @@ function borders(frame: HTMLElement): number {
 }
 
 /**
- * Sizes the frame to its document once. Returns the content height it set,
+ * Sizes the frame to its document once. Returns the height it set (the
+ * content's, plus a horizontal scrollbar's if there is one),
  * or null when the frame has the visible-area height of the stylesheet (the
  * fallback): no readable document, content over FRAME_CAP, or content that
  * is taller than any height the frame is given (viewport-relative content);
@@ -69,31 +70,51 @@ export function fit(frame: HTMLIFrameElement, box: HTMLElement, origin = locatio
     }
     const extra = borders(frame);
     style.setProperty("block-size", `${h + extra}px`);
+    // A mail wider than the frame gets a horizontal scrollbar, which with
+    // classic scrollbars takes its height from the viewport and leaves that
+    // much to scroll vertically: add it once.
+    const se = doc.scrollingElement ?? doc.documentElement;
+    const bar = Math.max(0, (doc.defaultView?.innerHeight ?? 0) - se.clientHeight);
+    if (bar > 0) style.setProperty("block-size", `${h + bar + extra}px`);
     if (contentHeight(doc) > h + 1) {
       // Still overflowing: content relative to the frame's height. The
       // visible area (the stylesheet's height), if that is more.
       style.removeProperty("block-size");
       const visible = frame.getBoundingClientRect().height;
-      if (visible < h + extra) style.setProperty("block-size", `${h + extra}px`);
+      if (visible < h + bar + extra) style.setProperty("block-size", `${h + bar + extra}px`);
       return null;
     }
-    return h;
+    return h + bar;
   } finally {
     box.style.removeProperty("min-block-size");
   }
 }
 
+/** Whether a node is a link: an a or area (HTML or SVG) with href, or SVG's xlink:href. */
+function isLink(n: unknown): boolean {
+  const e = n as Element | null;
+  return (
+    !!e &&
+    e.nodeType === 1 &&
+    (e.localName === "a" || e.localName === "area") &&
+    (e.hasAttribute("href") || e.hasAttributeNS(xlink, "href"))
+  );
+}
+
 /**
- * The link a click on target follows: the nearest a or area with an href,
- * HTML or SVG (SVG also with xlink:href). The same element closest("a[href],
- * area[href]") finds, plus SVG's xlink:href, so that an outer link cannot
+ * The link an event on it follows: the innermost link in the event's
+ * composed path, so links inside open shadow roots count too (a closed
+ * root's inside is not in the path). Without a path, the nearest link
+ * among the target's ancestors. Innermost, so that an outer link cannot
  * stand in for an inner one the browser would follow.
  */
-function linkOf(target: EventTarget | null): Element | null {
-  let el = target as Node | null;
+function linkOf(e: Event): Element | null {
+  const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+  if (path.length > 0) return (path.find(isLink) as Element | undefined) ?? null;
+  let el = e.target as Node | null;
   if (el && el.nodeType !== 1) el = el.parentNode;
-  for (let e = el as Element | null; e && e.nodeType === 1; e = e.parentElement) {
-    if ((e.localName === "a" || e.localName === "area") && (e.hasAttribute("href") || e.hasAttributeNS(xlink, "href"))) return e;
+  for (let n = el as Element | null; n && n.nodeType === 1; n = n.parentElement) {
+    if (isLink(n)) return n;
   }
   return null;
 }
@@ -110,7 +131,8 @@ export function linkURL(link: Element): URL | null {
 }
 
 /**
- * A click or auxclick listener for the frame document: it cancels links into
+ * A click, auxclick or dragstart listener for the frame document (dragging
+ * a link to the tab bar opens it): it cancels links into
  * the app itself. The frame shares the app's origin, so such a link would
  * reach the API with the session cookie (the server's Fetch Metadata guard
  * refuses most of them; this is the second layer). A mail has no reason to
@@ -120,7 +142,7 @@ export function linkURL(link: Element): URL | null {
  * untouched; a link that does not parse is cancelled.
  */
 export function blockAppLinks(e: Event, origin = location.origin): void {
-  const link = linkOf(e.target);
+  const link = linkOf(e);
   if (!link) return;
   const url = linkURL(link);
   if (!url || url.origin === origin || unsafeSchemes.has(url.protocol)) e.preventDefault();
@@ -143,7 +165,8 @@ export interface FrameFit {
  * loads and on details toggles (closing one does not resize the stretched
  * quirks-mode root). After LOOP_LIMIT height-changing fits in a row on
  * content resizes alone (a CSS animation, say), it stops observing them and
- * keeps its height. It also installs the same-origin link blocker.
+ * keeps its height. It also installs the same-origin link blocker (click,
+ * auxclick, dragstart).
  *
  * start: the height a replaced frame had (images toggle), so the page does
  * not jump until the new one is measured.
@@ -184,15 +207,13 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
     const block = (e: Event) => blockAppLinks(e, origin);
     // Capture: load, error and toggle do not bubble.
     for (const type of ["load", "error", "toggle"]) doc.addEventListener(type, refit, true);
-    doc.addEventListener("click", block, true);
-    doc.addEventListener("auxclick", block, true);
+    for (const type of ["click", "auxclick", "dragstart"]) doc.addEventListener(type, block, true);
     const fonts = doc.fonts;
     fonts?.addEventListener("loadingdone", refit);
     detachDoc = () => {
       content.disconnect();
       for (const type of ["load", "error", "toggle"]) doc.removeEventListener(type, refit, true);
-      doc.removeEventListener("click", block, true);
-      doc.removeEventListener("auxclick", block, true);
+      for (const type of ["click", "auxclick", "dragstart"]) doc.removeEventListener(type, block, true);
       fonts?.removeEventListener("loadingdone", refit);
     };
   };

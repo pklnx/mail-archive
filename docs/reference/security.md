@@ -241,19 +241,35 @@ IMAP connections. Two layers stop them:
   `GET /api/messages/{id}/html`, `…/raw`, `…/parts/{n}` and
   `/api/openapi.json`. Requests without these headers (scripts, API
   clients) are not affected.
-- The web UI cancels clicks on links in the mail that point into the app.
+- The web UI cancels clicks, middle clicks and drags of links in the mail
+  that point into the app, also inside open shadow roots, and of
+  `javascript:`, `data:` and `vbscript:` links.
 
 What remains:
 
-- The context menu's "Open link in new tab", or dragging a link to the
-  tab bar, cannot be intercepted. On the four routes above it can open or
-  download a message, a part or an `.eml` whose id (SHA-256) the mail's
-  author already knows. That writes an audit entry in your name and saves
-  a file to your device, but tells the author nothing.
+- The context menu's "Open link in new tab" cannot be intercepted. On the
+  four routes above it can open or download a message, a part or an
+  `.eml` whose id (SHA-256) the mail's author already knows. That writes an
+  audit entry in your name and saves a file to your device. It reveals no
+  more to the author than clicking an external link in the mail would
+  (opening `/html?images=1` of the author's own mail loads its remote
+  images).
+- The web UI cannot see into a closed declarative shadow root
+  (`<template shadowrootmode="closed">`) in the mail, so one click on a
+  link inside it is a real navigation and reaches the four routes above,
+  with the same effect as the context menu; every other route answers
+  `403`. Neutralizing `shadowrootmode` on the server is a planned
+  follow-up.
+- Links before the frame's `load`: the link blocker is installed when the
+  frame has loaded. A remote image that never answers (after **Load remote
+  images**) delays `load`; until then a click on a same-origin link is a
+  real navigation, which the server's rule above still limits to the four
+  routes. The frame also keeps its earlier height until then.
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests, and
-  so can a link opened from the context menu.
+  so can a link the web UI cannot cancel (the context menu, a closed shadow
+  root, before `load`).
 
 ### Login checks
 
