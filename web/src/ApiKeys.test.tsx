@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiKey } from "./api";
 import { apiKeyDetails, apiKeyError, ApiKeyItems, NewKeyPanel } from "./ApiKeys";
@@ -31,12 +31,28 @@ describe("NewKeyPanel", () => {
 describe("ApiKeyItems", () => {
   it("offers revoking only active keys and never shows more than the hint", () => {
     const revoke = vi.fn();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ApiKeyItems keys={[key, { ...key, id: 2, name: "old", state: "revoked" }]} revoke={revoke} />);
-    expect(screen.getAllByText(t.apiKeyRevoke)).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: t.apiKeyRevoke })).toHaveLength(1);
     expect(screen.getAllByText(/ma_…abcd/)).toHaveLength(2);
-    fireEvent.click(screen.getByText(t.apiKeyRevoke));
+    fireEvent.click(screen.getByRole("button", { name: t.apiKeyRevoke }));
+    // Asks first, in a danger Modal; nothing is revoked yet.
+    expect(revoke).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: t.apiKeyRevokeTitle("backup") });
+    expect(dialog.className).toContain("cds--modal-container");
+    expect(dialog.closest(".cds--modal")!.className).toContain("cds--modal--danger");
+    fireEvent.click(within(dialog).getByRole("button", { name: t.apiKeyRevoke }));
+    expect(revoke).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledWith(key);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("revokes nothing when the confirmation is cancelled", () => {
+    const revoke = vi.fn();
+    render(<ApiKeyItems keys={[key]} revoke={revoke} />);
+    fireEvent.click(screen.getByRole("button", { name: t.apiKeyRevoke }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.cancel }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(revoke).not.toHaveBeenCalled();
   });
 });
 

@@ -1578,3 +1578,228 @@ select:not([multiple], [size], .cds--select-input) {
   color: var(--cds-text-error);
   font-weight: 600;
 }
+
+/* A page with a wide table (Users, Log). */
+.page--wide {
+  max-inline-size: 76rem;
+}
+
+/* The content of a Modal: paragraphs, fields and lists, one below the other. */
+.modal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Users. */
+.users-page__heading {
+  outline: none;
+}
+.users-table__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.users-table__hint {
+  display: block;
+  max-inline-size: 16rem;
+  margin-block-start: 0.25rem;
+}
+.users-table__name + .app-text-secondary {
+  white-space: nowrap;
+}
+.users-table__lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+.users-table .cds--tag {
+  margin: 0;
+  white-space: nowrap;
+}
+/* On a phone the table scrolls sideways; headings and short values stay on one line. */
+.users-table th,
+.runs-table th,
+.log-table th,
+.users-table__lines {
+  white-space: nowrap;
+}
+.users-table__hint {
+  min-inline-size: 12rem;
+  white-space: normal;
+}
+.users-table td,
+.log-table td,
+.runs-table td {
+  vertical-align: top;
+}
+/* The scrolling box of a table also holds its visually hidden labels
+   (position: absolute); otherwise they widen the page on a phone. */
+.users-table .cds--data-table-content,
+.log-table .cds--data-table-content,
+.runs-table .cds--data-table-content {
+  position: relative;
+}
+.users-table .cds--data-table td,
+.log-table .cds--data-table td {
+  padding-block: 0.75rem;
+}
+.users-table .cds--table-column-menu {
+  padding-block: 0.25rem;
+}
+
+/* A generated password, shown once. */
+.generated {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.generated__title {
+  font-weight: 600;
+}
+.generated__code {
+  max-inline-size: 100%;
+}
+
+/* API keys under a user and on the profile. */
+.api-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-block: 0.5rem;
+}
+.api-key-list__item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--cds-border-subtle-01);
+}
+.api-key-list__item--off .api-key-list__text {
+  color: var(--cds-text-secondary);
+}
+.api-key-list__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+.api-key-list__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Log. */
+.log-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+.log-table__time {
+  white-space: nowrap;
+}
+.log-table__action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+.log-table__strong {
+  font-weight: 600;
+}
+.log-table .log-table__fold.cds--btn {
+  min-block-size: 1.5rem;
+  padding: 0 0.5rem;
+  margin-inline-start: -0.5rem;
+}
+.log-table__nested .log-table__time {
+  padding-inline-start: 2rem;
+}
+.log-table__target {
+  min-inline-size: 12rem;
+}
+.log-table__hash {
+  font-family: var(--cds-code-01-font-family, "IBM Plex Mono", monospace);
+  font-size: 0.75rem;
+}
+.log-table__detail {
+  display: block;
+  margin-block-start: 0.25rem;
+}
+.log-table__client {
+  max-inline-size: 14rem;
+}
+
+/* Retention. */
+.retention-panel {
+  padding-block: 1.5rem 2rem;
+}
+.retention-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.retention-section > p {
+  max-inline-size: 48rem;
+}
+.retention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.retention-tile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem 1rem;
+}
+.retention-tile--off .retention-tile__body {
+  color: var(--cds-text-secondary);
+}
+.retention-tile__body {
+  display: flex;
+  flex: 1 1 18rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+.retention-tile__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+.retention-tile__head .cds--tag {
+  margin: 0;
+}
+.retention-tile__name {
+  /* heading-02 */
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+.retention-tile__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.retention-form {
+  margin-block-start: 1rem;
+}
+.runs-table__action {
+  text-align: end;
+}
+.runs-table__number {
+  text-align: end;
+}
+.run-hashes {
+  max-block-size: 16rem;
+  overflow-y: auto;
+  font-family: var(--cds-code-01-font-family, "IBM Plex Mono", monospace);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  word-break: break-all;
+}

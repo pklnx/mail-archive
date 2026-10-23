@@ -290,25 +290,24 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
-      {/* The views not converted to Carbon yet (#168 parts 5 and 6) carry
-          .legacy each, for the reset in index.css; the converted markup
-          (Accounts, the mail view) does not, so the reset never reaches
-          Carbon's. */}
+      {/* The view not converted to Carbon yet (#168 part 6) carries
+          .legacy, for the reset in index.css; the converted markup does
+          not, so the reset never reaches Carbon's. */}
       {state.view === "profile" ? (
         <main inert={pageInert} className="legacy text-ink app-view">
           <ProfilePage name={user.name} close={() => update({ view: "" })} />
         </main>
       ) : state.view === "users" && user.admin ? (
-        <main inert={pageInert} className="legacy text-ink app-view">
-          <UsersPage close={() => update({ view: "" })} />
+        <main inert={pageInert} className="app-view">
+          <UsersPage />
         </main>
       ) : state.view === "retention" && user.admin ? (
-        <main inert={pageInert} className="legacy text-ink app-view">
-          <RetentionPage close={() => update({ view: "" })} />
+        <main inert={pageInert} className="app-view">
+          <RetentionPage />
         </main>
       ) : state.view === "log" ? (
-        <main inert={pageInert} className="legacy text-ink app-view">
-          <LogPage admin={user.admin} close={() => update({ view: "" })} open={(m) => update({ view: "", m })} />
+        <main inert={pageInert} className="app-view">
+          <LogPage admin={user.admin} open={(m) => update({ view: "", m })} />
         </main>
       ) : state.view === "accounts" ? (
         <main inert={pageInert} className="app-view">

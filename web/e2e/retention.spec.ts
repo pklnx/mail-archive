@@ -33,13 +33,16 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await expect(held).toContainText("account personal (demo)");
   await expect(held).toContainText("from:registry@court.example (1 matched)");
 
-  // The run lists the two other messages, not the held one.
+  // The run lists the two other messages, not the held one. Its review
+  // opens in a Modal.
   await main.getByRole("tab", { name: "Deletion runs" }).click();
   await main.getByRole("button", { name: "New deletion run" }).click();
-  const confirm = main.getByLabel("To delete, type the number of messages (2):");
+  const review = page.getByRole("dialog");
+  const confirm = review.getByLabel("To delete, type the number of messages (2):");
   await expect(confirm).toBeVisible();
-  await expect(main.getByRole("cell", { name: "demo / personal / Archive/2014" })).toBeVisible();
-  const remove = main.getByRole("button", { name: "Delete", exact: true });
+  await expect(confirm).toBeFocused();
+  await expect(review.getByRole("cell", { name: "demo / personal / Archive/2014" })).toBeVisible();
+  const remove = review.getByRole("button", { name: "Delete", exact: true });
   await expect(remove).toBeDisabled();
   // Only the exact count enables the button.
   await confirm.fill("3");
@@ -47,9 +50,10 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await confirm.fill("2");
   await expect(remove).toBeEnabled();
   await remove.click();
+  await expect(review).toHaveCount(0);
 
   // The retention job deletes in the background; the page polls.
-  const run = main.getByRole("listitem").filter({ hasText: /^Run \d+: 2 message\(s\)/ });
+  const run = main.getByRole("row").filter({ hasText: /^Run \d+: 2 message\(s\)/ });
   await expect(run).toContainText("done", { timeout: 20_000 });
   await expect(run).toContainText("2 deleted, 0 kept");
   await expect(main.getByRole("button", { name: "New deletion run" })).toBeVisible();

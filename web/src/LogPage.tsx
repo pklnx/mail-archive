@@ -1,14 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  Button,
+  Link,
+  Select,
+  SelectItem,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TextInput,
+} from "@carbon/react";
 import { auditApi, usersApi, type AuditEntry, type AuditFilter, type ManagedUser } from "./api";
-import { foldEntries, shortUserAgent, type LogRow } from "./auditLog";
+import { foldEntries, shortUserAgent } from "./auditLog";
+import { isPlainClick } from "./clicks";
 import { timestamp } from "./format";
 import { t } from "./i18n";
-import { PageHeader } from "./PageHeader";
-
-const button =
-  "rounded-md border border-line-control px-2.5 py-1 text-sm hover:bg-surface-hover disabled:opacity-50 pointer-coarse:min-h-11";
-const input =
-  "rounded-md border border-line-control bg-field px-2.5 py-1.5 text-sm pointer-coarse:min-h-11";
+import { formatState, parseState } from "./urlState";
 
 /** The action groups of the filter, as the API names them. */
 export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"];
@@ -52,7 +62,7 @@ export function entryDetail(e: AuditEntry): string {
 }
 
 /** The audit log: a user's own entries, or everyone's for admins. */
-export function LogPage({ admin, close, open }: { admin: boolean; close: () => void; open: (sha: string) => void }) {
+export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) => void }) {
   const [filter, setFilter] = useState<AuditFilter>(() => defaultFilter());
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [cursor, setCursor] = useState("");
@@ -60,6 +70,7 @@ export function LogPage({ admin, close, open }: { admin: boolean; close: () => v
   const [error, setError] = useState("");
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const id = useId();
 
   useEffect(() => {
     if (admin) usersApi.list().then(setUsers, () => setUsers([]));
@@ -107,141 +118,159 @@ export function LogPage({ admin, close, open }: { admin: boolean; close: () => v
   const set = (patch: Partial<AuditFilter>) => setFilter((f) => ({ ...f, ...patch }));
 
   return (
-    <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 overflow-y-auto p-4">
-      <PageHeader title={t.logTitle} close={close} />
-      <p className="text-sm text-ink-muted">{admin ? t.logAdminNote : t.logOwnNote}</p>
+    <div className="accounts-page">
+      <div className="page page--wide">
+        <header className="page-header">
+          <h1 className="page-header__title type-heading-04">{t.logTitle}</h1>
+          <p className="page-header__intro app-text-secondary">{admin ? t.logAdminNote : t.logOwnNote}</p>
+        </header>
 
-      <div className="flex flex-wrap items-end gap-3 text-sm">
-        <label className="flex flex-col gap-1">
-          {t.logFrom}
-          <input className={input} type="date" value={filter.since} onChange={(e) => set({ since: e.target.value })} />
-        </label>
-        <label className="flex flex-col gap-1">
-          {t.logTo}
-          <input className={input} type="date" value={filter.until} onChange={(e) => set({ until: e.target.value })} />
-        </label>
-        <label className="flex flex-col gap-1">
-          {t.logAction}
-          <select className={input} value={filter.group} onChange={(e) => set({ group: e.target.value })}>
-            <option value="">{t.logAllActions}</option>
+        <div className="log-filters">
+          <TextInput id={`${id}-from`} type="date" labelText={t.logFrom} value={filter.since} onChange={(e) => set({ since: e.target.value })} />
+          <TextInput id={`${id}-to`} type="date" labelText={t.logTo} value={filter.until} onChange={(e) => set({ until: e.target.value })} />
+          <Select id={`${id}-action`} labelText={t.logAction} value={filter.group} onChange={(e) => set({ group: e.target.value })}>
+            <SelectItem value="" text={t.logAllActions} />
             {auditGroups.map((g) => (
-              <option key={g} value={g}>
-                {t.logGroup(g)}
-              </option>
+              <SelectItem key={g} value={g} text={t.logGroup(g)} />
             ))}
-          </select>
-        </label>
-        {admin && (
-          <label className="flex flex-col gap-1">
-            {t.logWho}
-            <select className={input} value={filter.who} onChange={(e) => set({ who: e.target.value })}>
-              <option value="">{t.logEveryone}</option>
-              <option value="cli">{t.logCommandLine}</option>
-              <option value="api_key">{t.logApiKeys}</option>
+          </Select>
+          {admin && (
+            <Select id={`${id}-who`} labelText={t.logWho} value={filter.who} onChange={(e) => set({ who: e.target.value })}>
+              <SelectItem value="" text={t.logEveryone} />
+              <SelectItem value="cli" text={t.logCommandLine} />
+              <SelectItem value="api_key" text={t.logApiKeys} />
               {users.map((u) => (
-                <option key={u.name} value={u.name}>
-                  {u.name}
-                </option>
+                <SelectItem key={u.name} value={u.name} text={u.name} />
               ))}
-            </select>
-          </label>
+            </Select>
+          )}
+        </div>
+
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
         )}
+        {!loading && !error && rows.length === 0 && <p className="app-text-secondary">{t.logEmpty}</p>}
+
+        {rows.length > 0 && (
+          <TableContainer className="log-table">
+            <Table aria-label={t.logTitle} size="md">
+              <TableHead>
+                <TableRow>
+                  <TableHeader>{t.logTime}</TableHeader>
+                  <TableHeader>{t.logAction}</TableHeader>
+                  <TableHeader>{t.logWho}</TableHeader>
+                  <TableHeader>{t.logTarget}</TableHeader>
+                  <TableHeader>{t.logClient}</TableHeader>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {rows.map((row) => {
+                  const isOpen = expanded.has(row.entry.id);
+                  const folded = `${id}-folded-${row.entry.id}`;
+                  return (
+                    <Fragment key={row.entry.id}>
+                      <EntryRow
+                        entry={row.entry}
+                        admin={admin}
+                        open={open}
+                        fold={
+                          row.folded.length > 0 && (
+                            <Button
+                              kind="ghost"
+                              size="sm"
+                              className="log-table__fold"
+                              aria-expanded={isOpen}
+                              aria-controls={isOpen ? row.folded.map((e) => `${folded}-${e.id}`).join(" ") : undefined}
+                              onClick={() => toggle(row.entry.id)}
+                            >
+                              {isOpen ? t.logHideFolded : t.logFolded(row.folded.length)}
+                            </Button>
+                          )
+                        }
+                      />
+                      {isOpen &&
+                        row.folded.map((e) => <EntryRow key={e.id} id={`${folded}-${e.id}`} entry={e} admin={admin} open={open} nested />)}
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+        {cursor && (
+          <div>
+            <Button kind="tertiary" disabled={loading} onClick={() => void more()}>
+              {t.logMore}
+            </Button>
+          </div>
+        )}
+        {loading && rows.length === 0 && <p className="app-text-secondary">{t.loading}</p>}
       </div>
-
-      {error && (
-        <p role="alert" className="text-sm text-danger">
-          {error}
-        </p>
-      )}
-      {!loading && !error && rows.length === 0 && <p className="text-sm text-ink-muted">{t.logEmpty}</p>}
-
-      {rows.length > 0 && (
-        <ul className="flex flex-col divide-y divide-line rounded-lg border border-line text-sm">
-          {rows.map((row) => (
-            <LogItem
-              key={row.entry.id}
-              row={row}
-              admin={admin}
-              open={open}
-              expanded={expanded.has(row.entry.id)}
-              toggle={() => toggle(row.entry.id)}
-            />
-          ))}
-        </ul>
-      )}
-      {cursor && (
-        <button type="button" className={`${button} self-start`} disabled={loading} onClick={() => void more()}>
-          {t.logMore}
-        </button>
-      )}
-      {loading && rows.length === 0 && <p className="text-sm text-ink-muted">{t.loading}</p>}
     </div>
   );
 }
 
-function LogItem({
-  row,
+/** The link of a message, as the mail view's URL has it. */
+const messageHref = (sha: string) => `/${formatState({ ...parseState(""), m: sha })}`;
+
+function EntryRow({
+  id,
+  entry: e,
   admin,
   open,
-  expanded,
-  toggle,
+  fold,
+  nested = false,
 }: {
-  row: LogRow;
+  id?: string;
+  entry: AuditEntry;
   admin: boolean;
   open: (sha: string) => void;
-  expanded: boolean;
-  toggle: () => void;
+  fold?: ReactNode;
+  nested?: boolean;
 }) {
+  const target = targetLabel(e);
+  const detail = [entryDetail(e), e.apiKey ? t.logViaKey(e.apiKey) : ""].filter(Boolean);
+  const failed = e.action === "auth.login_failed";
+  const who = [admin ? (e.user ?? "") : "", e.actor === "cli" ? t.logCLI : ""].filter(Boolean).join(" · ");
+  const sha = e.target?.type === "message" && e.target.subject ? e.target.id : "";
   return (
-    <li className="flex flex-col gap-1 px-3 py-2">
-      <EntryLine entry={row.entry} admin={admin} open={open} />
-      {row.folded.length > 0 && (
-        <button type="button" className="self-start text-xs text-accent-ink hover:underline" onClick={toggle}>
-          {expanded ? t.logHideFolded : t.logFolded(row.folded.length)}
-        </button>
-      )}
-      {expanded && (
-        <ul className="ml-4 flex flex-col gap-1 border-l border-line pl-3">
-          {row.folded.map((e) => (
-            <li key={e.id}>
-              <EntryLine entry={e} admin={admin} open={open} />
-            </li>
+    <TableRow id={id} className={nested ? "log-table__nested" : undefined}>
+      <TableCell className="log-table__time app-tabular">{timestamp(e.at)}</TableCell>
+      <TableCell>
+        <span className="log-table__action">
+          <span className={failed ? "app-text-error log-table__strong" : "log-table__strong"}>{t.auditAction(e.action)}</span>
+          {fold}
+        </span>
+      </TableCell>
+      <TableCell>{who}</TableCell>
+      <TableCell className="log-table__target">
+        {target &&
+          (sha ? (
+            <Link
+              href={messageHref(sha)}
+              onClick={(ev: MouseEvent<HTMLAnchorElement>) => {
+                if (!isPlainClick(ev)) return;
+                ev.preventDefault();
+                open(sha);
+              }}
+            >
+              {target}
+            </Link>
+          ) : (
+            <span className={e.target?.type === "message" ? "log-table__hash" : "app-break-words"}>{target}</span>
           ))}
-        </ul>
-      )}
-    </li>
+        {detail.map((d) => (
+          <span key={d} className="log-table__detail app-text-secondary app-break-words">
+            {d}
+          </span>
+        ))}
+      </TableCell>
+      <TableCell className="log-table__client app-text-secondary app-text-small" title={e.userAgent ?? ""}>
+        {[e.clientIp, e.userAgent ? shortUserAgent(e.userAgent) : ""].filter(Boolean).join(" · ")}
+      </TableCell>
+    </TableRow>
   );
 }
 
-function EntryLine({ entry: e, admin, open }: { entry: AuditEntry; admin: boolean; open: (sha: string) => void }) {
-  const target = targetLabel(e);
-  const detail = entryDetail(e);
-  const failed = e.action === "auth.login_failed";
-  return (
-    <div className="flex flex-col gap-0.5 md:grid md:grid-cols-[12rem_1fr_14rem] md:gap-3">
-      <span className="text-ink-muted tabular-nums">{timestamp(e.at)}</span>
-      <span className="min-w-0">
-        <span className={`font-medium ${failed ? "text-danger" : ""}`}>{t.auditAction(e.action)}</span>
-        {admin && e.user && <span className="text-ink-muted"> · {e.user}</span>}
-        {e.actor === "cli" && <span className="text-ink-muted"> · {t.logCLI}</span>}
-        {e.apiKey && <span className="text-ink-muted"> · {t.logViaKey(e.apiKey)}</span>}
-        {target && (
-          <>
-            {" · "}
-            {e.target?.type === "message" && e.target.subject ? (
-              <button type="button" className="text-accent-ink hover:underline" onClick={() => open(e.target!.id)}>
-                {target}
-              </button>
-            ) : (
-              <span className={e.target?.type === "message" ? "font-mono text-xs" : ""}>{target}</span>
-            )}
-          </>
-        )}
-        {detail && <span className="block break-words text-ink-muted">{detail}</span>}
-      </span>
-      <span className="truncate text-xs text-ink-muted" title={e.userAgent ?? ""}>
-        {[e.clientIp, e.userAgent ? shortUserAgent(e.userAgent) : ""].filter(Boolean).join(" · ")}
-      </span>
-    </div>
-  );
-}
