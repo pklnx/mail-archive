@@ -39,15 +39,20 @@ func (s *Signal) Notify() {
 const (
 	// noDeadline bounds the wait of a test that has no deadline.
 	noDeadline = 30 * time.Second
+	// maxWait bounds every wait, so a stuck wait fails within a minute
+	// instead of shortly before the whole run's deadline.
+	maxWait = 60 * time.Second
 	// margin is how long before the test's deadline Until gives up, so its
 	// message is reported instead of the timeout's panic.
 	margin = 5 * time.Second
 )
 
-// limit is how long Until waits at most: until shortly before the test's
-// deadline, or noDeadline without one. It is a guard against a hang, not
-// a delay: Until returns as soon as the condition holds.
-func limit(tb testing.TB) time.Duration {
+// Limit is how long Until waits at most: until shortly before the test's
+// deadline but no longer than a minute, or noDeadline without a deadline.
+// It is a guard against a hang, not a delay: Until returns as soon as the
+// condition holds. A test that has to poll (a state nobody signals) bounds
+// its poll with it too.
+func Limit(tb testing.TB) time.Duration {
 	d, ok := tb.(interface{ Deadline() (time.Time, bool) })
 	if !ok {
 		return noDeadline
@@ -58,19 +63,19 @@ func limit(tb testing.TB) time.Duration {
 	}
 	left := time.Until(deadline)
 	if left-margin < left/2 {
-		return left / 2
+		return min(left/2, maxWait)
 	}
-	return left - margin
+	return min(left-margin, maxWait)
 }
 
 // Until returns once cond holds. It checks cond, and again after each
 // Notify of sig; whoever changes what cond reads must notify sig after the
 // change. cond runs in the calling goroutine, so it may call tb.Fatal. If
-// cond does not hold before the test's deadline (see limit), the test
+// cond does not hold before the test's deadline (see Limit), the test
 // fails with what.
 func Until(tb testing.TB, sig *Signal, what string, cond func() bool) {
 	tb.Helper()
-	timer := time.NewTimer(limit(tb))
+	timer := time.NewTimer(Limit(tb))
 	defer timer.Stop()
 	for {
 		// C is taken before the check, so a Notify between the check and

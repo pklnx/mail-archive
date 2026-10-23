@@ -17,6 +17,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // clock is a settable time for recurring fills.
@@ -319,12 +320,13 @@ func TestRecurringFillRestart(t *testing.T) {
 	}
 
 	filler.Progress = nil
-	r := &archive.FillRunner{Filler: filler, CheckEvery: 20 * time.Millisecond, Now: c.Now}
+	var ran testwait.Signal
+	r := &archive.FillRunner{Filler: filler, CheckEvery: 20 * time.Millisecond, Now: c.Now, AfterRun: ran.Notify}
 	rctx, rcancel := context.WithCancel(f.ctx)
 	done := make(chan struct{})
 	go func() { r.Run(rctx); close(done) }()
 	t.Cleanup(func() { rcancel(); <-done })
-	got = waitFill(t, f, fill.ID, store.FillOK)
+	got = waitFill(t, f, &ran, fill.ID, store.FillOK)
 	if totals(got).Imported != 3 || !got.KeepRunning {
 		t.Errorf("continued %+v", totals(got))
 	}
@@ -437,14 +439,40 @@ func TestFillRunnerRecurring(t *testing.T) {
 	fill := f.createRecurringFill(acc, "secret")
 	filler := f.recurringFiller(c)
 	runFill(t, filler, fill.ID)
-	var runs atomic.Int32
+	// The runner reads the clock through its own counter (the Filler and
+	// the test read c directly), so the test can wait until the runner has
+	// looked at the schedule: checks waits for twice the reads of one loop
+	// iteration in the runner's configuration, so at least one whole
+	// iteration read the clock after the change before it. A fill an
+	// iteration queued is claimed before the next iteration, so after the
+	// reads it is either still held (PendingFills) or its run has begun
+	// (BeforeRun).
+	var runs, reads, began atomic.Int64
+	var ran, read testwait.Signal
+	var cur *archive.FillRunner
 	start := func(r *archive.FillRunner) func() {
-		r.Filler, r.CheckEvery, r.Now = filler, 10*time.Millisecond, c.Now
-		r.AfterRun = func() { runs.Add(1) }
+		cur = r
+		r.Filler, r.CheckEvery = filler, 10*time.Millisecond
+		r.BeforeRun = func(context.Context, int64) { began.Add(1) }
+		r.Now = func() time.Time {
+			reads.Add(1)
+			read.Notify()
+			return c.Now()
+		}
+		r.AfterRun = func() { runs.Add(1); ran.Notify() }
 		ctx, cancel := context.WithCancel(f.ctx)
 		done := make(chan struct{})
 		go func() { r.Run(ctx); close(done) }()
 		return func() { cancel(); <-done }
+	}
+	checks := func(perIteration int64, what string) {
+		t.Helper()
+		before := began.Load()
+		from := reads.Load()
+		testwait.Until(t, &read, what, func() bool { return reads.Load() >= from+2*perIteration })
+		if n, pending := began.Load(), cur.PendingFills(); n != before || len(pending) != 0 {
+			t.Fatalf("%s: %d runs began, pending %v", what, n-before, pending)
+		}
 	}
 	lastStart := func() time.Time {
 		got, _ := f.store.GetFill(f.ctx, fill.ID)
@@ -453,38 +481,43 @@ func TestFillRunnerRecurring(t *testing.T) {
 	first := lastStart()
 	sched := archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}
 
-	// Not due yet; then due, but held after the start.
+	// Not due yet; then due, but held after the start. Held, an iteration
+	// reads the clock twice (held() for the running and for the due fills).
 	stop := start(&archive.FillRunner{Schedule: sched, HoldUntil: c.Now().Add(7 * time.Hour)})
-	time.Sleep(100 * time.Millisecond)
+	checks(2, "the schedule checks before it is due")
 	c.Add(6*time.Hour + time.Minute)
-	time.Sleep(100 * time.Millisecond)
+	checks(2, "the schedule checks during the hold")
 	if !lastStart().Equal(first) {
 		t.Fatal("ran before it was due or during the hold")
 	}
 	// After the hold it runs once.
 	c.Add(time.Hour)
-	deadline := time.Now().Add(10 * time.Second)
-	for lastStart().Equal(first) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	got := waitFill(t, f, fill.ID, store.FillOK)
+	testwait.Until(t, &ran, "the run after the hold", func() bool { return runs.Load() >= 1 })
 	stop()
-	if got.RunStartedAt.Equal(first) || runs.Load() != 1 {
-		t.Fatalf("after the hold: %v, %d runs", got.RunStartedAt, runs.Load())
+	got, err := f.store.GetFill(f.ctx, fill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != store.FillOK || got.RunStartedAt.Equal(first) || runs.Load() != 1 {
+		t.Fatalf("after the hold: %s, %v, %d runs", got.Status, got.RunStartedAt, runs.Load())
 	}
 
 	// The schedule off, or the account disabled: no run.
 	second := lastStart()
 	c.Add(7 * time.Hour)
+	// The schedule off, without a hold: one read per iteration (held() for
+	// the running fills).
 	stop = start(&archive.FillRunner{})
-	time.Sleep(100 * time.Millisecond)
+	checks(1, "the checks with the schedule off")
 	stop()
 	off := false
 	if err := f.store.UpdateAccount(f.ctx, acc.Ref(), store.AccountChange{Enabled: &off}); err != nil {
 		t.Fatal(err)
 	}
+	// The schedule on, without a hold: three reads per iteration (held()
+	// twice, dueFills once).
 	stop = start(&archive.FillRunner{Schedule: sched})
-	time.Sleep(100 * time.Millisecond)
+	checks(3, "the schedule checks with the account disabled")
 	stop()
 	if !lastStart().Equal(second) {
 		t.Error("ran with the schedule off or the account disabled")

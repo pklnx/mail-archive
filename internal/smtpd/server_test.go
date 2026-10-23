@@ -24,6 +24,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 func TestDecode(t *testing.T) {
@@ -290,11 +291,13 @@ func TestReceiveRefusals(t *testing.T) {
 }
 
 func TestReceiveRefusesClients(t *testing.T) {
+	var freed testwait.Signal
+	var frees atomic.Int32
 	f := newFixture(t, func(s *Server) {
 		s.MaxConns = 1
+		s.slotFreed = func() { frees.Add(1); freed.Notify() }
 	})
 	first := f.dial()
-	_ = first
 
 	c, err := smtp.Dial(f.addr)
 	if err == nil {
@@ -305,17 +308,11 @@ func TestReceiveRefusesClients(t *testing.T) {
 		t.Errorf("over the connection limit: %v", err)
 	}
 	_ = first.Quit()
-	// The slot is free again.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		err := f.send("sender@example.com", []string{"archive@archive.test"}, message("emu"))
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("after the first connection ended: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
+	// The slot is free again once the server closed the first connection
+	// (the refused one never took it).
+	testwait.Until(t, &freed, "the first connection's slot", func() bool { return frees.Load() >= 1 })
+	if err := f.send("sender@example.com", []string{"archive@archive.test"}, message("emu")); err != nil {
+		t.Fatalf("after the first connection ended: %v", err)
 	}
 
 	g := newFixture(t, func(s *Server) {
@@ -444,7 +441,8 @@ func TestReceiveAlongsideVerify(t *testing.T) {
 		var n atomic.Int64
 		for ctx.Err() == nil {
 			// verify runs again and again, but not without a pause: back to
-			// back, it could catch every retry between Put and commit.
+			// back, it could catch every retry between Put and commit. A
+			// deliberate pace, not a wait for a state.
 			time.Sleep(20 * time.Millisecond)
 			// A new orphans/ directory per run: runs within one second
 			// would otherwise share it.

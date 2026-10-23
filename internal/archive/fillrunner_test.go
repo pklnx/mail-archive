@@ -3,28 +3,29 @@ package archive_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
-func waitFill(t *testing.T, f *fixture, id int64, want string) *store.Fill {
+// waitFill waits until the fill has the status. ran is the runner's
+// AfterRun: a run's status is stored before it.
+func waitFill(t *testing.T, f *fixture, ran *testwait.Signal, id int64, want string) *store.Fill {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		got, err := f.store.GetFill(f.ctx, id)
-		if err != nil {
+	var got *store.Fill
+	testwait.Until(t, ran, fmt.Sprintf("fill %d to reach %s", id, want), func() bool {
+		var err error
+		if got, err = f.store.GetFill(f.ctx, id); err != nil {
 			t.Fatal(err)
 		}
-		if got.Status == want {
-			return got
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("fill %d did not reach %s", id, want)
-	return nil
+		return got.Status == want
+	})
+	return got
 }
 
 func TestFillRunnerContinuesRunningFills(t *testing.T) {
@@ -37,25 +38,29 @@ func TestFillRunnerContinuesRunningFills(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	r := &archive.FillRunner{Filler: f.filler(), CheckEvery: 20 * time.Millisecond}
+	var runs atomic.Int32
+	var ran testwait.Signal
+	r := &archive.FillRunner{Filler: f.filler(), CheckEvery: 20 * time.Millisecond,
+		AfterRun: func() { runs.Add(1); ran.Notify() }}
 	ctx, cancel := context.WithCancel(f.ctx)
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
-	time.Sleep(100 * time.Millisecond)
+	// A run skipped as busy also ends with AfterRun.
+	testwait.Until(t, &ran, "a run while locked", func() bool { return runs.Load() >= 1 })
 	if st, _ := f.store.FillStatus(f.ctx, fill.ID); st != store.FillRunning {
 		t.Fatalf("ran while locked: %s", st)
 	}
 	unlock()
 
-	got := waitFill(t, f, fill.ID, store.FillOK)
+	got := waitFill(t, f, &ran, fill.ID, store.FillOK)
 	if got.PasswordEnc != nil || len(got.Folders) != 2 {
 		t.Errorf("fill %+v", got)
 	}
-	// The end is in the audit log, by the web server.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var found []byte
+	// The end is in the audit log, by the web server; it is written before
+	// AfterRun.
+	var found []byte
+	testwait.Until(t, &ran, "the data.fill_done entry", func() bool {
 		_ = f.store.ExportAudit(f.ctx, store.AuditFilter{Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour)},
 			func(r store.AuditRecord) error {
 				if r.Action == "data.fill_done" && r.TargetName == acc.Name {
@@ -63,20 +68,14 @@ func TestFillRunnerContinuesRunningFills(t *testing.T) {
 				}
 				return nil
 			})
-		if found != nil {
-			var d map[string]any
-			if err := json.Unmarshal(found, &d); err != nil {
-				t.Fatal(err)
-			}
-			if d["by"] != "web server" || d["status"] != store.FillOK || d["imported"] != float64(archive.FillTotals(got).Imported) {
-				t.Errorf("data.fill_done %s", found)
-			}
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no data.fill_done entry")
-		}
-		time.Sleep(20 * time.Millisecond)
+		return found != nil
+	})
+	var d map[string]any
+	if err := json.Unmarshal(found, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d["by"] != "web server" || d["status"] != store.FillOK || d["imported"] != float64(archive.FillTotals(got).Imported) {
+		t.Errorf("data.fill_done %s", found)
 	}
 }
 
