@@ -209,7 +209,7 @@ export function UsersPage() {
                   if (own.length === 0) {
                     return (
                       <TableRow key={u.name}>
-                        <TableCell />
+                        <TableCell headers={`${id}-expand`} />
                         {cells}
                       </TableRow>
                     );
@@ -218,7 +218,9 @@ export function UsersPage() {
                     <Fragment key={u.name}>
                       <TableExpandRow
                         aria-label={t.apiKeysOf(u.name)}
-                        aria-controls={`${id}-keys-${i}`}
+                        // Names the key list only while it exists.
+                        aria-controls={open ? `${id}-keys-${i}` : undefined}
+                        expandHeader={`${id}-expand`}
                         expandIconDescription={open ? t.hideApiKeys : t.apiKeysOf(u.name)}
                         isExpanded={open}
                         onExpand={() => toggleKeys(u.name)}

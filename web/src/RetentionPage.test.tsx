@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeletionReview, DeletionRun, LegalHold, RetentionRules } from "./api";
 import { retentionDay } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
-import { accountLabel, countMatches, holdScope, RetentionPage, runOpen } from "./RetentionPage";
+import { accountLabel, countMatches, holdScope, RetentionPage, RunReview, runOpen } from "./RetentionPage";
 
 const hold = (h: Partial<LegalHold>): LegalHold => ({
   id: 1,
@@ -104,11 +104,17 @@ let runs: DeletionRun[];
 let review: DeletionReview;
 let requests: { method: string; url: string; body: unknown }[];
 let confirmFails: boolean;
+/** Loading the runs fails (after an action, for example). */
+let runsFail: boolean;
+/** A test's own answer to Delete or Cancel run, if it has one. */
+let answer: ((url: string) => Response | undefined) | null;
 const changes = () => requests.filter((r) => r.method !== "GET");
 
 beforeEach(() => {
   requests = [];
   confirmFails = false;
+  runsFail = false;
+  answer = null;
   runs = [run({ id: 2, state: "done", candidates: 4, deleted: 3, kept: 1 }), run({})];
   review = {
     run: run({}),
@@ -129,8 +135,16 @@ beforeEach(() => {
       return json({ holds: [hold({ id: 8, name: "Case 4711", user: "alice" })].concat(u.includes("released=1") ? [hold({ id: 9, name: "Old case", releasedAt: "2026-10-02T00:00:00Z", releasedBy: "demo", releaseNote: "closed" })] : []) });
     }
     if (method === "GET" && u === "/api/users") return json({ users: [{ name: "alice" }] });
-    if (method === "GET" && u === "/api/retention/runs") return json({ runs });
-    if (method === "GET" && u.startsWith("/api/retention/runs/")) return json(review);
+    if (method === "GET" && u === "/api/retention/runs") return runsFail ? json({ error: "database unavailable" }, 503) : json({ runs });
+    if (method === "GET" && u.startsWith("/api/retention/runs/")) {
+      // The review has the run's current state, as the server's does.
+      const now = runs.find((r) => r.id === review.run.id);
+      return json({ ...review, run: { ...review.run, state: now?.state ?? review.run.state } });
+    }
+    if (method === "POST" && (u.endsWith("/confirm") || u.endsWith("/cancel")) && answer) {
+      const res = answer(u);
+      if (res) return res;
+    }
     if (method === "POST" && u === "/api/retention/runs") return json(run({ id: 4 }), 201);
     if (method === "POST" && u === "/api/retention/rules") return json({ id: 6 }, 201);
     if (method === "POST" && u === "/api/legal-holds") return json({ id: 10, matched: 1 }, 201);
@@ -316,6 +330,77 @@ describe("RetentionPage", () => {
     fireEvent.click(within(dialog()).getByRole("button", { name: t.runConfirm }));
     expect(await within(dialog()).findByText(t.failed("type the number of messages (2) to confirm"))).toBeTruthy();
     expect(changes()).toHaveLength(1);
+  });
+
+  async function openRun3() {
+    await showTab(t.runsTab);
+    await screen.findByText(t.runLine(3, 2, "2.0 KB"));
+    fireEvent.click(screen.getAllByRole("button", { name: t.runShow })[1]!);
+    return within(dialog()).findByLabelText(t.runConfirmPrompt(2));
+  }
+
+  it("stays open and says so when another admin confirmed the run this one cancels", async () => {
+    // The race: the run was confirmed elsewhere; Cancel run gets a 409.
+    answer = (u) => {
+      if (!u.endsWith("/cancel")) return undefined;
+      runs = runs.map((r) => (r.id === 3 ? { ...r, state: "confirmed" } : r));
+      return new Response(JSON.stringify({ error: "the run is no longer proposed" }), { status: 409, headers: { "Content-Type": "application/json" } });
+    };
+    await openRun3();
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.runCancel }));
+    const text = `${t.failed("the run is no longer proposed")} ${t.runNowState(t.runState("confirmed"))}`;
+    expect(await within(dialog()).findByText(text)).toBeTruthy();
+    // The review shows the run as it is now: deleting, nothing to confirm.
+    expect(await within(dialog()).findByRole("heading", { name: `${t.runLine(3, 2, "2.0 KB")} · ${t.runState("confirmed")}` })).toBeTruthy();
+    expect(within(dialog()).queryByRole("button", { name: t.runConfirm })).toBeNull();
+    expect(changes()).toEqual([{ method: "POST", url: "/api/retention/runs/3/cancel", body: undefined }]);
+  });
+
+  it("stays open and says so when the run was cancelled elsewhere before Delete", async () => {
+    answer = (u) => {
+      if (!u.endsWith("/confirm")) return undefined;
+      runs = runs.map((r) => (r.id === 3 ? { ...r, state: "cancelled" } : r));
+      return new Response(JSON.stringify({ error: "the run is no longer proposed" }), { status: 409, headers: { "Content-Type": "application/json" } });
+    };
+    const field = await openRun3();
+    fireEvent.change(field, { target: { value: "2" } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.runConfirm }));
+    const text = `${t.failed("the run is no longer proposed")} ${t.runNowState(t.runState("cancelled"))}`;
+    expect(await within(dialog()).findByText(text)).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("disables Delete and says so when the state cannot be loaded after a confirm", async () => {
+    answer = (u) => {
+      if (!u.endsWith("/confirm")) return undefined;
+      runsFail = true;
+      return new Response(null, { status: 202 });
+    };
+    const field = await openRun3();
+    fireEvent.change(field, { target: { value: "2" } });
+    const remove = within(dialog()).getByRole("button", { name: t.runConfirm }) as HTMLButtonElement;
+    fireEvent.click(remove);
+    expect(await within(dialog()).findByText(t.runStateUnknown)).toBeTruthy();
+    expect(screen.queryByText(/JSON/)).toBeNull();
+    expect(remove.disabled).toBe(true);
+    fireEvent.submit(field.closest("form")!);
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.runCancel }));
+    expect(changes()).toEqual([{ method: "POST", url: "/api/retention/runs/3/confirm", body: { count: 2 } }]);
+  });
+
+  it("loads the review again when the run's state changes while it is open", async () => {
+    const reviews = () => requests.filter((r) => r.url === "/api/retention/runs/3").length;
+    runs = [run({ state: "confirmed" })];
+    const props = { id: 3, title: "", changed: async () => runs, close: () => {} };
+    const view = render(<RunReview {...props} state="confirmed" />);
+    expect(await within(dialog()).findByRole("heading", { name: `${t.runLine(3, 2, "2.0 KB")} · ${t.runState("confirmed")}` })).toBeTruthy();
+    expect(reviews()).toBe(1);
+    runs = [run({ state: "done", deleted: 2 })];
+    review = { ...review, candidates: review.candidates.map((c) => ({ ...c, state: "deleted" as const })) };
+    view.rerender(<RunReview {...props} state="done" />);
+    expect(await within(dialog()).findByRole("heading", { name: `${t.runLine(3, 2, "2.0 KB")} · ${t.runState("done")}` })).toBeTruthy();
+    expect(within(dialog()).getByText(`${"c".repeat(64)} (deleted)`)).toBeTruthy();
+    expect(reviews()).toBe(2);
   });
 
   it("cancels a run, and closing the review changes nothing", async () => {

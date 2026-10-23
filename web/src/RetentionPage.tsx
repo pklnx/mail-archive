@@ -698,6 +698,7 @@ function RunsTab() {
         <RunReview
           key={selected}
           id={selected}
+          state={shown?.state}
           title={shown ? t.runLine(shown.id, shown.candidates, fileSize(shown.bytes)) : t.runShow}
           returnFocus={() => reviewButtons.current.get(selected)}
           changed={reload}
@@ -708,19 +709,26 @@ function RunsTab() {
   );
 }
 
+/** The states a run must reach for an action to have done what was asked. */
+const reached = { confirm: ["confirmed", "done"], cancel: ["cancelled"] } as const;
+
 /**
  * The review of a deletion run in a Modal: the groups, the hashes and, for a
  * proposed run, the typed-count confirmation and Cancel run. Delete is
  * enabled only by the exact count. Closing the Modal changes nothing.
+ * state is the run's state in the polled list: the review loads again when
+ * it changes, so a deletion that finishes shows its hashes' states.
  */
 export function RunReview({
   id,
+  state,
   title,
   returnFocus,
   changed,
   close,
 }: {
   id: number;
+  state?: string;
   title: string;
   returnFocus?: () => HTMLElement | null | undefined;
   changed: () => Promise<DeletionRun[] | null>;
@@ -730,27 +738,44 @@ export function RunReview({
   const [count, setCount] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // After an action whose outcome could not be loaded: nothing more is sent.
+  const [unknown, setUnknown] = useState(false);
   const field = useRef<HTMLInputElement>(null);
   const fieldId = useId();
 
   useEffect(() => {
-    retentionApi.run(id).then(setReview, (err: unknown) => setError(message(err)));
-  }, [id]);
+    let current = true;
+    retentionApi.run(id).then(
+      (r) => {
+        if (current) setReview(r);
+      },
+      (err: unknown) => {
+        if (current) setError((e) => e || message(err));
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [id, state]);
 
   const run = review?.run;
   const proposed = run?.state === "proposed";
   const confirmable = proposed && run.candidates > 0;
-  const matches = confirmable && countMatches(count, run.candidates);
+  const matches = confirmable && !unknown && countMatches(count, run.candidates);
   useLayoutEffect(() => {
     if (confirmable) field.current?.focus();
   }, [confirmable]);
 
-  // After Delete or Cancel run the list is loaded again. The review closes
-  // when the request succeeded or the run is no longer proposed: the server
-  // answers a confirm with 202 and no body, which the client reads as an
-  // error (api.ts is unchanged in this part), so the run's state decides.
-  const act = async (action: () => Promise<unknown>) => {
-    if (busy || !run) return;
+  // After Delete or Cancel run the list is loaded again, and the run's new
+  // state decides: the server answers a confirm with 202 and no body, which
+  // the client reads as an error (api.ts is unchanged in this part). The
+  // review closes only when the run reached the state of the chosen action:
+  // confirmed or done after Delete, cancelled after Cancel run. Otherwise it
+  // stays open with the error and the state the run has now, for example
+  // when another admin confirmed it while this one cancelled it. When the
+  // state cannot be loaded, it says so and sends nothing more.
+  const act = async (kind: keyof typeof reached, action: () => Promise<unknown>) => {
+    if (busy || unknown || !run) return;
     setBusy(true);
     setError("");
     let failed = "";
@@ -759,16 +784,26 @@ export function RunReview({
     } catch (err) {
       failed = message(err);
     }
-    const now = (await changed())?.find((r) => r.id === run.id);
+    const runs = await changed();
+    const now = runs?.find((r) => r.id === run.id);
     setBusy(false);
-    if (!failed || (now && now.state !== "proposed")) close();
-    else setError(failed);
+    if (now && (reached[kind] as readonly string[]).includes(now.state)) {
+      close();
+      return;
+    }
+    if (!now) {
+      setUnknown(true);
+      setError(t.runStateUnknown);
+      return;
+    }
+    const elsewhere = now.state === "proposed" ? "" : t.runNowState(t.runState(now.state));
+    setError([failed, elsewhere].filter(Boolean).join(" ") || t.runNowState(t.runState(now.state)));
   };
   const confirm = () => {
-    if (run && matches && !busy) void act(() => retentionApi.confirm(run.id, Number(count.trim())));
+    if (run && matches && !busy) void act("confirm", () => retentionApi.confirm(run.id, Number(count.trim())));
   };
   const cancelRun = () => {
-    if (run && proposed && !busy) void act(() => retentionApi.cancel(run.id));
+    if (run && proposed && !busy && !unknown) void act("cancel", () => retentionApi.cancel(run.id));
   };
   const heading = run ? `${t.runLine(run.id, run.candidates, fileSize(run.bytes))} · ${t.runState(run.state)}` : title;
 
@@ -786,6 +821,7 @@ export function RunReview({
         }
       : {
           primaryButtonText: t.runCancel,
+          primaryButtonDisabled: unknown,
           secondaryButtonText: t.close,
           onRequestSubmit: cancelRun,
         };

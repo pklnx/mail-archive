@@ -202,8 +202,15 @@ describe("UsersPage", () => {
   it("shows a user's API keys and revokes one only after confirming", async () => {
     await show();
     expect(screen.queryByText("backup")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: t.apiKeysOf("bob") }));
+    const expand = screen.getByRole("button", { name: t.apiKeysOf("bob") });
+    // The expand cell names its header; aria-controls only names a list that exists.
+    const header = document.getElementById(expand.closest("td")!.getAttribute("headers")!);
+    expect(header?.tagName).toBe("TH");
+    for (const name of ["alice", "carol"]) expect(document.getElementById(row(name).querySelector("td")!.getAttribute("headers")!)).toBe(header);
+    expect(expand.getAttribute("aria-controls")).toBeNull();
+    fireEvent.click(expand);
     expect(screen.getByText("backup")).toBeTruthy();
+    expect(document.getElementById(expand.getAttribute("aria-controls")!)?.textContent).toContain("backup");
     fireEvent.click(screen.getByRole("button", { name: t.apiKeyRevoke }));
     expect(changes()).toEqual([]);
     fireEvent.click(within(dialog()).getByRole("button", { name: t.apiKeyRevoke }));

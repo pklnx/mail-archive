@@ -1647,6 +1647,26 @@ select:not([multiple], [size], .cds--select-input) {
 .users-table .cds--table-column-menu {
   padding-block: 0.25rem;
 }
+/* Below Carbon's lg breakpoint the table scrolls sideways; the actions
+   column stays at the inline end, so every row's menu is on screen. */
+@media (max-width: 65.98rem) {
+  .users-table th:last-child,
+  .users-table td.cds--table-column-menu {
+    position: sticky;
+    inset-inline-end: 0;
+    z-index: 1;
+    box-shadow: inset 1px 0 0 var(--cds-border-subtle-01);
+  }
+  .users-table td.cds--table-column-menu {
+    background-color: var(--cds-layer);
+  }
+  .users-table tr:hover td.cds--table-column-menu {
+    background-color: var(--cds-layer-hover);
+  }
+  .users-table th:last-child {
+    background-color: var(--cds-layer-accent);
+  }
+}
 
 /* A generated password, shown once. */
 .generated {
