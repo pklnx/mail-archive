@@ -299,6 +299,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The headless Chromium of the pinned Playwright, without apt unless
       # the runner image lacks one of its libraries (then with a warning).
+      - run: sudo apt-get remove -y libnss3
       - run: sh ../scripts/ci-playwright-chromium-test.sh
       - run: sh ../scripts/ci-playwright-chromium.sh
       # The config builds the UI, then builds and starts the demo (it embeds
