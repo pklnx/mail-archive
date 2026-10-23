@@ -56,11 +56,14 @@ function linkCenter(page: Page, name: string): Promise<{ x: number; y: number }>
   }, name);
 }
 
-/** Waits until the open message is laid out: heading, conversation (it loads on its own) and the frame's content. */
+/** The conversation's toggle in the action row (#203). */
+const conversationToggle = (page: Page) => page.getByRole("article").getByRole("button", { name: /^Conversation \(\d+\)$/ });
+
+/** Waits until the open message is laid out: heading, the conversation's toggle (it loads on its own) and the frame's content. */
 async function ready(page: Page, subject: RegExp) {
   const article = page.getByRole("article");
   await expect(article.getByRole("heading", { level: 1 })).toHaveText(subject);
-  await expect(article.getByRole("region", { name: "Conversation" })).toBeVisible();
+  await expect(conversationToggle(page)).toBeVisible();
   await mailReady(page);
 }
 
@@ -213,26 +216,26 @@ for (const size of sizes) {
       // the page on phones. The header, the conversation, the frame's box
       // and the frame's document have none.
       expect(await scrollers(page)).toEqual(phone ? ["page"] : ["mail-pane__fill reader-scroll"]);
-      for (const sel of [".message__header", ".conversation", ".message__html"]) {
+      for (const sel of [".message__header", ".message__html"]) {
         expect(await page.locator(sel).evaluate((e) => getComputedStyle(e).overflowY), sel).toBe("visible");
       }
 
-      // The fold: the open message with one neighbour on each side.
-      const conversation = article.getByRole("region", { name: "Conversation" });
-      await expect(conversation.getByRole("listitem")).toHaveCount(3);
-      await expect(conversation.getByRole("button", { name: "Show 1 later message" })).toBeVisible();
-
-      if (phone) {
-        // The compact header within its budget; the rest behind Details.
-        expect((await rect(page, ".message__header")).height).toBeLessThanOrEqual(180);
-        await expect(article.getByRole("button", { name: "Details" })).toHaveAttribute("aria-expanded", "false");
-        await expect(article.getByRole("term").filter({ hasText: "Found in" })).toBeHidden();
-      } else {
-        // The desktop header is unchanged.
-        await expect(article.getByRole("button", { name: "Details" })).toHaveCount(0);
-        await expect(article.getByRole("term").filter({ hasText: /^To$/ })).toBeVisible();
-        await expect(article.getByRole("term").filter({ hasText: "Found in" })).toBeVisible();
+      // The compact header (#203) within its budget, the actions in one
+      // row; To, Found in and the rest behind Details.
+      const header = await rect(page, ".message__header");
+      expect(header.height).toBeLessThanOrEqual(phone ? 150 : 170);
+      const tops = await page.locator(".message__actions .cds--btn").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().top));
+      expect(tops.length).toBeGreaterThanOrEqual(5);
+      for (const top of tops) expect(Math.abs(top - tops[0]!)).toBeLessThanOrEqual(1);
+      await expect(article.getByRole("button", { name: "Details" })).toHaveAttribute("aria-expanded", "false");
+      await expect(article.getByRole("term").filter({ hasText: /^To$/ })).toBeHidden();
+      await expect(article.getByRole("term").filter({ hasText: "Found in" })).toBeHidden();
+      if (!phone) {
+        await expect(article.getByRole("term").filter({ hasText: /^From$/ })).toBeVisible();
+        await expect(article.getByRole("term").filter({ hasText: /^Date$/ })).toBeVisible();
       }
+      // The conversation is closed: its list is not on the page.
+      await expect(page.getByRole("dialog", { name: "Conversation" })).toHaveCount(0);
 
       // The plain-text view starts on the first screen too.
       await article.getByRole("button", { name: "Show text" }).click();
@@ -245,12 +248,65 @@ for (const size of sizes) {
       expect(await frame.evaluate((f) => f.style.blockSize)).toBe(`${fit.frame}px`);
       await mailReady(page);
       expect((await fitted(page)).frame).toBe(fit.frame);
+    });
 
-      await conversation.getByRole("button", { name: "Show 2 earlier messages" }).click();
-      await expect(conversation.getByRole("listitem")).toHaveCount(5);
-      await expect(conversation.getByRole("button", { name: /earlier/ })).toHaveCount(0);
-      // The longer conversation pushes the frame down; it keeps its height.
-      expect((await fitted(page)).frame).toBe(fit.frame);
+    test("the conversation opens over the message and closes on Escape, the scrim or a pick", async ({ page }) => {
+      await openLong(page);
+      const article = page.getByRole("article");
+      const frame = frameOf(page);
+      await fitted(page);
+      const toggle = conversationToggle(page);
+      await expect(toggle).toHaveAccessibleName("Conversation (6)");
+      const frameTop = (await frame.boundingBox())!.y;
+
+      // Over the message: the frame does not move; all six, the open one focused.
+      await toggle.click();
+      const dialog = page.getByRole("dialog", { name: "Conversation" });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("listitem")).toHaveCount(6);
+      await expect(dialog.locator('[aria-current="true"]')).toBeFocused();
+      expect((await frame.boundingBox())!.y).toBe(frameTop);
+      if (phone) {
+        // A sheet as wide as the screen, right below the reader bar.
+        const box = (await dialog.boundingBox())!;
+        const bar = await rect(page, ".reader-bar");
+        expect(box.x).toBe(0);
+        expect(box.width).toBe(page.viewportSize()!.width);
+        expect(Math.abs(box.y - bar.bottom)).toBeLessThanOrEqual(1);
+      } else {
+        // Under the toggle, inside the reading pane.
+        const box = (await dialog.boundingBox())!;
+        const pane = await rect(page, "main.mail-pane--reader");
+        expect(box.x).toBeGreaterThanOrEqual(pane.left);
+        expect(box.x + box.width).toBeLessThanOrEqual(pane.right);
+        expect(box.y).toBeGreaterThanOrEqual((await toggle.boundingBox())!.y);
+      }
+      // Tab stays inside.
+      for (let i = 0; i < 7; i++) {
+        await page.keyboard.press("Tab");
+        expect(await dialog.evaluate((d) => d.contains(document.activeElement))).toBe(true);
+      }
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(toggle).toBeFocused();
+      // Escape closed only the panel, not the message.
+      await expect(article.getByRole("heading", { level: 1 })).toHaveText(/^Re: Offsite planning/);
+
+      // A click over the mail frame, far down the pane, hits the scrim and closes it.
+      await toggle.click();
+      await expect(dialog).toBeVisible();
+      const vp = page.viewportSize()!;
+      await page.mouse.click(phone ? vp.width / 2 : vp.width - 40, vp.height - 20);
+      await expect(dialog).toHaveCount(0);
+      await expect(toggle).toBeFocused();
+
+      // A pick opens that message, its subject focused.
+      await toggle.click();
+      const url = page.url();
+      await dialog.getByRole("button").first().click();
+      await expect(page).not.toHaveURL(url);
+      await expect(dialog).toHaveCount(0);
+      await expect(article.getByRole("heading", { level: 1 })).toBeFocused();
     });
 
     test("a wheel over the frame moves the message, and a link in the mail works on the first click", async ({ page, context }) => {
@@ -305,12 +361,11 @@ for (const size of sizes) {
 
       // j opens the next message in the list (the 3rd of the conversation,
       // a short HTML mail) at its top, in a frame as short as the mail.
-      const article = page.getByRole("article");
       await scrollTop(page, phone, "end");
       const url = page.url();
       await page.keyboard.press("j");
       await expect(page).not.toHaveURL(url);
-      await expect(article.getByRole("region", { name: "Conversation" })).toBeVisible();
+      await expect(conversationToggle(page)).toBeVisible();
       await mailReady(page, /I booked the venue/);
       expect(await scrollTop(page, phone)).toBe(0);
       expect((await fitted(page)).frame).toBeLessThan(300);

@@ -1,6 +1,6 @@
-/** A Carbon Modal, a native dialog or the folder overlay is open: the keyboard shortcuts are off while one is. */
+/** A Carbon Modal, a native dialog, the folder overlay or the conversation overlay is open: the keyboard shortcuts are off while one is. */
 export function dialogOpen(doc: Document = document): boolean {
-  return doc.querySelector("dialog[open], .cds--modal.is-visible, .folder-pane--overlay") !== null;
+  return doc.querySelector("dialog[open], .cds--modal.is-visible, .folder-pane--overlay, .conversation-overlay") !== null;
 }
 
 /** Fields that take typed keys. Carbon's Search, TextInput, Select and Checkbox are native fields too. */

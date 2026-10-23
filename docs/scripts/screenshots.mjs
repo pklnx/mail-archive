@@ -87,6 +87,12 @@ async function bodyShown(p) {
   if (frame) await frame.waitForLoadState("load");
 }
 
+/** Opens the message header's Details (#203). */
+async function openDetails(p) {
+  const details = p.getByRole("article").getByRole("button", { name: "Details" });
+  if ((await details.getAttribute("aria-expanded")) !== "true") await details.click();
+}
+
 async function openMessage(p, subject, path = "/") {
   await p.goto(base + path);
   await p.getByRole("list", { name: "Messages" }).getByRole("button", { name: new RegExp(subject) }).first().click();
@@ -126,12 +132,13 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // The last message of a conversation, with the conversation above the body.
+  // The last message of a conversation, with the conversation open over the body.
   const p = await page("light");
   await openMessage(p, "Re: Quote for the kitchen renovation");
-  await p.getByRole("region", { name: "Conversation" }).waitFor();
   await p.getByRole("list", { name: "Messages" }).evaluate((el) => el.closest(".mail-pane__fill")?.scrollTo(0, 0));
-  await shot(p, "conversation");
+  await p.getByRole("article").getByRole("button", { name: /^Conversation \(\d+\)$/ }).click();
+  await p.getByRole("dialog", { name: "Conversation" }).waitFor();
+  await shot(p, "conversation", { keepFocus: true });
   await p.context().close();
 }
 
@@ -161,6 +168,7 @@ for (const scheme of ["light", "dark"]) {
   // Only in archive: a message deleted on the server, open in the reader.
   const p = await page("light");
   await openMessage(p, "premium invoice", "/?gone=1");
+  await openDetails(p);
   await p.getByText(/no longer on the server/).first().waitFor();
   await shot(p, "only-in-archive");
   await p.context().close();
@@ -170,6 +178,7 @@ for (const scheme of ["light", "dark"]) {
   // A copy from the mail server: the envelope shows the BCC recipient.
   const p = await page("light");
   await openMessage(p, "Lease renewal for the office");
+  await openDetails(p);
   const envelope = p.getByRole("button", { name: /Envelope \(journal\)/ });
   if ((await envelope.getAttribute("aria-expanded")) !== "true") await envelope.click();
   await p.getByText(/counsel@lawfirm\.example/).first().waitFor();
@@ -229,6 +238,7 @@ for (const scheme of ["light", "dark"]) {
   // row says so and names the mailbox it came from.
   const p = await page("light");
   await openMessage(p, "Invoice 2026-10");
+  await openDetails(p);
   const origin = p.getByRole("button", { name: /Origin \(journal\)/ });
   if ((await origin.getAttribute("aria-expanded")) !== "true") await origin.click();
   await p.getByText(/Imported from IMAP: alex\.morgan@work\.example/).waitFor();
