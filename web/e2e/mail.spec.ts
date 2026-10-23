@@ -1,6 +1,11 @@
 import { expect, test } from "./fixtures";
 
 test("search, open a message, switch text and HTML, go back with u", async ({ page }) => {
+  // Inline images are embedded in the HTML: the frame requests no part.
+  const partRequests: string[] = [];
+  page.on("request", (r) => {
+    if (/\/api\/messages\/[^/]+\/parts\//.test(new URL(r.url()).pathname)) partRequests.push(r.url());
+  });
   await page.goto("/");
   const list = page.getByRole("list", { name: "Messages" });
   await expect(list.getByRole("button").first()).toBeVisible();
@@ -24,6 +29,12 @@ test("search, open a message, switch text and HTML, go back with u", async ({ pa
   // The HTML part shows first, in the sandboxed frame.
   const frame = message.getByTitle("Message content").contentFrame();
   await expect(frame.getByRole("heading", { name: "Hi Alex," })).toBeVisible();
+  // The cid: logo shows (a data: URL, 16 pixels wide); the tracking pixel
+  // stays blocked.
+  const logo = frame.locator('img[src^="data:image/png;base64,"]');
+  await expect(logo).toHaveCount(1);
+  await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth)).toBe(16);
+  await expect.poll(() => frame.locator('img[src^="https://tracker.example/"]').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(0);
 
   await message.getByRole("button", { name: "Show text" }).click();
   await expect(message.getByTitle("Message content")).toHaveCount(0);
@@ -38,6 +49,7 @@ test("search, open a message, switch text and HTML, go back with u", async ({ pa
   // The search stays.
   await expect(page.getByRole("searchbox", { name: "Search mail" })).toHaveValue("weekend");
   await expect(hit).toBeVisible();
+  expect(partRequests).toEqual([]);
 });
 
 test("only in archive, and search all mail from an account", async ({ page }) => {

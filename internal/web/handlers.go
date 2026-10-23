@@ -7,7 +7,6 @@ import (
 	gomime "mime"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -357,10 +356,6 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, out)
 }
 
-// handleMessageHTML serves the HTML body for display in a sandboxed iframe.
-// The Content-Security-Policy forbids scripts, forms, plugins and remote
-// content. Remote images stay blocked (they reveal that a mail was opened)
-// unless the client asks for them with ?images=1.
 type conversationEntryJSON struct {
 	ID      string     `json:"id"`
 	Subject string     `json:"subject"`
@@ -390,6 +385,11 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"messages": items, "total": c.Total, "truncated": c.Truncated})
 }
 
+// handleMessageHTML serves the HTML body for display in a sandboxed iframe.
+// The Content-Security-Policy forbids scripts, forms, plugins and remote
+// content; inline cid: images are embedded as data: URLs. Remote images stay
+// blocked (they reveal that a mail was opened) unless the client asks for
+// them with ?images=1.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -409,26 +409,29 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusNotFound, "message has no HTML body", nil)
 		return
 	}
+	// Inline images (cid:...) are embedded as data: URLs: the sandboxed
+	// frame has an opaque origin, so its requests carry no session cookie
+	// and could not load them from the parts endpoint.
+	inl, err := inlineImages(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
+	if err != nil {
+		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
+	}
+	images := r.URL.Query().Get("images") == "1"
 	e := s.messageEntry(r, "message.html", sha)
-	if r.URL.Query().Get("images") == "1" {
+	if images {
 		e.Detail("images", true)
+	}
+	e.Detail("inline_images", inl.Inlined)
+	if inl.Omitted > 0 {
+		e.Detail("inline_omitted", inl.Omitted)
 	}
 	if !s.audit(w, r, e) {
 		return
 	}
-	// Inline images (cid:...) are served by the parts endpoint, which is
-	// relative to this URL: /api/messages/{sha}/parts/{n}.
-	pairs := make([]string, 0, 2*len(m.Parts))
-	for _, p := range m.Parts {
-		if p.ContentID != "" {
-			pairs = append(pairs, "cid:"+p.ContentID, "parts/"+strconv.Itoa(p.Index))
-		}
-	}
-	body := strings.NewReplacer(pairs...).Replace(m.HTML)
 
-	self := "http://" + r.Host + " https://" + r.Host
-	img := "'self' " + self + " data:"
-	if r.URL.Query().Get("images") == "1" {
+	// Only data: images (the inlined parts); remote ones only on request.
+	img := "data:"
+	if images {
 		img += " https: http:"
 	}
 	h := w.Header()
@@ -439,7 +442,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		"; sandbox allow-popups allow-popups-to-escape-sandbox")
 	h.Set("X-Frame-Options", "SAMEORIGIN")
 	// Links open in a new tab instead of inside the viewer frame.
-	_, _ = io.WriteString(w, `<base target="_blank">`+"\n"+body)
+	_, _ = io.WriteString(w, `<base target="_blank">`+"\n"+inl.HTML)
 }
 
 func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
