@@ -186,10 +186,10 @@ in `CLAUDE.md` at the repository root.
 
 | Label | Meaning |
 |---|---|
-| `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). |
+| `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). `feature` makes at least a minor release. |
 | `dependencies` | Dependency update (set by Dependabot). |
-| `db-migration` | Changes the database schema (set automatically). Back up before upgrading. |
-| `breaking` | Needs manual steps when upgrading (set by hand). |
+| `db-migration` | Changes the database schema (set automatically). Back up before upgrading. Makes at least a minor release. |
+| `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
 | `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
 | `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
 

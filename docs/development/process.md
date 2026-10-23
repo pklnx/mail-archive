@@ -80,9 +80,9 @@ only one of them.
 | `review` | planner | The plan is posted and waits for review. |
 | `ready` | plan reviewer or maintainer | The plan is approved; the issue may be implemented. |
 | `second-review` | coordinator or maintainer | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
-| `db-migration` | automatically | Schema change (see Releases). |
-| `breaking` | by hand | Manual upgrade steps (see Releases). |
-| `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change. |
+| `db-migration` | automatically | Schema change; makes at least a minor release (see Releases). |
+| `breaking` | by hand | Manual upgrade steps; makes a major release (see Releases). |
+| `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change; `feature` makes at least a minor release. |
 
 Label changes do not notify anyone by themselves: after setting `plan` or
 `ready`, say so in the chat with the implementer (for example "plan #18" or
@@ -94,16 +94,47 @@ Releases are published from `main` by hand: **Actions → Release → Run
 workflow** (`.github/workflows/release.yml`), after CI on `main` is green. A
 dry run builds everything without pushing an image or creating a release.
 
-The version is `YY.MM-N`: year and month (UTC) and a build number that starts
-at 1 each month (`scripts/next-version.sh`), for example `26.10-11`. The
-workflow builds the image for `linux/amd64` and `linux/arm64`, pushes it to
-`ghcr.io/pklnx/mail-archive` with the tags `YY.MM-N`, `YY.MM` and `latest`,
-creates the tag `vYY.MM-N` and a GitHub release with `mail-archive.tar.gz` (the
+The version is semantic, `X.Y.Z` (`scripts/next-version.sh`). The labels of
+the pull requests merged into `main` since the last release decide it, not
+the labels of their issues:
+
+| Pull requests in the release | Release | Example after `1.4.2` |
+|---|---|---|
+| Any `breaking` | Major | `2.0.0` |
+| Else any `feature` or `db-migration` | Minor | `1.5.0` |
+| Else (bug fixes, docs, maintenance, dependencies, no label) | Patch | `1.4.3` |
+
+The first semver release is `1.0.0`, whatever the labels; its range starts at
+the last `vYY.MM-N` tag (`v26.10-11`). The old `vYY.MM-N` tags and images stay
+and are never renamed. The workflow lists the first-parent commits since the
+last release and asks the GitHub API for each commit's pull request. A dry
+run shows the proposed version and a table of the pull requests with their
+labels and their effect in the run summary; a pull request without a kind
+label (`breaking`, `feature`, `bug`, `chore`, `docs`, `dependencies`) is
+marked "no kind label", which is a warning, not a block. The run fails when:
+
+- nothing was merged since the last release, also with the `version` input;
+- a commit has no merged pull request (a direct push): check it, then set the
+  `version` input;
+- the `version` input is not `X.Y.Z` (no `v`, no leading zeros, no suffix) or
+  not greater than the last version (for the first release: at least
+  `1.0.0`). It may be lower than the proposal;
+- the tag `vX.Y.Z` or its release exists already;
+- it runs on another branch than `main`.
+
+The optional `version` input overrides the proposal. Use it to correct the
+bump, for example when a `feature` or `breaking` pull request was reverted
+within the range: the reverted pull request still counts.
+
+The workflow builds the image for `linux/amd64` and `linux/arm64`, pushes it
+to `ghcr.io/pklnx/mail-archive` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`,
+creates the tag `vX.Y.Z` and a GitHub release with `mail-archive.tar.gz` (the
 Docker Compose bundle, `scripts/release-bundle.sh`) and `SHA256SUMS`. The notes
-are grouped by label (breaking changes, database migrations, features, fixes,
-documentation, dependencies, maintenance; see `.github/release.yml`). A pull
-request without a kind label lands under "Maintenance", so a risky pull request
-needs a kind label in addition to `second-review`.
+start at the same tag as the range and are grouped by label (breaking changes,
+database migrations, features, fixes, documentation, dependencies,
+maintenance; see `.github/release.yml`). A pull request without a kind label
+lands under "Maintenance", so a risky pull request needs a kind label in
+addition to `second-review`.
 
 The workflow writes an upgrade paragraph into every release's notes. It links
 the [Upgrades guide](../guide/operations#upgrades), and the generated notes
@@ -111,16 +142,16 @@ list the `breaking` and `db-migration` pull requests first. Add manual upgrade
 notes only when a change needs more than these generic steps.
 
 `./ma --version` and `mail-archive --version` show the version. The release
-image shows `YY.MM-N` (for example `26.10-11`). A build from a clone shows
-`git describe`: the tag `v26.10-11`, or `v26.10-11-3-gabc1234` for commits
-after it.
+image shows `X.Y.Z` (for example `1.0.0`). A build from a clone shows
+`git describe`: the tag `v1.0.0`, or `v1.0.0-3-gabc1234` for commits after
+it.
 
 To run a release, follow [Upgrades](../guide/operations#upgrades), which uses
 the release bundle. From a clone instead of the latest `main`:
 
 ```sh
 git fetch --tags
-git checkout v26.10-11
+git checkout v1.0.0
 ./ma migrate
 docker compose up -d web
 ```
