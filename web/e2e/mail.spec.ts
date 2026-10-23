@@ -42,10 +42,14 @@ test("search, open a message, switch text and HTML, go back with u", async ({ pa
 
 test("only in archive, and search all mail from an account", async ({ page }) => {
   await page.goto("/");
-  const nav = page.getByRole("navigation", { name: "Accounts and folders" });
+  // Only in archive is a section of the shell's SideNav (a rail here); the
+  // accounts and folders are the mail view's tree.
+  const nav = page.getByRole("navigation", { name: "Main navigation" });
+  const tree = page.getByRole("tree", { name: "Accounts and folders" });
   const list = page.getByRole("list", { name: "Messages" });
 
-  await nav.getByRole("button", { name: /^Only in archive/ }).click();
+  await nav.getByRole("link", { name: /^Only in archive \d+$/ }).click();
+  await expect(page).toHaveURL(/[?&]gone=1/);
   const gone = list.getByRole("button", { name: /Your 2026 premium invoice/ });
   await expect(gone).toBeVisible();
   await expect(list.getByRole("button")).toHaveCount(1);
@@ -54,7 +58,7 @@ test("only in archive, and search all mail from an account", async ({ page }) =>
 
   // In the work account the word is not found; "Search all mail" finds it.
   await page.goto("/");
-  await nav.getByRole("button", { name: "work", exact: true }).click();
+  await tree.getByRole("treeitem", { name: "work", exact: true }).click();
   await expect(page).toHaveURL(/[?&]account=work/);
   await page.getByRole("searchbox", { name: "Search mail" }).fill("premium");
   await expect(page.getByText("No messages match your search.")).toBeVisible();
