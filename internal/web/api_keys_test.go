@@ -187,7 +187,12 @@ func TestAPIKeyRouteAccess(t *testing.T) {
 		if rt.ui || rt.access == accessPublic {
 			continue
 		}
-		method, path, _ := strings.Cut(rt.pattern, " ")
+		method, path, ok := strings.Cut(rt.pattern, " ")
+		if !ok {
+			// A pattern without a method (the /api/ catch-all) takes any
+			// method and any path below it.
+			method, path = "GET", rt.pattern+"nope"
+		}
 		path = params.Replace(path)
 		for kind, key := range keys {
 			got := f.keyStatus(key, method, path)
@@ -199,6 +204,13 @@ func TestAPIKeyRouteAccess(t *testing.T) {
 			case !allowed && got != 403:
 				t.Errorf("%s with a %s key: %d, want 403", rt.pattern, kind, got)
 			}
+		}
+	}
+	// An unknown path is session-only: with a key it answers like a
+	// session-only route, so a key cannot tell which paths exist.
+	for kind, key := range keys {
+		if s := f.keyStatus(key, "GET", "/api/nope"); s != 403 {
+			t.Errorf("unknown path with a %s key: %d, want 403", kind, s)
 		}
 	}
 	// Public routes work with a key too.

@@ -43,7 +43,7 @@ func compareSpec(routes []route, spec map[string]any) []string {
 	inTable := make(map[string]bool)
 	opIDs := make(map[string]string)
 	for _, rt := range routes {
-		if rt.ui {
+		if rt.ui || rt.catchAll {
 			continue
 		}
 		method, path, _ := strings.Cut(rt.pattern, " ")
@@ -139,11 +139,17 @@ func TestOpenAPIRoutes(t *testing.T) {
 	for _, p := range compareSpec(routes, servedSpec(t)) {
 		t.Error(p)
 	}
-	var ui []string
+	var ui, catchAll []string
 	for _, rt := range routes {
 		if rt.ui {
 			ui = append(ui, rt.pattern)
 		}
+		if rt.catchAll {
+			catchAll = append(catchAll, rt.pattern)
+		}
+	}
+	if !slices.Equal(catchAll, []string{"/api/"}) {
+		t.Errorf("catch-all routes left out of the spec: %q, want only /api/", catchAll)
 	}
 	want := []string{"GET /{$}", "GET /assets/"}
 	for _, path := range uipkg.RootPaths() {
@@ -166,6 +172,7 @@ func TestCompareSpec(t *testing.T) {
 		{pattern: "DELETE /api/things/{id}"},
 		{pattern: "GET /healthz", access: accessPublic},
 		{pattern: "GET /{$}", access: accessPublic, ui: true},
+		{pattern: "/api/", catchAll: true},
 	}
 	good := func() map[string]any {
 		return map[string]any{

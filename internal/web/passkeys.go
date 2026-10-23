@@ -130,7 +130,7 @@ func (s *Server) handleBeginPasskeyLogin(w http.ResponseWriter, r *http.Request)
 	}
 	token, err := s.store.BeginPasskeyLogin(r.Context(), data, s.currentTime().Add(passkeyCeremonyTTL))
 	if errors.Is(err, store.ErrTooManyCeremonies) {
-		s.log.Warn("too many passkey logins in progress", "addr", addr)
+		s.log.Warn("too many passkey logins in progress", "addr", s.clientIP(r), "key", addr)
 		s.tooMany(w, time.Minute)
 		return
 	}
@@ -204,7 +204,7 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 		return
 	case errors.Is(err, store.ErrPasskeyUnknown):
 		s.limiter.FailAddr(addr)
-		s.log.Info("login failed: unknown passkey", "addr", addr)
+		s.log.Info("login failed: unknown passkey", "addr", s.clientIP(r))
 		s.auditLoginFailed(r, "passkey", reasonUnknownPasskey, nil)
 		s.writeJSON(w, http.StatusUnauthorized, unknownPasskeyJSON{
 			Error: "this passkey is not registered", UnknownCredential: true,
@@ -213,7 +213,7 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 		return
 	case errors.Is(err, store.ErrPasskeyInvalid):
 		s.limiter.FailAddr(addr)
-		s.log.Info("login failed: passkey", "addr", addr, "err", err)
+		s.log.Info("login failed: passkey", "addr", s.clientIP(r), "err", err)
 		s.auditLoginFailed(r, "passkey", reasonPasskeyInvalid, nil)
 		s.fail(w, r, http.StatusUnauthorized, "the passkey was not accepted", nil)
 		return
@@ -227,11 +227,9 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 	}
 	u := login.User
 	s.limiter.Succeed(u.Name)
-	if old := sessionToken(r); old != "" {
-		_ = s.store.DeleteSession(r.Context(), auth.HashSessionToken(old))
-	}
-	s.log.Info("login", "user", u.Name, "addr", addr, "passkey", login.PasskeyName)
-	setSessionCookie(w, r, token, auth.MaxSessionAge)
+	s.deleteOldSessions(r)
+	s.log.Info("login", "user", u.Name, "addr", s.clientIP(r), "passkey", login.PasskeyName)
+	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
 	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, u.TwoFactorEnabled, u.Language, u.Locale)})
 }
 
@@ -433,7 +431,7 @@ func (s *Server) handleRemovePasskey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := currentSession(r)
-	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.auditEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(sessionToken(r)))
+	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.auditEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(s.sessionToken(r)))
 	if err != nil {
 		s.failStore(w, r, err)
 		return

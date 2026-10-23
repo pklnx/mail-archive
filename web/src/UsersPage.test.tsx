@@ -113,6 +113,64 @@ describe("UsersPage", () => {
     await waitFor(() => expect(changes()).toEqual([{ method: "DELETE", url: "/api/users/bob", body: undefined }]));
   });
 
+  describe("a user named by legal holds", () => {
+    /** Answers the removal of bob with 409 and the given body. */
+    function refuseRemoval(body: Record<string, unknown>) {
+      const fallback = vi.mocked(globalThis.fetch).getMockImplementation()!;
+      vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+        if (init?.method === "DELETE" && url === "/api/users/bob") {
+          return new Response(JSON.stringify(body), { status: 409, headers: { "Content-Type": "application/json" } });
+        }
+        return fallback(url, init);
+      });
+    }
+    async function remove() {
+      await show();
+      pick("bob", t.removeUser);
+      fireEvent.click(within(dialog()).getByRole("button", { name: t.removeUser }));
+    }
+
+    it("names the holds from holdIds, not the server's text", async () => {
+      refuseRemoval({ error: "named by a legal hold", code: "on_hold", holdIds: [3, 5] });
+      await remove();
+      expect(await screen.findByText("Legal holds #3, #5 name this user; lock the user instead")).toBeTruthy();
+      expect(screen.queryByText(/named by a legal hold/)).toBeNull();
+    });
+
+    it("names one hold in the singular", () => {
+      expect(messagesFor("en").userOnHold([3])).toBe("Legal hold #3 names this user; lock the user instead");
+      expect(messagesFor("de").userOnHold([3])).toBe("Legal Hold #3 nennt diesen Benutzer; sperren Sie den Benutzer stattdessen");
+    });
+
+    it("says it without numbers when the answer has no holdIds", async () => {
+      refuseRemoval({ error: "named by a legal hold", code: "on_hold" });
+      await remove();
+      expect(await screen.findByText("A legal hold names this user; lock the user instead")).toBeTruthy();
+    });
+
+    it("says it in German", async () => {
+      applySettings({ language: "de", locale: "de" });
+      try {
+        refuseRemoval({ error: "named by a legal hold", code: "on_hold", holdIds: [3, 5] });
+        const de = messagesFor("de");
+        render(<UsersPage />);
+        await screen.findByText("bob");
+        fireEvent.click(screen.getByRole("button", { name: de.userActions("bob") }));
+        fireEvent.click(screen.getByRole("menuitem", { name: de.removeUser }));
+        fireEvent.click(within(dialog()).getByRole("button", { name: de.removeUser }));
+        expect(await screen.findByText("Legal Holds #3, #5 nennen diesen Benutzer; sperren Sie den Benutzer stattdessen")).toBeTruthy();
+      } finally {
+        applySettings({ language: "en", locale: "en" });
+      }
+    });
+
+    it("shows the server's text for other conflicts", async () => {
+      refuseRemoval({ error: "\"bob\" still owns 1 account(s)" });
+      await remove();
+      expect(await screen.findByText(t.failed('"bob" still owns 1 account(s)'))).toBeTruthy();
+    });
+  });
+
   it("resets a password with the chosen options and shows the new one once", async () => {
     await show();
     pick("bob", t.resetPassword);

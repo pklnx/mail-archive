@@ -3,6 +3,8 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +296,19 @@ func TestLegalHolds(t *testing.T) {
 	}
 }
 
+// checkHoldError checks that err is a *store.HoldError with the IDs, for
+// the web answer, and that its text is unchanged, for the command line.
+func checkHoldError(t *testing.T, err error, text string, ids ...int64) {
+	t.Helper()
+	var held *store.HoldError
+	if !errors.As(err, &held) || !slices.Equal(held.IDs, ids) {
+		t.Errorf("%v: not a HoldError with IDs %v: %#v", err, ids, held)
+	}
+	if err == nil || err.Error() != text {
+		t.Errorf("text %q, want %q", err, text)
+	}
+}
+
 // Changes to users and accounts must not release held mail or remove what
 // a hold names.
 func TestHoldsGuardUsersAndAccounts(t *testing.T) {
@@ -306,9 +321,11 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetAccountOwner(f.ctx, acc.Ref(), f.bob.ID); !errors.Is(err, store.ErrOnHold) {
+	err = f.st.SetAccountOwner(f.ctx, acc.Ref(), f.bob.ID)
+	if !errors.Is(err, store.ErrOnHold) {
 		t.Errorf("moving an account away from a held user: %v", err)
 	}
+	checkHoldError(t, err, fmt.Sprintf("named by a legal hold: the account's owner is on legal hold #%d", hold), hold)
 
 	// A user named by a hold is never deleted, even after the release.
 	carol, err := f.st.CreateUser(f.ctx, "carol", "h", false)
@@ -317,9 +334,11 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 	}
 	carolHold := f.hold(store.NewLegalHold{OwnerID: &carol.ID})
 	_ = f.st.ReleaseLegalHold(f.ctx, carolHold, nil, "done")
-	if err := f.st.DeleteUser(f.ctx, carol.ID); !errors.Is(err, store.ErrOnHold) {
+	err = f.st.DeleteUser(f.ctx, carol.ID)
+	if !errors.Is(err, store.ErrOnHold) {
 		t.Errorf("deleting a user named by a hold: %v", err)
 	}
+	checkHoldError(t, err, fmt.Sprintf("named by a legal hold #%d; lock the user instead", carolHold), carolHold)
 
 	// An empty account named by a hold is kept as removed.
 	empty := f.folder(f.bob, "empty", "INBOX")

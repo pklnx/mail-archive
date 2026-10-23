@@ -18,6 +18,9 @@ func TestHandler(t *testing.T) {
 	if rec.Header().Get("X-Frame-Options") != "DENY" {
 		t.Error("missing X-Frame-Options")
 	}
+	if got := rec.Header().Get("Permissions-Policy"); got != "camera=(), microphone=(), geolocation=()" {
+		t.Errorf("Permissions-Policy = %q", got)
+	}
 	// Without a UI build (plain `go test`), a hint page is served instead.
 	switch rec.Code {
 	case http.StatusOK:

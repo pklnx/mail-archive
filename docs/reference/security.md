@@ -49,7 +49,7 @@ an access level, needs a login.
   passkey ends the user's other sessions. Admins with mandatory TOTP must
   still set it up: a passkey session is restricted like a password session
   until then. Starting a passkey login needs no session; it is limited to 30
-  per minute per address and 1000 open logins in total. Passwords stay: an
+  per minute per address (IPv6: per `/64`) and 1000 open logins in total. Passwords stay: an
   account never depends on passkeys alone.
 - **API keys** let scripts read mail (`read`) or start syncs (`sync`), and
   nothing else: logins, the profile, users and account changes stay with
@@ -64,12 +64,15 @@ an access level, needs a login.
   them. The user's own password change keeps them: scripts should not break
   on a routine change; the profile lists them for revocation. Each key may
   make 600 requests per minute; more than 30 invalid keys per client address
-  and minute answer `429`, without touching the password login limits. Keys
+  (IPv6: per `/64`) and minute answer `429`, without touching the password login limits. Keys
   never appear in logs or in the audit log.
 - **Failed logins:** after 5 failures for a user name within 15 minutes, the
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
-  further failure. 20 failures from one address within 15 minutes block that
-  address for 15 minutes. Failed passkey logins count for the address only.
+  further failure. 20 failures from one address (IPv6: per `/64`) within 15
+  minutes block that address for 15 minutes. Failed passkey logins count for
+  the address only (IPv6: per `/64`). An IPv6 client usually gets a whole
+  `/64`, so changing addresses within it does not escape the limits. Logs and
+  the audit log keep the full address.
   Wrong names and wrong passwords get the same answer
   and take the same time. The counters live in memory and reset when the
   server restarts.
@@ -88,9 +91,28 @@ Docker Compose publishes the web UI on `127.0.0.1`, so only this computer can
 reach it. To use it from your home network or a VPN:
 
 1. **Use HTTPS.** Without it, passwords and session cookies cross the network
-   in plain text. Put a reverse proxy or `tailscale serve` in front; the
-   server then marks the cookie `Secure` (it recognizes `X-Forwarded-Proto:
-   https`).
+   in plain text. Put a reverse proxy or `tailscale serve` in front. The
+   server learns that the browser used HTTPS from the proxy's
+   `X-Forwarded-Proto: https`, then sets the session cookie as
+   `__Host-mail_archive_session` with `Secure` and sends
+   `Strict-Transport-Security: max-age=31536000` (HSTS: the browser uses
+   only HTTPS for this host name for a year). The header counts only from a
+   loopback address or from an address in `MAIL_ARCHIVE_TRUSTED_PROXIES`;
+   from anybody else it is ignored, so a client cannot choose how the cookie
+   is set. Under Docker Compose a proxy or `tailscale serve` on the same
+   computer does not connect from loopback: Docker's port publishing hands
+   its requests to the container from the gateway of the Compose network.
+   Set `MAIL_ARCHIVE_TRUSTED_PROXIES` to that address, as in the examples
+   below ([Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy)
+   shows how to find it). Until then logging in works, but the cookie lacks
+   `Secure` and the `__Host-` prefix and no HSTS is sent; the server logs a
+   warning once, naming the address the header came from. Over HTTPS only
+   the `__Host-` cookie logs in, never the plain one: a plain cookie can be
+   planted over plain HTTP or from another host name of the domain, and must
+   not log the browser into someone else's session. HSTS covers the host
+   name, all ports, for a year: do not serve the same name over plain HTTP
+   later (for LAN access, for example), because browsers that saw HSTS
+   refuse it until the year is over.
 2. **Allow the host name** you type in the browser in
    `MAIL_ARCHIVE_ALLOWED_HOSTS` (comma-separated, without port). Requests with
    other names are rejected with `host not allowed` and logged.
@@ -107,7 +129,13 @@ your tailnet and forwards to the local port. In `.env`:
 ```sh
 MAIL_ARCHIVE_ALLOWED_HOSTS=localhost,127.0.0.1,mac.example-tailnet.ts.net
 MAIL_ARCHIVE_PUBLIC_URL=https://mac.example-tailnet.ts.net
+# The gateway of the Compose network, which tailscale serve connects from.
+MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1
 ```
+
+Use your Compose network's gateway address; [Behind a reverse
+proxy](../guide/audit-log#behind-a-reverse-proxy) shows how to find it. With
+it, the session cookie is `Secure` and HSTS is sent.
 
 Then:
 
@@ -134,10 +162,15 @@ and, for passkeys, `MAIL_ARCHIVE_PUBLIC_URL=https://archive.home.example`.
 The proxy must pass the original `Host` header (Caddy does by default);
 otherwise the server's same-origin check rejects changes.
 
-Without more, the audit log and the login limits see every request coming
-from the proxy. `MAIL_ARCHIVE_TRUSTED_PROXIES` names the proxies whose
-`X-Forwarded-For` header is believed; list only the proxy, and only if all
-access goes through it. See [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy).
+Caddy sends `X-Forwarded-Proto` and `X-Forwarded-For`. Under Docker Compose
+it connects from the gateway of the Compose network, so set
+`MAIL_ARCHIVE_TRUSTED_PROXIES` to that address, for example
+`MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1`. Then the session cookie is
+`Secure`, HSTS is sent, and the audit log and the login limits see the
+clients instead of the proxy. `MAIL_ARCHIVE_TRUSTED_PROXIES` names the
+proxies whose `X-Forwarded-Proto` and `X-Forwarded-For` headers are
+believed; list only the proxy, and only if all access goes through it. See
+[Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy).
 
 ### Plain LAN access
 

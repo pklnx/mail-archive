@@ -244,7 +244,7 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		if holds, err := q.HoldsNamingUser(ctx, id); err != nil {
 			return err
 		} else if len(holds) > 0 {
-			return fmt.Errorf("%w %s; lock the user instead", ErrOnHold, holdIDs(holds))
+			return newHoldError(holds, "%v %s; lock the user instead")
 		}
 		// The keys go with the user (ON DELETE CASCADE).
 		if e := auditFrom(ctx); e != nil {

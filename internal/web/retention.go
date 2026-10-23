@@ -311,6 +311,9 @@ func (s *Server) handleReleaseLegalHold(w http.ResponseWriter, r *http.Request) 
 	case errors.Is(err, store.ErrInvalidRetention):
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
+	case errors.Is(err, store.ErrConflict):
+		s.writeJSON(w, http.StatusConflict, apiError{Error: "this legal hold is already released", Code: errReleased})
+		return
 	case err != nil:
 		s.failStore(w, r, err)
 		return

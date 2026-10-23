@@ -170,9 +170,7 @@ func (s *Server) startTwoFactorLogin(w http.ResponseWriter, r *http.Request, u *
 	if !s.twoFactorReady(w, r) {
 		return
 	}
-	if old := sessionToken(r); old != "" {
-		_ = s.store.DeleteSession(r.Context(), auth.HashSessionToken(old))
-	}
+	s.deleteOldSessions(r)
 	// Wall-clock time: the database compares the expiry with now().
 	challenge, err := s.store.CreateTwoFactorChallenge(r.Context(), u.ID, u.TwoFactorVersion, s.currentTime().Add(twoFactorChallengeTTL))
 	if err != nil {
@@ -220,7 +218,7 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, store.ErrTwoFactorInvalid):
 		s.limiter.Fail(u.Name, addr)
-		s.log.Info("login failed: second factor", "user", u.Name, "addr", addr)
+		s.log.Info("login failed: second factor", "user", u.Name, "addr", s.clientIP(r))
 		s.auditLoginFailed(r, "2fa", reasonSecondFactor, u)
 		s.fail(w, r, http.StatusUnauthorized, errInvalidSecondFactor, nil)
 		return
@@ -233,8 +231,8 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only now is the login complete.
 	s.limiter.Succeed(u.Name)
-	s.log.Info("login", "user", user.Name, "addr", addr, "2fa", true)
-	setSessionCookie(w, r, token, auth.MaxSessionAge)
+	s.log.Info("login", "user", user.Name, "addr", s.clientIP(r), "2fa", true)
+	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
 	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(user.Name, user.IsAdmin, user.MustChangePassword, true, user.Language, user.Locale)})
 }
 
@@ -310,7 +308,7 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.auditEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(sessionToken(r))); err != nil {
+	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.auditEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(s.sessionToken(r))); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, "two-factor authentication changed meanwhile; reload and try again", nil)
 			return

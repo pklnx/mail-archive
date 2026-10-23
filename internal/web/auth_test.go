@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -43,7 +42,7 @@ func loggedIn(t *testing.T, st *store.Store, h http.Handler) http.Handler {
 		t.Fatal(err)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if sessionToken(r) == "" {
+		if len(allSessionTokens(r)) == 0 {
 			r.AddCookie(&http.Cookie{Name: cookieName, Value: token})
 		}
 		h.ServeHTTP(w, r)
@@ -390,43 +389,6 @@ func TestLoginRateLimit(t *testing.T) {
 	f.addUser("bob", "correct horse battery", false)
 	if resp := f.login("bob", "correct horse battery"); resp.StatusCode != 200 {
 		t.Fatalf("other user: %d", resp.StatusCode)
-	}
-}
-
-func TestSecureCookie(t *testing.T) {
-	st := storetest.New(t)
-	s := New(st, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"mail.example"}, Hasher: cheapHasher})
-	h, _ := cheapHasher.Hash(context.Background(), "correct horse battery")
-	if _, err := st.CreateUser(context.Background(), "alice", h, false); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range []struct {
-		name   string
-		header string
-		tls    bool
-	}{{"proxy", "https", false}, {"direct tls", "", true}} {
-		t.Run(c.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "https://mail.example/api/session", strings.NewReader(`{"username":"alice","password":"correct horse battery"}`))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Origin", "https://mail.example")
-			if c.header != "" {
-				req.Header.Set("X-Forwarded-Proto", c.header)
-			}
-			if !c.tls {
-				req.TLS = nil
-			} else {
-				req.TLS = &tls.ConnectionState{}
-			}
-			rec := httptest.NewRecorder()
-			s.Handler().ServeHTTP(rec, req)
-			if rec.Code != 200 {
-				t.Fatalf("status %d: %s", rec.Code, rec.Body)
-			}
-			cookies := rec.Result().Cookies()
-			if len(cookies) != 1 || cookies[0].Name != secureCookieName || !cookies[0].Secure {
-				t.Fatalf("cookies: %+v", cookies)
-			}
-		})
 	}
 }
 

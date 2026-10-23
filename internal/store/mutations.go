@@ -198,7 +198,7 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 				return err
 			}
 			if len(holds) > 0 {
-				return fmt.Errorf("%w: the account's owner is on legal hold %s", ErrOnHold, holdIDs(holds))
+				return newHoldError(holds, "%v: the account's owner is on legal hold %s")
 			}
 		}
 		err = one(q.SetAccountOwner(ctx, db.SetAccountOwnerParams{ID: ref.ID, OwnerID: &owner}))

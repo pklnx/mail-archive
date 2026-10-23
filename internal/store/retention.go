@@ -23,6 +23,24 @@ const retentionLockClass = 0x6d66
 // hold, or remove a user or account that a hold names.
 var ErrOnHold = errors.New("named by a legal hold")
 
+// HoldError is an ErrOnHold (errors.Is) that names the legal holds in the
+// way: the web answer carries their IDs instead of the message.
+type HoldError struct {
+	IDs []int64
+	msg string
+}
+
+// newHoldError returns a HoldError for ids; format gets ErrOnHold (%v)
+// and the IDs as "#1, #2" (%s).
+func newHoldError(ids []int64, format string) *HoldError {
+	return &HoldError{IDs: ids, msg: fmt.Sprintf(format, ErrOnHold, holdIDs(ids))}
+}
+
+func (e *HoldError) Error() string { return e.msg }
+
+// Is makes a HoldError match ErrOnHold.
+func (e *HoldError) Is(target error) bool { return target == ErrOnHold }
+
 // ErrInvalidRetention wraps the validation errors of rules and holds: a
 // field out of range, a missing name or note.
 var ErrInvalidRetention = errors.New("invalid")

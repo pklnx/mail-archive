@@ -24,6 +24,9 @@ type route struct {
 	handler http.Handler
 	access  access
 	ui      bool // the UI code: not an API route, not in the spec
+	// catchAll answers paths under /api/ that no other route takes; it is
+	// not in the spec.
+	catchAll bool
 }
 
 // routes lists every route of the server.
@@ -109,6 +112,10 @@ func (s *Server) routes() []route {
 		h("GET /api/messages/{sha}/html", s.handleMessageHTML, accessRead),
 		h("GET /api/messages/{sha}/raw", s.handleMessageRaw, accessRead),
 		h("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart, accessRead),
+
+		// Unknown paths and methods under /api/ answer JSON 404 (after the
+		// login), not the mux's text.
+		{pattern: "/api/", handler: http.HandlerFunc(s.handleUnknownAPI), access: accessSession, catchAll: true},
 
 		{pattern: "GET /{$}", handler: app, access: accessPublic, ui: true},
 		{pattern: "GET /assets/", handler: app, access: accessPublic, ui: true},

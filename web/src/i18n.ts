@@ -386,6 +386,10 @@ const en = {
   lockText: "They are logged out everywhere and cannot log in until unlocked.",
   removeUserTitle: (name: string) => `Remove “${name}”?`,
   removeUserText: "This cannot be undone.",
+  userOnHold: (ids: readonly number[]) =>
+    ids.length === 0
+      ? "A legal hold names this user; lock the user instead"
+      : `${ids.length === 1 ? "Legal hold" : "Legal holds"} ${ids.map((id) => `#${id}`).join(", ")} ${ids.length === 1 ? "names" : "name"} this user; lock the user instead`,
   userActions: (name: string) => `Actions for ${name}`,
   colUser: "User",
   colSignIn: "Sign-in",
@@ -1097,6 +1101,10 @@ const de: Messages = {
   lockText: "Der Benutzer wird überall abgemeldet und kann sich erst nach dem Entsperren wieder anmelden.",
   removeUserTitle: (name) => `„${name}“ entfernen?`,
   removeUserText: "Das lässt sich nicht rückgängig machen.",
+  userOnHold: (ids) =>
+    ids.length === 0
+      ? "Ein Legal Hold nennt diesen Benutzer; sperren Sie den Benutzer stattdessen"
+      : `${ids.length === 1 ? "Legal Hold" : "Legal Holds"} ${ids.map((id) => `#${id}`).join(", ")} ${ids.length === 1 ? "nennt" : "nennen"} diesen Benutzer; sperren Sie den Benutzer stattdessen`,
   userActions: (name) => `Aktionen für ${name}`,
   colUser: "Benutzer",
   colSignIn: "Anmeldung",

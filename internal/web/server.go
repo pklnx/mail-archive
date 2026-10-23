@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -71,6 +72,9 @@ type Server struct {
 	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
 	// is off.
 	smtpListen string
+	// forwardedProtoWarned is set once warnUntrustedForwardedProto has
+	// logged.
+	forwardedProtoWarned atomic.Bool
 }
 
 // Options configure a Server.
@@ -178,19 +182,26 @@ func (s *Server) Handler() http.Handler {
 	return s.protect(s.authenticate(mux, accessOf))
 }
 
+// newHTTPServer is the HTTP server for handler. A request has 10 seconds
+// for its headers (at most 64 KiB) and 30 for its body.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute, // large .eml and attachment downloads
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+	}
+}
+
 // ListenAndServe serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if _, err := openAPI(); err != nil {
 		return err
 	}
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      5 * time.Minute, // large .eml and attachment downloads
-		IdleTimeout:       2 * time.Minute,
-	}
+	srv := newHTTPServer(addr, s.Handler())
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	go s.housekeeping(ctx)
@@ -214,9 +225,22 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// apiError is the body of every error answer. Code is a stable,
+// machine-readable reason where a client may need one (errOnHold,
+// errConflict, errReleased); HoldIDs names the legal holds of an on_hold
+// answer when they are known.
 type apiError struct {
-	Error string `json:"error"`
+	Error   string  `json:"error"`
+	Code    string  `json:"code,omitempty"`
+	HoldIDs []int64 `json:"holdIds,omitempty"`
 }
+
+// The codes of apiError.
+const (
+	errOnHold   = "on_hold"
+	errConflict = "conflict"
+	errReleased = "released"
+)
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg string, err error) {
 	if status >= 500 {
@@ -225,6 +249,9 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg st
 	s.writeJSON(w, status, apiError{Error: msg})
 }
 
+// failStore answers a store error. Its text is never sent: it can name
+// internals. A conflict gets a fixed text and a code, a legal hold also
+// the IDs of the holds when the store names them.
 func (s *Server) failStore(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, store.ErrAuditUnavailable) {
 		s.failAudit(w, r, err)
@@ -234,11 +261,28 @@ func (s *Server) failStore(w http.ResponseWriter, r *http.Request, err error) {
 		s.fail(w, r, http.StatusNotFound, "not found", err)
 		return
 	}
-	if errors.Is(err, store.ErrOnHold) || errors.Is(err, store.ErrConflict) {
-		s.fail(w, r, http.StatusConflict, err.Error(), err)
+	if errors.Is(err, store.ErrOnHold) {
+		var held *store.HoldError
+		var ids []int64
+		if errors.As(err, &held) {
+			ids = held.IDs
+		}
+		s.writeJSON(w, http.StatusConflict, apiError{Error: "named by a legal hold", Code: errOnHold, HoldIDs: ids})
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		s.writeJSON(w, http.StatusConflict, apiError{Error: "already exists", Code: errConflict})
 		return
 	}
 	s.fail(w, r, http.StatusInternalServerError, "internal error", err)
+}
+
+// handleUnknownAPI answers paths under /api/ without a route, and methods
+// no route of a known path takes, in JSON, not with the mux's text. It is
+// session-only, so without a login it answers 401 and does not reveal
+// which paths exist.
+func (s *Server) handleUnknownAPI(w http.ResponseWriter, r *http.Request) {
+	s.fail(w, r, http.StatusNotFound, "not found", nil)
 }
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)

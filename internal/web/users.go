@@ -323,7 +323,7 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	if err := s.store.ChangeOwnPassword(withAudit(r, s.auditEntry(r, "profile.password_change")), u.ID, hash, auth.HashSessionToken(sessionToken(r))); err != nil {
+	if err := s.store.ChangeOwnPassword(withAudit(r, s.auditEntry(r, "profile.password_change")), u.ID, hash, auth.HashSessionToken(s.sessionToken(r))); err != nil {
 		s.failStore(w, r, err)
 		return
 	}
