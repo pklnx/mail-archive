@@ -16,6 +16,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // fillFixture is a manage fixture with an IMAP mailbox (INBOX and a Spam
@@ -60,16 +61,12 @@ func (f *manageFixture) fillBody(password string) map[string]any {
 // waitFill waits until the account's latest fill has the status.
 func (f *manageFixture) waitFill(name, status string) accountJSON {
 	f.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		a := f.account(name)
-		if a.Fill != nil && a.Fill.Status == status && a.Sync.State == "idle" {
-			return a
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	f.t.Fatalf("fill of %q did not reach %s: %+v", name, status, f.account(name).Fill)
-	return accountJSON{}
+	var a accountJSON
+	f.until(fmt.Sprintf("the fill of %q to reach %s", name, status), func() bool {
+		a = f.account(name)
+		return a.Fill != nil && a.Fill.Status == status && a.Sync.State == "idle"
+	}, func() any { return a.Fill })
+	return a
 }
 
 func auditDetails(t *testing.T, r store.AuditRecord) map[string]any {
@@ -295,6 +292,12 @@ func TestFillCancelAndResume(t *testing.T) {
 	f.do("POST", "/api/accounts/journal/fills/"+id+"/resume", map[string]any{"password": "secret"}, http.StatusAccepted)
 	unlock()
 	unlock = func() {}
+	// The run writes data.fill_done before its claim ends, and the account
+	// may show the fill ok and idle before the entry exists: wait for the
+	// entry, then for ok and idle (#213).
+	testwait.Until(t, f.changed, "the data.fill_done entry", func() bool {
+		return slices.ContainsFunc(newEntries(t, f.st, n), func(e store.AuditRecord) bool { return e.Action == "data.fill_done" })
+	})
 	a := f.waitFill("journal", store.FillOK)
 	if len(a.Fill.Folders) != 2 {
 		t.Errorf("resumed fill %+v", a.Fill)

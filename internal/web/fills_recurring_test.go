@@ -7,32 +7,45 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // waitFillID waits until the fill has the status and its account is idle.
 func (f *manageFixture) waitFillID(name string, id int64, status string) *fillJSON {
 	f.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		a := f.account(name)
+	var a accountJSON
+	var found *fillJSON
+	f.until(fmt.Sprintf("fill %d of %q to reach %s", id, name, status), func() bool {
+		a = f.account(name)
 		for _, fj := range a.Fills {
 			if fj.ID == id && fj.Status == status && a.Sync.State == "idle" {
-				return fj
+				found = fj
+				return true
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	f.t.Fatalf("fill %d of %q did not reach %s: %+v", id, name, status, f.account(name).Fills)
-	return nil
+		return false
+	}, func() any { return a.Fills })
+	return found
 }
 
 func TestRecurringFillAPI(t *testing.T) {
-	f, acc := fillFixtureOpts(t, archive.Schedule{Sync: 6 * time.Hour, SyncMin: time.Hour})
+	// tried holds the IDs of the fills whose run the fill runner has
+	// finished (from its BeforeRun to its AfterRun; one at a time). The
+	// AfterRun hook runs before the fixture's signal.
+	var running atomic.Int64
+	var tried sync.Map
+	f, acc := fillFixtureWith(t, manageOptions{
+		sched:     archive.Schedule{Sync: 6 * time.Hour, SyncMin: time.Hour},
+		beforeRun: func(_ context.Context, id int64) { running.Store(id) },
+		afterRun:  func() { tried.Store(running.Load(), true) },
+	})
 	ctx := context.Background()
 
 	// A recurring fill has no cut-off; its interval is checked.
@@ -120,15 +133,31 @@ func TestRecurringFillAPI(t *testing.T) {
 	}
 
 	// An ended one-time fill is switched on with its password; trash and
-	// spam folders it did not copy need a yes.
+	// spam folders it did not copy need a yes. CreateFill inserts it as
+	// running, so the fill runner picks it up: it is created and cancelled
+	// under the account's lock (as by the command line), where a run of it
+	// is skipped as busy and not audited. Without the lock, that run ends
+	// it as failed with a data.fill_done entry, or before CancelFill, which
+	// then fails (#213). The test waits until the runner has tried it.
+	unlock, ok, err := f.st.TryLockSyncForWrite(ctx, acc.ID)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	defer func() { unlock() }()
 	cutoff := time.Now()
 	once := &store.Fill{AccountID: acc.ID, Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", Cutoff: &cutoff}
 	if err := f.st.CreateFill(ctx, once, func(int64) ([]byte, error) { return []byte("x"), nil }); err != nil {
 		t.Fatal(err)
 	}
+	testwait.Until(t, f.changed, "the fill runner to try the one-time fill", func() bool {
+		_, ok := tried.Load(once.ID)
+		return ok
+	})
 	if err := f.st.CancelFill(ctx, once.ID); err != nil {
 		t.Fatal(err)
 	}
+	unlock()
+	unlock = func() {}
 	if a := f.account("journal"); len(a.Fills) != 2 || a.Fill.ID != once.ID || a.Fills[1].ID != started.ID || a.Fill.Interval != nil {
 		t.Fatalf("fills %+v", a.Fills)
 	}

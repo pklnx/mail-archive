@@ -33,6 +33,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
 | `internal/imaptest` | In-memory IMAP server for tests. |
+| `internal/testwait` | Waiting in tests: `Signal`, a broadcast, and `Until`, which checks a condition again after each signal instead of on a timer. |
 | `web/` | Web UI source (React, TypeScript, Vite, Carbon Design System). |
 | `docs/` | This documentation (VitePress). |
 | `tools/demo` | Demo server with made-up mail, used for screenshots. |
