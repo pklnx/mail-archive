@@ -260,9 +260,10 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
-    # Usually about 2 min, but `playwright install --with-deps` below can take
-    # 8-13 min when its apt download is slow (up to 14.5 min in total so far).
-    timeout-minutes: 30
+    # Usually about 2 min; the 20 covers the apt fallback of
+    # scripts/ci-playwright-chromium.sh (8-13 min here when the apt mirror was
+    # slow). Lower it once the fallback is seen not to run.
+    timeout-minutes: 20
     env:
       # Second guard against the telemetry postinstall of the Carbon packages;
       # web/pnpm-workspace.yaml blocks their install scripts.
@@ -296,10 +297,10 @@ jobs:
       # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
       - run: npm install -g corepack@0.36.0 && corepack enable
       - run: pnpm install --frozen-lockfile
-      # The headless Chromium of the pinned Playwright, with its system
-      # libraries: --with-deps installs them with apt, so the job does not
-      # depend on what the runner image happens to ship.
-      - run: pnpm exec playwright install --with-deps --only-shell chromium
+      # The headless Chromium of the pinned Playwright, without apt unless
+      # the runner image lacks one of its libraries (then with a warning).
+      - run: sh ../scripts/ci-playwright-chromium-test.sh
+      - run: sh ../scripts/ci-playwright-chromium.sh
       # The config builds the UI, then builds and starts the demo (it embeds
       # the built UI), and stops it at the end so it drops its database.
       - run: pnpm e2e

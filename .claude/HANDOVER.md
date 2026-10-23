@@ -76,7 +76,7 @@ State of the work for the next session. Update before a session ends.
 
 ## Manual checks for the maintainer
 - #186: `docker build`, confirming no postinstall or telemetry runs.
-- #181: first-run timing of `web-e2e` in CI, under 5 minutes. The slow runs (8.9 to 14.5 minutes) come from the apt download of `playwright install --with-deps`, not from the tests; the timeout is 30 since #216, and a faster setup is open (see FOLLOWUPS).
+- #181: first-run timing of `web-e2e` in CI, under 5 minutes. The slow runs (8.9 to 14.5 minutes) come from the apt download of `playwright install --with-deps`, not from the tests; the timeout is 20 since #238, which replaced the apt step with the headless shell and a library check (apt only as a fallback).
 - #159: upgrade a real volume created by `postgres:18-alpine` (bundle <= 26.10-6): `./ma status` refuses, `./ma migrate` rebuilds and records the marker, then commands work.
 - #158/#160: look at the profile tabs and the sidebar in a browser (EN/DE, light/dark, 320 px and 1024 px width, touch drag, many accounts).
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.
