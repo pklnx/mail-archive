@@ -8,16 +8,46 @@ on:
 permissions:
   contents: read
 
+# A pull request run cancels the older run of the same pull request (its group
+# is the PR ref). A push to main gets a group of its own per commit and is never
+# cancelled, so every merge gets a complete CI result, also when the next merge
+# follows seconds later (the same rule as secrets.yml).
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Docker Hub images: CI pulls them through mirror.gcr.io (Google's public
+# Docker Hub cache), with Docker Hub as the fallback, so a Docker Hub error or
+# rate limit does not fail a job (option (b) of #216, as in paperless-go; no
+# secrets, the same for fork and Dependabot pull requests). dockerd gets the
+# mirror from scripts/ci-docker-mirror.sh, the docker job's buildx builder from
+# buildkitd-config-inline, and the PostgreSQL services of test and web-e2e
+# name the mirror directly. The script also drops the runner's Docker Hub login
+# for the job's later steps, because dockerd would send it to the mirror, which
+# refuses it: pulls are anonymous. Users' builds (the Dockerfile,
+# docker-compose.yml, ./ma, release.yml) do not use the mirror.
+#
+# Timeouts are about 2-5 times the longest run seen (the last 400 runs,
+# 2026-10-06 to 2026-10-23).
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The slowest passing run took 7.7 min.
+    timeout-minutes: 20
     services:
       postgres:
-        image: postgres:18
+        # The runner pulls service images before any step, so no daemon
+        # mirror config applies here: the image is named on mirror.gcr.io
+        # directly, without a Docker Hub fallback (the runner retries a failed
+        # pull itself). postgres:18 is a heavily used tag and always cached
+        # there, though the mirror may serve the previous patch release for a
+        # short time after a new one. Should the mirror ever fail this job,
+        # start PostgreSQL with `docker run` in a step after
+        # scripts/ci-docker-mirror.sh instead. It keeps the image's default
+        # glibc locale (no POSTGRES_INITDB_ARGS): the collation tests, which
+        # simulate a database built by postgres:18-alpine, need it.
+        image: mirror.gcr.io/library/postgres:18
         env:
           POSTGRES_USER: mailarchive
           POSTGRES_PASSWORD: mailarchive
@@ -36,12 +66,15 @@ jobs:
           go-version-file: go.mod
       - run: go mod verify
       - run: go vet ./...
-      - run: go test -race -count=1 ./...
+      # Random test order (-shuffle=on): a failure prints its seed as
+      # -test.shuffle N; rerun it with go test -shuffle=N.
+      - run: go test -race -shuffle=on -count=1 ./...
         env:
           TEST_DATABASE_URL: postgres://mailarchive:mailarchive@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/mailarchive?sslmode=disable
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,6 +92,7 @@ jobs:
 
   vulncheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,25 +106,47 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    # Room for a run with a cold layer cache.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - run: scripts/ci-docker-mirror.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # BuildKit in the builder container pulls the Dockerfile's images
+          # (and its # syntax frontend) through the mirror, falling back to
+          # Docker Hub when the mirror fails or lacks a tag.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: Build amd64 and arm64 images
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: false
+          # The layer cache in the GitHub Actions cache. Only pushes to main
+          # write it (mode=max: every stage, so the pnpm install and go mod
+          # download layers too); pull requests only read it, so their
+          # entries cannot crowd main's out of the 10 GB cache. An empty
+          # cache-to exports nothing. release.yml builds without a cache.
+          cache-from: type=gha,scope=docker
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=docker' || '' }}
 
   compose:
     # End-to-end test of docker-compose.yml, the image and the ./ma wrapper.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - run: scripts/ci-docker-mirror.sh
+      # The base images and postgres:18 with retries; the smoke test's build
+      # then takes them from the local store.
+      - run: scripts/ci-pull-images.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -111,6 +167,7 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # Second guard against the telemetry postinstall of the Carbon packages;
       # web/pnpm-workspace.yaml blocks their install scripts.
@@ -131,6 +188,29 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  audit:
+    # pnpm audit of the UI's production dependencies. Not a required check:
+    # it asks the npm registry, which can time out, and Dependabot covers the
+    # same advisories. A finding still turns it red. It audits the lockfile,
+    # so it needs no install.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # As in the web job, although nothing is installed here.
+      IBM_TELEMETRY_DISABLED: "true"
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
+      - run: npm install -g corepack@0.36.0 && corepack enable
       - run: pnpm audit --prod
 
   # Decides whether a pull request is docs-only (only docs/**, .claude/** or
@@ -180,14 +260,18 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Usually about 2 min, but `playwright install --with-deps` below can take
+    # 8-13 min when its apt download is slow (up to 14.5 min in total so far).
+    timeout-minutes: 30
     env:
       # Second guard against the telemetry postinstall of the Carbon packages;
       # web/pnpm-workspace.yaml blocks their install scripts.
       IBM_TELEMETRY_DISABLED: "true"
     services:
       postgres:
-        image: postgres:18
+        # On mirror.gcr.io without a fallback and with the default glibc
+        # locale, as in the test job (see there).
+        image: mirror.gcr.io/library/postgres:18
         env:
           POSTGRES_USER: mailarchive
           POSTGRES_PASSWORD: mailarchive

@@ -23,6 +23,11 @@ Integration tests start an in-memory IMAP server (`internal/imaptest`) and
 create a throwaway database per test; the user in `TEST_DATABASE_URL` needs
 `CREATEDB`.
 
+Tests run in random order (`go test -shuffle=on`, in CI and `make test`) and
+must not depend on each other's state. A failure that shows only in some
+orders prints the seed in the failing package's log as `-test.shuffle N`;
+rerun it with `go test -shuffle=N -run … ./internal/<pkg>`.
+
 ## Web UI
 
 The UI lives in `web/`: React, TypeScript, Vite and the Carbon Design System
@@ -109,7 +114,11 @@ The tests fail on page errors, console errors, CSP violations and requests
 to any other host (`web/e2e/fixtures.ts`). They use role and label queries,
 wait for elements and responses, never for time, and run without retries.
 Names a test creates are unique per run, and no test depends on another.
-CI runs the suite in the `web-e2e` job.
+CI runs the suite in the `web-e2e` job. The job usually takes about two
+minutes, but its `playwright install --with-deps` step installs Chromium's
+system libraries and fonts with apt, and when the runner's apt mirror is slow
+that step alone takes 8 to 13 minutes. The job's timeout is 30 minutes for
+that reason.
 
 The job is skipped on docs-only pull requests, where only `docs/**`,
 `.claude/**` or `*.md` files change (`*.md` also matches in code
@@ -118,7 +127,7 @@ The skip happens at job level, not with a workflow-level `paths:` filter: a
 skipped job counts as passing for a required check, while a workflow that never
 starts would leave it pending for ever. The filter fails closed: a failed
 detection, an empty diff or any other changed file runs the suite, and so does
-every push to `main`. `web-e2e` is meant to be a required check.
+every push to `main`. `web-e2e` is a required check.
 
 ## Documentation
 
@@ -180,8 +189,11 @@ Changes start as an issue with an approved plan; see
 [Issues, plans and releases](./process).
 
 `main` is protected: changes go through pull requests, which can only be
-squash-merged when all CI checks pass. A pull request is merged (squash) after
-an approving review and green checks; auto-merge is not used. Agent rules are
+squash-merged when the required CI checks pass: `test`, `lint`, `vulncheck`,
+`docker`, `compose`, `web`, `web-e2e` and `secret-scan`. The `audit` and
+`docs-audit` checks are not required (see [Dependencies](#dependencies)). A
+pull request is merged (squash) after an approving review and green required
+checks; auto-merge is not used. Agent rules are
 in `CLAUDE.md` at the repository root.
 
 | Label | Meaning |
@@ -196,6 +208,24 @@ in `CLAUDE.md` at the repository root.
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.
 
+## CI
+
+- A pull request's CI run cancels the older run of the same pull request;
+  runs on `main` are never cancelled, so every merge gets a complete result.
+  The docs workflow queues its `main` runs instead, so deploys stay in order.
+- Every job has a timeout (`timeout-minutes`), about two to five times its
+  longest run so far.
+- CI pulls Docker Hub images through mirror.gcr.io (Google's public Docker Hub
+  cache), with Docker Hub as the fallback, so a Docker Hub error or rate limit
+  does not fail a job. These pulls are anonymous: dockerd would send the
+  runner's Docker Hub login to the mirror, which refuses it. The PostgreSQL
+  services of the `test` and `web-e2e` jobs are named on the mirror directly
+  and have no fallback. Users' builds (the Dockerfile, `docker-compose.yml`,
+  `./ma`, the release workflow) do not use the mirror; see the comments in
+  `.github/workflows/ci.yml`.
+- The `docker` job keeps its layer cache in the GitHub Actions cache. Only
+  runs on `main` write it; pull requests read it.
+
 ## Flaky tests
 
 A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
@@ -205,7 +235,13 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
 ### Dependencies
 
 - CI runs `govulncheck`, `go mod verify`, `go vet`, golangci-lint (with
-  `gosec`), tests with the race detector, and `pnpm audit` for the UI.
+  `gosec`) and tests with the race detector.
+- `pnpm audit` runs in the `audit` (UI, production dependencies) and
+  `docs-audit` (docs site) checks, which are not required: they call the npm
+  registry, which can time out, and Dependabot covers the same advisories. A
+  red audit does not block a merge. The coordinator reads its log: a registry
+  error needs nothing (no flaky-test row, since it is not a test); a real
+  advisory gets a Dependabot pull request or a follow-up issue.
 - Dependabot opens weekly update pull requests for Go modules, npm packages
   (UI and docs), GitHub Actions and Docker images. PostgreSQL major versions
   are excluded because they need a data migration.

@@ -15,13 +15,22 @@ on:
 permissions:
   contents: read
 
+# Pull request runs cancel the older run of the same pull request. On main a
+# run never cancels a running one: runs queue in push order, so the last deploy
+# is always the newest commit (a group per commit would let builds finish out of
+# order and an older site end up live). GitHub keeps one pending run per group,
+# so with three or more pushes during one run the pending middle run is
+# replaced; the newest run publishes the whole site, so nothing is lost. The
+# docs-audit job belongs to the run too: a hanging npm registry holds the group
+# up to its 10-minute timeout and delays the next deploy by that much.
 concurrency:
   group: docs-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: docs
@@ -37,16 +46,38 @@ jobs:
       - run: npm install -g corepack@0.36.0 && corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm audit
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: docs/.vitepress/dist
 
+  docs-audit:
+    # pnpm audit of the docs site's dependencies. Not a required check, and
+    # deploy does not wait for it: it asks the npm registry, which can time
+    # out, and Dependabot covers the same advisories. A finding still turns it
+    # red. It audits the lockfile, so it needs no install. Named docs-audit so
+    # it is not confused with CI's audit check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
+      - run: npm install -g corepack@0.36.0 && corepack enable
+      - run: pnpm audit
+
   deploy:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
