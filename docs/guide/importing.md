@@ -189,7 +189,7 @@ IMAP; when it exists only as files (a piler export, an mbox, a Maildir),
   without a Message-ID is always stored: a duplicate beats a gap. There is no
   cut-off; the Message-ID check covers the overlap with journaling.
 - Imported messages have no envelope, so BCC recipients are unknown. The
-  message view's **Origin** row says "Imported from files: LABEL". `--label`
+  message view's **Origin** section says "Imported from files: LABEL". `--label`
   sets the label, 1 to 200 characters without control characters; it
   defaults to the `--from` path. Every run is recorded with its label, and a
   message keeps the label of the run that added it.

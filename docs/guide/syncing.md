@@ -188,9 +188,9 @@ IMAP accounts and all of them are gone. A message moved to another folder on
 the server is not: its new folder has it. A message also found in an import
 account still counts, because the import says nothing about a server.
 
-The sidebar entry **Only in archive** lists these messages, and the account
+The navigation entry **Only in archive** lists these messages, and the account
 page shows their number per account (`GONE` in `./ma status`). The folder
-counts in the sidebar keep counting gone messages: the archive still has
+counts in the folder column keep counting gone messages: the archive still has
 them.
 
 Each user only sees their own accounts' state. If two users archived the

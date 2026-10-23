@@ -1,5 +1,7 @@
 // Takes the screenshots in docs/public/screenshots from the demo server
 // (go run ./tools/demo). Run through `make docs-screenshots`.
+// Locators use roles and labels, as the UI's end-to-end tests do; the
+// script waits for elements and frame load events, never for a time.
 import { createHmac } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
@@ -11,6 +13,7 @@ await mkdir(out, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const errors = [];
 const desktop = { width: 1280, height: 800 };
+const phoneSize = { width: 390, height: 780 };
 
 // The demo login from tools/demo. Admins need 2FA, so the demo admin has a
 // fixed TOTP secret.
@@ -65,26 +68,45 @@ async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = 
   return p;
 }
 
+/**
+ * A screenshot without the mouse over a control, with Carbon's animations
+ * finished. keepFocus leaves the focus where it is (an open menu or Modal
+ * needs it); otherwise the focus ring of a clicked tab or button goes.
+ */
+async function shot(p, name, { keepFocus = false } = {}) {
+  await p.mouse.move(0, 0);
+  if (!keepFocus) await p.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  await p.screenshot({ path: `${out}/${name}.png`, animations: "disabled" });
+}
+
+/** Waits until the open message's body is shown: the HTML frame has loaded, or the text is there. */
+async function bodyShown(p) {
+  const body = p.locator("main").locator("iframe, .message__text").first();
+  await body.waitFor();
+  const frame = await (await body.elementHandle()).contentFrame();
+  if (frame) await frame.waitForLoadState("load");
+}
+
+async function openMessage(p, subject, path = "/") {
+  await p.goto(base + path);
+  await p.getByRole("list", { name: "Messages" }).getByRole("button", { name: new RegExp(subject) }).first().click();
+  await p.getByRole("main").getByRole("heading", { name: new RegExp(subject) }).waitFor();
+  await bodyShown(p);
+}
+
 {
   const p = await page("light", { width: 1280, height: 720 }, { loggedIn: false });
   await p.goto(base + "/");
   await p.getByLabel("User name").fill(login.username);
   await p.getByRole("button", { name: "Log in" }).waitFor();
-  await p.screenshot({ path: `${out}/login.png` });
+  await shot(p, "login");
   await p.context().close();
-}
-
-async function openMessage(p, subject) {
-  await p.goto(base + "/");
-  await p.getByRole("button", { name: new RegExp(subject) }).first().click();
-  await p.getByRole("heading", { name: new RegExp(subject) }).waitFor();
-  await p.waitForTimeout(500); // let the HTML frame render
 }
 
 for (const scheme of ["light", "dark"]) {
   const p = await page(scheme);
   await openMessage(p, "Photos from the weekend");
-  await p.screenshot({ path: `${out}/mail-${scheme}.png` });
+  await shot(p, `mail-${scheme}`);
   await p.context().close();
 }
 
@@ -93,11 +115,13 @@ for (const scheme of ["light", "dark"]) {
   await p.goto(base + "/");
   // Mail to the tax advisor from the last month, with words from the body.
   const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  await p.getByRole("searchbox").fill(`to:taxadvisor after:${since} receipts`);
-  await p.waitForFunction(() => document.querySelectorAll('[aria-label="Messages"] mark').length > 0);
-  await p.getByRole("button", { name: /Documents for the tax return/ }).click();
-  await p.getByRole("heading", { name: /Documents for the tax return/ }).waitFor();
-  await p.screenshot({ path: `${out}/search.png` });
+  await p.getByRole("searchbox", { name: "Search mail" }).fill(`to:taxadvisor after:${since} receipts`);
+  const list = p.getByRole("list", { name: "Messages" });
+  await list.locator("mark").first().waitFor();
+  await list.getByRole("button", { name: /Documents for the tax return/ }).click();
+  await p.getByRole("main").getByRole("heading", { name: /Documents for the tax return/ }).waitFor();
+  await bodyShown(p);
+  await shot(p, "search");
   await p.context().close();
 }
 
@@ -106,8 +130,8 @@ for (const scheme of ["light", "dark"]) {
   const p = await page("light");
   await openMessage(p, "Re: Quote for the kitchen renovation");
   await p.getByRole("region", { name: "Conversation" }).waitFor();
-  await p.getByRole("list", { name: "Messages" }).evaluate((el) => el.scrollTo(0, 0));
-  await p.screenshot({ path: `${out}/conversation.png` });
+  await p.getByRole("list", { name: "Messages" }).evaluate((el) => el.closest(".mail-pane__fill")?.scrollTo(0, 0));
+  await shot(p, "conversation");
   await p.context().close();
 }
 
@@ -116,21 +140,26 @@ for (const scheme of ["light", "dark"]) {
   const p = await page("light");
   await p.goto(base + "/?group=1");
   await p.getByRole("button", { name: /Show 2 earlier messages/ }).click();
-  await p.getByRole("list", { name: "Conversation" }).getByRole("button").nth(1).waitFor();
-  // Start the list at the conversation, and move the mouse off the button.
-  await p.getByRole("button", { name: "Hide the messages" }).evaluate((el) => el.closest("li").scrollIntoView({ block: "start" }));
-  await p.mouse.move(0, 0);
-  await p.screenshot({ path: `${out}/grouped.png` });
+  const hide = p.getByRole("button", { name: "Hide the messages" });
+  await hide.waitFor();
+  // Start the list at the conversation. Only the list scrolls: scrollIntoView
+  // would move the page under the header too.
+  await hide.evaluate((el) => {
+    const row = el.closest("li");
+    let box = row.parentElement;
+    while (box && !(box.scrollHeight > box.clientHeight && getComputedStyle(box).overflowY !== "visible")) box = box.parentElement;
+    box.scrollTop += row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+  });
+  await shot(p, "grouped");
   await p.context().close();
 }
 
 {
   // Only in archive: a message deleted on the server, open in the reader.
   const p = await page("light");
-  await p.goto(base + "/?gone=1");
-  await p.getByRole("button", { name: /premium invoice/ }).first().click();
-  await p.getByText(/no longer on the server/).waitFor();
-  await p.screenshot({ path: `${out}/only-in-archive.png` });
+  await openMessage(p, "premium invoice", "/?gone=1");
+  await p.getByText(/no longer on the server/).first().waitFor();
+  await shot(p, "only-in-archive");
   await p.context().close();
 }
 
@@ -138,32 +167,43 @@ for (const scheme of ["light", "dark"]) {
   // A copy from the mail server: the envelope shows the BCC recipient.
   const p = await page("light");
   await openMessage(p, "Lease renewal for the office");
-  await p.getByText(/Envelope \(journal\)/).waitFor();
-  await p.screenshot({ path: `${out}/envelope.png` });
+  const envelope = p.getByRole("button", { name: /Envelope \(journal\)/ });
+  if ((await envelope.getAttribute("aria-expanded")) !== "true") await envelope.click();
+  await p.getByText(/counsel@lawfirm\.example/).first().waitFor();
+  await shot(p, "envelope");
   await p.context().close();
 }
 
 {
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
-  await p.getByText(/Last sync/).first().waitFor();
-  await p.screenshot({ path: `${out}/accounts.png` });
+  const main = p.getByRole("main");
+  await main.getByText(/Last sync/).first().waitFor();
+  await shot(p, "accounts");
 
   // Deleting the removed account "old-provider" completely: the preview
-  // and the typed-count confirmation in its card. Nothing is confirmed.
-  await p.getByRole("button", { name: "Delete completely…" }).click();
-  const purge = p.getByRole("group", { name: /Delete “old-provider” completely\?/ });
+  // and the typed-count confirmation in a danger Modal. Nothing is confirmed.
+  await main.getByRole("button", { name: /^Removed accounts/ }).click();
+  await main.getByRole("button", { name: "Delete completely…" }).click();
+  const purge = p.getByRole("dialog", { name: /Delete “old-provider” completely\?/ });
   await purge.getByLabel(/^Type \d+ to confirm$/).waitFor();
-  // The whole card, its bottom edge included, at the bottom of the window.
-  await purge.evaluate((el) => el.parentElement.scrollIntoView({ block: "end" }));
-  await p.screenshot({ path: `${out}/account-purge.png` });
+  await shot(p, "account-purge", { keepFocus: true });
   await purge.getByRole("button", { name: "Cancel" }).click();
+  await purge.waitFor({ state: "detached" });
+  await p.context().close();
+}
 
-  // The first card is the smtp account "journal"; the IMAP account "personal" is next.
-  await p.getByRole("button", { name: "Edit" }).nth(1).click();
-  await p.getByRole("button", { name: "Choose folders" }).click();
-  await p.getByRole("checkbox").first().waitFor();
-  await p.screenshot({ path: `${out}/account-edit.png` });
+{
+  // Editing the IMAP account "personal": its own page, with the folders.
+  const p = await page("light");
+  await p.goto(base + "/?view=accounts&edit=personal");
+  const main = p.getByRole("main");
+  await main.getByRole("heading", { name: "Edit “personal”" }).waitFor();
+  await main.getByRole("button", { name: "Choose folders" }).click();
+  const folders = main.getByRole("heading", { name: "Folders", level: 2 });
+  await main.getByRole("checkbox").first().waitFor();
+  await folders.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await shot(p, "account-edit");
   await p.context().close();
 }
 
@@ -171,12 +211,13 @@ for (const scheme of ["light", "dark"]) {
   // The import of earlier mail from IMAP into the smtp account "journal":
   // server, login and cut-off; everything goes into its folder JOURNAL.
   const p = await page("light");
-  await p.goto(base + "/?view=accounts");
-  await p.getByRole("button", { name: "Import existing mail from IMAP" }).click();
-  await p.getByLabel("IMAP server").fill("imap.example.com");
-  await p.getByLabel("Username").fill("alex@example.com");
-  await p.getByLabel("Cut-off (optional)").waitFor();
-  await p.screenshot({ path: `${out}/fill-form.png` });
+  await p.goto(base + "/?view=accounts&import=journal");
+  const main = p.getByRole("main");
+  await main.getByRole("heading", { name: "Import existing mail from IMAP", level: 1 }).waitFor();
+  await main.getByLabel("IMAP server").fill("imap.example.com");
+  await main.getByLabel("Username").fill("alex@example.com");
+  await main.getByLabel("Cut-off (optional)").waitFor();
+  await shot(p, "fill-form");
   await p.context().close();
 }
 
@@ -185,34 +226,43 @@ for (const scheme of ["light", "dark"]) {
   // row says so and names the mailbox it came from.
   const p = await page("light");
   await openMessage(p, "Invoice 2026-10");
-  await p.getByText(/Origin \(journal\)/).waitFor();
+  const origin = p.getByRole("button", { name: /Origin \(journal\)/ });
+  if ((await origin.getAttribute("aria-expanded")) !== "true") await origin.click();
   await p.getByText(/Imported from IMAP: alex\.morgan@work\.example/).waitFor();
   await p.getByText("journal / JOURNAL").waitFor();
-  await p.screenshot({ path: `${out}/fill-origin.png` });
+  await shot(p, "fill-origin");
   await p.context().close();
 }
 
 {
   const p = await page("light");
   await p.goto(base + "/?view=users");
-  await p.getByText("sam").first().waitFor();
-  await p.screenshot({ path: `${out}/users.png` });
+  const main = p.getByRole("main");
+  // The actions of a user are in its menu; open it for kim.
+  await main.getByRole("button", { name: "Actions for kim" }).click();
+  await p.getByRole("menuitem", { name: "Reset password" }).waitFor();
+  await shot(p, "users", { keepFocus: true });
+  await p.keyboard.press("Escape");
+
   await p.goto(base + "/?view=retention");
-  await p.getByText("§147 AO: business letters and invoices").waitFor();
-  await p.screenshot({ path: `${out}/retention.png` });
+  await main.getByRole("tab", { name: "Rules", selected: true }).waitFor();
+  await main.getByText("§147 AO: business letters and invoices").waitFor();
+  await shot(p, "retention");
+
   await p.goto(base + "/?view=profile");
-  await p.getByRole("heading", { name: "Profile" }).waitFor();
-  await p.screenshot({ path: `${out}/profile.png` });
+  await main.getByRole("heading", { name: "Profile", level: 1 }).waitFor();
+  await main.getByRole("combobox", { name: "Language" }).waitFor();
+  await shot(p, "profile");
   // The security tab. The panel is taller than the window; the top shows.
-  await p.getByRole("tab", { name: "Sign-in & security" }).click();
-  await p.getByRole("tabpanel", { name: "Sign-in & security" }).waitFor();
-  await p.mouse.move(0, 0);
-  await p.screenshot({ path: `${out}/profile-security.png`, animations: "disabled" });
+  await main.getByRole("tab", { name: "Sign-in & security" }).click();
+  const security = main.getByRole("tabpanel", { name: "Sign-in & security" });
+  await security.getByText("On", { exact: true }).waitFor();
+  await security.getByRole("button", { name: "Add passkey" }).or(security.getByText(/Passkeys (work only|are not set up)/)).first().waitFor();
+  await shot(p, "profile-security");
   // The API keys tab.
-  await p.getByRole("tab", { name: "API keys" }).click();
-  await p.getByRole("tabpanel", { name: "API keys" }).waitFor();
-  await p.mouse.move(0, 0);
-  await p.screenshot({ path: `${out}/profile-api-keys.png`, animations: "disabled" });
+  await main.getByRole("tab", { name: "API keys" }).click();
+  await main.getByRole("tabpanel", { name: "API keys" }).getByRole("button", { name: "Create API key" }).waitFor();
+  await shot(p, "profile-api-keys");
   await p.context().close();
 }
 
@@ -220,15 +270,20 @@ for (const scheme of ["light", "dark"]) {
   // The log: the demo's own login and the messages opened above.
   const p = await page("light");
   await p.goto(base + "/?view=log");
-  await p.getByText("Opened message").first().waitFor();
-  await p.screenshot({ path: `${out}/log.png` });
+  await p.getByRole("main").getByText("Opened message").first().waitFor();
+  await shot(p, "log");
   await p.context().close();
 }
 
 {
-  const p = await page("light", { width: 390, height: 780 }, { phone: true });
+  // A phone: a message on its own screen, and the navigation behind the menu button.
+  const p = await page("light", phoneSize, { phone: true });
   await openMessage(p, "Photos from the weekend");
-  await p.screenshot({ path: `${out}/mail-phone.png` });
+  await shot(p, "mail-phone");
+  await p.getByRole("button", { name: "Back to the list" }).click();
+  await p.getByRole("button", { name: "Open navigation" }).click();
+  await p.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Profile" }).waitFor();
+  await shot(p, "mail-phone-nav", { keepFocus: true });
   await p.context().close();
 }
 

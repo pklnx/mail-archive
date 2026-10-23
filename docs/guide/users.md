@@ -23,9 +23,9 @@ existed.
 
 ## Adding users
 
-Admins open **Users** at the bottom of the sidebar and click **Add user**.
-They enter a name (lowercase letters, digits, `.`, `-`, `_`) and choose
-whether the new user is an admin.
+Admins open **Users** in the navigation and click **Add user**. In the
+dialog they enter a name (lowercase letters, digits, `.`, `-`, `_`) and
+choose whether the new user is an admin.
 
 ![Users page](/screenshots/users.png)
 
@@ -38,7 +38,10 @@ On the command line, `./ma user add NAME` asks for a password instead, and
 
 ## Managing users
 
-For every other user, admins can:
+The users page is a table with each user's role, state, sign-in (2FA,
+passkeys, API keys), accounts and last login. For every other user, the
+menu (⋮) at the end of the row offers the actions below; the ones that
+delete or lock out ask in a dialog first. Admins can:
 
 - **Reset 2FA:** only shown while the user has 2FA on. Turns it off and logs
   the user out everywhere. Admins, and everyone when 2FA is required, set it
@@ -50,8 +53,9 @@ For every other user, admins can:
   out.
 - **Remove passkeys:** removes all passkeys of the user and logs them out
   everywhere, for example after a lost phone.
-- **API keys:** shown when the user has keys. Lists them; **Revoke** stops
-  one at once. This also works for your own keys.
+- **API keys:** when the user has keys, the arrow at the start of the row
+  lists them; **Revoke** stops one at once, after asking. This also works
+  for your own keys.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in;
   their API keys stop working until they are unlocked.
 - **Make admin / Remove admin.**
@@ -74,8 +78,8 @@ their own entries there too.
 
 ## Your profile
 
-Click your name at the bottom of the sidebar to open your profile. It has
-three tabs:
+The person icon in the header, or **Profile** in the navigation, opens your
+profile. It has three tabs:
 
 - **Display:** the [language and formats](./web-ui#appearance-and-language)
   of the web UI.
@@ -95,19 +99,23 @@ you have to wait.
 
 ## Two-factor authentication
 
-In your profile, on the **Sign-in & security** tab, **Set up 2FA** shows a
-QR code. Scan it with an authenticator app (for example Aegis, 2FAS or Google Authenticator) or type
-the key below it, then enter the 6-digit code from the app.
+In your profile, on the **Sign-in & security** tab, a tag shows whether 2FA
+is on. **Set up authenticator app** shows a QR code. Scan it with an
+authenticator app (for example Aegis, 2FAS or Google Authenticator) or type
+the key below it (the copy button copies it), then enter the 6-digit code
+from the app and click **Enable two-factor authentication**.
 
-You then get 10 recovery codes, shown **once**. Keep them somewhere safe:
+You then get 10 recovery codes, shown **once**, in a dialog that only
+**I have saved the codes** closes. Keep them somewhere safe:
 each one replaces a code from the app a single time, for example when the
 phone is lost. **Download PDF** and **Download .txt** save them with your
 user name, the server address and the date, to print or to keep offline or
 in a password manager. The browser makes the file from the codes on screen;
 the server does not send them again.
 
-Users who are not admins can generate new codes in their profile, and
-download them the same way. The old codes stop working, so throw away the
+Users who are not admins can generate new codes in their profile with a
+code from the app (**Generate new recovery codes**), and download them the
+same way. The old codes stop working, so throw away the
 old sheet.
 
 From then on, the login asks for a code after the password. A code works
@@ -127,15 +135,16 @@ key, without password and code. It works only at the address in
 `MAIL_ARCHIVE_PUBLIC_URL` (see [Configuration](../reference/configuration)),
 over HTTPS or on `localhost`.
 
-On the **Sign-in & security** tab, enter a name for the passkey (like
-*iPhone*), your password and, if you use 2FA, a code, then click **Add passkey** and confirm
-on your device. You can have up to 10 passkeys.
+On the **Sign-in & security** tab, click **Add passkey**. In the dialog,
+enter a name for the passkey (like *iPhone*), your password and, if you use
+2FA, a code, then click **Add passkey** and confirm on your device. You can
+have up to 10 passkeys; the table lists them with their last use.
 
 At the login, click **Sign in with a passkey**, or pick the passkey in the
 user name field when the browser offers it.
 
-**Remove** in your profile deletes a passkey and logs out your other
-devices. Your password keeps working; admins must still keep TOTP set up.
+**Remove** in your profile deletes a passkey, after asking, and logs out
+your other devices. Your password keeps working; admins must still keep TOTP set up.
 
 The passkey itself stays on your device or in your password manager. Chrome
 and Safari are told to forget it; Firefox and some password managers keep
@@ -163,8 +172,9 @@ A key can do nothing else: no logins, no profile or account changes, no
 user management, also for an admin. How to use a key is described in the
 [JSON API](../reference/api#api-keys).
 
-The list shows each key with its last 4 characters, when it expires and
-when it was last used. **Revoke** stops a key at once. You can have up to 20
+The table shows each key with its last 4 characters, its scopes, its state
+(active, expired or revoked), when it expires and when it was last used.
+**Revoke** stops a key at once, after asking. You can have up to 20
 active keys; revoked and expired keys stay listed for 30 days.
 
 ![Profile page, tab API keys](/screenshots/profile-api-keys.png)

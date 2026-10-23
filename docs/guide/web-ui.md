@@ -1,46 +1,54 @@
 # Web UI and search
 
 `docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
-with your user. The **Manage** section at the bottom of the sidebar holds
-**Manage accounts** and **Log**, the [audit log](./audit-log) of what you did;
-admins also find [Users](./users) and [Retention](./retention) there, and see
-everyone's entries in the log. Below it are your name, which opens your
-[profile](./users#your-profile), and **Log out**.
+with your user.
+
+The header at the top holds the name of the app, which leads to all mail,
+and on the right your name, the keyboard shortcuts, the light/dark switch,
+your [profile](./users#your-profile) and **Log out**. The navigation on the
+left lists **All mail**, **Only in archive** (once there is such mail, see
+below), [Accounts](./accounts), **Log** (the [audit log](./audit-log) of what
+you did) and **Profile**; admins also find [Users](./users) and
+[Retention](./retention) there, and see everyone's entries in the log. On a
+large screen the navigation is a narrow column of icons that shows its
+labels when you point at it or move the focus into it.
 
 ![The three-column mail view](/screenshots/mail-light.png)
 
 ## Layout
 
-- **Sidebar:** all mail, then each account with its folders and message
-  counts. A count is the number of distinct messages in the folder, as in
-  its list; messages no longer on the server still count. Once a
-  [reconcile](./syncing#reconcile) found messages deleted on all your
-  servers, **Only in archive** below **All mail** lists them, with their
-  number. A spinner marks accounts that are syncing; removed accounts are
-  marked as such. **Manage accounts** at the bottom opens the
-  [account page](./accounts).
+- **Folders:** the column next to the navigation lists each account with
+  its folders and message counts. A count is the number of distinct
+  messages in the folder, as in its list; messages no longer on the server
+  still count. Next to an account its state shows: *receiving* for an smtp
+  account, *failing*, *removed*, *disabled* or *imported*; a spinner marks
+  an account that is syncing. **All folders** under an account lists all of
+  its mail. Once a [reconcile](./syncing#reconcile) found messages deleted
+  on all your servers, **Only in archive** in the navigation lists them,
+  with their number.
 
   Folders form a tree, split at the server's hierarchy delimiter (`/` or
   `.`): `Archive/2024` shows as `2024` under `Archive`, with the full name as
   tooltip. A parent that is only part of a path, not a folder of its own, is
   shown without a count. The arrow next to an account or a parent folder
-  collapses or expands it; clicking the name still selects it.
-  **Collapse all** and **Expand all** do this for the whole sidebar. A
-  collapsed parent shows, in italics, the sum of the counts below it: a
-  message in two of those folders counts twice. When you open a folder
-  inside a collapsed one, for example from a link, its path expands. The
-  state is remembered per user in this browser; on a shared browser it keeps
-  listing your account names and folder paths after you log out. After an
-  upgrade, an account's folders form a tree from its next sync; until then,
-  and for removed accounts, the list stays flat. The accounts are listed
-  under **Accounts**, the pages to manage them and the archive under
-  **Manage**.
+  collapses or expands it; clicking the name still selects it. The arrow
+  keys move through the tree. **Collapse all** and **Expand all** do this
+  for the whole column. A collapsed parent shows, in italics, the sum of the
+  counts below it: a message in two of those folders counts twice. When you
+  open a folder inside a collapsed one, for example from a link, its path
+  expands. The state is remembered per user in this browser; on a shared
+  browser it keeps listing your account names and folder paths after you
+  log out. After an upgrade, an account's folders form a tree from its next
+  sync; until then, and for removed accounts, the list stays flat.
 
-  The sidebar's width is yours to set. Drag the handle on its right edge,
-  or focus it and use the arrow keys. A double-click on the handle resets
-  the width. The **«** button at the top collapses the sidebar to a narrow
-  rail of account labels; **»** expands it again. Width and state are
-  remembered per browser.
+  The column's width is yours to set, from 12 to 28 rem (192 to 448 pixels
+  at the default font size). Drag the handle on its right edge, or focus the
+  handle: the left and right arrow keys change the width, **Home** and
+  **End** set the narrowest and the widest, and **Enter** collapses the
+  column. A double-click on the handle resets the width. The button next to
+  **Folders** at the top also collapses the column, to a narrow rail of
+  account labels (a dot marks an account with sync problems); the same button expands
+  it again. Width and state are remembered per user in this browser.
 - **Message list:** newest first, with search at the top. More messages load
   as you scroll. A line above the list counts what is loaded ("42 messages",
   "More than 50 matches" while more can load). Headings group the messages
@@ -65,28 +73,21 @@ Everything you select is part of the URL, so the back button, reloads and
 bookmarks work. Back in the browser after paging returns to the list, not to
 the previous message.
 
-On a medium-sized screen, such as a tablet, the sidebar is a drawer behind
-the menu button next to the search field.
+On a smaller screen, such as a tablet or a phone, the menu button at the
+left of the header opens the navigation over the page; choosing an entry,
+the button again or <kbd>Esc</kbd> closes it. The folders are behind the
+**Folders** button left of the search field: it opens the folder column
+over the list, and choosing a folder, a click next to it or <kbd>Esc</kbd>
+closes it again.
 
-On a phone the columns become separate screens. An app bar at the top shows
-the current folder, with its account below it, or **All mail**; the menu
-button on its left opens the sidebar as a drawer, and the sun/moon button
-is on its right. The search field takes the full width below it. A
-navigation bar at the bottom has four entries:
-
-- **Mail:** the message list.
-- **Folders:** opens the sidebar drawer with the accounts and folders.
-- **Accounts:** the [account page](./accounts).
-- **More:** the log, your profile, the light/dark switch and **Log out**;
-  admins also find users and retention there.
-
-An open message fills the screen without the navigation bar. The arrow at
-the top left leads back to the list, the arrows on the right page through
-it.
+On a phone the list and the message are separate screens. Above the list
+the current folder shows, with its account below it, or **All mail**; the
+search field takes the full width below it. An open message fills the
+screen. The arrow at the top left leads back to the list, the arrows on the
+right page through it.
 
 <img src="/screenshots/mail-phone.png" alt="A message on a phone" width="320">
-
-<!-- screenshot: the message list on a phone, with the app bar, the filter chips and the bottom navigation -->
+<img src="/screenshots/mail-phone-nav.png" alt="The navigation on a phone, opened with the menu button" width="320">
 
 ## Sync problems
 
@@ -136,10 +137,11 @@ clickable and open in a new tab.
 <!-- screenshot: a plain-text reply with an indented quote, a folded older quote and a signature -->
 
 **Found in** lists every folder that holds the message. For a copy an smtp
-account received, an **Envelope** row shows the sender and recipients the mail
-server delivered it to, BCC included; for a copy it imported from IMAP
+account received, an **Envelope** section shows the sender and recipients the
+mail server delivered it to, BCC included; for a copy it imported from IMAP
 ([fill](./journaling#bring-in-the-mail-from-before-journaling)), an **Origin**
-row names the mailbox it came from and says that there is no envelope.
+section names the mailbox it came from and says that there is no envelope.
+Both are folded; a click on the title opens them.
 
 **Show text** switches to the plain-text version. **Download .eml** saves the
 original message, which any mail client opens.
@@ -191,21 +193,16 @@ Recipients and attachment names are found only with `to:` and `attachment:`,
 not by plain words: otherwise your own address would match nearly every
 message you received. The contents of attachments are not searched.
 
-The filter row under the search field sets the same prefixes for From, To or
-Cc, the date range and attachments. It writes them into the search field, and
-prefixes you type show up in it. The URL keeps the whole search, so Back,
-reload and bookmarks keep the filters.
+The filter panel under the search field sets the same prefixes for From, To
+or Cc, the date range and attachments. It writes them into the search field,
+and prefixes you type show up in it. The filter button right of the search
+field shows and hides the panel; it is open at first on larger screens and
+closed on a phone, and the button is marked while a prefix or grouping is
+set. The URL keeps the whole search, so Back, reload and bookmarks keep the
+filters.
 
-On a phone the filters are a row of chips under the search field:
-**Has attachment**, **Date**, **From**, **To or Cc** and **Conversation**.
-**Has attachment** and **Conversation** switch on and off in place. **Date**,
-**From** and **To or Cc** open the filter sheet, which has the same fields
-as the filter row; **Done** closes it. A chip that is set is highlighted and
-shows its value, for example `From: sam`; the × next to it removes that
-filter. The filter button next to the search field also opens the sheet and
-is highlighted while a prefix or grouping is set.
-
-<!-- screenshot: the filter chips on a phone with a set From chip, and the open filter sheet -->
+Every filter that is set also shows as a tag below the search field, with
+its value, for example `From: sam`; the × on a tag removes that filter.
 
 A message has an attachment when a part is marked as one, or when it is a
 named file that is not text, such as a PDF that Apple Mail sends inline.
@@ -248,7 +245,7 @@ half of a conversation.
 | <kbd>/</kbd> | Moves to the search field. |
 | <kbd>j</kbd> | Next message; with no message open, opens the first one. |
 | <kbd>k</kbd> | Previous message. |
-| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the sidebar drawer. |
+| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation or the folders opened over the page. |
 | <kbd>g</kbd> then <kbd>a</kbd> | All mail. |
 | <kbd>?</kbd> | Lists the shortcuts. |
 
@@ -272,9 +269,9 @@ web page: it needs the server and stores nothing for offline use.
 
 ## Appearance and language
 
-Light and dark mode follow the system. The sun/moon button overrides it: next
-to the search field on larger screens, in the app bar and under **More** on a
-phone. The choice is remembered in the browser.
+Light and dark mode follow the system. The sun/moon button in the header
+overrides it, also on the login page. The choice is remembered in the
+browser.
 
 ![Dark mode](/screenshots/mail-dark.png)
 

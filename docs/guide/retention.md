@@ -161,7 +161,7 @@ is on hold cannot move to another user.
 ```
 
 Or **Retention → Deletion runs**: the web UI shows the counts and the hashes,
-not subjects (admins do not read other users' mail there). Confirming needs
+not subjects (admins do not read other users' mail there). Confirming, in a dialog, needs
 the number of messages typed in. The web server then deletes in the
 background; the page shows the progress.
 

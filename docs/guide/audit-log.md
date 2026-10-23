@@ -129,7 +129,8 @@ day adds about 30 MB a year.
 
 ## The Log page
 
-**Log** in the sidebar shows the entries of the last 30 days, newest first.
+**Log** in the navigation shows the entries of the last 30 days, newest first,
+as a table.
 Everyone sees their own entries: logins (also failed attempts with their
 name), searches with their text, opened messages and downloads, changes,
 and requests with their API keys. Admins see every user's entries and the
