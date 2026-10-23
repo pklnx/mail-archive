@@ -1,11 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { InlineNotification, ProgressBar, TextInput } from "@carbon/react";
 import { accountsApi, ApiError, type AccountPurge, type PurgeBlockers, type PurgePreview } from "./api";
+import { DangerModal } from "./DangerModal";
 import { fileSize, formatCount, formatDuration } from "./format";
-import { button, input } from "./formStyles";
 import { t } from "./i18n";
-
-const dangerSolid =
-  "rounded-md bg-danger-solid px-3 py-1 text-sm font-medium text-on-accent hover:bg-danger-solid-hover disabled:opacity-50 pointer-coarse:min-h-11";
 
 function message(err: unknown): string {
   return t.failed(err instanceof Error ? err.message : String(err));
@@ -39,93 +37,120 @@ interface ReviewProps {
   onCancel: () => void;
 }
 
-/** The preview of a complete deletion, and the typed-count confirmation when nothing blocks it. */
+/**
+ * The preview of a complete deletion in a danger Modal, and the
+ * typed-count confirmation when nothing blocks it. Something blocking
+ * leaves only the reasons and the close button: there is nothing to
+ * confirm.
+ */
 export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: ReviewProps) {
   const [count, setCount] = useState("");
   const id = useId();
-  const heading = useRef<HTMLParagraphElement>(null);
+  const heading = useRef<HTMLSpanElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const blocked = purgeBlocked(p.blockers);
   // An exact match only: an empty field is not "0".
   const matches = count.trim() === String(p.deleted);
+  const confirm = () => {
+    if (matches && !blocked && !busy) onConfirm(p.deleted);
+  };
   // Focus moves into the dialog when it opens: to the field, or to the
   // heading when something blocks the deletion. A layout effect, so the
-  // focus is set in the same commit that shows the dialog.
+  // focus is set in the same commit that shows the dialog; Carbon's Modal
+  // then focuses the same element (data-modal-primary-focus).
   useLayoutEffect(() => {
     (field.current ?? heading.current)?.focus();
   }, []);
+  const title = t.purgeTitle(p.account);
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-danger-line p-3 text-sm" role="group" aria-labelledby={`${id}-title`}>
-      <p id={`${id}-title`} ref={heading} tabIndex={-1} className="font-semibold outline-none">
-        {t.purgeTitle(p.account)}
-      </p>
-      <ul className="list-disc pl-5">
-        <li>{t.purgeLocations(p.locations, formatCount(p.locations))}</li>
-        <li>
-          {t.purgeDeleted(p.deleted, formatCount(p.deleted), fileSize(p.deletedBytes))}{" "}
-          {p.grace ? t.purgeFiles(p.deleted, formatDuration(p.grace)) : t.purgeFilesLater(p.deleted)}
-        </li>
-        {p.kept > 0 && (
+    <DangerModal
+      aria-label={title}
+      modalHeading={
+        <span ref={heading} tabIndex={-1} className="purge__heading" data-modal-primary-focus={blocked ? "" : undefined}>
+          {title}
+        </span>
+      }
+      size="sm"
+      passiveModal={blocked}
+      preventCloseOnClickOutside
+      primaryButtonText={t.purgeConfirm}
+      primaryButtonDisabled={!matches}
+      secondaryButtonText={t.cancel}
+      loadingStatus={busy ? "active" : "inactive"}
+      loadingDescription={t.purgeConfirm}
+      loadingIconDescription={t.loading}
+      onRequestClose={() => {
+        if (!busy) onCancel();
+      }}
+      onRequestSubmit={confirm}
+    >
+      <div className="purge">
+        <ul className="app-bullet-list">
+          <li>{t.purgeLocations(p.locations, formatCount(p.locations))}</li>
           <li>
-            {t.purgeKept(p.kept, formatCount(p.kept))}
-            <ul className="list-[circle] pl-5">
-              {p.keptIn.map((k) => (
-                <li key={`${k.owner}/${k.account}`}>
-                  <span className="break-all">
-                    {k.owner || "-"} / {k.account}
-                  </span>
-                  : {t.messageCount(k.messages, formatCount(k.messages))}
-                </li>
+            {t.purgeDeleted(p.deleted, formatCount(p.deleted), fileSize(p.deletedBytes))}{" "}
+            {p.grace ? t.purgeFiles(p.deleted, formatDuration(p.grace)) : t.purgeFilesLater(p.deleted)}
+          </li>
+          {p.kept > 0 && (
+            <li>
+              {t.purgeKept(p.kept, formatCount(p.kept))}
+              <ul className="app-bullet-list app-bullet-list--nested">
+                {p.keptIn.map((k) => (
+                  <li key={`${k.owner}/${k.account}`}>
+                    <span className="app-break-all">
+                      {k.owner || "-"} / {k.account}
+                    </span>
+                    : {t.messageCount(k.messages, formatCount(k.messages))}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          )}
+          <li>{t.purgeAccountGone}</li>
+        </ul>
+        {blocked ? (
+          <InlineNotification
+            kind="error"
+            lowContrast
+            hideCloseButton
+            role="alert"
+            className="notification--full"
+            statusIconDescription={t.carbon.status.error}
+            title={t.purgeBlocked}
+          >
+            <ul className="app-bullet-list">
+              {purgeBlockerLines(p.blockers).map((line) => (
+                <li key={line}>{line}</li>
               ))}
             </ul>
-          </li>
-        )}
-        <li>{t.purgeAccountGone}</li>
-      </ul>
-      {blocked ? (
-        <div role="alert" className="flex flex-col gap-1 text-danger">
-          <p className="font-medium">{t.purgeBlocked}</p>
-          <ul className="list-disc pl-5">
-            {purgeBlockerLines(p.blockers).map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <form
-          className="flex flex-wrap items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (matches) onConfirm(p.deleted);
-          }}
-        >
-          <label className="flex flex-col gap-1">
-            {t.purgeTypeCount(p.deleted)}
-            <input
+          </InlineNotification>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              confirm();
+            }}
+          >
+            <TextInput
+              id={`${id}-count`}
               ref={field}
-              className={`${input} w-32`}
+              data-modal-primary-focus=""
+              className="purge__count"
+              labelText={t.purgeTypeCount(p.deleted)}
               inputMode="numeric"
               autoComplete="off"
               value={count}
               onChange={(e) => setCount(e.target.value)}
             />
-          </label>
-          <button type="submit" className={dangerSolid} disabled={busy || !matches}>
-            {t.purgeConfirm}
-          </button>
-        </form>
-      )}
-      {error && (
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-      )}
-      <div>
-        <button type="button" className={button} disabled={busy} onClick={onCancel}>
-          {t.cancel}
-        </button>
+          </form>
+        )}
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        )}
       </div>
-    </div>
+    </DangerModal>
   );
 }
 
@@ -173,19 +198,17 @@ export function PurgeDialog({ name, onClose, onConfirmed, onConflict }: DialogPr
   };
 
   if (!preview) {
-    return error ? (
-      <div className="flex flex-col gap-2 text-sm">
-        <p role="alert" className="text-danger">
-          {error}
-        </p>
-        <div>
-          <button type="button" className={button} onClick={onClose}>
-            {t.cancel}
-          </button>
-        </div>
-      </div>
-    ) : (
-      <p className="text-sm text-ink-muted">{t.loading}</p>
+    // Loading, or the preview failed: only the close button.
+    return (
+      <DangerModal aria-label={t.purgeTitle(name)} modalHeading={t.purgeTitle(name)} size="sm" passiveModal preventCloseOnClickOutside onRequestClose={onClose}>
+        {error ? (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        ) : (
+          <p className="app-text-secondary">{t.loading}</p>
+        )}
+      </DangerModal>
     );
   }
   // A new preview after an error starts with an empty field.
@@ -199,13 +222,19 @@ export function PurgeDialog({ name, onClose, onConfirmed, onConflict }: DialogPr
  */
 export function PurgeProgress({ purge }: { purge: AccountPurge | null }) {
   return (
-    <div className="flex flex-col gap-1 text-sm">
-      <p role="status" className="font-medium text-danger">
+    <div className="purge-progress">
+      <p role="status" className="purge-progress__state">
         {t.purgeRunning}
       </p>
-      {purge && (
-        <p className="text-ink-muted">{t.purgeProgress(formatCount(purge.deleted), formatCount(purge.expected), formatCount(purge.kept))}</p>
-      )}
+      {/* No helperText: Carbon would add an English "Loading" for screen readers. */}
+      <ProgressBar
+        size="small"
+        hideLabel
+        label={t.purgeRunning}
+        value={purge && purge.expected > 0 ? purge.deleted : undefined}
+        max={purge && purge.expected > 0 ? purge.expected : undefined}
+      />
+      {purge && <p className="app-text-secondary">{t.purgeProgress(formatCount(purge.deleted), formatCount(purge.expected), formatCount(purge.kept))}</p>}
     </div>
   );
 }

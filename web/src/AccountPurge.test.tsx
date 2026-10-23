@@ -1,9 +1,10 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { accountsApi, ApiError, type Account, type PurgePreview } from "./api";
 import { PurgeDialog, PurgeReview, purgeBlockerLines } from "./AccountPurge";
 import { RemovedCard } from "./AccountsPage";
 import { messagesFor, t } from "./i18n";
+import { findAlert, theAlert } from "./test/alerts";
 import { isActive } from "./useAccounts";
 
 const preview = (p: Partial<PurgePreview> = {}): PurgePreview => ({
@@ -87,9 +88,31 @@ describe("PurgeReview", () => {
     expect(screen.queryByLabelText(t.purgeTypeCount(3))).toBeNull();
   });
 
+  it("is a danger dialog that cannot be left or sent twice while it sends", () => {
+    const onCancel = vi.fn();
+    const onConfirm = vi.fn();
+    const { rerender } = render(<PurgeReview preview={preview()} busy={false} error="" onConfirm={onConfirm} onCancel={onCancel} />);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.closest(".cds--modal")?.classList.contains("cds--modal--danger")).toBe(true);
+    fireEvent.change(screen.getByLabelText(t.purgeTypeCount(3)), { target: { value: "3" } });
+    rerender(<PurgeReview preview={preview()} busy={true} error="" onConfirm={onConfirm} onCancel={onCancel} />);
+    const [cancel, confirm] = within(dialog).getAllByRole("button").slice(-2) as HTMLButtonElement[];
+    expect(cancel!.textContent).toBe(t.cancel);
+    expect(cancel!.disabled).toBe(true);
+    expect(confirm!.disabled).toBe(true);
+    fireEvent.submit(screen.getByLabelText(t.purgeTypeCount(3)).closest("form")!);
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: t.carbon.closeModal }));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    rerender(<PurgeReview preview={preview()} busy={false} error="" onConfirm={onConfirm} onCancel={onCancel} />);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("shows an error", () => {
     render(<PurgeReview preview={preview()} busy={false} error="Failed: nope" onConfirm={() => {}} onCancel={() => {}} />);
-    expect(screen.getByRole("alert").textContent).toBe("Failed: nope");
+    expect(theAlert().textContent).toBe("Failed: nope");
   });
 });
 
@@ -119,7 +142,7 @@ describe("PurgeDialog", () => {
     render(<PurgeDialog name="old" onClose={() => {}} onConfirmed={onConfirmed} />);
     fireEvent.change(await screen.findByLabelText(t.purgeTypeCount(3)), { target: { value: "3" } });
     fireEvent.click(confirmButton());
-    expect((await screen.findByRole("alert")).textContent).toBe(t.failed("the number of messages to delete is now 2, not 3; review again"));
+    expect((await findAlert()).textContent).toBe(t.failed("the number of messages to delete is now 2, not 3; review again"));
     expect(await screen.findByLabelText(t.purgeTypeCount(2))).toBeTruthy();
     expect(load).toHaveBeenCalledTimes(2);
     expect(confirmButton().disabled).toBe(true);
@@ -184,7 +207,9 @@ describe("RemovedCard", () => {
     vi.spyOn(accountsApi, "purgePreview").mockResolvedValue(preview({ blockers }));
     render(<RemovedCard account={removed} admin={true} onChanged={() => {}} />);
     fireEvent.click(screen.getByText(t.purgeStart));
-    expect(await screen.findByText(t.purgeTitle("old"))).toBe(document.activeElement);
+    // The title shows while the preview loads; the reasons come with it.
+    await screen.findByText(t.purgeBlocked);
+    expect(screen.getByText(t.purgeTitle("old"))).toBe(document.activeElement);
   });
 
   it("reloads the account list at once after a conflict", async () => {

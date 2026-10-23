@@ -23,7 +23,7 @@ const data = (): AccountsResponse => ({
   manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 });
 
-const view = (account = "", folder = ""): ViewState => ({ q: "", account, folder, group: "", gone: "", m: "", view: "" });
+const view = (account = "", folder = ""): ViewState => ({ q: "", account, folder, group: "", gone: "", m: "", view: "", add: "", edit: "", import: "" });
 
 function Harness({ state, d, select }: { state: ViewState; d: AccountsResponse; select: (a: string, f: string) => void }) {
   const collapsed = useCollapsed("alice", d);
