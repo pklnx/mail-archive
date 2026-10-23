@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
@@ -66,13 +67,14 @@ func (s *Store) Close() { s.pool.Close() }
 // Migrate rebuilds the indexes if the database needs it (see
 // RebuildIndexesIfNeeded) and then applies all pending schema migrations.
 // The rebuild runs first because pending migrations would already write
-// through misordered indexes. If it fails, nothing is migrated.
+// through misordered indexes. If it fails, nothing is migrated. The
+// migrations run under goose's migration lock (withMigrations).
 func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 	if _, err := s.RebuildIndexesIfNeeded(ctx, nil); err != nil {
 		return nil, err
 	}
 	var applied []string
-	err := s.withMigrations(func(p *goose.Provider) error {
+	err := s.withMigrations(true, func(p *goose.Provider) error {
 		results, err := p.Up(ctx)
 		for _, r := range results {
 			applied = append(applied, r.Source.Path)
@@ -83,10 +85,11 @@ func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 }
 
 // MigrateDown rolls back the most recently applied migration. This usually
-// drops data. It returns the migration that was rolled back.
+// drops data. It returns the migration that was rolled back. It runs under
+// goose's migration lock, as Migrate does.
 func (s *Store) MigrateDown(ctx context.Context) (string, error) {
 	var rolledBack string
-	err := s.withMigrations(func(p *goose.Provider) error {
+	err := s.withMigrations(true, func(p *goose.Provider) error {
 		r, err := p.Down(ctx)
 		if errors.Is(err, goose.ErrNoNextVersion) {
 			return errors.New("no migration to roll back")
@@ -107,10 +110,12 @@ type MigrationStatus struct {
 	AppliedAt time.Time
 }
 
-// MigrationStatus lists all migrations and whether they are applied.
+// MigrationStatus lists all migrations and whether they are applied. It
+// does not wait for a running migration: it reads goose_db_version without
+// the migration lock and sees the migrations committed so far.
 func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) {
 	var out []MigrationStatus
-	err := s.withMigrations(func(p *goose.Provider) error {
+	err := s.withMigrations(false, func(p *goose.Provider) error {
 		statuses, err := p.Status(ctx)
 		if err != nil {
 			return err
@@ -127,14 +132,29 @@ func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) 
 	return out, err
 }
 
-func (s *Store) withMigrations(fn func(*goose.Provider) error) error {
+// withMigrations runs fn with a goose provider for the embedded migrations.
+// With locked, the provider takes goose's session lock (a single bigint
+// advisory lock, lock.DefaultLockID) for each Up or Down, so that two
+// migrations at the same time never apply the same version: the second
+// retries every second for up to 5 minutes. Status reads go without it,
+// because goose's Status takes the lock too and would wait behind a
+// running migration.
+func (s *Store) withMigrations(locked bool, fn func(*goose.Provider) error) error {
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		return err
 	}
+	var opts []goose.ProviderOption
+	if locked {
+		locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 300))
+		if err != nil {
+			return err
+		}
+		opts = append(opts, goose.WithSessionLocker(locker))
+	}
 	sqlDB := stdlib.OpenDBFromPool(s.pool)
 	defer func(d *sql.DB) { _ = d.Close() }(sqlDB)
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub)
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub, opts...)
 	if err != nil {
 		return err
 	}

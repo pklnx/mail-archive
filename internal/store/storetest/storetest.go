@@ -30,6 +30,26 @@ func New(t *testing.T) *store.Store {
 // need to set up state the store API cannot create.
 func NewWithURL(t *testing.T) (*store.Store, string) {
 	t.Helper()
+	dbURL := NewUnmigrated(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Registered after the drop, so it runs before it.
+	t.Cleanup(st.Close)
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return st, dbURL
+}
+
+// NewUnmigrated creates a fresh, empty database without the schema and
+// returns its URL. It is dropped when the test ends, after every cleanup
+// registered later (stores opened on it close first). The test is skipped
+// if TEST_DATABASE_URL is not set.
+func NewUnmigrated(t *testing.T) string {
+	t.Helper()
 	base := os.Getenv(EnvURL)
 	if base == "" {
 		t.Skip(EnvURL + " not set; skipping database test")
@@ -47,25 +67,17 @@ func NewWithURL(t *testing.T) (*store.Store, string) {
 		_ = admin.Close(ctx)
 		t.Fatalf("create database: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(ctx, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
+		_ = admin.Close(ctx)
+	})
 
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
 	}
 	u.Path = "/" + name
-	st, err := store.Open(ctx, u.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		st.Close()
-		_, _ = admin.Exec(ctx, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
-		_ = admin.Close(ctx)
-	})
-	if _, err := st.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return st, u.String()
+	return u.String()
 }
 
 // SimulateAlpineDatabase makes the test database at dbURL look like one
@@ -117,6 +129,20 @@ func WithMaxConns(t *testing.T, dbURL string, n int) string {
 	}
 	q := u.Query()
 	q.Set("pool_max_conns", strconv.Itoa(n))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// WithApplicationName returns dbURL with the connections' application_name
+// set to name, so that a test can find them in pg_stat_activity.
+func WithApplicationName(t *testing.T, dbURL, name string) string {
+	t.Helper()
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("application_name", name)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
