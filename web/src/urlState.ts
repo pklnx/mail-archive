@@ -1,7 +1,8 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-// The UI state lives in the URL query (?q=&account=&folder=&group=&gone=&m=&view=), so
-// the back button, reloads and bookmarks work without a router library.
+// The UI state lives in the URL query (?q=&account=&folder=&group=&gone=&m=&view=,
+// and add=&edit=&import= for the pages under Accounts), so the back button,
+// reloads and bookmarks work without a router library.
 
 export interface ViewState {
   q: string;
@@ -15,12 +16,23 @@ export interface ViewState {
   m: string;
   /** "accounts" shows account management instead of the mail columns. */
   view: string;
+  /** With view=accounts: "1" opens the Add account page. */
+  add: string;
+  /** With view=accounts: the name of the account whose Edit page is open. */
+  edit: string;
+  /** With view=accounts: the name of the smtp account whose Import from IMAP page is open. */
+  import: string;
 }
 
-const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view"];
+const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "add", "edit", "import"];
+
+/** The keys of the pages under Accounts. Other views drop them, so returning to Accounts shows the list. */
+const accountPages: readonly (keyof ViewState)[] = ["add", "edit", "import"];
 
 export function parseState(search: string): ViewState {
   const p = new URLSearchParams(search);
+  const view = p.get("view") ?? "";
+  const accounts = view === "accounts";
   return {
     q: p.get("q") ?? "",
     account: p.get("account") ?? "",
@@ -28,13 +40,19 @@ export function parseState(search: string): ViewState {
     group: p.get("group") === "1" ? "1" : "",
     gone: p.get("gone") === "1" ? "1" : "",
     m: p.get("m") ?? "",
-    view: p.get("view") ?? "",
+    view,
+    add: accounts && p.get("add") === "1" ? "1" : "",
+    edit: accounts ? (p.get("edit") ?? "") : "",
+    import: accounts ? (p.get("import") ?? "") : "",
   };
 }
 
 export function formatState(s: ViewState): string {
   const p = new URLSearchParams();
-  for (const k of keys) if (s[k]) p.set(k, s[k]);
+  for (const k of keys) {
+    if (s.view !== "accounts" && accountPages.includes(k)) continue;
+    if (s[k]) p.set(k, s[k]);
+  }
   const qs = p.toString();
   return qs ? `?${qs}` : "";
 }

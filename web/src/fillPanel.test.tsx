@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse, Fill } from "./api";
 import { AccountsPage } from "./AccountsPage";
@@ -34,24 +34,39 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // The pages under Accounts live in the URL.
+  window.history.replaceState(null, "", "/");
 });
 
 function page(accounts: Account[]) {
   const reload = vi.fn();
-  render(<AccountsPage accounts={{ data: data(accounts), error: "", reload }} admin={false} close={() => {}} renamed={() => {}} showGone={() => {}} />);
+  window.history.replaceState(null, "", "/?view=accounts");
+  render(<AccountsPage accounts={{ data: data(accounts), error: "", reload }} admin={false} renamed={() => {}} showGone={() => {}} />);
   return reload;
+}
+
+/** Confirms in the danger Modal that the button opened. */
+function confirmInDialog(name: string) {
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name }));
 }
 
 describe("the fill on the smtp card", () => {
   it("shows a running fill and cancels it", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const reload = page([smtpAccount(fill())]);
     expect(screen.getByText(t.fillRunning(15, 12, 1, 2))).toBeTruthy();
     expect(screen.getByText(t.fillSource("alice@example.com", "imap.example.com", "JOURNAL"))).toBeTruthy();
     expect(screen.getByText(/^Sent/)).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: t.fillProgress })).toBeTruthy();
     expect((screen.getByRole("button", { name: t.importFromIMAP }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: t.remove }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: t.cancelFill }));
+    // It asks first; going back sends nothing.
+    expect(within(screen.getByRole("dialog")).getByText(t.cancelFillText)).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.fillBack }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(requests).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: t.cancelFill }));
+    confirmInDialog(t.cancelFill);
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(requests).toEqual([{ method: "POST", url: "/api/accounts/journal/fills/3/cancel", body: undefined }]);
   });
@@ -135,7 +150,6 @@ describe("recurring fills on the smtp card", () => {
     });
 
   it("shows every fill, stops a recurring one and changes its interval", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const once = fill({ status: "ok", finishedAt: "2026-10-12T09:00:00Z", username: "bob@example.com" });
     const reload = page([smtpAccount(once, { fills: [once, recurring({ unconfirmedFolders: ["Deleted"] })] })]);
     expect(screen.getByText(t.fillSource("bob@example.com", "imap.example.com", "JOURNAL"))).toBeTruthy();
@@ -148,6 +162,9 @@ describe("recurring fills on the smtp card", () => {
     await waitFor(() => expect(requests).toHaveLength(1));
     expect(requests[0]).toEqual({ method: "PATCH", url: "/api/accounts/journal/fills/5", body: { interval: "12h0m0s" } });
     fireEvent.click(screen.getByRole("button", { name: t.stopFill }));
+    expect(within(screen.getByRole("dialog")).getByText(t.stopFillText)).toBeTruthy();
+    expect(requests).toHaveLength(1);
+    confirmInDialog(t.stopFill);
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[1]).toEqual({ method: "POST", url: "/api/accounts/journal/fills/5/cancel", body: undefined });
     expect(reload).toHaveBeenCalled();

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse } from "./api";
 import { AccountsPage, addressList } from "./AccountsPage";
 import { t } from "./i18n";
+import { findAlert } from "./test/alerts";
 
 function smtpAccount(more: Partial<Account> = {}): Account {
   return {
@@ -33,11 +34,14 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // The pages under Accounts live in the URL.
+  window.history.replaceState(null, "", "/");
 });
 
 function page(admin: boolean, d = data()) {
   const reload = vi.fn();
-  render(<AccountsPage accounts={{ data: d, error: "", reload }} admin={admin} close={() => {}} renamed={() => {}} showGone={() => {}} />);
+  window.history.replaceState(null, "", "/?view=accounts");
+  render(<AccountsPage accounts={{ data: d, error: "", reload }} admin={admin} renamed={() => {}} showGone={() => {}} />);
   return reload;
 }
 
@@ -74,7 +78,7 @@ describe("adding an smtp account", () => {
     fireEvent.change(screen.getByLabelText(t.fieldName), { target: { value: "journal" } });
     fireEvent.change(screen.getByLabelText(`${t.fieldAddresses} 1`), { target: { value: "x@archive.local" } });
     fireEvent.click(screen.getByRole("button", { name: t.save }));
-    expect((await screen.findByRole("alert")).textContent).toContain("x@archive.local");
+    expect((await findAlert()).textContent).toContain("x@archive.local");
   });
 });
 

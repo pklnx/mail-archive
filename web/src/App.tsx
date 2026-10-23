@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, ty
 import { Header, HeaderGlobalBar, HeaderMenuButton, HeaderName } from "@carbon/react";
 import { AccountsPage } from "./AccountsPage";
 import { isPlainClick } from "./clicks";
+import { dialogOpen } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
 import { UsersPage } from "./UsersPage";
@@ -124,12 +125,13 @@ export function App({ user, logout }: Props) {
   }, [menuOpen]);
   const hide = menuOpen || undefined;
 
-  // Keyboard shortcuts (? lists them). Not while typing or in a dialog.
+  // Keyboard shortcuts (? lists them). Not while typing or in a dialog
+  // (the sheets, or a Carbon Modal).
   const search = useRef<HTMLInputElement>(null);
   const chord = useRef(0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || dialogOpen()) return;
       if (e.key === "Escape" && menuOpen) {
         setMenuOpen(false);
         return;
@@ -215,8 +217,10 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
-      {/* Not converted to Carbon yet (#168 parts 3 to 6). */}
-      <div className="legacy flex min-h-0 flex-1 flex-col text-ink">
+      {/* The views not converted to Carbon yet (#168 parts 4 to 6) carry
+          .legacy each, for the reset in index.css; the converted Accounts
+          page does not, so the reset never reaches its Carbon markup. */}
+      <div className="flex min-h-0 flex-1 flex-col">
       <div
         className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 md:grid-cols-[minmax(18rem,26rem)_1fr] lg:grid-cols-[var(--sidebar-w)_minmax(18rem,26rem)_1fr]"
         // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
@@ -227,7 +231,7 @@ export function App({ user, logout }: Props) {
           ref={aside}
           id={asideId}
           // Below the fixed header, which keeps its menu button usable to close the drawer.
-          className={`fixed top-[calc(3rem+env(safe-area-inset-top))] bottom-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
+          className={`legacy text-ink fixed top-[calc(3rem+env(safe-area-inset-top))] bottom-0 left-0 z-20 w-64 border-r border-line bg-surface-sunken pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] shadow-xl transition-[translate,visibility] duration-200 ease-out motion-reduce:transition-none ${
             menuOpen ? "visible translate-x-0" : "invisible -translate-x-full"
           } lg:visible lg:relative lg:top-0 lg:w-auto lg:min-w-0 lg:translate-x-0 lg:shadow-none lg:transition-none`}
         >
@@ -257,19 +261,19 @@ export function App({ user, logout }: Props) {
         />
 
         {state.view === "profile" ? (
-          <main inert={hide} className="min-h-0 md:col-span-2">
+          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
             <ProfilePage name={user.name} close={() => update({ view: "" })} />
           </main>
         ) : state.view === "users" && user.admin ? (
-          <main inert={hide} className="min-h-0 md:col-span-2">
+          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
             <UsersPage close={() => update({ view: "" })} />
           </main>
         ) : state.view === "retention" && user.admin ? (
-          <main inert={hide} className="min-h-0 md:col-span-2">
+          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
             <RetentionPage close={() => update({ view: "" })} />
           </main>
         ) : state.view === "log" ? (
-          <main inert={hide} className="min-h-0 md:col-span-2">
+          <main inert={hide} className="legacy text-ink min-h-0 md:col-span-2">
             <LogPage admin={user.admin} close={() => update({ view: "" })} open={(m) => update({ view: "", m })} />
           </main>
         ) : state.view === "accounts" ? (
@@ -277,7 +281,6 @@ export function App({ user, logout }: Props) {
             <AccountsPage
               admin={user.admin}
               accounts={accounts}
-              close={() => update({ view: "" })}
               renamed={(from, to) => {
                 collapsed.rename(from, to);
                 if (state.account === from) update({ account: to }, { replace: true });
@@ -287,7 +290,7 @@ export function App({ user, logout }: Props) {
           </main>
         ) : (
           <>
-          <section inert={hide} className={`min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
+          <section inert={hide} className={`legacy text-ink min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
             {/* Phones: where the user is, the search below at full width. Menu
                 and theme are in the header. */}
             <div className="flex min-h-12 shrink-0 flex-col justify-center border-b border-line px-3 py-1 md:hidden">
@@ -342,7 +345,7 @@ export function App({ user, logout }: Props) {
             </div>
           </section>
 
-          <main inert={hide} className={`min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
+          <main inert={hide} className={`legacy text-ink min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
             {reading ? (
               <>
                 {/* Back on phones, previous and next everywhere (when the message is in the list). */}
@@ -395,7 +398,7 @@ export function App({ user, logout }: Props) {
 
       {/* Phones: the main places within thumb reach; hidden while reading. */}
       {!(reading && state.view === "") && (
-        <nav inert={hide} aria-label={t.mainNavigation} className="grid h-14 shrink-0 grid-cols-4 border-t border-line bg-bg md:hidden">
+        <nav inert={hide} aria-label={t.mainNavigation} className="legacy text-ink grid h-14 shrink-0 grid-cols-4 border-t border-line bg-bg md:hidden">
           <NavButton icon={<InboxIcon />} label={t.navMail} on={state.view === ""} onClick={() => show("")} />
           <NavButton icon={<FolderIcon />} label={t.navFolders} on={menuOpen} onClick={() => setMenuOpen(true)} />
           <NavButton icon={<ServerIcon />} label={t.navAccounts} on={state.view === "accounts"} onClick={() => show("accounts")} />
@@ -403,6 +406,7 @@ export function App({ user, logout }: Props) {
         </nav>
       )}
 
+      <div className="legacy text-ink contents">
       <Sheet open={sheet === "filters"} onClose={closeSheet} title={t.filters}>
         <SearchFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
         <button type="button" className={`${primary} self-end`} onClick={closeSheet}>
@@ -458,6 +462,7 @@ export function App({ user, logout }: Props) {
           ))}
         </dl>
       </Sheet>
+      </div>
       </div>
       </div>
     </div>

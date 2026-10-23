@@ -99,23 +99,11 @@ export const test = base.extend<{ guards: Guards }>({
 });
 
 /**
- * The card of an account on the Accounts page: the block with the account's
- * (run-unique) name and its button (Edit for an active account, "Delete
- * completely…" for a removed one, Save while editing). A block with two
- * such buttons or two message counts holds several cards and is never the
- * one meant, so the locator matches the card itself or, while the list
- * re-renders, nothing (and the assertions wait). Strict mode catches any
- * other ambiguity. Cards have no role yet; #171 can give them one.
+ * The tile of an account on the Accounts page: a region named by its
+ * heading, the account's name (active and removed accounts alike).
  */
-export function accountCard(page: Page, name: string, button = "Edit"): Locator {
-  const action = page.getByRole("button", { name: button, exact: true });
-  return page
-    .getByRole("main")
-    .locator("div")
-    .filter({ has: page.getByText(name, { exact: true }) })
-    .filter({ has: action })
-    .filter({ hasNot: action.nth(1) })
-    .filter({ hasNot: page.getByText(/^[\d,.]+ messages?$/).nth(1) });
+export function accountCard(page: Page, name: string): Locator {
+  return page.getByRole("main").getByRole("region", { name, exact: true });
 }
 
 /** Accepts the next window.confirm or window.prompt, optionally with text. */
