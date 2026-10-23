@@ -1,5 +1,5 @@
-/* Page layout (layer app, above Carbon and Tailwind's utilities). Converted
-   views use Carbon components and these classes, no Tailwind utilities. */
+/* Page layout (layer app, above Carbon). The views use Carbon components
+   and these classes; there is no other CSS. */
 
 html,
 body,
@@ -11,20 +11,6 @@ body,
    index.html); the app keeps its content clear of them. 0 elsewhere. */
 #root {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-}
-
-/* Safari ignores padding and height on native selects (22px next to 34px
-   fields), so the unconverted selects drop the native look and draw their
-   own arrow; the field classes then size them like text inputs. Above the
-   utilities, so the room for the arrow wins over px-*. Carbon's Select keeps
-   its own arrow. */
-select:not([multiple], [size], .cds--select-input) {
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  background-position: right 0.5rem center;
-  background-repeat: no-repeat;
-  background-size: 1rem;
-  padding-right: 2rem;
 }
 
 /* Below 16px iOS Safari zooms into the page when a field gets focus. For
@@ -124,8 +110,8 @@ select:not([multiple], [size], .cds--select-input) {
 .app-view > * {
   min-block-size: 0;
 }
-/* The mail view: list, then the reading pane from 48rem (the unconverted
-   list's md), and the folder column first from lg. */
+/* The mail view: list, then the reading pane from 48rem, and the folder
+   column first from lg. */
 @media (min-width: 48rem) {
   .mail-view {
     grid-template-columns: minmax(18rem, 26rem) minmax(0, 1fr);
@@ -968,7 +954,8 @@ select:not([multiple], [size], .cds--select-input) {
   min-block-size: 0;
   inline-size: 100%;
   border: 0;
-  background-color: var(--color-paper, #ffffff);
+  /* HTML mail stays on white in both themes: it brings its own colors. */
+  background-color: #ffffff;
 }
 .cds--g100 .message__html {
   padding: 0.75rem;
@@ -1232,10 +1219,8 @@ select:not([multiple], [size], .cds--select-input) {
   --app-text-warning: #f1c21b;
 }
 
-/* Text helpers for the converted pages; colors are Carbon's tokens. The
-   app- prefix keeps them apart from Tailwind's utilities (text-warning,
-   break-words …), which the unconverted views still use: this layer is
-   above Tailwind's. */
+/* Text helpers; colors are Carbon's tokens. The app- prefix marks them as
+   the app's own, next to Carbon's cds-- classes. */
 .app-text-secondary {
   color: var(--cds-text-secondary);
 }
@@ -1822,4 +1807,66 @@ select:not([multiple], [size], .cds--select-input) {
   font-size: 0.75rem;
   line-height: 1.5;
   word-break: break-all;
+}
+
+/* Profile. */
+.profile-panel {
+  padding-block: 1.5rem 2rem;
+}
+.profile-panel .page__section + .page__section {
+  margin-block-start: 1.5rem;
+}
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-inline-size: 40rem;
+}
+.profile-form--divided {
+  padding-block-start: 1.5rem;
+  border-block-start: 1px solid var(--cds-border-subtle-01);
+}
+.profile-form .profile-form {
+  max-inline-size: none;
+}
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.profile-table {
+  max-inline-size: 52rem;
+}
+.profile-table__name {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.profile-table__hint {
+  display: block;
+}
+.profile-table__row--off td {
+  color: var(--cds-text-secondary);
+}
+.profile-table .profile-table__action {
+  text-align: end;
+}
+/* The QR code keeps a white quiet zone in both themes, so every
+   authenticator app can read it. */
+.two-factor__qr {
+  display: block;
+  inline-size: 14rem;
+  block-size: 14rem;
+  padding: 0.5rem;
+  background: #ffffff;
+}
+.two-factor__key {
+  max-inline-size: 100%;
+}
+/* The recovery codes leave only with "I have saved the codes". */
+.recovery-modal .cds--modal-close-button {
+  display: none;
+}
+.recovery-modal__codes {
+  max-inline-size: 100%;
 }

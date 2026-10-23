@@ -88,7 +88,7 @@ needs a fix by hand. `./ma migrate` then prints a warning with the command:
 
 ## Add your first account
 
-In the web UI, click **Manage accounts** at the bottom of the sidebar, then
+In the web UI, click **Accounts** in the navigation on the left, then
 **Add account**. Enter the IMAP server, user name and password; the login is
 checked before the account is saved, and the first sync starts right away.
 

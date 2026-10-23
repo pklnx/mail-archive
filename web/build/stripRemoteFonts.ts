@@ -2,7 +2,7 @@
 // the fonts from IBM's CDN (1.www.s81c.com). The app bundles its own Plex
 // files (src/fonts.css) and its CSP allows no other host, so these rules go.
 //
-// @tailwindcss/vite inlines CSS @imports itself, so a Vite transform hook
+// Vite inlines CSS @imports itself, so a Vite transform hook
 // never sees Carbon's file. Instead, this plugin writes a stripped copy to
 // src/vendor/carbon.css (not committed) when Vite starts, for `pnpm dev`,
 // `pnpm build` and Vitest alike; index.css imports that copy.

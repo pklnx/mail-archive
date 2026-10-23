@@ -33,7 +33,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
 | `internal/imaptest` | In-memory IMAP server for tests. |
-| `web/` | Web UI source (React, TypeScript, Vite, Tailwind CSS). |
+| `web/` | Web UI source (React, TypeScript, Vite, Carbon Design System). |
 | `docs/` | This documentation (VitePress). |
 | `tools/demo` | Demo server with made-up mail, used for screenshots. |
 | `tools/imap-testserver` | IMAP server for the Compose smoke test. |

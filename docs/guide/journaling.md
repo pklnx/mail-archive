@@ -47,7 +47,7 @@ message.
    `SMTP_PORT` change that. See [Configuration](../reference/configuration#smtp).
 
 2. Create the account and the address it receives for. In the web UI, as
-   an admin: **Manage accounts → Add account → SMTP journaling**, with a name
+   an admin: **Accounts → Add account → SMTP journaling**, with a name
    and the address. On the command line:
 
    ```sh
@@ -223,7 +223,8 @@ already holds comes into the same account with a one-time **fill** from IMAP.
 A fill can also [keep importing](#keep-importing-recurring-fill) what shows
 up in the mailbox later.
 In the web UI, the smtp account's card has **Import existing mail from IMAP**
-(also offered right after creating the account). The form takes the IMAP
+(also offered right after creating the account), which opens the import
+form as a page of its own. The form takes the IMAP
 server and login, checks the login and lists the folders: trash and spam
 folders start unticked. The cut-off is optional. The form shows the first
 message the account received over SMTP, as a check that journaling works.
@@ -248,16 +249,16 @@ writes into it too, whatever the IMAP folder: a message filed in `INBOX` and
 in `Clients/Miller` is stored once, and the archive's folders do not follow
 the mailbox's. What arrived over SMTP has an envelope; imported messages have
 none, so BCC recipients are unknown for them. The message view says so in an
-**Origin** row, with the mailbox the message was imported from, such as
+**Origin** section, with the mailbox the message was imported from, such as
 "Imported from IMAP: alice@example.com".
 
-![A message the fill copied: found in the journal's JOURNAL folder and in the work account; the origin row names the mailbox it was imported from](/screenshots/fill-origin.png)
+![A message the fill copied: found in the journal's JOURNAL folder and in the work account; the origin section names the mailbox it was imported from](/screenshots/fill-origin.png)
 
 Fills started before this layout wrote into folders of their own,
 `PREFIX/<IMAP folder>` (such as `alice@example.com/INBOX`). Those folders
 stay, and such a fill, resumed, finishes there. `--prefix` (`folderPrefix` in
 the API) is no longer accepted. An old fill with the prefix `JOURNAL` has
-folders such as `JOURNAL/INBOX`, which the sidebar shows below the journal
+folders such as `JOURNAL/INBOX`, which the folder column shows below the journal
 folder; that is only how they are displayed.
 
 **Which messages.** The journal copy and the mailbox copy of a message differ
@@ -283,7 +284,7 @@ earlier one (`2026-06-01` for midnight UTC, or RFC 3339 with an offset).
   `--confirm-folders`.
 
 **Several mailboxes** journaled into one account get one fill each, one after
-another, all into `JOURNAL`; the origin row tells which mailbox a message
+another, all into `JOURNAL`; the origin section tells which mailbox a message
 came from.
 
 **Interrupted or failed.** Ctrl-C stops the fill; `./ma account fill journal
@@ -298,7 +299,7 @@ retention.
 time and apart from the scheduled syncs. The card shows its progress per
 folder with **Cancel import**; after a failed, partly failed or cancelled fill
 it shows the error and **Resume import**, which asks for the password again.
-The sidebar marks the account as importing meanwhile. A fill the web server
+The folder column marks the account as importing meanwhile. A fill the web server
 was running when it stopped keeps its encrypted password and continues at the
 next start. So does a fill whose command-line process died without Ctrl-C:
 the web server picks it up within a minute.
@@ -307,7 +308,7 @@ the web server picks it up within a minute.
 mailbox, such as a [piler](./importing#piler-into-a-journaled-mailbox)
 export, goes into the same account with `import --journal`, with the rules of
 a fill: what the account received over SMTP is left out by its Message-ID,
-and the origin row says "Imported from files: LABEL". See
+and the origin section says "Imported from files: LABEL". See
 [Into an smtp account](./importing#into-an-smtp-account).
 
 ```sh

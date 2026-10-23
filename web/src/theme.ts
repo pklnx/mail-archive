@@ -29,8 +29,6 @@ export const THEME_EVENT = "mail-archive:theme";
 
 export function applyTheme(theme: Theme) {
   const root = document.documentElement;
-  // The dark class drives the unconverted (Tailwind) markup until #168 part 6.
-  root.classList.toggle("dark", theme === "dark");
   root.classList.toggle(carbonTheme.light, theme === "light");
   root.classList.toggle(carbonTheme.dark, theme === "dark");
   root.style.colorScheme = theme;

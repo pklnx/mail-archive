@@ -25,7 +25,9 @@ IMAP** on the card; see [Journaling](./journaling#bring-in-the-mail-from-before-
 
 ## Adding an account
 
-**Web UI:** Manage accounts → Add account. Fill in:
+**Web UI:** **Accounts** in the navigation → **Add account**. The form is a
+page of its own (**Accounts** at its top leads back; so do **Cancel** and
+the browser's Back). Fill in:
 
 | Field | Notes |
 |---|---|
@@ -89,7 +91,8 @@ archived stays in the archive even if you deselect its folder later.
 
 To change the selection later:
 
-- **Web UI:** Manage accounts → Edit → Choose folders. The list comes live
+- **Web UI:** Accounts → **Edit** on the account → **Choose folders** under
+  *Folders* on the edit page. The list comes live
   from the server; checked folders are archived. Roles reported by the server
   (Trash, Spam, Sent, …) are shown next to the names.
 - **Command line:** `./ma account folders NAME` shows which folders will be
@@ -104,16 +107,18 @@ deselect the folder later.
 
 ## Changing an account
 
-In the web UI, **Edit** changes the name, server, port, security, user name
+In the web UI, **Edit** on the account's card opens its edit page, where
+**Save** under *Account* changes the name, server, port, security, user name
 and password. Leave the password empty to keep the current one. Any change to the
 connection is checked with a real login before it is saved. On the command
 line, use `./ma account set-password NAME`.
 
 ### Schedule
 
-Under **Edit**, **Schedule** sets how often the web server syncs the
+On the edit page, **Schedule** sets how often the web server syncs the
 account: the server's default, every 15 minutes to every day, or **Not on
-the schedule**. On the command line:
+the schedule**; **Save schedule** stores it. Each section of the page is
+saved with its own button. On the command line:
 
 ```sh
 ./ma account set-schedule work --sync-interval 30m
@@ -145,8 +150,9 @@ web server's schedule away from an account, use **Not on the schedule**
 instead; see the [comparison](./syncing#per-account).
 
 **Remove** keeps the archived mail. The mail stays searchable and still shows
-the account and folder it came from; in the sidebar the account is marked
-*removed*. The stored password is deleted and the account is never synced
+the account and folder it came from; in the folder column the account is
+marked *removed*. On the account page, removed accounts are folded under
+*Removed accounts* at the end. The stored password is deleted and the account is never synced
 again. This cannot be undone, and the name stays taken: a new account needs a
 different name, or the removed account is deleted completely (below). An
 account without any archived mail is deleted completely right away.
@@ -170,15 +176,16 @@ else:
 ```
 
 In the web UI, an admin finds **Delete completely…** on each of their own
-cards under *Removed accounts* (**Manage accounts**). It opens the same
-preview in the card; the button **Delete completely** is enabled only once
-the number of messages to delete is typed. When something is in the way,
-the card names the rules and holds instead and offers no button: remove the
-rules and release the holds on the **Retention** page first. After the
-confirmation the web server deletes in the background; the card shows
+cards under *Removed accounts* on the **Accounts** page (a click on the
+heading unfolds them). It opens the same preview in a dialog; its button
+**Delete completely** is enabled only once the number of messages to delete
+is typed, exactly. When something is in the way, the dialog names the rules
+and holds instead and offers no button: remove the rules and release the
+holds on the **Retention** page first. After the confirmation the web server
+deletes in the background; the card shows
 *Being deleted completely* with the messages deleted so far and disappears
 when it is done. A purge confirmed elsewhere (another browser tab, the
-command line) shows the same way, without the form. Other users' removed accounts are deleted from the command line with
+command line) shows the same way. Other users' removed accounts are deleted from the command line with
 `./ma account purge NAME --user USER`.
 
 ![Deleting the removed account old-provider completely: the preview and the field for the number of messages](/screenshots/account-purge.png)
