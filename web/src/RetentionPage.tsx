@@ -740,6 +740,8 @@ export function RunReview({
   const [busy, setBusy] = useState(false);
   // After an action whose outcome could not be loaded: nothing more is sent.
   const [unknown, setUnknown] = useState(false);
+  // The run's state after an action that did not reach it, when it changed elsewhere.
+  const [nowState, setNowState] = useState<string | null>(null);
   const field = useRef<HTMLInputElement>(null);
   const fieldId = useId();
 
@@ -778,6 +780,7 @@ export function RunReview({
     if (busy || unknown || !run) return;
     setBusy(true);
     setError("");
+    setNowState(null);
     let failed = "";
     try {
       await action();
@@ -796,9 +799,14 @@ export function RunReview({
       setError(t.runStateUnknown);
       return;
     }
-    const elsewhere = now.state === "proposed" ? "" : t.runNowState(t.runState(now.state));
-    setError([failed, elsewhere].filter(Boolean).join(" ") || t.runNowState(t.runState(now.state)));
+    setError(failed);
+    if (now.state !== "proposed" || !failed) setNowState(now.state);
   };
+  // The error, and the state the run has now if it changed elsewhere; that
+  // line follows the polled state (confirmed, later done).
+  // A run never goes back to proposed, so a polled "proposed" is older than nowState.
+  const nowLine = nowState ? t.runNowState(t.runState(state && state !== "proposed" ? state : nowState)) : "";
+  const shownError = [error, nowLine].filter(Boolean).join(" ");
   const confirm = () => {
     if (run && matches && !busy) void act("confirm", () => retentionApi.confirm(run.id, Number(count.trim())));
   };
@@ -903,9 +911,9 @@ export function RunReview({
             />
           </form>
         )}
-        {error && (
+        {shownError && (
           <p role="alert" className="app-text-error">
-            {error}
+            {shownError}
           </p>
         )}
       </div>

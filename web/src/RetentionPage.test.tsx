@@ -352,8 +352,31 @@ describe("RetentionPage", () => {
     expect(await within(dialog()).findByText(text)).toBeTruthy();
     // The review shows the run as it is now: deleting, nothing to confirm.
     expect(await within(dialog()).findByRole("heading", { name: `${t.runLine(3, 2, "2.0 KB")} · ${t.runState("confirmed")}` })).toBeTruthy();
+    // The reload of the review keeps the error.
+    expect(within(dialog()).getByText(text)).toBeTruthy();
     expect(within(dialog()).queryByRole("button", { name: t.runConfirm })).toBeNull();
     expect(changes()).toEqual([{ method: "POST", url: "/api/retention/runs/3/cancel", body: undefined }]);
+  });
+
+  it("lets the changed-state line follow the polled state", async () => {
+    answer = (u) => {
+      if (!u.endsWith("/cancel")) return undefined;
+      runs = runs.map((r) => (r.id === 3 ? { ...r, state: "confirmed" } : r));
+      return new Response(JSON.stringify({ error: "the run is no longer proposed" }), { status: 409, headers: { "Content-Type": "application/json" } });
+    };
+    const props = { id: 3, title: "", changed: async () => runs, close: () => {} };
+    const view = render(<RunReview {...props} state="proposed" />);
+    await within(dialog()).findByLabelText(t.runConfirmPrompt(2));
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.runCancel }));
+    const failed = t.failed("the run is no longer proposed");
+    expect(await within(dialog()).findByText(`${failed} ${t.runNowState(t.runState("confirmed"))}`)).toBeTruthy();
+    // As the page does: the list's state reaches the review, later done.
+    view.rerender(<RunReview {...props} state="confirmed" />);
+    runs = runs.map((r) => (r.id === 3 ? { ...r, state: "done" } : r));
+    view.rerender(<RunReview {...props} state="done" />);
+    expect(await within(dialog()).findByRole("heading", { name: `${t.runLine(3, 2, "2.0 KB")} · ${t.runState("done")}` })).toBeTruthy();
+    expect(within(dialog()).getByText(`${failed} ${t.runNowState(t.runState("done"))}`)).toBeTruthy();
+    expect(within(dialog()).queryByText(t.runNowState(t.runState("confirmed")), { exact: false })).toBeNull();
   });
 
   it("stays open and says so when the run was cancelled elsewhere before Delete", async () => {
