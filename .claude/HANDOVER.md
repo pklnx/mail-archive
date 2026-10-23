@@ -12,7 +12,6 @@ State of the work for the next session. Update before a session ends.
 - #214: port the web hardening and the migration lock from paperless-go.
 - #215: process hygiene (release section, labels, `second-review` marker, signature rule).
 - #211 and #213-#215 belong to a separate cross-repository coordinator session (a comparison report with paperless-go and design-system); their plan and review flow is described in the issues.
-- That session relabelled #207, #210, #203-#205 and #209 from `enhancement` to `feature`.
 
 ## State (2026-10-23 evening)
 - Release v26.10-10 is out (#200, message view scrolling).
