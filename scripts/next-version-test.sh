@@ -3,7 +3,8 @@
 # fixtures for the GitHub API responses. No network.
 #
 # Usage: scripts/next-version-test.sh
-#   NEXT_VERSION=path  test another copy of the script (for counter-proofs)
+#   NEXT_VERSION=path   test another copy of the script (for counter-proofs)
+#   RELEASE_NOTES=path  the same for scripts/release-notes.sh
 set -eu
 
 command -v jq > /dev/null || {
@@ -18,6 +19,8 @@ command -v git > /dev/null || {
 here=$(cd "$(dirname "$0")" && pwd)
 script=${NEXT_VERSION:-$here/next-version.sh}
 script=$(cd "$(dirname "$script")" && pwd)/$(basename "$script")
+notes_script=${RELEASE_NOTES:-$here/release-notes.sh}
+notes_script=$(cd "$(dirname "$notes_script")" && pwd)/$(basename "$notes_script")
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 tab=$(printf '\t')
@@ -32,15 +35,36 @@ fail() {
 	failed=$((failed + 1))
 }
 
-# ok NAME WANT INPUT ARGS...: the script prints WANT and exits 0.
+# ok NAME WANT INPUT ARGS...: the script prints WANT, nothing on stderr (no
+# warning) and exits 0.
 ok() {
 	name=$1 want=$2 input=$3
 	shift 3
 	if got=$(printf '%s' "$input" | sh "$script" "$@" 2> "$tmp/err"); then
-		if [ "$got" = "$want" ]; then
-			passed=$((passed + 1))
-		else
+		if [ "$got" != "$want" ]; then
 			fail "$name" "got '$got', want '$want'"
+		elif [ -s "$tmp/err" ]; then
+			fail "$name" "unexpected stderr: $(cat "$tmp/err")"
+		else
+			passed=$((passed + 1))
+		fi
+	else
+		fail "$name" "exit $?, want '$want': $(cat "$tmp/err")"
+	fi
+}
+
+# warns NAME WANT TEXT INPUT ARGS...: the script prints WANT, exits 0 and
+# writes a warning that contains TEXT on stderr.
+warns() {
+	name=$1 want=$2 text=$3 input=$4
+	shift 4
+	if got=$(printf '%s' "$input" | sh "$script" "$@" 2> "$tmp/err"); then
+		if [ "$got" != "$want" ]; then
+			fail "$name" "got '$got', want '$want'"
+		elif ! grep -q 'warning:' "$tmp/err" || ! grep -qF -- "$text" "$tmp/err"; then
+			fail "$name" "stderr '$(cat "$tmp/err")' lacks a warning with '$text'"
+		else
+			passed=$((passed + 1))
 		fi
 	else
 		fail "$name" "exit $?, want '$want': $(cat "$tmp/err")"
@@ -123,6 +147,17 @@ git tag v1.9.0
 git tag v1.10.0
 ok "last: numeric, not lexical" "1.10.0" "" last
 ok "base: highest semver tag" "v1.10.0" "" base
+
+# Only the first old tag: the case of a product with a single vYY.MM-N
+# release.
+repo1=$tmp/repo1
+git init -q "$repo1"
+cd "$repo1"
+git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false \
+	commit -q --allow-empty -m tags
+git tag v26.10-1
+ok "last: only v26.10-1" "" "" last
+ok "base: only v26.10-1" "v26.10-1" "" base
 
 cd "$tmp"
 
@@ -220,6 +255,7 @@ bad "first: empty stdin" "nothing merged" "" next ""
 bad "first: empty stdin with override 1.0.0" "nothing merged" "" next "" 1.0.0
 bad "first: commit without PR" "$sha" "$nopr$nl" next ""
 ok "first: commit without PR with override 1.0.0" 1.0.0 "$nopr$nl" next "" 1.0.0
+ok "first: override equal to 1.0.0" 1.0.0 "$bug$nl" next "" 1.0.0
 
 # Override.
 bad "override: equal" "not greater" "$bug$nl" next 1.2.3 1.2.3
@@ -228,8 +264,12 @@ bad "override: lower major" "not greater" "$bug$nl" next 1.2.3 0.9.9
 ok "override: numeric patch compare" 1.2.10 "$bug$nl" next 1.2.9 1.2.10
 ok "override: numeric minor compare" 1.10.0 "$bug$nl" next 1.9.0 1.10.0
 ok "override: numeric major compare" 10.0.0 "$bug$nl" next 9.0.0 10.0.0
-ok "override: below the proposal" 1.2.4 "$feature$nl" next 1.2.3 1.2.4
+warns "override: below the proposal warns" 1.2.4 "lower than the proposal 1.3.0" "$feature$nl" next 1.2.3 1.2.4
+warns "override: below a major proposal warns" 1.3.0 "lower than the proposal 2.0.0" "$breaking$nl" next 1.2.3 1.3.0
+warns "override: below the proposal, numeric" 1.9.1 "lower than the proposal 1.10.0" "$feature$nl" next 1.9.0 1.9.1
+ok "override: equal to the proposal" 1.3.0 "$feature$nl" next 1.2.3 1.3.0
 ok "override: above the proposal" 3.0.0 "$bug$nl" next 1.2.3 3.0.0
+ok "override: commit without PR, no proposal" 1.2.4 "$feature$nl$nopr$nl" next 1.2.3 1.2.4
 bad "override: with v" "not X.Y.Z" "$bug$nl" next 1.2.3 v1.2.4
 bad "override: two fields" "not X.Y.Z" "$bug$nl" next 1.2.3 1.2
 bad "override: suffix" "not X.Y.Z" "$bug$nl" next 1.2.3 1.2.4-rc1
@@ -286,6 +326,28 @@ if out=$(sh "$here/release-bundle.sh" 99.0.0 "$tmp/dist" 2>&1); then
 		"$(tar -xzOf "$tmp/dist/mail-archive.tar.gz" mail-archive/README.txt)"
 else
 	fail "release-bundle: accepts 99.0.0" "$out"
+fi
+
+# --- release-notes.sh -----------------------------------------------------
+
+if out=$(sh "$notes_script" 1.0.0 ghcr.io/pklnx/mail-archive "" 2>&1); then
+	contains "release-notes: first, image line" \
+		"\`ghcr.io/pklnx/mail-archive:1.0.0\` (linux/amd64, linux/arm64), also tagged \`1.0\`, \`1\` and \`latest\`." "$out"
+	contains "release-notes: first, updater paragraph" "\`26.10\` stays on \`26.10-11\`" "$out"
+	contains "release-notes: first, trusted proxies" "MAIL_ARCHIVE_TRUSTED_PROXIES" "$out"
+else
+	fail "release-notes: first release" "$out"
+fi
+if out=$(sh "$notes_script" 1.0.1 ghcr.io/pklnx/mail-archive 1.0.0 2>&1); then
+	lacks "release-notes: later, no updater paragraph" "26.10" "$out"
+	contains "release-notes: later, upgrade paragraph" "./ma migrate" "$out"
+else
+	fail "release-notes: later release" "$out"
+fi
+if out=$(sh "$notes_script" 1.0.0 ghcr.io/pklnx/mail-archive 2>&1); then
+	fail "release-notes: two arguments" "accepted: $out"
+else
+	contains "release-notes: two arguments" "usage" "$out"
 fi
 
 echo "next-version-test: $passed passed, $failed failed"

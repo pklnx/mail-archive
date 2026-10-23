@@ -89,4 +89,5 @@ Non-blocking findings from reviews that are not fixed in their PR. Read at sessi
 | CI (PR #210) | The `web-e2e` job took 11 minutes instead of about 2; check for Playwright retries hiding flakiness. | open |
 | Older (2026-10-23) | A phone swipe over the SideNav scrim can scroll the page behind while a message is open. | open |
 | Older (2026-10-23) | WebKit is not in CI (iPhone checks are manual). | open |
+| #232 plan ([plan](https://github.com/pklnx/mail-archive/issues/232#issuecomment-6372535237)) | `release.yml` pushes the floating image tags (`X.Y`, `X`, `latest`) before "Create the release"; a failure there leaves them on a build without a release (recovery in `docs/development/process.md`). Move them in a second job after the release (`needs: release`; `docker buildx imagetools create` from `X.Y.Z`; check that the digests are equal). Try it first on a patch release after 1.0.0; the same in paperless-go. | open |
 | Environment (2026-10-23) | The e2e suite needs `DEMO_DATABASE_URL`. The pnpm wrapper is needed because corepack points to a missing pnpm version (see HANDOVER, Environment). | note |
