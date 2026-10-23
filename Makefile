@@ -47,11 +47,11 @@ build:
 
 ## test: all tests, including PostgreSQL integration tests
 test:
-	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GO) test -race -count=1 ./...
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(GO) test -race -shuffle=on -count=1 ./...
 
 ## test-unit: tests that need no database
 test-unit:
-	$(GO) test -race ./...
+	$(GO) test -race -shuffle=on ./...
 
 lint:
 	golangci-lint run

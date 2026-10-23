@@ -49,7 +49,10 @@ Each issue (or part of a plan) gets its own branch and pull request. The
 description says `Closes #N` (and "Part K of #N" for a part), so merging closes
 the issue. Labels follow the [label table](./#pull-requests-and-labels). After
 an approving review and green required checks, the coordinator merges with
-squash; there is no auto-merge.
+squash; there is no auto-merge. The `audit` and `docs-audit` checks
+(`pnpm audit`) are not required: a red audit does not block a merge. The
+coordinator reads its log; a registry error needs nothing, a real advisory gets
+a Dependabot pull request or a follow-up issue.
 
 Every pull request with app code gets a session review. Risky pull requests
 (deletes, schema changes, rewriting user data) also get a second, independent

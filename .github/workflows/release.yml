@@ -35,6 +35,8 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # About 2 min so far; started by hand, so a timeout only costs a rerun.
+    timeout-minutes: 15
     permissions:
       contents: write # the tag and the release
       packages: write # the image on ghcr.io

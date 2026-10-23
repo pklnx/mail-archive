@@ -72,10 +72,11 @@ State of the work for the next session. Update before a session ends.
 
 ## Maintainer actions
 - Check release 26.10-11 on a real iPhone (message view, compact header, conversation overlay, link blocking).
+- Keep `audit` and `docs-audit` (`pnpm audit`, #216) off the required checks of the `main` ruleset. The required list stays test, lint, vulncheck, docker, compose, web, web-e2e and secret-scan.
 
 ## Manual checks for the maintainer
 - #186: `docker build`, confirming no postinstall or telemetry runs.
-- #181: first-run timing of `web-e2e` in CI, under 5 minutes (PR #210 took 11 minutes, see FOLLOWUPS).
+- #181: first-run timing of `web-e2e` in CI, under 5 minutes. The slow runs (8.9 to 14.5 minutes) come from the apt download of `playwright install --with-deps`, not from the tests; the timeout is 30 since #216, and a faster setup is open (see FOLLOWUPS).
 - #159: upgrade a real volume created by `postgres:18-alpine` (bundle <= 26.10-6): `./ma status` refuses, `./ma migrate` rebuilds and records the marker, then commands work.
 - #158/#160: look at the profile tabs and the sidebar in a browser (EN/DE, light/dark, 320 px and 1024 px width, touch drag, many accounts).
 - #115 (optional, documented in `docs/development/architecture.md`): a real power-loss test on a disposable VM, hard links and directory fsync on Docker Desktop file shares, and a start of the distroless image with the `./data:/data` bind mount.
@@ -86,3 +87,4 @@ State of the work for the next session. Update before a session ends.
 ## Environment
 - pnpm via corepack is broken in cloud sessions (corepack points to a missing pnpm version). Use `node /root/.cache/node/corepack/v1/pnpm/12.9.1/bin/pnpm.mjs`.
 - The e2e suite needs `DEMO_DATABASE_URL` (a Postgres the suite may write to).
+- Docker Hub can answer 500 or 429 on image pulls. Since #216 CI pulls through mirror.gcr.io with Docker Hub as the fallback (`scripts/ci-docker-mirror.sh`, `scripts/ci-pull-images.sh`, buildx `buildkitd-config-inline`); the PostgreSQL services of `test` and `web-e2e` have no fallback. A pull failure that still happens: rerun only per the flaky-test rule.
