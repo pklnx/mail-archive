@@ -281,7 +281,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	out := auditPageJSON{Entries: make([]auditEntryJSON, 0, min(len(recs), limit))}
+	out := auditPageJSON{Entries: make([]auditEntryJSON, 0, len(recs))}
 	if len(recs) > limit {
 		last := recs[limit-1]
 		out.NextCursor = encodeAuditCursor(last.At, last.ID)
