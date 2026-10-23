@@ -2,10 +2,11 @@
 // frame exactly as before #168 (the regression test below), remote images
 // stay blocked until asked for, and journal mail shows its envelope in an
 // accordion. The API is a stub; no network.
-// #200: on phones the header is compact (the rest behind Details), the
-// conversation is folded around the open message, and the HTML frame is
-// gated until the page or pane is scrolled to its end.
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+// #200: on phones the header is compact (the rest behind Details) and the
+// conversation is folded around the open message.
+// #203: the frame allows the same origin (never scripts), so the app can
+// size it to its content (frameFit.ts); there is no gate any more.
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageView } from "./MessageView";
 import type { ConversationEntry, Location, MessageDetail } from "./api";
@@ -72,8 +73,10 @@ async function show() {
   return screen.findByRole("article");
 }
 
-/** The sandbox exactly as before the move to Carbon: no scripts, no same origin, no forms, no top navigation. */
-const sandbox = "allow-popups allow-popups-to-escape-sandbox";
+/** The sandbox exactly: the same origin (#203, measuring) and popups (links); no scripts, no forms, no top navigation. */
+const sandbox = "allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+/** Never in the sandbox (regression): scripts would undo it together with the same origin. */
+const forbidden = ["allow-scripts", "allow-forms", "allow-top-navigation", "allow-top-navigation-by-user-activation", "allow-modals", "allow-downloads"];
 
 describe("the HTML frame (regression, #168 part 4b)", () => {
   it("keeps its sandbox, referrer policy and src, and blocks remote images until the button", async () => {
@@ -81,9 +84,7 @@ describe("the HTML frame (regression, #168 part 4b)", () => {
     const frame = within(article).getByTitle(t.messageContent) as HTMLIFrameElement;
     expect(frame.tagName).toBe("IFRAME");
     expect(frame.getAttribute("sandbox")).toBe(sandbox);
-    for (const token of ["allow-scripts", "allow-same-origin", "allow-forms", "allow-top-navigation", "allow-modals"]) {
-      expect(frame.getAttribute("sandbox")!.split(/\s+/), token).not.toContain(token);
-    }
+    for (const token of forbidden) expect(frame.getAttribute("sandbox")!.split(/\s+/), token).not.toContain(token);
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     // No remote images yet: the server's CSP for this URL allows only data: images.
     expect(frame.getAttribute("src")).toBe(`/api/messages/${id}/html`);
@@ -98,6 +99,7 @@ describe("the HTML frame (regression, #168 part 4b)", () => {
     expect(withImages).not.toBe(frame);
     expect(withImages.getAttribute("src")).toBe(`/api/messages/${id}/html?images=1`);
     expect(withImages.getAttribute("sandbox")).toBe(sandbox);
+    for (const token of forbidden) expect(withImages.getAttribute("sandbox")!.split(/\s+/), token).not.toContain(token);
     expect(withImages.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(within(article).queryByRole("button", { name: t.loadRemoteImages })).toBeNull();
   });
@@ -280,58 +282,17 @@ describe("the conversation fold (#200)", () => {
   });
 });
 
-describe("the frame gate (#200)", () => {
-  // The page is the scroller here (no ancestor scrolls on its own); jsdom has no layout, so its sizes are set.
-  const page = document.scrollingElement ?? document.documentElement;
-  let top = 0;
-  beforeEach(() => {
-    top = 0;
-    Object.defineProperty(page, "scrollHeight", { configurable: true, get: () => 2000 });
-    Object.defineProperty(page, "clientHeight", { configurable: true, get: () => 600 });
-    Object.defineProperty(page, "scrollTop", { configurable: true, get: () => top, set: (v: number) => (top = Math.min(v, 1400)) });
-  });
-  afterEach(() => {
-    for (const p of ["scrollHeight", "clientHeight", "scrollTop"]) delete (page as unknown as Record<string, unknown>)[p];
-  });
-  const frame = (article: HTMLElement) => within(article).getByTitle(t.messageContent) as HTMLIFrameElement;
-
-  it("takes no pointer events and shows the hint until the scroller is at its end", async () => {
+describe("no frame gate (#203)", () => {
+  it("has no hint and no pointer-events style: the frame is as tall as the mail", async () => {
     const article = await show();
-    expect(frame(article).style.pointerEvents).toBe("none");
-    expect(within(article).getByRole("button", { name: t.showFullMessage })).toBeTruthy();
-
-    act(() => {
-      top = 1399.5;
-      window.dispatchEvent(new Event("scroll"));
-    });
-    expect(frame(article).style.pointerEvents).toBe("");
-    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
-
-    // Back up: gated again.
-    act(() => {
-      top = 100;
-      window.dispatchEvent(new Event("scroll"));
-    });
-    expect(frame(article).style.pointerEvents).toBe("none");
+    const frame = within(article).getByTitle(t.messageContent) as HTMLIFrameElement;
+    expect(frame.getAttribute("style") ?? "").not.toContain("pointer-events");
+    expect(frame.parentElement!.getAttribute("style") ?? "").not.toContain("pointer-events");
+    expect(within(article).queryByRole("button", { name: /full message/i })).toBeNull();
+    expect(within(article).queryByText("Show full message")).toBeNull();
   });
 
-  it("scrolls to the end on a click on the hint or on the gated frame", async () => {
-    const article = await show();
-    fireEvent.click(within(article).getByRole("button", { name: t.showFullMessage }));
-    expect(top).toBe(1400);
-    act(() => void window.dispatchEvent(new Event("scroll")));
-    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
-
-    act(() => {
-      top = 0;
-      window.dispatchEvent(new Event("scroll"));
-    });
-    // A click on the frame lands on its box: the frame takes no pointer events.
-    fireEvent.click(frame(article).parentElement!);
-    expect(top).toBe(1400);
-  });
-
-  it("does not take the focus back to a revealed conversation entry when the gate flips (regression)", async () => {
+  it("does not take the focus back to a revealed conversation entry when the message re-renders (regression)", async () => {
     const n = (i: number) => String(i).repeat(64).slice(0, 64);
     conversation = [1, 2, 3, 4, 5, 6].map((i) => ({
       id: i === 4 ? id : n(i), subject: `Message ${i}`, from: "Sam Taylor <sam@example.org>",
@@ -343,26 +304,16 @@ describe("the frame gate (#200)", () => {
     const entry = document.activeElement;
     expect(entry?.textContent).toContain("Message 1");
 
-    // The user moves on: the hint scrolls to the end, the gate opens and the message re-renders.
-    const hint = within(article).getByRole("button", { name: t.showFullMessage });
-    hint.focus();
-    fireEvent.click(hint);
-    act(() => void window.dispatchEvent(new Event("scroll")));
-    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
+    // The user moves on: the message re-renders with a new frame, twice.
+    const images = within(article).getByRole("button", { name: t.loadRemoteImages });
+    images.focus();
+    fireEvent.click(images);
+    expect(within(article).getByTitle(t.messageContent).getAttribute("src")).toContain("images=1");
     expect(document.activeElement).not.toBe(entry);
-    expect(top).toBe(1400);
-
-    // And again on the way back up.
-    act(() => {
-      top = 0;
-      window.dispatchEvent(new Event("scroll"));
-    });
+    const text = within(article).getByRole("button", { name: t.showText });
+    text.focus();
+    fireEvent.click(text);
+    expect(within(article).queryByTitle(t.messageContent)).toBeNull();
     expect(document.activeElement).not.toBe(entry);
-  });
-
-  it("does not gate the plain-text body", async () => {
-    detail = message({ hasHtml: false });
-    const article = await show();
-    expect(within(article).queryByRole("button", { name: t.showFullMessage })).toBeNull();
   });
 });

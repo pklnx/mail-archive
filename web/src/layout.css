@@ -1028,12 +1028,14 @@ body,
 /* The HTML body in its sandboxed frame. HTML mail brings its own colors,
    so the frame keeps the white paper in both themes; in dark mode it sits
    as a sheet on the dark background instead of filling the pane.
-   The frame cannot be as tall as its content (no script and no same
-   origin in it), so it is as tall as the visible area (#200): the pane
-   below its bar from 48rem, the screen below the fixed header and the
-   reader bar (3rem each) on phones. Scrolled to its end, the frame fills
-   that area and the mail scrolls inside it like a page of its own. svh:
-   the frame does not change while the address bar collapses. */
+   The frame grows with the mail (frameFit.ts sets its height to the
+   content's, #203), so the message scrolls as one page. --message-visible
+   is only the fallback: before the first fit, for a document that cannot
+   be measured, and for mails taller than any height (100vh content) or
+   very long ones, which then scroll inside the frame. It is the visible
+   area: the pane below its bar from 48rem, the screen below the fixed
+   header and the reader bar (3rem each) on phones. svh: the fallback does
+   not change while the address bar collapses. */
 .message__html {
   --message-visible: calc(100svh - 6rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   --message-sheet: 0px;
@@ -1063,17 +1065,6 @@ body,
     --message-sheet: 1rem;
   }
 }
-/* "Show full message" while the frame is gated: at the bottom of the
-   visible area (sticky), over the frame; the margins take its place back,
-   so the frame still ends where the scroller does. */
-.message__full.cds--btn {
-  position: sticky;
-  z-index: 1;
-  align-self: center;
-  margin-block: -3.5rem 1rem;
-  inset-block-end: calc(1rem + env(safe-area-inset-bottom));
-}
-
 /* The plain-text body, set for reading. */
 .message__text {
   padding: 1rem;
