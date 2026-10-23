@@ -5,6 +5,9 @@
 # Usage: scripts/next-version-test.sh
 #   NEXT_VERSION=path   test another copy of the script (for counter-proofs)
 #   RELEASE_NOTES=path  the same for scripts/release-notes.sh
+#   RELEASE_BUNDLE=path the same for scripts/release-bundle.sh (the copy finds
+#                       docker-compose.yml, .env.example and ma in the parent
+#                       folder of its own folder)
 set -eu
 
 command -v jq > /dev/null || {
@@ -21,6 +24,8 @@ script=${NEXT_VERSION:-$here/next-version.sh}
 script=$(cd "$(dirname "$script")" && pwd)/$(basename "$script")
 notes_script=${RELEASE_NOTES:-$here/release-notes.sh}
 notes_script=$(cd "$(dirname "$notes_script")" && pwd)/$(basename "$notes_script")
+bundle_script=${RELEASE_BUNDLE:-$here/release-bundle.sh}
+bundle_script=$(cd "$(dirname "$bundle_script")" && pwd)/$(basename "$bundle_script")
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 tab=$(printf '\t')
@@ -314,13 +319,24 @@ contains "summary: header" "| PR | Title | Labels | Effect |" "$s"
 # --- release-bundle.sh ----------------------------------------------------
 
 for v in 26.10-11 1.0 v1.0.0 01.0.0; do
-	if out=$(sh "$here/release-bundle.sh" "$v" "$tmp/dist" 2>&1); then
+	if out=$(sh "$bundle_script" "$v" "$tmp/dist" 2>&1); then
 		fail "release-bundle: rejects $v" "accepted: $out"
 	else
 		contains "release-bundle: rejects $v" "not a release version" "$out"
 	fi
 done
-if out=$(sh "$here/release-bundle.sh" 99.0.0 "$tmp/dist" 2>&1); then
+# A newline in the version is a separate case: the list above splits on
+# whitespace. Exit 2 and the message, not just any failure: without the
+# script's `case`, sed fails with exit 1 on the newline.
+nl_version="1.0.0${nl}x"
+rc=0
+out=$(sh "$bundle_script" "$nl_version" "$tmp/dist" 2>&1) || rc=$?
+if [ "$rc" -eq 2 ]; then
+	contains "release-bundle: rejects a newline in the version" "not a release version" "$out"
+else
+	fail "release-bundle: rejects a newline in the version" "exit $rc, want 2: $out"
+fi
+if out=$(sh "$bundle_script" 99.0.0 "$tmp/dist" 2>&1); then
 	passed=$((passed + 1))
 	contains "release-bundle: README names the version" "mail-archive 99.0.0" \
 		"$(tar -xzOf "$tmp/dist/mail-archive.tar.gz" mail-archive/README.txt)"

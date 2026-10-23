@@ -86,6 +86,7 @@ only one of them.
 | `db-migration` | automatically | Schema change; makes at least a minor release (see Releases). |
 | `breaking` | by hand | Manual upgrade steps; makes a major release (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change; `feature` makes at least a minor release. |
+| `security` | by hand | Security hardening (never an undisclosed vulnerability). Kind label; does not change the version (a patch release unless other labels raise it). |
 
 Label changes do not notify anyone by themselves: after setting `plan` or
 `ready`, say so in the chat with the implementer (for example "plan #18" or
@@ -105,7 +106,7 @@ the labels of their issues:
 |---|---|---|
 | Any `breaking` | Major | `2.0.0` |
 | Else any `feature` or `db-migration` | Minor | `1.5.0` |
-| Else (bug fixes, docs, maintenance, dependencies, no label) | Patch | `1.4.3` |
+| Else (bug fixes, security hardening, docs, maintenance, dependencies, no label) | Patch | `1.4.3` |
 
 The first semver release is `1.0.0`, whatever the labels; its range starts at
 the last `vYY.MM-N` tag (`v26.10-11`). The old `vYY.MM-N` tags and images stay
@@ -114,8 +115,8 @@ last release and asks the GitHub API for each commit's pull request. A dry
 run shows the proposed version, a table of the pull requests with their
 labels and their effect, and the head of the release notes in the run
 summary; a pull request without a kind label (`breaking`, `feature`, `bug`,
-`chore`, `docs`, `dependencies`) is marked "no kind label", which is a
-warning, not a block. The run fails when:
+`chore`, `docs`, `dependencies`, `security`) is marked "no kind label", which
+is a warning, not a block. The run fails when:
 
 - nothing was merged since the last release, also with the `version` input;
 - a commit has no merged pull request (a direct push): check it, then set the
@@ -136,7 +137,7 @@ to `ghcr.io/pklnx/mail-archive` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`,
 creates the tag `vX.Y.Z` and a GitHub release with `mail-archive.tar.gz` (the
 Docker Compose bundle, `scripts/release-bundle.sh`) and `SHA256SUMS`. The notes
 start at the same tag as the range and are grouped by label (breaking changes,
-database migrations, features, fixes, documentation, dependencies,
+database migrations, security, features, fixes, documentation, dependencies,
 maintenance; see `.github/release.yml`). A pull request without a kind label
 lands under "Maintenance", so a risky pull request needs a kind label in
 addition to `second-review`.
@@ -179,9 +180,11 @@ The workflow writes an upgrade paragraph into every release's notes
 [Upgrades guide](../guide/operations#upgrades), and the generated notes list
 the `breaking` and `db-migration` pull requests first. Add manual upgrade notes
 only when a change needs more than these generic steps. The first semver
-release (no `vX.Y.Z` tag before it) also gets a paragraph for automatic image
-updaters: the tag `26.10` stays on `26.10-11`, and tools should switch to an
-exact version, `1.0` or `1`.
+release (no `vX.Y.Z` tag before it) also got a paragraph for automatic image
+updaters (the tag `26.10` stays on `26.10-11`); it was published with 1.0.0,
+and once a `vX.Y.Z` tag exists no release prints it again. The current advice
+for updaters is in [Versions](../guide/operations#versions): an exact version
+or `X.Y`, moved to the newest `X.Y` tag after reading that release's notes.
 
 `./ma --version` and `mail-archive --version` show the version. The release
 image shows `X.Y.Z` (for example `1.0.0`). A build from a clone shows

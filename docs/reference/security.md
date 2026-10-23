@@ -106,13 +106,35 @@ reach it. To use it from your home network or a VPN:
    below ([Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy)
    shows how to find it). Until then logging in works, but the cookie lacks
    `Secure` and the `__Host-` prefix and no HSTS is sent; the server logs a
-   warning once, naming the address the header came from. Over HTTPS only
-   the `__Host-` cookie logs in, never the plain one: a plain cookie can be
-   planted over plain HTTP or from another host name of the domain, and must
-   not log the browser into someone else's session. HSTS covers the host
-   name, all ports, for a year: do not serve the same name over plain HTTP
-   later (for LAN access, for example), because browsers that saw HSTS
-   refuse it until the year is over.
+   warning once, naming the address the header came from.
+
+   When a request counts as HTTPS, only the `__Host-` cookie logs in, never
+   the plain one: a plain cookie can be planted over plain HTTP or from
+   another host name of the domain, and must not log the browser into
+   someone else's session. A `__Host-` cookie on a plain request is one from
+   a time the header counted; the server does not set that name there, so it
+   does not count either, and the next login expires it.
+
+   This protection works only where requests count as HTTPS: with
+   `X-Forwarded-Proto: https` from loopback (a proxy or `tailscale serve` on
+   the same computer, with the server run without Docker) or from an address
+   in `MAIL_ARCHIVE_TRUSTED_PROXIES`. In Docker Compose, `tailscale serve`
+   included, that needs the variable. Without it every request is plain,
+   whatever the proxy is, so a planted plain cookie can still log a browser
+   in as the planter.
+
+   Setting, removing or changing `MAIL_ARCHIVE_TRUSTED_PROXIES` later, in a
+   way that changes whether requests count as HTTPS, makes the cookie each
+   browser holds the wrong one, so every user logs in once more. A login and
+   a logout end the sessions of both cookies the browser sends.
+
+   Browsers that have seen the HSTS header switch to HTTPS for that host
+   name, on all its ports (they do not refuse plain HTTP, they rewrite it to
+   HTTPS), and the year counts from the last HTTPS visit, since every answer
+   to a request that counts as HTTPS carries the header. So do not serve the
+   same name over plain HTTP later (for LAN access, for example): a
+   plain-HTTP-only service under that name becomes unreachable in those
+   browsers until the year is over.
 2. **Allow the host name** you type in the browser in
    `MAIL_ARCHIVE_ALLOWED_HOSTS` (comma-separated, without port). Requests with
    other names are rejected with `host not allowed` and logged.

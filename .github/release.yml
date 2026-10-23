@@ -6,6 +6,8 @@ changelog:
       labels: [breaking]
     - title: Database migrations (back up before upgrading)
       labels: [db-migration]
+    - title: Security hardening
+      labels: [security]
     - title: New features
       labels: [feature]
     - title: Bug fixes

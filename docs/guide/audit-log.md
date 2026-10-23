@@ -203,6 +203,9 @@ docker network inspect mail-archive_default --format '{{(index .IPAM.Config 0).G
 ```
 
 Then set, for example, `MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1` in `.env`.
+If the proxy serves HTTPS and a login before that did not count as HTTPS (in
+Docker Compose, for example), you log in once more after setting the
+variable, because the cookie of that login is the wrong one then.
 List only the proxy: every address in the list may name any client. And
 trust it only if all access goes through the proxy; a client that reaches
 the web port directly from a trusted address could choose its own.
