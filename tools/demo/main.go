@@ -469,13 +469,16 @@ func htmlReply(id, from, to, subject string, date time.Time, html string, refs .
 // is a long HTML mail, for the message view's scrolling and fold (#200,
 // web/e2e/reading.spec.ts). Its subject wraps on a phone. Only the long
 // mail has the word "itinerary". It sits between the newsletters of weeks
-// 34 and 33, below the rows of the list screenshots.
+// 34 and 33, below the rows of the list screenshots. The long mail has a
+// doctype, so it renders in standards mode (#206); Sam's mail (the docs
+// screenshots) has none and renders in quirks mode: the e2e tests cover both.
 func offsite(day func(days, hours int) time.Time) []message {
 	const subject = "Offsite planning: agenda, venue and travel"
 	priya := "Priya Shah <priya.shah@work.example>"
 	jonas := "Jonas Berg <jonas.berg@work.example>"
 	to := "Alex Morgan <alex.morgan@work.example>"
 	var long strings.Builder
+	long.WriteString(`<!DOCTYPE html>` + "\n")
 	long.WriteString(`<html><body style="font-family:Arial,sans-serif;color:#222;line-height:1.5">`)
 	long.WriteString(`<p>Hi Alex, here is the full itinerary for the offsite, day by day.</p>`)
 	for i := 1; i <= 60; i++ {

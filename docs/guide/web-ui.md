@@ -141,6 +141,8 @@ refuses most of them in any case (see [HTML mail](../reference/security#html-mai
 A few mails are taller than any frame (for example a picture as high as
 the window); those, and very long ones, keep the height of the visible
 area and scroll inside it.
+HTML mail is rendered like in other mail clients: a mail with a doctype in
+standards mode, one without in quirks mode.
 **Remote images stay blocked** because they tell the sender that you opened
 the message (tracking pixels). Click **Load remote images** for one message
 to allow them. Images embedded in the message (`cid:`) are always shown if

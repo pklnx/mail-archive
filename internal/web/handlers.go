@@ -391,12 +391,6 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 // tab. Never allow-scripts: with the same origin it would undo the sandbox.
 const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sandbox"
 
-// htmlPreamble goes in front of every HTML mail. Links open in a new tab
-// instead of inside the viewer frame. The style keeps height:100% chains on
-// html and body from tying the content to the frame's height, so the app
-// can size the frame to the content.
-const htmlPreamble = `<base target="_blank"><style>html,body{height:auto!important;min-height:0!important}</style>` + "\n"
-
 // handleMessageHTML serves the HTML body for display in a sandboxed iframe.
 // The Content-Security-Policy forbids scripts, forms, plugins and remote
 // content; inline cid: images are embedded as data: URLs. Remote images stay
@@ -463,7 +457,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		"; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"+
 		"; sandbox "+frameSandbox)
 	h.Set("X-Frame-Options", "SAMEORIGIN")
-	_, _ = io.WriteString(w, htmlPreamble+inl.HTML)
+	_, _ = io.WriteString(w, withPreamble(inl.HTML))
 }
 
 func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
