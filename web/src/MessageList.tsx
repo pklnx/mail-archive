@@ -1,12 +1,10 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Button, InlineLoading, SkeletonText, Tag } from "@carbon/react";
+import { Attachment, ChevronDown, Email, Search } from "@carbon/icons-react";
 import { listMessages, type Filter, type MessageSummary } from "./api";
 import { useAsync } from "./useAsync";
 import { dateGroup, senderName, shortDate } from "./format";
 import { Highlight } from "./Highlight";
-import { EmptyState } from "./EmptyState";
-import { SearchIcon } from "./icons";
-import { MessageRowsSkeleton } from "./Skeleton";
-import { button } from "./formStyles";
 import type { ListNav } from "./pager";
 import { t } from "./i18n";
 
@@ -95,17 +93,18 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
   }, [items, cursor, done, loading, error, load, onNav]);
 
   const kind = searching ? "matches" : filter.group ? "conversations" : "messages";
+  // Every message of the "only in archive" view is gone from the servers.
+  const gone = filter.gone === true;
   let group = "";
   return (
-    <div className="flex h-full flex-col">
+    <div className="mail-list">
       {items.length > 0 && (
-        <p className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-4 py-1.5 text-xs text-ink-muted">
+        <p className="mail-list__count">
           <span>{t.resultCount(items.length, !done, kind)}</span>
           <span>{t.newestFirst}</span>
         </p>
       )}
-      {/* scroll-pt-9: rows scrolled into view stay clear of the sticky date heading. */}
-      <ul aria-label={t.messages} aria-busy={loading} className="min-h-0 flex-1 scroll-pt-9 overflow-y-auto">
+      <ul aria-label={t.messages} aria-busy={loading} className="mail-list__items">
         {items.map((m) => {
           // A heading where the date group changes (the list is newest first).
           const g = dateGroup(m.sortAt);
@@ -114,26 +113,26 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
           return (
             <Fragment key={m.id}>
               {heading && (
-                <li role="heading" aria-level={2} className="sticky top-0 z-[1] border-b border-line bg-bg px-4 pt-2 pb-1 text-xs font-semibold text-ink-muted">
+                <li role="heading" aria-level={2} className="mail-list__group">
                   {g}
                 </li>
               )}
               <li>
                 {filter.group && m.thread && (m.count ?? 1) > 1 ? (
-                  <ThreadRow m={m} filter={filter} selected={selected} open={open} />
+                  <ThreadRow m={m} filter={filter} selected={selected} open={open} gone={gone} />
                 ) : (
-                  <Row m={m} selected={selected} open={open} />
+                  <Row m={m} selected={selected} open={open} gone={gone} />
                 )}
               </li>
             </Fragment>
           );
         })}
         {error && (
-          <li className="p-4 text-sm text-danger">
+          <li className="mail-list__note app-text-error">
             {t.loadMessagesFailed(error)}{" "}
-            <button type="button" className="underline" onClick={() => load(cursor, generation.current)}>
+            <Button kind="ghost" size="sm" onClick={() => load(cursor, generation.current)}>
               {t.retry}
-            </button>
+            </Button>
           </li>
         )}
         {!loading && !error && items.length === 0 && (
@@ -143,49 +142,53 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
         )}
         {loading && (
           <>
-            <li className="sr-only" role="status">
+            <li className="cds--visually-hidden" role="status">
               {t.loading}
             </li>
-            <MessageRowsSkeleton rows={items.length ? 1 : 6} />
+            <RowsSkeleton rows={items.length ? 1 : 6} />
           </>
         )}
-        {!done && <li ref={sentinel} aria-hidden className="h-px" />}
+        {!done && <li ref={sentinel} aria-hidden className="mail-list__sentinel" />}
       </ul>
     </div>
   );
 }
 
-function Empty({ searching, clearSearch, searchEverywhere }: { searching: boolean; clearSearch?: () => void; searchEverywhere?: () => void }) {
-  if (!searching) return <EmptyState icon={inboxIcon} title={t.noMessages} />;
-  const actions: ReactNode[] = [];
-  if (clearSearch)
-    actions.push(
-      <button key="clear" type="button" className={button} onClick={clearSearch}>
-        {t.clearSearch}
-      </button>,
-    );
-  if (searchEverywhere)
-    actions.push(
-      <button key="all" type="button" className={button} onClick={searchEverywhere}>
-        {t.searchEverywhere}
-      </button>,
-    );
-  return <EmptyState icon={<SearchIcon />} title={t.noMatches} actions={actions.length ? actions : undefined} />;
+/** Rows of the list while it loads, in the shape of the content. Screen readers hear "Loading" instead. */
+function RowsSkeleton({ rows }: { rows: number }) {
+  return Array.from({ length: rows }, (_, i) => (
+    <li key={i} aria-hidden className="mail-row mail-row--skeleton">
+      <SkeletonText width={["40%", "30%", "50%"][i % 3]} />
+      <SkeletonText width={["75%", "66%", "50%"][i % 3]} />
+      <SkeletonText width="85%" />
+    </li>
+  ));
 }
 
-const inboxIcon = (
-  <svg aria-hidden width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 12h-6l-2 3h-4l-2-3H2" />
-    <path d="M5.5 5.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.8 1.1z" />
-  </svg>
-);
-
-const paperclip = (
-  <svg role="img" aria-label={t.hasAttachment} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <title>{t.hasAttachment}</title>
-    <path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
-  </svg>
-);
+/** Says why the list is empty and offers the next step. */
+function Empty({ searching, clearSearch, searchEverywhere }: { searching: boolean; clearSearch?: () => void; searchEverywhere?: () => void }) {
+  const Icon = searching ? Search : Email;
+  return (
+    <div className="empty-state">
+      <Icon size={32} aria-hidden className="empty-state__icon" />
+      <p className="empty-state__title">{searching ? t.noMatches : t.noMessages}</p>
+      {searching && (clearSearch || searchEverywhere) && (
+        <div className="empty-state__actions">
+          {clearSearch && (
+            <Button kind="tertiary" size="sm" onClick={clearSearch}>
+              {t.clearSearch}
+            </Button>
+          )}
+          {searchEverywhere && (
+            <Button kind="tertiary" size="sm" onClick={searchEverywhere}>
+              {t.searchEverywhere}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface RowProps {
   m: MessageSummary;
@@ -193,11 +196,13 @@ interface RowProps {
   open: (id: string) => void;
   /** Rows of an expanded conversation are indented and more compact. */
   nested?: boolean;
-  /** Messages of the conversation, shown as a badge. */
+  /** Messages of the conversation, shown as a tag. */
   count?: number;
+  /** The message is no longer on any server ("only in archive"). */
+  gone?: boolean;
 }
 
-function Row({ m, selected, open, nested, count }: RowProps) {
+function Row({ m, selected, open, nested, count, gone }: RowProps) {
   const on = m.id === selected;
   // Paging in the reading pane moves the selection; keep it in view.
   const ref = useRef<HTMLButtonElement>(null);
@@ -210,61 +215,60 @@ function Row({ m, selected, open, nested, count }: RowProps) {
       type="button"
       onClick={() => open(m.id)}
       aria-current={on ? "true" : undefined}
-      className={`block w-full min-w-0 border-b border-line py-3 pr-4 text-left ${nested ? "pl-8" : "pl-4"} ${
-        on ? "bg-accent-soft" : "hover:bg-surface-sunken"
-      }`}
+      className={`mail-row${nested ? " mail-row--nested" : ""}${on ? " mail-row--selected" : ""}`}
     >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          <span className="truncate text-sm font-semibold">{senderName(m.from)}</span>
-          {count !== undefined && (
-            <span
-              className="shrink-0 rounded-full bg-line px-1.5 text-xs font-medium text-ink"
-              title={t.inConversation(count)}
-              aria-label={t.inConversation(count)}
-            >
-              {count}
-            </span>
-          )}
-        </span>
-        <span className="flex shrink-0 items-center gap-1 text-xs text-ink-muted">
-          {m.hasAttachment && paperclip}
+      <span className="mail-row__top">
+        <span className="mail-row__from">{senderName(m.from)}</span>
+        {count !== undefined && (
+          <Tag as="span" size="sm" type="outline" className="mail-row__tag">
+            <span aria-hidden>{count}</span>
+            <span className="cds--visually-hidden">{t.inConversation(count)}</span>
+          </Tag>
+        )}
+        <span className="mail-row__meta">
+          {m.hasAttachment && <Attachment size={16} role="img" aria-label={t.hasAttachment} />}
           <time dateTime={m.sortAt}>{shortDate(m.sentAt ?? m.sortAt)}</time>
         </span>
-      </div>
-      <div className="truncate text-sm">{m.subject || t.noSubject}</div>
+      </span>
+      <span className="mail-row__subject">{m.subject || t.noSubject}</span>
       {m.snippet && !nested && (
-        <p className="mt-0.5 line-clamp-2 text-xs text-ink-muted">
+        <span className="mail-row__snippet">
           <Highlight text={m.snippet} />
-        </p>
+        </span>
+      )}
+      {gone && !nested && (
+        <span className="mail-row__tags">
+          <Tag as="span" size="sm" type="warm-gray">
+            {t.onlyInArchive}
+          </Tag>
+        </span>
       )}
     </button>
   );
 }
 
 /** The newest message of a conversation; expands to all its matching messages. */
-function ThreadRow({ m, filter, selected, open }: { m: MessageSummary; filter: Filter; selected: string; open: (id: string) => void }) {
+function ThreadRow({ m, filter, selected, open, gone }: { m: MessageSummary; filter: Filter; selected: string; open: (id: string) => void; gone: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const count = m.count ?? 1;
   const id = `thread-${m.id}`;
+  const label = expanded ? t.hideConversation : t.showConversation(count - 1);
   return (
     <>
-      <div className="flex items-stretch">
-        <div className="min-w-0 flex-1">
-          <Row m={m} selected={selected} open={open} count={count} />
+      <div className="mail-thread">
+        <div className="mail-thread__row">
+          <Row m={m} selected={selected} open={open} count={count} gone={gone} />
         </div>
         <button
           type="button"
           aria-expanded={expanded}
           aria-controls={id}
-          aria-label={expanded ? t.hideConversation : t.showConversation(count - 1)}
-          title={expanded ? t.hideConversation : t.showConversation(count - 1)}
-          className="shrink-0 border-b border-line px-2 pointer-coarse:px-3.5 text-ink-muted hover:bg-surface-hover hover:text-ink"
+          aria-label={label}
+          title={label}
+          className={`mail-thread__toggle${expanded ? " mail-thread__toggle--open" : ""}`}
           onClick={() => setExpanded(!expanded)}
         >
-          <svg aria-hidden width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={expanded ? "rotate-180" : ""}>
-            <path d="M6 9l6 6 6-6" />
-          </svg>
+          <ChevronDown size={16} aria-hidden />
         </button>
       </div>
       {expanded && (
@@ -298,16 +302,20 @@ function ThreadMembers({ id, filter, newest, count, selected, open }: ThreadMemb
   const members = res.status === "ok" ? earlierMembers(res.data.messages, newest) : [];
   const hidden = count - 1 - members.length;
   return (
-    <ul id={id} aria-label={t.conversation} className="bg-surface-sunken">
-      {res.status === "loading" && <li className="py-2 pl-8 text-xs text-ink-muted">{t.loading}</li>}
-      {res.status === "error" && <li className="py-2 pl-8 text-xs text-danger">{t.loadMessagesFailed(res.error.message)}</li>}
+    <ul id={id} aria-label={t.conversation} className="mail-thread__members">
+      {res.status === "loading" && (
+        <li className="mail-thread__note">
+          <InlineLoading description={t.loading} iconDescription={t.loading} />
+        </li>
+      )}
+      {res.status === "error" && <li className="mail-thread__note app-text-error">{t.loadMessagesFailed(res.error.message)}</li>}
       {res.status === "ok" &&
         members.map((x) => (
           <li key={x.id}>
             <Row m={x} selected={selected} open={open} nested />
           </li>
         ))}
-      {res.status === "ok" && hidden > 0 && <li className="py-2 pl-8 text-xs text-ink-muted">{t.moreInConversation(hidden)}</li>}
+      {res.status === "ok" && hidden > 0 && <li className="mail-thread__note app-text-secondary">{t.moreInConversation(hidden)}</li>}
     </ul>
   );
 }

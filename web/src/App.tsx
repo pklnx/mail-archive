@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
-import { Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton } from "@carbon/react";
-import { Folders, Keyboard, Logout, UserAvatar } from "@carbon/icons-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
+import { Button, FeatureFlags, Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Modal, Search } from "@carbon/react";
+import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders, Keyboard, Logout, UserAvatar } from "@carbon/icons-react";
 import { AccountsPage } from "./AccountsPage";
 import { isPlainClick } from "./clicks";
-import { dialogOpen } from "./dialogs";
+import { dialogOpen, ownedByWidget } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
 import { ProfilePage } from "./Profile";
 import { UsersPage } from "./UsersPage";
@@ -11,16 +12,12 @@ import { MessageList } from "./MessageList";
 import { LogPage } from "./LogPage";
 import { RetentionPage } from "./RetentionPage";
 import { MessageView } from "./MessageView";
-import { SearchFilters } from "./SearchFilters";
+import { ActiveFilters, SearchFilters } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
 import { ThemeToggle } from "./ThemeToggle";
-import { lg, useMediaQuery } from "./breakpoints";
-import { BackIcon, DownIcon, FilterIcon, UpIcon, iconButton } from "./icons";
-import { FilterChips } from "./FilterChips";
-import { Sheet } from "./Sheet";
-import { primary } from "./formStyles";
+import { lg, matchesNow, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import logo from "./logo.svg";
 import { useAccounts } from "./useAccounts";
@@ -50,11 +47,13 @@ export function App({ user, logout }: Props) {
       setFoldersOpen(false);
     }
   }, [wide]);
-  // Phones show the filters as chips and a sheet; the filter button is
-  // highlighted while a prefix or grouping is set.
+  // The filter button toggles the filter panel under the search; the set
+  // filters show as tags either way. It is marked while one is set.
   const prefixed = hasPrefix(query) || state.group === "1";
-  const [sheet, setSheet] = useState<"" | "filters" | "shortcuts">("");
-  const closeSheet = useCallback(() => setSheet(""), []);
+  // Open from the two-pane width up, closed on phones (maintainer decision on #195).
+  const [filtersOpen, setFiltersOpen] = useState(() => matchesNow(twoPane));
+  const filtersId = useId();
+  const [shortcuts, setShortcuts] = useState(false);
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
   const layout = useSidebarLayout(user.name);
@@ -121,7 +120,6 @@ export function App({ user, logout }: Props) {
     update({ view, m: "" });
     setMenuOpen(false);
     setFoldersOpen(false);
-    setSheet("");
   };
   // The folder overlay belongs to the mail view.
   useEffect(() => {
@@ -159,22 +157,26 @@ export function App({ user, logout }: Props) {
     }
   };
 
-  // Keyboard shortcuts (? lists them). Not while typing or in a dialog (the
-  // sheets, a Carbon Modal, the folder overlay). In the capture phase, so
-  // they also work while a folder in Carbon's TreeView has focus: the tree
-  // keeps its keys from bubbling.
+  // Keyboard shortcuts (? lists them). In the capture phase, so they also
+  // work while a folder in Carbon's TreeView has focus: the tree keeps its
+  // keys from bubbling. That is before any component sees a key, so the
+  // keys that belong to one are left alone explicitly (ownedByWidget):
+  // fields (Carbon's Search included), open popovers, menus and dialogs,
+  // Escape for an open tooltip and in the SideNav. Off while a dialog or an
+  // overlay is open; the SideNav overlay closes on Escape.
   const search = useRef<HTMLInputElement>(null);
   const chord = useRef(0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || dialogOpen()) return;
-      if (e.key === "Escape" && menuOpen) {
-        setMenuOpen(false);
+      if (menuOpen) {
+        if (e.key === "Escape") setMenuOpen(false);
         return;
       }
-      const el = e.target instanceof HTMLElement ? e.target : null;
-      if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName))) {
-        if (e.key === "Escape") el.blur();
+      if (ownedByWidget(e)) {
+        // Escape leaves a field, as before; Carbon's Search clears itself first (below).
+        const el = e.target instanceof HTMLElement ? e.target : null;
+        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA"].includes(el.tagName) && !el.closest(".cds--search")) el.blur();
         return;
       }
       const mail = state.view === "";
@@ -188,7 +190,7 @@ export function App({ user, logout }: Props) {
           }
           break;
         case "?":
-          setSheet("shortcuts");
+          setShortcuts(true);
           break;
         case "j":
           if (mail && reading) next();
@@ -249,7 +251,7 @@ export function App({ user, logout }: Props) {
           <span className="app-header__user" aria-hidden>
             {user.name}
           </span>
-          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={() => setSheet("shortcuts")}>
+          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={() => setShortcuts(true)}>
             <Keyboard size={20} />
           </HeaderGlobalAction>
           <ThemeToggle header />
@@ -277,7 +279,6 @@ export function App({ user, logout }: Props) {
         go={(patch) => {
           update(patch);
           setFoldersOpen(false);
-          setSheet("");
         }}
       />
       <div className="app-shell__body">
@@ -289,9 +290,9 @@ export function App({ user, logout }: Props) {
           openUsers={() => update({ view: "users", m: "" })}
         />
       </div>
-      {/* The views not converted to Carbon yet (#168 parts 4b to 6) carry
+      {/* The views not converted to Carbon yet (#168 parts 5 and 6) carry
           .legacy each, for the reset in index.css; the converted markup
-          (Accounts, the folder column) does not, so the reset never reaches
+          (Accounts, the mail view) does not, so the reset never reaches
           Carbon's. */}
       {state.view === "profile" ? (
         <main inert={pageInert} className="legacy text-ink app-view">
@@ -323,7 +324,7 @@ export function App({ user, logout }: Props) {
         </main>
       ) : (
         <div
-          className="app-view mail-view"
+          className={`app-view mail-view${reading ? " mail-view--reading" : ""}`}
           // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
           style={{ "--sidebar-w": `${layout.collapsed ? railWidth : layout.width}rem` } as CSSProperties}
         >
@@ -354,14 +355,14 @@ export function App({ user, logout }: Props) {
           </aside>
           {foldersOpen && <div aria-hidden className="folder-pane__scrim" onClick={closeFolders} />}
 
-          <section inert={pageInert} className={`legacy text-ink min-h-0 flex-col border-r border-line ${reading ? "hidden md:flex" : "flex"}`}>
+          <section inert={pageInert} className="mail-pane mail-pane--list">
             {/* Phones: where the user is, the search below at full width. Menu
                 and theme are in the header. */}
-            <div className="flex min-h-12 shrink-0 flex-col justify-center border-b border-line px-3 py-1 md:hidden">
-              <h1 className="truncate text-lg leading-6 font-semibold">{place.title}</h1>
-              {place.sub && <p className="truncate text-xs text-ink-muted">{place.sub}</p>}
+            <div className="mail-place">
+              <h1 className="mail-place__title">{place.title}</h1>
+              {place.sub && <p className="mail-place__sub">{place.sub}</p>}
             </div>
-            <div className="flex items-center gap-2 border-b border-line p-2">
+            <div className="mail-toolbar">
               {/* Below lg: opens the folder column as an overlay. */}
               <div className="folder-pane__open">
                 <IconButton
@@ -378,33 +379,38 @@ export function App({ user, logout }: Props) {
                   <Folders />
                 </IconButton>
               </div>
-              <input
+              <Search
                 ref={search}
-                type="search"
-                aria-label={t.searchMail}
+                size="md"
+                labelText={t.searchMail}
+                closeButtonLabelText={t.carbon.clearSearch}
                 placeholder={
                   state.gone === "1" ? t.searchIn(t.onlyInArchive) : state.account ? t.searchIn(state.folder || state.account) : t.searchAll
                 }
-                className="w-full rounded-md border border-line-control bg-field px-3 py-1.5 text-sm pointer-coarse:min-h-11"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                // Escape clears the field (Carbon); in an empty one it leaves the field.
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && !e.currentTarget.value) e.currentTarget.blur();
+                }}
               />
-              <button
-                type="button"
-                aria-label={t.filters}
-                title={t.filters}
-                aria-haspopup="dialog"
-                className={`${iconButton} md:hidden ${prefixed ? "text-accent-ink" : ""}`}
-                onClick={() => setSheet("filters")}
+              <IconButton
+                kind="ghost"
+                size="md"
+                align="bottom-end"
+                label={t.filters}
+                className={prefixed ? "mail-toolbar__filters--set" : undefined}
+                isSelected={filtersOpen}
+                aria-expanded={filtersOpen}
+                aria-controls={filtersId}
+                onClick={() => setFiltersOpen((open) => !open)}
               >
-                <FilterIcon />
-              </button>
+                <Filter />
+              </IconButton>
             </div>
-            <FilterChips query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} openFilters={() => setSheet("filters")} />
-            <div className="hidden md:block">
-              <SearchFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
-            </div>
-            <div className="min-h-0 flex-1">
+            {filtersOpen && <SearchFilters id={filtersId} query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />}
+            <ActiveFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
+            <div className="mail-pane__fill">
               <MessageList
                 filter={filter}
                 selected={state.m}
@@ -425,92 +431,96 @@ export function App({ user, logout }: Props) {
             </div>
           </section>
 
-          <main inert={pageInert} className={`legacy text-ink min-h-0 flex-col ${reading ? "flex" : "hidden md:flex"}`}>
+          <main inert={pageInert} className="mail-pane mail-pane--reader">
             {reading ? (
               <>
                 {/* Back on phones, previous and next everywhere (when the message is in the list). */}
-                <div className={`flex h-14 shrink-0 items-center gap-1 border-b border-line px-1 md:h-11 md:px-2 ${pos.index < 0 ? "md:hidden" : ""}`}>
-                  <button
-                    type="button"
-                    aria-label={t.backToList}
-                    title={t.backToList}
-                    className={`${iconButton} md:hidden`}
-                    onClick={() => update({ m: "" })}
-                  >
-                    <BackIcon />
-                  </button>
+                <div className={`reader-bar${pos.index < 0 ? " reader-bar--phone-only" : ""}`}>
+                  <span className="reader-bar__back">
+                    <IconButton kind="ghost" size="md" align="bottom-start" label={t.backToList} onClick={() => update({ m: "" })}>
+                      <ArrowLeft />
+                    </IconButton>
+                  </span>
                   {pos.index >= 0 && (
-                    <div className="ml-auto flex items-center">
-                      <button type="button" aria-label={t.previousMessage} title={t.previousMessage} className={iconButton} disabled={!pos.prev} onClick={() => pos.prev && go(pos.prev)}>
-                        <UpIcon />
-                      </button>
-                      <span className="px-1 text-xs text-ink-muted tabular-nums">{t.messagePosition(pos.index + 1, nav.ids.length, nav.more)}</span>
-                      <button
-                        type="button"
-                        aria-label={t.nextMessage}
-                        title={t.nextMessage}
-                        className={iconButton}
-                        disabled={!pos.next && !pos.nextNeedsMore}
-                        onClick={next}
-                      >
-                        <DownIcon />
-                      </button>
+                    <div className="reader-bar__pager">
+                      <IconButton kind="ghost" size="md" align="bottom" label={t.previousMessage} disabled={!pos.prev} onClick={() => pos.prev && go(pos.prev)}>
+                        <ChevronUp />
+                      </IconButton>
+                      <span className="reader-bar__position">{t.messagePosition(pos.index + 1, nav.ids.length, nav.more)}</span>
+                      <IconButton kind="ghost" size="md" align="bottom-end" label={t.nextMessage} disabled={!pos.next && !pos.nextNeedsMore} onClick={next}>
+                        <ChevronDown />
+                      </IconButton>
                     </div>
                   )}
                 </div>
-                <div className="min-h-0 flex-1">
+                <div className="mail-pane__fill">
                   <MessageView id={state.m} open={(m) => update({ m })} />
                 </div>
               </>
             ) : (
-              <div className="m-auto flex flex-col items-center gap-3 p-6 text-center">
-                <img src={logo} alt="" className="size-12 opacity-80" />
-                <p className="text-sm text-ink-muted">{t.selectMessage}</p>
-                <button type="button" className="hidden text-xs text-ink-muted hover:text-ink pointer-fine:block" onClick={() => setSheet("shortcuts")}>
-                  {t.shortcutsHint} <kbd className={kbd}>?</kbd>
-                </button>
+              <div className="reader-empty">
+                <img src={logo} alt="" className="reader-empty__logo" />
+                <p className="app-text-secondary">{t.selectMessage}</p>
+                <Button kind="ghost" size="sm" className="reader-empty__shortcuts" onClick={() => setShortcuts(true)}>
+                  {t.shortcutsHint}&nbsp;<kbd className="kbd">?</kbd>
+                </Button>
               </div>
             )}
           </main>
         </div>
       )}
 
-      <div className="legacy text-ink contents">
-      <Sheet open={sheet === "filters"} onClose={closeSheet} title={t.filters}>
-        <SearchFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />
-        <button type="button" className={`${primary} self-end`} onClick={closeSheet}>
-          {t.done}
-        </button>
-      </Sheet>
-      <Sheet open={sheet === "shortcuts"} onClose={closeSheet} title={t.shortcuts}>
-        <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
-          {(
-            [
-              [["/"], t.keySearch],
-              [["j"], t.keyNext],
-              [["k"], t.keyPrevious],
-              [["u", "Esc"], t.keyBack],
-              [["g", "a"], t.keyAllMail],
-              [["?"], t.keyHelp],
-            ] as const
-          ).map(([keys, label]) => (
-            <div key={label} className="contents">
-              <dt className="flex gap-1">
-                {keys.map((k) => (
-                  <kbd key={k} className={kbd}>
-                    {k}
-                  </kbd>
-                ))}
-              </dt>
-              <dd className="text-ink-muted">{label}</dd>
-            </div>
-          ))}
-        </dl>
-      </Sheet>
-      </div>
+      {shortcuts && <ShortcutsModal onClose={() => setShortcuts(false)} />}
       </div>
     </div>
   );
 }
 
-const kbd = "inline-grid min-w-6 place-items-center rounded border border-b-2 border-line-control bg-bg px-1.5 font-mono text-xs leading-5";
+const shortcutKeys = () =>
+  [
+    [["/"], t.keySearch],
+    [["j"], t.keyNext],
+    [["k"], t.keyPrevious],
+    [["u", "Esc"], t.keyBack],
+    [["g", "a"], t.keyAllMail],
+    [["?"], t.keyHelp],
+  ] as const;
+
+/**
+ * The shortcuts overview: a passive Carbon Modal (no buttons, Escape, the
+ * close button and a click outside close it). It exists only while open,
+ * and the focus goes back to where it was when it closes.
+ */
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  const opener = useRef<Element | null>(null);
+  useLayoutEffect(() => {
+    opener.current = document.activeElement;
+    return () => {
+      const el = opener.current;
+      if (el instanceof HTMLElement && el.isConnected) el.focus();
+    };
+  }, []);
+  return createPortal(
+    // Without the flag, Carbon adds two hidden "Focus sentinel" tab stops.
+    <FeatureFlags enableFocusWrapWithoutSentinels>
+      <Modal open passiveModal size="sm" modalHeading={t.shortcuts} closeButtonLabel={t.carbon.closeModal} onRequestClose={onClose}>
+        {/* Focus starts on the list, not on the close button, whose tooltip would take the first Escape. */}
+        <dl className="shortcut-list" tabIndex={-1} data-modal-primary-focus>
+          {shortcutKeys().map(([keys, label]) => (
+            <div key={label} className="shortcut-list__row">
+              <dt>
+                {keys.map((k) => (
+                  <kbd key={k} className="kbd">
+                    {k}
+                  </kbd>
+                ))}
+              </dt>
+              <dd>{label}</dd>
+            </div>
+          ))}
+        </dl>
+      </Modal>
+    </FeatureFlags>,
+    document.body,
+  );
+}
