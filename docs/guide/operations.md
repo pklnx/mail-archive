@@ -324,8 +324,11 @@ Disabled, removed and import accounts are left out, as are fills that were
 stopped; with the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts
 as stale, nor does an account not on the schedule, or one that is syncing
 or waiting in the queue, nor a recurring fill during a run or while it
-waits for one. A recurring fill counts as stale from when it was switched on
-until its first successful run. The
+waits for one. A running sync or fill counts from its start, and one the
+web server has taken from the queue from then, also while it waits for a
+verify or a deletion to finish: one that hangs, or waits behind a verify
+that hangs, turns stale after the same time. A recurring fill counts as
+stale from when it was switched on until its first successful run. The
 answer is cached for 15 seconds. `./ma status` shows each account's ID next
 to its name, in `HEALTH` the same state, and in `FAILED` how many syncs in a
 row failed.

@@ -139,9 +139,52 @@ jobs:
       - run: pnpm build
       - run: pnpm audit --prod
 
+  # Decides whether a pull request is docs-only (only docs/**, .claude/** or
+  # *.md changed), so web-e2e can be skipped. The skip is at job level, not a
+  # workflow-level `paths:` filter: a required check that never runs stays
+  # pending for ever, while a job skipped by `if:` counts as passing.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, so the base commit is reachable for the diff.
+          fetch-depth: 0
+      - run: sh scripts/ci-docs-only-test.sh
+      - id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          docs_only=false
+          if [ "$EVENT_NAME" = pull_request ]; then
+            # --no-renames: a code file moved into docs/ lists its old path too.
+            # quotePath=false: non-ASCII names are not quoted. The diff goes to a
+            # file first, so a git failure stops the step and shows in the log.
+            git -c core.quotePath=false diff --name-only --no-renames \
+              "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-paths"
+            if sh scripts/ci-docs-only.sh < "$RUNNER_TEMP/changed-paths"; then
+              docs_only=true
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   web-e2e:
     # Playwright end-to-end tests of the web UI against the demo server
     # (tools/demo: made-up mail, a temporary database, no network).
+    # Skipped on docs-only pull requests. Fail closed: it runs unless this is a
+    # pull request, `changes` succeeded and said docs_only. !cancelled() (not
+    # always()) is needed because a failed `changes` would otherwise skip this
+    # job, and a skipped job passes a required check; it also keeps a cancelled
+    # (superseded) run from starting e2e.
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

@@ -88,6 +88,15 @@ wait for elements and responses, never for time, and run without retries.
 Names a test creates are unique per run, and no test depends on another.
 CI runs the suite in the `web-e2e` job.
 
+The job is skipped on docs-only pull requests, where only `docs/**`,
+`.claude/**` or `*.md` files change (`*.md` also matches in code
+directories). The `changes` job decides this with `scripts/ci-docs-only.sh`.
+The skip happens at job level, not with a workflow-level `paths:` filter: a
+skipped job counts as passing for a required check, while a workflow that never
+starts would leave it pending for ever. The filter fails closed: a failed
+detection, an empty diff or any other changed file runs the suite, and so does
+every push to `main`. `web-e2e` is meant to be a required check.
+
 ## Documentation
 
 This site is built with [VitePress](https://vitepress.dev/) from `docs/` and
