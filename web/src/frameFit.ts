@@ -114,16 +114,20 @@ export function linkURL(link: Element): URL | null {
  * the app itself. The frame shares the app's origin, so such a link would
  * reach the API with the session cookie (the server's Fetch Metadata guard
  * refuses most of them; this is the second layer). A mail has no reason to
- * link into the archive. javascript: links are cancelled too: the sandbox
- * runs none, but a new tab would have the app's origin. Other links are
+ * link into the archive. javascript:, data: and vbscript: links are
+ * cancelled too: the sandbox runs no script, but a new tab would have the
+ * app's origin (or, for data:, content the mail chose). Other links are
  * untouched; a link that does not parse is cancelled.
  */
 export function blockAppLinks(e: Event, origin = location.origin): void {
   const link = linkOf(e.target);
   if (!link) return;
   const url = linkURL(link);
-  if (!url || url.origin === origin || url.protocol === "javascript:") e.preventDefault();
+  if (!url || url.origin === origin || unsafeSchemes.has(url.protocol)) e.preventDefault();
 }
+
+/** Schemes a link in a mail is never followed to (URL lowercases protocol). */
+const unsafeSchemes = new Set(["javascript:", "data:", "vbscript:"]);
 
 export interface FrameFit {
   /** Removes every listener and observer. */

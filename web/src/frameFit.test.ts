@@ -385,8 +385,8 @@ describe("blockAppLinks", () => {
     expect(blocked(rect)).toBe(true);
   });
 
-  it("cancels javascript: links, which would run with the app's origin in a new tab", () => {
-    for (const href of ["javascript:void(0)", " JavaScript:alert(1)", "java\tscript:alert(1)"]) {
+  it("cancels javascript:, data: and vbscript: links, which would run with the app's origin in a new tab", () => {
+    for (const href of ["javascript:void(0)", " JavaScript:alert(1)", "JAVASCRIPT:alert(1)", "java\tscript:alert(1)", "data:text/html,x", "DATA:text/html,x", "vbscript:msgbox(1)", "VBScript:msgbox(1)"]) {
       expect(blocked(html(`<a href="${href}">x</a>`).firstElementChild!), href).toBe(true);
     }
   });
