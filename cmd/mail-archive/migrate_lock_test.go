@@ -80,7 +80,17 @@ func TestMigrateWaitsForMigrateLock(t *testing.T) {
 				}
 			}
 			unlock()
-			err = <-done
+			// Bounded, so a command that never ends fails here with a
+			// message instead of hanging until the go test timeout.
+			select {
+			case err = <-done:
+			case <-ctx.Done():
+				// Stuck for good (cancelling does not end it): the cleanup
+				// must not wait for it either. Dropping the database ends
+				// its connections.
+				collected = true
+				t.Fatalf("the command did not end after the unlock: %v", ctx.Err())
+			}
 			collected = true
 			if err != nil {
 				t.Fatal(err)

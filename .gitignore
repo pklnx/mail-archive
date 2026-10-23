@@ -51,3 +51,6 @@ go.work.sum
 /docs/node_modules/
 /docs/.vitepress/cache/
 /docs/.vitepress/dist/
+
+# Local build output of `go build ./cmd/mail-archive`
+/mail-archive

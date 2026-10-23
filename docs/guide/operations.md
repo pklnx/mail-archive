@@ -142,6 +142,9 @@ starts once the first is done, also after a long index rebuild. Ctrl-C stops
 the wait. The lock covers the whole command (the index rebuild, the
 migrations, the audit log partitions and the password upgrade).
 `./ma migrate status` and `./ma backup` do not wait for a running migration.
+If a `migrate` is killed during a long statement (an index rebuild, for
+example), PostgreSQL keeps its locks until that statement ends, so the next
+`migrate` waits until then.
 The web server is not covered: it neither waits for nor blocks a migration,
 so stop it before `./ma migrate` when the release notes say so.
 

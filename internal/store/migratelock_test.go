@@ -20,6 +20,21 @@ const migrateLockClass = 0x6d68
 // lockTestDeadline only guards against a hang; the tests wait for signals.
 const lockTestDeadline = 2 * time.Minute
 
+// receive returns the next value from ch. It fails the test once ctx
+// ends, so a result that never comes fails with what instead of hanging
+// until the go test timeout; ctx is the guard, not a delay.
+func receive[T any](t *testing.T, ctx context.Context, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-ctx.Done():
+		t.Fatalf("no %s before the deadline: %v", what, ctx.Err())
+		var zero T
+		return zero
+	}
+}
+
 // openNamed opens a store on dbURL whose connections carry the
 // application_name name. It closes when the test ends.
 func openNamed(t *testing.T, ctx context.Context, dbURL, name string) *store.Store {
@@ -131,8 +146,11 @@ func TestMigrateWaitsForLock(t *testing.T) {
 	}
 
 	applied := map[string]int{}
-	for ; pending > 0; pending-- {
-		r := <-results
+	for pending > 0 {
+		r := receive(t, ctx, results, "migration result")
+		// Counted before a failure, so the cleanup waits only for the
+		// results still to come.
+		pending--
 		if r.err != nil {
 			t.Fatalf("%s: %v", r.name, r.err)
 		}
@@ -286,7 +304,7 @@ func TestLockMigrations(t *testing.T) {
 	}
 
 	unlockA()
-	r := <-done
+	r := receive(t, ctx, done, "lock after the unlock")
 	collected = true
 	if r.err != nil {
 		t.Fatal(r.err)
@@ -345,7 +363,7 @@ func TestLockMigrationsCancel(t *testing.T) {
 		}
 	}
 	stop()
-	err = <-done
+	err = receive(t, ctx, done, "end of the cancelled wait")
 	collected = true
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled wait: %v", err)
