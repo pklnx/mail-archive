@@ -160,10 +160,10 @@ there is no release. To finish the release:
    API again): compare the version in the re-run's summary with the first
    attempt.
 
-To abandon the release instead, point the floating tags back to the previous
-release by hand and delete the new package version (package settings on
-GitHub, "Manage versions"). Moving a tag needs a `docker login ghcr.io` with
-a token that has `write:packages`:
+To abandon the release instead, point the tags `X.Y`, `X` and `latest` back
+to the previous release by hand and delete the new package version (package
+settings on GitHub, "Manage versions"). Moving a tag needs a
+`docker login ghcr.io` with a token that has `write:packages`:
 
 ```sh
 docker buildx imagetools create -t ghcr.io/pklnx/mail-archive:latest ghcr.io/pklnx/mail-archive:26.10-11
