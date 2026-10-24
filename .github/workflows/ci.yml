@@ -306,3 +306,15 @@ jobs:
       - run: pnpm e2e
         env:
           DEMO_DATABASE_URL: postgres://mailarchive:mailarchive@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/mailarchive?sslmode=disable
+      # On a failure, the test results (traces, the guards' frame diagnostics
+      # of #260) are kept for a week. `path:` ignores working-directory. The
+      # data is made up (the demo's own logins); artefacts of a public
+      # repository are readable by anyone.
+      - name: Upload e2e failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-e2e-test-results
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
