@@ -567,8 +567,11 @@ func TestGooseLockHolderOfAnotherRole(t *testing.T) {
 // goose's version-table check, which MigrateDown runs after it took the
 // lock and Migrate before (in HasPending, without the lock; goose checks
 // the table once per provider, so Migrate does not check it again under
-// the lock). Afterwards no backend waits for goose's lock, and after Close
-// only the test's holder holds it.
+// the lock). Afterwards no backend waits for goose's lock, and right after
+// the call, with the store still open, only the test's holder holds it
+// (#269: before goose had a pool of its own, MigrateDown's cancelled
+// version-table check left the lock on an idle connection of the store's
+// pool). After Close, too, only the test's holder holds it.
 func TestMigrateCancelBeforeQuery(t *testing.T) {
 	cases := []struct {
 		name string
@@ -666,6 +669,17 @@ func TestMigrateCancelBeforeQuery(t *testing.T) {
 				if n, err := countGooseLockWaiters(ctx, observer); err != nil || n != 0 {
 					t.Errorf("backends waiting for goose's lock: %d (%v), want 0", n, err)
 				}
+				// #269: with the store still open, no session other than
+				// the test's holder holds goose's lock. No wait: the
+				// teardown frees it before the call returns.
+				var others int
+				if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_locks l WHERE l.granted AND l.pid <> $2 AND `+gooseLockRows,
+					lock.DefaultLockID, holderPID).Scan(&others); err != nil {
+					t.Fatal(err)
+				}
+				if others != 0 {
+					t.Errorf("goose's lock still held by %d session(s) of the open store after the cancelled %s", others, cl.name)
+				}
 				st.Close()
 				// The server releases a closed session's lock
 				// asynchronously; wait until only the holder holds it.
@@ -708,4 +722,50 @@ func TestMigrateCancelBeforeQuery(t *testing.T) {
 			t.Errorf("cancelled status: %v, want an error that wraps context.Canceled", err)
 		}
 	})
+}
+
+// TestMigrateSessionSettingsReachGoose (#269): goose runs on a pool of its
+// own, made from a copy of the store's pool config. The session settings
+// of Open (as ForMigrations sets them) reach goose's session, and that
+// session is not a connection of the store's pool. The hook fires when
+// goose starts its version-table check, on goose's connection.
+func TestMigrateSessionSettingsReachGoose(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	dbURL := storetest.NewUnmigrated(t)
+	observer := connect(t, dbURL)
+	suffix := make([]byte, 6)
+	_, _ = rand.Read(suffix)
+	appName := "goose_269_" + hex.EncodeToString(suffix) // hex: safe in the literal
+	fired := false
+	var st *store.Store
+	// The hook runs on the goroutine of Migrate below, which is the
+	// test's goroutine.
+	st, err := store.Open(ctx, dbURL,
+		store.WithSessionSettings("SET application_name = '"+appName+"'"),
+		store.WithQueryStartConnHook(func(pid uint32, sql string) {
+			if fired || !strings.HasPrefix(sql, "SELECT EXISTS ( SELECT 1 FROM pg_tables") {
+				return
+			}
+			fired = true
+			var got string
+			if err := observer.QueryRow(ctx, "SELECT application_name FROM pg_stat_activity WHERE pid = $1", pid).Scan(&got); err != nil {
+				t.Errorf("goose's session %d: %v", pid, err)
+			} else if got != appName {
+				t.Errorf("goose's session: application_name = %q, want %q", got, appName)
+			}
+			if n := st.AcquiredConnsForTest(); n != 0 {
+				t.Errorf("connections of the store's pool in use during goose's query: %d, want 0", n)
+			}
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !fired {
+		t.Fatal("goose's version-table check never started")
+	}
 }
