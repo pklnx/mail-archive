@@ -34,8 +34,9 @@ type app struct {
 func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, true) }
 
 // openAppForMigrate opens the database without the index rebuild check and
-// without touching it, for `migrate` (which runs the rebuild before it
-// creates the audit log partitions) and the read-only `migrate status`.
+// without touching it, for `migrate` and `migrate down` (which take the
+// migration lock first and then run the rebuild or its check before they
+// create the audit log partitions) and the read-only `migrate status`.
 func openAppForMigrate(ctx context.Context) (*app, error) { return openAppChecked(ctx, false) }
 
 func openAppChecked(ctx context.Context, normal bool) (*app, error) {
@@ -89,9 +90,7 @@ func newMigrateCmd() *cobra.Command {
 		}
 		defer a.close()
 		// The whole command runs under the migration lock: a second
-		// migrate waits until this one is done. unlock is deferred after
-		// a.close, so it runs first: closing the store waits for the
-		// lock's connection.
+		// migrate waits until this one is done.
 		unlock, err := lockMigrations(cmd, a.store)
 		if err != nil {
 			return err
@@ -172,16 +171,23 @@ development; in production, prefer restoring a backup.`,
 			if !yes {
 				return errors.New("refusing to roll back without --yes (this may delete data)")
 			}
-			a, err := openApp(cmd.Context())
+			a, err := openAppForMigrate(cmd.Context())
 			if err != nil {
 				return err
 			}
 			defer a.close()
+			// The lock comes before anything else touches the database:
+			// while a first migrate rebuilds the indexes, down waits for it
+			// instead of refusing. Then the checks openApp runs.
 			unlock, err := lockMigrations(cmd, a.store)
 			if err != nil {
 				return err
 			}
 			defer unlock()
+			if err := checkIndexRebuild(cmd.Context(), a.store); err != nil {
+				return err
+			}
+			ensureAuditPartitions(cmd.Context(), a.store)
 			rolledBack, err := a.store.MigrateDown(cmd.Context())
 			if err != nil {
 				return err

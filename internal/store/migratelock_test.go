@@ -5,20 +5,17 @@ import (
 	"errors"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/pressly/goose/v3/lock"
 
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // migrateLockClass is store.migrateLockClass.
 const migrateLockClass = 0x6d68
-
-// lockTestDeadline only guards against a hang; the tests wait for signals.
-const lockTestDeadline = 2 * time.Minute
 
 // receive returns the next value from ch. It fails the test once ctx
 // ends, so a result that never comes fails with what instead of hanging
@@ -96,7 +93,7 @@ func tryMigrateLock(t *testing.T, ctx context.Context, conn *pgx.Conn) bool {
 // holds it, which fails the test.
 func TestMigrateWaitsForLock(t *testing.T) {
 	dbURL := storetest.NewUnmigrated(t)
-	ctx, cancel := context.WithTimeout(context.Background(), lockTestDeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	defer cancel()
 	holder := connect(t, dbURL)
 	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
@@ -189,7 +186,7 @@ func TestMigrateWaitsForLock(t *testing.T) {
 // running migration.
 func TestMigrationStatusIgnoresLock(t *testing.T) {
 	_, dbURL := storetest.NewWithURL(t)
-	ctx, cancel := context.WithTimeout(context.Background(), lockTestDeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	defer cancel()
 	holder := connect(t, dbURL)
 	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
@@ -245,7 +242,7 @@ func TestMigrationStatusIgnoresLock(t *testing.T) {
 // lock is free; then it holds the lock until unlock.
 func TestLockMigrations(t *testing.T) {
 	a, dbURL := storetest.NewWithURL(t)
-	ctx, cancel := context.WithTimeout(context.Background(), lockTestDeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	defer cancel()
 	b, err := store.Open(ctx, dbURL)
 	if err != nil {
@@ -270,8 +267,8 @@ func TestLockMigrations(t *testing.T) {
 	waited := make(chan struct{})
 	done := make(chan result, 1)
 	collected := false
-	// B ends, and both locks are released, before the stores close, also
-	// when the test fails: pgxpool.Close waits for every connection.
+	// B ends, and both locks are released, also when the test fails, so
+	// that no wait for the lock outlives the test.
 	t.Cleanup(func() {
 		stop()
 		unlockA()
@@ -323,7 +320,7 @@ func TestLockMigrations(t *testing.T) {
 // error and leaves neither the lock nor a waiting session behind.
 func TestLockMigrationsCancel(t *testing.T) {
 	a, dbURL := storetest.NewWithURL(t)
-	ctx, cancel := context.WithTimeout(context.Background(), lockTestDeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	defer cancel()
 	b, err := store.Open(ctx, dbURL)
 	if err != nil {
@@ -375,5 +372,65 @@ func TestLockMigrationsCancel(t *testing.T) {
 	unlockA()
 	if !tryMigrateLock(t, ctx, observer) {
 		t.Fatal("the lock is held after the cancelled wait and unlock")
+	}
+}
+
+// TestLockMigrationsOutsidePool (#228): the migration lock is held on a
+// connection of its own, outside the pool. With a pool of one connection,
+// a store query still runs while the lock is held, and closing the store
+// neither waits for the lock's connection nor releases the lock.
+func TestLockMigrationsOutsidePool(t *testing.T) {
+	_, dbURL := storetest.NewWithURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	st, err := store.Open(ctx, storetest.WithMaxConns(t, dbURL, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := connect(t, dbURL)
+
+	unlock, err := st.LockMigrations(ctx, func() { t.Error("waited for a free lock") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	closing := false
+	// unlock first, also when the test fails: a lock on a pool connection
+	// would keep the store from closing.
+	t.Cleanup(func() {
+		unlock()
+		if !closing {
+			st.Close()
+			return
+		}
+		// Bounded, so a Close that hangs for another reason fails here
+		// instead of at the go test timeout.
+		wait, stop := context.WithTimeout(context.Background(), testwait.Limit(t))
+		defer stop()
+		select {
+		case <-closed:
+		case <-wait.Done():
+			t.Errorf("the store did not close after the unlock: %v", wait.Err())
+		}
+	})
+
+	// The pool's only connection is free for the store's queries.
+	if _, err := st.MigrationStatus(ctx); err != nil {
+		t.Fatalf("a store query while the lock is held: %v", err)
+	}
+	// Closing the store does not wait for the lock: the defer order of
+	// unlock and close in the commands does not matter.
+	closing = true
+	go func() {
+		st.Close()
+		close(closed)
+	}()
+	receive(t, ctx, closed, "closed store")
+	if tryMigrateLock(t, ctx, observer) {
+		t.Fatal("closing the store released the lock")
+	}
+	unlock()
+	if !tryMigrateLock(t, ctx, observer) {
+		t.Fatal("the lock is held after unlock")
 	}
 }

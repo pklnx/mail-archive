@@ -20,6 +20,14 @@ A complete backup has three parts, made in this order:
    the note. Without it, archived mail stays readable, but every IMAP
    password and every 2FA setup has to be entered again.
 
+A backup taken while `./ma migrate` runs is consistent, but holds only the
+migrations committed when the dump started. `BACKUP-NOTE.txt` names the last
+migration committed when its text was made, before the dump started, so the
+dump can hold later migrations than the note names. While a migration runs,
+the dump can also wait for it or fail on its table locks. After a restore,
+`./ma migrate` applies the rest. Back up before `./ma migrate`, not while it
+runs.
+
 With an [attestation key](./tamper-evidence), `backup` first writes an
 attestation, so that the dump holds the newest one. The data directory, and
 so every backup, contains the private signing key in `data/attest/`. The
@@ -165,9 +173,12 @@ run` both run the new version afterwards.
 Two `./ma migrate` (or `migrate down`) runs at the same time wait for each
 other: the second prints `another migrate is running; waiting for it` and
 starts once the first is done, also after a long index rebuild. Ctrl-C stops
-the wait. The lock covers the whole command (the index rebuild, the
-migrations, the audit log partitions and the password upgrade).
-`./ma migrate status` and `./ma backup` do not wait for a running migration.
+the wait. The lock covers the whole command: for `migrate`, the index
+rebuild, the migrations, the audit log partitions and the password upgrade;
+for `migrate down`, its index rebuild check, the audit log partitions and the
+rollback. `./ma migrate status` and `./ma backup` do not wait for a running
+migration; a backup taken meanwhile records the last committed migration
+(see [Backups](#backups)).
 If a `migrate` is killed during a long statement (an index rebuild, for
 example), PostgreSQL keeps its locks until that statement ends, so the next
 `migrate` waits until then.
