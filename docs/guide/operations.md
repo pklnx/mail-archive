@@ -179,9 +179,19 @@ for `migrate down`, its index rebuild check, the audit log partitions and the
 rollback. `./ma migrate status` and `./ma backup` do not wait for a running
 migration; a backup taken meanwhile records the last committed migration
 (see [Backups](#backups)).
-If a `migrate` is killed during a long statement (an index rebuild, for
-example), PostgreSQL keeps its locks until that statement ends, so the next
-`migrate` waits until then.
+If a `migrate` is killed (SIGKILL, a crashed container) during a long
+migration statement, the server ends that statement about 10 seconds after
+the process died, or about 2 minutes after its host vanished (over a TCP
+connection), with PostgreSQL 14 or later on Linux, as in the bundled image.
+Until then the statement still holds goose's migration lock, and the next
+`migrate` or `migrate down` waits for it and says so:
+`waiting for goose's migration lock, held by database backend 12345 (active for 3m12s): ...`.
+The wait has no time limit; Ctrl-C stops it. If no
+`migrate` runs anywhere, the message names the `pg_cancel_backend` and
+`pg_terminate_backend` calls that stop the holder. Statements of the killed
+command outside goose's lock (the index rebuild, the audit log partitions,
+the password upgrade) are not waited for: within those 10 seconds a new
+command can start next to such a statement.
 The web server is not covered: it neither waits for nor blocks a migration,
 so stop it before `./ma migrate` when the release notes say so.
 

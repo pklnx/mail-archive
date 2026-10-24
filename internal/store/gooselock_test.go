@@ -1,0 +1,434 @@
+package store_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"os/exec"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/pressly/goose/v3/lock"
+
+	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
+)
+
+// gooseLockRows is the condition on pg_locks (as l) for goose's lock in
+// the test's database: a single bigint key below 2^32.
+const gooseLockRows = `l.locktype = 'advisory' AND l.classid = 0 AND l.objid::bigint = $1 AND l.objsubid = 1
+	AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`
+
+// countGooseLockWaiters counts the sessions of the test's database that
+// wait for goose's lock.
+func countGooseLockWaiters(ctx context.Context, conn *pgx.Conn) (int, error) {
+	var n int
+	err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_locks l WHERE NOT l.granted AND `+gooseLockRows,
+		lock.DefaultLockID).Scan(&n)
+	return n, err
+}
+
+// gooseLockHeld reports whether a session of the test's database holds
+// goose's lock.
+func gooseLockHeld(t *testing.T, ctx context.Context, conn *pgx.Conn) bool {
+	t.Helper()
+	var held bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks l WHERE l.granted AND `+gooseLockRows+`)`,
+		lock.DefaultLockID).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// backendPID returns the backend process ID of conn.
+func backendPID(t *testing.T, ctx context.Context, conn *pgx.Conn) int64 {
+	t.Helper()
+	var pid int64
+	if err := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+// TestForMigrationsSessionSettings (#253): the connections of a store
+// opened with ForMigrations check for a vanished client every 10 s during
+// a statement and use TCP keepalives; without the option they keep the
+// server's defaults. It checks that the settings are applied, not that a
+// vanished host is detected (that needs a network fault). On a Unix
+// socket PostgreSQL ignores the keepalives, so they are checked over TCP
+// only.
+func TestForMigrationsSessionSettings(t *testing.T) {
+	dbURL := storetest.NewUnmigrated(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	open := func(opts ...store.Option) *store.Store {
+		t.Helper()
+		st, err := store.Open(ctx, dbURL, opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(st.Close)
+		return st
+	}
+	show := func(st *store.Store, name string) string {
+		t.Helper()
+		var v string
+		if err := st.QueryRowForTest(ctx, "SHOW "+name).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	migrating, plain := open(store.ForMigrations()), open()
+	var tcp bool
+	if err := plain.QueryRowForTest(ctx, "SELECT inet_client_addr() IS NOT NULL").Scan(&tcp); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := show(migrating, "client_connection_check_interval"); got != "10s" {
+		t.Errorf("with ForMigrations: client_connection_check_interval = %q, want 10s", got)
+	}
+	if got := show(plain, "client_connection_check_interval"); got != "0" {
+		t.Errorf("without ForMigrations: client_connection_check_interval = %q, want the default 0", got)
+	}
+	if !tcp {
+		t.Log("not a TCP connection: keepalives not checked")
+		return
+	}
+	for name, want := range map[string]string{
+		"tcp_keepalives_idle":     "60",
+		"tcp_keepalives_interval": "10",
+		"tcp_keepalives_count":    "6",
+	} {
+		if got := show(migrating, name); got != want {
+			t.Errorf("with ForMigrations: %s = %q, want %q", name, got, want)
+		}
+		if got := show(plain, name); got == want {
+			t.Errorf("without ForMigrations: %s = %q, the value of ForMigrations", name, got)
+		}
+	}
+}
+
+// orphanChildEnv makes the test binary act as the child of
+// TestMigrationStatementEndsAfterKill. Its value is the URL to connect to.
+const orphanChildEnv = "MAIL_ARCHIVE_TEST_ORPHAN_CHILD_URL"
+
+// orphanApp is the application_name of the child's connection.
+const orphanApp = "orphan-child"
+
+// orphanChild is the child process of TestMigrationStatementEndsAfterKill:
+// on the single connection of its store, which it opens like migrate but
+// with a check interval of 1 s, it takes goose's lock and then runs a
+// statement that sleeps for an hour, as a long migration statement would.
+// The parent kills it meanwhile; it never returns.
+func orphanChild(dbURL string) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbURL, store.ForMigrationsWithCheckInterval("1s"))
+	if err != nil {
+		fmt.Println("unexpected: open the store:", err)
+		os.Exit(3)
+	}
+	var n int
+	if err := st.QueryRowForTest(ctx, "SELECT 1 FROM pg_advisory_lock($1)", lock.DefaultLockID).Scan(&n); err != nil {
+		fmt.Println("unexpected: take goose's lock:", err)
+		os.Exit(3)
+	}
+	err = st.QueryRowForTest(ctx, "SELECT 1 FROM pg_sleep(3600)").Scan(&n)
+	fmt.Println("unexpected: the sleep ended:", err)
+	os.Exit(3)
+}
+
+// TestMigrationStatementEndsAfterKill (#253): when a migrate is killed
+// (SIGKILL) during a long statement on the connection that holds goose's
+// lock, the server ends the statement soon after, and with it the backend
+// and the lock, instead of running the statement to its end. Without
+// ForMigrations, the statement (an hour of pg_sleep) runs on and the test
+// fails at its bound.
+func TestMigrationStatementEndsAfterKill(t *testing.T) {
+	if dbURL := os.Getenv(orphanChildEnv); dbURL != "" {
+		orphanChild(dbURL) // before any storetest call: it creates no database
+	}
+
+	dbURL := storetest.NewUnmigrated(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	observer := connect(t, dbURL)
+	// Registered before the child starts, and run whatever the result: no
+	// sleeping backend outlives the test on the shared server.
+	t.Cleanup(func() {
+		_, _ = observer.Exec(context.Background(), `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+			WHERE datname = current_database() AND application_name = $1`, orphanApp)
+	})
+
+	childURL := storetest.WithMaxConns(t, storetest.WithApplicationName(t, dbURL, orphanApp), 1)
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMigrationStatementEndsAfterKill$") //nolint:gosec // the test binary itself
+	cmd.Env = append(os.Environ(), orphanChildEnv+"="+childURL)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	collected := false
+	t.Cleanup(func() {
+		cancel() // kills the child if it still runs
+		if !collected {
+			<-exited
+		}
+	})
+
+	// The child's statement runs, on the connection that holds goose's lock.
+	var pid int64
+	for {
+		err := observer.QueryRow(ctx, `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid = a.pid
+			WHERE a.datname = current_database() AND a.application_name = $2 AND a.state = 'active'
+			  AND a.query LIKE '%pg_sleep%' AND l.granted AND `+gooseLockRows, lock.DefaultLockID, orphanApp).Scan(&pid)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("no sleeping statement of the child: %v", err)
+		}
+		select {
+		case err := <-exited:
+			collected = true
+			t.Fatalf("the child ended before its statement ran: %v\n%s", err, out.String())
+		default:
+		}
+	}
+
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+		collected = true
+	case <-ctx.Done():
+		t.Fatalf("the child did not end: %v", ctx.Err())
+	}
+
+	for {
+		var running bool
+		err := observer.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)`, pid).Scan(&running)
+		if ctx.Err() != nil {
+			t.Fatalf("the statement of the killed process still runs: %v", ctx.Err())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !running {
+			break
+		}
+	}
+	if gooseLockHeld(t, ctx, observer) {
+		t.Fatal("goose's lock is held after the backend ended")
+	}
+}
+
+// TestMigrateSaysWhoHoldsGooseLock (#253): while another session holds
+// goose's lock, Migrate calls the function set with SetGooseLockWait once
+// with that session, waits without a time limit, and migrates once the
+// lock is free; afterwards the lock is free. The holder is idle (a session
+// that holds the lock between statements) or active (a statement of a
+// killed migrate). Without the custom locker, goose retries silently and
+// the function is never called.
+func TestMigrateSaysWhoHoldsGooseLock(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		name := map[bool]string{false: "idle", true: "active"}[active]
+		t.Run(name, func(t *testing.T) {
+			// Unmigrated: goose takes its lock only when something is
+			// pending.
+			dbURL := storetest.NewUnmigrated(t)
+			ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+			defer cancel()
+			observer := connect(t, dbURL)
+			holder := connect(t, dbURL)
+			holderPID := backendPID(t, ctx, holder)
+			if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
+				t.Fatal(err)
+			}
+			// release frees goose's lock: an idle holder lets go of it; an
+			// active one is cancelled, which ends its session.
+			release := func() {
+				if _, err := holder.Exec(ctx, "SELECT pg_advisory_unlock($1)", lock.DefaultLockID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if active {
+				sleepCtx, stopSleep := context.WithCancel(ctx)
+				slept := make(chan struct{})
+				go func() {
+					defer close(slept)
+					_, _ = holder.Exec(sleepCtx, "SELECT pg_sleep(3600)")
+				}()
+				release = func() {
+					stopSleep()
+					<-slept
+				}
+				t.Cleanup(release)
+				for {
+					var state string
+					if err := observer.QueryRow(ctx, "SELECT coalesce(state, '') FROM pg_stat_activity WHERE pid = $1", holderPID).Scan(&state); err != nil {
+						t.Fatal(err)
+					}
+					if state == "active" {
+						break
+					}
+				}
+			}
+
+			st := openNamed(t, ctx, dbURL, "migrate")
+			waits := make(chan store.GooseLockHolder, 4)
+			st.SetGooseLockWait(func(h store.GooseLockHolder) { waits <- h })
+			migrateCtx, stop := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			collected := false
+			t.Cleanup(func() {
+				stop()
+				if !collected {
+					<-done
+				}
+			})
+			go func() {
+				_, err := st.Migrate(migrateCtx)
+				done <- err
+			}()
+
+			h := receive(t, ctx, waits, "call of the wait function")
+			if h.PID != holderPID {
+				t.Errorf("holder pid %d, want %d", h.PID, holderPID)
+			}
+			if h.State != name {
+				t.Errorf("holder state %q, want %q", h.State, name)
+			}
+			if active && (h.ActiveFor <= 0 || h.ActiveFor > testwait.Limit(t)) {
+				t.Errorf("active for %v", h.ActiveFor)
+			}
+			if !active && h.ActiveFor != 0 {
+				t.Errorf("an idle holder is active for %v", h.ActiveFor)
+			}
+			for {
+				n, err := countGooseLockWaiters(ctx, observer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n > 0 {
+					break
+				}
+				select {
+				case err := <-done:
+					collected = true
+					t.Fatalf("Migrate returned while goose's lock was held: %v", err)
+				default:
+				}
+			}
+
+			release()
+			err := receive(t, ctx, done, "migration result")
+			collected = true
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := len(waits); n != 0 {
+				t.Errorf("the wait function was called %d more times", n)
+			}
+			if gooseLockHeld(t, ctx, observer) {
+				t.Error("goose's lock is held after Migrate")
+			}
+		})
+	}
+}
+
+// TestGooseLockHolderOfAnotherRole (#253): when goose's lock is held by a
+// session of a role whose activity the migrating role may not see, the
+// wait function still gets the holder's pid, with an empty state and no
+// duration (pg_stat_activity shows NULL for them). The test needs a role
+// that can create roles.
+func TestGooseLockHolderOfAnotherRole(t *testing.T) {
+	admin, dbURL := storetest.NewWithURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	// goose takes its lock only when something is pending.
+	if _, err := admin.MigrateDown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	holder := connect(t, dbURL)
+	var canCreate bool
+	if err := holder.QueryRow(ctx, "SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname = current_user").Scan(&canCreate); err != nil {
+		t.Fatal(err)
+	}
+	if !canCreate {
+		t.Skip("the test role cannot create roles")
+	}
+	suffix, password := make([]byte, 6), make([]byte, 16)
+	_, _ = rand.Read(suffix)
+	_, _ = rand.Read(password)
+	role := "mailarchive_test_role_" + hex.EncodeToString(suffix)
+	pw := hex.EncodeToString(password) // hex: safe in the literal
+	ident := pgx.Identifier{role}.Sanitize()
+	if _, err := holder.Exec(ctx, "CREATE ROLE "+ident+" LOGIN PASSWORD '"+pw+"'"); err != nil {
+		t.Fatal(err)
+	}
+	// Registered before the store opens, so it runs after the store
+	// closed. DROP OWNED drops the grant below.
+	t.Cleanup(func() {
+		for _, q := range []string{"DROP OWNED BY " + ident, "DROP ROLE " + ident} {
+			if _, err := holder.Exec(context.Background(), q); err != nil {
+				t.Errorf("%s: %v", q, err)
+			}
+		}
+	})
+	// goose reads the applied versions before it takes its lock.
+	if _, err := holder.Exec(ctx, "GRANT SELECT ON goose_db_version TO "+ident); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(role, pw)
+
+	holderPID := backendPID(t, ctx, holder)
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = holder.Exec(context.Background(), "SELECT pg_advisory_unlock_all()") })
+
+	st, err := store.Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	waits := make(chan store.GooseLockHolder, 1)
+	st.SetGooseLockWait(func(h store.GooseLockHolder) { waits <- h })
+	migrateCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	collected := false
+	t.Cleanup(func() {
+		stop()
+		if !collected {
+			<-done
+		}
+	})
+	go func() {
+		_, err := st.Migrate(migrateCtx)
+		done <- err
+	}()
+
+	h := receive(t, ctx, waits, "call of the wait function")
+	if h.PID != holderPID || h.State != "" || h.ActiveFor != 0 {
+		t.Errorf("holder %+v, want pid %d without state and duration", h, holderPID)
+	}
+	stop()
+	err = receive(t, ctx, done, "end of the cancelled wait")
+	collected = true
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled wait: %v", err)
+	}
+}

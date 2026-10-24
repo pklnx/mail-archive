@@ -35,3 +35,7 @@ func (s *Store) HoldBlobWaitSlotForTest(ctx context.Context) (release func(), er
 func (s *Store) AcquiredConnsForTest() int32 {
 	return s.pool.Stat().AcquiredConns()
 }
+
+// ForMigrationsWithCheckInterval is ForMigrations with another client
+// connection check interval.
+var ForMigrationsWithCheckInterval = withCheckInterval

@@ -18,7 +18,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/lock"
 
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
@@ -46,11 +45,78 @@ type Store struct {
 	// blobParked counts the writers waiting for one.
 	blobWait   chan struct{}
 	blobParked atomic.Int32
+	// gooseLockWait is called when Migrate or MigrateDown has to wait
+	// for goose's lock (see SetGooseLockWait).
+	gooseLockWait func(GooseLockHolder)
+}
+
+// Option configures Open.
+type Option func(*openConfig)
+
+type openConfig struct {
+	// settings are the SET statements run on every new connection.
+	settings []string
+}
+
+// ForMigrations sets up the store for `migrate` and `migrate down`, so
+// that a statement of a killed command does not run on for long and keep
+// goose's lock (#253). Every new connection of the pool gets:
+//
+//   - client_connection_check_interval = 10s: PostgreSQL 14 and later on
+//     Linux check every 10 s during a running statement whether the client
+//     is still there, and abort the statement about 10 s after its socket
+//     closed (SIGKILL, a crashed container). Without it, the server notices
+//     only when the statement ends.
+//   - TCP keepalives (idle 60 s, then every 10 s, 6 probes): if the client's
+//     host or network vanishes and no FIN arrives, the server notices after
+//     about 2 minutes instead of the kernel default of about 2 hours. They
+//     apply to TCP connections only; PostgreSQL ignores them on a Unix
+//     socket.
+//
+// Each SET is best effort: its error is ignored, so a server or proxy that
+// refuses one (PostgreSQL before 14, a platform without the check, a
+// pooler) works as before, just without that setting.
+func ForMigrations() Option {
+	return withCheckInterval("10s")
+}
+
+// withCheckInterval is ForMigrations with another client connection check
+// interval, for tests.
+func withCheckInterval(interval string) Option {
+	return func(c *openConfig) {
+		c.settings = append(c.settings,
+			"SET client_connection_check_interval = '"+interval+"'",
+			"SET tcp_keepalives_idle = 60",
+			"SET tcp_keepalives_interval = 10",
+			"SET tcp_keepalives_count = 6",
+		)
+	}
 }
 
 // Open connects to the database.
-func Open(ctx context.Context, url string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
+	var oc openConfig
+	for _, o := range opts {
+		o(&oc)
+	}
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	if settings := oc.settings; len(settings) > 0 {
+		cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			for _, set := range settings {
+				// Best effort (see ForMigrations): a refused SET is
+				// ignored. Only a connection that broke on the way is
+				// not handed out.
+				if _, err := conn.Exec(ctx, set); err != nil && conn.IsClosed() {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -59,6 +125,14 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
 	return &Store{pool: pool, q: db.New(pool), blobWait: make(chan struct{}, blobWaiters)}, nil
+}
+
+// SetGooseLockWait sets the function that Migrate and MigrateDown call
+// once when goose's lock is held by another session, before they wait for
+// it (see gooseLocker). It gets the session that holds the lock. Call it
+// before Migrate or MigrateDown, not while one runs.
+func (s *Store) SetGooseLockWait(onWait func(GooseLockHolder)) {
+	s.gooseLockWait = onWait
 }
 
 // Close releases all connections.
@@ -134,11 +208,11 @@ func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) 
 
 // withMigrations runs fn with a goose provider for the embedded migrations.
 // With locked, the provider takes goose's session lock (a single bigint
-// advisory lock, lock.DefaultLockID) for each Up or Down, so that two
-// migrations at the same time never apply the same version: the second
-// retries every second for up to 5 minutes. Status reads go without it,
-// because goose's Status takes the lock too and would wait behind a
-// running migration.
+// advisory lock, lock.DefaultLockID) for each Up or Down, on the
+// connection that runs the migrations, so that two migrations at the same
+// time never apply the same version. The second waits without a time limit
+// and says so (gooseLocker). Status reads go without it, because goose's
+// Status takes the lock too and would wait behind a running migration.
 func (s *Store) withMigrations(locked bool, fn func(*goose.Provider) error) error {
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
@@ -146,11 +220,7 @@ func (s *Store) withMigrations(locked bool, fn func(*goose.Provider) error) erro
 	}
 	var opts []goose.ProviderOption
 	if locked {
-		locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 300))
-		if err != nil {
-			return err
-		}
-		opts = append(opts, goose.WithSessionLocker(locker))
+		opts = append(opts, goose.WithSessionLocker(gooseLocker{onWait: s.gooseLockWait}))
 	}
 	sqlDB := stdlib.OpenDBFromPool(s.pool)
 	defer func(d *sql.DB) { _ = d.Close() }(sqlDB)

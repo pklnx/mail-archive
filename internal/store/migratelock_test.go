@@ -45,14 +45,29 @@ func openNamed(t *testing.T, ctx context.Context, dbURL, name string) *store.Sto
 }
 
 // tryingGooseLock counts the given application names of the test's
-// database whose last query is goose's try of its lock. It counts by name,
-// so the query never counts itself, though its text contains the try.
+// database whose last query tries or waits for an advisory lock, as goose's
+// lock does. It counts by name, so the query never counts itself, though
+// its text contains the pattern.
 func tryingGooseLock(t *testing.T, ctx context.Context, conn *pgx.Conn, names ...string) int {
 	t.Helper()
 	var n int
 	if err := conn.QueryRow(ctx, `SELECT count(DISTINCT application_name) FROM pg_stat_activity
 		WHERE datname = current_database() AND application_name = ANY($1)
-		  AND query LIKE '%pg_try_advisory_lock%'`, names).Scan(&n); err != nil {
+		  AND query LIKE '%advisory_lock(%'`, names).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// waitingForGooseLock counts the given application names of the test's
+// database whose backend waits for goose's lock.
+func waitingForGooseLock(t *testing.T, ctx context.Context, conn *pgx.Conn, names ...string) int {
+	t.Helper()
+	var n int
+	if err := conn.QueryRow(ctx, `SELECT count(DISTINCT a.application_name)
+		FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+		WHERE a.application_name = ANY($2) AND NOT l.granted AND `+gooseLockRows,
+		lock.DefaultLockID, names).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -122,7 +137,7 @@ func TestMigrateWaitsForLock(t *testing.T) {
 	pending := len(stores)
 	// The migrations end before the stores close, also when the test
 	// fails: pgxpool.Close waits for every connection, and a migration
-	// would otherwise retry the lock for 5 minutes.
+	// would otherwise wait for the lock without a time limit.
 	t.Cleanup(func() {
 		stop()
 		_, _ = holder.Exec(context.Background(), "SELECT pg_advisory_unlock_all()")
@@ -137,8 +152,8 @@ func TestMigrateWaitsForLock(t *testing.T) {
 		}()
 	}
 
-	// Wait until both try goose's lock; neither may finish meanwhile.
-	for tryingGooseLock(t, ctx, holder, "migrate-a", "migrate-b") < 2 {
+	// Wait until both wait for goose's lock; neither may finish meanwhile.
+	for waitingForGooseLock(t, ctx, holder, "migrate-a", "migrate-b") < 2 {
 		select {
 		case r := <-results:
 			pending--
