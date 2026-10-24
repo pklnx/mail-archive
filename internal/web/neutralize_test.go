@@ -1,11 +1,14 @@
 package web
 
 import (
+	"io"
 	"strings"
 	"testing"
 	"unsafe"
 
 	"golang.org/x/net/html"
+
+	"github.com/pklnx/mail-archive/internal/mime"
 )
 
 // neutralizeCase is one input of neutralizeHTML and its exact output.
@@ -34,6 +37,7 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"tab, LF and CR", "<template\t\r\n shadowrootmode=closed\r\nx>", "<template\t\r\n data-shadowrootmode=closed\r\nx>"},
 		{"slash separator", `<template/shadowrootmode=closed>`, `<template/data-shadowrootmode=closed>`},
 		{"slash and space", `<template / shadowrootmode=closed>`, `<template / data-shadowrootmode=closed>`},
+		{"slash after a valueless name", `<template a/shadowrootmode=closed>`, `<template a/data-shadowrootmode=closed>`},
 		{"slash after a value", `<template a="x"/shadowrootmode=closed>`, `<template a="x"/data-shadowrootmode=closed>`},
 		{"no space after a quoted value", `<template x="a"shadowrootmode=closed>`, `<template x="a"data-shadowrootmode=closed>`},
 		{"no space after a single-quoted value", `<template x='a'shadowrootmode=closed>`, `<template x='a'data-shadowrootmode=closed>`},
@@ -70,6 +74,7 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"uppercase", `<IFRAME SrcDoc="x"></IFRAME>`, `<IFRAME data-SrcDoc="x"></IFRAME>`},
 		{"form feed", "<iframe\fsrcdoc=x></iframe>", "<iframe\fdata-srcdoc=x></iframe>"},
 		{"slash separator", `<iframe/srcdoc=x></iframe>`, `<iframe/data-srcdoc=x></iframe>`},
+		{"slash after a valueless name", `<iframe a/srcdoc=x></iframe>`, `<iframe a/data-srcdoc=x></iframe>`},
 		{"no space after a quoted value", `<iframe style="border:0"srcdoc=x></iframe>`, `<iframe style="border:0"data-srcdoc=x></iframe>`},
 		{"entity-escaped content", `<iframe srcdoc="&#x3C;a href=/api/x&#x3E;x&#x3C;/a&#x3E;"></iframe>`,
 			`<iframe data-srcdoc="&#x3C;a href=/api/x&#x3E;x&#x3C;/a&#x3E;"></iframe>`},
@@ -255,28 +260,8 @@ func FuzzNeutralizeHTML(f *testing.F) {
 		}
 		// 2. Every candidate, tokenized on its own, has no attribute with
 		// its rule's prefix.
-		for p := strings.IndexByte(out, '<'); p >= 0; {
-			for _, ru := range neutralizeRules {
-				e := p + 1 + len(ru.tag)
-				if e >= len(out) || !hasPrefixASCIIFold(out[p+1:], ru.tag) || !isTagNameEnd(out[e]) {
-					continue
-				}
-				z := html.NewTokenizer(strings.NewReader(out[p:]))
-				if tt := z.Next(); tt != html.StartTagToken && tt != html.SelfClosingTagToken {
-					continue
-				}
-				tok := z.Token()
-				for _, a := range tok.Attr {
-					if strings.HasPrefix(a.Key, ru.prefix) {
-						t.Fatalf("candidate at %d keeps %q:\n in %q\nout %q", p, a.Key, in, out)
-					}
-				}
-			}
-			n := strings.IndexByte(out[p+1:], '<')
-			if n < 0 {
-				break
-			}
-			p += 1 + n
+		if p, key, keeps := neutralizeCandidateKeeps(out); keeps {
+			t.Fatalf("candidate at %d keeps %q:\n in %q\nout %q", p, key, in, out)
 		}
 		// 3. The parse oracle.
 		if s := neutralizeSurvivors(out); len(s) > 0 {
@@ -299,6 +284,96 @@ func FuzzNeutralizeHTML(f *testing.F) {
 			if ti[k] != to[k] || ei[k]+shift != eo[k] {
 				t.Fatalf("token %d: %v ending at %d -> %v ending at %d:\n in %q\nout %q", k, ti[k], ei[k], to[k], eo[k], in, out)
 			}
+		}
+	})
+}
+
+// neutralizeCandidateKeeps tokenizes every candidate in out on its own with
+// x/net/html's Tokenizer and reports the first one that keeps an attribute
+// with its rule's prefix: its offset and the attribute.
+func neutralizeCandidateKeeps(out string) (at int, key string, keeps bool) {
+	for p := strings.IndexByte(out, '<'); p >= 0; {
+		for _, ru := range neutralizeRules {
+			e := p + 1 + len(ru.tag)
+			if e >= len(out) || !hasPrefixASCIIFold(out[p+1:], ru.tag) || !isTagNameEnd(out[e]) {
+				continue
+			}
+			z := html.NewTokenizer(strings.NewReader(out[p:]))
+			if tt := z.Next(); tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+				continue
+			}
+			for _, a := range z.Token().Attr {
+				if strings.HasPrefix(a.Key, ru.prefix) {
+					return p, a.Key, true
+				}
+			}
+		}
+		n := strings.IndexByte(out[p+1:], '<')
+		if n < 0 {
+			break
+		}
+		p += 1 + n
+	}
+	return 0, "", false
+}
+
+// servedCIDParts is a stored message with inline images whose Content-IDs
+// end in "=" and whose base64 has no padding (one with "/"), so that
+// inlining a reference changes how the bytes after it tokenize. Its parts
+// and an opener feed servedMailHTML in FuzzServedMailHTML.
+func servedCIDParts(t testing.TB) ([]mime.Part, func() (io.ReadCloser, error)) {
+	t.Helper()
+	raw := cidMessage("<p>x</p>",
+		inlinePart{"image/png", "a@x=", "\x89PNG\r\n\x1a\n\xff"},
+		inlinePart{"image/gif", "b@x=", "GIF89a\xff\xff\xff"},
+		inlinePart{"image/png", "c@x", "\x89PNG\r\n\x1a\n-c"},
+	)
+	m := mime.Parse(strings.NewReader(raw))
+	if len(m.Parts) != 4 {
+		t.Fatalf("parts: %+v", m.Parts)
+	}
+	return m.Parts, func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(raw)), nil }
+}
+
+// FuzzServedMailHTML checks what the handler serves (servedMailHTML: inline
+// images, preamble, rename), not neutralizeHTML alone: no rewrite after the
+// rename may bring a declarative shadow root or a srcdoc frame back.
+func FuzzServedMailHTML(f *testing.F) {
+	for _, cases := range neutralizeCases {
+		for _, c := range cases {
+			f.Add(c.in)
+		}
+	}
+	for _, s := range []string{
+		`<template cid:q= shadowrootmode=closed>x</template>`,
+		`<iframe cid:q= srcdoc=&lt;a&#32;href=/api/x&gt;x&lt;/a&gt;></iframe>`,
+		`<template cid:a@x= shadowrootmode=closed>x</template>`,
+		`<iframe cid:b@x= srcdoc=x></iframe>`,
+		`<template x=cid:c@x shadowrootmode=closed><img src="cid:c@x">`,
+		`<template cid:a@x=/shadowrootmode=closed>`,
+	} {
+		f.Add(s)
+	}
+	parts, open := servedCIDParts(f)
+	f.Fuzz(func(t *testing.T, in string) {
+		in = cleanLikeMIME(in)
+		served, inl, err := servedMailHTML(in, parts, open)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Alignment: the inlined mail with the preamble, plus prefixes only
+		// directly before a rule prefix.
+		if _, ok := neutralizeInsertions(withPreamble(inl.HTML), served); !ok {
+			t.Fatalf("not an insertion:\n in %q\nserved %q", in, served)
+		}
+		if again := neutralizeHTML(served); again != served {
+			t.Fatalf("served bytes not final:\n in %q\nserved %q", in, served)
+		}
+		if p, key, keeps := neutralizeCandidateKeeps(served); keeps {
+			t.Fatalf("candidate at %d keeps %q:\n in %q\nserved %q", p, key, in, served)
+		}
+		if s := neutralizeSurvivors(served); len(s) > 0 {
+			t.Fatalf("oracle: %v survive:\n in %q\nserved %q", s, in, served)
 		}
 	})
 }

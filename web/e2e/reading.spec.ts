@@ -511,15 +511,6 @@ test.describe("the frame's sandbox and the API guard", () => {
     context.on("request", (r) => {
       if (new URL(r.url()).pathname === "/api/openapi.json") appRequests.push(r.url());
     });
-    // Each of the mail's frames is an empty about:blank in the sandbox, so
-    // the browser blocks the guards' init script there once, as in the mail
-    // frame itself, and logs it as about:blank. Registered after the
-    // fixture's listener: when this counts a message, the fixture has it.
-    const blockedBlank = "Blocked script execution in 'about:blank' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.";
-    let blankErrors = 0;
-    context.on("console", (m) => {
-      if (m.type() === "error" && m.text() === blockedBlank) blankErrors++;
-    });
     await page.goto("/?q=kaleidoscope");
     const list = page.getByRole("list", { name: "Messages" });
     await expect(list.getByRole("button")).toHaveCount(1);
@@ -545,24 +536,13 @@ test.describe("the frame's sandbox and the API guard", () => {
         }),
       };
     });
-    const variants = ["open", "closed", "legacy", "uppercase", "formfeed", "slash", "nospace", "entity", "noscript", "math"];
-    expect(dom.hosts).toEqual(
-      variants.map((c) => ({ case: c, shadow: false, attrs: c === "legacy" ? ["data-shadowroot"] : c === "nospace" ? ["title", "data-shadowrootmode"] : ["data-shadowrootmode"] })),
-    );
-    const frames = ["srcdoc", "srcdoc-upper", "srcdoc-formfeed", "srcdoc-slash", "srcdoc-nospace", "srcdoc-entity", "srcdoc-noscript", "srcdoc-shadow"];
+    // The "cid" cases: the server inlines the unknown cid: reference as
+    // "data:," before it renames, so the rename sees the served bytes.
+    const variants = ["open", "closed", "legacy", "uppercase", "formfeed", "slash", "nospace", "entity", "noscript", "math", "cid"];
+    const templateAttrs: Record<string, string[]> = { legacy: ["data-shadowroot"], nospace: ["title", "data-shadowrootmode"], cid: ["data:,", "data-shadowrootmode"] };
+    expect(dom.hosts).toEqual(variants.map((c) => ({ case: c, shadow: false, attrs: templateAttrs[c] ?? ["data-shadowrootmode"] })));
+    const frames = ["srcdoc", "srcdoc-upper", "srcdoc-formfeed", "srcdoc-slash", "srcdoc-nospace", "srcdoc-entity", "srcdoc-noscript", "srcdoc-cid", "srcdoc-shadow"];
     expect(dom.frames).toEqual(frames.map((c) => ({ case: c, attrs: ["data-srcdoc"], url: "about:blank", empty: true })));
-    // Exactly one blocked init script per frame, each while a frame under
-    // the mail frame is about:blank, and nothing else: the guards' check
-    // stays as strict for every other problem, and later ones still fail
-    // the test.
-    await expect.poll(() => blankErrors).toBe(frames.length);
-    const mailURL = await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.URL);
-    const problems = guards.takeProblems();
-    expect(problems).toHaveLength(frames.length);
-    for (const p of problems) {
-      expect(p.split("\n")[0]).toBe(`console error: ${blockedBlank} (about:blank)`);
-      expect(p).toContain(`    name="" url="about:blank" parent(name="" url="${mailURL}")`);
-    }
 
     // Left and middle clicks at the centre of every box open nothing. Each
     // box is scrolled into view first (the mail is taller than the window).
@@ -591,6 +571,21 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(appRequests).toEqual([]);
     expect(pages).toHaveLength(1);
     expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
+
+    // While Playwright records a trace (the config's retain-on-failure
+    // records every test), its snapshotter logs "Blocked script execution"
+    // once for each document a sandboxed frame commits: here each renamed
+    // frame's about:blank, during the mail's parse, long before the sentinel
+    // opened. Without a trace there is none. Only these are taken, at most
+    // one per frame; anything else fails the test, here or in the guards.
+    const blockedBlank = "Blocked script execution in 'about:blank' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.";
+    const mailURL = await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.URL);
+    const problems = guards.takeProblems();
+    expect(problems.length).toBeLessThanOrEqual(frames.length);
+    for (const p of problems) {
+      expect(p.split("\n")[0]).toBe(`console error: ${blockedBlank} (about:blank)`);
+      expect(p).toContain(`    name="" url="about:blank" parent(name="" url="${mailURL}")`);
+    }
   });
 
   test("a navigation to an API route a browser does not open is refused", async ({ page, guards }) => {

@@ -36,8 +36,10 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
     text: new RegExp(`^Loading the image '${remote}' violates the following Content Security Policy directive: "img-src [^"]*"\\. The action has been blocked\\.\\s*$`),
     url: mailFrame,
   },
-  // This suite's own init script (the CSP listener below): the frame has no
-  // allow-scripts, so it never runs there.
+  // Playwright's trace snapshotter, while a trace is recorded (the config's
+  // retain-on-failure records every test): in a frame without
+  // allow-scripts it is blocked, and the browser logs it. Without a trace
+  // there is no such message (#209, part 1).
   {
     text: new RegExp(`^Blocked script execution in '${message}/html[^']*' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\\.$`),
     url: /.*/, // reported with or without the frame's URL

@@ -545,6 +545,10 @@ func neutralized(date time.Time) message {
 	b.WriteString(host("entity", "", `<template shadowrootmode="&#99;losed">`, ""))
 	b.WriteString(host("noscript", "<noscript>", `<template shadowrootmode=closed>`, "</noscript>"))
 	b.WriteString(host("math", `<math><mtext><style></style></mtext><title>`, `<template shadowrootmode=closed>`, "</title></math>"))
+	// An unknown cid: reference whose match runs over "=": the server
+	// inlines it as "data:," and only then renames, so that the value
+	// "shadowrootmode=closed" cannot turn into an attribute name.
+	b.WriteString(host("cid", "", `<template cid:q= shadowrootmode=closed>`, ""))
 	b.WriteString(`</div><p>Inline frames:</p><div>`)
 	b.WriteString(frame("srcdoc", `<iframe srcdoc="`+esc(frameDoc("srcdoc"))+`"`, ""))
 	b.WriteString(frame("srcdoc-upper", `<IFRAME SRCDOC="`+esc(frameDoc("srcdoc-upper"))+`"`, ""))
@@ -553,6 +557,8 @@ func neutralized(date time.Time) message {
 	b.WriteString(frame("srcdoc-nospace", `<iframe title="t"srcdoc="`+esc(frameDoc("srcdoc-nospace"))+`"`, ""))
 	b.WriteString(frame("srcdoc-entity", `<iframe srcdoc="`+strings.NewReplacer("<", "&#x3C;", ">", "&#x3E;", `"`, "&#x22;").Replace(frameDoc("srcdoc-entity"))+`"`, ""))
 	b.WriteString(frame("srcdoc-noscript", `<noscript><iframe srcdoc="`+esc(frameDoc("srcdoc-noscript"))+`"`, "</noscript>"))
+	// As the "cid" host: an unquoted srcdoc value without white space.
+	b.WriteString(frame("srcdoc-cid", `<iframe cid:q= srcdoc=`+strings.ReplaceAll(esc(frameDoc("srcdoc-cid")), " ", "&#32;"), ""))
 	b.WriteString(frame("srcdoc-shadow", `<iframe srcdoc="`+esc(`<body style="margin:0"><div style="position:fixed;inset:0">`+
 		`<template shadowrootmode="closed">`+link("srcdoc-shadow")+`</template></div></body>`)+`"`, ""))
 	b.WriteString(`</div><p><a href="https://links.example/kaleidoscope">The check online</a></p></body></html>`)

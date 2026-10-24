@@ -467,6 +467,43 @@ func TestMessageHTMLNeutralized(t *testing.T) {
 	if string(body) != want {
 		t.Errorf("body\n got %q\nwant %q", body, want)
 	}
+	if s := neutralizeSurvivors(string(body)); len(s) > 0 {
+		t.Errorf("served body keeps %v", s)
+	}
+}
+
+// Inlining replaces a cid: URL together with the bytes after it up to a
+// quote, white space, ")", "<" or ">", "=" and "/" included. Before the
+// rename, that could turn an attribute value into attribute names: in
+// <template cid:q= shadowrootmode=closed>, "shadowrootmode=closed" is a
+// value until "cid:q=" becomes "data:,". So the rename runs on the served
+// bytes, after inlining (#209). Unknown references become "data:,"; the
+// known ones end without base64 padding, one with "/" in the payload.
+func TestMessageHTMLNeutralizedAfterInlining(t *testing.T) {
+	const (
+		png = "\x89PNG\r\n\x1a\n\xff" // iVBORw0KGgr/
+		gif = "GIF89a\xff\xff\xff"    // R0lGODlh////
+	)
+	mail := `<div><template cid:q= shadowrootmode=closed><a href="/api/openapi.json">u</a></template></div>` +
+		`<iframe cid:q= srcdoc=&lt;a&#32;href=/api/openapi.json&#32;target=_blank&gt;v&lt;/a&gt;></iframe>` +
+		`<div><template cid:a@x= shadowrootmode=closed>w</template></div>` +
+		`<iframe cid:b@x= srcdoc=&lt;p&gt;y&lt;/p&gt;></iframe>`
+	f := newAPIFixture(t)
+	f.addMessage("alice", "INBOX", "after-inlining", cidMessage(mail,
+		inlinePart{"image/png", "a@x=", png}, inlinePart{"image/gif", "b@x=", gif}), 10)
+
+	body, _ := f.htmlBody("after-inlining")
+	want := `<div><template data:, data-shadowrootmode=closed><a href="/api/openapi.json">u</a></template></div>` +
+		`<iframe data:, data-srcdoc=&lt;a&#32;href=/api/openapi.json&#32;target=_blank&gt;v&lt;/a&gt;></iframe>` +
+		`<div><template ` + dataURL("image/png", png) + ` data-shadowrootmode=closed>w</template></div>` +
+		`<iframe ` + dataURL("image/gif", gif) + ` data-srcdoc=&lt;p&gt;y&lt;/p&gt;></iframe>`
+	if body != want {
+		t.Errorf("body\n got %q\nwant %q", body, want)
+	}
+	// The parse oracle on what the handler serves.
+	if s := neutralizeSurvivors(htmlPreamble + body); len(s) > 0 {
+		t.Errorf("served body keeps %v", s)
+	}
 }
 
 // cspDirective returns the sources of one directive of a CSP header.

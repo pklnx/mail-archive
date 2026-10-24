@@ -308,9 +308,10 @@ cannot reach: declarative shadow roots (attributes whose names start with
 `srcdoc` frames (attributes whose names start with `srcdoc` on `<iframe>`).
 It puts `data-` in front of these attribute names, so the template stays an
 unrendered `<template>` and the frame an empty page; their content is not
-shown. Every other byte of the mail stays as it is. The rename does not
-depend on where the tag is, so the same text in a comment, a style or an
-attribute value gets the prefix too. Other ways to nest a document (a frame
+shown. The rename runs last, on the bytes as served (after the images are
+inlined), and changes no other byte. It does not depend on where the tag
+is, so the same text in a comment, a style or an attribute value gets the
+prefix too. Other ways to nest a document (a frame
 or object with a `src` or `data` URL, `embed`, a `<meta>` refresh) load nothing
 under the CSP. This was measured in Chromium only.
 

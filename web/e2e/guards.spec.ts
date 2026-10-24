@@ -43,7 +43,7 @@ base("a blocked script in about:blank is not an exception, with or without a mai
   expect(fromMailFrame("about:blank", blockedBlank)).toBe(false);
   expect(fromMailFrame(frame, blockedBlank)).toBe(false);
   expect(fromMailFrame(`${origin}/`, blockedBlank)).toBe(false);
-  // The one this suite's own init script causes in the mail frame stays expected.
+  // The one the trace snapshotter causes in the mail frame stays expected.
   expect(fromMailFrame(frame, `Blocked script execution in '${frame}' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.`)).toBe(true);
 });
 

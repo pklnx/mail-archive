@@ -2407,10 +2407,11 @@ paths:
         size the frame to the mail, but never scripts. Inline images
         (`cid:` references to PNG, JPEG, GIF or WebP parts, up to 10 MiB of
         `data:` URLs per response) are embedded as `data:` URLs; other,
-        unknown or omitted references become `data:,`. Declarative shadow
-        roots and `srcdoc` frames are neutralized: attribute names starting
-        with `shadowroot` on `<template>` and `srcdoc` on `<iframe>` get the
-        prefix `data-`; every other byte of the mail stays as it is. The
+        unknown or omitted references become `data:,`. Then declarative
+        shadow roots and `srcdoc` frames are neutralized in the bytes as
+        served: attribute names starting with `shadowroot` on `<template>`
+        and `srcdoc` on `<iframe>` get the prefix `data-`; the rename changes
+        no other byte. The
         frame needs no request to the parts endpoint; requests it makes to
         `/api` (images, links) are refused with `403` by their Fetch
         Metadata (see the API description).
