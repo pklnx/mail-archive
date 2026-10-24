@@ -230,7 +230,9 @@ fi
 echo "== audit"
 # Every step above that reads, imports, exports or changes was recorded,
 # with the client address and the host user from ./ma.
-./ma audit --since "$(date -u +%Y-%m-%d)" --format jsonl > "$work/out"
+# A fixed early day, because every run starts on a fresh database (down -v; the
+# migrate check fails on a stale schema), so the window never depends on the clock.
+./ma audit --since 2000-01-01 --format jsonl > "$work/out"
 for action in account.add user.add auth.login message.search data.import data.export data.backup audit.export; do
 	expect "$work/out" "\"action\":\"$action\""
 done
