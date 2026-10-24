@@ -141,7 +141,7 @@ func TestRootFilesServed(t *testing.T) {
 			path := "/assets/" + up + name
 			rec := get(path)
 			// The file server sends a request for index.html to its folder.
-			if rec.Code != http.StatusNotFound && !(name == "index.html" && rec.Code == http.StatusMovedPermanently) {
+			if rec.Code != http.StatusNotFound && (name != "index.html" || rec.Code != http.StatusMovedPermanently) {
 				t.Errorf("%s: status %d, want 404", path, rec.Code)
 			}
 			body := rec.Body.Bytes()
