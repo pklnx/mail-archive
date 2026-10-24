@@ -194,13 +194,25 @@ export interface FrameFit {
  * keeps its height. It also installs the same-origin link blocker (click,
  * auxclick, dragstart).
  *
- * The blocker comes first (#209): the frame is inert from attach until the
- * blocker is on the mail's document, so it takes no click and no focus
- * before. A requestAnimationFrame poll installs it as soon as the mail's
- * document exists (it commits long before its load, which a remote image can
- * hold up), so the mail can be used while it loads; on load it is installed
- * again, with the body. Only install() lifts inert; detach() leaves it, since
- * the frame is then about to go.
+ * The blocker comes first (#209): the frame is inert unless its current
+ * document is a mail document with the blocker on it, so it takes no click
+ * and no focus before. A requestAnimationFrame poll installs it as soon as
+ * the mail's document exists (it commits long before its load, which a
+ * remote image can hold up), so the mail can be used while it loads; on load
+ * it is installed again, with the body. Only install() lifts inert; detach()
+ * leaves it, since the frame is then about to go.
+ *
+ * The same holds for every later document in the frame (#265). When the
+ * frame leaves the guarded mail document (its pagehide: a link that opens in
+ * the frame itself, Back or Forward), the frame turns inert, the listeners
+ * come off and the poll runs again. The parent gets no early signal for a
+ * document that comes back (Back to the mail), so this is a gate, not a
+ * detector: the next mail document commits into a frame that is already
+ * inert, and the poll installs the blocker on it. Until then the frame stays
+ * inert, also on a document the parent cannot read (the browser's error page
+ * after a link the CSP's frame-src refuses). A pagehide with persisted set
+ * (the whole app goes into the back/forward cache) changes nothing: the same
+ * document comes back with its listeners.
  *
  * start: the height a replaced frame had (images toggle), so the page does
  * not jump until the new one is measured.
@@ -218,9 +230,17 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
   let loaded = false;
   // The pending poll frame, 0 when none.
   let poll = 0;
+  // The guarded document the frame left (its pagehide), until the next
+  // install: while it is still the frame's document, it is not installed again.
+  let left: Document | null = null;
+  // Set by detach(): a later pagehide (React removing the frame) or install changes nothing.
+  let detached = false;
   const stopPoll = () => {
     if (poll) cancelAnimationFrame(poll);
     poll = 0;
+  };
+  const startPoll = () => {
+    if (!detached && !poll) poll = requestAnimationFrame(check);
   };
 
   const run = (fromContent: boolean) => {
@@ -240,7 +260,14 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
     detachDoc();
     detachDoc = () => {};
     const doc = frameDocument(frame, origin);
-    if (!doc) return;
+    if (!doc || doc === left) {
+      // No guarded mail document (the error page's load, say): the frame
+      // stays inert and the poll waits for the next mail document.
+      frame.setAttribute("inert", "");
+      startPoll();
+      return;
+    }
+    left = null;
     // ResizeObserver of the parent: the frame runs no script.
     const content = new ResizeObserver(() => {
       if (run(true)) content.disconnect();
@@ -256,22 +283,37 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
     for (const type of ["click", "auxclick", "dragstart"]) doc.addEventListener(type, block, true);
     const fonts = doc.fonts;
     fonts?.addEventListener("loadingdone", refit);
+    // The frame leaves this document: inert until the next one is installed.
+    const win = doc.defaultView;
+    const hide = (e: Event) => {
+      if (detached || (e as PageTransitionEvent).persisted) return;
+      frame.setAttribute("inert", "");
+      left = doc;
+      detachDoc();
+      detachDoc = () => {};
+      startPoll();
+    };
+    win?.addEventListener("pagehide", hide);
     detachDoc = () => {
       content.disconnect();
       for (const type of ["load", "error", "toggle"]) doc.removeEventListener(type, refit, true);
       for (const type of ["click", "auxclick", "dragstart"]) doc.removeEventListener(type, block, true);
       fonts?.removeEventListener("loadingdone", refit);
+      win?.removeEventListener("pagehide", hide);
     };
     // Only now, with the blocker on the mail's document.
     frame.removeAttribute("inert");
   };
 
-  // Until the mail's document exists: the frame's initial about:blank first.
-  const check = () => {
+  // Until a mail document other than the left one exists: the frame's
+  // initial about:blank first, after a pagehide the left document, an
+  // unreadable one or another URL.
+  function check() {
     poll = 0;
-    if (frameDocument(frame, origin)) install();
-    else poll = requestAnimationFrame(check);
-  };
+    const doc = frameDocument(frame, origin);
+    if (doc && doc !== left) install();
+    else startPoll();
+  }
 
   const onLoad = () => {
     loaded = true;
@@ -294,6 +336,7 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
 
   return {
     detach() {
+      detached = true;
       stopPoll();
       frame.removeEventListener("load", onLoad);
       outer.disconnect();

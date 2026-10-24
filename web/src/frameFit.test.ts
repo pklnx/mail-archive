@@ -494,6 +494,197 @@ describe("attachFrameFit: inert until the link blocker is installed (#209)", () 
   });
 });
 
+describe("attachFrameFit: inert whenever the frame leaves the guarded mail document (#265)", () => {
+  beforeEach(() => {
+    FakeObserver.all = [];
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+  });
+
+  /** A mail document, still loading, with a link into the app and a window that pagehide is dispatched on. */
+  function mailDocument(url = frameURL) {
+    const doc = document.implementation.createHTMLDocument("");
+    Object.defineProperty(doc, "URL", { value: url });
+    Object.defineProperty(doc, "baseURI", { value: url });
+    Object.defineProperty(doc, "readyState", { value: "loading", configurable: true });
+    const win = new EventTarget();
+    Object.defineProperty(doc, "defaultView", { value: win });
+    const a = doc.createElement("a");
+    a.setAttribute("href", "/api/status");
+    doc.body.append(a);
+    return {
+      doc,
+      /** Whether a click on its link into the app is cancelled now. */
+      clickBlocked() {
+        const click = new MouseEvent("click", { bubbles: true, cancelable: true, composed: true });
+        a.dispatchEvent(click);
+        return click.defaultPrevented;
+      },
+      /** The frame leaves the document; persisted: into the back/forward cache. */
+      pagehide(persisted = false) {
+        const e = new Event("pagehide");
+        Object.defineProperty(e, "persisted", { value: persisted });
+        win.dispatchEvent(e);
+      },
+    };
+  }
+
+  /**
+   * A frame that shows `shown` (null: a document the parent cannot read,
+   * such as the browser's error page). Records, each time inert is removed,
+   * whether a click into the app on the shown document is cancelled then.
+   */
+  function frameAt(first: Document | null) {
+    const s = setup({ content: () => 1200 });
+    let shown = first;
+    Object.defineProperty(s.frame, "contentDocument", { get: () => shown, configurable: true });
+    const blockedAtRemoval: boolean[] = [];
+    const remove = s.frame.removeAttribute.bind(s.frame);
+    s.frame.removeAttribute = (name: string) => {
+      if (name === "inert" && shown) {
+        const click = new MouseEvent("click", { bubbles: true, cancelable: true, composed: true });
+        shown.querySelector("a")!.dispatchEvent(click);
+        blockedAtRemoval.push(click.defaultPrevented);
+      }
+      remove(name);
+    };
+    return { ...s, blockedAtRemoval, show: (doc: Document | null) => (shown = doc) };
+  }
+
+  /** A same-origin document that is not a mail (a route the frame was navigated to). */
+  function otherDocument() {
+    const doc = document.implementation.createHTMLDocument("");
+    Object.defineProperty(doc, "URL", { value: `${origin}/api/openapi.json?again` });
+    doc.body.append(doc.createElement("a"));
+    return doc;
+  }
+
+  /** A frame with the mail installed by the poll, its blocker on. */
+  function installed() {
+    const raf = animationFrames();
+    const mail = mailDocument();
+    const m = frameAt(mail.doc);
+    const f = attachFrameFit(m.frame, m.box, "", origin);
+    expect(m.frame.hasAttribute("inert")).toBe(false);
+    expect(mail.clickBlocked()).toBe(true);
+    expect(raf.pending()).toBe(0);
+    return { raf, mail, m, f };
+  }
+
+  it("turns inert on the guarded document's pagehide, removes its listeners and polls again", () => {
+    const { raf, mail, m, f } = installed();
+    mail.pagehide();
+    expect(m.frame.getAttribute("inert")).toBe("");
+    // The listeners are off: a click into the app on the old document is no longer cancelled.
+    expect(mail.clickBlocked()).toBe(false);
+    expect(raf.pending()).toBe(1);
+    f.detach();
+  });
+
+  it("stays inert on an unreadable document, another URL and the left document, and installs the next mail document before lifting inert", () => {
+    const { raf, mail, m, f } = installed();
+    mail.pagehide();
+    // The browser's error page (or any document the parent cannot read).
+    m.show(null);
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(raf.pending()).toBe(1);
+    // A same-origin document that is no mail.
+    m.show(otherDocument());
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(raf.pending()).toBe(1);
+    // The left document while it is still the frame's.
+    m.show(mail.doc);
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(mail.clickBlocked()).toBe(false);
+    expect(raf.pending()).toBe(1);
+    // Back: the mail's document again (a new one), still loading.
+    const again = mailDocument();
+    m.show(again.doc);
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(false);
+    // The first removal was the install on attach; at the second, the new
+    // document's click into the app was already cancelled.
+    expect(m.blockedAtRemoval).toEqual([true, true]);
+    expect(again.clickBlocked()).toBe(true);
+    expect(raf.pending()).toBe(0);
+    // Its own pagehide gates it again: the left document was cleared and replaced.
+    again.pagehide();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(raf.pending()).toBe(1);
+    f.detach();
+  });
+
+  it("keeps polling and the frame inert on a load without a mail document, and installs a later one from the poll", () => {
+    // From attach: the frame's first load is the error page.
+    const raf = animationFrames();
+    const m = frameAt(null);
+    const f = attachFrameFit(m.frame, m.box, "", origin);
+    m.frame.dispatchEvent(new Event("load"));
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(raf.pending()).toBe(1);
+    const mail = mailDocument();
+    m.show(mail.doc);
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(false);
+    expect(m.blockedAtRemoval).toEqual([true]);
+    expect(raf.pending()).toBe(0);
+    f.detach();
+
+    // After a pagehide: the error page's load, and the left document's.
+    const s = installed();
+    s.mail.pagehide();
+    s.m.show(null);
+    s.m.frame.dispatchEvent(new Event("load"));
+    expect(s.m.frame.hasAttribute("inert")).toBe(true);
+    expect(s.raf.pending()).toBe(1);
+    s.m.show(s.mail.doc);
+    s.m.frame.dispatchEvent(new Event("load"));
+    expect(s.m.frame.hasAttribute("inert")).toBe(true);
+    expect(s.mail.clickBlocked()).toBe(false);
+    expect(s.raf.pending()).toBe(1);
+    const next = mailDocument();
+    s.m.show(next.doc);
+    s.raf.run();
+    expect(s.m.frame.hasAttribute("inert")).toBe(false);
+    expect(next.clickBlocked()).toBe(true);
+    expect(s.raf.pending()).toBe(0);
+    s.f.detach();
+  });
+
+  it("changes nothing on a persisted pagehide (back/forward cache): not inert, listeners on, no poll", () => {
+    const { raf, mail, m, f } = installed();
+    mail.pagehide(true);
+    expect(m.frame.hasAttribute("inert")).toBe(false);
+    expect(mail.clickBlocked()).toBe(true);
+    expect(raf.pending()).toBe(0);
+    f.detach();
+  });
+
+  it("does nothing on a pagehide after detach, and detach stops a poll that a pagehide started", () => {
+    const a = installed();
+    a.f.detach();
+    a.mail.pagehide();
+    expect(a.m.frame.hasAttribute("inert")).toBe(false);
+    expect(a.raf.pending()).toBe(0);
+
+    const b = installed();
+    b.mail.pagehide();
+    expect(b.raf.pending()).toBe(1);
+    b.f.detach();
+    expect(b.raf.pending()).toBe(0);
+    // A mail document after detach: nothing installs, the frame stays inert.
+    const later = mailDocument();
+    b.m.show(later.doc);
+    b.raf.run();
+    b.m.frame.dispatchEvent(new Event("load"));
+    expect(b.m.frame.hasAttribute("inert")).toBe(true);
+    expect(later.clickBlocked()).toBe(false);
+  });
+});
+
 describe("blockAppLinks", () => {
   const { doc } = setup({ content: () => 0 });
   /** Whether a click on el is cancelled. */
