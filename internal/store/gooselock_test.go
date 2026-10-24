@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -554,4 +555,157 @@ func TestGooseLockHolderOfAnotherRole(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled wait: %v", err)
 	}
+}
+
+// TestMigrateCancelBeforeQuery (#268): a cancel that lands after pgx
+// started one of goose's queries on its *sql.Conn but before pgx sent it
+// ends Migrate, MigrateDown and MigrationStatus with an error that wraps
+// context.Canceled. pgx's stdlib driver turns such a cancel into a bare
+// driver.ErrBadConn; the query-start hook cancels exactly in that window.
+// The cases cover each query of goose's lock (try-lock, holder lookup,
+// wait: the CI interleaving of TestGooseLockHolderOfAnotherRole) and
+// goose's version-table check, which MigrateDown runs after it took the
+// lock and Migrate before (in HasPending, without the lock; goose checks
+// the table once per provider, so Migrate does not check it again under
+// the lock). Afterwards no backend waits for goose's lock, and after Close
+// only the test's holder holds it.
+func TestMigrateCancelBeforeQuery(t *testing.T) {
+	cases := []struct {
+		name string
+		// prefix selects the query: the first query of the store that
+		// starts with it.
+		prefix string
+		// holder: another session holds goose's lock during the call.
+		holder bool
+		// versionTable: the case is goose's version-table check, which
+		// runs with or without goose's lock depending on the call.
+		versionTable bool
+	}{
+		{name: "try-lock", prefix: "SELECT pg_try_advisory_lock("},
+		{name: "holder-lookup", prefix: "SELECT l.pid, a.state", holder: true},
+		{name: "wait", prefix: "SELECT pg_advisory_lock(", holder: true},
+		{name: "version-table", prefix: "SELECT EXISTS ( SELECT 1 FROM pg_tables", versionTable: true},
+	}
+	type call struct {
+		name string
+		// versionTableLocked: the call checks the version table after it
+		// took goose's lock.
+		versionTableLocked bool
+		run                func(context.Context, *store.Store) error
+		db                 func(*testing.T) string
+	}
+	calls := []call{
+		{
+			name: "migrate",
+			run:  func(ctx context.Context, st *store.Store) error { _, err := st.Migrate(ctx); return err },
+			db:   storetest.NewUnmigrated,
+		},
+		{
+			name:               "migrate-down",
+			versionTableLocked: true,
+			run:                func(ctx context.Context, st *store.Store) error { _, err := st.MigrateDown(ctx); return err },
+			db: func(t *testing.T) string {
+				_, dbURL := storetest.NewWithURL(t)
+				return dbURL
+			},
+		},
+	}
+	for _, cl := range calls {
+		for _, c := range cases {
+			name := cl.name + "/" + c.name
+			// locked: goose's lock is held by some session when the
+			// cancel lands.
+			locked := c.holder
+			if c.versionTable {
+				locked = cl.versionTableLocked
+				if locked {
+					name += "-locked"
+				} else {
+					name += "-unlocked"
+				}
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+				defer cancel()
+				dbURL := cl.db(t)
+				observer := connect(t, dbURL)
+				var holderPID int64
+				if c.holder {
+					holder := connect(t, dbURL)
+					holderPID = backendPID(t, ctx, holder)
+					if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				migrateCtx, stop := context.WithCancel(ctx)
+				defer stop()
+				fired := false
+				// The hook runs on the goroutine of the call below, which
+				// is the test's goroutine.
+				st, err := store.Open(ctx, dbURL, store.WithQueryStartHook(func(sql string) {
+					if fired || !strings.HasPrefix(sql, c.prefix) {
+						return
+					}
+					fired = true
+					if held := gooseLockHeld(t, ctx, observer); held != locked {
+						t.Errorf("goose's lock held at the cancel: %v, want %v", held, locked)
+					}
+					stop()
+				}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				st.SetGooseLockWait(func(store.GooseLockHolder) {})
+				err = cl.run(migrateCtx, st)
+				if !fired {
+					t.Fatalf("query %q never started; error %v", c.prefix, err)
+				}
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("cancelled %s: %v, want an error that wraps context.Canceled", cl.name, err)
+				}
+				if n, err := countGooseLockWaiters(ctx, observer); err != nil || n != 0 {
+					t.Errorf("backends waiting for goose's lock: %d (%v), want 0", n, err)
+				}
+				st.Close()
+				// The server releases a closed session's lock
+				// asynchronously; wait until only the holder holds it.
+				for {
+					var others int
+					if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_locks l WHERE l.granted AND l.pid <> $2 AND `+gooseLockRows,
+						lock.DefaultLockID, holderPID).Scan(&others); err != nil {
+						t.Fatalf("goose's lock still held by the store's sessions after Close: %v", err)
+					}
+					if others == 0 {
+						break
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("migration-status/version-table", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+		defer cancel()
+		_, dbURL := storetest.NewWithURL(t)
+		statusCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		fired := false
+		st, err := store.Open(ctx, dbURL, store.WithQueryStartHook(func(sql string) {
+			if !fired && strings.HasPrefix(sql, "SELECT EXISTS ( SELECT 1 FROM pg_tables") {
+				fired = true
+				stop()
+			}
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		_, err = st.MigrationStatus(statusCtx)
+		if !fired {
+			t.Fatalf("version-table check never started; error %v", err)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("cancelled status: %v, want an error that wraps context.Canceled", err)
+		}
+	})
 }
