@@ -44,7 +44,7 @@ func (s *Store) LockMigrations(ctx context.Context, onWait func()) (unlock func(
 	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, 0)", migrateLockClass).Scan(&ok); err != nil {
 		// The lock may have been taken before the query failed: closing
 		// the connection releases it.
-		_ = conn.Close(bg)
+		closeAndWaitCleanup(bg, conn)
 		return nil, fmt.Errorf("take the migration lock: %w", err)
 	}
 	if !ok {
@@ -53,7 +53,7 @@ func (s *Store) LockMigrations(ctx context.Context, onWait func()) (unlock func(
 		}
 		if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1, 0)", migrateLockClass); err != nil {
 			// A cancelled wait leaves the connection unusable; close it.
-			_ = conn.Close(bg)
+			closeAndWaitCleanup(bg, conn)
 			return nil, fmt.Errorf("wait for the migration lock: %w", err)
 		}
 	}
@@ -66,4 +66,26 @@ func (s *Store) LockMigrations(ctx context.Context, onWait func()) (unlock func(
 			_ = conn.Close(bg)
 		})
 	}, nil
+}
+
+// closeAndWaitCleanup closes conn after a failed or cancelled query and
+// waits until pgx has finished closing it. The caller is about to return
+// the error, and the command exits right after (Ctrl-C).
+//
+// When a query's context ends, pgx closes the connection in a background
+// goroutine: it sends the cancel request and then closes the socket, and
+// Close returns at once. A backend that waits for a lock does not notice
+// the closed socket; only the cancel request ends its wait. If the
+// process exits before that goroutine has sent the request, the backend
+// stays queued for the lock with no client (#255). Waiting for
+// CleanupDone makes sure the request is sent.
+//
+// pgx bounds the cleanup to 15 seconds, so the wait ends then at the
+// latest. If the server cannot be reached, Ctrl-C can take that long, and
+// the command's signal handling swallows further interrupts meanwhile. The
+// wait is not capped further: a shorter cap would bring the leftover
+// waiter back exactly when the cancel request is slow.
+func closeAndWaitCleanup(ctx context.Context, conn *pgx.Conn) {
+	_ = conn.Close(ctx)
+	<-conn.PgConn().CleanupDone()
 }

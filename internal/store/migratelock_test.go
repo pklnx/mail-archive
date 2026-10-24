@@ -58,14 +58,22 @@ func tryingGooseLock(t *testing.T, ctx context.Context, conn *pgx.Conn, names ..
 	return n
 }
 
-// waitingForMigrateLock counts the sessions of the test's database that
+// countMigrateLockWaiters counts the sessions of the test's database that
 // wait for the migration command lock.
+func countMigrateLockWaiters(ctx context.Context, conn *pgx.Conn) (int, error) {
+	var n int
+	err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_locks
+		WHERE locktype = 'advisory' AND classid = $1 AND objid = 0 AND objsubid = 2 AND NOT granted
+		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, migrateLockClass).Scan(&n)
+	return n, err
+}
+
+// waitingForMigrateLock is countMigrateLockWaiters that fails the test on
+// an error.
 func waitingForMigrateLock(t *testing.T, ctx context.Context, conn *pgx.Conn) int {
 	t.Helper()
-	var n int
-	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_locks
-		WHERE locktype = 'advisory' AND classid = $1 AND objid = 0 AND objsubid = 2 AND NOT granted
-		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, migrateLockClass).Scan(&n); err != nil {
+	n, err := countMigrateLockWaiters(ctx, conn)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return n

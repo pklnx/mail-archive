@@ -60,7 +60,9 @@ type migrateRun struct {
 // startMigrate runs the migrate command with args in a goroutine. When the
 // test ends, it cancels the command and calls unlock, which releases the
 // lock the test holds, and then waits for the command unless the test took
-// its result: a command that never started is never waited for.
+// its result: a command that never started is never waited for. The wait
+// is bounded, so a command that does not end fails the test instead of
+// hanging until the go test timeout.
 func startMigrate(t *testing.T, ctx context.Context, unlock func(), args ...string) *migrateRun {
 	t.Helper()
 	cmdCtx, stop := context.WithCancel(ctx)
@@ -73,8 +75,16 @@ func startMigrate(t *testing.T, ctx context.Context, unlock func(), args ...stri
 	t.Cleanup(func() {
 		stop()
 		unlock()
-		if !r.collected {
-			<-r.done
+		if r.collected {
+			return
+		}
+		wait, giveUp := context.WithTimeout(context.Background(), testwait.Limit(t))
+		defer giveUp()
+		select {
+		case <-r.done:
+		case <-wait.Done():
+			// Dropping the test database ends the command's connections.
+			t.Errorf("the command %v did not end after the test: %v", args, wait.Err())
 		}
 	})
 	return r
