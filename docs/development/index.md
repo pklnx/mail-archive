@@ -116,7 +116,10 @@ Playwright brings (`pnpm exec playwright --version` names the Playwright
 release; its release notes name the Chromium). Older builds word console
 messages differently, and the guards match some of them by their text. CI
 uses Playwright's own headless shell (`--only-shell`). A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
-trace in `web/test-results/` (`pnpm exec playwright show-trace <file>`).
+trace in `web/test-results/` (`pnpm exec playwright show-trace <file>`); the
+trace has no DOM snapshots and no network log, because Playwright's DOM
+snapshotter makes the browser log blocked script in sandboxed frames, which
+the guards fail on (#260).
 
 The tests fail on page errors, console errors, CSP violations and requests
 to any other host (`web/e2e/fixtures.ts`). They use role and label queries,

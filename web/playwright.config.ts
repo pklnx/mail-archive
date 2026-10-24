@@ -26,7 +26,11 @@ export default defineConfig({
     locale: "en-US",
     timezoneId: "Europe/Berlin",
     actionTimeout: 10_000,
-    trace: "retain-on-failure",
+    // No DOM snapshots: Playwright's DOM snapshotter runs script in every
+    // frame of the page, and in a sandboxed frame without allow-scripts (the
+    // mail frame) the browser blocks that and logs "Blocked script execution",
+    // which the guards rightly fail on (#260). The rest of the trace stays.
+    trace: { mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: true } },
   },
   projects: [
     {
