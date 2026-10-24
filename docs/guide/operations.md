@@ -115,8 +115,8 @@ Delete them once imported. `verify` ignores the `export/` directory.
 ## Upgrades
 
 Back up first (see [Backups](#backups)) and read the release notes of every
-version you skip: they list database migrations and manual steps. Check
-`.env` for a `MAIL_ARCHIVE_IMAGE` line first (see the note below the steps).
+version you skip: they list database migrations and manual steps. Also
+check `.env` for a `MAIL_ARCHIVE_IMAGE` line (see the note below the steps).
 Then, in the directory that holds your `mail-archive/` directory:
 
 ```sh
@@ -144,12 +144,13 @@ The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
 A `MAIL_ARCHIVE_IMAGE` line in the kept `.env` (see [Versions](#versions))
 overrides the new bundle's image: the web server and the CLI (`./ma`) go on
 using the image it names, and `./ma --version` shows that image's version.
-Before `./ma migrate`, remove the line (unless it names a newer build of
-your own) or set it to the new release's exact image, for example
-`ghcr.io/pklnx/mail-archive:X.Y.Z`. If you ran the steps above with the
-line in place, change it as described, run `./ma migrate`, redo any manual
-steps from the release notes that ran with the old image, and run
-`docker compose up -d web` again.
+Unless it names a newer build of your own, remove the line or set it to the
+new release's exact image, for example `ghcr.io/pklnx/mail-archive:X.Y.Z`,
+before `./ma migrate`. If you ran the steps above with the line in place,
+change it as described and repeat the upgrade from `./ma migrate` on, with
+the manual steps from the release notes and the
+[One-time steps](#one-time-steps) in their order, then
+run `docker compose up -d web`.
 
 With a clone of the repository (see [From source](./getting-started#install)),
 `git pull` replaces the download, and `./ma migrate` rebuilds the image for
