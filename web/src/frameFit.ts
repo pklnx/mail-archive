@@ -105,8 +105,10 @@ function isLink(n: unknown): boolean {
 
 /**
  * The link an event on it follows: the innermost link in the event's
- * composed path, so links inside open shadow roots count too (a closed
- * root's inside is not in the path). Without a path, the nearest link
+ * composed path, so links inside open shadow roots count too. The server
+ * neutralizes declarative shadow roots in served mail (#209), so a closed
+ * root, whose inside is not in the path, does not occur there; the composed
+ * path still covers open ones. Without a path, the nearest link
  * among the target's ancestors. Innermost, so that an outer link cannot
  * stand in for an inner one the browser would follow.
  */

@@ -404,6 +404,10 @@ const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sand
 // after "Load remote images", links) carry the session cookie; the Fetch
 // Metadata guard in protect refuses them, and the app blocks clicks on
 // same-origin links in the frame.
+//
+// The served bytes are built by servedMailHTML: it also neutralizes
+// declarative shadow roots and srcdoc frames (#209), which the app's link
+// blocker cannot see into.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -423,10 +427,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusNotFound, "message has no HTML body", nil)
 		return
 	}
-	// Inline images (cid:...) are embedded as data: URLs: img-src has no
-	// 'self', and the Fetch Metadata guard refuses image requests to the
-	// API, so the frame could not load them from the parts endpoint.
-	inl, err := inlineImages(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
+	body, inl, err := servedMailHTML(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
 	if err != nil {
 		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
 	}
@@ -457,7 +458,28 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		"; font-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'"+
 		"; sandbox "+frameSandbox)
 	h.Set("X-Frame-Options", "SAMEORIGIN")
-	_, _ = io.WriteString(w, withPreamble(inl.HTML))
+	_, _ = io.WriteString(w, body)
+}
+
+// servedMailHTML builds the bytes handleMessageHTML serves for a mail's HTML
+// body: inline images (cid:...) embedded as data: URLs (img-src has no
+// 'self', and the Fetch Metadata guard refuses image requests to the API,
+// so the frame could not load them from the parts endpoint), then the
+// preamble, then neutralizeHTML. That renames the attributes that make a
+// nested document the app's link blocker cannot reach (#209): declarative
+// shadow roots (shadowroot... on <template>) and srcdoc frames (srcdoc... on
+// <iframe>) get the prefix "data-", so their content is not shown.
+//
+// neutralizeHTML runs last, on exactly the bytes that are served: any
+// rewrite after it could change how the scanned bytes tokenize. Inlining
+// replaces a cid: URL together with the bytes after it up to a quote, white
+// space, ")", "<" or ">", "=" and "/" included, so before the rename it
+// could turn an attribute value into attribute names. The preamble holds no
+// candidate. The rename changes no other byte: the output is the inlined
+// mail with the preamble and the prefixes inserted.
+func servedMailHTML(html string, parts []mime.Part, open func() (io.ReadCloser, error)) (string, inlineResult, error) {
+	inl, err := inlineImages(html, parts, open)
+	return neutralizeHTML(withPreamble(inl.HTML)), inl, err
 }
 
 func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {

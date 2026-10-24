@@ -499,6 +499,95 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
   });
 
+  test("declarative shadow roots and srcdoc frames in the mail are neutralized by the server", async ({ page, context, guards }) => {
+    // The demo's rendering check (tools/demo, neutralized): boxes whose
+    // content would be a link to /api/openapi.json in a new tab, an API
+    // route a browser opens (the guard lets it through), in a declarative
+    // shadow root or a srcdoc frame in every syntax variant. The server
+    // renames the attributes (#209), so the boxes stay empty: the closed
+    // roots and the frames are out of the app's link blocker's reach.
+    await context.route("https://links.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>check</p>" }));
+    const appRequests: string[] = [];
+    context.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/openapi.json") appRequests.push(r.url());
+    });
+    await page.goto("/?q=kaleidoscope");
+    const list = page.getByRole("list", { name: "Messages" });
+    await expect(list.getByRole("button")).toHaveCount(1);
+    await list.getByRole("button").click();
+    // A message on its own: no conversation toggle.
+    await expect(page.getByRole("article").getByRole("heading", { level: 1 })).toHaveText("Rendering check: boxes that stay empty");
+    await mailReady(page, /kaleidoscope rendering check/);
+    await fitted(page);
+    const pages: string[] = [];
+    context.on("page", (p) => pages.push(p.url()));
+
+    // A template that became a root is gone from the DOM; a renamed one stays.
+    const dom = await frameOf(page).evaluate((f: HTMLIFrameElement) => {
+      const doc = f.contentDocument!;
+      return {
+        hosts: [...doc.querySelectorAll("div[data-case]")].map((h) => {
+          const t = h.querySelector(":scope > template");
+          return { case: h.getAttribute("data-case"), shadow: h.shadowRoot !== null, attrs: t ? t.getAttributeNames() : null };
+        }),
+        frames: [...doc.querySelectorAll("iframe[data-case]")].map((fr) => {
+          const inner = (fr as HTMLIFrameElement).contentDocument;
+          return { case: fr.getAttribute("data-case"), attrs: fr.getAttributeNames().filter((a) => a.includes("srcdoc")), url: inner?.URL, empty: inner?.body?.childNodes.length === 0 };
+        }),
+      };
+    });
+    // The "cid" cases: the server inlines the unknown cid: reference as
+    // "data:," before it renames, so the rename sees the served bytes.
+    const variants = ["open", "closed", "legacy", "uppercase", "formfeed", "slash", "nospace", "entity", "noscript", "math", "cid"];
+    const templateAttrs: Record<string, string[]> = { legacy: ["data-shadowroot"], nospace: ["title", "data-shadowrootmode"], cid: ["data:,", "data-shadowrootmode"] };
+    expect(dom.hosts).toEqual(variants.map((c) => ({ case: c, shadow: false, attrs: templateAttrs[c] ?? ["data-shadowrootmode"] })));
+    const frames = ["srcdoc", "srcdoc-upper", "srcdoc-formfeed", "srcdoc-slash", "srcdoc-nospace", "srcdoc-entity", "srcdoc-noscript", "srcdoc-cid", "srcdoc-shadow"];
+    expect(dom.frames).toEqual(frames.map((c) => ({ case: c, attrs: ["data-srcdoc"], url: "about:blank", empty: true })));
+
+    // Left and middle clicks at the centre of every box open nothing. Each
+    // box is scrolled into view first (the mail is taller than the window).
+    const viewport = page.viewportSize()!;
+    for (const name of [...variants, ...frames]) {
+      const at = await frameOf(page).evaluate((f: HTMLIFrameElement, name) => {
+        const e = f.contentDocument!.querySelector(`[data-case="${name}"]`)!;
+        e.scrollIntoView({ block: "center" });
+        const r = e.getBoundingClientRect();
+        const box = f.getBoundingClientRect();
+        return { x: box.left + f.clientLeft + r.left + r.width / 2, y: box.top + f.clientTop + r.top + r.height / 2 };
+      }, name);
+      expect(at.y, name).toBeGreaterThan(0);
+      expect(at.y, name).toBeLessThan(viewport.height);
+      expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, at), name).toBe("message__frame");
+      await page.mouse.click(at.x, at.y);
+      await page.mouse.click(at.x, at.y, { button: "middle" });
+    }
+    // The external link opens: the signal that the clicks before it were handled.
+    const opened = context.waitForEvent("page");
+    await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.querySelector('a[href^="https://links.example/"]')!.scrollIntoView({ block: "center" }));
+    const at = await linkCenter(page, "The check online");
+    await page.mouse.click(at.x, at.y);
+    const tab = await opened;
+    await expect.poll(() => tab.url()).toBe("https://links.example/kaleidoscope");
+    expect(appRequests).toEqual([]);
+    expect(pages).toHaveLength(1);
+    expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
+
+    // While Playwright records a trace (the config's retain-on-failure
+    // records every test), its snapshotter logs "Blocked script execution"
+    // once for each document a sandboxed frame commits: here each renamed
+    // frame's about:blank, during the mail's parse, long before the sentinel
+    // opened. Without a trace there is none. Only these are taken, at most
+    // one per frame; anything else fails the test, here or in the guards.
+    const blockedBlank = "Blocked script execution in 'about:blank' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.";
+    const mailURL = await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.URL);
+    const problems = guards.takeProblems();
+    expect(problems.length).toBeLessThanOrEqual(frames.length);
+    for (const p of problems) {
+      expect(p.split("\n")[0]).toBe(`console error: ${blockedBlank} (about:blank)`);
+      expect(p).toContain(`    name="" url="about:blank" parent(name="" url="${mailURL}")`);
+    }
+  });
+
   test("a navigation to an API route a browser does not open is refused", async ({ page, guards }) => {
     guards.allowHTTPError("/api/status", 403);
     const status = await page.goto("/api/status");
