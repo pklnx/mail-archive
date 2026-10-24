@@ -299,11 +299,19 @@ IMAP connections. Two layers stop them:
   clients) are not affected.
 - The web UI cancels clicks, middle clicks and drags of links in the mail
   that point into the app, also inside open shadow roots, and of
-  `javascript:`, `data:` and `vbscript:` links.
+  `javascript:`, `data:` and `vbscript:` links. It cancels every click,
+  middle click and drag through an SVG `<use>` element, whatever the link
+  points to: links through `<use>` do not work at all. The frame takes no
+  clicks and no focus (it is `inert`) until this blocker is on the mail's
+  document. The web UI installs it as soon as that document exists, before
+  its `load`, so a remote image that never answers does not leave the mail
+  unusable.
 
-The second layer has to see the links. So before it serves the HTML, the
-server neutralizes the two ways a mail can build a document the web UI
-cannot reach: declarative shadow roots (attributes whose names start with
+The second layer has to see the links. A mail can hide them in three ways:
+behind SVG `<use>`, which shows a copy of the link in a tree the web UI
+cannot see into (cancelled as above), in a declarative shadow root and in a
+`srcdoc` frame. Before it serves the HTML, the server neutralizes the last
+two: declarative shadow roots (attributes whose names start with
 `shadowroot` on `<template>`, such as `shadowrootmode="closed"`) and
 `srcdoc` frames (attributes whose names start with `srcdoc` on `<iframe>`).
 It puts `data-` in front of these attribute names, so the template stays an
@@ -324,15 +332,18 @@ What remains:
   more to the author than clicking an external link in the mail would
   (opening `/html?images=1` of the author's own mail loads its remote
   images).
-- Links before the frame's `load`: the link blocker is installed when the
-  frame has loaded. A remote image that never answers (after **Load remote
-  images**) delays `load`; until then a click on a same-origin link is a
-  real navigation, which the server's rule above still limits to the four
-  routes. The frame also keeps its earlier height until then.
+- Back to the mail after an external link with `target="_self"`: the
+  frame shows the mail's document again, and the link blocker is installed
+  on it only at its `load`. If a remote image (after **Load remote
+  images**) holds that `load`, a click on a same-origin link until then is
+  a real navigation, which the server's rule above still limits to the four
+  routes. Installing the blocker earlier there is a follow-up
+  ([#265](https://github.com/pklnx/mail-archive/issues/265)).
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests, and
-  so can a link the web UI cannot cancel (the context menu, before `load`).
+  so can a link the web UI cannot cancel (the context menu, Back after a
+  `_self` link before `load`).
 
 ### Login checks
 

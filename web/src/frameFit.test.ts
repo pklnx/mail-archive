@@ -190,7 +190,8 @@ describe("attachFrameFit", () => {
     FakeObserver.all = [];
     vi.stubGlobal("ResizeObserver", FakeObserver);
   });
-  const observerOf = (el: Element) => FakeObserver.all.find((o) => o.targets.includes(el))!;
+  // The latest: the blocker installs once the document exists and again on load.
+  const observerOf = (el: Element) => [...FakeObserver.all].reverse().find((o) => o.targets.includes(el))!;
 
   it("keeps the start height until the frame loads, then fits", () => {
     let content = 1200;
@@ -344,6 +345,155 @@ describe("attachFrameFit", () => {
   });
 });
 
+/** requestAnimationFrame and cancelAnimationFrame that tests drive by hand: run() calls the pending callbacks once. */
+function animationFrames() {
+  let next = 1;
+  const queue = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    queue.set(next, cb);
+    return next++;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => void queue.delete(id));
+  return {
+    pending: () => queue.size,
+    run() {
+      const cbs = [...queue.values()];
+      queue.clear();
+      for (const cb of cbs) cb(0);
+    },
+  };
+}
+
+describe("attachFrameFit: inert until the link blocker is installed (#209)", () => {
+  beforeEach(() => {
+    FakeObserver.all = [];
+    vi.stubGlobal("ResizeObserver", FakeObserver);
+  });
+
+  /**
+   * A frame that shows `shown` (the initial about:blank first), with a link
+   * into the app in the mail's document. Records, each time inert is
+   * removed, whether a click on that link is cancelled at that moment.
+   */
+  function frameWithMail(readyState = "loading") {
+    const s = setup({ content: () => 1200 });
+    Object.defineProperty(s.doc, "readyState", { value: readyState, configurable: true });
+    const blank = document.implementation.createHTMLDocument("");
+    Object.defineProperty(blank, "URL", { value: "about:blank" });
+    const elsewhere = document.implementation.createHTMLDocument("");
+    Object.defineProperty(elsewhere, "URL", { value: "https://elsewhere.example/" });
+    let shown: Document = blank;
+    Object.defineProperty(s.frame, "contentDocument", { get: () => shown, configurable: true });
+    const a = s.doc.createElement("a");
+    a.setAttribute("href", "/api/status");
+    s.doc.body.append(a);
+    const blockedAtRemoval: boolean[] = [];
+    const remove = s.frame.removeAttribute.bind(s.frame);
+    s.frame.removeAttribute = (name: string) => {
+      if (name === "inert") {
+        const click = new MouseEvent("click", { bubbles: true, cancelable: true, composed: true });
+        a.dispatchEvent(click);
+        blockedAtRemoval.push(click.defaultPrevented);
+      }
+      remove(name);
+    };
+    return {
+      ...s,
+      blockedAtRemoval,
+      show: (which: "blank" | "elsewhere" | "mail") => (shown = which === "blank" ? blank : which === "elsewhere" ? elsewhere : s.doc),
+    };
+  }
+
+  it("sets the inert attribute on attach and keeps it while the frame shows about:blank or another URL", () => {
+    const raf = animationFrames();
+    const m = frameWithMail();
+    const f = attachFrameFit(m.frame, m.box, "", origin);
+    expect(m.frame.getAttribute("inert")).toBe("");
+    expect(raf.pending()).toBe(1);
+    raf.run();
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    m.show("elsewhere");
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    // Still polling: the mail's document is not there yet.
+    expect(raf.pending()).toBe(1);
+    expect(m.blockedAtRemoval).toEqual([]);
+    f.detach();
+  });
+
+  it("installs the blocker from the poll as soon as the mail's document exists, before its load, and only then lifts inert", () => {
+    const raf = animationFrames();
+    const m = frameWithMail();
+    const f = attachFrameFit(m.frame, m.box, "", origin);
+    raf.run();
+    m.show("mail");
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    raf.run();
+    expect(m.frame.hasAttribute("inert")).toBe(false);
+    // At the moment inert went, a click into the app was already cancelled.
+    expect(m.blockedAtRemoval).toEqual([true]);
+    // The poll stopped with the install.
+    expect(raf.pending()).toBe(0);
+    raf.run();
+    expect(raf.pending()).toBe(0);
+    // Load installs again, with the body, and fits.
+    m.frame.dispatchEvent(new Event("load"));
+    expect(m.blockedAtRemoval).toEqual([true, true]);
+    expect(f.height()).toBe("1200px");
+    f.detach();
+  });
+
+  it("installs on load when the poll has not found the document yet, and stops the poll", () => {
+    const raf = animationFrames();
+    const m = frameWithMail();
+    const f = attachFrameFit(m.frame, m.box, "", origin);
+    expect(raf.pending()).toBe(1);
+    m.show("mail");
+    m.frame.dispatchEvent(new Event("load"));
+    expect(m.frame.hasAttribute("inert")).toBe(false);
+    expect(m.blockedAtRemoval).toEqual([true]);
+    expect(raf.pending()).toBe(0);
+    f.detach();
+  });
+
+  it("installs at once when the document is there on attach: loaded, or still loading", () => {
+    const raf = animationFrames();
+    const loaded = frameWithMail("complete");
+    loaded.show("mail");
+    const f = attachFrameFit(loaded.frame, loaded.box, "", origin);
+    expect(loaded.frame.hasAttribute("inert")).toBe(false);
+    expect(loaded.blockedAtRemoval).toEqual([true]);
+    expect(f.height()).toBe("1200px");
+    expect(raf.pending()).toBe(0);
+    f.detach();
+
+    const loading = frameWithMail("loading");
+    loading.show("mail");
+    const g = attachFrameFit(loading.frame, loading.box, "", origin);
+    expect(loading.frame.hasAttribute("inert")).toBe(false);
+    expect(loading.blockedAtRemoval).toEqual([true]);
+    expect(raf.pending()).toBe(0);
+    g.detach();
+  });
+
+  it("keeps the inert attribute on detach and stops the poll", () => {
+    const raf = animationFrames();
+    const m = frameWithMail();
+    const f = attachFrameFit(m.frame, m.box, "", origin);
+    expect(raf.pending()).toBe(1);
+    f.detach();
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(raf.pending()).toBe(0);
+    // The document arrives after detach: nothing installs, the frame stays inert.
+    m.show("mail");
+    raf.run();
+    m.frame.dispatchEvent(new Event("load"));
+    expect(m.frame.hasAttribute("inert")).toBe(true);
+    expect(m.blockedAtRemoval).toEqual([]);
+  });
+});
+
 describe("blockAppLinks", () => {
   const { doc } = setup({ content: () => 0 });
   /** Whether a click on el is cancelled. */
@@ -449,6 +599,59 @@ describe("blockAppLinks", () => {
     const root = host.attachShadow({ mode: "closed" });
     root.innerHTML = `<a href="/api/status">x</a>`;
     expect(blocked(root.querySelector("a")!)).toBe(false);
+  });
+
+  it("cancels click, auxclick and dragstart through an SVG <use>, whatever it points to (#209)", () => {
+    // In a browser, use clones the element it references (here a link into
+    // the app) into a user-agent shadow tree: the path starts at use.
+    const svg = doc.createElementNS(svgNS, "svg");
+    const defs = doc.createElementNS(svgNS, "defs");
+    const target = doc.createElementNS(svgNS, "a");
+    target.setAttribute("id", "spec");
+    target.setAttribute("href", "/api/openapi.json");
+    defs.append(target);
+    const use = doc.createElementNS(svgNS, "use");
+    use.setAttribute("href", "#spec");
+    // An external link around a use: the clone inside it is what the browser follows.
+    const out = doc.createElementNS(svgNS, "a");
+    out.setAttribute("href", "https://example.org/");
+    const wrapped = doc.createElementNS(svgNS, "use");
+    wrapped.setAttribute("href", "#spec");
+    out.append(wrapped);
+    // The same in an HTML link around the svg.
+    const htmlOut = doc.createElement("a");
+    htmlOut.setAttribute("href", "https://example.org/");
+    const inner = doc.createElementNS(svgNS, "svg");
+    const innerUse = doc.createElementNS(svgNS, "use");
+    innerUse.setAttribute("href", "#spec");
+    inner.append(innerUse);
+    htmlOut.append(inner);
+    svg.append(defs, use, out);
+    doc.body.append(svg, htmlOut);
+    for (const type of ["click", "auxclick", "dragstart"]) {
+      expect(blocked(use, type), type).toBe(true);
+      expect(blocked(wrapped, type), type).toBe(true);
+      expect(blocked(innerUse, type), type).toBe(true);
+    }
+    // An external link without use still opens; an HTML element named use is not SVG's.
+    expect(blocked(out)).toBe(false);
+    const htmlUse = doc.createElement("use");
+    const plain = doc.createElement("a");
+    plain.setAttribute("href", "https://example.org/");
+    plain.append(htmlUse);
+    doc.body.append(plain);
+    expect(blocked(htmlUse)).toBe(false);
+  });
+
+  it("cancels through an SVG <use> also when the event has no composed path", () => {
+    const use = doc.createElementNS(svgNS, "use");
+    const svg = doc.createElementNS(svgNS, "svg");
+    svg.append(use);
+    doc.body.append(svg);
+    let prevented = false;
+    const e = { target: use, composedPath: () => [], preventDefault: () => (prevented = true) } as unknown as Event;
+    blockAppLinks(e, origin);
+    expect(prevented).toBe(true);
   });
 
   it("walks the target's ancestors when the event has no composed path", () => {

@@ -83,7 +83,9 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
   const html = msg.hasHtml && showHTML;
   const body = useRef<HTMLDivElement>(null);
   // The frame grows with the mail (frameFit.ts). A replaced frame (images
-  // toggle, text and back) starts at the last fitted height.
+  // toggle, text and back) starts at the last fitted height. A layout
+  // effect: attachFrameFit makes the frame inert before its first paint,
+  // until the link blocker is on the mail's document (#209).
   const fitted = useRef("");
   useLayoutEffect(() => {
     const box = body.current;

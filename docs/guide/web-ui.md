@@ -149,7 +149,8 @@ in the mail work on the first click; they open in a new tab. Links from a
 mail into the archive itself are blocked where possible, and the server
 refuses most of them in any case (see [HTML mail](../reference/security#html-mail)).
 Content a mail puts into a declarative shadow root or a `srcdoc` frame is
-not shown.
+not shown, and links that an SVG picture shows through `<use>` do not
+open.
 A few mails are taller than any frame (for example a picture as high as
 the window); those, and very long ones, keep the height of the visible
 area and scroll inside it.

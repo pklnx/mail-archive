@@ -499,6 +499,140 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
   });
 
+  test("links into the app are blocked before the frame's load", async ({ page, context }) => {
+    // A remote image that does not answer holds the frame's load (after
+    // Load remote images). The frame is inert until the link blocker is on
+    // the mail's document, and the blocker is installed as soon as that
+    // document exists (#209): the mail can be used while it loads, and a
+    // link into the app is cancelled.
+    await addToMail(
+      page,
+      `<p><a href="/api/openapi.json?early">Spec early</a> <a href="https://links.example/early">Early check</a></p><img src="https://img.example/held.svg" style="display:block">`,
+      "start",
+      true,
+    );
+    let onRequest = () => {};
+    const requested = new Promise<void>((r) => (onRequest = r));
+    let release = () => {};
+    const released = new Promise<void>((r) => (release = r));
+    await page.route("https://img.example/**", async (route) => {
+      onRequest();
+      await released;
+      await route.fulfill({ contentType: "image/svg+xml", body: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>` });
+    });
+    await context.route("https://links.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>early</p>" }));
+    const appRequests: string[] = [];
+    context.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/openapi.json") appRequests.push(r.url());
+    });
+    await openLong(page);
+    await fitted(page);
+    const pages: string[] = [];
+    context.on("page", (p) => pages.push(p.url()));
+
+    await page.getByRole("article").getByRole("button", { name: "Load remote images" }).click();
+    await requested;
+    // The mail's document is there and still loading (the image holds it),
+    // and the frame is no longer inert: the blocker is on.
+    await expect
+      .poll(() =>
+        frameOf(page).evaluate((f: HTMLIFrameElement) => {
+          const doc = f.contentDocument;
+          return { mail: !!doc && /\/html\?images=1$/.test(doc.URL), state: doc?.readyState === "complete" ? "complete" : "loading", inert: f.hasAttribute("inert") };
+        }),
+      )
+      .toEqual({ mail: true, state: "loading", inert: false });
+
+    const spec = await linkCenter(page, "Spec early");
+    await page.mouse.click(spec.x, spec.y);
+    await page.mouse.click(spec.x, spec.y, { button: "middle" });
+    // The external link opens: the signal that the clicks before it were handled.
+    const opened = context.waitForEvent("page");
+    const check = await linkCenter(page, "Early check");
+    await page.mouse.click(check.x, check.y);
+    const tab = await opened;
+    await expect.poll(() => tab.url()).toBe("https://links.example/early");
+    expect(appRequests).toEqual([]);
+    expect(pages).toHaveLength(1);
+    // Still loading: everything above happened before the frame's load.
+    expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.readyState)).not.toBe("complete");
+
+    // The image arrives: the frame loads and fits.
+    release();
+    await mailReady(page);
+    await fitted(page);
+    expect(appRequests).toEqual([]);
+  });
+
+  test("links through SVG <use> are blocked", async ({ page, context }) => {
+    // use clones the link it references into a user-agent shadow tree that
+    // the event's path does not show. One link without a target (it would
+    // navigate the mail frame itself) and one with target=_blank; clicks and
+    // keyboard through use are cancelled, whatever the link (#209).
+    await addToMail(
+      page,
+      `<svg width="0" height="0" style="position:absolute"><defs>` +
+        `<a id="use-self" href="/api/openapi.json?use=self"><rect width="120" height="40" fill="#c33"/></a>` +
+        `<a id="use-blank" href="/api/openapi.json?use=blank" target="_blank"><rect width="120" height="40" fill="#33c"/></a>` +
+        `</defs></svg>` +
+        `<p id="use-start">Use check</p>` +
+        `<p><svg width="120" height="40" data-case="use-self"><use href="#use-self"/></svg> ` +
+        `<svg width="120" height="40" data-case="use-blank"><use href="#use-blank"/></svg> ` +
+        `<a href="https://links.example/use">Use sentinel</a></p>`,
+      "start",
+    );
+    await context.route("https://links.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>use</p>" }));
+    const appRequests: string[] = [];
+    context.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/openapi.json") appRequests.push(r.url());
+    });
+    await openLong(page);
+    await fitted(page);
+    const pages: string[] = [];
+    context.on("page", (p) => pages.push(p.url()));
+    /** The page coordinates of the centre of an element in the mail. */
+    const centre = (selector: string) =>
+      frameOf(page).evaluate((f: HTMLIFrameElement, selector) => {
+        const r = f.contentDocument!.querySelector(selector)!.getBoundingClientRect();
+        const box = f.getBoundingClientRect();
+        return { x: box.left + f.clientLeft + r.left + r.width / 2, y: box.top + f.clientTop + r.top + r.height / 2 };
+      }, selector);
+
+    for (const name of ["use-self", "use-blank"]) {
+      const at = await centre(`[data-case="${name}"] use`);
+      await page.mouse.click(at.x, at.y);
+      await page.mouse.click(at.x, at.y, { button: "middle" });
+    }
+
+    // Keyboard: the clone takes the focus (the frame document's
+    // activeElement is the use), and Enter dispatches a click through use.
+    // Tab from the paragraph before them until a use has the focus.
+    const start = await centre("#use-start");
+    await page.mouse.click(start.x, start.y);
+    const focused = () =>
+      frameOf(page).evaluate((f: HTMLIFrameElement) => {
+        const a = f.contentDocument!.activeElement;
+        return a?.localName === "use" ? a.parentElement!.getAttribute("data-case") : null;
+      });
+    for (const name of ["use-self", "use-blank"]) {
+      for (let i = 0; i < 5 && (await focused()) !== name; i++) await page.keyboard.press("Tab");
+      expect(await focused()).toBe(name);
+      await page.keyboard.press("Enter");
+    }
+
+    // The external link opens: the signal that everything before it was handled.
+    const opened = context.waitForEvent("page");
+    const at = await linkCenter(page, "Use sentinel");
+    await page.mouse.click(at.x, at.y);
+    const tab = await opened;
+    await expect.poll(() => tab.url()).toBe("https://links.example/use");
+    expect(appRequests).toEqual([]);
+    expect(pages).toHaveLength(1);
+    // The frame still shows the mail.
+    expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
+    await mailReady(page, /Use check/);
+  });
+
   test("declarative shadow roots and srcdoc frames in the mail are neutralized by the server", async ({ page, context, guards }) => {
     // The demo's rendering check (tools/demo, neutralized): boxes whose
     // content would be a link to /api/openapi.json in a new tab, an API
@@ -576,12 +710,13 @@ test.describe("the frame's sandbox and the API guard", () => {
     // records every test), its snapshotter logs "Blocked script execution"
     // once for each document a sandboxed frame commits: here each renamed
     // frame's about:blank, during the mail's parse, long before the sentinel
-    // opened. Without a trace there is none. Only these are taken, at most
-    // one per frame; anything else fails the test, here or in the guards.
+    // opened. Without a trace there is none. Only these are taken, exactly
+    // one per frame or none; anything else fails the test, here or in the
+    // guards.
     const blockedBlank = "Blocked script execution in 'about:blank' because the document's frame is sandboxed and the 'allow-scripts' permission is not set.";
     const mailURL = await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.URL);
     const problems = guards.takeProblems();
-    expect(problems.length).toBeLessThanOrEqual(frames.length);
+    expect([0, frames.length]).toContain(problems.length);
     for (const p of problems) {
       expect(p.split("\n")[0]).toBe(`console error: ${blockedBlank} (about:blank)`);
       expect(p).toContain(`    name="" url="about:blank" parent(name="" url="${mailURL}")`);
