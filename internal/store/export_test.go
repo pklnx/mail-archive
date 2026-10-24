@@ -35,3 +35,21 @@ func (s *Store) HoldBlobWaitSlotForTest(ctx context.Context) (release func(), er
 func (s *Store) AcquiredConnsForTest() int32 {
 	return s.pool.Stat().AcquiredConns()
 }
+
+// ForMigrationsWithCheckInterval is ForMigrations with another client
+// connection check interval.
+var ForMigrationsWithCheckInterval = withCheckInterval
+
+// SetGooseLockHolderQuery replaces the query that looks up the holder of
+// goose's lock until the returned function restores it.
+func SetGooseLockHolderQuery(q string) (restore func()) {
+	old := gooseLockHolderQuery
+	gooseLockHolderQuery = q
+	return func() { gooseLockHolderQuery = old }
+}
+
+// WithSessionSettings is an Open option that runs the given statements on
+// every new connection, as ForMigrations runs its SETs.
+func WithSessionSettings(stmts ...string) Option {
+	return func(c *openConfig) { c.settings = append(c.settings, stmts...) }
+}

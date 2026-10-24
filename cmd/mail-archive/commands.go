@@ -36,15 +36,19 @@ func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, tru
 // openAppForMigrate opens the database without the index rebuild check and
 // without touching it, for `migrate` and `migrate down` (which take the
 // migration lock first and then run the rebuild or its check before they
-// create the audit log partitions) and the read-only `migrate status`.
-func openAppForMigrate(ctx context.Context) (*app, error) { return openAppChecked(ctx, false) }
+// create the audit log partitions) and the read-only `migrate status`. Its
+// connections let the server end a statement soon after the command was
+// killed (store.ForMigrations).
+func openAppForMigrate(ctx context.Context) (*app, error) {
+	return openAppChecked(ctx, false, store.ForMigrations())
+}
 
-func openAppChecked(ctx context.Context, normal bool) (*app, error) {
+func openAppChecked(ctx context.Context, normal bool, opts ...store.Option) (*app, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	st, err := store.Open(ctx, cfg.DatabaseURL)
+	st, err := store.Open(ctx, cfg.DatabaseURL, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -149,11 +153,45 @@ func newMigrateCmd() *cobra.Command {
 
 // lockMigrations takes the migration lock for a migrate command (see
 // store.LockMigrations). While another migrate holds it, it says so and
-// waits; Ctrl-C ends the wait.
+// waits; Ctrl-C ends the wait. It also makes the command say so when it
+// later waits for goose's lock (gooseLockWaitMessage).
 func lockMigrations(cmd *cobra.Command, st *store.Store) (unlock func(), err error) {
+	st.SetGooseLockWait(func(h store.GooseLockHolder) {
+		fmt.Fprintln(cmd.OutOrStdout(), gooseLockWaitMessage(h))
+	})
 	return st.LockMigrations(cmd.Context(), func() {
 		fmt.Fprintln(cmd.OutOrStdout(), "another migrate is running; waiting for it (Ctrl-C to stop) ...")
 	})
+}
+
+// gooseLockWaitMessage is what migrate and migrate down say when they wait
+// for goose's lock although they hold the command lock (#253). It does not
+// claim who the holder is: usually a statement of a killed migrate, but it
+// may be a running migrate of an older version without the command lock,
+// or an idle session. It never shows the holder's query, which another
+// role cannot see.
+func gooseLockWaitMessage(h store.GooseLockHolder) string {
+	if h.PID == 0 {
+		return "waiting for goose's migration lock ..."
+	}
+	const prefix = "waiting for goose's migration lock, held by database backend %d"
+	switch h.State {
+	case "active", "":
+		// Active, or not visible to this role: most likely the
+		// statement of a killed migrate.
+		var active string
+		if h.State == "active" {
+			active = fmt.Sprintf(" (active for %s)", h.ActiveFor.Round(time.Second))
+		}
+		return fmt.Sprintf(prefix+"%s: usually a statement of an earlier migrate that was stopped, which ends shortly; "+
+			"if no migrate is running anywhere, it can be stopped with SELECT pg_cancel_backend(%[1]d), "+
+			"or with SELECT pg_terminate_backend(%[1]d) if it is idle", h.PID, active)
+	default:
+		// Idle (or idle in transaction): no statement runs that would
+		// end; cancelling does nothing.
+		return fmt.Sprintf(prefix+" (%s): a session holds it and releases it when it ends or unlocks; "+
+			"if no migrate is running anywhere, it can be stopped with SELECT pg_terminate_backend(%[1]d)", h.PID, h.State)
+	}
 }
 
 func newMigrateDownCmd() *cobra.Command {

@@ -8,9 +8,9 @@ With Docker Compose, run every command through the wrapper, for example
 
 | Command | Purpose |
 |---|---|
-| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. See [One-time steps](../guide/operations#one-time-steps). Waits for another running `migrate` (see [Upgrades](../guide/operations#upgrades)). |
+| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. See [One-time steps](../guide/operations#one-time-steps). Waits for another running `migrate` (see [Upgrades](../guide/operations#upgrades)). After a killed `migrate`, it may wait for goose's migration lock while the killed command's statement ends, and says so: `waiting for goose's migration lock, held by database backend …`. |
 | `migrate status` | Show applied and pending migrations. Does not wait for a running migration. |
-| `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. Waits for another running `migrate`, also during its one-time index rebuild. Refuses, like the other commands, while no `migrate` has done that rebuild. |
+| `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. Waits for another running `migrate`, also during its one-time index rebuild, and, like `migrate`, for goose's migration lock. Refuses, like the other commands, while no `migrate` has done that rebuild. |
 | `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |
 
 ## Users
