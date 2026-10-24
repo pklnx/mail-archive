@@ -6,12 +6,19 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Open tickets
-- #209: neutralize declarative shadow roots on the server, and block links before the frame's `load`.
-- #211: design system theme; waits for `@pklnx/design-system` to be published.
-- #213: `TestRecurringFillAPI` is flaky on main; replace the sleep polls.
-- #214: port the web hardening and the migration lock from paperless-go.
-- #215: process hygiene (release section, labels, `second-review` marker, signature rule).
-- #211 and #213-#215 belong to a separate cross-repository coordinator session (a comparison report with paperless-go and design-system); their plan and review flow is described in the issues.
+- #260 (bug, ready): flaky e2e "Blocked script execution in 'about:blank'". Part 1 (diagnostics, PR #262) is merged. Strong lead for part 2: the message comes from Playwright's trace snapshotter (`trace: retain-on-failure` records every test), not from app code; the test passes with `--trace off`. Part 2 also owes the `flaky-tests.md` row for the #259 rerun and fixes the run count there (16 local runs, not 13).
+- #265 (bug): install the link blocker again before `load` after Back to a mail (residual in `security.md`; scope widened in a comment).
+- #269 (bug): a cancelled migration can return a pool connection that still holds goose's lock (measured 10 of 10, confirmed by the #268 plan reviewer). Run goose on a dedicated, unpooled connection; regression test with signals only.
+
+## State (2026-10-24)
+- #209 is done: part 1 (PR #266) neutralizes declarative shadow roots and `srcdoc` frames as the last step on the served bytes; part 2 (PR #267, maintainer option A) blocks links from the start.
+- The coordinator's decision tiers (green, yellow, red) and the merge rules are in `pklnx/dev-process` (`decisions.md`, `coordinator.md`). Apply them in every session.
+- Merge rules learned 2026-10-24: never merge a head that no approving review covers (only exception: a pure base merge with the evidence posted); read every reviewer's full report and post a "Reports read" comment before merging.
+
+## Done (2026-10-24)
+- #213 (red main, PRs #223, #226), #214 (web hardening #230, migration lock #225), #215 (process hygiene #222), #211 (pklnx theme, PR #227).
+- #253 (migration lock waits visibly, PR #259) and #255 (PR #256); #258 (SideNav stuck when crossing `lg`, PR #261); #260 part 1 (PR #262).
+- #209 (PRs #266, #267); #268 (cancelled lock wait reports `context.Canceled`, PR #270); #271 (process rules: sub-issues by planner or coordinator, serving layer counts as risky).
 
 ## State (2026-10-23 evening)
 - Release v26.10-10 is out (#200, message view scrolling).
@@ -85,6 +92,7 @@ State of the work for the next session. Update before a session ends.
 - #153: time `./ma migrate` (00029 reads `message_locations` once) on a large archive.
 
 ## Environment
+- pnpm shims: every agent creates its own new shim directory (check with `ls -la` first) with a wrapper script, never a symlink, and never writes to an existing shim or binary; never `corepack enable`. Fetch with an explicit refspec, never through `FETCH_HEAD`. A refused action is reported and never retried in another form.
 - pnpm via corepack is broken in cloud sessions (corepack points to a missing pnpm version). Use `node /root/.cache/node/corepack/v1/pnpm/12.9.1/bin/pnpm.mjs`.
 - The e2e suite needs `DEMO_DATABASE_URL` (a Postgres the suite may write to).
 - Docker Hub can answer 500 or 429 on image pulls. Since #216 CI pulls through mirror.gcr.io with Docker Hub as the fallback (`scripts/ci-docker-mirror.sh`, `scripts/ci-pull-images.sh`, buildx `buildkitd-config-inline`); the PostgreSQL services of `test` and `web-e2e` have no fallback. A pull failure that still happens: rerun only per the flaky-test rule.
