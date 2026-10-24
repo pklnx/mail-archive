@@ -87,6 +87,14 @@ release age does not apply to it. Rules of the design system:
 - Do not use `support-caution-undefined`: it is Purple in Carbon and would
   look like the interactive colour.
 
+The logo (the mark per theme in the header, the empty reader and the login
+pages; the tile as favicon and app icon) and the docs logos are copied
+unchanged from the design system; `brand-assets.json` names the commit and
+the checksum of each file, and `web/src/brandAssets.test.ts` fails on a
+changed copy or on a brand file without a row. They are not under the MIT
+License: see `BRAND-ASSETS.md`. A new file in `web/public` also needs an entry
+in `rootFiles` (`internal/web/ui/ui.go`), or the server answers 404 for it.
+
 ### End-to-end tests
 
 `web/e2e` holds a Playwright suite that drives the UI in Chromium against
@@ -134,7 +142,13 @@ every push to `main`. `web-e2e` is a required check.
 
 This site is built with [VitePress](https://vitepress.dev/) from `docs/` and
 published to GitHub Pages on every merge to `main`. Pull requests that touch
-`docs/` build it in CI, which fails on broken links.
+`docs/` build it in CI, which fails on broken links. It uses the pklnx
+VitePress theme (`@pklnx/design-system/theme/vitepress.css`, IBM Plex, from
+the design system's release tarball as in `web/`). `pnpm build` ends with
+`docs/scripts/check-dist.mjs`, which fails when the built site lacks the font
+and icon licence texts under `licenses/`, emits the default theme's Inter
+font, misses a logo or `theme-color`, or when the lockfile installs a
+`@carbon/` or `@ibm/` package.
 
 ```sh
 cd docs

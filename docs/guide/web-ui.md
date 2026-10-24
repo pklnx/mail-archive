@@ -3,8 +3,8 @@
 `docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
 with your user.
 
-The header at the top holds the name of the app, which leads to all mail,
-and on the right your name, the keyboard shortcuts, the light/dark switch,
+The header at the top holds the logo and the name of the app, which leads to
+all mail, and on the right your name, the keyboard shortcuts, the light/dark switch,
 your [profile](./users#your-profile) and **Log out**. The navigation on the
 left lists **All mail**, **Only in archive** (once there is such mail, see
 below), [Accounts](./accounts), **Log** (the [audit log](./audit-log) of what

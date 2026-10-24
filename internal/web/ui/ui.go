@@ -25,11 +25,14 @@ const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 
 // permissionsPolicy turns off browser features the UI never uses.
 const permissionsPolicy = "camera=(), microphone=(), geolocation=()"
 
-// rootFiles are served from the build root (web/public): the web app manifest
-// and its icons, which browsers fetch by fixed names. Everything else that is
-// not under /assets/ gets index.html.
+// rootFiles are served from the build root (web/public): the web app manifest,
+// its icons and the PNG favicon, which browsers fetch by fixed names. They
+// must list every file in web/public (TestRootFilesMatchPublic): the server
+// routes only "/", "/assets/" and these paths, so a file missing here
+// answers 404. Within this handler, any other path gets index.html.
 var rootFiles = map[string]string{
 	"/manifest.webmanifest":  "application/manifest+json",
+	"/favicon-32.png":        "image/png",
 	"/icon-192.png":          "image/png",
 	"/icon-512.png":          "image/png",
 	"/icon-maskable-512.png": "image/png",

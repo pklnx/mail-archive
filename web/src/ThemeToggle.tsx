@@ -1,18 +1,7 @@
-import { useSyncExternalStore } from "react";
 import { HeaderGlobalAction, IconButton } from "@carbon/react";
 import { Asleep, Light } from "@carbon/icons-react";
-import { THEME_EVENT, currentTheme, setTheme, type Theme } from "./theme";
+import { setTheme, useTheme, type Theme } from "./theme";
 import { t } from "./i18n";
-
-function subscribe(changed: () => void) {
-  window.addEventListener(THEME_EVENT, changed);
-  return () => window.removeEventListener(THEME_EVENT, changed);
-}
-
-/** The applied theme; every toggle on screen follows a change by another one or by the system. */
-function useTheme(): Theme {
-  return useSyncExternalStore(subscribe, currentTheme);
-}
 
 /**
  * Switches between light and dark; the choice overrides the system setting.

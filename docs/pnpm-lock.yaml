@@ -166,6 +166,9 @@ importers:
 
   .:
     devDependencies:
+      '@pklnx/design-system':
+        specifier: https://github.com/pklnx/design-system/releases/download/v0.2.0/pklnx-design-system-0.2.0.tgz
+        version: https://github.com/pklnx/design-system/releases/download/v0.2.0/pklnx-design-system-0.2.0.tgz
       playwright-core:
         specifier: 1.64.1
         version: 1.64.1
@@ -243,6 +246,15 @@ packages:
 
   '@oxc-project/types@0.154.0':
     resolution: {integrity: sha512-KYOUGQFlLWR+s4QMV2Q9ko38TZm7EdO87Qm7rvZLqk/webse/cDjtyxKhg/47l0byCbs/k46LT8qc4PKjAikzA==}
+
+  '@pklnx/design-system@https://github.com/pklnx/design-system/releases/download/v0.2.0/pklnx-design-system-0.2.0.tgz':
+    resolution: {integrity: sha512-+wmZdT1DRJyxDt/JREQMXOC5yV3YrnF2FdrkjR2HP9J7STi/5SYRgIwwjAV4GZrnUuXQuMQ91lMwlnfqd+8Gtg==, tarball: https://github.com/pklnx/design-system/releases/download/v0.2.0/pklnx-design-system-0.2.0.tgz}
+    version: 0.2.0
+    peerDependencies:
+      '@carbon/styles': ^1.118.0
+    peerDependenciesMeta:
+      '@carbon/styles':
+        optional: true
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     resolution: {integrity: sha512-aWR+XKH9+rW7m5fWq/5360J3mHycrx/o6xZM2DQFdJnTMdyP7/WzxPjhtLbVWdKo2y612/4U1bWqb3HQhiF7vg==}
@@ -934,6 +946,8 @@ snapshots:
       vue: 3.5.44
 
   '@oxc-project/types@0.154.0': {}
+
+  '@pklnx/design-system@https://github.com/pklnx/design-system/releases/download/v0.2.0/pklnx-design-system-0.2.0.tgz': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.14':
     optional: true

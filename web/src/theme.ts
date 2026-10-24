@@ -1,6 +1,8 @@
 // Light/dark theme: follows the system until the user picks one in the
 // header; the choice is remembered in localStorage (per browser).
 
+import { useSyncExternalStore } from "react";
+
 export type Theme = "light" | "dark";
 const KEY = "mail-archive.theme";
 const media = () => window.matchMedia("(prefers-color-scheme: dark)");
@@ -52,4 +54,14 @@ export function initTheme() {
   media().addEventListener("change", () => {
     if (!storedTheme()) applyTheme(currentTheme());
   });
+}
+
+function subscribe(changed: () => void) {
+  window.addEventListener(THEME_EVENT, changed);
+  return () => window.removeEventListener(THEME_EVENT, changed);
+}
+
+/** The applied theme; a component using it follows a change by a toggle or by the system. */
+export function useTheme(): Theme {
+  return useSyncExternalStore(subscribe, currentTheme);
 }
