@@ -265,7 +265,9 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
   `@pklnx/design-system` (the theme, see [Web UI](#web-ui)): bump them by
   hand in a pull request. Download the new release's tarball, verify it
   with `gh attestation verify pklnx-design-system-X.Y.Z.tgz --repo
-  pklnx/design-system --source-ref refs/heads/main`, change the URL in
+  pklnx/design-system --signer-workflow
+  pklnx/design-system/.github/workflows/release.yml --source-ref
+  refs/heads/main` (pinned to the release workflow), change the URL in
   `web/package.json`, run `pnpm install`, and compare the `integrity` line
   in `web/pnpm-lock.yaml` with the one in the release notes (and its
   SHA256 with the release's `SHA256SUMS`). Note the check in the pull
@@ -288,9 +290,9 @@ the narrow allowlist in `.gitleaks.toml`:
   clone, scans only its last commit and says so in the log.
 
 The workflow has no `paths` filter, so the check runs on every pull request;
-the maintainer adds it to the required checks of the `main` ruleset. Secret
-values are redacted in the log. Pull request runs cancel older runs of the
-same pull request; push runs are never cancelled.
+`secret-scan` is a required check. Secret values are redacted in the log. Pull
+request runs cancel older runs of the same pull request; push runs are never
+cancelled.
 
 ```sh
 make secrets        # scan the full history of all local refs
