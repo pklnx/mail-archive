@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (path: string) => readFileSync(resolve(repo, path));
 const text = (path: string) => readFileSync(resolve(repo, path), "utf8");
-const sha256 = (data: Buffer) => createHash("sha256").update(data).digest("hex");
+const sha256 = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
 
 interface BrandAssets {
   repository: string;
@@ -79,9 +79,21 @@ describe("brand assets", () => {
 
   it("LICENSE stays the plain MIT licence", () => {
     // The plain MIT text as of #237 (maintainer decision: the logo terms live
-    // in BRAND-ASSETS.md, not in LICENSE). A deliberate change to LICENSE
-    // updates this hash in the same PR.
-    expect(sha256(read("LICENSE"))).toBe("3ab472d18a36afd1b4960db218d4c7d23f5b46b297f04017b8323b3290f05363");
+    // in BRAND-ASSETS.md, not in LICENSE). Line endings are normalised, so the
+    // checkout does not matter. The line checks come first, so a failure names
+    // what differs.
+    const license = text("LICENSE").replace(/\r\n?/g, "\n");
+    const lines = license.split("\n");
+    expect(lines[0]).toBe("MIT License");
+    expect(lines[2]).toBe("Copyright (c) 2026 Patrick Klein");
+    // The warranty paragraph ends the file, followed by exactly one newline.
+    expect(lines.slice(-3)).toEqual([
+      "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE",
+      "SOFTWARE.",
+      "",
+    ]);
+    // A deliberate change to LICENSE updates this pin in the same PR.
+    expect(sha256(license)).toBe("3ab472d18a36afd1b4960db218d4c7d23f5b46b297f04017b8323b3290f05363");
   });
 
   it("README.md links BRAND-ASSETS.md", () => {

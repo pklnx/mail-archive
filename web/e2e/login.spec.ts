@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { lockedUser, timeStep, totp, twoFactorUser } from "./demo";
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -69,7 +70,7 @@ test("login errors: wrong password and locked user", async ({ page, guards }) =>
   await expect(page.getByRole("heading", { name: "Enter your authentication code" })).toHaveCount(0);
 });
 
-test("the login page shows the product mark for the theme, and the PNG favicon is served", async ({ page }) => {
+test("the login page shows the product mark for the theme", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   const brand = page.locator(".auth-page__brand img");
@@ -82,9 +83,28 @@ test("the login page shows the product mark for the theme, and the PNG favicon i
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(brand).toHaveClass(/(^|\s)app-mark--dark(\s|$)/);
   await expect.poll(() => brand.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+});
 
-  // The PNG favicon index.html links: served by its fixed name (#237).
-  const favicon = await page.request.get("/favicon-32.png");
-  expect(favicon.status()).toBe(200);
-  expect(favicon.headers()["content-type"]).toBe("image/png");
+test("the web app manifest and its icons are served without a session", async ({ page }) => {
+  // The built binary: Vite copies web/public into the embedded build, and
+  // the real route table lets these paths through without a login (#242).
+  const files: Record<string, string> = {
+    "/manifest.webmanifest": "application/manifest+json",
+    "/favicon-32.png": "image/png",
+    "/apple-touch-icon.png": "image/png",
+    "/icon-192.png": "image/png",
+    "/icon-512.png": "image/png",
+    "/icon-maskable-512.png": "image/png",
+  };
+  // A new file in web/public needs a row here, and a route in the server.
+  const pub = readdirSync(new URL("../public", import.meta.url)).map((n) => `/${n}`);
+  expect(Object.keys(files).sort()).toEqual(pub.sort());
+  for (const [path, type] of Object.entries(files)) {
+    const resp = await page.request.get(path);
+    expect(resp.status(), path).toBe(200);
+    expect(resp.headers()["content-type"], path).toBe(type);
+    expect(resp.headers()["cache-control"], path).toBe("no-cache");
+    expect(resp.headers()["content-security-policy"], path).toContain("default-src 'self'");
+    expect(Buffer.compare(await resp.body(), readFileSync(new URL(`../public${path}`, import.meta.url))), path).toBe(0);
+  }
 });

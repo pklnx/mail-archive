@@ -29,7 +29,8 @@ const permissionsPolicy = "camera=(), microphone=(), geolocation=()"
 // its icons and the PNG favicon, which browsers fetch by fixed names. They
 // must list every file in web/public (TestRootFilesMatchPublic): the server
 // routes only "/", "/assets/" and these paths, so a file missing here
-// answers 404. Within this handler, any other path gets index.html.
+// answers 404. Within this handler, a root path whose file is missing from
+// the build answers 404; any other path gets index.html.
 var rootFiles = map[string]string{
 	"/manifest.webmanifest":  "application/manifest+json",
 	"/favicon-32.png":        "image/png",
@@ -45,27 +46,34 @@ func RootPaths() []string {
 }
 
 // Handler serves index.html at "/", the hashed build assets at "/assets/" and
-// the rootFiles.
+// the rootFiles, all from the embedded build.
 func Handler() http.Handler {
 	files, err := fs.Sub(dist, "dist")
 	if err != nil {
 		panic(err)
 	}
+	return handler(files)
+}
+
+// handler serves the UI from files, the root of a build (dist).
+func handler(files fs.FS) http.Handler {
 	index, err := fs.ReadFile(files, "index.html")
 	if err != nil {
 		index = nil // UI not built
 	}
-	assets := http.FileServerFS(files)
+	// /assets/ is served from the build's assets folder only, so no path
+	// under it reaches a file outside that folder.
+	assetFiles, err := fs.Sub(files, "assets")
+	if err != nil {
+		panic(err)
+	}
+	assets := http.StripPrefix("/assets", http.FileServerFS(assetFiles))
 	// The rootFiles are read once here, so a request only picks one of them
 	// by its exact path and never names a file.
-	type rootFile struct {
-		path, typ string
-		data      []byte
-	}
-	var root []rootFile
+	root := map[string][]byte{}
 	for _, path := range RootPaths() {
 		if data, err := fs.ReadFile(files, strings.TrimPrefix(path, "/")); err == nil {
-			root = append(root, rootFile{path, rootFiles[path], data})
+			root[path] = data
 		}
 	}
 
@@ -81,12 +89,16 @@ func Handler() http.Handler {
 			return
 		}
 		h.Set("Cache-Control", "no-cache")
-		for _, f := range root {
-			if r.URL.Path == f.path {
-				h.Set("Content-Type", f.typ)
-				_, _ = w.Write(f.data)
+		if typ, ok := rootFiles[r.URL.Path]; ok {
+			data, ok := root[r.URL.Path]
+			if !ok {
+				// Not in this build: an icon URL answering HTML helps nobody.
+				http.NotFound(w, r)
 				return
 			}
+			h.Set("Content-Type", typ)
+			_, _ = w.Write(data)
+			return
 		}
 		if index == nil {
 			h.Set("Content-Type", "text/plain; charset=utf-8")

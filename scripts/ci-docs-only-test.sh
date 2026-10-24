@@ -28,7 +28,7 @@ expect() {
 nl='
 '
 expect docs-only 0 "docs/index.md$nl"
-expect docs-non-markdown 0 "docs/public/logo.svg$nl"
+expect docs-non-markdown 0 "docs/public/mail-archive-tile.svg$nl"
 expect claude-only 0 ".claude/HANDOVER.md$nl"
 expect nested-md 0 "web/README.md$nl"
 expect docs-and-md 0 "docs/a.md${nl}README.md$nl"
