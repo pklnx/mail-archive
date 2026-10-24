@@ -404,6 +404,12 @@ const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sand
 // after "Load remote images", links) carry the session cookie; the Fetch
 // Metadata guard in protect refuses them, and the app blocks clicks on
 // same-origin links in the frame.
+//
+// Before that, neutralizeHTML renames the attributes that make a nested
+// document the app's link blocker cannot reach (#209): declarative shadow
+// roots (shadowroot... on <template>) and srcdoc frames (srcdoc... on
+// <iframe>) get the prefix "data-", so their content is not shown. All other
+// bytes of the mail stay as they are.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -426,7 +432,9 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	// Inline images (cid:...) are embedded as data: URLs: img-src has no
 	// 'self', and the Fetch Metadata guard refuses image requests to the
 	// API, so the frame could not load them from the parts endpoint.
-	inl, err := inlineImages(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
+	// Inlining runs on the neutralized mail: its byte-exact replacement
+	// cannot undo a rename, and a data: URL adds no tag.
+	inl, err := inlineImages(neutralizeHTML(m.HTML), m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
 	if err != nil {
 		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
 	}

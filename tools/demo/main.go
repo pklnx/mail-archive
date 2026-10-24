@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"log/slog"
 	"net"
 	"net/http"
@@ -501,6 +502,64 @@ func offsite(day func(days, hours int) time.Time) []message {
 	}
 }
 
+// neutralized is an HTML mail with declarative shadow roots and srcdoc
+// frames in every syntax variant (#209), for web/e2e/reading.spec.ts. Each
+// host is a fixed-size box whose content would be one link filling it, to
+// /api/openapi.json?case=<name> in a new tab: an API route a browser opens,
+// so the server's Fetch Metadata guard lets it through. The server renames
+// the attributes (neutralizeHTML in internal/web), so the boxes stay empty
+// and no click on them opens anything. An external link is the sentinel.
+// Only this mail has the word "kaleidoscope". It sits between the
+// newsletters of weeks 27 and 26, below the rows of the list screenshots.
+// Nothing in it violates the frame's CSP.
+func neutralized(date time.Time) message {
+	const box = "display:inline-block;vertical-align:top;width:120px;height:40px;margin:4px;border:1px dashed #888"
+	link := func(name string) string {
+		return `<a href="/api/openapi.json?case=` + name + `" target="_blank" style="display:block;height:100%;background:#fde68a">` + name + `</a>`
+	}
+	// A shadow root host: the markup before the template, the template's
+	// start tag, and what closes the host.
+	host := func(name, before, tag, after string) string {
+		return before + `<div data-case="` + name + `" style="` + box + `">` + tag + link(name) + `</template></div>` + after
+	}
+	// The document of a srcdoc frame: the link fills the frame.
+	frameDoc := func(name string) string {
+		return `<body style="margin:0"><a href="/api/openapi.json?case=` + name + `" target="_blank" ` +
+			`style="position:fixed;inset:0;background:#fde68a">` + name + `</a></body>`
+	}
+	frame := func(name, start, end string) string {
+		return start + ` data-case="` + name + `" style="` + box + `"></iframe>` + end
+	}
+	esc := html.EscapeString
+	var b strings.Builder
+	b.WriteString(`<html><body style="font-family:Arial,sans-serif;color:#222">`)
+	b.WriteString(`<p>Hi Alex, this is the kaleidoscope rendering check. A safe mail client shows every box below empty.</p>`)
+	b.WriteString(`<p>Shadow roots:</p><div>`)
+	b.WriteString(host("open", "", `<template shadowrootmode="open">`, ""))
+	b.WriteString(host("closed", "", `<template shadowrootmode="closed">`, ""))
+	b.WriteString(host("legacy", "", `<template shadowroot="closed">`, ""))
+	b.WriteString(host("uppercase", "", `<TEMPLATE ShadowRootMode=Closed>`, ""))
+	b.WriteString(host("formfeed", "", "<template\fshadowrootmode=closed>", ""))
+	b.WriteString(host("slash", "", `<template/shadowrootmode=closed>`, ""))
+	b.WriteString(host("nospace", "", `<template title="t"shadowrootmode=closed>`, ""))
+	b.WriteString(host("entity", "", `<template shadowrootmode="&#99;losed">`, ""))
+	b.WriteString(host("noscript", "<noscript>", `<template shadowrootmode=closed>`, "</noscript>"))
+	b.WriteString(host("math", `<math><mtext><style></style></mtext><title>`, `<template shadowrootmode=closed>`, "</title></math>"))
+	b.WriteString(`</div><p>Inline frames:</p><div>`)
+	b.WriteString(frame("srcdoc", `<iframe srcdoc="`+esc(frameDoc("srcdoc"))+`"`, ""))
+	b.WriteString(frame("srcdoc-upper", `<IFRAME SRCDOC="`+esc(frameDoc("srcdoc-upper"))+`"`, ""))
+	b.WriteString(frame("srcdoc-formfeed", "<iframe\fsrcdoc=\""+esc(frameDoc("srcdoc-formfeed"))+`"`, ""))
+	b.WriteString(frame("srcdoc-slash", `<iframe/srcdoc="`+esc(frameDoc("srcdoc-slash"))+`"`, ""))
+	b.WriteString(frame("srcdoc-nospace", `<iframe title="t"srcdoc="`+esc(frameDoc("srcdoc-nospace"))+`"`, ""))
+	b.WriteString(frame("srcdoc-entity", `<iframe srcdoc="`+strings.NewReplacer("<", "&#x3C;", ">", "&#x3E;", `"`, "&#x22;").Replace(frameDoc("srcdoc-entity"))+`"`, ""))
+	b.WriteString(frame("srcdoc-noscript", `<noscript><iframe srcdoc="`+esc(frameDoc("srcdoc-noscript"))+`"`, "</noscript>"))
+	b.WriteString(frame("srcdoc-shadow", `<iframe srcdoc="`+esc(`<body style="margin:0"><div style="position:fixed;inset:0">`+
+		`<template shadowrootmode="closed">`+link("srcdoc-shadow")+`</template></div></body>`)+`"`, ""))
+	b.WriteString(`</div><p><a href="https://links.example/kaleidoscope">The check online</a></p></body></html>`)
+	return message{"work", "INBOX", htmlReply("kaleidoscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"Rendering check: boxes that stay empty", date, b.String())}
+}
+
 // A 16x16 blue square as an inline image.
 const logoPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGNQTX5NEmIY1TCqYfhqAAB2SXMQ7mVTQgAAAABJRU5ErkJggg=="
 
@@ -602,6 +661,7 @@ Content-Transfer-Encoding: base64
 			"Thanks for signing up. Your mailbox is ready.")},
 	}
 	msgs = append(msgs, offsite(ago)...)
+	msgs = append(msgs, neutralized(ago(19, 12)))
 	for i := range 25 {
 		msgs = append(msgs, message{"work", "INBOX", plain("Newsletter <news@shop.example>", "alex.morgan@work.example",
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})

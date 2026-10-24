@@ -301,6 +301,19 @@ IMAP connections. Two layers stop them:
   that point into the app, also inside open shadow roots, and of
   `javascript:`, `data:` and `vbscript:` links.
 
+The second layer has to see the links. So before it serves the HTML, the
+server neutralizes the two ways a mail can build a document the web UI
+cannot reach: declarative shadow roots (attributes whose names start with
+`shadowroot` on `<template>`, such as `shadowrootmode="closed"`) and
+`srcdoc` frames (attributes whose names start with `srcdoc` on `<iframe>`).
+It puts `data-` in front of these attribute names, so the template stays an
+unrendered `<template>` and the frame an empty page; their content is not
+shown. Every other byte of the mail stays as it is. The rename does not
+depend on where the tag is, so the same text in a comment, a style or an
+attribute value gets the prefix too. Other ways to nest a document (a frame
+or object with a `src` or `data` URL, `embed`, a `<meta>` refresh) load nothing
+under the CSP. This was measured in Chromium only.
+
 What remains:
 
 - The context menu's "Open link in new tab" cannot be intercepted. On the
@@ -310,12 +323,6 @@ What remains:
   more to the author than clicking an external link in the mail would
   (opening `/html?images=1` of the author's own mail loads its remote
   images).
-- The web UI cannot see into a closed declarative shadow root
-  (`<template shadowrootmode="closed">`) in the mail, so one click on a
-  link inside it is a real navigation and reaches the four routes above,
-  with the same effect as the context menu; every other route answers
-  `403`. Neutralizing `shadowrootmode` on the server is a planned
-  follow-up.
 - Links before the frame's `load`: the link blocker is installed when the
   frame has loaded. A remote image that never answers (after **Load remote
   images**) delays `load`; until then a click on a same-origin link is a
@@ -324,8 +331,7 @@ What remains:
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests, and
-  so can a link the web UI cannot cancel (the context menu, a closed shadow
-  root, before `load`).
+  so can a link the web UI cannot cancel (the context menu, before `load`).
 
 ### Login checks
 

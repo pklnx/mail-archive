@@ -444,6 +444,31 @@ Content-Type: text/html; charset=utf-8
 	}
 }
 
+// Declarative shadow roots and srcdoc frames are neutralized in the served
+// mail (#209): their attributes get the prefix "data-". The cid: image inside
+// the template is still inlined, and the preamble still goes after the
+// doctype; every other byte is the mail's.
+func TestMessageHTMLNeutralized(t *testing.T) {
+	const png = "\x89PNG\r\n\x1a\n-n"
+	mail := `<!DOCTYPE html>` + "\n" + `<html><body><div id="host"><template shadowrootmode="closed">` +
+		`<img src="cid:a@x"><a href="/api/openapi.json" target="_blank">in a closed root</a></template></div>` +
+		`<iframe SrcDoc="&lt;a href=/api/openapi.json target=_blank&gt;in a srcdoc frame&lt;/a&gt;"></iframe></body></html>`
+	f := newAPIFixture(t)
+	f.addMessage("alice", "INBOX", "neutralized", cidMessage(mail, inlinePart{"image/png", "a@x", png}), 10)
+
+	resp := f.get("/api/messages/" + f.ids["neutralized"] + "/html")
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	want := `<!DOCTYPE html>` + htmlPreamble + "\n" + `<html><body><div id="host"><template data-shadowrootmode="closed">` +
+		`<img src="` + dataURL("image/png", png) + `"><a href="/api/openapi.json" target="_blank">in a closed root</a></template></div>` +
+		`<iframe data-SrcDoc="&lt;a href=/api/openapi.json target=_blank&gt;in a srcdoc frame&lt;/a&gt;"></iframe></body></html>`
+	if string(body) != want {
+		t.Errorf("body\n got %q\nwant %q", body, want)
+	}
+}
+
 // cspDirective returns the sources of one directive of a CSP header.
 func cspDirective(csp, name string) string {
 	for _, d := range strings.Split(csp, ";") {
