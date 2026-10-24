@@ -305,7 +305,13 @@ IMAP connections. Two layers stop them:
   clicks and no focus (it is `inert`) until this blocker is on the mail's
   document. The web UI installs it as soon as that document exists, before
   its `load`, so a remote image that never answers does not leave the mail
-  unusable.
+  unusable. The app's CSP (`frame-src 'self'`) lets no external page into
+  the frame: a link that would open in the frame itself (`target="_self"`,
+  or an SVG link, which ignores `<base target>`) shows the browser's error
+  page there. Whenever the frame leaves the mail's document, it is `inert`
+  again until the blocker is on the next mail document, the error page
+  included. So Back (or Forward) to the mail is guarded like its first
+  load, also while a remote image holds it.
 
 The second layer has to see the links. A mail can hide them in three ways:
 behind SVG `<use>`, which shows a copy of the link in a tree the web UI
@@ -332,18 +338,16 @@ What remains:
   more to the author than clicking an external link in the mail would
   (opening `/html?images=1` of the author's own mail loads its remote
   images).
-- Back to the mail after an external link with `target="_self"`: the
-  frame shows the mail's document again, and the link blocker is installed
-  on it only at its `load`. If a remote image (after **Load remote
-  images**) holds that `load`, a click on a same-origin link until then is
-  a real navigation, which the server's rule above still limits to the four
-  routes. Installing the blocker earlier there is a follow-up
-  ([#265](https://github.com/pklnx/mail-archive/issues/265)).
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests, and
-  so can a link the web UI cannot cancel (the context menu, Back after a
-  `_self` link before `load`).
+  so can a link the web UI cannot cancel (the context menu).
+- The accepted cost above: if a browser bug ever ran script in the frame,
+  it would run with the app's origin.
+
+The frame's behaviour above (the CSP refusing external pages in the frame,
+the frame going `inert` when it leaves the mail) was measured in Chromium
+only.
 
 ### Login checks
 

@@ -564,6 +564,108 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(appRequests).toEqual([]);
   });
 
+  test("links into the app are blocked when the frame shows a mail again", async ({ page, context, guards }) => {
+    // #265: a link that opens in the frame itself takes the frame away from
+    // the mail; the app's CSP (frame-src 'self') refuses the external page,
+    // so the frame shows the browser's error page. Back shows the mail's
+    // document again while a remote image holds its load. The frame turns
+    // inert when it leaves the mail and stays so until the link blocker is
+    // on the mail's next document.
+    let loads = 0;
+    await page.route(/\/api\/messages\/[0-9a-f]{64}\/html\?images=1$/, async (route) => {
+      const response = await route.fetch();
+      const body = await response.text();
+      const end = "</style>\n";
+      const at = body.indexOf(end) + end.length;
+      // A new image URL per load: the renderer's memory cache would answer a repeated one.
+      loads++;
+      const markup =
+        `<p><a href="https://links.example/away" target="_self" style="display:block;height:60px">Away</a></p>` +
+        `<p><a href="/api/openapi.json?again" target="_self">Spec again</a> <a href="https://links.example/again">Again check</a></p>` +
+        `<img src="https://img.example/again.svg?load=${loads}" style="display:block">`;
+      await route.fulfill({ response, body: body.slice(0, at) + markup + body.slice(at) });
+    });
+    // The second load's image is held: the mail's document after Back stays loading.
+    let onHeld = () => {};
+    const held = new Promise<void>((r) => (onHeld = r));
+    let release = () => {};
+    const released = new Promise<void>((r) => (release = r));
+    await page.route("https://img.example/**", async (route) => {
+      if (route.request().url().endsWith("load=2")) {
+        onHeld();
+        await released;
+      }
+      await route.fulfill({ contentType: "image/svg+xml", body: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>` });
+    });
+    // Only the sentinel: the CSP refuses the external page in the frame
+    // before any request, so a request to links.example/away would be
+    // reported by the guards.
+    await context.route("https://links.example/again", (route) => route.fulfill({ contentType: "text/html", body: "<p>again</p>" }));
+    const appRequests: string[] = [];
+    context.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/openapi.json") appRequests.push(r.url());
+    });
+    await openLong(page);
+    await page.getByRole("article").getByRole("button", { name: "Load remote images" }).click();
+    await mailReady(page);
+    const mailURL = await frameOf(page).evaluate((f: HTMLIFrameElement) => f.contentDocument!.URL);
+    expect(mailURL).toMatch(/\/html\?images=1$/);
+    const pages: string[] = [];
+    context.on("page", (p) => pages.push(p.url()));
+    const frameState = () =>
+      frameOf(page).evaluate((f: HTMLIFrameElement) => {
+        const doc = f.contentDocument;
+        return {
+          url: doc ? doc.URL : null,
+          state: doc ? (doc.readyState === "complete" ? "complete" : "loading") : null,
+          inert: f.hasAttribute("inert"),
+        };
+      });
+
+    // Away, in the frame itself: the error page, which the parent cannot read, and the frame inert.
+    const away = await linkCenter(page, "Away");
+    await page.mouse.click(away.x, away.y);
+    await expect.poll(frameState).toEqual({ url: null, state: null, inert: true });
+    // The refused framing, nothing else: the browser's message and the
+    // guards' own (the app page's listener), checked by their first line
+    // without the location, which the browser does not always give.
+    const appURL = page.url();
+    const lines = guards
+      .takeProblems()
+      .map((p) => p.split("\n")[0]!)
+      .sort();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.startsWith(`console error: CSP violation: frame-src blocked https://links.example in ${appURL} `), lines[0]).toBe(true);
+    expect(
+      lines[1]!.startsWith(`console error: Framing 'https://links.example/' violates the following Content Security Policy directive: "frame-src 'self'". The request has been blocked.`),
+      lines[1],
+    ).toBe(true);
+
+    // Back: the mail's document again, its load held by the image, the blocker on before inert goes.
+    await page.evaluate(() => history.back());
+    await held;
+    await expect.poll(frameState).toEqual({ url: mailURL, state: "loading", inert: false });
+    const spec = await linkCenter(page, "Spec again");
+    await page.mouse.click(spec.x, spec.y);
+    await page.mouse.click(spec.x, spec.y, { button: "middle" });
+    // On main the left click navigated the frame to the route.
+    expect((await frameState()).url).toBe(mailURL);
+    // The external link opens: the signal that the clicks before it were handled.
+    const opened = context.waitForEvent("page");
+    const check = await linkCenter(page, "Again check");
+    await page.mouse.click(check.x, check.y);
+    const tab = await opened;
+    await expect.poll(() => tab.url()).toBe("https://links.example/again");
+    expect(appRequests).toEqual([]);
+    expect(pages).toHaveLength(1);
+    expect(await frameState()).toEqual({ url: mailURL, state: "loading", inert: false });
+
+    // The image arrives: the frame loads.
+    release();
+    await mailReady(page);
+    expect(appRequests).toEqual([]);
+  });
+
   test("links through SVG <use> are blocked", async ({ page, context }) => {
     // use clones the link it references into a user-agent shadow tree that
     // the event's path does not show. One link without a target (it would
