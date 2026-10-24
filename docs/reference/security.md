@@ -21,10 +21,11 @@
 ## Login
 
 Every API request needs a login or an API key, except the login itself,
-`/healthz` and the API description `/api/openapi.json`. The page code (`/`, `/assets/`) is
-public; it contains no data. Which route needs what is set in one table
-(`internal/web/routes.go`); a route not listed there, or a new one without
-an access level, needs a login.
+`/healthz` and the API description `/api/openapi.json`. The page code (`/`,
+`/assets/`, the web app manifest and its icons) is public; it contains no
+data. Which route needs what is set in one table (`internal/web/routes.go`);
+a route not listed there, or a new one without an access level, needs a
+login.
 
 - **Users** are created by admins in the web UI or with `./ma user add NAME`
   (`--admin` for admins). There is no self-registration. Passwords generated

@@ -253,8 +253,8 @@ func (s *Server) sessionWithToken(r *http.Request) (*store.Session, string, erro
 // login routes for requests without a key. A path without a route, or with
 // a method no route takes, counts as session-only, so it answers 401
 // without a login. New endpoints are protected by default (accessSession
-// is the zero value). /healthz and the UI code (/, /assets/) are public;
-// they contain no data.
+// is the zero value). /healthz and the UI code (/, /assets/, the web app
+// manifest and its icons: ui.RootPaths) are public; they contain no data.
 func (s *Server) authenticate(mux *http.ServeMux, accessOf map[string]access) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
