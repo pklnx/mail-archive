@@ -69,7 +69,9 @@ var gooseLockHolderQuery = `SELECT l.pid, a.state,
 // On an error it closes the connection instead of giving it back to the
 // pool: the lock may have been taken before the error, and a cancelled
 // wait must not leave a backend queued for the lock after the command
-// exits (closeAndWaitCleanup, #255).
+// exits (closeAndWaitCleanup, #255). If ctx ended before a query was sent,
+// the error may be a bare driver.ErrBadConn without ctx's error (see
+// discardConn); withMigrations adds ctx's error for the caller.
 func (l gooseLocker) SessionLock(ctx context.Context, conn *sql.Conn) error {
 	var ok bool
 	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", lock.DefaultLockID).Scan(&ok); err != nil {
@@ -140,16 +142,24 @@ func gooseLockHolder(ctx context.Context, conn *sql.Conn) (GooseLockHolder, erro
 // has finished closing it (closeAndWaitCleanup). The pool drops a closed
 // connection when goose gives it back.
 //
-// It does nothing when database/sql has already closed conn itself: the
-// stdlib driver returns driver.ErrBadConn for a query on a pgx connection
-// that is already closed (for example after a cancelled query), and Raw
-// then returns sql.ErrConnDone. That is fine: such a connection holds no
-// lock any more once the server sees it closed, pgx has already started
-// its own close (cancel request included) in the background, and the
-// pool's destructor waits for that cleanup when the store is closed. A
-// cancelled wait for the lock itself never gets here with a closed conn:
-// the failing query is the one that cancelled it, and pgx returns the
-// context's error for it, not driver.ErrBadConn.
+// It does nothing when database/sql has already given conn up itself
+// (Raw then returns sql.ErrConnDone). The stdlib driver returns a bare
+// driver.ErrBadConn, and database/sql then gives the conn up, in two
+// cases:
+//
+//   - The pgx connection is already closed (for example after a cancelled
+//     query). Such a connection holds no lock any more once the server
+//     sees it closed, pgx has already started its own close (cancel
+//     request included) in the background, and the pool's destructor
+//     waits for that cleanup when the store is closed.
+//   - ctx ended after pgx started the query but before it sent it (#268):
+//     pgconn's context-already-done error is safe to retry, and the
+//     driver turns it into driver.ErrBadConn. This reaches SessionLock's
+//     try-lock, holder lookup and wait. Nothing was sent, so no backend
+//     waits for the lock, and on these paths this session does not hold
+//     goose's lock. The pgx connection stays open and goes back to the
+//     pool (OpenDBFromPool's close is a release). On SessionUnlock's path
+//     it may still hold goose's lock (#269).
 func discardConn(ctx context.Context, conn *sql.Conn) {
 	_ = conn.Raw(func(driverConn any) error {
 		if c, ok := driverConn.(*stdlib.Conn); ok {

@@ -53,3 +53,19 @@ func SetGooseLockHolderQuery(q string) (restore func()) {
 func WithSessionSettings(stmts ...string) Option {
 	return func(c *openConfig) { c.settings = append(c.settings, stmts...) }
 }
+
+// WithQueryStartHook is an Open option that calls f with the SQL of every
+// query when pgx starts it, before pgx checks the query's context and
+// sends it (a pgx query tracer).
+func WithQueryStartHook(f func(sql string)) Option {
+	return func(c *openConfig) { c.tracer = queryStartTracer(f) }
+}
+
+type queryStartTracer func(sql string)
+
+func (f queryStartTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	f(d.SQL)
+	return ctx
+}
+
+func (queryStartTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}

@@ -56,6 +56,9 @@ type Option func(*openConfig)
 type openConfig struct {
 	// settings are the SET statements run on every new connection.
 	settings []string
+	// tracer is the pgx query tracer of every connection; only tests set
+	// it.
+	tracer pgx.QueryTracer
 }
 
 // ForMigrations sets up the store for `migrate` and `migrate down`, so
@@ -116,6 +119,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 			return nil
 		}
 	}
+	if oc.tracer != nil {
+		cfg.ConnConfig.Tracer = oc.tracer
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -148,7 +154,7 @@ func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	var applied []string
-	err := s.withMigrations(true, func(p *goose.Provider) error {
+	err := s.withMigrations(ctx, true, func(p *goose.Provider) error {
 		results, err := p.Up(ctx)
 		for _, r := range results {
 			applied = append(applied, r.Source.Path)
@@ -163,7 +169,7 @@ func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 // goose's migration lock, as Migrate does.
 func (s *Store) MigrateDown(ctx context.Context) (string, error) {
 	var rolledBack string
-	err := s.withMigrations(true, func(p *goose.Provider) error {
+	err := s.withMigrations(ctx, true, func(p *goose.Provider) error {
 		r, err := p.Down(ctx)
 		if errors.Is(err, goose.ErrNoNextVersion) {
 			return errors.New("no migration to roll back")
@@ -189,7 +195,7 @@ type MigrationStatus struct {
 // the migration lock and sees the migrations committed so far.
 func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) {
 	var out []MigrationStatus
-	err := s.withMigrations(false, func(p *goose.Provider) error {
+	err := s.withMigrations(ctx, false, func(p *goose.Provider) error {
 		statuses, err := p.Status(ctx)
 		if err != nil {
 			return err
@@ -213,7 +219,10 @@ func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) 
 // time never apply the same version. The second waits without a time limit
 // and says so (gooseLocker). Status reads go without it, because goose's
 // Status takes the lock too and would wait behind a running migration.
-func (s *Store) withMigrations(locked bool, fn func(*goose.Provider) error) error {
+//
+// When ctx has ended, the error wraps ctx's error (withCtxErr), whichever
+// step of goose saw the cancel.
+func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.Provider) error) error {
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
 		return err
@@ -228,7 +237,27 @@ func (s *Store) withMigrations(locked bool, fn func(*goose.Provider) error) erro
 	if err != nil {
 		return err
 	}
-	return fn(provider)
+	return withCtxErr(ctx, fn(provider))
+}
+
+// withCtxErr returns err so that it wraps ctx's error when ctx has ended
+// (#268), keeping err's text: "context canceled (<err>)". A nil err stays
+// nil, so a migration that finished just before the cancel still reports
+// success, and an err that already wraps ctx's error is returned as is.
+//
+// It is needed because a cancel can lose ctx's error on goose's *sql.Conn:
+// when ctx ends after pgx started a query but before it sent it, pgconn's
+// context-already-done error is safe to retry, and pgx's stdlib driver
+// turns every such error into a bare driver.ErrBadConn. goose then appends
+// the "sql: connection is already closed" of its own cleanup.
+func withCtxErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+		return fmt.Errorf("%w (%w)", cerr, err)
+	}
+	return err
 }
 
 // TLSMode describes how to secure the IMAP connection.
