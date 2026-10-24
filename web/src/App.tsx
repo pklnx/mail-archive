@@ -291,6 +291,9 @@ export function App({ user, logout }: Props) {
         </HeaderGlobalBar>
       </Header>
       <ShellNav
+        // Carbon keeps its hover state across a change of isRail: a rail expanded by
+        // hover or focus would stay an inert overlay when the window narrows below lg.
+        key={wide ? "rail" : "overlay"}
         ref={sideNav}
         id={navId}
         state={state}
