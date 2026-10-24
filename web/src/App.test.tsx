@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Account, AccountsResponse, Folder, MessageDetail, MessageSummary, User } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
-import { twoPane as twoPaneQuery } from "./breakpoints";
+import { lg, twoPane as twoPaneQuery } from "./breakpoints";
 
 const f = (name: string, messages = 1): Folder => ({ name, delimiter: "/", messages, lastSyncedAt: null, lastReconciledAt: null });
 
@@ -233,6 +233,59 @@ describe("desktop navigation (lg and up)", () => {
     await waitFor(() => expect(nav.className).toContain("cds--side-nav--expanded"));
     fireEvent.blur(link, { relatedTarget: document.body });
     await waitFor(() => expect(nav.className).not.toContain("cds--side-nav--expanded"));
+  });
+
+  /** matchMedia whose lg and two-pane answers can change while the app runs; the change reaches every listener of either query. */
+  function liveWidth(wide: boolean) {
+    const state = { wide };
+    const listeners: { query: string; fn: (e: { matches: boolean; media: string }) => void }[] = [];
+    const matches = (query: string) => state.wide && (query === lg || query === twoPaneQuery);
+    window.matchMedia = (query: string) =>
+      ({
+        get matches() {
+          return matches(query);
+        },
+        media: query,
+        onchange: null,
+        addEventListener: (_: string, fn: () => void) => listeners.push({ query, fn }),
+        removeEventListener: (_: string, fn: () => void) => {
+          const at = listeners.findIndex((l) => l.fn === fn);
+          if (at >= 0) listeners.splice(at, 1);
+        },
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList;
+    return (next: boolean) =>
+      act(() => {
+        state.wide = next;
+        listeners.slice().forEach(({ query, fn }) => fn({ matches: matches(query), media: query }));
+      });
+  }
+
+  it("drops the rail's focus expansion when the window narrows below lg, instead of leaving an inert overlay (#258)", async () => {
+    const resize = liveWidth(true);
+    await renderApp();
+    const link = within(sideNav()).getByRole("link", { name: t.log });
+    fireEvent.focus(link);
+    // Carbon expands after a short delay: wait for it, so the resize below meets an expanded rail.
+    await waitFor(() => expect(sideNav().className).toContain("cds--side-nav--expanded"));
+    expect(sideNav().className).toContain("cds--side-nav--rail");
+    resize(false);
+    const nav = sideNav();
+    expect(nav.className).not.toContain("cds--side-nav--rail");
+    expect(nav.className).not.toContain("cds--side-nav--expanded");
+    expect(nav.hasAttribute("inert")).toBe(true);
+    expect(document.querySelector(".cds--side-nav__overlay-active")).toBeNull();
+    // The overlay works as usual afterwards: the menu button opens it, Escape closes it and returns the focus.
+    menuButton().focus();
+    fireEvent.click(menuButton());
+    expect(sideNav().className).toContain("cds--side-nav--expanded");
+    expect(document.querySelector(".cds--side-nav__overlay-active")).not.toBeNull();
+    key(document.activeElement!, "Escape");
+    expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+    expect(document.querySelector(".cds--side-nav__overlay-active")).toBeNull();
+    expect(document.activeElement).toBe(menuButton());
   });
 
   it("keeps the shortcuts working while a folder has focus", async () => {
