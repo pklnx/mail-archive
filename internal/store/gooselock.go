@@ -52,8 +52,8 @@ var _ lock.SessionLocker = gooseLocker{}
 // (a single bigint key: classid holds its upper and objid its lower 32
 // bits, objsubid is 1) in the current database. state and query_start are
 // NULL for a session of another role (and query is "<insufficient
-// privilege>", which is never read).
-const gooseLockHolderQuery = `SELECT l.pid, a.state,
+// privilege>", which is never read). It is a variable for a test only.
+var gooseLockHolderQuery = `SELECT l.pid, a.state,
 		EXTRACT(epoch FROM clock_timestamp() - a.query_start)::float8
 	FROM pg_locks l LEFT JOIN pg_stat_activity a ON a.pid = l.pid
 	WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
@@ -62,7 +62,9 @@ const gooseLockHolderQuery = `SELECT l.pid, a.state,
 	LIMIT 1`
 
 // SessionLock takes goose's lock on conn. If another session holds it, it
-// calls onWait with that session and waits for the lock.
+// calls onWait with that session and waits for the lock. The lookup of the
+// holder only feeds the message: if it fails, onWait gets an empty holder
+// and the wait goes on, unless ctx has ended.
 //
 // On an error it closes the connection instead of giving it back to the
 // pool: the lock may have been taken before the error, and a cancelled
@@ -79,9 +81,14 @@ func (l gooseLocker) SessionLock(ctx context.Context, conn *sql.Conn) error {
 	}
 	if l.onWait != nil {
 		h, err := gooseLockHolder(ctx, conn)
-		if err != nil {
+		if err != nil && ctx.Err() != nil {
+			// Cancelled (Ctrl-C): end here, with the cleanup of a
+			// cancelled query.
 			discardConn(context.WithoutCancel(ctx), conn)
 			return fmt.Errorf("look up the holder of goose's migration lock: %w", err)
+		}
+		if err != nil {
+			h = GooseLockHolder{} // wait anyway, without the holder's details
 		}
 		l.onWait(h)
 	}
@@ -132,6 +139,17 @@ func gooseLockHolder(ctx context.Context, conn *sql.Conn) (GooseLockHolder, erro
 // discardConn closes the pool connection behind conn and waits until pgx
 // has finished closing it (closeAndWaitCleanup). The pool drops a closed
 // connection when goose gives it back.
+//
+// It does nothing when database/sql has already closed conn itself: the
+// stdlib driver returns driver.ErrBadConn for a query on a pgx connection
+// that is already closed (for example after a cancelled query), and Raw
+// then returns sql.ErrConnDone. That is fine: such a connection holds no
+// lock any more once the server sees it closed, pgx has already started
+// its own close (cancel request included) in the background, and the
+// pool's destructor waits for that cleanup when the store is closed. A
+// cancelled wait for the lock itself never gets here with a closed conn:
+// the failing query is the one that cancelled it, and pgx returns the
+// context's error for it, not driver.ErrBadConn.
 func discardConn(ctx context.Context, conn *sql.Conn) {
 	_ = conn.Raw(func(driverConn any) error {
 		if c, ok := driverConn.(*stdlib.Conn); ok {

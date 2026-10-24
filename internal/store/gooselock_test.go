@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pressly/goose/v3/lock"
 
 	"github.com/pklnx/mail-archive/internal/store"
@@ -111,6 +112,128 @@ func TestForMigrationsSessionSettings(t *testing.T) {
 		if got := show(plain, name); got == want {
 			t.Errorf("without ForMigrations: %s = %q, the value of ForMigrations", name, got)
 		}
+	}
+}
+
+// TestForMigrationsRefusedSetting (#253): a SET the server refuses (here
+// an invalid check interval, as PostgreSQL before 14 or a pooler would
+// refuse one) does not break the connect: the store opens and queries,
+// the refused setting keeps its default, and the SETs after it still
+// apply. Without the best effort, Open fails.
+func TestForMigrationsRefusedSetting(t *testing.T) {
+	dbURL := storetest.NewUnmigrated(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	st, err := store.Open(ctx, dbURL, store.ForMigrationsWithCheckInterval("not an interval"))
+	if err != nil {
+		t.Fatalf("open with a refused SET: %v", err)
+	}
+	t.Cleanup(st.Close)
+	var interval string
+	var tcp bool
+	if err := st.QueryRowForTest(ctx, "SELECT current_setting('client_connection_check_interval'), inet_client_addr() IS NOT NULL").
+		Scan(&interval, &tcp); err != nil {
+		t.Fatalf("query after a refused SET: %v", err)
+	}
+	if interval != "0" {
+		t.Errorf("client_connection_check_interval = %q, want the default 0", interval)
+	}
+	if !tcp {
+		t.Log("not a TCP connection: keepalives not checked")
+		return
+	}
+	var idle string
+	if err := st.QueryRowForTest(ctx, "SHOW tcp_keepalives_idle").Scan(&idle); err != nil {
+		t.Fatal(err)
+	}
+	if idle != "60" {
+		t.Errorf("tcp_keepalives_idle = %q after the refused SET, want 60", idle)
+	}
+}
+
+// TestSessionSettingBreaksConnection (#253): a connection that breaks
+// during the session settings is not handed out: Open fails with the
+// server's error. Handing it out would make Open fail later with a bare
+// "conn closed" instead.
+func TestSessionSettingBreaksConnection(t *testing.T) {
+	dbURL := storetest.NewUnmigrated(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	st, err := store.Open(ctx, dbURL, store.WithSessionSettings("SELECT pg_terminate_backend(pg_backend_pid())"))
+	if err == nil {
+		st.Close()
+		t.Fatal("Open succeeded although every connection breaks")
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "57P01" {
+		t.Fatalf("Open failed with %v, want the server's admin_shutdown (57P01) from the setting", err)
+	}
+}
+
+// TestMigrateWaitsWhenHolderLookupFails (#253): the lookup of the holder
+// only feeds the message. If it fails, Migrate still calls the wait
+// function, with an empty holder, waits for goose's lock and migrates once
+// it is free.
+func TestMigrateWaitsWhenHolderLookupFails(t *testing.T) {
+	defer store.SetGooseLockHolderQuery("SELECT $1::bigint / 0, NULL::text, NULL::float8")()
+	dbURL := storetest.NewUnmigrated(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	observer := connect(t, dbURL)
+	holder := connect(t, dbURL)
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", lock.DefaultLockID); err != nil {
+		t.Fatal(err)
+	}
+	st := openNamed(t, ctx, dbURL, "migrate")
+	waits := make(chan store.GooseLockHolder, 4)
+	st.SetGooseLockWait(func(h store.GooseLockHolder) { waits <- h })
+	migrateCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	collected := false
+	t.Cleanup(func() {
+		stop()
+		if !collected {
+			<-done
+		}
+	})
+	go func() {
+		_, err := st.Migrate(migrateCtx)
+		done <- err
+	}()
+
+	select {
+	case h := <-waits:
+		if h != (store.GooseLockHolder{}) {
+			t.Errorf("holder %+v from a failed lookup, want an empty one", h)
+		}
+	case err := <-done:
+		collected = true
+		t.Fatalf("Migrate returned before it waited: %v", err)
+	case <-ctx.Done():
+		t.Fatalf("no call of the wait function: %v", ctx.Err())
+	}
+	for {
+		n, err := countGooseLockWaiters(ctx, observer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			collected = true
+			t.Fatalf("Migrate returned while goose's lock was held: %v", err)
+		default:
+		}
+	}
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_unlock($1)", lock.DefaultLockID); err != nil {
+		t.Fatal(err)
+	}
+	err := receive(t, ctx, done, "migration result")
+	collected = true
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

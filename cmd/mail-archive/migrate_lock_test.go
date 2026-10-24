@@ -391,11 +391,14 @@ func TestMigrateSaysItWaitsForGooseLock(t *testing.T) {
 
 // TestGooseLockWaitMessage (#253): the message names the holder's backend
 // and how to stop it, says how long its statement has run only when it is
-// active, and leaves out what this role may not see.
+// active, and leaves out what this role may not see. Only a holder that
+// may run a statement is said to end shortly; an idle one is not.
 func TestGooseLockWaitMessage(t *testing.T) {
 	const advice = ": usually a statement of an earlier migrate that was stopped, which ends shortly; " +
 		"if no migrate is running anywhere, it can be stopped with SELECT pg_cancel_backend(12345), " +
 		"or with SELECT pg_terminate_backend(12345) if it is idle"
+	const idleAdvice = ": a session holds it and releases it when it ends or unlocks; " +
+		"if no migrate is running anywhere, it can be stopped with SELECT pg_terminate_backend(12345)"
 	for _, tc := range []struct {
 		holder store.GooseLockHolder
 		want   string
@@ -403,7 +406,9 @@ func TestGooseLockWaitMessage(t *testing.T) {
 		{store.GooseLockHolder{PID: 12345, State: "active", ActiveFor: 3*time.Minute + 12400*time.Millisecond},
 			"waiting for goose's migration lock, held by database backend 12345 (active for 3m12s)" + advice},
 		{store.GooseLockHolder{PID: 12345, State: "idle"},
-			"waiting for goose's migration lock, held by database backend 12345 (idle)" + advice},
+			"waiting for goose's migration lock, held by database backend 12345 (idle)" + idleAdvice},
+		{store.GooseLockHolder{PID: 12345, State: "idle in transaction"},
+			"waiting for goose's migration lock, held by database backend 12345 (idle in transaction)" + idleAdvice},
 		// A session of another role: no state, no duration.
 		{store.GooseLockHolder{PID: 12345},
 			"waiting for goose's migration lock, held by database backend 12345" + advice},

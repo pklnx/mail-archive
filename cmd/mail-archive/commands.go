@@ -167,24 +167,31 @@ func lockMigrations(cmd *cobra.Command, st *store.Store) (unlock func(), err err
 // gooseLockWaitMessage is what migrate and migrate down say when they wait
 // for goose's lock although they hold the command lock (#253). It does not
 // claim who the holder is: usually a statement of a killed migrate, but it
-// may be a running migrate of an older version without the command lock.
-// It never shows the holder's query, which another role cannot see.
+// may be a running migrate of an older version without the command lock,
+// or an idle session. It never shows the holder's query, which another
+// role cannot see.
 func gooseLockWaitMessage(h store.GooseLockHolder) string {
 	if h.PID == 0 {
 		return "waiting for goose's migration lock ..."
 	}
-	var state string
+	const prefix = "waiting for goose's migration lock, held by database backend %d"
 	switch h.State {
-	case "":
-	case "active":
-		state = fmt.Sprintf(" (active for %s)", h.ActiveFor.Round(time.Second))
+	case "active", "":
+		// Active, or not visible to this role: most likely the
+		// statement of a killed migrate.
+		var active string
+		if h.State == "active" {
+			active = fmt.Sprintf(" (active for %s)", h.ActiveFor.Round(time.Second))
+		}
+		return fmt.Sprintf(prefix+"%s: usually a statement of an earlier migrate that was stopped, which ends shortly; "+
+			"if no migrate is running anywhere, it can be stopped with SELECT pg_cancel_backend(%[1]d), "+
+			"or with SELECT pg_terminate_backend(%[1]d) if it is idle", h.PID, active)
 	default:
-		state = " (" + h.State + ")"
+		// Idle (or idle in transaction): no statement runs that would
+		// end; cancelling does nothing.
+		return fmt.Sprintf(prefix+" (%s): a session holds it and releases it when it ends or unlocks; "+
+			"if no migrate is running anywhere, it can be stopped with SELECT pg_terminate_backend(%[1]d)", h.PID, h.State)
 	}
-	return fmt.Sprintf("waiting for goose's migration lock, held by database backend %d%s: "+
-		"usually a statement of an earlier migrate that was stopped, which ends shortly; "+
-		"if no migrate is running anywhere, it can be stopped with SELECT pg_cancel_backend(%[1]d), "+
-		"or with SELECT pg_terminate_backend(%[1]d) if it is idle", h.PID, state)
 }
 
 func newMigrateDownCmd() *cobra.Command {
