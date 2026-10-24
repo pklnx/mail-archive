@@ -220,6 +220,17 @@ func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) 
 // and says so (gooseLocker). Status reads go without it, because goose's
 // Status takes the lock too and would wait behind a running migration.
 //
+// goose runs on a short-lived pgx pool of its own, made from a copy of
+// the store's pool config (the same server, credentials, ForMigrations
+// settings and tracer) and closed before withMigrations returns. So each
+// call opens one extra short-lived connection, and goose never takes
+// connections from the store's pool. This keeps goose's lock out of the
+// store's pool (#269): when database/sql gives up goose's *sql.Conn after
+// a cancel (a bare driver.ErrBadConn, see discardConn), the stdlib driver
+// releases the pgx connection to its pool instead of closing it, and the
+// connection may still hold goose's lock. The teardown frees that lock:
+// see closeMigrationPool.
+//
 // When ctx has ended, the error wraps ctx's error (withCtxErr), whichever
 // step of goose saw the cancel.
 func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.Provider) error) error {
@@ -231,13 +242,55 @@ func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.
 	if locked {
 		opts = append(opts, goose.WithSessionLocker(gooseLocker{onWait: s.gooseLockWait}))
 	}
-	sqlDB := stdlib.OpenDBFromPool(s.pool)
-	defer func(d *sql.DB) { _ = d.Close() }(sqlDB)
+	gp, err := pgxpool.NewWithConfig(ctx, s.pool.Config())
+	if err != nil {
+		return err
+	}
+	sqlDB := stdlib.OpenDBFromPool(gp)
+	defer closeMigrationPool(ctx, gp, sqlDB)
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub, opts...)
 	if err != nil {
 		return err
 	}
 	return withCtxErr(ctx, fn(provider))
+}
+
+// migrationPoolUnlockLimit bounds the teardown unlock of
+// closeMigrationPool, so that a vanished server cannot hang it.
+const migrationPoolUnlockLimit = 5 * time.Second
+
+// closeMigrationPool closes goose's pool gp and its database/sql handle
+// sqlDB, and frees goose's lock if a connection of gp still holds it.
+//
+// Closing sqlDB releases its connections to gp. A connection that
+// database/sql gave up while it held goose's lock is already back in gp:
+// pgxpool keeps it when it is open and idle (outside a transaction), and
+// destroys it otherwise. On every idle connection the teardown runs
+// pg_advisory_unlock_all(), so goose's lock of such an idle connection is
+// free when Migrate or MigrateDown returns. A destroyed connection (for
+// example one given up inside goose's transaction) keeps its lock until
+// its backend exits, which the server notices asynchronously; gp.Close
+// waits for pgx's close of it. The unlock only touches sessions of gp; the
+// command lock (LockMigrations) is on a connection of its own.
+//
+// The unlock runs without ctx's cancel, so a Ctrl-C does not skip it, and
+// within migrationPoolUnlockLimit. A failed or timed-out unlock is ignored:
+// gp.Close closes the connection anyway, and the server then frees the
+// lock when the backend exits.
+//
+// Known race, not a leak: gp's background health check also takes idle
+// connections for a moment. If it holds the connection with goose's lock
+// exactly while AcquireAllIdle runs, that connection is skipped here, and
+// gp.Close frees the lock asynchronously instead.
+func closeMigrationPool(ctx context.Context, gp *pgxpool.Pool, sqlDB *sql.DB) {
+	_ = sqlDB.Close()
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), migrationPoolUnlockLimit)
+	defer cancel()
+	for _, c := range gp.AcquireAllIdle(uctx) {
+		_, _ = c.Exec(uctx, "SELECT pg_advisory_unlock_all()")
+		c.Release()
+	}
+	gp.Close()
 }
 
 // withCtxErr returns err so that it wraps ctx's error when ctx has ended

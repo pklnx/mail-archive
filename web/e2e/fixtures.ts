@@ -36,10 +36,11 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
     text: new RegExp(`^Loading the image '${remote}' violates the following Content Security Policy directive: "img-src [^"]*"\\. The action has been blocked\\.\\s*$`),
     url: mailFrame,
   },
-  // Playwright's trace snapshotter, while a trace is recorded (the config's
-  // retain-on-failure records every test): in a frame without
-  // allow-scripts it is blocked, and the browser logs it. Without a trace
-  // there is no such message (#209, part 1).
+  // The mail's own <script>, which the sandbox (no allow-scripts) blocks and
+  // the browser logs, e.g. in "no script runs in the mail". Playwright's DOM
+  // snapshotter used to add to these in every frame, and for a frame that had
+  // committed about:blank; the config records traces without DOM snapshots
+  // now, so it does not (#260). Nothing here covers about:blank.
   {
     text: new RegExp(`^Blocked script execution in '${message}/html[^']*' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\\.$`),
     url: /.*/, // reported with or without the frame's URL

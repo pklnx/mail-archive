@@ -71,7 +71,9 @@ var gooseLockHolderQuery = `SELECT l.pid, a.state,
 // wait must not leave a backend queued for the lock after the command
 // exits (closeAndWaitCleanup, #255). If ctx ended before a query was sent,
 // the error may be a bare driver.ErrBadConn without ctx's error (see
-// discardConn); withMigrations adds ctx's error for the caller.
+// discardConn); withMigrations adds ctx's error for the caller. A conn
+// that database/sql has given up is not closed here and may still hold
+// goose's lock; withMigrations frees it (closeMigrationPool, #269).
 func (l gooseLocker) SessionLock(ctx context.Context, conn *sql.Conn) error {
 	var ok bool
 	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", lock.DefaultLockID).Scan(&ok); err != nil {
@@ -103,7 +105,10 @@ func (l gooseLocker) SessionLock(ctx context.Context, conn *sql.Conn) error {
 
 // SessionUnlock releases goose's lock on conn. If that fails, it closes
 // the connection, which releases the lock, instead of giving it back to
-// the pool with the lock.
+// the pool with the lock. When database/sql has already given conn up,
+// the close does nothing and the connection may be back in goose's pool
+// with the lock; withMigrations frees it when it closes that pool
+// (closeMigrationPool, #269).
 func (gooseLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
 	var ok bool
 	err := conn.QueryRowContext(ctx, "SELECT pg_advisory_unlock($1)", lock.DefaultLockID).Scan(&ok)
@@ -158,8 +163,10 @@ func gooseLockHolder(ctx context.Context, conn *sql.Conn) (GooseLockHolder, erro
 //     try-lock, holder lookup and wait. Nothing was sent, so no backend
 //     waits for the lock, and on these paths this session does not hold
 //     goose's lock. The pgx connection stays open and goes back to the
-//     pool (OpenDBFromPool's close is a release). On SessionUnlock's path
-//     it may still hold goose's lock (#269).
+//     pool (OpenDBFromPool's close is a release). On SessionUnlock's path,
+//     or on a query of goose after SessionLock, it may still hold goose's
+//     lock. That pool is goose's own (withMigrations), and its teardown
+//     frees the lock (closeMigrationPool, #269).
 func discardConn(ctx context.Context, conn *sql.Conn) {
 	_ = conn.Raw(func(driverConn any) error {
 		if c, ok := driverConn.(*stdlib.Conn); ok {

@@ -61,6 +61,21 @@ func WithQueryStartHook(f func(sql string)) Option {
 	return func(c *openConfig) { c.tracer = queryStartTracer(f) }
 }
 
+// WithQueryStartConnHook is like WithQueryStartHook, but f also gets the
+// backend process ID of the connection that starts the query.
+func WithQueryStartConnHook(f func(pid uint32, sql string)) Option {
+	return func(c *openConfig) { c.tracer = queryStartConnTracer(f) }
+}
+
+type queryStartConnTracer func(pid uint32, sql string)
+
+func (f queryStartConnTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	f(conn.PgConn().PID(), d.SQL)
+	return ctx
+}
+
+func (queryStartConnTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
 type queryStartTracer func(sql string)
 
 func (f queryStartTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {

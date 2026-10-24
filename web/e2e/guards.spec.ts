@@ -1,6 +1,6 @@
 // The guards' exceptions for the sandboxed mail frame stay narrow. No
 // browser needed: these check the matcher on the messages Chromium logs.
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
 import { origin } from "./demo";
 import { formatConsoleError, formatFrameEvents, fromMailFrame, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo } from "./fixtures";
 
@@ -130,4 +130,60 @@ test("a javascript: navigation of a sandboxed frame is reported with that frame"
   // The log shows the frame appearing under the page. It may be recorded
   // after the message, so wait for it.
   await expect.poll(() => guards.frameLog()).toContain(` attached name="" url="" parent(name="" url="${pageURL}")`);
+});
+
+// #260: Playwright's DOM snapshotter ran script in every frame while a trace
+// was recorded, and the browser logged "Blocked script execution" for each
+// sandboxed document, among them an about:blank one. The config records
+// traces without DOM snapshots, so a sandboxed frame is quiet again. Both
+// tests serve their page from the demo origin (the guards abort any other
+// host) and end on a console.error sentinel they wait for, so the check does
+// not depend on timing.
+const sandboxed = `sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"`;
+const sentinel = "snapshotter-sentinel";
+
+async function logSentinel(page: Page, context: BrowserContext) {
+  // Registered after the fixture's own listener, so the fixture has seen the
+  // message when this resolves.
+  const logged = context.waitForEvent("console", { predicate: (m) => m.text() === sentinel });
+  await page.evaluate((text) => console.error(text), sentinel);
+  await logged;
+}
+
+test("a sandboxed frame that commits about:blank logs nothing while the trace records", async ({ page, context, guards }) => {
+  // The setting this test depends on: a change back to DOM snapshots fails here first.
+  expect(test.info().project.use.trace).toEqual({ mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: true } });
+  await page.route(`${origin}/e2e/outer`, (route) =>
+    route.fulfill({ contentType: "text/html", body: `<!doctype html><button>go</button><iframe ${sandboxed} src="/e2e/inner"></iframe>` }),
+  );
+  await page.route(`${origin}/e2e/inner`, (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><p>mail</p>` }));
+  await page.goto(`${origin}/e2e/outer`);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const f = document.querySelector("iframe")!;
+        f.addEventListener("load", () => resolve(), { once: true });
+        f.src = "about:blank";
+      }),
+  );
+  await page.getByRole("button", { name: "go" }).click();
+  await logSentinel(page, context);
+  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([`console error: ${sentinel} ()`]);
+});
+
+test("a script blocked in a sandboxed frame outside the mail frame still fails the guard", async ({ page, context, guards }) => {
+  await page.route(`${origin}/e2e/outer`, (route) =>
+    route.fulfill({ contentType: "text/html", body: `<!doctype html><button>go</button><iframe ${sandboxed} src="/e2e/inner"></iframe>` }),
+  );
+  await page.route(`${origin}/e2e/inner`, (route) =>
+    route.fulfill({ contentType: "text/html", body: `<!doctype html><p>mail</p><script>parent.document.title = "ran"</script>` }),
+  );
+  await page.goto(`${origin}/e2e/outer`);
+  await page.getByRole("button", { name: "go" }).click();
+  await logSentinel(page, context);
+  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([
+    `console error: Blocked script execution in '${origin}/e2e/inner' because the document's frame is sandboxed and the 'allow-scripts' permission is not set. (${origin}/e2e/inner)`,
+    `console error: ${sentinel} ()`,
+  ]);
+  expect(await page.title()).toBe("");
 });
