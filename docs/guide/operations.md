@@ -144,13 +144,18 @@ The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
 A `MAIL_ARCHIVE_IMAGE` line in the kept `.env` (see [Versions](#versions))
 overrides the new bundle's image: the web server and the CLI (`./ma`) go on
 using the image it names, and `./ma --version` shows that image's version.
-Unless it names a newer build of your own, remove the line or set it to the
-new release's exact image, for example `ghcr.io/pklnx/mail-archive:X.Y.Z`,
-before `./ma migrate`. If you ran the steps above with the line in place,
-change it as described and repeat the upgrade from `./ma migrate` on, with
-the manual steps from the release notes and the
-[One-time steps](#one-time-steps) in their order, then
-run `docker compose up -d web`.
+Check it before `./ma migrate`. Keep the line if it names a newer build of
+your own than the new release. Otherwise, if it names an `X.Y` tag of
+`ghcr.io/pklnx/mail-archive`, set it to the new release's `X.Y` tag, for
+example `ghcr.io/pklnx/mail-archive:1.2`, and run `docker compose pull web`
+(it restarts nothing; migrate before starting web): a tag that is already on
+the machine is not pulled again. In any other case, remove the line or set
+it to the new release's exact image, for example
+`ghcr.io/pklnx/mail-archive:X.Y.Z`. If you ran the steps above with the line
+in place, change it as described and repeat the upgrade from `./ma migrate`
+on, with the manual steps from the release notes and the
+[One-time steps](#one-time-steps) in their order, then run
+`docker compose up -d web`.
 
 With a clone of the repository (see [From source](./getting-started#install)),
 `git pull` replaces the download, and `./ma migrate` rebuilds the image for
@@ -205,19 +210,23 @@ have no migration). `1.0` gets nothing new once a newer minor or major release
 is out. Then move the tag to the newest `X.Y` tag (for example `1.1`, or `2.0`
 after the major release's upgrade steps) after reading that release's notes:
 back up, set `MAIL_ARCHIVE_IMAGE=ghcr.io/pklnx/mail-archive:1.1` in `.env`,
-run `./ma migrate` as in [Upgrades](#upgrades), then
-`docker compose up -d web`. `1` also installs minor releases, which may
-include a migration; the web server does not run it, so until `./ma migrate`
-runs, the new version runs against a database that lacks it, and what needs
-the migration fails. A tool on `latest` installs breaking changes without
-their upgrade steps.
+run `docker compose pull web`, run `./ma migrate` as in
+[Upgrades](#upgrades), then `docker compose up -d web`. That setting stays
+in `.env` when you extract a newer bundle: move it to the new release's
+`X.Y` tag as described below the steps in [Upgrades](#upgrades). `1` also
+installs minor releases, which may include a migration; the web server does
+not run it, so until `./ma migrate` runs, the new version runs against a
+database that lacks it, and what needs the migration fails. A tool on
+`latest` installs breaking changes without their upgrade steps.
 
 Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build;
 pinning an exact version is safer than `latest`, because migrations only run
 with `./ma migrate`. Do not update images automatically (Watchtower, a
 floating tag): the web server does not run migrations, so after an automatic
 update it runs against a database that lacks them, and what needs them fails,
-until `./ma migrate` runs. If a tool updates the image anyway, pin an exact
+until `./ma migrate` runs. Here a floating tag means `latest` or a major tag
+such as `1`, not an exact version or an `X.Y` tag such as `1.4`, which gets
+patch releases only. If a tool updates the image anyway, pin an exact
 version or an `X.Y` tag, as described above. The images carry a provenance
 attestation and an SBOM.
 
