@@ -7,6 +7,7 @@ package ui
 
 import (
 	"embed"
+	"io"
 	"io/fs"
 	"maps"
 	"net/http"
@@ -67,7 +68,6 @@ func handler(files fs.FS) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	assets := http.StripPrefix("/assets", http.FileServerFS(assetFiles))
 	// The rootFiles are read once here, so a request only picks one of them
 	// by its exact path and never names a file.
 	root := map[string][]byte{}
@@ -82,13 +82,13 @@ func handler(files fs.FS) http.Handler {
 		h.Set("Content-Security-Policy", contentSecurityPolicy)
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Permissions-Policy", permissionsPolicy)
-		if strings.HasPrefix(r.URL.Path, "/assets/") {
-			// File names contain a content hash, so they never change.
-			h.Set("Cache-Control", "public, max-age=31536000, immutable")
-			assets.ServeHTTP(w, r)
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		// Every answer is revalidated, except a file under /assets/ (serveAsset).
+		h.Set("Cache-Control", "no-cache")
+		if name, ok := strings.CutPrefix(r.URL.Path, "/assets/"); ok {
+			serveAsset(w, r, assetFiles, name)
 			return
 		}
-		h.Set("Cache-Control", "no-cache")
 		if typ, ok := rootFiles[r.URL.Path]; ok {
 			data, ok := root[r.URL.Path]
 			if !ok {
@@ -109,4 +109,36 @@ func handler(files fs.FS) http.Handler {
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(index)
 	})
+}
+
+// serveAsset serves name, a path below the build's assets folder, when it is
+// a regular file there. Anything else (a directory, a missing file, a path
+// with dot segments) answers 404 with the no-cache header the caller set: no
+// listing, no redirect. Only the file itself is cached for a year.
+//
+// So a non-200 answer under /assets/ carries no-cache, with three exceptions
+// that come from http.ServeContent after the file was found: a 416 (range not
+// satisfiable) has no Cache-Control, and a 304 or 412 (conditional request)
+// keeps immutable. A 206 is a part of the same file and keeps it too.
+func serveAsset(w http.ResponseWriter, r *http.Request, assets fs.FS, name string) {
+	if !fs.ValidPath(name) {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := assets.Open(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	// embed.FS and fstest.MapFS files are seekers.
+	content, seekable := f.(io.ReadSeeker)
+	if err != nil || !st.Mode().IsRegular() || !seekable {
+		http.NotFound(w, r)
+		return
+	}
+	// File names contain a content hash, so they never change.
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.ServeContent(w, r, name, st.ModTime(), content)
 }

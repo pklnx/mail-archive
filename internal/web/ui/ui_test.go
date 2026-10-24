@@ -50,17 +50,37 @@ func TestHandler(t *testing.T) {
 }
 
 // rootBuild is a build root with index.html, every root file (distinct bytes
-// each), a hashed asset and a file that is never served by name.
+// each), hashed assets and a file that is never served by name.
 func rootBuild() fstest.MapFS {
 	files := fstest.MapFS{
-		"index.html":      {Data: []byte(`<!doctype html><div id="root"></div>`)},
-		".keep":           {Data: []byte("keep")},
-		"assets/app-1.js": {Data: []byte("console.log(1)")},
+		"index.html":       {Data: []byte(`<!doctype html><div id="root"></div>`)},
+		".keep":            {Data: []byte("keep")},
+		"assets/app-1.js":  {Data: []byte("console.log(1)")},
+		"assets/sub/a.css": {Data: []byte("a{color:red}")},
+		"assets/x.mjs":     {Data: []byte("export default 1")},
 	}
 	for _, path := range RootPaths() {
 		files[strings.TrimPrefix(path, "/")] = &fstest.MapFile{Data: []byte("root file " + path)}
 	}
 	return files
+}
+
+// checkUI checks the headers every UI answer carries: assets, root files,
+// 404s and the hint page alike.
+func checkUI(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := rec.Header().Get("Content-Security-Policy"); got != contentSecurityPolicy {
+		t.Errorf("CSP = %q", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q", got)
+	}
+	if got := rec.Header().Get("Permissions-Policy"); got != permissionsPolicy {
+		t.Errorf("Permissions-Policy = %q", got)
+	}
+	if got := rec.Header().Get("Cross-Origin-Resource-Policy"); got != "same-origin" {
+		t.Errorf("Cross-Origin-Resource-Policy = %q", got)
+	}
 }
 
 // TestRootFilesServed checks the web app manifest and its icons through the
@@ -74,18 +94,6 @@ func TestRootFilesServed(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		return rec
-	}
-	checkUI := func(t *testing.T, rec *httptest.ResponseRecorder) {
-		t.Helper()
-		if got := rec.Header().Get("Content-Security-Policy"); got != contentSecurityPolicy {
-			t.Errorf("CSP = %q", got)
-		}
-		if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
-			t.Errorf("X-Frame-Options = %q", got)
-		}
-		if got := rec.Header().Get("Permissions-Policy"); got != permissionsPolicy {
-			t.Errorf("Permissions-Policy = %q", got)
-		}
 	}
 	index := files["index.html"].Data
 
@@ -140,8 +148,7 @@ func TestRootFilesServed(t *testing.T) {
 		for _, name := range outside {
 			path := "/assets/" + up + name
 			rec := get(path)
-			// The file server sends a request for index.html to its folder.
-			if rec.Code != http.StatusNotFound && (name != "index.html" || rec.Code != http.StatusMovedPermanently) {
+			if rec.Code != http.StatusNotFound {
 				t.Errorf("%s: status %d, want 404", path, rec.Code)
 			}
 			body := rec.Body.Bytes()
@@ -231,4 +238,124 @@ func TestRootFilesMatchPublic(t *testing.T) {
 	if !slices.Contains(public, "/favicon-32.png") {
 		t.Error("web/public has no favicon-32.png")
 	}
+}
+
+// TestAssetsFilesOnly checks /assets/ on a fake build: the regular files
+// under it are served, cached for a year; everything else answers 404 with
+// no listing and no redirect, and is not cached (#250).
+func TestAssetsFilesOnly(t *testing.T) {
+	files := rootBuild()
+	h := handler(files)
+	do := func(method, path string, header ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	const immutable = "public, max-age=31536000, immutable"
+
+	t.Run("no listing, no redirect", func(t *testing.T) {
+		for _, path := range []string{
+			"/assets/", "/assets/sub/", "/assets/sub", "/assets/.", "/assets/sub/.",
+			"/assets/%2e%2e/", "/assets/sub/index.html", "/assets/%2e%2e/index.html",
+			"/assets/app-1.js/", "/assets/nope.js", "/assets/sub/nope.css",
+		} {
+			rec := do("GET", path)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("%s: status %d, want 404", path, rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); loc != "" {
+				t.Errorf("%s: redirects to %q", path, loc)
+			}
+			body := rec.Body.String()
+			for _, leak := range []string{"app-1.js", "a.css", "x.mjs", "sub/", "<a href"} {
+				if strings.Contains(body, leak) {
+					t.Errorf("%s: body names %q: %q", path, leak, body)
+				}
+			}
+			// Only a file is immutable, so a missing one is not cached.
+			if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+				t.Errorf("%s: Cache-Control %q, want no-cache", path, got)
+			}
+			checkUI(t, rec)
+		}
+	})
+
+	t.Run("files are served", func(t *testing.T) {
+		for _, tc := range []struct{ path, name string }{
+			{"/assets/app-1.js", "assets/app-1.js"},
+			{"/assets/sub/a.css", "assets/sub/a.css"},
+			{"/assets/x.mjs", "assets/x.mjs"},
+			// An encoded spelling of the folder is the same file (#250).
+			{"/%61ssets/app-1.js", "assets/app-1.js"},
+			{"/assets/%61pp-1.js", "assets/app-1.js"},
+		} {
+			rec := do("GET", tc.path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s: status %d", tc.path, rec.Code)
+			}
+			if want := files[tc.name].Data; !bytes.Equal(rec.Body.Bytes(), want) {
+				t.Errorf("%s: body %q, want %q", tc.path, rec.Body.Bytes(), want)
+			}
+			// The type comes from the extension; the host's table decides
+			// the exact string.
+			want := mime.TypeByExtension(path.Ext(tc.path))
+			if want == "" {
+				t.Fatalf("%s: the host has no type for %s", tc.path, path.Ext(tc.path))
+			}
+			if got := rec.Header().Get("Content-Type"); got != want {
+				t.Errorf("%s: Content-Type %q, want %q", tc.path, got, want)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != immutable {
+				t.Errorf("%s: Cache-Control %q", tc.path, got)
+			}
+			checkUI(t, rec)
+		}
+	})
+
+	t.Run("head and range", func(t *testing.T) {
+		rec := do("HEAD", "/assets/app-1.js")
+		if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+			t.Errorf("HEAD: %d %q", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != immutable {
+			t.Errorf("HEAD: Cache-Control %q", got)
+		}
+
+		// A part of the same file is as immutable as the file.
+		rec = do("GET", "/assets/app-1.js", "Range", "bytes=0-6")
+		if rec.Code != http.StatusPartialContent || rec.Body.String() != "console" {
+			t.Errorf("range: %d %q", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Content-Range"); got != "bytes 0-6/14" {
+			t.Errorf("range: Content-Range %q", got)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != immutable {
+			t.Errorf("range: Cache-Control %q", got)
+		}
+		checkUI(t, rec)
+
+		// The exceptions to "a non-200 answer is no-cache", all from
+		// http.ServeContent after the file was found: a 416 has no
+		// Cache-Control, a 304 and a 412 keep immutable (documented on
+		// serveAsset).
+		rec = do("GET", "/assets/app-1.js", "Range", "bytes=100-")
+		if rec.Code != http.StatusRequestedRangeNotSatisfiable {
+			t.Errorf("unsatisfiable range: status %d", rec.Code)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "" {
+			t.Errorf("unsatisfiable range: Cache-Control %q, want none", got)
+		}
+		rec = do("GET", "/assets/app-1.js", "If-None-Match", "*")
+		if rec.Code != http.StatusNotModified || rec.Header().Get("Cache-Control") != immutable {
+			t.Errorf("If-None-Match: %d, Cache-Control %q", rec.Code, rec.Header().Get("Cache-Control"))
+		}
+		rec = do("GET", "/assets/app-1.js", "If-Match", `"x"`)
+		if rec.Code != http.StatusPreconditionFailed || rec.Header().Get("Cache-Control") != immutable {
+			t.Errorf("If-Match: %d, Cache-Control %q", rec.Code, rec.Header().Get("Cache-Control"))
+		}
+	})
 }
