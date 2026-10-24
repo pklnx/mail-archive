@@ -19,6 +19,7 @@ export const FRAME_CAP = 50_000;
 export const LOOP_LIMIT = 10;
 
 const xlink = "http://www.w3.org/1999/xlink";
+const svgNS = "http://www.w3.org/2000/svg";
 
 /** The frame's document while it shows a message of this app, else null (not loaded, or navigated elsewhere). */
 export function frameDocument(frame: HTMLIFrameElement, origin = location.origin): Document | null {
@@ -113,14 +114,24 @@ function isLink(n: unknown): boolean {
  * stand in for an inner one the browser would follow.
  */
 function linkOf(e: Event): Element | null {
+  return (pathOf(e).find(isLink) as Element | undefined) ?? null;
+}
+
+/** The event's composed path, innermost first; without one, the target and its ancestor elements. */
+function pathOf(e: Event): EventTarget[] {
   const path = typeof e.composedPath === "function" ? e.composedPath() : [];
-  if (path.length > 0) return (path.find(isLink) as Element | undefined) ?? null;
+  if (path.length > 0) return path;
+  const found: EventTarget[] = [];
   let el = e.target as Node | null;
   if (el && el.nodeType !== 1) el = el.parentNode;
-  for (let n = el as Element | null; n && n.nodeType === 1; n = n.parentElement) {
-    if (isLink(n)) return n;
-  }
-  return null;
+  for (let n = el as Element | null; n && n.nodeType === 1; n = n.parentElement) found.push(n);
+  return found;
+}
+
+/** Whether a node is an SVG use element. */
+function isUse(n: unknown): boolean {
+  const e = n as Element | null;
+  return !!e && e.nodeType === 1 && e.namespaceURI === svgNS && e.localName === "use";
 }
 
 /** The URL a link points to, resolved like the browser does (against the frame document's base URL), or null if invalid. */
@@ -144,8 +155,19 @@ export function linkURL(link: Element): URL | null {
  * cancelled too: the sandbox runs no script, but a new tab would have the
  * app's origin (or, for data:, content the mail chose). Other links are
  * untouched; a link that does not parse is cancelled.
+ *
+ * Any event whose composed path holds an SVG <use> element is cancelled,
+ * whatever it points to: use clones what it references, links included,
+ * into a user-agent shadow tree that the path does not show, so the clone's
+ * link cannot be told apart (#209). A click on use has no other default
+ * action. So links through <use> do not work at all, external ones
+ * included; a mail has no need for them.
  */
 export function blockAppLinks(e: Event, origin = location.origin): void {
+  if (pathOf(e).some(isUse)) {
+    e.preventDefault();
+    return;
+  }
   const link = linkOf(e);
   if (!link) return;
   const url = linkURL(link);
@@ -172,10 +194,21 @@ export interface FrameFit {
  * keeps its height. It also installs the same-origin link blocker (click,
  * auxclick, dragstart).
  *
+ * The blocker comes first (#209): the frame is inert from attach until the
+ * blocker is on the mail's document, so it takes no click and no focus
+ * before. A requestAnimationFrame poll installs it as soon as the mail's
+ * document exists (it commits long before its load, which a remote image can
+ * hold up), so the mail can be used while it loads; on load it is installed
+ * again, with the body. Only install() lifts inert; detach() leaves it, since
+ * the frame is then about to go.
+ *
  * start: the height a replaced frame had (images toggle), so the page does
  * not jump until the new one is measured.
  */
 export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start = "", origin = location.origin): FrameFit {
+  // The attribute, not the inert property: the attribute is what the browser
+  // acts on, whatever the DOM implementation's IDL support.
+  frame.setAttribute("inert", "");
   if (start) frame.style.setProperty("block-size", start);
   let detachDoc = () => {};
   let width = -1;
@@ -183,6 +216,12 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
   let last: number | null = null;
   // Until the first load the frame shows about:blank: keep the start height.
   let loaded = false;
+  // The pending poll frame, 0 when none.
+  let poll = 0;
+  const stopPoll = () => {
+    if (poll) cancelAnimationFrame(poll);
+    poll = 0;
+  };
 
   const run = (fromContent: boolean) => {
     if (!loaded) return false;
@@ -197,6 +236,7 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
   };
 
   const install = () => {
+    stopPoll();
     detachDoc();
     detachDoc = () => {};
     const doc = frameDocument(frame, origin);
@@ -205,7 +245,9 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
     const content = new ResizeObserver(() => {
       if (run(true)) content.disconnect();
     });
-    content.observe(doc.documentElement);
+    // Installed early, the document may have no root or body yet: load
+    // installs again.
+    if (doc.documentElement) content.observe(doc.documentElement);
     if (doc.body) content.observe(doc.body);
     const refit = () => void run(false);
     const block = (e: Event) => blockAppLinks(e, origin);
@@ -220,6 +262,15 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
       for (const type of ["click", "auxclick", "dragstart"]) doc.removeEventListener(type, block, true);
       fonts?.removeEventListener("loadingdone", refit);
     };
+    // Only now, with the blocker on the mail's document.
+    frame.removeAttribute("inert");
+  };
+
+  // Until the mail's document exists: the frame's initial about:blank first.
+  const check = () => {
+    poll = 0;
+    if (frameDocument(frame, origin)) install();
+    else poll = requestAnimationFrame(check);
   };
 
   const onLoad = () => {
@@ -236,11 +287,14 @@ export function attachFrameFit(frame: HTMLIFrameElement, box: HTMLElement, start
     run(false);
   });
   outer.observe(frame);
-  // Loaded before this ran (a cached document).
+  // Loaded before this ran (a cached document); else installed as soon as
+  // the document is there.
   if (frameDocument(frame, origin)?.readyState === "complete") onLoad();
+  else check();
 
   return {
     detach() {
+      stopPoll();
       frame.removeEventListener("load", onLoad);
       outer.disconnect();
       detachDoc();
