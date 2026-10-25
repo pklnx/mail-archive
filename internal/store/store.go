@@ -242,9 +242,15 @@ func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.
 	if locked {
 		opts = append(opts, goose.WithSessionLocker(gooseLocker{onWait: s.gooseLockWait}))
 	}
-	gp, err := pgxpool.NewWithConfig(ctx, s.pool.Config())
+	// The copy keeps the store's pool_min_conns and pool_min_idle_conns;
+	// zeroed, goose's pool opens only the connections goose asks for
+	// (#277), not idle ones in the background on ctx.
+	cfg := s.pool.Config()
+	cfg.MinConns = 0
+	cfg.MinIdleConns = 0
+	gp, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return err
+		return withCtxErr(ctx, err)
 	}
 	sqlDB := stdlib.OpenDBFromPool(gp)
 	defer closeMigrationPool(ctx, gp, sqlDB)

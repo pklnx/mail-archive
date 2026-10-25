@@ -769,3 +769,82 @@ func TestMigrateSessionSettingsReachGoose(t *testing.T) {
 		t.Fatal("goose's version-table check never started")
 	}
 }
+
+// TestMigrateOneGooseConnection (#277): goose's pool is a copy of the
+// store's pool config, without its pool_min_conns and pool_min_idle_conns,
+// so it opens only the one connection goose asks for. Every new connection
+// runs the SET of WithSessionSettings, and the hook reports its backend.
+// The store's pool is capped at three connections and filled first; any
+// other backend that ran the SET belongs to goose's pool. gp.Close waits
+// for constructors in flight, so all of them have reported when Migrate
+// returns.
+func TestMigrateOneGooseConnection(t *testing.T) {
+	for _, tc := range []struct{ name, query string }{
+		{"min-conns", "pool_min_conns=3&pool_max_conns=3"},
+		{"min-idle-conns", "pool_min_conns=3&pool_min_idle_conns=3&pool_max_conns=3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+			defer cancel()
+			dbURL := storetest.NewUnmigrated(t)
+			u, err := url.Parse(dbURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			extra, err := url.ParseQuery(tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := u.Query()
+			for k, v := range extra {
+				q[k] = v
+			}
+			u.RawQuery = q.Encode()
+			const set = "SET application_name = 'goose_277'"
+			pids := make(chan uint32, 64)
+			st, err := store.Open(ctx, u.String(),
+				store.WithSessionSettings(set),
+				store.WithQueryStartConnHook(func(pid uint32, sql string) {
+					if sql != set {
+						return
+					}
+					select {
+					case pids <- pid:
+					default:
+						t.Errorf("more new connections than the test expects; backend %d not counted", pid)
+					}
+				}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+
+			storePIDs := map[uint32]bool{}
+			for len(storePIDs) < 3 {
+				select {
+				case pid := <-pids:
+					storePIDs[pid] = true
+				case <-ctx.Done():
+					t.Fatalf("store's pool opened %d of its 3 connections: %v", len(storePIDs), ctx.Err())
+				}
+			}
+			if _, err := st.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			goosePIDs := map[uint32]bool{}
+			for drained := false; !drained; {
+				select {
+				case pid := <-pids:
+					if !storePIDs[pid] {
+						goosePIDs[pid] = true
+					}
+				default:
+					drained = true
+				}
+			}
+			if len(goosePIDs) != 1 {
+				t.Errorf("connections of goose's pool: %d, want 1", len(goosePIDs))
+			}
+		})
+	}
+}
