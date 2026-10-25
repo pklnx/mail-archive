@@ -6,9 +6,12 @@ State of the work for the next session. Update before a session ends.
 - None besides this handover update.
 
 ## Open tickets
-- #260 (bug, ready): flaky e2e "Blocked script execution in 'about:blank'". Part 1 (diagnostics, PR #262) is merged. Strong lead for part 2: the message comes from Playwright's trace snapshotter (`trace: retain-on-failure` records every test), not from app code; the test passes with `--trace off`. Part 2 also owes the `flaky-tests.md` row for the #259 rerun and fixes the run count there (16 local runs, not 13).
-- #265 (bug): install the link blocker again before `load` after Back to a mail (residual in `security.md`; scope widened in a comment).
-- #269 (bug): a cancelled migration can return a pool connection that still holds goose's lock (measured 10 of 10, confirmed by the #268 plan reviewer). Run goose on a dedicated, unpooled connection; regression test with signals only.
+- #277 (bug, follow-up of #274): the migration pool copy inherits `pool_min_conns`; zero `MinConns`/`MinIdleConns` on the copy and fix the "one extra connection" wording.
+
+## State (2026-10-25)
+- Release 1.1.0 is out (v1.1.0 on 82e5fe5; image `ghcr.io/pklnx/mail-archive:1.1.0`, also `1.1`, `1`, `latest`). It contains #209 (PRs #266, #267), #265 (PR #276), #269 (PR #274), #260 (PRs #262, #275), #268 (PR #270) and the migration-lock work (#228, #253, #255).
+- #260 closed: the about:blank console error came from Playwright's DOM snapshotter; e2e traces now record no DOM snapshots (`playwright.config.ts`).
+- `web/e2e/demo.ts` uses fixed ports 18181/18143. Agents that run e2e in parallel change them in their own worktree only and never commit that.
 
 ## State (2026-10-24)
 - #209 is done: part 1 (PR #266) neutralizes declarative shadow roots and `srcdoc` frames as the last step on the served bytes; part 2 (PR #267, maintainer option A) blocks links from the start.
