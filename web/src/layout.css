@@ -51,10 +51,18 @@ body,
 .app-mark {
   flex-shrink: 0;
 }
+.app-header__name > span {
+  display: inline-flex;
+  align-items: center;
+}
 .app-header__logo {
   width: 1.25rem;
   height: 1.25rem;
   margin-inline-end: 0.5rem;
+  /* Both marks' drawn centre is y=34 in a 64 px viewBox, 0.625 px below
+     its box centre at 1.25rem. Shift it up to the label's cap-height centre. */
+  position: relative;
+  top: -0.0390625rem;
 }
 /* The header's user name, from Carbon's md up; the shortcuts button only
    there too, where a keyboard is likely. */
