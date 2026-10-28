@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
-import { createPortal } from "react-dom";
-import { Button, FeatureFlags, Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Modal, Search } from "@carbon/react";
+import { Button, Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Search } from "@carbon/react";
 import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders, Keyboard, Logout, UserAvatar } from "@carbon/icons-react";
-import { AccountsPage } from "./AccountsPage";
 import { isPlainClick } from "./clicks";
 import { dialogOpen, ownedByWidget } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
-import { ProfilePage } from "./Profile";
-import { UsersPage } from "./UsersPage";
 import { MessageList } from "./MessageList";
-import { LogPage } from "./LogPage";
-import { RetentionPage } from "./RetentionPage";
 import { MessageView } from "./MessageView";
 import { ActiveFilters, QuickFilters, SearchFilters, editTarget, type FocusRequest } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
@@ -25,7 +19,18 @@ import { useCollapsed } from "./sidebarState";
 import { railWidth, useSidebarLayout } from "./sidebarLayout";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
+import { LazyView, lazyNamed } from "./lazyView";
 import type { User } from "./api";
+
+// The non-mail views and the shortcuts overview load on demand (#288); the
+// mail view stays in the initial bundle. scripts/lazyChunks.mjs lists these
+// chunks for the bundle check and the e2e suite.
+const AccountsPage = lazyNamed(() => import("./AccountsPage"), "AccountsPage");
+const UsersPage = lazyNamed(() => import("./UsersPage"), "UsersPage");
+const RetentionPage = lazyNamed(() => import("./RetentionPage"), "RetentionPage");
+const LogPage = lazyNamed(() => import("./LogPage"), "LogPage");
+const ProfilePage = lazyNamed(() => import("./Profile"), "ProfilePage");
+const ShortcutsModal = lazyNamed(() => import("./ShortcutsModal"), "ShortcutsModal");
 
 interface Props {
   user: User;
@@ -67,6 +72,13 @@ export function App({ user, logout }: Props) {
     setFocusRequest((r) => ({ field, n: r.n + 1 }));
   };
   const [shortcuts, setShortcuts] = useState(false);
+  // Where the focus goes back to when the overview closes: captured when the
+  // user asks for it, before its chunk loads.
+  const shortcutsOpener = useRef<Element | null>(null);
+  const openShortcuts = () => {
+    if (!shortcuts) shortcutsOpener.current = document.activeElement;
+    setShortcuts(true);
+  };
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
   const layout = useSidebarLayout(user.name);
@@ -182,6 +194,12 @@ export function App({ user, logout }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || dialogOpen()) return;
+      // The overview is not a dialog yet while its chunk loads, or if it
+      // could not load (the notice then stands in for it): Escape closes it.
+      if (shortcuts && e.key === "Escape") {
+        setShortcuts(false);
+        return;
+      }
       if (menuOpen) {
         if (e.key === "Escape") setMenuOpen(false);
         return;
@@ -203,7 +221,7 @@ export function App({ user, logout }: Props) {
           }
           break;
         case "?":
-          setShortcuts(true);
+          openShortcuts();
           break;
         case "j":
           if (mail && reading) next();
@@ -275,7 +293,7 @@ export function App({ user, logout }: Props) {
           <span className="app-header__user" aria-hidden>
             {user.name}
           </span>
-          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={() => setShortcuts(true)}>
+          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={openShortcuts}>
             <Keyboard size={20} />
           </HeaderGlobalAction>
           <ThemeToggle header />
@@ -319,31 +337,41 @@ export function App({ user, logout }: Props) {
       </div>
       {state.view === "profile" ? (
         <main inert={pageInert} className="app-view">
-          <ProfilePage name={user.name} />
+          <LazyView key={state.view}>
+            <ProfilePage name={user.name} />
+          </LazyView>
         </main>
       ) : state.view === "users" && user.admin ? (
         <main inert={pageInert} className="app-view">
-          <UsersPage />
+          <LazyView key={state.view}>
+            <UsersPage />
+          </LazyView>
         </main>
       ) : state.view === "retention" && user.admin ? (
         <main inert={pageInert} className="app-view">
-          <RetentionPage />
+          <LazyView key={state.view}>
+            <RetentionPage />
+          </LazyView>
         </main>
       ) : state.view === "log" ? (
         <main inert={pageInert} className="app-view">
-          <LogPage admin={user.admin} open={(m) => update({ view: "", m })} />
+          <LazyView key={state.view}>
+            <LogPage admin={user.admin} open={(m) => update({ view: "", m })} />
+          </LazyView>
         </main>
       ) : state.view === "accounts" ? (
         <main inert={pageInert} className="app-view">
-          <AccountsPage
-            admin={user.admin}
-            accounts={accounts}
-            renamed={(from, to) => {
-              collapsed.rename(from, to);
-              if (state.account === from) update({ account: to }, { replace: true });
-            }}
-            showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}
-          />
+          <LazyView key={state.view}>
+            <AccountsPage
+              admin={user.admin}
+              accounts={accounts}
+              renamed={(from, to) => {
+                collapsed.rename(from, to);
+                if (state.account === from) update({ account: to }, { replace: true });
+              }}
+              showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}
+            />
+          </LazyView>
         </main>
       ) : (
         <div
@@ -501,7 +529,7 @@ export function App({ user, logout }: Props) {
               <div className="reader-empty">
                 <ProductMark className="reader-empty__logo" />
                 <p className="app-text-secondary">{t.selectMessage}</p>
-                <Button kind="ghost" size="sm" className="reader-empty__shortcuts" onClick={() => setShortcuts(true)}>
+                <Button kind="ghost" size="sm" className="reader-empty__shortcuts" onClick={openShortcuts}>
                   {t.shortcutsHint}&nbsp;<kbd className="kbd">?</kbd>
                 </Button>
               </div>
@@ -510,57 +538,14 @@ export function App({ user, logout }: Props) {
         </div>
       )}
 
-      {shortcuts && <ShortcutsModal onClose={() => setShortcuts(false)} />}
+      {shortcuts && (
+        // No placeholder while it loads (a placeholder dialog would only flash); if it cannot
+        // load, the notice floats in its place, and Escape or its close button closes it.
+        <LazyView fallback={null} onClose={() => setShortcuts(false)}>
+          <ShortcutsModal opener={shortcutsOpener.current} onClose={() => setShortcuts(false)} />
+        </LazyView>
+      )}
       </div>
     </div>
-  );
-}
-
-const shortcutKeys = () =>
-  [
-    [["/"], t.keySearch],
-    [["j"], t.keyNext],
-    [["k"], t.keyPrevious],
-    [["u", "Esc"], t.keyBack],
-    [["g", "a"], t.keyAllMail],
-    [["?"], t.keyHelp],
-  ] as const;
-
-/**
- * The shortcuts overview: a passive Carbon Modal (no buttons, Escape, the
- * close button and a click outside close it). It exists only while open,
- * and the focus goes back to where it was when it closes.
- */
-function ShortcutsModal({ onClose }: { onClose: () => void }) {
-  const opener = useRef<Element | null>(null);
-  useLayoutEffect(() => {
-    opener.current = document.activeElement;
-    return () => {
-      const el = opener.current;
-      if (el instanceof HTMLElement && el.isConnected) el.focus();
-    };
-  }, []);
-  return createPortal(
-    // Without the flag, Carbon adds two hidden "Focus sentinel" tab stops.
-    <FeatureFlags enableFocusWrapWithoutSentinels>
-      <Modal open passiveModal size="sm" modalHeading={t.shortcuts} closeButtonLabel={t.carbon.closeModal} onRequestClose={onClose}>
-        {/* Focus starts on the list, not on the close button, whose tooltip would take the first Escape. */}
-        <dl className="shortcut-list" tabIndex={-1} data-modal-primary-focus>
-          {shortcutKeys().map(([keys, label]) => (
-            <div key={label} className="shortcut-list__row">
-              <dt>
-                {keys.map((k) => (
-                  <kbd key={k} className="kbd">
-                    {k}
-                  </kbd>
-                ))}
-              </dt>
-              <dd>{label}</dd>
-            </div>
-          ))}
-        </dl>
-      </Modal>
-    </FeatureFlags>,
-    document.body,
   );
 }

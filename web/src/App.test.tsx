@@ -78,6 +78,22 @@ afterEach(() => {
   localStorage.clear();
 });
 
+// The shortcuts overview is a lazy chunk (#288). It is loaded once, before
+// the first test: a "?" that must not open it is then checked against a
+// loaded chunk, which would show at once, not against one still on its way.
+// Its first load and a failed load have their own tests (App.shortcutsLoad,
+// App.shortcutsFail).
+let shortcutsLoaded = false;
+beforeEach(async () => {
+  if (shortcutsLoaded) return;
+  render(<App user={user()} logout={() => {}} />);
+  fireEvent.keyDown(document.body, { key: "?" });
+  await screen.findByRole("dialog", { name: t.shortcuts });
+  cleanup();
+  window.history.replaceState(null, "", "/");
+  shortcutsLoaded = true;
+});
+
 async function renderApp(admin = false) {
   render(<App user={user(admin)} logout={() => {}} />);
   // The accounts are loaded: the tree has them.

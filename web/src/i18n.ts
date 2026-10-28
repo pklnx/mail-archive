@@ -76,6 +76,9 @@ const en = {
   unknownSender: "(unknown sender)",
   loadMessagesFailed: (err: string) => `Could not load messages: ${err}`,
   retry: "Retry",
+  /** A lazy view whose chunk did not load (#288); the button (retry) reloads the page. */
+  viewLoadFailed: "This page could not be loaded",
+  viewLoadFailedText: "The app may have been updated. Reload to continue.",
   noMatches: "No messages match your search.",
   noMessages: "No messages.",
 
@@ -795,6 +798,8 @@ const de: Messages = {
   unknownSender: "(unbekannter Absender)",
   loadMessagesFailed: (err) => `Nachrichten konnten nicht geladen werden: ${err}`,
   retry: "Erneut versuchen",
+  viewLoadFailed: "Diese Seite konnte nicht geladen werden",
+  viewLoadFailedText: "Die App wurde vielleicht aktualisiert. Zum Fortfahren neu laden.",
   noMatches: "Keine Nachrichten passen zur Suche.",
   noMessages: "Keine Nachrichten.",
 
