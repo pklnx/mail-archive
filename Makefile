@@ -17,12 +17,17 @@ TEST_DATABASE_URL ?= postgres://mailarchive:mailarchive@localhost:5432/mailarchi
 # install. web/pnpm-workspace.yaml blocks their install scripts; this is a
 # second guard for every recipe here (web, web-test, web-e2e, docs-screenshots).
 export IBM_TELEMETRY_DISABLED := true
+# Makes pnpm available for the web, web-e2e and docs recipes: a pnpm already on
+# PATH is used as is, corepack is enabled only when there is none. Use your own
+# pnpm by putting it on PATH, or skip the step with `make PNPM_SETUP=true ...`.
+# scripts/makefile-pnpm-test.sh guards this.
+PNPM_SETUP ?= command -v pnpm >/dev/null 2>&1 || corepack enable
 
 .PHONY: web web-test docs docs-screenshots build test test-unit lint vuln secrets secrets-test generate sqlc-check tidy docker docker-multiarch clean
 
 ## web: build the web UI (embedded by `build`)
 web:
-	cd web && corepack enable && pnpm install --frozen-lockfile && pnpm build
+	cd web && $(PNPM_SETUP) && pnpm install --frozen-lockfile && pnpm build
 
 ## web-test: typecheck and unit-test the web UI
 web-test:
@@ -32,11 +37,11 @@ web-test:
 ## web-e2e: end-to-end tests of the web UI against the demo server (needs DEMO_DATABASE_URL)
 web-e2e:
 	@: "$${DEMO_DATABASE_URL:?set DEMO_DATABASE_URL to a PostgreSQL URL with CREATEDB}"
-	cd web && corepack enable && pnpm install --frozen-lockfile && pnpm e2e
+	cd web && $(PNPM_SETUP) && pnpm install --frozen-lockfile && pnpm e2e
 
 ## docs: build the documentation site into docs/.vitepress/dist
 docs:
-	cd docs && corepack enable && pnpm install --frozen-lockfile && pnpm build
+	cd docs && $(PNPM_SETUP) && pnpm install --frozen-lockfile && pnpm build
 
 ## docs-screenshots: regenerate docs/public/screenshots (needs DEMO_DATABASE_URL)
 docs-screenshots:
