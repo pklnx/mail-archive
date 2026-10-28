@@ -107,7 +107,9 @@ jobs:
   review-gate:
     # Deterministic checks on what a pull request changes, for the reviewer
     # (docs/development/review-gate.md): noctx on added Go lines, squawk on
-    # new migrations, migration-changed, actionlint on changed workflows. Not
+    # new migrations, migration-changed, actionlint and zizmor on changed
+    # workflows (zizmor is pip-installed from hash-pinned wheels into a venv
+    # with the runner's python3; no setup-python, no new action). Not
     # a required check; the reviewer records an outcome for each finding, and
     # a red or missing gate is not a pass. Pushes to main run only the
     # self-test, which also saves the tool caches that pull requests read.
