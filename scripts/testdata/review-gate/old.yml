@@ -1,0 +1,15 @@
+# In the base commit already, with an undefined matrix property: the gate
+# lints only workflows the branch changes, so it must not report this one.
+name: Old
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.26", "1.27"]
+    steps:
+      - run: echo "${{ matrix.golang }}"

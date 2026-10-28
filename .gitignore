@@ -51,6 +51,8 @@ go.work.sum
 /docs/node_modules/
 /docs/.vitepress/cache/
 /docs/.vitepress/dist/
+# npm-installed tools of the review gate (make review-gate-tools)
+/tools/review-gate/node_modules/
 
 # Local build output of `go build ./cmd/mail-archive`
 /mail-archive

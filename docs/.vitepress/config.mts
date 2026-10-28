@@ -82,6 +82,7 @@ export default defineConfig({
           { text: "Issues, plans and releases", link: "/development/process" },
           { text: "Architecture", link: "/development/architecture" },
           { text: "Flaky tests", link: "/development/flaky-tests" },
+          { text: "Review gate", link: "/development/review-gate" },
         ],
       },
     ],

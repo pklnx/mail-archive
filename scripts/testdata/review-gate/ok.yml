@@ -1,0 +1,17 @@
+# The safe form of bad.yml: the title goes through env, the matrix property exists.
+name: OK
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.26", "1.27"]
+    steps:
+      - name: Title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: echo "Building $TITLE with Go ${{ matrix.go }}"

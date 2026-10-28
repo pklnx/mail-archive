@@ -24,6 +24,11 @@ updates:
     groups:
       docs-dependencies:
         patterns: ["*"]
+  - package-ecosystem: npm # squawk of the review gate (make review-gate)
+    directory: /tools/review-gate
+    schedule:
+      interval: weekly
+    labels: [dependencies]
   - package-ecosystem: github-actions
     directory: /
     schedule:

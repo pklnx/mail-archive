@@ -1,0 +1,16 @@
+name: Bad
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.26", "1.27"]
+    steps:
+      - name: Title
+        run: echo "Building ${{ github.event.pull_request.title }}" # want template injection
+      - name: Version
+        run: echo "Go ${{ matrix.golang }}" # want undefined matrix property
