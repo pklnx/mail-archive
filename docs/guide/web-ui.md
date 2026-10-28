@@ -4,8 +4,14 @@
 with your user.
 
 The header at the top holds the logo and the name of the app, which leads to
-all mail, and on the right your name, the keyboard shortcuts, the light/dark switch,
-your [profile](./users#your-profile) and **Log out**. The navigation on the
+all mail, the menu button on smaller screens (see [Layout](#layout)) and, on
+the right, the person icon. That icon opens the user panel with your name,
+your [profile](./users#your-profile), **Keyboard shortcuts**, the light/dark
+switch and **Log out**; a click outside it or <kbd>Esc</kbd> closes it.
+
+![The user panel, opened from the person icon](/screenshots/user-panel.png)
+
+The navigation on the
 left lists **All mail**, **Only in archive** (once there is such mail, see
 below), [Accounts](./accounts), **Log** (the [audit log](./audit-log) of what
 you did) and **Profile**; admins also find [Users](./users) and
@@ -304,12 +310,12 @@ half of a conversation.
 | <kbd>/</kbd> | Moves to the search field. |
 | <kbd>j</kbd> | Next message; with no message open, opens the first one. |
 | <kbd>k</kbd> | Previous message. |
-| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation or the folders opened over the page. |
+| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation, the folders opened over the page or the user panel. |
 | <kbd>g</kbd> then <kbd>a</kbd> | All mail. |
 | <kbd>?</kbd> | Lists the shortcuts. |
 
 They do not apply while you type in a field (<kbd>Esc</kbd> leaves the
-field) or while a dialog is open. With no message open, the reading pane
+field), while a dialog is open or while the user panel is open. With no message open, the reading pane
 points to <kbd>?</kbd>.
 
 ## Install as an app
@@ -328,8 +334,9 @@ web page: it needs the server and stores nothing for offline use.
 
 ## Appearance and language
 
-Light and dark mode follow the system. The sun/moon button in the header
-overrides it, also on the login page. The choice is remembered in the
+Light and dark mode follow the system. **Switch to dark mode** or **Switch
+to light mode** in the user panel overrides it; on the login page the
+sun/moon button does. The choice is remembered in the
 browser.
 
 The colours are those of the pklnx design system: IBM's Carbon with Purple

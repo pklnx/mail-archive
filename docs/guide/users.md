@@ -78,8 +78,8 @@ their own entries there too.
 
 ## Your profile
 
-The person icon in the header, or **Profile** in the navigation, opens your
-profile. It has three tabs:
+The person icon in the header, then **Profile**, or **Profile** in the
+navigation opens your profile. It has three tabs:
 
 - **Display:** the [language and formats](./web-ui#appearance-and-language)
   of the web UI.
