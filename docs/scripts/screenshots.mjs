@@ -311,6 +311,12 @@ for (const scheme of ["light", "dark"]) {
   await shot(p, "users", { keepFocus: true });
   await p.keyboard.press("Escape");
 
+  // kim's page: role and state, Reset password and the menu, the tiles and the API keys.
+  await p.goto(base + "/?view=users&id=kim");
+  await main.getByRole("heading", { name: "kim", level: 1 }).waitFor();
+  await main.getByRole("region", { name: "API keys" }).waitFor();
+  await shot(p, "user-detail");
+
   await p.goto(base + "/?view=retention");
   await main.getByRole("tab", { name: "Rules", selected: true }).waitFor();
   await main.getByText("§147 AO: business letters and invoices").waitFor();

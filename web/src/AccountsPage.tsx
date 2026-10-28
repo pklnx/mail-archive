@@ -51,12 +51,12 @@ interface Props {
 /** A confirmation the list asks for in a danger Modal. */
 type Asking = { kind: "remove" | "disable"; account: Account } | null;
 
-/** The pages under Accounts, from the URL (?view=accounts&add=1, &edit=NAME, &import=NAME). */
+/** The pages under Accounts, from the URL (?view=accounts&add=1, &id=NAME, &import=NAME). */
 type Page = { kind: "list" } | { kind: "add" } | { kind: "edit"; name: string } | { kind: "import"; name: string };
 
 function pageOf(s: ViewState): Page {
   if (s.add === "1") return { kind: "add" };
-  if (s.edit) return { kind: "edit", name: s.edit };
+  if (s.id) return { kind: "edit", name: s.id };
   if (s.import) return { kind: "import", name: s.import };
   return { kind: "list" };
 }
@@ -75,7 +75,7 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
 
   // Opening a page is a history entry; finishing one replaces it, so Back
   // does not lead into a form that is done.
-  const go = (p: Partial<ViewState>, replace = false) => update({ view: "accounts", add: "", edit: "", import: "", ...p }, { replace });
+  const go = (p: Partial<ViewState>, replace = false) => update({ view: "accounts", add: "", id: "", import: "", ...p }, { replace });
   const toList = () => go({}, true);
 
   const manage = data?.manage ?? false;
@@ -92,8 +92,12 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
   const unknown = data !== null && page.kind !== "list" && !waiting && (!manage || (page.kind !== "add" && !target));
 
   useEffect(() => {
-    if (unknown) update({ add: "", edit: "", import: "" }, { replace: true });
+    if (unknown) update({ add: "", id: "", import: "" }, { replace: true });
   }, [unknown, update]);
+  // An old link with edit=NAME reads as id=NAME (urlState); the URL then says id too.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("edit")) update({}, { replace: true });
+  }, [update]);
   useEffect(() => {
     if (awaiting && awaiting.data !== data) setAwaiting(null);
   }, [awaiting, data]);
@@ -263,7 +267,7 @@ function AccountList({ data, error, reload, admin, manage, active, go, showGone 
             onSync={() => void run(() => accountsApi.sync(a.name))}
             onReconcile={() => void run(() => accountsApi.reconcile(a.name))}
             onShowGone={() => showGone(a.name)}
-            onEdit={() => go({ edit: a.name })}
+            onEdit={() => go({ id: a.name })}
             onFill={() => go({ import: a.name })}
             onChanged={reload}
             onToggle={() => {

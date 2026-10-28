@@ -1,8 +1,8 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 // The UI state lives in the URL query (?q=&account=&folder=&group=&gone=&m=&view=,
-// and add=&edit=&import= for the pages under Accounts), so the back button,
-// reloads and bookmarks work without a router library.
+// and the page keys tab=&id=&add=&import= of the settings views), so the back
+// button, reloads and bookmarks work without a router library.
 
 export interface ViewState {
   q: string;
@@ -16,18 +16,33 @@ export interface ViewState {
   m: string;
   /** "accounts" shows account management instead of the mail columns. */
   view: string;
-  /** With view=accounts: "1" opens the Add account page. */
+  /** With view=retention: "rules", "holds" or "runs"; empty is rules. */
+  tab: string;
+  /**
+   * With view=accounts, users or retention: the entry whose detail page is
+   * open. An old edit=NAME of Accounts reads as id=NAME.
+   */
+  id: string;
+  /** With view=accounts: "1" opens the Add account page; with view=retention: "rule" or "hold". */
   add: string;
-  /** With view=accounts: the name of the account whose Edit page is open. */
-  edit: string;
   /** With view=accounts: the name of the smtp account whose Import from IMAP page is open. */
   import: string;
 }
 
-const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "add", "edit", "import"];
+const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "tab", "id", "add", "import"];
 
-/** The keys of the pages under Accounts. Other views drop them, so returning to Accounts shows the list. */
-const accountPages: readonly (keyof ViewState)[] = ["add", "edit", "import"];
+/**
+ * The page keys and the views they belong to. Other views drop them, so
+ * returning to a view shows its list.
+ */
+const pageKeys: Partial<Record<keyof ViewState, readonly string[]>> = {
+  tab: ["retention"],
+  id: ["accounts", "users", "retention"],
+  add: ["accounts", "retention"],
+  import: ["accounts"],
+};
+const inView = (k: keyof ViewState, view: string) => pageKeys[k]?.includes(view) ?? true;
+const oneOf = (v: string | null, allowed: readonly string[]) => (v !== null && allowed.includes(v) ? v : "");
 
 export function parseState(search: string): ViewState {
   const p = new URLSearchParams(search);
@@ -41,8 +56,9 @@ export function parseState(search: string): ViewState {
     gone: p.get("gone") === "1" ? "1" : "",
     m: p.get("m") ?? "",
     view,
-    add: accounts && p.get("add") === "1" ? "1" : "",
-    edit: accounts ? (p.get("edit") ?? "") : "",
+    tab: inView("tab", view) ? oneOf(p.get("tab"), ["rules", "holds", "runs"]) : "",
+    id: inView("id", view) ? (p.get("id") ?? (accounts ? p.get("edit") : null) ?? "") : "",
+    add: inView("add", view) ? oneOf(p.get("add"), accounts ? ["1"] : ["rule", "hold"]) : "",
     import: accounts ? (p.get("import") ?? "") : "",
   };
 }
@@ -50,7 +66,7 @@ export function parseState(search: string): ViewState {
 export function formatState(s: ViewState): string {
   const p = new URLSearchParams();
   for (const k of keys) {
-    if (s.view !== "accounts" && accountPages.includes(k)) continue;
+    if (!inView(k, s.view)) continue;
     if (s[k]) p.set(k, s[k]);
   }
   const qs = p.toString();
@@ -72,7 +88,10 @@ export function useViewState(): [ViewState, (patch: Partial<ViewState>, opts?: {
   const search = useSyncExternalStore(subscribe, getSearch);
   const state = parseState(search);
   const update = useCallback((patch: Partial<ViewState>, opts?: { replace?: boolean }) => {
-    const next = formatState({ ...parseState(window.location.search), ...patch });
+    const cur = parseState(window.location.search);
+    // Another view starts on its list: the page keys stay behind.
+    const base = patch.view !== undefined && patch.view !== cur.view ? { ...cur, tab: "", id: "", add: "", import: "" } : cur;
+    const next = formatState({ ...base, ...patch });
     if (next === window.location.search) return;
     const url = window.location.pathname + next;
     if (opts?.replace) window.history.replaceState(null, "", url);
