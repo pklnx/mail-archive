@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { accountsApi, ApiError, type Account, type PurgePreview } from "./api";
 import { PurgeDialog, PurgeReview, purgeBlockerLines } from "./AccountPurge";
-import { RemovedCard } from "./AccountsPage";
+import { AccountsPage } from "./AccountsPage";
 import { messagesFor, t } from "./i18n";
 import { findAlert, theAlert } from "./test/alerts";
 import { isActive } from "./useAccounts";
@@ -32,6 +32,7 @@ const removed: Account = {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 const confirmButton = () => screen.getByRole("button", { name: t.purgeConfirm }) as HTMLButtonElement;
@@ -150,13 +151,28 @@ describe("PurgeDialog", () => {
   });
 });
 
-describe("RemovedCard", () => {
+describe("the removed accounts' table", () => {
+  const list = (accounts: Account[]) => ({ accounts, manage: true, syncInterval: "", syncIntervalMin: "", reconcileInterval: "", alertAfter: 3, smtp: null });
+  /** The Accounts page with a removed account; its accordion is open while it is being deleted. */
+  function page(account: Account, admin: boolean, onChanged: () => void = () => {}) {
+    window.history.replaceState(null, "", "/?view=accounts");
+    const ui = (a: Account) => <AccountsPage accounts={{ data: list([a]), error: "", reload: onChanged }} admin={admin} renamed={() => {}} showGone={() => {}} />;
+    const view = render(ui(account));
+    return (a: Account) => view.rerender(ui(a));
+  }
+  const menuButton = () => screen.queryByRole("button", { name: t.userActions("old") });
+  function start() {
+    fireEvent.click(menuButton()!);
+    fireEvent.click(screen.getByRole("menuitem", { name: t.purgeStart }));
+  }
+
   it("offers deleting completely to admins only", async () => {
     vi.spyOn(accountsApi, "purgePreview").mockResolvedValue(preview());
-    const { rerender } = render(<RemovedCard account={removed} admin={false} onChanged={() => {}} />);
-    expect(screen.queryByText(t.purgeStart)).toBeNull();
-    rerender(<RemovedCard account={removed} admin={true} onChanged={() => {}} />);
-    fireEvent.click(screen.getByText(t.purgeStart));
+    page(removed, false);
+    expect(menuButton()).toBeNull();
+    cleanup();
+    page(removed, true);
+    start();
     expect(await screen.findByText(t.purgeTitle("old"))).toBeTruthy();
     fireEvent.click(screen.getByText(t.cancel));
     expect(screen.queryByText(t.purgeTitle("old"))).toBeNull();
@@ -165,48 +181,48 @@ describe("RemovedCard", () => {
   it("shows the progress from the account list, without loading the preview", () => {
     const load = vi.spyOn(accountsApi, "purgePreview");
     const purge = { id: 1, expected: 1234, locations: 2, deleted: 1000, kept: 1 };
-    render(<RemovedCard account={{ ...removed, purging: true, purge }} admin={true} onChanged={() => {}} />);
+    page({ ...removed, purging: true, purge }, true);
     // Only the unchanging line is live; the counts are formatted.
     expect(screen.getByRole("status").textContent).toBe(t.purgeRunning);
     expect(screen.getByText(t.purgeProgress("1,000", "1,234", "1"))).toBeTruthy();
-    expect(screen.queryByText(t.purgeStart)).toBeNull();
+    expect(menuButton()).toBeNull();
     expect(load).not.toHaveBeenCalled();
     cleanup();
-    render(<RemovedCard account={{ ...removed, purging: true }} admin={false} onChanged={() => {}} />);
+    page({ ...removed, purging: true }, false);
     expect(screen.getByRole("status").textContent).toBe(t.purgeRunning);
   });
 
-  it("drops the form when the account's purge is open elsewhere", async () => {
+  it("drops the dialog when the account's purge is open elsewhere", async () => {
     vi.spyOn(accountsApi, "purgePreview").mockResolvedValue(preview());
-    const { rerender } = render(<RemovedCard account={removed} admin={true} onChanged={() => {}} />);
-    fireEvent.click(screen.getByText(t.purgeStart));
+    const rerender = page(removed, true);
+    start();
     expect(await screen.findByLabelText(t.purgeTypeCount(3))).toBeTruthy();
     const purge = { id: 1, expected: 3, locations: 0, deleted: 0, kept: 0 };
-    rerender(<RemovedCard account={{ ...removed, purging: true, purge }} admin={true} onChanged={() => {}} />);
+    rerender({ ...removed, purging: true, purge });
     expect(screen.queryByLabelText(t.purgeTypeCount(3))).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(t.purgeRunning);
     // It ended but the account is still there: it was cancelled.
-    rerender(<RemovedCard account={removed} admin={true} onChanged={() => {}} />);
+    rerender(removed);
     expect(screen.getByRole("status").textContent).toBe(t.purgeCancelled);
     expect(screen.queryByLabelText(t.purgeTypeCount(3))).toBeNull();
-    expect(screen.getByText(t.purgeStart)).toBeTruthy();
+    expect(menuButton()).toBeTruthy();
   });
 
-  it("moves the focus into the dialog and back to its button", async () => {
+  it("moves the focus into the dialog and back to the menu's button", async () => {
     vi.spyOn(accountsApi, "purgePreview").mockResolvedValue(preview());
-    render(<RemovedCard account={removed} admin={true} onChanged={() => {}} />);
-    fireEvent.click(screen.getByText(t.purgeStart));
+    page(removed, true);
+    start();
     const field = await screen.findByLabelText(t.purgeTypeCount(3));
     expect(document.activeElement).toBe(field);
     fireEvent.click(screen.getByText(t.cancel));
-    expect(document.activeElement).toBe(screen.getByText(t.purgeStart));
+    expect(document.activeElement).toBe(menuButton());
   });
 
   it("focuses the heading when something blocks the deletion", async () => {
     const blockers = { notRemoved: false, syncing: false, purgeOpen: false, messages: [], rules: [{ id: 1, folder: "", years: 6 }], holds: [] };
     vi.spyOn(accountsApi, "purgePreview").mockResolvedValue(preview({ blockers }));
-    render(<RemovedCard account={removed} admin={true} onChanged={() => {}} />);
-    fireEvent.click(screen.getByText(t.purgeStart));
+    page(removed, true);
+    start();
     // The title shows while the preview loads; the reasons come with it.
     await screen.findByText(t.purgeBlocked);
     expect(screen.getByText(t.purgeTitle("old"))).toBe(document.activeElement);
@@ -219,8 +235,8 @@ describe("RemovedCard", () => {
       .mockRejectedValueOnce(new ApiError(409, 'purge 4 of account "old" is open already: an account purge is open'))
       .mockRejectedValueOnce(new ApiError(500, "internal error"));
     const onChanged = vi.fn();
-    render(<RemovedCard account={removed} admin={true} onChanged={onChanged} />);
-    fireEvent.click(screen.getByText(t.purgeStart));
+    page(removed, true, onChanged);
+    start();
     fireEvent.change(await screen.findByLabelText(t.purgeTypeCount(3)), { target: { value: "3" } });
     fireEvent.click(confirmButton());
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));

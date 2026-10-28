@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Account, SyncInfo } from "./api";
-import { receiveStatus, reconcileNote, syncableCount, syncHealthNote, syncStatus } from "./AccountsPage";
+import { receiveStatus, reconcileNote, syncableCount, syncHealthNote, syncStatus } from "./accountParts";
 import { bannerState } from "./HealthBanner";
 import { isActive } from "./useAccounts";
 

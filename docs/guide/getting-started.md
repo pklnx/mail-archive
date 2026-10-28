@@ -93,7 +93,7 @@ In the web UI, click **Accounts** in the navigation on the left, then
 **Add account**. Enter the IMAP server, user name and password; the login is
 checked before the account is saved, and the first sync starts right away.
 
-![Account page with two accounts](/screenshots/accounts.png)
+![The Accounts page: the accounts as a table, with Sync in each IMAP row and the other actions in the row's menu](/screenshots/accounts.png)
 
 The same works on the command line:
 

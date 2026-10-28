@@ -244,13 +244,15 @@ for (const scheme of ["light", "dark"]) {
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
   const main = p.getByRole("main");
-  await main.getByText(/Last sync/).first().waitFor();
+  await main.getByRole("cell", { name: /^Last sync/ }).first().waitFor();
   await shot(p, "accounts");
 
-  // Deleting the removed account "old-provider" completely: the preview
-  // and the typed-count confirmation in a danger Modal. Nothing is confirmed.
+  // Deleting the removed account "old-provider" completely, from its row's
+  // menu: the preview and the typed-count confirmation in a danger Modal.
+  // Nothing is confirmed.
   await main.getByRole("button", { name: /^Removed accounts/ }).click();
-  await main.getByRole("button", { name: "Delete completely…" }).click();
+  await main.getByRole("button", { name: "Actions for old-provider" }).click();
+  await p.getByRole("menuitem", { name: "Delete completely…" }).click();
   const purge = p.getByRole("dialog", { name: /Delete “old-provider” completely\?/ });
   await purge.getByLabel(/^Type \d+ to confirm$/).waitFor();
   await shot(p, "account-purge", { keepFocus: true });
@@ -260,16 +262,18 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // Editing the IMAP account "personal": its own page, with the folders. A
-  // taller window shows the whole page, from its heading to the folders.
-  const p = await page("light", { width: 1280, height: 1100 });
-  await p.goto(base + "/?view=accounts&edit=personal");
+  // The page of the IMAP account "personal": the title row, the tiles and
+  // the sections, with Folders open for editing. A taller window shows the
+  // whole page, from its heading to the folders.
+  const p = await page("light", { width: 1280, height: 1300 });
+  await p.goto(base + "/?view=accounts&id=personal");
   const main = p.getByRole("main");
-  await main.getByRole("heading", { name: "Edit “personal”" }).waitFor();
-  await main.getByRole("button", { name: "Choose folders" }).click();
-  await main.getByRole("checkbox").first().waitFor();
-  await main.getByRole("button", { name: "Save folder selection" }).waitFor();
-  await shot(p, "account-edit");
+  await main.getByRole("heading", { name: "personal", level: 1 }).waitFor();
+  const folders = main.getByRole("region", { name: "Folders" });
+  await folders.getByRole("button", { name: "Edit" }).click();
+  await folders.getByRole("checkbox").first().waitFor();
+  await folders.getByRole("button", { name: "Save folder selection" }).waitFor();
+  await shot(p, "account-detail");
   await p.context().close();
 }
 

@@ -58,6 +58,7 @@ const views = [
   { view: "profile", heading: "Profile" },
   { view: "log", heading: "Log" },
   { view: "accounts", heading: "Accounts" },
+  { view: "accounts&id=personal", heading: "personal" },
   { view: "users", heading: "Users" },
   // A detail page loads its view's chunk too.
   { view: "users&id=kim", heading: "kim" },

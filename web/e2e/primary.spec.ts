@@ -13,7 +13,7 @@
 // the copy button of a CodeSnippet and the close X of a Modal. They are
 // excluded, as Profile.test.tsx does for the copy button.
 import { unique } from "./demo";
-import { accountCard, expect, test } from "./fixtures";
+import { accountRow, expect, test } from "./fixtures";
 import type { Locator, Page } from "@playwright/test";
 
 const primary = ".cds--btn--primary:not(.cds--copy-btn):not(.cds--modal-close)";
@@ -96,21 +96,47 @@ const views: View[] = [
   },
   { name: "Accounts, Add account", open: (page) => mainPage(page, "/?view=accounts&add=1", "Add account") },
   {
-    name: "Accounts, Edit account",
+    // An account's page: Sync is its one primary.
+    name: "Accounts, account page",
+    exactly: "Sync",
     open: async (page) => {
       await mainPage(page, "/?view=accounts", "Accounts");
-      await accountCard(page, "personal").getByRole("button", { name: "Edit" }).click();
-      return ready(page, "Edit “personal”");
+      await accountRow(page, "personal").getByRole("link", { name: "personal", exact: true }).click();
+      return ready(page, "personal");
     },
   },
   {
-    // The demo's smtp (journal) account is the one whose card offers the
-    // import; its name comes from the card.
+    // A section's form: Save is tertiary, Cancel ghost.
+    name: "Accounts, account page, Connection open",
+    exactly: "Sync",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=accounts&id=personal", "personal");
+      await main.getByRole("region", { name: "Connection" }).getByRole("button", { name: "Edit" }).click();
+      await expect(main.getByLabel("IMAP server", { exact: true })).toBeVisible();
+      return main;
+    },
+  },
+  {
+    name: "Accounts, account page, Remove dialog",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=accounts&id=personal", "personal");
+      await main.getByRole("button", { name: "Actions for personal" }).click();
+      await page.getByRole("menuitem", { name: "Remove" }).click();
+      const dialog = page.getByRole("dialog", { name: "Remove “personal”?" });
+      await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+      return dialog;
+    },
+  },
+  { name: "Accounts, smtp account page", open: (page) => mainPage(page, "/?view=accounts&id=journal", "journal") },
+  { name: "Accounts, removed account page", open: (page) => mainPage(page, "/?view=accounts&id=old-provider", "old-provider") },
+  {
+    // The demo's smtp (journal) account is the one whose row's menu offers
+    // the import; its name comes from the row.
     name: "Accounts, Import from IMAP",
     open: async (page) => {
       const main = await mainPage(page, "/?view=accounts", "Accounts");
-      const card = main.getByRole("region").filter({ has: page.getByRole("button", { name: "Import existing mail from IMAP" }) });
-      const account = (await card.getByRole("heading").first().textContent())?.trim() ?? "";
+      const row = main.getByRole("row").filter({ has: page.getByRole("button", { name: "complete (SMTP)" }) });
+      const account = (await row.getByRole("rowheader").getByRole("link").textContent())?.trim() ?? "";
       expect(account).not.toBe("");
       return mainPage(page, `/?view=accounts&import=${encodeURIComponent(account)}`, "Import existing mail from IMAP");
     },

@@ -126,8 +126,9 @@ below the bar at the top; a tap outside it closes it.
 When one of your accounts keeps failing to sync (by default three syncs in a
 row) or has not synced successfully for two of its sync intervals, a banner above
 the mail names it: red for failing, amber for not synced for a while.
-**Open accounts** leads to the account page, where the card says how often
-in a row and since when the sync failed, with the last error. The banner
+**Open accounts** leads to the Accounts page, where the account's row is
+tagged *failing*; the account's own page says how often in a row and since
+when the sync failed, with the last error under *Last sync*. The banner
 disappears after the next successful sync. It refreshes with the account
 list every 30 seconds; screen readers hear it when the set of failing
 accounts changes. Disabled accounts never appear in it.

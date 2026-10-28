@@ -214,11 +214,14 @@ export const test = base.extend<{ guards: Guards }>({
 });
 
 /**
- * The tile of an account on the Accounts page: a region named by its
- * heading, the account's name (active and removed accounts alike).
+ * The row of an account in a table on the Accounts page, active and removed
+ * accounts alike: the row whose header links to the account by its name.
  */
-export function accountCard(page: Page, name: string): Locator {
-  return page.getByRole("main").getByRole("region", { name, exact: true });
+export function accountRow(page: Page, name: string): Locator {
+  return page
+    .getByRole("main")
+    .getByRole("row")
+    .filter({ has: page.getByRole("rowheader").getByRole("link", { name, exact: true }) });
 }
 
 /** Accepts the next window.confirm or window.prompt, optionally with text. */
