@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
-import { Button, Header, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, InlineNotification, Search } from "@carbon/react";
+import { Button, Header, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, InlineNotification, Popover, PopoverContent, Search } from "@carbon/react";
 import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { dialogOpen, ownedByWidget } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
 import { MessageList } from "./MessageList";
 import { MessageView } from "./MessageView";
-import { ActiveFilters, QuickFilters, SearchFilters, editTarget, type FocusRequest } from "./SearchFilters";
+import { ActiveFilters, QuickFilters, editTarget, type FocusRequest } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
 import { UserPanel } from "./UserPanel";
-import { lg, matchesNow, twoPane, useMediaQuery } from "./breakpoints";
+import { lg, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
@@ -31,6 +31,8 @@ const RetentionPage = lazyNamed(() => import("./RetentionPage"), "RetentionPage"
 const LogPage = lazyNamed(() => import("./LogPage"), "LogPage");
 const ProfilePage = lazyNamed(() => import("./Profile"), "ProfilePage");
 const ShortcutsModal = lazyNamed(() => import("./ShortcutsModal"), "ShortcutsModal");
+// The filter form with its date picker (#286), mounted while its popover is open.
+const FilterPanel = lazyNamed(() => import("./FilterPanel"), "FilterPanel");
 
 interface Props {
   user: User;
@@ -54,12 +56,19 @@ export function App({ user, logout, logoutError }: Props) {
       setFoldersOpen(false);
     }
   }, [wide]);
-  // The filter button toggles the filter panel under the search; the set
+  // The filter button opens the filter form in a Carbon Popover; the set
   // filters show as tags either way. It is marked while one is set.
   const prefixed = hasPrefix(query) || state.group === "1";
-  // Open from the two-pane width up, closed on phones (maintainer decision on #195).
-  const [filtersOpen, setFiltersOpen] = useState(() => matchesNow(twoPane));
+  // Closed to start with on every width (maintainer decision on #286; it replaces #195's open panel).
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersId = useId();
+  const filtersButton = useRef<HTMLButtonElement>(null);
+  // Whether the form's calendar is open right now (FilterPanel sets it while
+  // mounted). Flatpickr's calendar lies outside the popover and overlaps
+  // the date field, so a click into the field can end on the calendar: its
+  // click event then targets body, and Carbon's outside click would close
+  // the popover. A real outside click closes the calendar on mousedown first.
+  const calendarOpen = useRef<() => boolean>(() => false);
   // Phones (one pane): the yes/no filters are one-tap quick filters and
   // have no tag of their own. Follows rotation.
   const phone = !useMediaQuery(twoPane);
@@ -70,6 +79,9 @@ export function App({ user, logout, logoutError }: Props) {
   const editFilters = () => {
     const field = editTarget(query, state.group === "1", phone);
     if (!field) return;
+    // Its click does not reach Carbon's outside click listeners (ActiveFilters),
+    // so the user panel's would not close it either.
+    setUserOpen(false);
     setFiltersOpen(true);
     setFocusRequest((r) => ({ field, n: r.n + 1 }));
   };
@@ -233,7 +245,8 @@ export function App({ user, logout, logoutError }: Props) {
       if (ownedByWidget(e)) {
         // Escape leaves a field, as before; Carbon's Search clears itself first (below).
         const el = e.target instanceof HTMLElement ? e.target : null;
-        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA"].includes(el.tagName) && !el.closest(".cds--search")) el.blur();
+        // Not in the filter popover: Escape there closes its calendar, then the popover (FilterPanel.tsx).
+        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA"].includes(el.tagName) && !el.closest(".cds--search, .cds--popover-content")) el.blur();
         return;
       }
       const mail = state.view === "";
@@ -504,33 +517,61 @@ export function App({ user, logout, logoutError }: Props) {
                   if (e.key === "Escape" && !e.currentTarget.value) e.currentTarget.blur();
                 }}
               />
-              <IconButton
-                kind="ghost"
-                size="md"
+              <Popover
+                open={filtersOpen}
                 align="bottom-end"
-                label={t.filters}
-                className={prefixed ? "mail-toolbar__filters--set" : undefined}
-                isSelected={filtersOpen}
-                aria-expanded={filtersOpen}
-                aria-controls={filtersId}
-                onClick={() => setFiltersOpen((open) => !open)}
+                autoAlign
+                onRequestClose={() => !calendarOpen.current() && setFiltersOpen(false)}
               >
-                <Filter />
-              </IconButton>
+                <IconButton
+                  ref={filtersButton}
+                  kind="ghost"
+                  size="md"
+                  align="bottom-end"
+                  label={t.filters}
+                  className={prefixed ? "mail-toolbar__filters--set" : undefined}
+                  aria-expanded={filtersOpen}
+                  aria-controls={filtersId}
+                  onClick={() => setFiltersOpen((open) => !open)}
+                  // Carbon closes the popover on Escape only from inside its content.
+                  onKeyDown={(e: ReactKeyboardEvent) => {
+                    if (e.key === "Escape" && filtersOpen) {
+                      e.preventDefault();
+                      setFiltersOpen(false);
+                    }
+                  }}
+                >
+                  <Filter />
+                </IconButton>
+                <PopoverContent id={filtersId} className="filter-popover__content">
+                  {/* PopoverContent is always in the DOM: mounted only while open, so the chunk loads on first open. */}
+                  {filtersOpen && (
+                    <LazyView inline>
+                      <FilterPanel
+                        id={filtersId}
+                        query={query}
+                        setQuery={setQuery}
+                        group={state.group === "1"}
+                        setGroup={setGroup}
+                        focus={focusRequest.n > focusDone ? focusRequest : undefined}
+                        onFocused={setFocusDone}
+                        calendarOpen={calendarOpen}
+                      />
+                    </LazyView>
+                  )}
+                </PopoverContent>
+              </Popover>
             </div>
             {phone && <QuickFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />}
-            {filtersOpen && (
-              <SearchFilters
-                id={filtersId}
-                query={query}
-                setQuery={setQuery}
-                group={state.group === "1"}
-                setGroup={setGroup}
-                focus={focusRequest.n > focusDone ? focusRequest : undefined}
-                onFocused={setFocusDone}
-              />
-            )}
-            <ActiveFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} quick={phone} onEdit={editFilters} />
+            <ActiveFilters
+              query={query}
+              setQuery={setQuery}
+              group={state.group === "1"}
+              setGroup={setGroup}
+              quick={phone}
+              onEdit={editFilters}
+              fallbackFocus={filtersButton}
+            />
             <div className="mail-pane__fill">
               <MessageList
                 filter={filter}

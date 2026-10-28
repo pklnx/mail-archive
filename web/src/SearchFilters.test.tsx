@@ -1,10 +1,11 @@
-// The filter panel and the set filters as Carbon DismissibleTags (they
-// replace the hand-written FilterChips of the phones). Both edit the
-// search text; the grouping lives in the URL. On phones the yes/no
+// The set filters as Carbon DismissibleTags (they replace the hand-written
+// FilterChips of the phones); the filter form is FilterPanel.test.tsx. Both
+// edit the search text; the grouping lives in the URL. On phones the yes/no
 // filters are quick filters (Carbon SelectableTags) instead of tags.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ActiveFilters, QuickFilters, SearchFilters, editTarget } from "./SearchFilters";
+import { useRef, useState } from "react";
+import { ActiveFilters, QuickFilters, editTarget } from "./SearchFilters";
 import { applySettings, messagesFor } from "./i18n";
 
 afterEach(() => {
@@ -45,7 +46,8 @@ describe("ActiveFilters", () => {
 
   it("removes both ends of a date range at once", () => {
     const { setQuery } = setup("after:2026-01-01 before:2026-02-01 tax to:office");
-    expect(tags()[0]).toMatch(/^Date: .+ – .+$/);
+    // The end inclusive: before: is the first day after the range.
+    expect(tags()[0]).toBe("Date: Jan 1, 2026 – Jan 31, 2026");
     expect(tags()[1]).toBe("To or Cc: office");
     fireEvent.click(screen.getByRole("button", { name: "Remove filter: Date" }));
     expect(setQuery).toHaveBeenCalledWith("tax to:office");
@@ -59,26 +61,6 @@ describe("ActiveFilters", () => {
     expect(screen.getByRole("button", { name: de.removeFilter(de.from) })).toBeTruthy();
     const html = document.body.innerHTML;
     for (const s of ["Dismiss", "Remove filter", "Has attachment", "Active filters"]) expect(html, s).not.toContain(s);
-  });
-});
-
-describe("SearchFilters", () => {
-  it("switches yes/no filters in place: the attachment in the text, the grouping through setGroup", () => {
-    const { setQuery, setGroup } = setup("invoice", false, SearchFilters);
-    fireEvent.click(screen.getByRole("checkbox", { name: "Has attachment" }));
-    expect(setQuery).toHaveBeenCalledWith("invoice has:attachment");
-    fireEvent.click(screen.getByRole("checkbox", { name: "Group by conversation" }));
-    expect(setGroup).toHaveBeenCalledWith(true);
-  });
-
-  it("shows the prefixes of the text in its fields and edits them", () => {
-    const { setQuery } = setup("from:sam after:2026-01-01 invoice has:attachment", true, SearchFilters);
-    expect((screen.getByRole("textbox", { name: "From" }) as HTMLInputElement).value).toBe("sam");
-    expect((screen.getByLabelText("Since") as HTMLInputElement).value).toBe("2026-01-01");
-    expect((screen.getByRole("checkbox", { name: "Has attachment" }) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByRole("checkbox", { name: "Group by conversation" }) as HTMLInputElement).checked).toBe(true);
-    fireEvent.change(screen.getByRole("textbox", { name: "To or Cc" }), { target: { value: "office" } });
-    expect(setQuery).toHaveBeenCalledWith("from:sam after:2026-01-01 invoice has:attachment to:office");
   });
 });
 
@@ -184,45 +166,60 @@ describe("editTarget: the first visible tag's field, in the panel's order", () =
   });
 });
 
-describe("SearchFilters with a focus request", () => {
-  type Field = "from" | "to" | "after" | "before" | "has" | "group";
-  const panel = (focus: { field: Field; n: number } | undefined, onFocused: (n: number) => void) => (
-    <SearchFilters query="from:sam" setQuery={() => {}} group={false} setGroup={() => {}} focus={focus} onFocused={onFocused} />
-  );
-
-  it.each([
-    ["from", "From"],
-    ["to", "To or Cc"],
-    ["after", "Since"],
-    ["before", "Before"],
-    ["has", "Has attachment"],
-    ["group", "Group by conversation"],
-  ] as const)("focuses %s when it mounts and acknowledges once", (field, label) => {
-    applySettings({ language: "en", locale: "en-US" });
-    const onFocused = vi.fn();
-    render(panel({ field, n: 1 }, onFocused));
-    expect(document.activeElement).toBe(screen.getByLabelText(label));
-    expect(onFocused.mock.calls).toEqual([[1]]);
+describe("ActiveFilters: an open end of the range", () => {
+  it("shows … for the open end", () => {
+    setup("after:2026-01-01");
+    expect(tags()[0]).toBe("Date: Jan 1, 2026 – …");
+    cleanup();
+    setup("before:2026-02-01");
+    expect(tags()[0]).toBe("Date: … – Jan 31, 2026");
   });
+});
 
-  it("takes no focus without a request", () => {
+describe("ActiveFilters: the focus after a dismiss (#286, #311)", () => {
+  /** The tags with the search text and grouping as state, and a filter button as the last fallback. */
+  function Row({ start, group: g = false }: { start: string; group?: boolean }) {
+    const [query, setQuery] = useState(start);
+    const [group, setGroup] = useState(g);
+    const button = useRef<HTMLButtonElement>(null);
+    return (
+      <>
+        <button ref={button}>Filters</button>
+        <ActiveFilters query={query} setQuery={setQuery} group={group} setGroup={setGroup} fallbackFocus={button} onEdit={() => {}} />
+      </>
+    );
+  }
+  const dismiss = (label: string) => screen.getByRole("button", { name: `Remove filter: ${label}` });
+
+  it("moves to the next tag's dismiss button, else the previous one's, else the filter button", () => {
     applySettings({ language: "en", locale: "en-US" });
-    const onFocused = vi.fn();
-    render(panel(undefined, onFocused));
-    expect(document.activeElement).toBe(document.body);
-    expect(onFocused).not.toHaveBeenCalled();
+    render(<Row start="has:attachment from:sam to:office" group />);
+    // Has attachment, From, To or Cc, Conversation.
+    fireEvent.click(dismiss("From"));
+    expect(document.activeElement).toBe(dismiss("To or Cc"));
+    fireEvent.click(dismiss("Conversation"));
+    expect(document.activeElement).toBe(dismiss("To or Cc"));
+    fireEvent.click(dismiss("Has attachment"));
+    expect(document.activeElement).toBe(dismiss("To or Cc"));
+    fireEvent.click(dismiss("To or Cc"));
+    expect(screen.queryByRole("list", { name: "Active filters" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Filters" }));
   });
+});
 
-  it("focuses again on a new request while mounted, also for the same field", () => {
+describe("ActiveFilters: Edit filters", () => {
+  it("keeps its click from window, where the popover's outside click listener would close the popover it opens", () => {
     applySettings({ language: "en", locale: "en-US" });
-    const onFocused = vi.fn();
-    const { rerender } = render(panel({ field: "from", n: 1 }, onFocused));
-    const from = screen.getByRole("textbox", { name: "From" });
-    from.blur();
-    rerender(panel({ field: "from", n: 2 }, onFocused));
-    expect(document.activeElement).toBe(from);
-    rerender(panel({ field: "to", n: 3 }, onFocused));
-    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "To or Cc" }));
-    expect(onFocused.mock.calls).toEqual([[1], [2], [3]]);
+    const onEdit = vi.fn();
+    const onWindow = vi.fn();
+    window.addEventListener("click", onWindow);
+    try {
+      render(<ActiveFilters query="from:sam" setQuery={() => {}} group={false} setGroup={() => {}} onEdit={onEdit} />);
+      fireEvent.click(screen.getByRole("button", { name: "Edit filters" }));
+      expect(onEdit).toHaveBeenCalledTimes(1);
+      expect(onWindow).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("click", onWindow);
+    }
   });
 });

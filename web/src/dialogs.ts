@@ -11,9 +11,10 @@ function editable(el: Element): boolean {
 /**
  * The floating and composite parts of Carbon components that handle keys
  * themselves: the content of an open popover (Toggletip, menus), menus,
- * list boxes, combo boxes and dialogs.
+ * list boxes, combo boxes and dialogs, and the date picker's calendar, which
+ * flatpickr attaches to body, outside the filter popover.
  */
-const widget = '.cds--popover-content, [role="menu"], [role="menubar"], [role="listbox"], [role="combobox"], [role="dialog"], [role="alertdialog"], .cds--modal';
+const widget = '.cds--popover-content, .flatpickr-calendar, [role="menu"], [role="menubar"], [role="listbox"], [role="combobox"], [role="dialog"], [role="alertdialog"], .cds--modal';
 
 /**
  * Whether a key press belongs to the element it happens in, so the app's

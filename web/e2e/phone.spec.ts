@@ -72,7 +72,7 @@ test("phone: the navigation and the folders, open a message, back to the list", 
   await expect(item).toBeVisible();
 });
 
-test("phone: the quick filters toggle with one tap, Edit filters opens the panel", async ({ page }) => {
+test("phone: the quick filters toggle with one tap, Edit filters opens the filter popover", async ({ page }) => {
   await page.goto("/");
   const list = page.getByRole("list", { name: "Messages" });
   const rows = list.getByRole("button");
@@ -84,7 +84,7 @@ test("phone: the quick filters toggle with one tap, Edit filters opens the panel
   const grouping = quick.getByRole("button", { name: "Group by conversation" });
   const panel = page.getByRole("group", { name: "Filters", exact: true });
   const tags = page.getByRole("list", { name: "Active filters" });
-  // The panel stays closed; the quick filters are under the search.
+  // The popover stays closed; the quick filters are under the search.
   await expect(panel).toHaveCount(0);
   await expect(attachment).toHaveAttribute("aria-pressed", "false");
 
@@ -107,13 +107,16 @@ test("phone: the quick filters toggle with one tap, Edit filters opens the panel
   await grouping.click();
   await expect(page).not.toHaveURL(/group=1/);
 
-  // A set filter's tag: "Edit filters" opens the panel at its field, the × removes it.
+  // A set filter's tag: "Edit filters" opens the popover at its field, the × removes it.
   await page.goto("/?q=from%3Asam");
   await expect(rows.first()).toBeVisible();
   await expect(panel).toHaveCount(0);
   await tags.getByRole("button", { name: "Edit filters" }).click();
   await expect(panel).toBeVisible();
   await expect(panel.getByRole("textbox", { name: "From" })).toBeFocused();
+  // The popover lies over the tag row on a phone: Escape closes it first.
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
   await tags.getByRole("button", { name: "Remove filter: From" }).click();
   await expect(tags).toHaveCount(0);
   await expect(page).not.toHaveURL(/from%3Asam/);
