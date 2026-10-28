@@ -115,27 +115,31 @@ select,
   position: relative;
   top: -0.0390625rem;
 }
-/* The header's user name, from Carbon's md up; the shortcuts button only
-   there too, where a keyboard is likely. */
-.app-header__user {
-  display: none;
-  align-self: center;
-  padding-inline: 0.5rem;
-  color: var(--cds-text-secondary);
+/* The user panel (UserPanel.tsx) opens below the header, which reaches
+   under the notch, and keeps its last item above the home indicator. */
+.cds--header-panel.app-user-panel {
+  inset-block-start: calc(3rem + env(safe-area-inset-top));
+  padding-block-end: env(safe-area-inset-bottom);
+}
+/* Its first row, the user name: text, not an item. */
+.app-user-panel__name {
+  align-self: stretch;
+  padding: 1rem 1rem 0.5rem;
+  color: var(--cds-text-primary);
   font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
   letter-spacing: 0.16px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
-.app-shell .app-header__shortcuts {
-  display: none;
-}
-@media (min-width: 42rem) {
-  .app-header__user {
-    display: block;
-  }
-  .app-shell .app-header__shortcuts {
-    display: flex;
-  }
+/* Its items that are buttons look like the link items. */
+:where(.app-user-panel) button.cds--switcher__item-link {
+  inline-size: 100%;
+  border: 0;
+  background-color: transparent;
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
 }
 
 /* The shell's SideNav sits below the header, which reaches under the notch.

@@ -94,8 +94,8 @@ beforeEach(async () => {
   shortcutsLoaded = true;
 });
 
-async function renderApp(admin = false) {
-  render(<App user={user(admin)} logout={() => {}} />);
+async function renderApp(admin = false, logout = () => {}) {
+  render(<App user={user(admin)} logout={logout} />);
   // The accounts are loaded: the tree has them.
   await screen.findByRole("treeitem", { name: /^work$/, hidden: true });
 }
@@ -212,14 +212,18 @@ describe("phone navigation (below lg)", () => {
       const de = messagesFor("de");
       await renderApp(true);
       expect(screen.getByRole("button", { name: de.showMenu })).toBeTruthy();
-      expect(screen.getByRole("button", { name: de.profileOf("alice") })).toBeTruthy();
-      expect(screen.getByRole("button", { name: de.logOut })).toBeTruthy();
-      expect(screen.getByRole("button", { name: de.shortcuts })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.userPanelOf("alice") }));
+      const panel = screen.getByRole("list", { name: de.userPanelOf("alice") });
+      expect(within(panel).getByRole("link", { name: de.profile })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: de.logOut })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: de.shortcuts })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: de.switchTheme("dark") })).toBeTruthy();
+      key(document.activeElement!, "Escape");
       fireEvent.click(screen.getByRole("button", { name: de.navFolders }));
       expect(screen.getByRole("dialog", { name: de.navFolders })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.closeFolders })).toBeTruthy();
       const html = document.body.innerHTML;
-      for (const s of ["Open navigation", "All folders", "Main navigation", "Log out", "Folders", "Profile"]) expect(html, s).not.toContain(s);
+      for (const s of ["Open navigation", "All folders", "Main navigation", "Log out", "Folders", "Profile", "User (", "Keyboard shortcuts", "Switch to"]) expect(html, s).not.toContain(s);
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
@@ -456,6 +460,7 @@ describe("keyboard shortcuts in the mail view", () => {
       expect(screen.getByRole("button", { name: de.filters }).getAttribute("aria-expanded")).toBe("true");
       expect(screen.getByRole("group", { name: de.filters })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.removeFilter(de.hasAttachment) })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.userPanelOf("alice") }));
       fireEvent.click(screen.getByRole("button", { name: de.shortcuts }));
       expect(screen.getByRole("dialog", { name: de.shortcuts })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.carbon.closeModal })).toBeTruthy();
@@ -489,6 +494,204 @@ describe("keyboard shortcuts while the SideNav overlay is open (below lg)", () =
     expect(document.activeElement).toBe(link);
     key(link, "Escape");
     expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+  });
+});
+
+describe("user panel (#284)", () => {
+  beforeEach(() => {
+    screenWidth(true);
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  const action = () => screen.getByRole("button", { name: t.userPanelOf("alice") });
+  const panel = () => screen.queryByRole("list", { name: t.userPanelOf("alice") });
+  const items = () => Array.from(panel()!.querySelectorAll<HTMLElement>(".cds--switcher__item-link"));
+  const item = (name: string) => items().find((el) => el.textContent === name)!;
+  const params = () => new URLSearchParams(window.location.search);
+  const open = () => {
+    act(() => action().focus());
+    fireEvent.click(action());
+    expect(panel()).not.toBeNull();
+  };
+
+  for (const wide of [false, true]) {
+    it(`leaves the header the menu button, the name and one user action (${wide ? "desktop" : "phone"}); closed, the panel holds nothing`, async () => {
+      screenWidth(wide);
+      await renderApp();
+      const header = screen.getByRole("banner");
+      // Carbon hides the menu button from lg up with CSS; it is in the DOM at both widths.
+      expect(within(header).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([t.showMenu, t.userPanelOf("alice")]);
+      expect(within(header).getAllByRole("link").map((l) => l.textContent)).toEqual([t.appName]);
+      // The name is no text of its own there (the action's tooltip names it).
+      expect(within(header).queryByText("alice")).toBeNull();
+      expect(panel()).toBeNull();
+      expect(header.querySelectorAll(".cds--switcher__item-link")).toHaveLength(0);
+      expect(action().getAttribute("aria-expanded")).toBe("false");
+    });
+  }
+
+  it("opens on a click with the focus on Profile: name, Profile, Keyboard shortcuts, theme, Log out, each named by its text and in the tab order", async () => {
+    await renderApp();
+    open();
+    expect(action().getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(action().getAttribute("aria-controls")!)?.contains(panel())).toBe(true);
+    expect(document.activeElement).toBe(item(t.profile));
+    expect(Array.from(panel()!.children).map((li) => li.textContent)).toEqual(["alice", t.profile, t.shortcuts, t.switchTheme("dark"), "", t.logOut]);
+    for (const el of items()) {
+      expect(el.getAttribute("aria-label")).toBe(el.textContent);
+      expect(el.tabIndex).toBe(0);
+    }
+    expect(item(t.profile).getAttribute("href")).toBe("/?view=profile");
+  });
+
+  it("closes on Escape, also with the action's tooltip open, focuses the action and leaves the message open; the other shortcuts are off meanwhile", async () => {
+    window.history.replaceState(null, "", "/?m=m1");
+    await renderApp();
+    await screen.findByRole("article");
+    open();
+    const profile = item(t.profile);
+    for (const k of ["j", "k", "?", "/", "u"]) key(profile, k);
+    expect(params().get("m")).toBe("m1");
+    expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull();
+    expect(document.activeElement).toBe(profile);
+    // The pointer still over the action: its tooltip is open, which would claim the Escape (ownedByWidget).
+    fireEvent.mouseEnter(action());
+    await waitFor(() => expect(document.querySelector(".cds--popover--open")).not.toBeNull());
+    key(profile, "Escape");
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(action());
+    expect(params().get("m")).toBe("m1");
+  });
+
+  it("keeps the panel open when a click blurs the focus first (WebKit, Firefox on macOS): Log out still works", async () => {
+    const logout = vi.fn();
+    await renderApp(false, logout);
+    open();
+    // Those browsers focus nothing on mousedown: the focus leaves the item to nowhere before the click.
+    fireEvent.focusOut(item(t.profile), { relatedTarget: null });
+    expect(panel()).not.toBeNull();
+    fireEvent.click(item(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open when the focus goes to its action, and closes when Tab takes it elsewhere, leaving the focus there", async () => {
+    await renderApp();
+    open();
+    act(() => action().focus());
+    expect(panel()).not.toBeNull();
+    act(() => item(t.logOut).focus());
+    const search = screen.getByRole("searchbox", { name: t.searchMail });
+    act(() => search.focus());
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("closes when Shift+Tab takes the focus back past its action, and the shortcuts work again", async () => {
+    await renderApp();
+    await screen.findByRole("button", { name: /First/ });
+    open();
+    // Shift+Tab from Profile: to the action (the panel stays open), then to the name link before it.
+    act(() => action().focus());
+    expect(panel()).not.toBeNull();
+    const name = within(screen.getByRole("banner")).getByRole("link", { name: t.appName });
+    act(() => name.focus());
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(name);
+    key(name, "j");
+    expect(params().get("m")).toBe("m1");
+  });
+
+  it("opens Profile on a plain click and returns the focus to the action; leaves a Ctrl click to the browser", async () => {
+    await renderApp();
+    open();
+    expect(fireEvent.click(item(t.profile), { ctrlKey: true })).toBe(true);
+    expect(params().get("view")).toBeNull();
+    expect(panel()).not.toBeNull();
+    expect(fireEvent.click(item(t.profile))).toBe(false);
+    expect(params().get("view")).toBe("profile");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("opens the shortcuts; closing them returns the focus to the action", async () => {
+    await renderApp();
+    open();
+    fireEvent.click(item(t.shortcuts));
+    expect(panel()).toBeNull();
+    const dialog = await screen.findByRole("dialog", { name: t.shortcuts });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    key(document.activeElement!, "Escape");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull());
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("switches the theme and stays open; the item's text and name follow", async () => {
+    await renderApp();
+    open();
+    fireEvent.click(item(t.switchTheme("dark")));
+    expect(document.documentElement.classList.contains("cds--g100")).toBe(true);
+    expect(panel()).not.toBeNull();
+    const theme = items()[2]!;
+    expect(theme.textContent).toBe(t.switchTheme("light"));
+    expect(theme.getAttribute("aria-label")).toBe(t.switchTheme("light"));
+    fireEvent.click(theme);
+    expect(document.documentElement.classList.contains("cds--white")).toBe(true);
+    document.documentElement.className = "";
+  });
+
+  it("logs out", async () => {
+    const logout = vi.fn();
+    await renderApp(false, logout);
+    open();
+    fireEvent.click(item(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on a click outside and toggles with its action", async () => {
+    await renderApp();
+    open();
+    fireEvent.click(screen.getByRole("searchbox", { name: t.searchMail }));
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    open();
+    fireEvent.click(action());
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("moves between the items with the arrow keys", async () => {
+    await renderApp();
+    open();
+    key(item(t.profile), "ArrowDown");
+    expect(document.activeElement).toBe(item(t.shortcuts));
+    key(item(t.shortcuts), "ArrowDown");
+    expect(document.activeElement).toBe(item(t.switchTheme("dark")));
+    key(item(t.switchTheme("dark")), "ArrowDown");
+    expect(document.activeElement).toBe(item(t.logOut));
+    key(item(t.logOut), "ArrowUp");
+    expect(document.activeElement).toBe(item(t.switchTheme("dark")));
+  });
+
+  it("takes over from the SideNav and hands back to it, with the focus in the one that is open (below lg)", async () => {
+    screenWidth(false);
+    await renderApp();
+    menuButton().focus();
+    fireEvent.click(menuButton());
+    expect(document.activeElement).toBe(within(sideNav()).getByRole("link", { name: t.allMail }));
+    fireEvent.click(action());
+    expect(screen.getByRole("button", { name: t.showMenu }).getAttribute("aria-expanded")).toBe("false");
+    expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+    expect(panel()).not.toBeNull();
+    expect(document.activeElement).toBe(item(t.profile));
+    // As in WebKit, the click focuses nothing: no focus-out from the panel to another element closes it.
+    act(() => item(t.profile).blur());
+    expect(panel()).not.toBeNull();
+    fireEvent.click(menuButton());
+    expect(panel()).toBeNull();
+    expect(sideNav().className).toContain("cds--side-nav--expanded");
+    expect(document.activeElement).toBe(within(sideNav()).getByRole("link", { name: t.allMail }));
   });
 });
 

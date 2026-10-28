@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
-import { Button, Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Search } from "@carbon/react";
-import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders, Keyboard, Logout, UserAvatar } from "@carbon/icons-react";
+import { Button, Header, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Search } from "@carbon/react";
+import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { dialogOpen, ownedByWidget } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
@@ -10,7 +10,7 @@ import { ActiveFilters, QuickFilters, SearchFilters, editTarget, type FocusReque
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
-import { ThemeToggle } from "./ThemeToggle";
+import { UserPanel } from "./UserPanel";
 import { lg, matchesNow, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import { ProductMark } from "./ProductMark";
@@ -84,6 +84,16 @@ export function App({ user, logout }: Props) {
   const layout = useSidebarLayout(user.name);
   const asideId = useId();
   const navId = useId();
+  // The header's user panel (UserPanel.tsx). Its state is here: the key
+  // listener below needs it, and it hands over to and from the SideNav.
+  const [userOpen, setUserOpen] = useState(false);
+  const userId = useId();
+  const userAction = useRef<HTMLButtonElement>(null);
+  const userPanel = useRef<HTMLDivElement>(null);
+  const closeUser = (returnFocus: boolean) => {
+    setUserOpen(false);
+    if (returnFocus) userAction.current?.focus();
+  };
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -170,6 +180,12 @@ export function App({ user, logout }: Props) {
       opener.current = null;
     }
   }, [overlay]);
+  // The user panel: focus moves to its first item when it opens. Declared
+  // after the overlay effect, so it runs after that one's focus return when
+  // the panel replaces the SideNav (a child's effect would run before it).
+  useEffect(() => {
+    if (userOpen) userPanel.current?.querySelector<HTMLElement>(".cds--switcher__item-link")?.focus();
+  }, [userOpen]);
   const hide = overlay !== "" || undefined;
   const closeFolders = useCallback(() => setFoldersOpen(false), []);
   // Escape closes the folder overlay. In the capture phase: Carbon's
@@ -202,6 +218,14 @@ export function App({ user, logout }: Props) {
       }
       if (menuOpen) {
         if (e.key === "Escape") setMenuOpen(false);
+        return;
+      }
+      // Before ownedByWidget: an open tooltip of the panel's action would claim the Escape.
+      if (userOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeUser(true);
+        }
         return;
       }
       if (ownedByWidget(e)) {
@@ -271,7 +295,12 @@ export function App({ user, logout }: Props) {
           aria-expanded={menuOpen}
           isActive={menuOpen}
           // Never from behind the folder overlay (inert there anyway): one overlay does not open another.
-          onClick={() => !foldersOpen && setMenuOpen((open) => !open)}
+          onClick={() => {
+            if (foldersOpen) return;
+            // The SideNav replaces the user panel; its overlay effect moves the focus.
+            setUserOpen(false);
+            setMenuOpen((open) => !open);
+          }}
         />
         <HeaderName
           className="app-header__name"
@@ -290,23 +319,31 @@ export function App({ user, logout }: Props) {
           {t.appName}
         </HeaderName>
         <HeaderGlobalBar>
-          <span className="app-header__user" aria-hidden>
-            {user.name}
-          </span>
-          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={openShortcuts}>
-            <Keyboard size={20} />
-          </HeaderGlobalAction>
-          <ThemeToggle header />
-          <HeaderGlobalAction
-            aria-label={t.profileOf(user.name)}
-            isActive={state.view === "profile"}
-            onClick={() => show("profile")}
-          >
-            <UserAvatar size={20} />
-          </HeaderGlobalAction>
-          <HeaderGlobalAction aria-label={t.logOut} tooltipAlignment="end" onClick={logout}>
-            <Logout size={20} />
-          </HeaderGlobalAction>
+          <UserPanel
+            name={user.name}
+            id={userId}
+            open={userOpen}
+            actionRef={userAction}
+            panelRef={userPanel}
+            toggle={() => {
+              if (userOpen) return closeUser(true);
+              // The panel replaces the SideNav: no focus return to the menu button.
+              opener.current = null;
+              setMenuOpen(false);
+              setUserOpen(true);
+            }}
+            close={closeUser}
+            profile={() => {
+              closeUser(true);
+              show("profile");
+            }}
+            shortcuts={() => {
+              closeUser(true);
+              shortcutsOpener.current = userAction.current;
+              setShortcuts(true);
+            }}
+            logout={logout}
+          />
         </HeaderGlobalBar>
       </Header>
       <ShellNav
@@ -408,7 +445,7 @@ export function App({ user, logout }: Props) {
 
           <section inert={pageInert} className="mail-pane mail-pane--list">
             {/* Phones: where the user is, the search below at full width. Menu
-                and theme are in the header. */}
+                and the user panel are in the header. */}
             <div className="mail-place">
               <h1 className="mail-place__title">{place.title}</h1>
               {place.sub && <p className="mail-place__sub">{place.sub}</p>}

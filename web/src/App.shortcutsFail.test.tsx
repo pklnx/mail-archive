@@ -58,7 +58,8 @@ it("shows the notice in place of the overview; Escape and the close button close
   fireEvent.keyDown(document.body, { key: "Escape" });
   await waitFor(() => expect(notice()).toBeNull());
 
-  // Again from the header button; its close button closes it.
+  // Again from the user panel; its close button closes it.
+  fireEvent.click(screen.getByRole("button", { name: t.userPanelOf(user.name) }));
   fireEvent.click(screen.getByRole("button", { name: t.shortcuts }));
   await screen.findByText(t.viewLoadFailed);
   fireEvent.click(screen.getByRole("button", { name: t.carbon.closeNotification }));

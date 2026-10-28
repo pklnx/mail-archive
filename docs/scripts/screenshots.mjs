@@ -158,6 +158,19 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The user panel, opened from the person icon in the header (#284).
+  const p = await page("light");
+  await openMessage(p, "Photos from the weekend");
+  await p.getByRole("banner").getByRole("button", { name: `User (${login.username})`, exact: true }).click();
+  await p.getByRole("list", { name: `User (${login.username})` }).getByRole("button", { name: "Log out" }).waitFor();
+  // Off the action, its tooltip closes; the panel stays open.
+  await p.mouse.move(0, 0);
+  await p.locator(".cds--popover--open").waitFor({ state: "detached" });
+  await shot(p, "user-panel");
+  await p.context().close();
+}
+
+{
   const p = await page("light");
   await p.goto(base + "/");
   // Mail to the tax advisor from the last month, with words from the body.
