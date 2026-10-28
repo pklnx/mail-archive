@@ -581,6 +581,8 @@ describe("the account's page", () => {
     fireEvent.change(section(t.scheduleTitle).getByLabelText(t.scheduleTitle), { target: { value: "manual" } });
     fireEvent.click(section(t.scheduleTitle).getByRole("button", { name: t.saveSchedule }));
     await waitFor(() => expect(section(t.scheduleTitle).getByText(t.saved)).toBeTruthy());
+    // The form closed: the focus is back on its Edit.
+    expect(document.activeElement).toBe(section(t.scheduleTitle).getByRole("button", { name: t.edit }));
     expect(changes()).toEqual([{ method: "PATCH", url: "/api/accounts/work", body: { syncInterval: "manual" } }]);
     expect((section(s.connection).getByLabelText(t.fieldUsername) as HTMLInputElement).value).toBe("other@example.com");
 
@@ -635,6 +637,22 @@ describe("the account's page", () => {
     fireEvent.click(section(t.scheduleTitle).getByRole("button", { name: t.saveSchedule }));
     await waitFor(() => expect(changes()).toHaveLength(2));
     expect(changes()[1]).toEqual({ method: "PATCH", url: "/api/accounts/office", body: { syncInterval: "30m0s" } });
+  });
+
+  it("locks only the renamed account's page, and not once its new name has left the list", async () => {
+    const { rerender } = show("/?view=accounts&id=work", data([account("work"), account("home")]));
+    const s = settingsText();
+    fireEvent.click(section(s.connection).getByRole("button", { name: t.edit }));
+    fireEvent.change(section(s.connection).getByLabelText(t.fieldName), { target: { value: "office" } });
+    fireEvent.click(section(s.connection).getByRole("button", { name: t.save }));
+    await waitFor(() => expect(window.location.search).toBe("?view=accounts&id=office"));
+    // The new name never shows up (purged, or renamed again elsewhere): the page returns to the list.
+    rerender(data([account("home")]));
+    expect(window.location.search).toBe("?view=accounts");
+    fireEvent.click(within(row("home")).getByRole("link", { name: "home" }));
+    fireEvent.click(section(t.scheduleTitle).getByRole("button", { name: t.edit }));
+    fireEvent.change(section(t.scheduleTitle).getByLabelText(t.scheduleTitle), { target: { value: "30m0s" } });
+    expect((section(t.scheduleTitle).getByRole("button", { name: t.saveSchedule }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("tells a failed save from a saved one by its state, not by the text (#310)", async () => {
@@ -709,6 +727,15 @@ describe("the account's page", () => {
     expect(screen.queryByRole("button", { name: t.edit })).toBeNull();
     expect(screen.queryByRole("region", { name: settingsText().connection })).toBeNull();
     expect(menu("files")).toEqual([[t.remove, false]]);
+  });
+
+  it("offers Delete completely on a removed account's page to admins only", () => {
+    show("/?view=accounts&id=old", data([account("old", { removed: true })]), false);
+    expect(h1("old")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: t.userActions("old") })).toBeNull();
+    cleanup();
+    show("/?view=accounts&id=old", data([account("old", { removed: true })]));
+    expect(menu("old")).toEqual([[t.purgeStart, false]]);
   });
 
   it("shows a removed account with its note; after confirming a purge the focus is on the h1, and the list opens when it is gone", async () => {

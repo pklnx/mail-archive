@@ -107,7 +107,9 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
     target = active.find((a) => a.name === page.name && a.kind === "smtp");
   }
   // Saving on the page waits until the list has the new name.
-  const renaming = renamedTo.current !== null && data !== null && !all.some((a) => a.name === renamedTo.current?.to);
+  // Only the renamed account's page waits, and only until the list has the
+  // new name.
+  const renaming = page.kind === "detail" && renamedTo.current?.to === page.name && data !== null && !all.some((a) => a.name === page.name);
   const waiting = awaiting !== null && page.kind === "import" && awaiting.name === page.name && awaiting.data === data;
   const unknown = data !== null && !waiting && (page.kind === "add" ? !manage : page.kind !== "list" && !target);
   const shown = unknown ? "list" : page.kind === "detail" ? `detail:${aliases.current.get(page.name) ?? page.name}` : page.kind === "list" || page.kind === "add" ? page.kind : `import:${page.name}`;
@@ -123,6 +125,12 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
   useEffect(() => {
     if (awaiting && awaiting.data !== data) setAwaiting(null);
   }, [awaiting, data]);
+  // The list has the new name: the rename is done, and the old name means
+  // nothing for the new one any more.
+  useEffect(() => {
+    const to = renamedTo.current?.to;
+    if (to !== undefined && data?.accounts.some((a) => a.name === to)) renamedTo.current = null;
+  }, [data]);
   // A purge that shows up later (the list loaded after the page, or the
   // purge was confirmed elsewhere) opens the removed accounts too (#310).
   const purging = all.some((a) => a.removed && a.purging);
