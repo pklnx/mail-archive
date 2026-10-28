@@ -72,10 +72,33 @@ maintainer's explicit OK, noted on the pull request. This covers
 `Makefile`. The reviewer flags any such change as blocking until the OK is
 there. The OK names the changed entries, never secret values.
 
+A non-blocking review finding becomes a follow-up issue, labelled
+**`followup`**, only when the reviewer names a realistic case likely to occur
+soon. The coordinator creates it after the merge, and its body names the pull
+request or review it comes from. Every other non-blocking remark stays in the
+review and is done with it.
+
 Go toolchain bumps change the `toolchain` line in `go.mod` and the `golang` tag
 in the `Dockerfile` together, in one pull request: the image build fails when
 they differ (`scripts/check-go-toolchain.sh`), also on a Dependabot bump of
 only one of them.
+
+## Agents, rules and handover
+
+The Claude roles are defined in `.claude/agents/`: `implementer.md`,
+`reviewer.md` and `plan-reviewer.md`. The coordinator starts them as agents,
+or, where a session does not offer them, as general agents told to act as the
+role in that file. Lessons that apply to certain files live in
+`.claude/rules/*.md`; each rule names its files in `paths:` and loads when a
+matching file is read or edited, and the agents read the matching rules
+themselves before they start. The GitHub commands per operation are in
+`.claude/github-operations.md`.
+
+`.claude/HANDOVER.md` holds only the current state: open pull requests, open
+tickets, active decisions and maintainer actions. A session reads it at start
+and replaces it at the end, never appending; history lives in pull requests,
+issues and git. Follow-ups are open issues labelled `followup`, queried when
+needed and not read at start.
 
 ## Labels
 
@@ -89,6 +112,7 @@ only one of them.
 | `breaking` | by hand | Manual upgrade steps; makes a major release (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change; `feature` makes at least a minor release. |
 | `security` | by hand | Security hardening (never an undisclosed vulnerability). Kind label; does not change the version (a patch release unless other labels raise it). |
+| `followup` | coordinator | Non-blocking finding from a review, CI or the day's work; its body names the source. |
 
 Label changes do not notify anyone by themselves: after setting `plan` or
 `ready`, say so in the chat with the implementer (for example "plan #18" or
