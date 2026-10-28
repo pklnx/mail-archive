@@ -85,7 +85,8 @@ secrets-test: $(GITLEAKS)
 .PHONY: review-gate review-gate-test review-gate-tools
 # Review gate (scripts/review-gate.sh, docs/development/review-gate.md):
 # deterministic checks on what the branch changes. Tool versions are pinned
-# here and in tools/review-gate/package-lock.json (squawk); bump them by hand,
+# here and in tools/review-gate/package-lock.json (squawk, oxlint,
+# oxlint-tsgolint); bump them by hand,
 # like sqlc and gitleaks. Each Go tool is built with the project's toolchain
 # into its own folder under bin/, verified through the Go checksum database.
 GOLANGCI_LINT_VERSION := v2.14.0
@@ -94,6 +95,9 @@ ACTIONLINT_VERSION := v1.7.12
 ACTIONLINT := bin/actionlint-$(ACTIONLINT_VERSION)/actionlint
 SQUAWK := tools/review-gate/node_modules/.bin/squawk
 SQUAWK_STAMP := tools/review-gate/node_modules/.installed
+# oxlint and its type-aware engine come from the same npm install.
+OXLINT := tools/review-gate/node_modules/.bin/oxlint
+TSGOLINT := tools/review-gate/node_modules/.bin/tsgolint
 # zizmor comes from PyPI (tools/review-gate/requirements.txt: pinned version,
 # hash of every wheel) into a venv of its own under bin/.
 ZIZMOR := bin/zizmor-venv/bin/zizmor
@@ -101,7 +105,7 @@ ZIZMOR_STAMP := bin/zizmor-venv/.installed
 PYTHON3 ?= python3
 # The branch or commit the gate compares against (CI: the pull request's base).
 BASE ?= origin/main
-REVIEW_GATE_ENV = GOLANGCI_LINT=$(abspath $(GOLANGCI_LINT)) ACTIONLINT=$(abspath $(ACTIONLINT)) SQUAWK=$(abspath $(SQUAWK)) ZIZMOR=$(abspath $(ZIZMOR))
+REVIEW_GATE_ENV = GOLANGCI_LINT=$(abspath $(GOLANGCI_LINT)) ACTIONLINT=$(abspath $(ACTIONLINT)) SQUAWK=$(abspath $(SQUAWK)) ZIZMOR=$(abspath $(ZIZMOR)) OXLINT=$(abspath $(OXLINT)) TSGOLINT=$(abspath $(TSGOLINT))
 
 $(GOLANGCI_LINT):
 	GOTOOLCHAIN=$$($(GO) env GOVERSION) GOBIN=$(CURDIR)/$(dir $(GOLANGCI_LINT)) $(GO) install \

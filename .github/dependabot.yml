@@ -24,7 +24,7 @@ updates:
     groups:
       docs-dependencies:
         patterns: ["*"]
-  - package-ecosystem: npm # squawk of the review gate (make review-gate)
+  - package-ecosystem: npm # squawk, oxlint, oxlint-tsgolint of the review gate (make review-gate)
     directory: /tools/review-gate
     schedule:
       interval: weekly

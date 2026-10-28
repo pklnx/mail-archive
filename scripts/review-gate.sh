@@ -16,10 +16,17 @@
 #   actionlint         added or modified workflows
 #   zizmor             the same workflows: unpinned actions, dangerous
 #                      triggers, permissions, ... (--offline, medium and up)
+#   oxlint             added or modified web/src .ts/.tsx files: floating and
+#                      misused promises and the rules of hooks, only on the
+#                      lines the branch adds (tools/review-gate/oxlintrc.json);
+#                      needs web/node_modules (pnpm install in web/), else
+#                      skipped
 # A check whose files did not change is listed as skipped, with the reason.
 #
-# Tools: GOLANGCI_LINT, SQUAWK, ACTIONLINT, ZIZMOR (commands or paths). Configs come
-# from REVIEW_GATE_CONF (default: the repository this script is in).
+# Tools: GOLANGCI_LINT, SQUAWK, ACTIONLINT, ZIZMOR, OXLINT, TSGOLINT (commands
+# or paths). Configs come from REVIEW_GATE_CONF (default: the repository this
+# script is in). REVIEW_GATE_REQUIRE_WEB=1 (CI) makes missing web/node_modules
+# an error instead of a skip.
 #
 # Output: one line. Clean: "review-gate: clean (...)". Otherwise compact JSON:
 #   {"base","head","ran":[check],"skipped":[{"check","reason"}],
@@ -36,6 +43,8 @@ GOLANGCI_LINT=${GOLANGCI_LINT:-golangci-lint}
 SQUAWK=${SQUAWK:-squawk}
 ACTIONLINT=${ACTIONLINT:-actionlint}
 ZIZMOR=${ZIZMOR:-zizmor}
+OXLINT=${OXLINT:-oxlint}
+TSGOLINT=${TSGOLINT:-tsgolint}
 migrations=internal/store/migrations
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -244,6 +253,55 @@ elif have zizmor "$ZIZMOR"; then
 			| {tool: "zizmor", rule: $f.ident, file: $l.symbolic.key.Local.verbatim_path,
 			   line: ($l.concrete.location.start_point.row + 1), message: $f.desc}' \
 			"$work/zz.json" >>"$work/findings"
+	fi
+fi
+
+# --- oxlint: added or modified web/src TypeScript files, type-aware, three
+# rules (tools/review-gate/oxlintrc.json). web/src has hits from before the
+# gate, so only findings on lines the branch adds are reported (the same
+# scope as noctx). oxlint exits 1 for findings and for its own failures alike:
+# a failure is anything but a clean JSON report on stdout and an empty stderr.
+grep -E '^web/src/.*\.(ts|tsx)$' "$work/present" >"$work/web-files"
+if [ ! -s "$work/web-files" ]; then
+	skipped oxlint "no changed web/src TypeScript files"
+elif [ ! -d web/node_modules ]; then
+	if [ "${REVIEW_GATE_REQUIRE_WEB:-}" = 1 ]; then
+		error oxlint "web/node_modules is missing (pnpm install in web/)"
+	else
+		skipped oxlint "web deps not installed; pnpm install in web/ to run it"
+	fi
+elif have oxlint "$OXLINT" && have tsgolint "$TSGOLINT"; then
+	ran oxlint
+	# Lines added per file: "<path> <first> <last>".
+	git -c core.quotePath=false diff -U0 --no-renames --diff-filter=AMT "$base_sha" "$head_sha" -- web/src |
+		awk '/^\+\+\+ b\// { f = substr($0, 7); next }
+			/^@@ / { split($3, a, ","); n = (a[2] == "" ? 1 : a[2]);
+				if (n > 0) print f, substr(a[1], 2), substr(a[1], 2) + n - 1 }' >"$work/web-added"
+	set --
+	while IFS= read -r p; do set -- "$@" "${p#web/}"; done <"$work/web-files"
+	rc=0
+	(
+		cd web &&
+			OXLINT_TSGOLINT_PATH=$TSGOLINT "$OXLINT" -c "$conf/tools/review-gate/oxlintrc.json" \
+				--type-aware --tsconfig tsconfig.json -f json "$@"
+	) >"$work/ox.json" 2>"$work/ox.err" || rc=$?
+	if [ "$rc" -gt 1 ]; then
+		error oxlint "exit $rc: $(oneline <"$work/ox.err") $(oneline <"$work/ox.json")"
+	elif [ -s "$work/ox.err" ]; then
+		error oxlint "exit $rc, stderr: $(oneline <"$work/ox.err")"
+	elif ! jq -e 'type == "object" and (.diagnostics | type == "array")' "$work/ox.json" >/dev/null 2>&1; then
+		error oxlint "exit $rc, unreadable output: $(oneline <"$work/ox.json")"
+	elif [ "$rc" -eq 1 ] && jq -e '.diagnostics | length == 0' "$work/ox.json" >/dev/null; then
+		error oxlint "exit 1 without diagnostics: $(oneline <"$work/ox.json")"
+	else
+		# "typescript(no-floating-promises)" is reported as typescript/no-floating-promises;
+		# the first label is the primary location, relative to web/.
+		jq -c --rawfile added "$work/web-added" '
+			($added | split("\n") | map(select(. != "") | split(" ") | {f: .[0], a: (.[1] | tonumber), b: (.[2] | tonumber)})) as $r
+			| .diagnostics[] | ("web/" + .filename) as $f | .labels[0].span.line as $l
+			| select(any($r[]; .f == $f and .a <= $l and $l <= .b))
+			| {tool: "oxlint", rule: (.code | sub("\\((?<r>.*)\\)$"; "/\(.r)")), file: $f, line: $l, message: .message}
+			' "$work/ox.json" >>"$work/findings"
 	fi
 fi
 
