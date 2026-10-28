@@ -583,17 +583,33 @@ select,
   fill: var(--cds-icon-interactive);
 }
 
-/* The filter panel and the set filters under the search. */
+/* The filter form in the filter button's popover (#286): one column, at
+   most the viewport wide; Carbon's horizontal radio group does not wrap, so
+   it is vertical below 42rem (FilterPanel.tsx). */
+.filter-popover__content {
+  max-inline-size: calc(100vw - 1rem);
+}
 .search-filters {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem 0.5rem;
-  padding: 0.75rem 0.5rem;
-  border-block-end: 1px solid var(--cds-border-subtle-01);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  inline-size: 36rem;
+  max-inline-size: 100%;
+  padding: 1rem;
   background-color: var(--cds-layer-01);
 }
 .search-filters .cds--form-item.cds--checkbox-wrapper {
   margin: 0;
+}
+.search-filters .cds--date-picker--range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.search-filters .cds--date-picker--range .cds--date-picker__input,
+.search-filters .cds--date-picker--range .cds--date-picker-container {
+  inline-size: 100%;
+  min-inline-size: 0;
 }
 /* Phones: the two yes/no filters as one-tap tags, in their own row. */
 .quick-filters {

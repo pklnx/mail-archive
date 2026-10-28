@@ -44,6 +44,12 @@ describe("ownedByWidget", () => {
     }
   });
 
+  it("gives every key to the date picker's calendar, which flatpickr attaches to body (#286)", () => {
+    // A day of the calendar (role button, as Carbon sets it), outside any popover.
+    const calendar = '<div class="flatpickr-calendar open" role="application"><span class="flatpickr-day" role="button" tabindex="-1" id="d">28</span></div>';
+    for (const key of ["j", "k", "u", "?", "/", "Escape"]) expect(press(calendar, "#d", key), key).toBe(true);
+  });
+
   it("gives Escape to an open tooltip anywhere and to the SideNav, other keys not", () => {
     const tooltip = '<span class="cds--popover-container cds--popover--open"><button id="t">x</button></span><button id="b">y</button>';
     expect(press(tooltip, "#b", "Escape")).toBe(true);

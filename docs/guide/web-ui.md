@@ -249,24 +249,41 @@ Recipients and attachment names are found only with `to:` and `attachment:`,
 not by plain words: otherwise your own address would match nearly every
 message you received. The contents of attachments are not searched.
 
-The filter panel under the search field sets the same prefixes for From, To
-or Cc, the date range and attachments. It writes them into the search field,
-and prefixes you type show up in it. The filter button right of the search
-field shows and hides the panel; it is open at first on larger screens and
-closed on a phone, and the button is marked while a prefix or grouping is
-set. The URL keeps the whole search, so Back, reload and bookmarks keep the
-filters.
+The filter button right of the search field opens the filters over the
+list; they are closed at first on every screen, and the button is marked
+while a prefix or grouping is set. They set the same prefixes for From, To
+or Cc, the date range and attachments: they write them into the search
+field, and prefixes you type show up in them. The URL keeps the whole
+search, so Back, reload and bookmarks keep the filters. A click outside the
+filters, the filter button or <kbd>Esc</kbd> closes them.
+
+The date range has two fields, **Since** and **Until**; both days count.
+Type the dates in your date format (the hint below the fields shows it,
+for example `mm/dd/yyyy`), or pick them in the calendar that opens below
+the field. In the search field the range becomes `after:` the first day and
+`before:` the day after the last one. Above the fields, **Any time**,
+**Last 7 days**, **Last 30 days**, **This year** and **Custom** choose a
+range in one step: the presets set only the first day (today counts among
+the seven and thirty days), **Any time** removes both dates, and **Custom**
+keeps them and moves to **Since**. A range you edit yourself, or one no
+preset gives, shows as **Custom**. In the calendar, <kbd>Esc</kbd> closes
+the calendar first and then the filters.
+
+![The filters with Last 30 days chosen](/screenshots/search-filters.png)
 
 Every filter that is set also shows as a tag below the search field, with
-its value, for example `From: sam`; the × on a tag removes that filter.
-**Edit filters** after the tags opens the filter panel and moves the focus
-to the field of the first tag, in the panel's order (From, To or Cc, the
-date range, attachments, grouping).
+its value, for example `From: sam`; the × on a tag removes that filter, and
+the focus moves on to the next tag. A date range shows as one tag with both
+days, for example `Date: Oct 1, 2026 – Oct 31, 2026`. **Edit filters**
+after the tags opens the filters and moves the focus to the field of the
+first tag, in their order (From, To or Cc, the date range, attachments,
+grouping).
 
-On a phone, **Has attachment** and **Group by conversation** are two tags
-of their own right below the search field: one tap turns the filter on or
-off, without opening the panel. A selected one is highlighted, and these
-two filters do not show again among the tags of set filters.
+On a phone the filters fill the width of the screen. **Has attachment** and
+**Group by conversation** are two tags of their own right below the search
+field: one tap turns the filter on or off, without opening the filters. A
+selected one is highlighted, and these two filters do not show again among
+the tags of set filters.
 
 A message has an attachment when a part is marked as one, or when it is a
 named file that is not text, such as a PDF that Apple Mail sends inline.
@@ -292,7 +309,7 @@ together here, also from different accounts.
 
 ![A reply with its conversation open over the text](/screenshots/conversation.png)
 
-"Group by conversation" in the filter panel (on a phone also a tag below
+"Group by conversation" in the filters (on a phone also a tag below
 the search field) lists one row per conversation:
 its newest message, with the number of its messages as a badge. The arrow
 on the right shows the earlier ones below it. With a search or filters, a

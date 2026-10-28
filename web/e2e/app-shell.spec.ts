@@ -239,6 +239,10 @@ for (const size of [
       const from = panel.getByRole("textbox", { name: "From" });
       await expect(from).toBeVisible();
       expect(await fontSize(from)).toBeGreaterThanOrEqual(16);
+      // The date range's fields too (Carbon sets .875rem on them).
+      const since = panel.getByRole("textbox", { name: "Since" });
+      await expect(since).toBeVisible();
+      expect(await fontSize(since)).toBeGreaterThanOrEqual(16);
     });
   });
 }

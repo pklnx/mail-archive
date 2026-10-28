@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { dateGroup, day, fileSize, formatCount, formatInterval, locationLabel, originText, relativeTime, senderName, shortDate, splitHighlights } from "./format";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { dateGroup, dateOfDay, day, dayOfDate, fileSize, formatCount, formatInterval, locationLabel, originText, relativeTime, senderName, shiftDay, shortDate, splitHighlights } from "./format";
 import { applySettings, t } from "./i18n";
 
 describe("splitHighlights", () => {
@@ -137,5 +137,52 @@ describe("dateGroup", () => {
     const monday = new Date(2026, 9, 12, 12, 0);
     expect(dateGroup(at(9, 11), monday)).toBe("Yesterday");
     expect(dateGroup(at(9, 10), monday)).toBe("This month");
+  });
+});
+
+describe("local days (#286)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    applySettings({ language: "en", locale: "en" });
+  });
+
+  it("makes and reads local days", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    const d = dateOfDay("2025-01-01");
+    expect([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours()]).toEqual([2025, 0, 1, 0]);
+    expect(dayOfDate(d)).toBe("2025-01-01");
+    // 23:30 local is the next day in UTC; the local day counts.
+    expect(dayOfDate(new Date(2026, 9, 28, 23, 30))).toBe("2026-10-28");
+  });
+
+  it("moves by days with setDate, also across a DST change", () => {
+    vi.stubEnv("TZ", "Europe/Berlin");
+    // 25 Oct 2026 has 25 hours in Berlin: + 86 400 000 ms would give the 25th again.
+    expect(shiftDay("2026-10-25", 1)).toBe("2026-10-26");
+    expect(shiftDay("2026-10-26", -1)).toBe("2026-10-25");
+    expect(shiftDay("2026-03-29", 1)).toBe("2026-03-30");
+    expect(shiftDay("2026-03-30", -1)).toBe("2026-03-29");
+    expect(shiftDay("2028-02-28", 1)).toBe("2028-02-29");
+    expect(shiftDay("2026-12-31", 1)).toBe("2027-01-01");
+    expect(shiftDay("2027-01-01", -1)).toBe("2026-12-31");
+  });
+
+  it("round-trips an inclusive end and the exclusive before:", () => {
+    vi.stubEnv("TZ", "Europe/Berlin");
+    for (const end of ["2026-10-24", "2026-10-25", "2026-03-28", "2026-03-29", "2028-02-29"]) {
+      const before = shiftDay(dayOfDate(dateOfDay(end)), 1);
+      expect(dayOfDate(dateOfDay(shiftDay(before, -1))), end).toBe(end);
+    }
+  });
+
+  it("shows a search day as the same local day west of UTC", async () => {
+    // A formatter keeps the zone it was made in: fresh modules, made in Los Angeles.
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    vi.resetModules();
+    const i18n = await import("./i18n");
+    const format = await import("./format");
+    i18n.applySettings({ language: "en", locale: "en-US" });
+    expect(format.localDay("2025-01-01")).toBe("Jan 1, 2025");
+    expect(format.localDay("2025-12-31")).toBe("Dec 31, 2025");
   });
 });
