@@ -24,6 +24,7 @@ and the CI run see the same files.
 | `migration-changed` | changes anything in `internal/store/migrations/` | the gate script | an existing migration that was modified or deleted (a rename counts as a deletion) |
 | `actionlint` | adds or modifies a workflow | actionlint | errors in those workflows, including template injection |
 | `zizmor` | adds or modifies a workflow | zizmor, `--offline --min-severity medium` | workflow security: unpinned actions (`unpinned-uses`), dangerous triggers such as `pull_request_target` (`dangerous-triggers`), missing or broad `permissions:` (`excessive-permissions`), template injection, credential persistence |
+| `oxlint` | adds or modifies a `web/src` `.ts` or `.tsx` file | oxlint with oxlint-tsgolint (`tools/review-gate/oxlintrc.json`) | floating promises (`typescript/no-floating-promises`), promises where a boolean or a void callback is expected (`typescript/no-misused-promises`) and hooks called conditionally (`react-hooks/rules-of-hooks`), only on the lines the branch adds |
 
 A check whose files did not change is listed as skipped, with the reason.
 
@@ -57,6 +58,23 @@ anyway. It runs only what CI does not check elsewhere.
   to catch a zizmor bump that changes this. Should a future zizmor flag it, add
   an `ignore` entry for that rule and file to a `zizmor.yml`, with a comment
   that names this reason, rather than a special case in the gate script.
+- **oxlint** runs the type-aware rules on the TypeScript 7 compiler
+  (oxlint-tsgolint; typescript-eslint does not support TypeScript 7) with
+  `web/tsconfig.json`, only the three named rules, all others off. They need
+  the UI's dependencies, so the check is skipped, with the reason "web deps
+  not installed", when `web/node_modules` is missing (`pnpm install` in
+  `web/`); CI installs them in the gate job only when the pull request changes
+  `web/src` TypeScript, and there a missing `web/node_modules` is an error
+  (`REVIEW_GATE_REQUIRE_WEB=1`). `web/src` is not clean today (13 hits in 7
+  files on 2026-10-28: `no-misused-promises` on async event handlers such as
+  `onSubmit`, `no-floating-promises` in 3 places, none for the hooks rule), so
+  the gate reports only findings on lines the branch adds, like `noctx`; a
+  hit on an untouched line is never reported. A finding that a change causes
+  on a line it does not touch (for example a function that now returns a
+  promise) is not seen. oxlint exits 1 both for findings and for its own
+  failures, so the gate counts anything but a clean JSON report on stdout
+  and an empty stderr as a tool error (exit 2). The type engine is passed
+  through `OXLINT_TSGOLINT_PATH`, set from `TSGOLINT`.
 
 ### squawk rules
 
@@ -113,17 +131,19 @@ Makefile sets.
 
 Each tool is pinned to the newest release that was at least 14 days old when
 it was pinned. Bump them by hand, together with this table. Dependabot updates
-squawk through `tools/review-gate/package.json`.
+the npm tools through `tools/review-gate/package.json`.
 
 | Tool | Version | Released | Pinned in | Install | Licence |
 |---|---|---|---|---|---|
 | golangci-lint | v2.14.0 (the same as the `lint` job) | 2026-09-24 | `Makefile` (`GOLANGCI_LINT_VERSION`) | `go install` from the Go module proxy, built with the project's toolchain into `bin/golangci-lint-<version>/` and verified through the Go checksum database | GPL-3.0 (a development tool, not shipped) |
 | actionlint | v1.7.12 | 2026-03-30 | `Makefile` (`ACTIONLINT_VERSION`) | the same, into `bin/actionlint-<version>/` | MIT |
 | squawk-cli | 2.68.0 | 2026-10-08 | `tools/review-gate/package-lock.json` | `npm ci --ignore-scripts` into `tools/review-gate/node_modules/`; the platform binary is an optional dependency with an integrity hash, without a download at install time | Apache-2.0 OR MIT |
+| oxlint | 1.88.0 (1.89.0 is from 2026-10-19, younger than 14 days on 2026-10-28) | 2026-10-13 | `tools/review-gate/package-lock.json` | the same `npm ci --ignore-scripts`; the platform binary is an optional dependency with an integrity hash, no install script | MIT |
+| oxlint-tsgolint | 7.0.2004 (7.0.2005 is from 2026-10-22; oxlint 1.88.0 needs `>=7.0.2003`) | 2026-10-10 | `tools/review-gate/package-lock.json` | the same; the engine for the type-aware rules, platform binary as an optional dependency, no install script | MIT |
 | zizmor | 1.30.1 (1.31.0 and 1.31.1 are from 2026-10-15, younger than 14 days on 2026-10-28) | 2026-09-09 | `tools/review-gate/requirements.txt` | PyPI wheels only, every wheel hash-pinned: `pip install --require-hashes --only-binary=:all: --no-deps` into the venv `bin/zizmor-venv/`, with the system `python3` (`make review-gate-tools`) | MIT |
 
-All four run offline. The gate sends nothing anywhere; the installs use
-the Go module proxy, the npm registry and PyPI (zizmor only; the maintainer
+All six run offline. The gate sends nothing anywhere; the installs use
+the Go module proxy, the npm registry (squawk, oxlint, oxlint-tsgolint) and PyPI (zizmor only; the maintainer
 accepted PyPI as a registry on 2026-10-28, #292). zizmor has no dependencies.
 Dependabot (`pip`) proposes new zizmor versions; a bump must carry the hashes
 of the new wheels (`https://pypi.org/pypi/zizmor/<version>/json`).
@@ -138,7 +158,10 @@ is installed with the runner's `python3 -m venv`: no `setup-python` action, so
 no new action, and the install takes about a second, so it has no cache. Pushes
 to `main` run only the self-test; they also save the caches that pull
 requests read (a Go cache keyed on the `Makefile`, an npm cache keyed on the
-gate's lockfile). `review-gate` is **not a required check** (maintainer
+gate's lockfile). When a pull request changes `web/src` TypeScript, the job
+also runs `pnpm install --frozen-lockfile` in `web/` (with corepack from the
+npm cache, as in the `web` job; the pnpm store is not cached, as there), for
+the type-aware rules. `review-gate` is **not a required check** (maintainer
 decision, 2026-10-28; to be revisited after about ten pull requests).
 
 ## Findings: outcomes and exceptions
@@ -180,8 +203,16 @@ its counter-case:
   SHA does not; zizmor also finds the template injection of the actionlint
   fixture; all of the repository's own workflows, and `labeler.yml` alone, give
   no finding.
+- `oxlint`: a dropped promise, a promise as a condition, an `async` callback
+  where a void return is expected and a hook called inside an `if` are
+  reported with their file lines; the awaited, `void`ed and `.catch`ed forms
+  and a hook at the top level of a component are not. The base has a dropped
+  promise of its own: a change elsewhere in that file reports nothing, a
+  second dropped promise added next to it reports exactly the new one. Without
+  `web/node_modules` the check is skipped with its reason, and an error with
+  `REVIEW_GATE_REQUIRE_WEB=1`.
 - Errors: a dirty tree, a crashing or garbage-printing stub for each tool
-  (for zizmor also garbage under a findings exit code),
-  a stub with valid output but a failing exit code, and a missing tool
-  (exit 2, also with findings of the other checks; no error when its check is
-  skipped).
+  (for zizmor also garbage under a findings exit code; for oxlint also exit 1
+  without diagnostics, noise on stderr and a crashing type engine), a stub
+  with valid output but a failing exit code, and a missing tool (exit 2, also
+  with findings of the other checks; no error when its check is skipped).

@@ -2,7 +2,7 @@
 # Self-test of scripts/review-gate.sh (`make review-gate-test`). Offline: temp
 # git repos with a base and a head commit built from
 # scripts/testdata/review-gate, the real tools (GOLANGCI_LINT, SQUAWK,
-# ACTIONLINT, ZIZMOR; the Makefile sets them), stubs for tool failures, no module
+# ACTIONLINT, ZIZMOR, OXLINT, TSGOLINT; the Makefile sets them), stubs for tool failures, no module
 # downloads (the Go fixture uses only the standard library).
 set -eu
 
@@ -13,7 +13,10 @@ fx=$here/testdata/review-gate
 : "${SQUAWK:?set SQUAWK (make review-gate-test sets it)}"
 : "${ACTIONLINT:?set ACTIONLINT (make review-gate-test sets it)}"
 : "${ZIZMOR:?set ZIZMOR (make review-gate-test sets it)}"
+: "${OXLINT:?set OXLINT (make review-gate-test sets it)}"
+: "${TSGOLINT:?set TSGOLINT (make review-gate-test sets it)}"
 real_golangci=$GOLANGCI_LINT real_squawk=$SQUAWK real_actionlint=$ACTIONLINT real_zizmor=$ZIZMOR
+real_oxlint=$OXLINT real_tsgolint=$TSGOLINT
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -30,7 +33,12 @@ printf '#!/bin/sh\necho "this is not JSON"\nexit 1\n' >"$tmp/stubs/garbage"
 printf '#!/bin/sh\necho "[]"\necho "fatal: config" >&2\nexit 3\n' >"$tmp/stubs/empty-fail"
 # zizmor exits 10-14 for findings: that code with unreadable output.
 printf '#!/bin/sh\necho "this is not JSON"\nexit 14\n' >"$tmp/stubs/garbage14"
-chmod +x "$tmp/stubs/crash" "$tmp/stubs/garbage" "$tmp/stubs/empty-fail" "$tmp/stubs/garbage14"
+# oxlint exits 1 for findings and for its own failures: a report without
+# diagnostics under exit 1, and a clean report with noise on stderr.
+printf '#!/bin/sh\necho "{\\"diagnostics\\": []}"\nexit 1\n' >"$tmp/stubs/ox-empty-1"
+printf '#!/bin/sh\necho "{\\"diagnostics\\": []}"\necho "warning: something" >&2\nexit 0\n' >"$tmp/stubs/ox-noise"
+chmod +x "$tmp/stubs/crash" "$tmp/stubs/garbage" "$tmp/stubs/empty-fail" "$tmp/stubs/garbage14" \
+	"$tmp/stubs/ox-empty-1" "$tmp/stubs/ox-noise"
 
 # line <file> <marker>: the line number of the fixture line carrying the marker.
 line() { grep -n -- "$2" "$1" | head -1 | cut -d: -f1; }
@@ -51,6 +59,9 @@ repo() {
 		cp "$fx/fetch-base.go" fetch/fetch.go
 		cp "$fx/00001_old.sql" internal/store/migrations/
 		cp "$fx/old.yml" .github/workflows/
+		mkdir -p web/src web/node_modules
+		cp "$fx/web/tsconfig.json" web/
+		cp "$fx/web/old.ts" web/src/old.ts
 		echo '# fixture' >README.md
 		git add -A
 		git commit -q -m base
@@ -72,7 +83,8 @@ gate() {
 	(
 		cd "$tmp/$n"
 		GOLANGCI_LINT=$real_golangci SQUAWK=$real_squawk ACTIONLINT=$real_actionlint ZIZMOR=$real_zizmor
-		export GOLANGCI_LINT SQUAWK ACTIONLINT ZIZMOR
+		OXLINT=$real_oxlint TSGOLINT=$real_tsgolint
+		export GOLANGCI_LINT SQUAWK ACTIONLINT ZIZMOR OXLINT TSGOLINT
 		for kv in "$@"; do export "${kv?}"; done
 		BASE=base sh "$gate"
 	) >"$tmp/$n.out" 2>"$tmp/$n.err" || rc=$?
@@ -107,7 +119,7 @@ check() {
 repo clean 'echo more >>README.md'
 gate clean
 check clean 0 clean
-grep -q 'skipped: noctx (no changed non-test Go files), squawk (no new migrations), migration-changed (no migration changes), actionlint (no workflow changes), zizmor (no workflow changes))$' "$tmp/clean.out" ||
+grep -q 'skipped: noctx (no changed non-test Go files), squawk (no new migrations), migration-changed (no migration changes), actionlint (no workflow changes), zizmor (no workflow changes), oxlint (no changed web/src TypeScript files))$' "$tmp/clean.out" ||
 	{ echo "FAIL clean-skipped: $(cat "$tmp/clean.out")" >&2; fail=1; }
 
 # --- noctx: only the lines the head adds, not Old in the base, not tests;
@@ -217,6 +229,45 @@ gate real-labeler
 check real-labeler 0 clean
 grep -q 'ran: actionlint, zizmor;' "$tmp/real-labeler.out" || { echo "FAIL real-labeler-ran: $(cat "$tmp/real-labeler.out")" >&2; fail=1; }
 
+# --- oxlint (type-aware, three rules) on changed web/src files, only on the
+# lines the branch adds. web/src/old.ts has a dropped promise in the base.
+repo web-bad 'cp "$fx/web/bad.ts" web/src/'
+gate web-bad
+l_fl=$(line "$fx/web/bad.ts" 'want no-floating-promises')
+l_cond=$(line "$fx/web/bad.ts" 'want promise in a condition')
+l_cb=$(line "$fx/web/bad.ts" 'want promise-returning callback')
+l_hook=$(line "$fx/web/bad.ts" 'want rules-of-hooks')
+check web-bad 1 "([.findings[] | [.tool, .rule, .file, .line]] | sort) ==
+	[[\"oxlint\",\"react-hooks/rules-of-hooks\",\"web/src/bad.ts\",$l_hook],
+	 [\"oxlint\",\"typescript/no-floating-promises\",\"web/src/bad.ts\",$l_fl],
+	 [\"oxlint\",\"typescript/no-misused-promises\",\"web/src/bad.ts\",$l_cond],
+	 [\"oxlint\",\"typescript/no-misused-promises\",\"web/src/bad.ts\",$l_cb]]
+	and .ran == [\"oxlint\"] and .errors == []
+	and ([.findings[] | select(.rule == \"react-hooks/rules-of-hooks\")][0].message | test(\"conditionally\"))"
+repo web-ok 'cp "$fx/web/ok.ts" web/src/'
+gate web-ok
+check web-ok 0 clean
+grep -q 'ran: oxlint;' "$tmp/web-ok.out" || { echo "FAIL web-ok-ran: $(cat "$tmp/web-ok.out")" >&2; fail=1; }
+# The base's own dropped promise: not reported when the branch touches the file
+# elsewhere, reported when the branch adds one next to it (only the new one).
+repo web-old-touched 'cp "$fx/web/old-touched.ts" web/src/old.ts'
+gate web-old-touched
+check web-old-touched 0 clean
+grep -q 'ran: oxlint;' "$tmp/web-old-touched.out" || { echo "FAIL web-old-touched-ran: $(cat "$tmp/web-old-touched.out")" >&2; fail=1; }
+repo web-old-added 'cp "$fx/web/old-added.ts" web/src/old.ts'
+gate web-old-added
+l=$(line "$fx/web/old-added.ts" 'want no-floating-promises')
+check web-old-added 1 "[.findings[] | [.rule, .file, .line]] ==
+	[[\"typescript/no-floating-promises\",\"web/src/old.ts\",$l]]"
+# Without web/node_modules the check is skipped with the reason (never silent),
+# and an error where CI requires it.
+repo web-nodeps 'rm -rf web/node_modules; cp "$fx/web/bad.ts" web/src/'
+gate web-nodeps
+check web-nodeps 0 clean
+grep -q 'skipped: .*oxlint (web deps not installed' "$tmp/web-nodeps.out" || { echo "FAIL web-nodeps-skipped: $(cat "$tmp/web-nodeps.out")" >&2; fail=1; }
+gate web-nodeps REVIEW_GATE_REQUIRE_WEB=1
+check web-nodeps-required 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("node_modules")) and .findings == []'
+
 # --- errors: never a pass.
 repo dirty 'echo more >>README.md'
 echo untracked >"$tmp/dirty/new.txt"
@@ -254,7 +305,24 @@ check missing-tool-with-findings 2 '(.errors | length) == 1 and (.errors[0].mess
 gate mixed ZIZMOR="$tmp/no-such-zizmor"
 check missing-zizmor-with-findings 2 '(.errors | length) == 1 and .errors[0].tool == "zizmor"
 	and (.errors[0].message | test("not found")) and (.findings | length) == 2'
-gate clean ACTIONLINT="$tmp/no-such-actionlint" GOLANGCI_LINT="$tmp/no-such" SQUAWK="$tmp/no-such" ZIZMOR="$tmp/no-such"
+gate web-bad OXLINT="$tmp/stubs/crash"
+check oxlint-crash 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("exit 3.*boom")) and .findings == []'
+gate web-bad OXLINT="$tmp/stubs/garbage"
+check oxlint-garbage 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("unreadable output"))'
+gate web-bad OXLINT="$tmp/stubs/empty-fail"
+check oxlint-empty-fail 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("exit 3.*fatal"))'
+gate web-bad OXLINT="$tmp/stubs/ox-empty-1"
+check oxlint-exit1-no-diagnostics 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("without diagnostics"))'
+gate web-ok OXLINT="$tmp/stubs/ox-noise"
+check oxlint-stderr 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("stderr: warning"))'
+# The real oxlint with a type engine that crashes or is not there.
+gate web-bad TSGOLINT="$tmp/stubs/crash"
+check tsgolint-crash 2 '.errors[0].tool == "oxlint" and .findings == []'
+gate web-bad TSGOLINT="$tmp/no-such-tsgolint"
+check missing-tsgolint 2 '.errors[0].tool == "tsgolint" and (.errors[0].message | test("not found"))'
+gate web-bad OXLINT="$tmp/no-such-oxlint"
+check missing-oxlint 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("not found"))'
+gate clean ACTIONLINT="$tmp/no-such-actionlint" GOLANGCI_LINT="$tmp/no-such" SQUAWK="$tmp/no-such" ZIZMOR="$tmp/no-such" OXLINT="$tmp/no-such" TSGOLINT="$tmp/no-such"
 check missing-tools-unneeded 0 clean
 
 exit "$fail"

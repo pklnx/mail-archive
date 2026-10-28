@@ -107,12 +107,13 @@ jobs:
   review-gate:
     # Deterministic checks on what a pull request changes, for the reviewer
     # (docs/development/review-gate.md): noctx on added Go lines, squawk on
-    # new migrations, migration-changed, actionlint and zizmor on changed
-    # workflows (zizmor is pip-installed from hash-pinned wheels into a venv
-    # with the runner's python3; no setup-python, no new action). Not
-    # a required check; the reviewer records an outcome for each finding, and
-    # a red or missing gate is not a pass. Pushes to main run only the
-    # self-test, which also saves the tool caches that pull requests read.
+    # new migrations, migration-changed, oxlint on added web/src lines,
+    # actionlint and zizmor on changed workflows (zizmor is pip-installed from
+    # hash-pinned wheels into a venv with the runner's python3; no
+    # setup-python, no new action). Not a required check; the reviewer
+    # records an outcome for each finding, and a red or missing gate is not a
+    # pass. Pushes to main run only the self-test, which also saves the tool
+    # caches that pull requests read.
     runs-on: ubuntu-latest
     # A cold run builds golangci-lint (about 1 min); a warm one takes seconds.
     timeout-minutes: 10
@@ -136,10 +137,32 @@ jobs:
           cache-dependency-path: tools/review-gate/package-lock.json
       - run: make review-gate-tools
       - run: make review-gate-test
+      # oxlint's type-aware rules need the UI's dependencies. They are
+      # installed (as in the web job, from the lockfile, install scripts
+      # blocked) only when the pull request changes web/src TypeScript; the
+      # corepack download comes from the npm cache above.
+      - name: Web dependencies
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # Second guard against the telemetry postinstall of the Carbon
+          # packages; web/pnpm-workspace.yaml blocks their install scripts.
+          IBM_TELEMETRY_DISABLED: "true"
+        run: |
+          mb=$(git merge-base "$BASE_SHA" HEAD)
+          if git diff --name-only --no-renames "$mb" HEAD -- 'web/src/*.ts' 'web/src/*.tsx' | grep -q .; then
+            # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
+            npm install -g corepack@0.36.0 && corepack enable
+            cd web && pnpm install --frozen-lockfile
+          else
+            echo 'no web/src TypeScript changes: web dependencies not needed'
+          fi
       - name: Gate
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # A missing web/node_modules is an error here, not a skip.
+          REVIEW_GATE_REQUIRE_WEB: "1"
         run: |
           rc=0
           make -s review-gate BASE="$BASE_SHA" >"$RUNNER_TEMP/gate.out" || rc=$?
