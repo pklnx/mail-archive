@@ -29,6 +29,11 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+  - package-ecosystem: pip # zizmor of the review gate (requirements.txt)
+    directory: /tools/review-gate
+    schedule:
+      interval: weekly
+    labels: [dependencies]
   - package-ecosystem: github-actions
     directory: /
     schedule:

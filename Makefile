@@ -94,9 +94,14 @@ ACTIONLINT_VERSION := v1.7.12
 ACTIONLINT := bin/actionlint-$(ACTIONLINT_VERSION)/actionlint
 SQUAWK := tools/review-gate/node_modules/.bin/squawk
 SQUAWK_STAMP := tools/review-gate/node_modules/.installed
+# zizmor comes from PyPI (tools/review-gate/requirements.txt: pinned version,
+# hash of every wheel) into a venv of its own under bin/.
+ZIZMOR := bin/zizmor-venv/bin/zizmor
+ZIZMOR_STAMP := bin/zizmor-venv/.installed
+PYTHON3 ?= python3
 # The branch or commit the gate compares against (CI: the pull request's base).
 BASE ?= origin/main
-REVIEW_GATE_ENV = GOLANGCI_LINT=$(abspath $(GOLANGCI_LINT)) ACTIONLINT=$(abspath $(ACTIONLINT)) SQUAWK=$(abspath $(SQUAWK))
+REVIEW_GATE_ENV = GOLANGCI_LINT=$(abspath $(GOLANGCI_LINT)) ACTIONLINT=$(abspath $(ACTIONLINT)) SQUAWK=$(abspath $(SQUAWK)) ZIZMOR=$(abspath $(ZIZMOR))
 
 $(GOLANGCI_LINT):
 	GOTOOLCHAIN=$$($(GO) env GOVERSION) GOBIN=$(CURDIR)/$(dir $(GOLANGCI_LINT)) $(GO) install \
@@ -111,8 +116,16 @@ $(SQUAWK_STAMP): tools/review-gate/package-lock.json
 	npm ci --ignore-scripts --no-audit --no-fund --prefix tools/review-gate
 	touch $@
 
+# --require-hashes: every file must match its pinned hash; --only-binary: no
+# build from source. The venv is rebuilt whenever requirements.txt changes.
+$(ZIZMOR_STAMP): tools/review-gate/requirements.txt
+	rm -rf bin/zizmor-venv
+	$(PYTHON3) -m venv bin/zizmor-venv
+	bin/zizmor-venv/bin/pip install --disable-pip-version-check --quiet --no-deps --only-binary=:all: --require-hashes -r tools/review-gate/requirements.txt
+	touch $@
+
 ## review-gate-tools: build or install the review gate's tools
-review-gate-tools: $(GOLANGCI_LINT) $(ACTIONLINT) $(SQUAWK_STAMP)
+review-gate-tools: $(GOLANGCI_LINT) $(ACTIONLINT) $(SQUAWK_STAMP) $(ZIZMOR_STAMP)
 
 ## review-gate: check what the branch changes against BASE (one line; non-zero on findings or tool errors)
 review-gate: review-gate-tools

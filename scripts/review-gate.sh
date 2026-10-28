@@ -14,9 +14,11 @@
 #   migration-changed  an existing migration modified or deleted (a rename is
 #                      a deletion plus an addition)
 #   actionlint         added or modified workflows
+#   zizmor             the same workflows: unpinned actions, dangerous
+#                      triggers, permissions, ... (--offline, medium and up)
 # A check whose files did not change is listed as skipped, with the reason.
 #
-# Tools: GOLANGCI_LINT, SQUAWK, ACTIONLINT (commands or paths). Configs come
+# Tools: GOLANGCI_LINT, SQUAWK, ACTIONLINT, ZIZMOR (commands or paths). Configs come
 # from REVIEW_GATE_CONF (default: the repository this script is in).
 #
 # Output: one line. Clean: "review-gate: clean (...)". Otherwise compact JSON:
@@ -33,6 +35,7 @@ BASE=${BASE:-origin/main}
 GOLANGCI_LINT=${GOLANGCI_LINT:-golangci-lint}
 SQUAWK=${SQUAWK:-squawk}
 ACTIONLINT=${ACTIONLINT:-actionlint}
+ZIZMOR=${ZIZMOR:-zizmor}
 migrations=internal/store/migrations
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -215,6 +218,32 @@ elif have actionlint "$ACTIONLINT"; then
 	else
 		jq -c '.[] | {tool: "actionlint", rule: .kind, file: .filepath, line: .line,
 			message: .message}' "$work/al.json" >>"$work/findings"
+	fi
+fi
+
+# --- zizmor: the same workflows. Offline (no GitHub API), medium severity and
+# up. Exit 0 is clean and 10-14 are findings (by severity); anything else is a
+# failure of zizmor. A zizmor.yml in the repository is honored.
+if [ ! -s "$work/workflows" ]; then
+	skipped zizmor "no workflow changes"
+elif have zizmor "$ZIZMOR"; then
+	ran zizmor
+	set --
+	while IFS= read -r p; do set -- "$@" "$p"; done <"$work/workflows"
+	rc=0
+	"$ZIZMOR" --offline --min-severity medium --format json --no-progress \
+		"$@" >"$work/zz.json" 2>"$work/zz.err" || rc=$?
+	if [ "$rc" -ne 0 ] && { [ "$rc" -lt 10 ] || [ "$rc" -gt 14 ]; }; then
+		error zizmor "exit $rc: $(oneline <"$work/zz.err") $(oneline <"$work/zz.json")"
+	elif ! jq -e 'type == "array"' "$work/zz.json" >/dev/null 2>&1; then
+		error zizmor "unreadable JSON output: $(oneline <"$work/zz.json")"
+	else
+		# zizmor counts rows from 0; the primary location is the finding's place.
+		jq -c '.[] | select(.ignored | not) | . as $f
+			| ([$f.locations[] | select(.symbolic.kind == "Primary")][0] // $f.locations[0]) as $l
+			| {tool: "zizmor", rule: $f.ident, file: $l.symbolic.key.Local.verbatim_path,
+			   line: ($l.concrete.location.start_point.row + 1), message: $f.desc}' \
+			"$work/zz.json" >>"$work/findings"
 	fi
 fi
 

@@ -1,0 +1,13 @@
+# zizmor: an action referenced by tag, not by commit SHA.
+name: Unpinned
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # want unpinned-uses
+        with:
+          persist-credentials: false
