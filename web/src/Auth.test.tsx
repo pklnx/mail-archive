@@ -250,6 +250,22 @@ describe("logout (#327)", () => {
     expect(deletes()).toBe(2);
   });
 
+  it("clears the alert when Log out is tried again, and shows it again on a second failure", async () => {
+    serve({ "GET /api/session": [session], "DELETE /api/session": [failed] });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    await screen.findByRole("alert");
+    // The second attempt waits for its answer.
+    let answer!: (r: Response) => void;
+    vi.mocked(globalThis.fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => (answer = resolve)));
+    logOut();
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    answer(new Response(JSON.stringify({ error: "still unavailable" }), { status: 500, headers: { "Content-Type": "application/json" } }));
+    expect((await screen.findByRole("alert")).textContent).toBe(t.logoutFailed("still unavailable"));
+    expect(screen.getByText("app for kim")).toBeTruthy();
+  });
+
   // Vitest fails the run on an unhandled rejection (vite.config.ts does not
   // turn that off), so this also proves the rejection is handled.
   it("stays signed in when the request itself fails (no answer)", async () => {
