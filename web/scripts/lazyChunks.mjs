@@ -2,7 +2,7 @@
 // them (`AccountsPage-<hash>.js`). One list for the bundle check
 // (check-dist.mjs) and the e2e suite (e2e/lazy.spec.ts). A new lazy view
 // adds its module here.
-export const lazyChunks = ["AccountsPage", "UsersPage", "RetentionPage", "LogPage", "Profile", "ShortcutsModal"];
+export const lazyChunks = ["AccountsPage", "UsersPage", "RetentionPage", "LogPage", "Profile", "ShortcutsModal", "FilterPanel"];
 
 // The most initial JS the mail view may load, in raw bytes: the entry chunk
 // and every chunk it imports statically. 579 000 is the #282 "Done when"

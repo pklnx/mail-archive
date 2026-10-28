@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
-import { Button, Checkbox, DismissibleTag, Layer, SelectableTag, TextInput } from "@carbon/react";
-import { day } from "./format";
+import { useEffect, useRef, type RefObject } from "react";
+import { Button, DismissibleTag, SelectableTag } from "@carbon/react";
+import { localDay, shiftDay } from "./format";
 import { parseQuery, setToken, type TokenKey } from "./searchSyntax";
 import { t } from "./i18n";
 
@@ -13,7 +13,7 @@ interface Props {
   setGroup: (on: boolean) => void;
 }
 
-/** A field of the filter panel. */
+/** A field of the filter form (FilterPanel.tsx, in the filter button's popover). */
 export type FilterField = "from" | "to" | "after" | "before" | "has" | "group";
 
 /** A request to focus a panel field. Each "Edit filters" press counts n up, so a second press focuses again. */
@@ -24,7 +24,7 @@ export interface FocusRequest {
 
 /**
  * The field "Edit filters" moves focus to: the first visible tag's field,
- * in the panel's order (From, To or Cc, Since, Before, Has attachment,
+ * in the form's order (From, To or Cc, Since, Until, Has attachment,
  * Group by conversation). A date range is Since if set, otherwise Before.
  * With quick (phones) has and group have no tag, so they are skipped.
  * Empty when no tag is visible.
@@ -42,79 +42,8 @@ export function editTarget(query: string, group: boolean, quick = false): Filter
 }
 
 /**
- * The filter panel under the search field, for people who do not type
- * prefixes. The filter button toggles it, on phones and desktops alike.
- * The fields edit the prefix tokens in the search text, so both stay in
- * sync. Attachment names (attachment:) are typed only.
- *
- * A focus request moves focus to one field once the panel is there, or
- * right away when it already is. onFocused then acknowledges it, so the
- * panel does not take the focus again when it is reopened later.
- */
-export function SearchFilters({
-  id,
-  query,
-  setQuery,
-  group,
-  setGroup,
-  focus,
-  onFocused,
-}: Props & { id?: string; focus?: FocusRequest; onFocused?: (n: number) => void }) {
-  const p = parseQuery(query);
-  const set = (key: TokenKey, value: string) => setQuery(setToken(query, key, value));
-  const fields = useRef<Partial<Record<FilterField, HTMLInputElement | null>>>({});
-  const ref = (key: FilterField) => (el: HTMLInputElement | null) => {
-    fields.current[key] = el;
-  };
-  const request = focus?.n ?? 0;
-  const field = focus?.field;
-  const acknowledge = useRef(onFocused);
-  acknowledge.current = onFocused;
-  // After the commit, so the fields are mounted (no timers).
-  useEffect(() => {
-    if (!request || !field) return;
-    fields.current[field]?.focus();
-    acknowledge.current?.(request);
-  }, [request, field]);
-  const input = (key: "from" | "to" | "after" | "before", label: string, type: "text" | "date") => (
-    <TextInput
-      ref={ref(key)}
-      id={`${id ?? "filters"}-${key}`}
-      size="sm"
-      type={type}
-      labelText={label}
-      value={p[key]}
-      onChange={(e) => set(key, e.target.value)}
-    />
-  );
-  return (
-    // A layer up from the list, so the fields contrast with the panel.
-    <Layer id={id} role="group" aria-label={t.filters} className="search-filters">
-      {input("from", t.from, "text")}
-      {input("to", t.toOrCc, "text")}
-      {input("after", t.since, "date")}
-      {input("before", t.before, "date")}
-      <Checkbox
-        ref={ref("has")}
-        id={`${id ?? "filters"}-has`}
-        labelText={t.hasAttachment}
-        checked={p.hasAttachment}
-        onChange={(_, { checked }) => set("has", checked ? "attachment" : "")}
-      />
-      <Checkbox
-        ref={ref("group")}
-        id={`${id ?? "filters"}-group`}
-        labelText={t.groupByConversation}
-        checked={group}
-        onChange={(_, { checked }) => setGroup(checked)}
-      />
-    </Layer>
-  );
-}
-
-/**
  * The two yes/no filters as one-tap Carbon SelectableTags, for phones
- * (below 48rem), where the panel starts closed. They edit the same search
+ * (below 48rem). They edit the same search
  * text and grouping as the panel's checkboxes. Carbon calls onChange with
  * the new state.
  */
@@ -136,24 +65,47 @@ export function QuickFilters({ query, setQuery, group, setGroup }: Props) {
 /**
  * The filters that are set, as tags under the search field; each one's
  * dismiss button removes it from the search text (or the grouping). A date
- * range is one tag for both ends. With quick (phones) has and group are
- * left out, because the quick filters show them. "Edit filters" at the
- * end calls onEdit; it is there only with at least one tag.
+ * range is one tag for both ends, its end shown inclusive (before: − 1
+ * day). With quick (phones) has and group are left out, because the quick
+ * filters show them. "Edit filters" at the end calls onEdit; it is there
+ * only with at least one tag.
+ *
+ * After a dismiss the focus goes to the next tag's dismiss button, else the
+ * previous one's, else to fallbackFocus (the filter button).
  */
-export function ActiveFilters({ query, setQuery, group, setGroup, quick = false, onEdit }: Props & { quick?: boolean; onEdit?: () => void }) {
+export function ActiveFilters({
+  query,
+  setQuery,
+  group,
+  setGroup,
+  quick = false,
+  onEdit,
+  fallbackFocus,
+}: Props & { quick?: boolean; onEdit?: () => void; fallbackFocus?: RefObject<HTMLElement | null> }) {
   const p = parseQuery(query);
   const clear = (...keys: TokenKey[]) => setQuery(keys.reduce((q, k) => setToken(q, k, ""), query));
-  const range = p.after || p.before ? `${p.after ? day(p.after) : "…"} – ${p.before ? day(p.before) : "…"}` : "";
+  const range = p.after || p.before ? `${p.after ? localDay(p.after) : "…"} – ${p.before ? localDay(shiftDay(p.before, -1)) : "…"}` : "";
   const tags: { label: string; text: string; remove: () => void }[] = [];
   if (p.hasAttachment && !quick) tags.push({ label: t.hasAttachment, text: t.hasAttachment, remove: () => clear("has") });
   if (range) tags.push({ label: t.dateRange, text: `${t.dateRange}: ${range}`, remove: () => clear("after", "before") });
   if (p.from) tags.push({ label: t.from, text: `${t.from}: ${p.from}`, remove: () => clear("from") });
   if (p.to) tags.push({ label: t.toOrCc, text: `${t.toOrCc}: ${p.to}`, remove: () => clear("to") });
   if (group && !quick) tags.push({ label: t.conversation, text: t.groupByConversation, remove: () => setGroup(false) });
+  // The dismissed tag's place and the tag count then; the focus moves once the count changed.
+  const dismissed = useRef<{ at: number; count: number } | null>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const count = tags.length;
+  useEffect(() => {
+    const d = dismissed.current;
+    if (!d || d.count === count) return;
+    dismissed.current = null;
+    const buttons = list.current?.querySelectorAll<HTMLElement>(".cds--tag__close-icon");
+    (buttons?.[d.at] ?? buttons?.[d.at - 1] ?? fallbackFocus?.current)?.focus();
+  });
   if (!tags.length) return null;
   return (
-    <ul aria-label={t.activeFilters} className="active-filters">
-      {tags.map((tag) => (
+    <ul ref={list} aria-label={t.activeFilters} className="active-filters">
+      {tags.map((tag, i) => (
         <li key={tag.label}>
           <DismissibleTag
             size="sm"
@@ -161,13 +113,25 @@ export function ActiveFilters({ query, setQuery, group, setGroup, quick = false,
             text={tag.text}
             title={t.removeFilter(tag.label)}
             dismissTooltipLabel={t.removeFilter(tag.label)}
-            onClose={tag.remove}
+            onClose={() => {
+              dismissed.current = { at: i, count };
+              tag.remove();
+            }}
           />
         </li>
       ))}
       {onEdit && (
         <li>
-          <Button kind="ghost" size="sm" onClick={onEdit}>
+          <Button
+            kind="ghost"
+            size="sm"
+            onClick={(e) => {
+              // The filter popover's outside-click listener on window would
+              // take this click, which opens it, as one that closes it.
+              e.stopPropagation();
+              onEdit();
+            }}
+          >
             {t.editFilters}
           </Button>
         </li>

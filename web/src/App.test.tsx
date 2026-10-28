@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Account, AccountsResponse, Folder, MessageDetail, MessageSummary, User } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
+import { filterTextFor } from "./filterText";
 import { lg, twoPane as twoPaneQuery } from "./breakpoints";
 
 const f = (name: string, messages = 1): Folder => ({ name, delimiter: "/", messages, lastSyncedAt: null, lastReconciledAt: null });
@@ -52,6 +53,19 @@ const detail = (id: string): MessageDetail => ({
 let listed: MessageSummary[] = [];
 
 const original = window.matchMedia;
+// jsdom lays nothing out: every box is 0 × 0 at the origin, so the filter
+// popover's autoAlign (floating-ui's hide middleware) would hide its content
+// as if its button were out of view. A box of its own for every element.
+const rect = Element.prototype.getBoundingClientRect;
+beforeEach(() => {
+  Element.prototype.getBoundingClientRect = () => DOMRect.fromRect({ x: 100, y: 100, width: 32, height: 32 });
+  // The viewport floating-ui clips to.
+  Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: 1024 });
+  Object.defineProperty(document.documentElement, "clientHeight", { configurable: true, value: 768 });
+});
+afterEach(() => {
+  Element.prototype.getBoundingClientRect = rect;
+});
 beforeEach(() => {
   listed = [];
   window.history.replaceState(null, "", "/");
@@ -425,20 +439,23 @@ describe("keyboard shortcuts in the mail view", () => {
     expect(params().get("m")).toBeNull();
   });
 
-  it("toggles the filter panel with the filter button and shows the set filters as tags", async () => {
+  it("toggles the filter popover with the filter button and shows the set filters as tags", async () => {
     window.history.replaceState(null, "", "/?q=from%3Asam%20invoice");
     await renderApp();
     const button = screen.getByRole("button", { name: t.filters });
-    // Open on a desktop to start with (below).
-    expect(button.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(button);
+    // Closed to start with; the button tells it as expanded, not as pressed (#311).
     expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
     expect(screen.queryByRole("group", { name: t.filters })).toBeNull();
     const tags = screen.getByRole("list", { name: t.activeFilters });
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    const panel = screen.getByRole("group", { name: t.filters });
-    expect(button.getAttribute("aria-controls")).toBe(panel.id);
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+    const panel = await screen.findByRole("group", { name: t.filters });
+    // aria-controls names the popover, which holds the form.
+    const content = document.getElementById(button.getAttribute("aria-controls")!);
+    expect(content?.className).toBe("cds--popover");
+    expect(content?.contains(panel)).toBe(true);
     expect((within(panel).getByRole("textbox", { name: t.from }) as HTMLInputElement).value).toBe("sam");
     fireEvent.click(within(tags).getByRole("button", { name: t.removeFilter(t.from) }));
     expect(searchbox().value).toBe("invoice");
@@ -456,9 +473,8 @@ describe("keyboard shortcuts in the mail view", () => {
       await screen.findByRole("button", { name: /First/ });
       expect(screen.getByRole("searchbox", { name: de.searchMail })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.carbon.clearSearch })).toBeTruthy();
-      // Open on a desktop from the start.
-      expect(screen.getByRole("button", { name: de.filters }).getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByRole("group", { name: de.filters })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.filters }));
+      expect(await screen.findByRole("group", { name: de.filters })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.removeFilter(de.hasAttachment) })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: de.userPanelOf("alice") }));
       fireEvent.click(screen.getByRole("button", { name: de.shortcuts }));
@@ -695,32 +711,96 @@ describe("user panel (#284)", () => {
   });
 });
 
-describe("the filter panel's first state", () => {
+describe("the filter popover (#286)", () => {
   const panel = () => screen.queryByRole("group", { name: t.filters });
   const button = () => screen.getByRole("button", { name: t.filters });
-
-  it("starts open from 48rem (two panes), also below lg", async () => {
-    screenWidth(false, true);
-    await renderApp();
-    expect(panel()).not.toBeNull();
-    expect(button().getAttribute("aria-expanded")).toBe("true");
+  const open = async () => {
     fireEvent.click(button());
-    expect(panel()).toBeNull();
-  });
+    return screen.findByRole("group", { name: t.filters }, { timeout: 10000 });
+  };
+  const since = () => screen.getByLabelText(filterTextFor("en").since) as HTMLInputElement & { _flatpickr: { isOpen: boolean } };
 
-  it("starts open on a desktop (lg)", async () => {
-    screenWidth(true);
-    await renderApp();
-    expect(panel()).not.toBeNull();
-  });
-
-  it("starts closed on phones, and the button opens it", async () => {
-    screenWidth(false, false);
+  it.each([
+    ["a phone", false, false],
+    ["two panes below lg", false, true],
+    ["a desktop (lg)", true, true],
+  ])("starts closed on %s, and the button opens it", async (_, wide, twoPane) => {
+    screenWidth(wide, twoPane);
     await renderApp();
     expect(panel()).toBeNull();
     expect(button().getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(button());
+    await open();
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("closes on Escape from the filter button, and on an outside click", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => button().focus());
+    key(button(), "Escape");
+    expect(panel()).toBeNull();
+    expect(button().getAttribute("aria-expanded")).toBe("false");
+    // Escape on the closed popover's button is the app's again (no message open: nothing).
+    await open();
+    fireEvent.click(document.body);
+    expect(panel()).toBeNull();
+  });
+
+  it("ignores close requests while the calendar is open: a click into a date field can end on the calendar", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => since().focus());
+    expect(since()._flatpickr.isOpen).toBe(true);
+    // A real browser: mousedown on the field, mouseup on the calendar, which
+    // overlaps the field's lower edge; the click then targets body.
+    fireEvent.mouseDown(since());
+    fireEvent.click(document.body);
+    expect(since()._flatpickr.isOpen).toBe(true);
     expect(panel()).not.toBeNull();
+  });
+
+  it("closes on an outside click after the form was unmounted with its calendar open", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => since().focus());
+    expect(since()._flatpickr.isOpen).toBe(true);
+    // Closed with the calendar still open (Carbon keeps it open for a click that started in the field).
+    fireEvent.mouseDown(since());
+    fireEvent.click(button());
+    expect(panel()).toBeNull();
+    await open();
+    fireEvent.click(document.body);
+    expect(panel()).toBeNull();
+  });
+
+  it("keeps the focus in a date field on Escape: the first closes the calendar, the next the popover", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => since().focus());
+    key(since(), "Escape");
+    expect(since()._flatpickr.isOpen).toBe(false);
+    expect(document.activeElement).toBe(since());
+    expect(panel()).not.toBeNull();
+    key(since(), "Escape");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(button());
+  });
+
+  it("closes the user panel when Edit filters opens the popover", async () => {
+    window.history.replaceState(null, "", "/?q=from%3Asam");
+    screenWidth(true);
+    await renderApp();
+    const userAction = screen.getByRole("button", { name: t.userPanelOf("alice") });
+    fireEvent.click(userAction);
+    expect(userAction.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: t.editFilters }));
+    expect(userAction.getAttribute("aria-expanded")).toBe("false");
+    const p = await screen.findByRole("group", { name: t.filters });
+    await waitFor(() => expect(document.activeElement).toBe(within(p).getByRole("textbox", { name: t.from })));
   });
 });
 
@@ -810,7 +890,7 @@ describe("quick filters on phones and the Edit filters button (#196)", () => {
     expect(tagList()).toBeNull();
   });
 
-  it("opens the closed panel with Edit filters and focuses the first tag's field; j types there and Escape leaves it", async () => {
+  it("opens the closed popover with Edit filters and focuses the first tag's field once the form loaded; j types there and Escape closes it", async () => {
     window.history.replaceState(null, "", "/?q=from%3Asam%20after%3A2026-01-01");
     screenWidth(false, false);
     await renderApp();
@@ -825,38 +905,47 @@ describe("quick filters on phones and the Edit filters button (#196)", () => {
     expect(panel()).toBeNull();
     fireEvent.click(editButton()!);
     expect(filtersButton().getAttribute("aria-expanded")).toBe("true");
-    const from = within(panel()!).getByRole("textbox", { name: t.from });
-    expect(document.activeElement).toBe(from);
+    const from = within(await screen.findByRole("group", { name: t.filters })).getByRole("textbox", { name: t.from });
+    await waitFor(() => expect(document.activeElement).toBe(from));
     // A field owns its keys: j does not open a message.
     key(from, "j");
     expect(params().get("m")).toBeNull();
+    // Escape in a field of the popover closes it; the focus goes to the filter button.
     key(from, "Escape");
-    expect(document.activeElement).not.toBe(from);
-    // A second press with the panel open focuses again.
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(filtersButton());
+    // Edit filters again opens and focuses again.
     fireEvent.click(editButton()!);
-    expect(document.activeElement).toBe(from);
-    // Closing and reopening the panel with its button takes no focus.
-    from.blur();
+    const again = within(await screen.findByRole("group", { name: t.filters })).getByRole("textbox", { name: t.from });
+    await waitFor(() => expect(document.activeElement).toBe(again));
+    // A second press with the popover open focuses again (focus elsewhere in it first: a blur to nowhere closes it).
+    const to = within(panel()!).getByRole("textbox", { name: t.toOrCc });
+    act(() => to.focus());
+    fireEvent.click(editButton()!);
+    expect(document.activeElement).toBe(again);
+    // Closing and reopening the popover with its button takes no focus.
     fireEvent.click(filtersButton());
     expect(panel()).toBeNull();
     fireEvent.click(filtersButton());
-    expect(panel()).not.toBeNull();
+    expect(await screen.findByRole("group", { name: t.filters })).toBeTruthy();
     expect(document.activeElement).toBe(document.body);
   });
 
-  it("only moves the focus when the panel is already open, to Before or the checkbox by the rule", async () => {
+  it("focuses Until or the checkbox by the rule, also when the popover is already open", async () => {
     window.history.replaceState(null, "", "/?q=before%3A2026-02-01");
     screenWidth(true);
     await renderApp();
-    expect(panel()).not.toBeNull();
+    fireEvent.click(filtersButton());
+    const p = await screen.findByRole("group", { name: t.filters });
     fireEvent.click(editButton()!);
-    expect(document.activeElement).toBe(within(panel()!).getByLabelText(t.before));
+    expect(document.activeElement).toBe(within(p).getByLabelText(filterTextFor("en").until));
     expect(filtersButton().getAttribute("aria-expanded")).toBe("true");
     cleanup();
     window.history.replaceState(null, "", "/?q=has%3Aattachment");
     await renderApp();
     fireEvent.click(editButton()!);
-    expect(document.activeElement).toBe(within(panel()!).getByRole("checkbox", { name: t.hasAttachment }));
+    const checkbox = within(await screen.findByRole("group", { name: t.filters })).getByRole("checkbox", { name: t.hasAttachment });
+    await waitFor(() => expect(document.activeElement).toBe(checkbox));
   });
 
   it("still removes exactly one filter with a tag's ×, and leaves the panel as it was", async () => {
