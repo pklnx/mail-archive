@@ -186,6 +186,21 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The filters over the list (#286): a recipient and the preset Last 30 days.
+  const p = await page("light");
+  await p.goto(base + "/?q=to%3Ataxadvisor");
+  await p.getByRole("list", { name: "Messages" }).getByRole("button").first().waitFor();
+  await p.getByRole("button", { name: "Filters", exact: true }).click();
+  const filters = p.getByRole("group", { name: "Filters", exact: true });
+  await filters.getByText("Last 30 days", { exact: true }).click();
+  await p.waitForURL(/[?&]q=to%3Ataxadvisor(%20|\+)after%3A/);
+  await p.waitForFunction(() => document.querySelector('.search-filters input[id$="-after"]')?.value !== "");
+  // The focus stays in the filters: a blur to nowhere would close them.
+  await shot(p, "search-filters", { keepFocus: true });
+  await p.context().close();
+}
+
+{
   // The last message of a conversation, with the conversation open over the body.
   const p = await page("light");
   await openMessage(p, "Re: Quote for the kitchen renovation");
