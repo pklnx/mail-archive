@@ -7,6 +7,12 @@ web UI and the docs, and optionally [golangci-lint](https://golangci-lint.run/)
 v2. Node.js 26 no longer ships corepack; install it once with
 `npm install -g corepack`.
 
+`make web`, `make web-e2e` and `make docs` use a pnpm that is already on
+`PATH`; only when there is none do they run `corepack enable`. To use your own
+pnpm (for example in a sandbox where corepack must not be enabled), put a
+wrapper on `PATH`, or skip the step with `make PNPM_SETUP=true web`. pnpm
+switches to the version pinned in `packageManager` by itself.
+
 ```sh
 make build              # bin/mail-archive (with the web UI if built)
 make test-unit          # unit tests, no database needed
