@@ -61,8 +61,12 @@ repo() {
 		cp "$fx/00001_old.sql" internal/store/migrations/
 		cp "$fx/old.yml" .github/workflows/
 		mkdir -p web/src web/node_modules
-		cp "$fx/web/tsconfig.json" web/
-		cp "$fx/web/old.ts" web/src/old.ts
+		cp "$fx/web/tsconfig.json" "$fx/web/package.json" web/
+		cp "$fx/web/lib.ts" "$fx/web/use.ts" "$fx/web/same.ts" web/src/
+		mkdir -p tools/review-gate
+		echo '{}' >tools/review-gate/oxlintrc.json
+		echo '{}' >tools/review-gate/package-lock.json
+		echo 'lockfileVersion: 9.0' >web/pnpm-lock.yaml
 		echo '# fixture' >README.md
 		git add -A
 		git commit -q -m base
@@ -120,7 +124,7 @@ check() {
 repo clean 'echo more >>README.md'
 gate clean
 check clean 0 clean
-grep -q 'skipped: noctx (no changed non-test Go files), squawk (no new migrations), migration-changed (no migration changes), actionlint (no workflow changes), zizmor (no workflow changes), oxlint (no changed web/src TypeScript files))$' "$tmp/clean.out" ||
+grep -q 'skipped: noctx (no changed non-test Go files), squawk (no new migrations), migration-changed (no migration changes), actionlint (no workflow changes), zizmor (no workflow changes), oxlint (no changed web/src TypeScript files and no web dependency or oxlint config changes))$' "$tmp/clean.out" ||
 	{ echo "FAIL clean-skipped: $(cat "$tmp/clean.out")" >&2; fail=1; }
 
 # --- noctx: only the lines the head adds, not Old in the base, not tests;
@@ -230,8 +234,9 @@ gate real-labeler
 check real-labeler 0 clean
 grep -q 'ran: actionlint, zizmor;' "$tmp/real-labeler.out" || { echo "FAIL real-labeler-ran: $(cat "$tmp/real-labeler.out")" >&2; fail=1; }
 
-# --- oxlint (type-aware, three rules) on changed web/src files, only on the
-# lines the branch adds. web/src/old.ts has a dropped promise in the base.
+# --- oxlint (type-aware, three rules) on all of web/src, like main clean in
+# the base (lib.ts, use.ts, same.ts), whenever the branch changes a web/src
+# TypeScript file or a web dependency or oxlint config file.
 repo web-bad 'cp "$fx/web/bad.ts" web/src/'
 gate web-bad
 l_fl=$(line "$fx/web/bad.ts" 'want no-floating-promises')
@@ -249,17 +254,38 @@ repo web-ok 'cp "$fx/web/ok.ts" web/src/'
 gate web-ok
 check web-ok 0 clean
 grep -q 'ran: oxlint;' "$tmp/web-ok.out" || { echo "FAIL web-ok-ran: $(cat "$tmp/web-ok.out")" >&2; fail=1; }
-# The base's own dropped promise: not reported when the branch touches the file
-# elsewhere, reported when the branch adds one next to it (only the new one).
-repo web-old-touched 'cp "$fx/web/old-touched.ts" web/src/old.ts'
-gate web-old-touched
-check web-old-touched 0 clean
-grep -q 'ran: oxlint;' "$tmp/web-old-touched.out" || { echo "FAIL web-old-touched-ran: $(cat "$tmp/web-old-touched.out")" >&2; fail=1; }
-repo web-old-added 'cp "$fx/web/old-added.ts" web/src/old.ts'
-gate web-old-added
-l=$(line "$fx/web/old-added.ts" 'want no-floating-promises')
-check web-old-added 1 "[.findings[] | [.rule, .file, .line]] ==
-	[[\"typescript/no-floating-promises\",\"web/src/old.ts\",$l]]"
+# A change that causes a finding on a line it does not touch: one line turns
+# save async, its caller in the same file is reported (review 5684010819) ...
+repo web-same-file 'cp "$fx/web/same-async.ts" web/src/same.ts'
+gate web-same-file
+l=$(line "$fx/web/same-async.ts" 'want no-floating-promises')
+check web-same-file 1 "[.findings[] | [.rule, .file, .line]] ==
+	[[\"typescript/no-floating-promises\",\"web/src/same.ts\",$l]]"
+# ... and in a file it does not touch: lib.ts turns load async, use.ts drops it.
+repo web-cross-file 'cp "$fx/web/lib-async.ts" web/src/lib.ts'
+gate web-cross-file
+l=$(line "$fx/web/use.ts" 'want no-floating-promises')
+check web-cross-file 1 "[.findings[] | [.rule, .file, .line]] ==
+	[[\"typescript/no-floating-promises\",\"web/src/use.ts\",$l]]"
+# A web dependency or oxlint config change alone runs the check (a tool or
+# dependency bump can add findings without touching web/src); a change
+# elsewhere in web/ does not.
+for f in web/package.json web/pnpm-lock.yaml web/tsconfig.json web/tsconfig.app.json \
+	tools/review-gate/oxlintrc.json tools/review-gate/package-lock.json; do
+	n=web-config-$(echo "$f" | tr '/.' '--')
+	repo "$n" "echo ' ' >>'$f'"
+	gate "$n"
+	check "$n" 0 clean
+	grep -q 'ran: oxlint;' "$tmp/$n.out" || { echo "FAIL $n-ran: $(cat "$tmp/$n.out")" >&2; fail=1; }
+done
+repo web-config-nodeps 'rm -rf web/node_modules; echo " " >>web/package.json'
+gate web-config-nodeps REVIEW_GATE_REQUIRE_WEB=1
+check web-config-nodeps-required 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("node_modules"))'
+repo web-other 'echo "export default {};" >web/vite.config.ts; echo more >web/README.md'
+gate web-other
+check web-other 0 clean
+grep -q 'oxlint (no changed web/src TypeScript files and no web dependency or oxlint config changes)' "$tmp/web-other.out" ||
+	{ echo "FAIL web-other-skipped: $(cat "$tmp/web-other.out")" >&2; fail=1; }
 # Without web/node_modules the check is skipped with the reason (never silent),
 # and an error where CI requires it.
 repo web-nodeps 'rm -rf web/node_modules; cp "$fx/web/bad.ts" web/src/'

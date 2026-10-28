@@ -277,7 +277,7 @@ export function ApiKeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: num
       ) : (
         <section className="profile-form profile-form--divided">
           <h2 className="type-heading-03">{t.apiKeyCreate}</h2>
-          <Form className="profile-form" onSubmit={create}>
+          <Form className="profile-form" onSubmit={(e) => void create(e)}>
             <TextInput
               id={`${id}-name`}
               labelText={t.apiKeyName}

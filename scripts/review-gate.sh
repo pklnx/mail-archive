@@ -16,11 +16,11 @@
 #   actionlint         added or modified workflows
 #   zizmor             the same workflows: unpinned actions, dangerous
 #                      triggers, permissions, ... (--offline, medium and up)
-#   oxlint             added or modified web/src .ts/.tsx files: floating and
-#                      misused promises and the rules of hooks, only on the
-#                      lines the branch adds (tools/review-gate/oxlintrc.json);
-#                      needs web/node_modules (pnpm install in web/), else
-#                      skipped
+#   oxlint             all of web/src's .ts/.tsx files, when the branch adds
+#                      or modifies one of them or a web dependency or oxlint
+#                      config file: floating and misused promises and the
+#                      rules of hooks (tools/review-gate/oxlintrc.json); needs
+#                      web/node_modules (pnpm install in web/), else skipped
 # A check whose files did not change is listed as skipped, with the reason.
 #
 # Tools: GOLANGCI_LINT, SQUAWK, ACTIONLINT, ZIZMOR, OXLINT, TSGOLINT (commands
@@ -256,27 +256,30 @@ elif have zizmor "$ZIZMOR"; then
 	fi
 fi
 
-# --- oxlint: added or modified web/src TypeScript files, type-aware, three
-# rules (tools/review-gate/oxlintrc.json). web/src has hits from before the
-# gate, so only findings on lines the branch adds are reported (the same
-# scope as noctx). oxlint exits 1 for findings and for its own failures alike:
-# a failure is anything but a clean JSON report on stdout and an empty stderr.
-grep -E '^web/src/.*\.(ts|tsx)$' "$work/present" >"$work/web-files"
-if [ ! -s "$work/web-files" ]; then
-	skipped oxlint "no changed web/src TypeScript files"
+# --- oxlint: all of web/src's tracked TypeScript files, type-aware, three
+# rules (tools/review-gate/oxlintrc.json). main is at 0 (#327), so every
+# finding comes from the branch, also one on a line or in a file it does not
+# touch (a function turned async elsewhere). It runs when the branch changes a
+# web/src TypeScript file, or a file that can change the result without one:
+# the oxlint config and lockfile, the web dependencies, the tsconfigs. oxlint
+# exits 1 for findings and for its own failures alike: a failure is anything
+# but a clean JSON report on stdout and an empty stderr.
+web_trigger='^(web/src/.*\.(ts|tsx)|tools/review-gate/(oxlintrc\.json|package-lock\.json)|web/(package\.json|pnpm-lock\.yaml|tsconfig[^/]*\.json))$'
+grep -E "$web_trigger" "$work/present" >"$work/web-trigger"
+if [ ! -s "$work/web-trigger" ]; then
+	skipped oxlint "no changed web/src TypeScript files and no web dependency or oxlint config changes"
 elif [ ! -d web/node_modules ]; then
 	if [ "${REVIEW_GATE_REQUIRE_WEB:-}" = 1 ]; then
 		error oxlint "web/node_modules is missing (pnpm install in web/)"
 	else
 		skipped oxlint "web deps not installed; pnpm install in web/ to run it"
 	fi
+elif ! git -c core.quotePath=false ls-files -- 'web/src/*.ts' 'web/src/*.tsx' >"$work/web-files" 2>"$work/git.err"; then
+	error git "$(oneline <"$work/git.err")"
+elif [ ! -s "$work/web-files" ]; then
+	skipped oxlint "no web/src TypeScript files"
 elif have oxlint "$OXLINT" && have tsgolint "$TSGOLINT"; then
 	ran oxlint
-	# Lines added per file: "<path> <first> <last>".
-	git -c core.quotePath=false diff -U0 --no-renames --diff-filter=AMT "$base_sha" "$head_sha" -- web/src |
-		awk '/^\+\+\+ b\// { f = substr($0, 7); next }
-			/^@@ / { split($3, a, ","); n = (a[2] == "" ? 1 : a[2]);
-				if (n > 0) print f, substr(a[1], 2), substr(a[1], 2) + n - 1 }' >"$work/web-added"
 	set --
 	while IFS= read -r p; do set -- "$@" "${p#web/}"; done <"$work/web-files"
 	rc=0
@@ -296,11 +299,9 @@ elif have oxlint "$OXLINT" && have tsgolint "$TSGOLINT"; then
 	else
 		# "typescript(no-floating-promises)" is reported as typescript/no-floating-promises;
 		# the first label is the primary location, relative to web/.
-		jq -c --rawfile added "$work/web-added" '
-			($added | split("\n") | map(select(. != "") | split(" ") | {f: .[0], a: (.[1] | tonumber), b: (.[2] | tonumber)})) as $r
-			| .diagnostics[] | ("web/" + .filename) as $f | .labels[0].span.line as $l
-			| select(any($r[]; .f == $f and .a <= $l and $l <= .b))
-			| {tool: "oxlint", rule: (.code | sub("\\((?<r>.*)\\)$"; "/\(.r)")), file: $f, line: $l, message: .message}
+		jq -c '.diagnostics[]
+			| {tool: "oxlint", rule: (.code | sub("\\((?<r>.*)\\)$"; "/\(.r)")), file: ("web/" + .filename),
+			   line: .labels[0].span.line, message: .message}
 			' "$work/ox.json" >>"$work/findings"
 	fi
 fi
