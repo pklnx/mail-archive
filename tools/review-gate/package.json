@@ -1,0 +1,9 @@
+{
+  "name": "mail-archive-review-gate",
+  "private": true,
+  "description": "npm-installed tools of make review-gate (scripts/review-gate.sh); see docs/development/review-gate.md",
+  "license": "MIT",
+  "dependencies": {
+    "squawk-cli": "2.68.0"
+  }
+}

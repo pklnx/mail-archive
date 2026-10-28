@@ -1,0 +1,14 @@
+# golangci-lint config of the review gate (scripts/review-gate.sh), not of the
+# `lint` job (that is .golangci.yml). The gate runs only what the required
+# `lint` job does not: noctx, on the lines the branch adds, production code
+# only (main has 6 hits in production code and 33 in tests; see
+# docs/development/review-gate.md).
+version: "2"
+run:
+  # Paths in the JSON relative to the repository root, not to this file.
+  relative-path-mode: gitroot
+  tests: false
+linters:
+  default: none
+  enable:
+    - noctx

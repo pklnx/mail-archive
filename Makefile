@@ -82,6 +82,46 @@ secrets: $(GITLEAKS)
 secrets-test: $(GITLEAKS)
 	GITLEAKS=$(CURDIR)/$(GITLEAKS) sh scripts/secret-scan-test.sh
 
+.PHONY: review-gate review-gate-test review-gate-tools
+# Review gate (scripts/review-gate.sh, docs/development/review-gate.md):
+# deterministic checks on what the branch changes. Tool versions are pinned
+# here and in tools/review-gate/package-lock.json (squawk); bump them by hand,
+# like sqlc and gitleaks. Each Go tool is built with the project's toolchain
+# into its own folder under bin/, verified through the Go checksum database.
+GOLANGCI_LINT_VERSION := v2.14.0
+GOLANGCI_LINT := bin/golangci-lint-$(GOLANGCI_LINT_VERSION)/golangci-lint
+ACTIONLINT_VERSION := v1.7.12
+ACTIONLINT := bin/actionlint-$(ACTIONLINT_VERSION)/actionlint
+SQUAWK := tools/review-gate/node_modules/.bin/squawk
+SQUAWK_STAMP := tools/review-gate/node_modules/.installed
+# The branch or commit the gate compares against (CI: the pull request's base).
+BASE ?= origin/main
+REVIEW_GATE_ENV = GOLANGCI_LINT=$(abspath $(GOLANGCI_LINT)) ACTIONLINT=$(abspath $(ACTIONLINT)) SQUAWK=$(abspath $(SQUAWK))
+
+$(GOLANGCI_LINT):
+	GOTOOLCHAIN=$$($(GO) env GOVERSION) GOBIN=$(CURDIR)/$(dir $(GOLANGCI_LINT)) $(GO) install \
+		github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+$(ACTIONLINT):
+	GOTOOLCHAIN=$$($(GO) env GOVERSION) GOBIN=$(CURDIR)/$(dir $(ACTIONLINT)) $(GO) install \
+		github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+
+# npm ci installs exactly the lockfile (integrity hashes, no install scripts).
+$(SQUAWK_STAMP): tools/review-gate/package-lock.json
+	npm ci --ignore-scripts --no-audit --no-fund --prefix tools/review-gate
+	touch $@
+
+## review-gate-tools: build or install the review gate's tools
+review-gate-tools: $(GOLANGCI_LINT) $(ACTIONLINT) $(SQUAWK_STAMP)
+
+## review-gate: check what the branch changes against BASE (one line; non-zero on findings or tool errors)
+review-gate: review-gate-tools
+	@$(REVIEW_GATE_ENV) BASE="$(BASE)" sh scripts/review-gate.sh
+
+## review-gate-test: self-test of the review gate (temp git repos, no network)
+review-gate-test: review-gate-tools
+	$(REVIEW_GATE_ENV) sh scripts/review-gate-test.sh
+
 ## generate: regenerate database code from internal/store/queries
 generate:
 	$(SQLC) generate

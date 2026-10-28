@@ -216,7 +216,9 @@ ALTER TABLE messages DROP COLUMN thread_id;
 
 Name new files with the next number. Never edit a migration that has been
 released; add a new one. The store tests roll every migration down and up
-again, so a broken `Down` section fails CI.
+again, so a broken `Down` section fails CI. The [review gate](./review-gate)
+lints the `Up` section of new migrations with squawk and reports an edited
+or deleted migration.
 
 ## Database queries
 
@@ -238,7 +240,8 @@ Changes start as an issue with an approved plan; see
 `main` is protected: changes go through pull requests, which can only be
 squash-merged when the required CI checks pass: `test`, `lint`, `vulncheck`,
 `docker`, `compose`, `web`, `web-e2e` and `secret-scan`. The `audit` and
-`docs-audit` checks are not required (see [Dependencies](#dependencies)). A
+`docs-audit` checks are not required (see [Dependencies](#dependencies)), nor
+is `review-gate` (see [Review gate](./review-gate)). A
 pull request is merged (squash) after an approving review and green required
 checks; auto-merge is not used. Agent rules are
 in `CLAUDE.md` at the repository root.
@@ -284,12 +287,20 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
 
 - CI runs `govulncheck`, `go mod verify`, `go vet`, golangci-lint (with
   `gosec`) and tests with the race detector.
+- The `review-gate` job checks what a pull request changes: HTTP requests
+  without a context in new Go code, new migrations and changed workflows
+  (template injection and other actionlint errors). See
+  [Review gate](./review-gate).
 - `pnpm audit` runs in the `audit` (UI, production dependencies) and
   `docs-audit` (docs site) checks, which are not required: they call the npm
   registry, which can time out, and Dependabot covers the same advisories. A
-  red audit does not block a merge. The coordinator reads its log: a registry
-  error needs nothing (no flaky-test row, since it is not a test); a real
-  advisory gets a Dependabot pull request or a follow-up issue.
+  red audit does not block a merge, but it is not ignored either. The
+  coordinator reads its log: a registry error needs nothing (no flaky-test
+  row, since it is not a test); a real advisory gets a recorded outcome, as a
+  review gate finding does: fixed (usually a Dependabot pull request), not
+  affected (with the reason), or an exception
+  ([outcomes and exceptions](./review-gate#findings-outcomes-and-exceptions)).
+  An advisory that cannot be fixed now gets a follow-up issue as well.
 - Dependabot opens weekly update pull requests for Go modules, npm packages
   (UI and docs), GitHub Actions and Docker images. PostgreSQL major versions
   are excluded because they need a data migration.
