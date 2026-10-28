@@ -1,8 +1,9 @@
 // The header's user panel (#284) in a real browser: the one user action
 // opens it below the header and inside the screen, by click, tap and
 // keyboard; the focus moves into it, Tab walks its items, Escape and a Tab
-// out of it close it, and the shortcuts overview opens from it. App.test.tsx
-// covers the rest in jsdom.
+// out of it close it, and the shortcuts overview opens from it. A failed Log
+// out (#327) shows its alert in view and keeps the app. App.test.tsx covers
+// the rest in jsdom.
 import { devices, type Page } from "@playwright/test";
 import { isChunkOf } from "../scripts/lazyChunks.mjs";
 import { admin } from "./demo";
@@ -28,6 +29,42 @@ async function placed(page: Page) {
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 0.5);
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 0.5);
+}
+
+/**
+ * Answers the app's DELETE /api/session in the browser, never reaching the
+ * server (the admin session is shared by all tests): first with a 500, then
+ * with a 204. Other requests to the path go through.
+ */
+async function failLogoutOnce(page: Page) {
+  let n = 0;
+  await page.route("/api/session", (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    n++;
+    if (n === 1) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "store unavailable" }) });
+    return route.fulfill({ status: 204 });
+  });
+}
+
+const logoutAlert = (page: Page) => page.getByRole("alert").filter({ hasText: "Signing out failed: store unavailable." });
+
+/** Log out from the panel fails: the alert is in view under the header, the app stays; Log out again signs out. */
+async function logoutFailsThenWorks(page: Page, open: () => Promise<void>, logOut: () => Promise<void>) {
+  await open();
+  await logOut();
+  await expect(logoutAlert(page)).toBeInViewport();
+  await expect(logoutAlert(page)).toContainText("Signing out failed: store unavailable. You are still signed in; try again.");
+  const header = (await page.getByRole("banner").boundingBox())!;
+  const box = (await logoutAlert(page).boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(header.y + header.height - 0.5);
+  await expect(panel(page)).toHaveCount(0);
+  await expect(action(page)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Log in" })).toHaveCount(0);
+
+  await open();
+  await logOut();
+  await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
+  await expect(logoutAlert(page)).toHaveCount(0);
 }
 
 test.describe("desktop", () => {
@@ -86,6 +123,17 @@ test.describe("desktop", () => {
     await expect(dialog).toHaveCount(0);
     await expect(action(page)).toBeFocused();
   });
+
+  test("a failed Log out shows an alert under the header and keeps the app; Log out again signs out", async ({ page, guards }) => {
+    guards.allowHTTPError("/api/session", 500);
+    await failLogoutOnce(page);
+    await ready(page);
+    await logoutFailsThenWorks(
+      page,
+      () => action(page).click(),
+      () => panel(page).getByRole("button", { name: "Log out" }).click(),
+    );
+  });
 });
 
 test.describe("phone", () => {
@@ -111,5 +159,28 @@ test.describe("phone", () => {
     await expect(page).toHaveURL(/\?view=profile$/);
     await expect(page.getByRole("main").getByRole("heading", { name: "Profile", level: 1 })).toBeVisible();
     await expect(panel(page)).toHaveCount(0);
+  });
+
+  test("a failed Log out with a message open and the page scrolled down shows the alert in view", async ({ page, guards }) => {
+    guards.allowHTTPError("/api/session", 500);
+    await failLogoutOnce(page);
+    await page.goto("/?q=itinerary");
+    const list = page.getByRole("list", { name: "Messages" });
+    await expect(list.getByRole("button")).toHaveCount(1);
+    await list.getByRole("button").tap();
+    await expect(page.getByRole("article").getByRole("heading", { level: 1 })).toHaveText(/^Re: Offsite planning/);
+    // On phones the page itself scrolls while a message is open.
+    const scrolled = () =>
+      page.evaluate(() => {
+        const s = document.scrollingElement!;
+        s.scrollTop = s.scrollHeight;
+        return s.scrollTop;
+      });
+    await expect.poll(scrolled).toBeGreaterThan(0);
+    await logoutFailsThenWorks(
+      page,
+      () => action(page).tap(),
+      () => panel(page).getByRole("button", { name: "Log out" }).tap(),
+    );
   });
 });

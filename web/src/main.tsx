@@ -9,6 +9,6 @@ initTheme();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <AuthGate>{(user, logout) => <App user={user} logout={logout} />}</AuthGate>
+    <AuthGate>{(user, logout, logoutError) => <App user={user} logout={logout} logoutError={logoutError} />}</AuthGate>
   </StrictMode>,
 );

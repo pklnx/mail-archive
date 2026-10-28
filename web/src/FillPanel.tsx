@@ -268,7 +268,7 @@ export function FillForm({ account, data, onCancel, onStarted }: { account: Acco
   };
 
   return (
-    <Form onSubmit={submit} className="page-form">
+    <Form onSubmit={(e) => void submit(e)} className="page-form">
       <p className="app-text-secondary">{t.fillIntro}</p>
       <p className="app-text-secondary">
         {account.firstReceived ? t.firstReceived(longDate(account.firstReceived.at), account.firstReceived.subject) : t.noneReceived}

@@ -470,7 +470,9 @@ describe("Folder column rail", () => {
     expect(target?.closest(".folder-pane__full")).not.toBeNull();
     unmount();
     render(<Panel />);
-    act(() => fireEvent.click(expandButton()));
+    act(() => {
+      fireEvent.click(expandButton());
+    });
     target = drawerFocusTarget(screen.getByTestId("aside"));
     expect(target).toBe(node(/^work$/));
   });

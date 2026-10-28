@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
-import { Button, Header, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Search } from "@carbon/react";
+import { Button, Header, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, InlineNotification, Search } from "@carbon/react";
 import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { dialogOpen, ownedByWidget } from "./dialogs";
@@ -35,9 +35,11 @@ const ShortcutsModal = lazyNamed(() => import("./ShortcutsModal"), "ShortcutsMod
 interface Props {
   user: User;
   logout: () => void;
+  /** Why the last Log out failed ("" if it did not): shown as an alert under the header. */
+  logoutError: string;
 }
 
-export function App({ user, logout }: Props) {
+export function App({ user, logout, logoutError }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   // Below lg the shell's SideNav (menuOpen) and the folder column
@@ -279,6 +281,12 @@ export function App({ user, logout }: Props) {
     if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
   }, [state.m]);
 
+  // A failed Log out: on phones the page may be scrolled down (a message is
+  // open), so bring the alert under the header into view.
+  useEffect(() => {
+    if (logoutError && document.scrollingElement) document.scrollingElement.scrollTop = 0;
+  }, [logoutError]);
+
   const gone = accounts.data?.accounts.reduce((n, a) => n + a.goneMessages, 0) ?? 0;
   const pageInert = hide;
 
@@ -342,7 +350,11 @@ export function App({ user, logout }: Props) {
               shortcutsOpener.current = userAction.current;
               setShortcuts(true);
             }}
-            logout={logout}
+            logout={() => {
+              // Close the panel first, so on a phone it does not cover a failure alert.
+              closeUser(true);
+              logout();
+            }}
           />
         </HeaderGlobalBar>
       </Header>
@@ -365,6 +377,16 @@ export function App({ user, logout }: Props) {
       />
       <div className="app-shell__body">
       <div inert={pageInert}>
+        {logoutError && (
+          <InlineNotification
+            kind="error"
+            lowContrast
+            hideCloseButton
+            role="alert"
+            statusIconDescription={t.carbon.status.error}
+            subtitle={logoutError}
+          />
+        )}
         <HealthBanner
           data={accounts.data}
           admin={user.admin}

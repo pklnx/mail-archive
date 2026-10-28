@@ -2,7 +2,8 @@
 
 The review gate runs deterministic checks on what a branch changes, before a
 reviewer reads the diff. It reports only findings in the changed files or
-lines, as one line of output, so the reviewer can read it cheaply.
+lines (oxlint: in all of `web/src`, which is clean on `main`), as one line of
+output, so the reviewer can read it cheaply.
 
 ```sh
 make review-gate                  # against origin/main
@@ -24,7 +25,7 @@ and the CI run see the same files.
 | `migration-changed` | changes anything in `internal/store/migrations/` | the gate script | an existing migration that was modified or deleted (a rename counts as a deletion) |
 | `actionlint` | adds or modifies a workflow | actionlint | errors in those workflows, including template injection |
 | `zizmor` | adds or modifies a workflow | zizmor, `--offline --min-severity medium` | workflow security: unpinned actions (`unpinned-uses`), dangerous triggers such as `pull_request_target` (`dangerous-triggers`), missing or broad `permissions:` (`excessive-permissions`), template injection, credential persistence |
-| `oxlint` | adds or modifies a `web/src` `.ts` or `.tsx` file | oxlint with oxlint-tsgolint (`tools/review-gate/oxlintrc.json`) | floating promises (`typescript/no-floating-promises`), promises where a boolean or a void callback is expected (`typescript/no-misused-promises`) and hooks called conditionally (`react-hooks/rules-of-hooks`), only on the lines the branch adds |
+| `oxlint` | adds or modifies a `web/src` `.ts` or `.tsx` file, or one of `web/package.json`, `web/pnpm-lock.yaml`, `web/tsconfig*.json`, `tools/review-gate/oxlintrc.json`, `tools/review-gate/package-lock.json` | oxlint with oxlint-tsgolint (`tools/review-gate/oxlintrc.json`) | floating promises (`typescript/no-floating-promises`), promises where a boolean or a void callback is expected (`typescript/no-misused-promises`) and hooks called conditionally (`react-hooks/rules-of-hooks`), in all of `web/src` |
 
 A check whose files did not change is listed as skipped, with the reason.
 
@@ -64,17 +65,22 @@ anyway. It runs only what CI does not check elsewhere.
   the UI's dependencies, so the check is skipped, with the reason "web deps
   not installed", when `web/node_modules` is missing (`pnpm install` in
   `web/`); CI installs them in the gate job only when the pull request changes
-  `web/src` TypeScript, and there a missing `web/node_modules` is an error
-  (`REVIEW_GATE_REQUIRE_WEB=1`). `web/src` is not clean today (13 hits in 7
-  files on 2026-10-28: `no-misused-promises` on async event handlers such as
-  `onSubmit`, `no-floating-promises` in 3 places, none for the hooks rule), so
-  the gate reports only findings on lines the branch adds, like `noctx`; a
-  hit on an untouched line is never reported. A finding that a change causes
-  on a line it does not touch (for example a function that now returns a
-  promise) is not seen. oxlint exits 1 both for findings and for its own
-  failures, so the gate counts anything but a clean JSON report on stdout
-  and an empty stderr as a tool error (exit 2). The type engine is passed
-  through `OXLINT_TSGOLINT_PATH`, set from `TSGOLINT`.
+  a file that triggers the check, and there a missing `web/node_modules` is an
+  error (`REVIEW_GATE_REQUIRE_WEB=1`). `web/src` is clean on `main` since #327
+  (it had 12 hits before: ten async event handlers, a dropped promise in a
+  test and the logout call), so the check lints all of the tracked `web/src`
+  TypeScript files at the head and reports every finding: a change that makes
+  a function return a promise is reported at its callers, also on lines and in
+  files the branch does not touch. It runs not only for `web/src` changes but also for
+  the gate's oxlint config and lockfile, `web/package.json`,
+  `web/pnpm-lock.yaml` and `web/tsconfig*.json`: a bump of oxlint,
+  oxlint-tsgolint, TypeScript or `@types/react` can add findings without
+  touching `web/src`, and is then reported on the pull request that causes
+  them, not on the next one. A whole run takes about a second. oxlint exits 1
+  both for findings and for its own failures, so the gate counts anything but
+  a clean JSON report on stdout and an empty stderr as a tool error (exit 2).
+  The type engine is passed through `OXLINT_TSGOLINT_PATH`, set from
+  `TSGOLINT`.
 
 ### squawk rules
 
@@ -158,7 +164,9 @@ is installed with the runner's `python3 -m venv`: no `setup-python` action, so
 no new action, and the install takes about a second, so it has no cache. Pushes
 to `main` run only the self-test; they also save the caches that pull
 requests read (a Go cache keyed on the `Makefile`, an npm cache keyed on the
-gate's lockfile). When a pull request changes `web/src` TypeScript, the job
+gate's lockfile). When a pull request changes a file that triggers the
+oxlint check (`web/src` TypeScript, the web dependency files and tsconfigs,
+the gate's oxlint config and lockfile; the same list as in the gate), the job
 also runs `pnpm install --frozen-lockfile` in `web/` (with corepack from the
 npm cache, as in the `web` job; the pnpm store is not cached, as there), for
 the type-aware rules. `review-gate` is **not a required check** (maintainer
@@ -206,11 +214,16 @@ its counter-case:
 - `oxlint`: a dropped promise, a promise as a condition, an `async` callback
   where a void return is expected and a hook called inside an `if` are
   reported with their file lines; the awaited, `void`ed and `.catch`ed forms
-  and a hook at the top level of a component are not. The base has a dropped
-  promise of its own: a change elsewhere in that file reports nothing, a
-  second dropped promise added next to it reports exactly the new one. Without
-  `web/node_modules` the check is skipped with its reason, and an error with
-  `REVIEW_GATE_REQUIRE_WEB=1`.
+  and a hook at the top level of a component are not. The base is clean, like
+  `main`. One changed line that makes a function `async` reports its caller in
+  the same file, on a line the branch does not touch, and making `load` in
+  `lib.ts` `async` reports its caller in the untouched `use.ts`. A change of
+  only `web/package.json`, `web/pnpm-lock.yaml`, `web/tsconfig.json`, a new
+  `web/tsconfig.app.json`, or the gate's `oxlintrc.json` or
+  `package-lock.json` runs the check (with `REVIEW_GATE_REQUIRE_WEB=1` and no
+  `web/node_modules` it is an error, as for a TypeScript change); a change to
+  another file in `web/` does not. Without `web/node_modules` the check is
+  skipped with its reason, and an error with `REVIEW_GATE_REQUIRE_WEB=1`.
 - Errors: a dirty tree, a crashing or garbage-printing stub for each tool
   (for zizmor also garbage under a findings exit code; for oxlint also exit 1
   without diagnostics, noise on stderr and a crashing type engine), a stub

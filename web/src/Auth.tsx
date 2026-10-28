@@ -16,7 +16,8 @@ type GateState = SessionState | { loading: true } | { error: string };
 
 interface Props {
   /** Renders the app for a logged-in user. */
-  children: (user: User, logout: () => void) => ReactNode;
+  /** logoutError is the reason the last Log out failed ("" if it did not); the user is still signed in. */
+  children: (user: User, logout: () => void, logoutError: string) => ReactNode;
 }
 
 /**
@@ -27,12 +28,16 @@ interface Props {
  */
 export function AuthGate({ children }: Props) {
   const [state, setGateState] = useState<GateState>({ loading: true });
+  // Why the last Log out failed. Any change of the gate state drops it, so a
+  // stale alert never comes back after a new login.
+  const [logoutError, setLogoutError] = useState("");
 
   // The user's settings apply before the app renders: until then only
   // "Loading…" or the login page is on screen.
   const setState = useCallback((s: GateState) => {
     if ("user" in s && s.user) applySettings({ language: s.user.language, locale: s.user.locale });
     setGateState(s);
+    setLogoutError("");
   }, []);
 
   const check = useCallback(() => {
@@ -63,8 +68,15 @@ export function AuthGate({ children }: Props) {
     );
   }
   if (state.user) {
+    // A failed DELETE leaves the session (and its cookie) alive: the user
+    // stays on the current screen, signed in, with the reason; Log out again
+    // retries. An ended session answers 204, so it signs out as usual.
     const logout = () => {
-      sessionApi.logout().finally(() => setState({ user: null, setupRequired: false }));
+      setLogoutError("");
+      sessionApi.logout().then(
+        () => setState({ user: null, setupRequired: false }),
+        (err: unknown) => setLogoutError(t.logoutFailed(err instanceof Error ? err.message : String(err))),
+      );
     };
     if (state.user.mustChangePassword) {
       const user = state.user;
@@ -82,6 +94,7 @@ export function AuthGate({ children }: Props) {
               {t.logOut}
             </Button>
           </div>
+          {logoutError && <ErrorNotice text={logoutError} alert />}
         </Centered>
       );
     }
@@ -100,10 +113,11 @@ export function AuthGate({ children }: Props) {
               {t.logOut}
             </Button>
           </div>
+          {logoutError && <ErrorNotice text={logoutError} alert />}
         </Centered>
       );
     }
-    return children(state.user, logout);
+    return children(state.user, logout, logoutError);
   }
   if (state.setupRequired) return <SetupNotice check={check} />;
   return <LoginPage done={(user) => setState({ user })} passkeyOrigin={state.passkeyOrigin} />;
@@ -261,26 +275,32 @@ function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passke
     }
   };
 
+  // The second step: the code from the authenticator app or a recovery code.
+  const submitCode = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!challenge) return;
+    setBusy(true);
+    setError("");
+    try {
+      done(await sessionApi.login2FA(challenge, password));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401 && err.message.includes("expired")) {
+        setChallenge(null);
+        setError(t.twoFactorExpired);
+      } else {
+        setError(err instanceof ApiError && err.status === 401 ? t.invalidTwoFactor : loginError(err));
+      }
+      setPassword("");
+      setBusy(false);
+    }
+  };
 
   if (challenge) {
     return (
       <Centered>
         <Brand />
         <Heading title={t.twoFactorLogin} text={t.twoFactorLoginText} />
-        <Form className="auth-page__form" onSubmit={async (e) => {
-          e.preventDefault(); setBusy(true); setError("");
-          try { done(await sessionApi.login2FA(challenge, password)); }
-          catch (err) {
-            if (err instanceof ApiError && err.status === 401 && err.message.includes("expired")) {
-              setChallenge(null);
-              setError(t.twoFactorExpired);
-            } else {
-              setError(err instanceof ApiError && err.status === 401 ? t.invalidTwoFactor : loginError(err));
-            }
-            setPassword("");
-            setBusy(false);
-          }
-        }}>
+        <Form className="auth-page__form" onSubmit={(e) => void submitCode(e)}>
           {/* Text, not numeric: recovery codes contain letters, so one field takes both. */}
           <TextInput
             id="login-code"
@@ -304,7 +324,7 @@ function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passke
   return (
     <Centered>
       <Brand />
-      <Form className="auth-page__form" onSubmit={submit}>
+      <Form className="auth-page__form" onSubmit={(e) => void submit(e)}>
         <TextInput
           id="login-user"
           labelText={t.userName}

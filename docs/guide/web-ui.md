@@ -7,7 +7,10 @@ The header at the top holds the logo and the name of the app, which leads to
 all mail, the menu button on smaller screens (see [Layout](#layout)) and, on
 the right, the person icon. That icon opens the user panel with your name,
 your [profile](./users#your-profile), **Keyboard shortcuts**, the light/dark
-switch and **Log out**; a click outside it or <kbd>Esc</kbd> closes it.
+switch and **Log out**; a click outside it or <kbd>Esc</kbd> closes it. If
+signing out fails (the server cannot be reached or answers with an error),
+you stay signed in: an error under the header says so, with the reason, and
+**Log out** again tries once more.
 
 ![The user panel, opened from the person icon](/screenshots/user-panel.png)
 
