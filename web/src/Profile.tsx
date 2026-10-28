@@ -64,7 +64,7 @@ export function PasswordForm({ done }: { done: () => void }) {
 
   const password = { showPasswordLabel: t.carbon.showPassword, hidePasswordLabel: t.carbon.hidePassword, required: true };
   return (
-    <Form className="profile-form" onSubmit={submit}>
+    <Form className="profile-form" onSubmit={(e) => void submit(e)}>
       <PasswordInput
         id={`${id}-current`}
         labelText={t.currentPassword}
@@ -417,7 +417,7 @@ export function TwoFactorSetup({
         {tag}
         <p className="app-text-secondary">{t.twoFactorSetupText}</p>
         <div>
-          <Button kind={actionKind} onClick={start} disabled={busy}>{t.twoFactorSetup}</Button>
+          <Button kind={actionKind} onClick={() => void start()} disabled={busy}>{t.twoFactorSetup}</Button>
         </div>
         <FormError text={error} />
       </div>
@@ -439,7 +439,7 @@ export function TwoFactorSetup({
         >
           {setup.secret}
         </CodeSnippet>
-        <Form className="profile-form" onSubmit={confirm}>
+        <Form className="profile-form" onSubmit={(e) => void confirm(e)}>
           {codeInput("confirm", false)}
           <FormError text={error} />
           <div>
@@ -455,13 +455,13 @@ export function TwoFactorSetup({
       {tag}
       {state.admin ? <p className="app-text-secondary">{t.twoFactorAdminRequired}</p> : (
         <>
-          <Form className="profile-form" onSubmit={regenerate}>
+          <Form className="profile-form" onSubmit={(e) => void regenerate(e)}>
             {codeInput("regenerate", false)}
             <div>
               <Button type="submit" kind="secondary" disabled={busy}>{t.twoFactorRegenerate}</Button>
             </div>
           </Form>
-          <Form className="profile-form profile-form--divided" onSubmit={disable}>
+          <Form className="profile-form profile-form--divided" onSubmit={(e) => void disable(e)}>
             <p className="app-text-secondary">{t.twoFactorDisableText}</p>
             <PasswordInput
               id={`${id}-password`}

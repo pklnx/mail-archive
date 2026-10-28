@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { User } from "./api";
+import { UNAUTHORIZED_EVENT, type User } from "./api";
 import { AuthGate } from "./Auth";
 import { applySettings, messagesFor, t } from "./i18n";
 
@@ -200,6 +200,131 @@ describe("forced screens after login", () => {
     expect(screen.getByRole("button", { name: t.twoFactorSetup })).toBeTruthy();
     expect(screen.queryByText("app for kim")).toBeNull();
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/session", "GET /api/profile/2fa"]);
+  });
+});
+
+describe("logout (#327)", () => {
+  const session: Answer = { status: 200, body: { user } };
+  const failed: Answer = { status: 500, body: { error: "store unavailable" } };
+
+  /** The app stand-in: a Log out button and the reason the last Log out failed. */
+  function renderApp() {
+    return render(
+      <AuthGate>
+        {(u, logout, logoutError) => (
+          <div>
+            <p>app for {u.name}</p>
+            <button onClick={logout}>{t.logOut}</button>
+            {logoutError && <p role="alert">{logoutError}</p>}
+          </div>
+        )}
+      </AuthGate>,
+    );
+  }
+  const logOut = () => fireEvent.click(screen.getByRole("button", { name: t.logOut }));
+  const deletes = () => calls.filter((c) => c.method === "DELETE" && c.path === "/api/session").length;
+
+  it("shows the login page after a successful Log out, with one DELETE", async () => {
+    serve({ "GET /api/session": [session], "DELETE /api/session": [{ status: 204 }] });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    expect(screen.queryByText("app for kim")).toBeNull();
+    expect(deletes()).toBe(1);
+  });
+
+  it("stays signed in with the reason when the DELETE fails, and Log out again retries", async () => {
+    serve({ "GET /api/session": [session], "DELETE /api/session": [failed, { status: 204 }] });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    expect((await screen.findByRole("alert")).textContent).toBe(t.logoutFailed("store unavailable"));
+    expect(screen.getByText("app for kim")).toBeTruthy();
+    expect(screen.queryByLabelText(t.userName)).toBeNull();
+    expect(deletes()).toBe(1);
+    expect(calls).toHaveLength(2);
+
+    logOut();
+    expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    expect(deletes()).toBe(2);
+  });
+
+  it("clears the alert when Log out is tried again, and shows it again on a second failure", async () => {
+    serve({ "GET /api/session": [session], "DELETE /api/session": [failed] });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    await screen.findByRole("alert");
+    // The second attempt waits for its answer.
+    let answer!: (r: Response) => void;
+    vi.mocked(globalThis.fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => (answer = resolve)));
+    logOut();
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    answer(new Response(JSON.stringify({ error: "still unavailable" }), { status: 500, headers: { "Content-Type": "application/json" } }));
+    expect((await screen.findByRole("alert")).textContent).toBe(t.logoutFailed("still unavailable"));
+    expect(screen.getByText("app for kim")).toBeTruthy();
+  });
+
+  // Vitest fails the run on an unhandled rejection (vite.config.ts does not
+  // turn that off), so this also proves the rejection is handled.
+  it("stays signed in when the request itself fails (no answer)", async () => {
+    serve({ "GET /api/session": [session] });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    expect((await screen.findByRole("alert")).textContent).toBe(t.logoutFailed("unexpected request DELETE /api/session"));
+    expect(screen.getByText("app for kim")).toBeTruthy();
+  });
+
+  it("drops the alert on the next state change: a 401 elsewhere, then a new login", async () => {
+    serve({
+      "GET /api/session": [session, noSession],
+      "DELETE /api/session": [failed],
+      "POST /api/session": [{ status: 200, body: { user } }],
+    });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    await screen.findByRole("alert");
+    // Another request answered 401: the gate checks the session again.
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    await logIn("kim", "kim-password");
+    expect(await screen.findByText("app for kim")).toBeTruthy();
+    expect(screen.queryByText(t.logoutFailed("store unavailable"))).toBeNull();
+    expect(screen.queryAllByRole("alert").filter((a) => a.textContent)).toHaveLength(0);
+  });
+
+  it("keeps the own-password screen with an alert when the DELETE fails, then signs out", async () => {
+    serve({
+      "GET /api/session": [{ status: 200, body: { user: { ...user, mustChangePassword: true } } }],
+      "DELETE /api/session": [failed, { status: 204 }],
+    });
+    renderGate();
+    expect(await screen.findByRole("heading", { name: t.chooseOwnPassword })).toBeTruthy();
+    logOut();
+    await waitFor(() => expect(alertText()).toContain(t.logoutFailed("store unavailable")));
+    expect(screen.getByRole("heading", { name: t.chooseOwnPassword })).toBeTruthy();
+    logOut();
+    expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    expect(deletes()).toBe(2);
+  });
+
+  it("keeps the two-factor setup screen with an alert when the DELETE fails, then signs out", async () => {
+    serve({
+      "GET /api/session": [{ status: 200, body: { user: { ...user, twoFactorEnabled: false, twoFactorRequired: true } } }],
+      "GET /api/profile/2fa": [{ status: 200, body: { enabled: false, required: true, admin: false, setupPending: false } }],
+      "DELETE /api/session": [failed, { status: 204 }],
+    });
+    renderGate();
+    expect(await screen.findByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
+    await screen.findByText(t.twoFactorSetupText);
+    logOut();
+    await waitFor(() => expect(alertText()).toContain(t.logoutFailed("store unavailable")));
+    expect(screen.getByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
+    logOut();
+    expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    expect(deletes()).toBe(2);
   });
 });
 

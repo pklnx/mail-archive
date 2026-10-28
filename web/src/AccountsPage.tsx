@@ -1009,7 +1009,7 @@ export function SMTPAccountForm({ account, admin, smtpOn, onCancel, onCreated, o
   }
 
   return (
-    <Form onSubmit={submit} className="page-form">
+    <Form onSubmit={(e) => void submit(e)} className="page-form">
       {!smtpOn && (
         // A notification takes no interactive content: the link follows it.
         <div className="notice-with-link">

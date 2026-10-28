@@ -44,7 +44,7 @@ afterEach(() => {
 
 it("shows the notice in place of the overview; Escape and the close button close it", async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  render(<App user={user} logout={() => {}} />);
+  render(<App user={user} logout={() => {}} logoutError="" />);
   const node = await screen.findByRole("treeitem", { name: "INBOX 5" });
   node.focus();
   fireEvent.keyDown(node, { key: "?" });

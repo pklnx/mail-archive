@@ -100,7 +100,7 @@ afterEach(() => {
 let shortcutsLoaded = false;
 beforeEach(async () => {
   if (shortcutsLoaded) return;
-  render(<App user={user()} logout={() => {}} />);
+  render(<App user={user()} logout={() => {}} logoutError="" />);
   fireEvent.keyDown(document.body, { key: "?" });
   await screen.findByRole("dialog", { name: t.shortcuts });
   cleanup();
@@ -108,8 +108,8 @@ beforeEach(async () => {
   shortcutsLoaded = true;
 });
 
-async function renderApp(admin = false, logout = () => {}) {
-  render(<App user={user(admin)} logout={logout} />);
+async function renderApp(admin = false, logout = () => {}, logoutError = "") {
+  render(<App user={user(admin)} logout={logout} logoutError={logoutError} />);
   // The accounts are loaded: the tree has them.
   await screen.findByRole("treeitem", { name: /^work$/, hidden: true });
 }
@@ -665,6 +665,35 @@ describe("user panel (#284)", () => {
     expect(logout).toHaveBeenCalledTimes(1);
   });
 
+  it("closes on Log out, with the focus back on its action, so a failure alert is not covered (#327)", async () => {
+    const logout = vi.fn();
+    await renderApp(false, logout);
+    open();
+    fireEvent.click(item(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("shows a failed Log out as an alert in the banner slot under the header (#327)", async () => {
+    await renderApp(false, () => {}, t.logoutFailed("500 Internal Server Error"));
+    // HealthBanner's own live region is an (empty) alert too.
+    const alerts = screen.getAllByRole("alert").filter((el) => el.textContent?.includes(t.logoutFailed("500 Internal Server Error")));
+    expect(alerts).toHaveLength(1);
+    const alert = alerts[0]!;
+    expect(alert.classList.contains("cds--inline-notification")).toBe(true);
+    // The slot is the first child of the shell body, above the main view.
+    const slot = document.querySelector(".app-shell__body")!.firstElementChild!;
+    expect(slot.contains(alert)).toBe(true);
+  });
+
+  it("shows no logout alert without a logout error", async () => {
+    await renderApp();
+    expect(screen.getAllByRole("alert").filter((el) => el.textContent)).toHaveLength(0);
+    expect(document.querySelector(".app-shell__body .cds--inline-notification")).toBeNull();
+  });
+
   it("closes on a click outside and toggles with its action", async () => {
     await renderApp();
     open();
@@ -1015,7 +1044,7 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
 
   it("leaves the keys to the actions menu and to the danger Modal on Users", async () => {
     window.history.replaceState(null, "", "/?view=users");
-    render(<App user={user(true)} logout={() => {}} />);
+    render(<App user={user(true)} logout={() => {}} logoutError="" />);
     fireEvent.click(await screen.findByRole("button", { name: t.userActions("bob") }));
     const item = screen.getByRole("menuitem", { name: t.removeUser });
     key(item, "?");
@@ -1035,7 +1064,7 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
 
   it("leaves the keys to the fields of Retention", async () => {
     window.history.replaceState(null, "", "/?view=retention");
-    render(<App user={user(true)} logout={() => {}} />);
+    render(<App user={user(true)} logout={() => {}} logoutError="" />);
     const years = await screen.findByLabelText(t.ruleYears);
     years.focus();
     key(years, "?");

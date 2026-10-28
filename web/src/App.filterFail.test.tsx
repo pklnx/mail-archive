@@ -42,7 +42,7 @@ afterEach(() => {
 
 it("shows the notice with Retry in the popover; the tags still work", async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  render(<App user={user} logout={() => {}} />);
+  render(<App user={user} logout={() => {}} logoutError="" />);
   const button = screen.getByRole("button", { name: t.filters });
   fireEvent.click(button);
   const title = await screen.findByText(t.viewLoadFailed);

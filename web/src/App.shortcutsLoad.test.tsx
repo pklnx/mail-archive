@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 it("returns the focus to where it was when ? was pressed, also if it moved while the chunk loaded", async () => {
-  render(<App user={user} logout={() => {}} />);
+  render(<App user={user} logout={() => {}} logoutError="" />);
   const node = await screen.findByRole("treeitem", { name: "INBOX 5" });
   node.focus();
   fireEvent.keyDown(node, { key: "?" });

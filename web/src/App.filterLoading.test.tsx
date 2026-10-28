@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 it("shows the skeleton in the popover, and Edit filters closes the user panel at once", () => {
-  render(<App user={user} logout={() => {}} />);
+  render(<App user={user} logout={() => {}} logoutError="" />);
   const userAction = screen.getByRole("button", { name: t.userPanelOf(user.name) });
   fireEvent.click(userAction);
   expect(userAction.getAttribute("aria-expanded")).toBe("true");
