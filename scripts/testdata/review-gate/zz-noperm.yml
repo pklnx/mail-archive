@@ -1,0 +1,9 @@
+# zizmor: no permissions block, so the token gets the repository default.
+name: No permissions
+on:
+  pull_request:
+jobs:
+  build: # want excessive-permissions
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi

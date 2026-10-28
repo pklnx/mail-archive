@@ -2,7 +2,7 @@
 # Self-test of scripts/review-gate.sh (`make review-gate-test`). Offline: temp
 # git repos with a base and a head commit built from
 # scripts/testdata/review-gate, the real tools (GOLANGCI_LINT, SQUAWK,
-# ACTIONLINT; the Makefile sets them), stubs for tool failures, no module
+# ACTIONLINT, ZIZMOR; the Makefile sets them), stubs for tool failures, no module
 # downloads (the Go fixture uses only the standard library).
 set -eu
 
@@ -12,7 +12,8 @@ fx=$here/testdata/review-gate
 : "${GOLANGCI_LINT:?set GOLANGCI_LINT (make review-gate-test sets it)}"
 : "${SQUAWK:?set SQUAWK (make review-gate-test sets it)}"
 : "${ACTIONLINT:?set ACTIONLINT (make review-gate-test sets it)}"
-real_golangci=$GOLANGCI_LINT real_squawk=$SQUAWK real_actionlint=$ACTIONLINT
+: "${ZIZMOR:?set ZIZMOR (make review-gate-test sets it)}"
+real_golangci=$GOLANGCI_LINT real_squawk=$SQUAWK real_actionlint=$ACTIONLINT real_zizmor=$ZIZMOR
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -27,7 +28,9 @@ printf '#!/bin/sh\necho "panic: boom" >&2\nexit 3\n' >"$tmp/stubs/crash"
 printf '#!/bin/sh\necho "this is not JSON"\nexit 1\n' >"$tmp/stubs/garbage"
 # Valid empty JSON, but a failing exit code: the exit code alone must count.
 printf '#!/bin/sh\necho "[]"\necho "fatal: config" >&2\nexit 3\n' >"$tmp/stubs/empty-fail"
-chmod +x "$tmp/stubs/crash" "$tmp/stubs/garbage" "$tmp/stubs/empty-fail"
+# zizmor exits 10-14 for findings: that code with unreadable output.
+printf '#!/bin/sh\necho "this is not JSON"\nexit 14\n' >"$tmp/stubs/garbage14"
+chmod +x "$tmp/stubs/crash" "$tmp/stubs/garbage" "$tmp/stubs/empty-fail" "$tmp/stubs/garbage14"
 
 # line <file> <marker>: the line number of the fixture line carrying the marker.
 line() { grep -n -- "$2" "$1" | head -1 | cut -d: -f1; }
@@ -68,8 +71,8 @@ gate() {
 	rc=0
 	(
 		cd "$tmp/$n"
-		GOLANGCI_LINT=$real_golangci SQUAWK=$real_squawk ACTIONLINT=$real_actionlint
-		export GOLANGCI_LINT SQUAWK ACTIONLINT
+		GOLANGCI_LINT=$real_golangci SQUAWK=$real_squawk ACTIONLINT=$real_actionlint ZIZMOR=$real_zizmor
+		export GOLANGCI_LINT SQUAWK ACTIONLINT ZIZMOR
 		for kv in "$@"; do export "${kv?}"; done
 		BASE=base sh "$gate"
 	) >"$tmp/$n.out" 2>"$tmp/$n.err" || rc=$?
@@ -104,7 +107,7 @@ check() {
 repo clean 'echo more >>README.md'
 gate clean
 check clean 0 clean
-grep -q 'skipped: noctx (no changed non-test Go files), squawk (no new migrations), migration-changed (no migration changes), actionlint (no workflow changes))$' "$tmp/clean.out" ||
+grep -q 'skipped: noctx (no changed non-test Go files), squawk (no new migrations), migration-changed (no migration changes), actionlint (no workflow changes), zizmor (no workflow changes))$' "$tmp/clean.out" ||
 	{ echo "FAIL clean-skipped: $(cat "$tmp/clean.out")" >&2; fail=1; }
 
 # --- noctx: only the lines the head adds, not Old in the base, not tests;
@@ -166,15 +169,53 @@ repo wf-bad 'cp "$fx/bad.yml" .github/workflows/'
 gate wf-bad
 l_inj=$(line "$fx/bad.yml" 'want template injection')
 l_mat=$(line "$fx/bad.yml" 'want undefined matrix property')
-check wf-bad 1 "[.findings[] | [.tool, .rule, .file, .line]] ==
+check wf-bad 1 "[.findings[] | select(.tool == \"actionlint\") | [.tool, .rule, .file, .line]] ==
 	[[\"actionlint\",\"expression\",\".github/workflows/bad.yml\",$l_inj],
 	 [\"actionlint\",\"expression\",\".github/workflows/bad.yml\",$l_mat]]
-	and (.findings[0].message | test(\"github.event.pull_request.title.*untrusted\"))
-	and (.findings[1].message | test(\"golang\"))"
+	and ([.findings[] | select(.tool == \"actionlint\")][0].message | test(\"github.event.pull_request.title.*untrusted\"))
+	and ([.findings[] | select(.tool == \"actionlint\")][1].message | test(\"golang\"))
+	and .ran == [\"actionlint\", \"zizmor\"]"
 repo wf-ok 'cp "$fx/ok.yml" .github/workflows/'
 gate wf-ok
 check wf-ok 0 clean
-grep -q 'ran: actionlint;' "$tmp/wf-ok.out" || { echo "FAIL wf-ok-ran: $(cat "$tmp/wf-ok.out")" >&2; fail=1; }
+grep -q 'ran: actionlint, zizmor;' "$tmp/wf-ok.out" || { echo "FAIL wf-ok-ran: $(cat "$tmp/wf-ok.out")" >&2; fail=1; }
+
+# --- zizmor: an unpinned action, the pull_request_target trigger and a
+# missing permissions block each give a finding on their line; the same
+# action pinned to a SHA gives none. The template injection of bad.yml is found
+# by zizmor as well (offline, medium and up; the gate reports file lines from 1).
+repo zz-unpinned 'cp "$fx/zz-unpinned.yml" .github/workflows/'
+gate zz-unpinned
+l=$(line "$fx/zz-unpinned.yml" 'want unpinned-uses')
+check zz-unpinned 1 "[.findings[] | [.tool, .rule, .file, .line]] ==
+	[[\"zizmor\",\"unpinned-uses\",\".github/workflows/zz-unpinned.yml\",$l]]"
+repo zz-target 'cp "$fx/zz-target.yml" .github/workflows/'
+gate zz-target
+l=$(line "$fx/zz-target.yml" 'want dangerous-triggers')
+check zz-target 1 "[.findings[] | [.tool, .rule, .file, .line]] ==
+	[[\"zizmor\",\"dangerous-triggers\",\".github/workflows/zz-target.yml\",$l]]"
+repo zz-noperm 'cp "$fx/zz-noperm.yml" .github/workflows/'
+gate zz-noperm
+l=$(line "$fx/zz-noperm.yml" 'want excessive-permissions')
+check zz-noperm 1 "[.findings[] | [.tool, .rule, .file, .line]] ==
+	[[\"zizmor\",\"excessive-permissions\",\".github/workflows/zz-noperm.yml\",$l]]"
+repo zz-pinned 'cp "$fx/zz-pinned.yml" .github/workflows/'
+gate zz-pinned
+check zz-pinned 0 clean
+gate wf-bad
+l_inj=$(line "$fx/bad.yml" 'want template injection')
+check zz-bad 1 "[.findings[] | select(.tool == \"zizmor\") | [.rule, .line]] == [[\"template-injection\",$l_inj]]"
+# main stays clean: the repository's own workflows, all of them as changed
+# files (labeler.yml uses pull_request_target on purpose; zizmor knows
+# actions/labeler as a safe user of it and needs no exemption, see
+# docs/development/review-gate.md).
+repo real-workflows 'cp "$here"/../.github/workflows/*.yml .github/workflows/'
+gate real-workflows
+check real-workflows 0 clean
+repo real-labeler 'cp "$here/../.github/workflows/labeler.yml" .github/workflows/'
+gate real-labeler
+check real-labeler 0 clean
+grep -q 'ran: actionlint, zizmor;' "$tmp/real-labeler.out" || { echo "FAIL real-labeler-ran: $(cat "$tmp/real-labeler.out")" >&2; fail=1; }
 
 # --- errors: never a pass.
 repo dirty 'echo more >>README.md'
@@ -191,9 +232,17 @@ check squawk-garbage 2 '.errors[0].tool == "squawk" and (.errors[0].message | te
 gate mig-new SQUAWK="$tmp/stubs/crash"
 check squawk-crash 2 '.errors[0].tool == "squawk" and (.errors[0].message | test("exit 3"))'
 gate wf-bad ACTIONLINT="$tmp/stubs/crash"
-check actionlint-crash 2 '.errors[0].tool == "actionlint" and .findings == []'
+check actionlint-crash 2 '.errors[0].tool == "actionlint" and ([.findings[] | select(.tool == "actionlint")] == [])'
 gate wf-bad ACTIONLINT="$tmp/stubs/empty-fail"
 check actionlint-empty-fail 2 '.errors[0].tool == "actionlint" and (.errors[0].message | test("exit 3.*fatal"))'
+gate zz-unpinned ZIZMOR="$tmp/stubs/crash"
+check zizmor-crash 2 '.errors[0].tool == "zizmor" and (.errors[0].message | test("exit 3.*boom")) and .findings == []'
+gate zz-unpinned ZIZMOR="$tmp/stubs/empty-fail"
+check zizmor-empty-fail 2 '.errors[0].tool == "zizmor" and (.errors[0].message | test("exit 3.*fatal"))'
+gate zz-unpinned ZIZMOR="$tmp/stubs/garbage"
+check zizmor-garbage 2 '.errors[0].tool == "zizmor" and (.errors[0].message | test("exit 1:"))'
+gate zz-unpinned ZIZMOR="$tmp/stubs/garbage14"
+check zizmor-garbage-findings-code 2 '.errors[0].tool == "zizmor" and (.errors[0].message | test("unreadable JSON"))'
 gate mig-new SQUAWK="$tmp/stubs/empty-fail"
 check squawk-empty-fail 2 '.errors[0].tool == "squawk" and (.errors[0].message | test("exit 3.*fatal"))'
 # A missing tool is an error where it is needed, together with the findings
@@ -202,7 +251,10 @@ repo mixed 'cp "$fx/00002_new.sql" internal/store/migrations/; cp "$fx/ok.yml" .
 gate mixed ACTIONLINT="$tmp/no-such-actionlint"
 check missing-tool-with-findings 2 '(.errors | length) == 1 and (.errors[0].message | test("not found"))
 	and (.findings | length) == 2'
-gate clean ACTIONLINT="$tmp/no-such-actionlint" GOLANGCI_LINT="$tmp/no-such" SQUAWK="$tmp/no-such"
+gate mixed ZIZMOR="$tmp/no-such-zizmor"
+check missing-zizmor-with-findings 2 '(.errors | length) == 1 and .errors[0].tool == "zizmor"
+	and (.errors[0].message | test("not found")) and (.findings | length) == 2'
+gate clean ACTIONLINT="$tmp/no-such-actionlint" GOLANGCI_LINT="$tmp/no-such" SQUAWK="$tmp/no-such" ZIZMOR="$tmp/no-such"
 check missing-tools-unneeded 0 clean
 
 exit "$fail"
