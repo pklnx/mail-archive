@@ -4,7 +4,7 @@
   "description": "npm-installed tools of make review-gate (scripts/review-gate.sh); see docs/development/review-gate.md",
   "license": "MIT",
   "dependencies": {
-    "oxlint": "1.88.0",
+    "oxlint": "1.89.0",
     "oxlint-tsgolint": "7.0.2004",
     "squawk-cli": "2.68.0"
   }
