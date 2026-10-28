@@ -229,6 +229,7 @@ jobs:
           # Full history, so the base commit is reachable for the diff.
           fetch-depth: 0
       - run: sh scripts/ci-docs-only-test.sh
+      - run: sh scripts/makefile-pnpm-test.sh
       - id: detect
         env:
           EVENT_NAME: ${{ github.event_name }}
