@@ -65,6 +65,22 @@ Vite starts), and `pnpm build` fails if the result refers to another host
 (`web/scripts/check-dist.mjs`). Carbon's built-in English texts get German
 ones from the `carbon` section of `i18n.ts`.
 
+The mail view is the initial bundle; the other views load on demand (#288).
+`App.tsx` loads Accounts, Users, Retention, Log, Profile and the keyboard
+shortcuts overview with `lazyNamed()` from `web/src/lazyView.tsx`, each in a
+`LazyView` (a skeleton while the chunk loads, and a notice with a Retry button
+that reloads the page when the chunk does not load, e.g. after an upgrade);
+the forced password and 2FA screens in `Auth.tsx` take their forms from the
+Profile chunk. `check-dist` also checks the initial JS: the entry script of
+`index.html` and every chunk it imports statically
+(`web/scripts/initialBundle.mjs`). It prints that size, raw and gzip, on every
+build (`check-dist: initial JS … bytes`), and fails when it is over 579 000
+bytes (the #282 number), when a lazy chunk is missing or in the initial
+bundle, or when the computed chunks differ from the `modulepreload` links. A
+new view gets `lazyNamed()` and an entry in `web/scripts/lazyChunks.mjs`,
+which the check and the e2e suite (`web/e2e/lazy.spec.ts`) share; the budget
+is raised only in a PR that says why.
+
 The colours come from the pklnx design system
 ([pklnx/design-system](https://github.com/pklnx/design-system), #211):
 Carbon v11 unchanged, with Purple instead of Blue as the interactive colour

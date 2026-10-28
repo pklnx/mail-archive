@@ -1515,6 +1515,28 @@ select,
   max-inline-size: none;
   inline-size: 100%;
 }
+/* A lazy view (#288; lazyView.tsx): the skeleton while its chunk loads, and the notice if it cannot. */
+.app-view-fallback {
+  inline-size: 100%;
+}
+.app-load-error .cds--inline-notification {
+  max-inline-size: none;
+}
+.app-load-error__action {
+  margin-block-start: 0.5rem;
+}
+/* In place of the shortcuts overview: over the page, below the header. */
+.app-load-error--floating {
+  position: fixed;
+  z-index: 9000;
+  inset-block-start: 3.5rem;
+  inset-inline: 1rem;
+  max-inline-size: 36rem;
+  margin-inline: auto;
+  padding: 0.5rem;
+  background-color: var(--cds-layer-01);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 30%);
+}
 .inline-loading--auto {
   inline-size: auto;
   min-block-size: 2rem;

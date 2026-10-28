@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button, CodeSnippet, Form, InlineNotification, PasswordInput, TextInput } from "@carbon/react";
 import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type SessionState, type User } from "./api";
-import { PasswordForm, TwoFactorSetup } from "./Profile";
 import { ThemeToggle } from "./ThemeToggle";
 import { applySettings, t } from "./i18n";
 import { ProductMark } from "./ProductMark";
 import { autofillSupported, browserError, credentialJSON, forgetPasskey, passkeysSupported, requestOptions } from "./webauthn";
+import { LazyView, lazyNamed } from "./lazyView";
+
+// The forced screens after login are rare; their forms come with the Profile
+// view's chunk (#288), so the login page does not carry them.
+const PasswordForm = lazyNamed(() => import("./Profile"), "PasswordForm");
+const TwoFactorSetup = lazyNamed(() => import("./Profile"), "TwoFactorSetup");
 
 type GateState = SessionState | { loading: true } | { error: string };
 
@@ -68,7 +73,9 @@ export function AuthGate({ children }: Props) {
           <Brand />
           <Heading title={t.chooseOwnPassword} text={t.chooseOwnPasswordText} />
           <div className="auth-page__form">
-            <PasswordForm done={() => setState({ user: { ...user, mustChangePassword: false } })} />
+            <LazyView inline>
+              <PasswordForm done={() => setState({ user: { ...user, mustChangePassword: false } })} />
+            </LazyView>
           </div>
           <div>
             <Button kind="ghost" onClick={logout}>
@@ -84,7 +91,9 @@ export function AuthGate({ children }: Props) {
           <Brand />
           <Heading title={t.twoFactorSetup} text={t.twoFactorRequired} />
           <div className="auth-page__form">
-            <TwoFactorSetup user={state.user.name} onDone={() => check()} />
+            <LazyView inline>
+              <TwoFactorSetup user={state.user.name} onDone={() => check()} />
+            </LazyView>
           </div>
           <div>
             <Button kind="ghost" onClick={logout}>
