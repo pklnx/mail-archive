@@ -66,15 +66,37 @@ func main() {
 	dbURL := flag.String("db", os.Getenv("MAIL_ARCHIVE_DATABASE_URL"), "PostgreSQL URL of a user with CREATEDB")
 	listen := flag.String("listen", "127.0.0.1:18080", "address of the web UI")
 	imapListen := flag.String("imap-listen", "127.0.0.1:0", "address of the demo IMAP server (port 0: a free port)")
+	nowFlag := flag.String("now", "", "RFC 3339 instant the demo mail is dated from (empty: the current time); for reproducible screenshots")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	if err := run(*dbURL, *listen, *imapListen, log); err != nil {
+	now, err := parseNow(*nowFlag, time.Now)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "demo:", err)
+		os.Exit(2)
+	}
+	if err := run(*dbURL, *listen, *imapListen, now, log); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dbURL, listen, imapListen string, log *slog.Logger) error {
+// parseNow returns the instant the demo's mail is dated from: the -now
+// value, or the wall clock when it is empty.
+func parseNow(s string, wall func() time.Time) (time.Time, error) {
+	if s == "" {
+		return wall(), nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("-now: %w", err)
+	}
+	return t, nil
+}
+
+// run starts the demo. now dates the made-up mail (the IMAP messages, the
+// journal copies and the import's cut-off); everything else, such as the
+// 2FA setup and the times the server records, uses the real clock.
+func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) error {
 	if dbURL == "" {
 		return errors.New("set -db or MAIL_ARCHIVE_DATABASE_URL")
 	}
@@ -111,7 +133,7 @@ func run(dbURL, listen, imapListen string, log *slog.Logger) error {
 		return err
 	}
 
-	imapAddr, err := startIMAP(imapListen, time.Now())
+	imapAddr, err := startIMAP(imapListen, now)
 	if err != nil {
 		return err
 	}
@@ -154,14 +176,14 @@ func run(dbURL, listen, imapListen string, log *slog.Logger) error {
 			return fmt.Errorf("reconcile %s: %w", a.Name, res.Err)
 		}
 	}
-	journalAcc, err := journal(ctx, st, blobs, time.Now())
+	journalAcc, err := journal(ctx, st, blobs, now)
 	if err != nil {
 		return err
 	}
 	// The work mailbox's mail from before journaling, copied into the
 	// journal account once, as "Import existing mail from IMAP" does.
 	filler := &archive.Filler{Store: st, Blobs: blobs, Sealer: sealer, Logger: log}
-	cutoff := time.Now()
+	cutoff := now
 	fill := &store.Fill{
 		AccountID: journalAcc.ID, Host: host, Port: portNum, TLSMode: store.TLSModeNone,
 		Username: "alex.morgan@work.example", Cutoff: &cutoff,
