@@ -37,8 +37,9 @@ printf '#!/bin/sh\necho "this is not JSON"\nexit 14\n' >"$tmp/stubs/garbage14"
 # diagnostics under exit 1, and a clean report with noise on stderr.
 printf '#!/bin/sh\necho "{\\"diagnostics\\": []}"\nexit 1\n' >"$tmp/stubs/ox-empty-1"
 printf '#!/bin/sh\necho "{\\"diagnostics\\": []}"\necho "warning: something" >&2\nexit 0\n' >"$tmp/stubs/ox-noise"
+printf '#!/bin/sh\necho "{\\"diagnostics\\": []}"\nexit 3\n' >"$tmp/stubs/ox-empty-3"
 chmod +x "$tmp/stubs/crash" "$tmp/stubs/garbage" "$tmp/stubs/empty-fail" "$tmp/stubs/garbage14" \
-	"$tmp/stubs/ox-empty-1" "$tmp/stubs/ox-noise"
+	"$tmp/stubs/ox-empty-1" "$tmp/stubs/ox-noise" "$tmp/stubs/ox-empty-3"
 
 # line <file> <marker>: the line number of the fixture line carrying the marker.
 line() { grep -n -- "$2" "$1" | head -1 | cut -d: -f1; }
@@ -313,6 +314,8 @@ gate web-bad OXLINT="$tmp/stubs/empty-fail"
 check oxlint-empty-fail 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("exit 3.*fatal"))'
 gate web-bad OXLINT="$tmp/stubs/ox-empty-1"
 check oxlint-exit1-no-diagnostics 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("without diagnostics"))'
+gate web-ok OXLINT="$tmp/stubs/ox-empty-3"
+check oxlint-exit3-clean-report 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("^exit 3"))'
 gate web-ok OXLINT="$tmp/stubs/ox-noise"
 check oxlint-stderr 2 '.errors[0].tool == "oxlint" and (.errors[0].message | test("stderr: warning"))'
 # The real oxlint with a type engine that crashes or is not there.
