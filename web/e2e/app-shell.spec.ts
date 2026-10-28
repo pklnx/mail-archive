@@ -180,8 +180,8 @@ test.describe("desktop", () => {
     expect(await search.evaluate((e: HTMLInputElement) => [e.selectionStart, e.selectionEnd])).toEqual([0, "receipts".length]);
 
     // The data on a management page.
-    await page.goto("/?view=accounts");
-    const address = page.getByRole("main").getByText(/alex@example\.com · /).first();
+    await page.goto("/?view=accounts&id=personal");
+    const address = page.getByRole("main").getByText("alex@example.com", { exact: true });
     await expect(address).toBeVisible();
     expect(await userSelect(address)).not.toBe("none");
   });

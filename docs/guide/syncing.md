@@ -59,8 +59,8 @@ Apply a change with `docker compose up -d web`.
 
 ### Per account
 
-Each IMAP account can have its own interval, in the web UI under **Edit** →
-**Schedule** or with
+Each IMAP account can have its own interval, in the web UI under
+**Schedule** → **Edit** on the account's page or with
 [`./ma account set-schedule`](../reference/cli#accounts):
 
 - **Default**: `MAIL_ARCHIVE_SYNC_INTERVAL`.
@@ -253,9 +253,9 @@ that was interrupted by a crash is shown as failed with the error
 
 ## Sync status
 
-The account page shows for each account whether it is waiting, syncing (with
-the number of messages fetched and new so far) or when its last sync ended
-and how. The page refreshes every 2 seconds while a sync is waiting or
+The Accounts page shows for each account whether it is syncing and when its
+last sync ended and how; the account's own page shows it under *Last sync*,
+with the number of messages fetched and new so far while it syncs. The page refreshes every 2 seconds while a sync is waiting or
 running, and every 30 seconds otherwise, so syncs from the schedule or the
 command line show up as well. `./ma status` prints the same per account.
 
@@ -263,9 +263,9 @@ A sync ends as `ok`, `partial` (some folders failed, or could not be
 reconciled; the others are archived) or `failed` (for example a wrong
 password).
 
-Below the status, the card shows how many messages are no longer on the
-server (a link to them) and when the account was last compared with the
-server, with what the last run found.
+The account's page also shows how many messages are no longer on the
+server (*Only in archive*, a link to them) and when the account was last
+compared with the server, with what the last run found.
 
 ## Alerts
 

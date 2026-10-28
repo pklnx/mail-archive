@@ -21,7 +21,7 @@ and removed. Admins add them in the web UI (Add account → **SMTP journaling**)
 or with `./ma account add-smtp`; only admins change their addresses, because
 an address decides who receives the copies of every message. The owner can
 bring in the mail from before journaling with **Import existing mail from
-IMAP** on the card; see [Journaling](./journaling#bring-in-the-mail-from-before-journaling).
+IMAP** in the account's row menu or on its page; see [Journaling](./journaling#bring-in-the-mail-from-before-journaling).
 
 ## Adding an account
 
@@ -81,6 +81,53 @@ the folders that contain everything:
 Folder names are localized, for example `[Gmail]/Alle Nachrichten`. Run
 `./ma account folders gmail` to see the exact names.
 
+## The Accounts page
+
+**Accounts** in the navigation lists your accounts as a table: the name,
+the type (*snapshot (IMAP)*, *complete (SMTP)* or *imported*), the state
+(*failing*, *disabled*, *receiving*, or a spinner while a sync runs), the
+number of messages and the last sync, import or received message. **Sync**
+stays in each IMAP account's row; the other actions are in the row's menu
+(**⋮**):
+
+| Account | Row menu |
+|---|---|
+| IMAP | **Check server**, **Edit**, **Disable** or **Enable**, **Remove** |
+| smtp | **Mail server setup**, **Import existing mail from IMAP**, **Edit**, **Disable** or **Enable**, **Remove** |
+| Import | **Remove** |
+
+While an account syncs, **Sync**, **Check server** and **Remove** wait; so
+does **Import existing mail from IMAP** while an import from IMAP runs.
+**Mail server setup** is there for every smtp account, also when the server
+has no `MAIL_ARCHIVE_SECRET_KEY` and nothing else can be changed. On a
+phone the table keeps the name, the state and the actions; the number of
+messages and the last activity show under the name.
+
+![The Accounts page: the accounts as a table, with Sync in each IMAP row and the other actions in the row's menu](/screenshots/accounts.png)
+
+### The account's page
+
+The account's name in the table (or **Edit** in its menu) opens its page;
+the browser's Back, a reload and a bookmark work as everywhere in the UI.
+**Accounts** at its top leads back. At the top are the name with its tags,
+**Sync** and **Check server** (IMAP accounts) and a menu with **Disable** or
+**Enable** and **Remove**. Below them, tiles show the messages, the messages
+*Only in archive* (a link to them, when there are any), the folders
+archived and the last sync with its last error (smtp: the last message
+received; import: the last import).
+
+Then come the sections. An IMAP account has **Connection** (name, server,
+security, port, user name), **Schedule** and **Folders**; an smtp account
+has **Connection** (name and addresses), **Mail server setup** and
+*Imports from IMAP*; an import account lists its folders. Each section has
+its own **Edit**, which opens its form in place, and its own **Save** and
+**Cancel**. Saving one section sends only its own fields and keeps what you
+have typed or chosen in the others, so you can change the schedule and the
+folders and save them one after the other. Without
+`MAIL_ARCHIVE_SECRET_KEY` the page only shows the account.
+
+![The page of the account personal: the tiles, then Connection, Schedule and Folders, with Folders open for editing](/screenshots/account-detail.png)
+
 ## Choosing folders
 
 By default every folder is archived, spam and trash included. When you add
@@ -91,34 +138,33 @@ archived stays in the archive even if you deselect its folder later.
 
 To change the selection later:
 
-- **Web UI:** Accounts → **Edit** on the account → **Choose folders** under
-  *Folders* on the edit page. The list comes live
-  from the server; checked folders are archived. Roles reported by the server
-  (Trash, Spam, Sent, …) are shown next to the names.
+- **Web UI:** on the account's page, **Edit** under *Folders*, then **Save
+  folder selection**. The list comes live from the server; checked folders
+  are archived. Roles reported by the server (Trash, Spam, Sent, …) are
+  shown next to the names. The section lists the archived folders with their
+  messages, and the ones left out under *Not archived*.
 - **Command line:** `./ma account folders NAME` shows which folders will be
   archived and their roles, and suggests a ready-to-run command to skip spam
   and trash. `./ma account set-folders NAME --exclude Spam --exclude Trash`
   replaces the selection.
-
-![Editing an account and choosing folders](/screenshots/account-edit.png)
 
 Mail that was already archived from a folder stays in the archive when you
 deselect the folder later.
 
 ## Changing an account
 
-In the web UI, **Edit** on the account's card opens its edit page, where
-**Save** under *Account* changes the name, server, port, security, user name
-and password. Leave the password empty to keep the current one. Any change to the
+In the web UI, **Edit** under *Connection* on the account's page opens the
+form for the name, server, port, security, user name and password; **Save**
+stores them. Leave the password empty to keep the current one. Any change to the
 connection is checked with a real login before it is saved. On the command
 line, use `./ma account set-password NAME`.
 
 ### Schedule
 
-On the edit page, **Schedule** sets how often the web server syncs the
-account: the server's default, every 15 minutes to every day, or **Not on
-the schedule**; **Save schedule** stores it. Each section of the page is
-saved with its own button. On the command line:
+On the account's page, **Edit** under *Schedule* sets how often the web
+server syncs the account: the server's default, every 15 minutes to every
+day, or **Not on the schedule**; **Save schedule** stores it. On the command
+line:
 
 ```sh
 ./ma account set-schedule work --sync-interval 30m
@@ -131,7 +177,9 @@ See [The schedule](./syncing#per-account) for the server's minimum and what
 
 ### Renaming
 
-Change the name in the edit form, or on the command line:
+Change the name under *Connection* on the account's page; the page stays
+open under the new name, with whatever is open in its other sections. Or on
+the command line:
 
 ```sh
 ./ma account rename postmaster@pklnx.space pklnx
@@ -149,10 +197,14 @@ by hand (button or `./ma sync --account NAME`) still runs. To keep only the
 web server's schedule away from an account, use **Not on the schedule**
 instead; see the [comparison](./syncing#per-account).
 
+**Disable** and **Remove** are in the account's row menu and on its page;
+both ask first.
+
 **Remove** keeps the archived mail. The mail stays searchable and still shows
 the account and folder it came from; in the folder column the account is
-marked *removed*. On the account page, removed accounts are folded under
-*Removed accounts* at the end. The stored password is deleted and the account is never synced
+marked *removed*. On the Accounts page, removed accounts are folded under
+*Removed accounts* at the end, in a table of their own; each has a page
+with its tiles. The stored password is deleted and the account is never synced
 again. This cannot be undone, and the name stays taken: a new account needs a
 different name, or the removed account is deleted completely (below). An
 account without any archived mail is deleted completely right away.
@@ -175,16 +227,16 @@ else:
 ./ma account purge NAME --count 42     # the same, for scripts
 ```
 
-In the web UI, an admin finds **Delete completely…** on each of their own
-cards under *Removed accounts* on the **Accounts** page (a click on the
-heading unfolds them). It opens the same preview in a dialog; its button
+In the web UI, an admin finds **Delete completely…** in the row menu of each
+of their own accounts under *Removed accounts* on the **Accounts** page (a
+click on the heading unfolds them), and in the menu of the account's page. It opens the same preview in a dialog; its button
 **Delete completely** is enabled only once the number of messages to delete
 is typed, exactly. When something is in the way, the dialog names the rules
 and holds instead and offers no button: remove the rules and release the
 holds on the **Retention** page first. After the confirmation the web server
-deletes in the background; the card shows
-*Being deleted completely* with the messages deleted so far and disappears
-when it is done. A purge confirmed elsewhere (another browser tab, the
+deletes in the background; the row (and the account's page) shows
+*Being deleted completely* with the messages deleted so far, and the
+account disappears when it is done. A purge confirmed elsewhere (another browser tab, the
 command line) shows the same way. Other users' removed accounts are deleted from the command line with
 `./ma account purge NAME --user USER`.
 
@@ -230,9 +282,9 @@ list` shows the account as *removed (being deleted)* meanwhile, the web UI
 
 A purge is **cancelled** when a retention rule or a legal hold for the
 account appears while it runs, or when it would delete more messages than
-confirmed. In the web UI the card then returns to its normal state
-(**Delete completely…**); if the page was open meanwhile, the card also
-says that the deletion was cancelled. The reason is in the audit log
+confirmed. In the web UI the row then returns to its normal state
+(**Delete completely…** in its menu); if the page was open meanwhile, the
+row also says that the deletion was cancelled. The reason is in the audit log
 (*Cancelled account deletion*, with a note such as "retention rule #12
 added"), and a new preview names the rule or hold that is now in the way.
 `./ma account purge NAME --cancel` cancels an open purge by hand (there is

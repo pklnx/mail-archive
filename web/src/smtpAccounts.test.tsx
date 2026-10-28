@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse } from "./api";
-import { AccountsPage, addressList } from "./AccountsPage";
+import { addressList } from "./accountParts";
+import { AccountsPage } from "./AccountsPage";
 import { t } from "./i18n";
 import { findAlert } from "./test/alerts";
 
@@ -82,10 +83,15 @@ describe("adding an smtp account", () => {
   });
 });
 
-describe("the smtp card", () => {
-  it("lets the owner rename but not change addresses", async () => {
+describe("the smtp account's page", () => {
+  function detail(admin: boolean, more: Partial<Account> = {}) {
     answer = () => new Response(null, { status: 204 });
-    page(false, data([smtpAccount()]));
+    window.history.replaceState(null, "", "/?view=accounts&id=journal");
+    render(<AccountsPage accounts={{ data: data([smtpAccount(more)]), error: "", reload: () => {} }} admin={admin} renamed={() => {}} showGone={() => {}} />);
+  }
+
+  it("lets the owner rename but not change addresses", async () => {
+    detail(false);
     fireEvent.click(screen.getByRole("button", { name: t.edit }));
     expect((screen.getByLabelText(`${t.fieldAddresses} 1`) as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByText(t.addressesAdminOnly)).toBeTruthy();
@@ -96,8 +102,7 @@ describe("the smtp card", () => {
   });
 
   it("lets admins replace the addresses", async () => {
-    answer = () => new Response(null, { status: 204 });
-    page(true, data([smtpAccount()]));
+    detail(true);
     fireEvent.click(screen.getByRole("button", { name: t.edit }));
     fireEvent.click(screen.getByRole("button", { name: t.addAddress }));
     fireEvent.change(screen.getByLabelText(`${t.fieldAddresses} 2`), { target: { value: "more@archive.local" } });
@@ -107,10 +112,11 @@ describe("the smtp card", () => {
     expect(requests[0]!.body).toEqual({ addresses: ["more@archive.local"] });
   });
 
-  it("shows the mail server setup on request", () => {
-    page(false, data([smtpAccount({ addresses: ["journal@example.com"] })]));
-    fireEvent.click(screen.getByRole("button", { name: t.mailServerSetup }));
+  it("shows the mail server setup in its own section", () => {
+    detail(false, { addresses: ["journal@example.com"] });
     expect(screen.getByText(t.setupNotDedicated("archive@archive.local"))).toBeTruthy();
+    // The section is the region; the panel inside it is none of its own.
+    expect(screen.getAllByRole("region", { name: t.mailServerSetup })).toHaveLength(1);
   });
 });
 

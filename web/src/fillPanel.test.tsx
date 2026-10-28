@@ -40,7 +40,8 @@ afterEach(() => {
 
 function page(accounts: Account[]) {
   const reload = vi.fn();
-  window.history.replaceState(null, "", "/?view=accounts");
+  // The fills are on the smtp account's page.
+  window.history.replaceState(null, "", "/?view=accounts&id=journal");
   render(<AccountsPage accounts={{ data: data(accounts), error: "", reload }} admin={false} renamed={() => {}} showGone={() => {}} />);
   return reload;
 }
@@ -50,7 +51,7 @@ function confirmInDialog(name: string) {
   fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name }));
 }
 
-describe("the fill on the smtp card", () => {
+describe("the fill on the smtp account's page", () => {
   it("shows a running fill and cancels it", async () => {
     const reload = page([smtpAccount(fill())]);
     expect(screen.getByText(t.fillRunning(15, 12, 1, 2))).toBeTruthy();
@@ -58,7 +59,9 @@ describe("the fill on the smtp card", () => {
     expect(screen.getByText(/^Sent/)).toBeTruthy();
     expect(screen.getByRole("progressbar", { name: t.fillProgress })).toBeTruthy();
     expect((screen.getByRole("button", { name: t.importFromIMAP }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: t.remove }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: t.userActions("journal") }));
+    expect(screen.getByRole("menuitem", { name: t.remove }).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: t.cancelFill }));
     // It asks first; going back sends nothing.
     expect(within(screen.getByRole("dialog")).getByText(t.cancelFillText)).toBeTruthy();
@@ -141,7 +144,7 @@ describe("the fill on the smtp card", () => {
   });
 });
 
-describe("recurring fills on the smtp card", () => {
+describe("recurring fills on the smtp account's page", () => {
   const recurring = (more: Partial<Fill> = {}) =>
     fill({
       id: 5, status: "ok", keepRunning: true, recurringSince: "2026-10-01T08:00:00Z", runStartedAt: "2026-10-13T07:55:00Z",

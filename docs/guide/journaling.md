@@ -55,13 +55,15 @@ message.
    ```
 
    After creating the account, the web UI shows the Postfix lines below,
-   filled in with its address; **Mail server setup** on the account's card
-   shows them again. It only routes a domain that looks like it belongs to
+   filled in with its address; the account's page shows them again under
+   **Mail server setup** (also **Mail server setup** in its row's menu on the
+   Accounts page). It only routes a domain that looks like it belongs to
    the archive alone (`archive.local`, or a name ending in `.local`,
    `.internal`, `.test` or `.invalid`): for an address like
    `journal@example.com` it warns and uses `archive@archive.local`, because a
    transport for `example.com` would send all of that domain's mail to the
-   archive. **Edit** on the card changes the addresses (admins only).
+   archive. **Edit** under *Connection* on the account's page changes the
+   addresses (admins only).
 
    The address is only a name for the archive: `archive.local` needs no DNS
    and no MX record, because Postfix delivers to it with a transport (below).
@@ -222,8 +224,9 @@ Journaling covers mail from the moment it is switched on. What the mailbox
 already holds comes into the same account with a one-time **fill** from IMAP.
 A fill can also [keep importing](#keep-importing-recurring-fill) what shows
 up in the mailbox later.
-In the web UI, the smtp account's card has **Import existing mail from IMAP**
-(also offered right after creating the account), which opens the import
+In the web UI, **Import existing mail from IMAP** is in the smtp account's
+row menu on the Accounts page and under *Imports from IMAP* on the account's
+page (also offered right after creating the account). It opens the import
 form as a page of its own. The form takes the IMAP
 server and login, checks the login and lists the folders: trash and spam
 folders start unticked. The cut-off is optional. The form shows the first
@@ -296,8 +299,8 @@ retention.
 
 **From the web server.** A fill started in the web UI (or the
 [API](../reference/api#fills)) runs in the web server's background, one at a
-time and apart from the scheduled syncs. The card shows its progress per
-folder with **Cancel import**; after a failed, partly failed or cancelled fill
+time and apart from the scheduled syncs. The account's page shows its
+progress per folder under *Imports from IMAP*, with **Cancel import**; after a failed, partly failed or cancelled fill
 it shows the error and **Resume import**, which asks for the password again.
 The folder column marks the account as importing meanwhile. A fill the web server
 was running when it stopped keeps its encrypted password and continues at the
@@ -348,8 +351,8 @@ the future, from a server with a wrong clock, counts as old.
 **After a restart.** The web server starts no run of a recurring fill in the
 first 70 minutes after it started. While it was down, Postfix kept the journal
 copies queued and retries them at least every 4000 seconds; they must arrive
-before the fill sees the mailbox copies. The card shows such a run as
-waiting. Re-enabling a disabled smtp account starts no such hold: the
+before the fill sees the mailbox copies. The account's page shows such a run
+as waiting. Re-enabling a disabled smtp account starts no such hold: the
 copies Postfix kept queued while the account answered `451` arrive within
 about an hour, but a recurring fill that is overdue runs within a minute and
 may import their mailbox copies first. To avoid that, stop the fill before
@@ -372,7 +375,7 @@ downloading what the fill imported before.
 
 **New folders** are picked up, subject to the fill's include and exclude
 lists. A trash or spam folder that appears later is skipped, because nobody
-confirmed it: the card lists it as such, and the command line shows it as
+confirmed it: the account's page lists it as such, and the command line shows it as
 *not confirmed*. It is filled only if it was confirmed when the fill started
 or was switched on, or if the fill's include list names it.
 
@@ -386,12 +389,12 @@ from 5 minutes to 30 days, but not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`.
 The next run is due that long after the last one started. With the schedule
 off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are no scheduled runs, and no fill
 is stale; a fill just started, switched on, resumed or interrupted still
-finishes its current run. Change it on the card, or with
+finishes its current run. Change it on the account's page, or with
 `./ma account fill journal --interval 24h`. Runs of the fills of all accounts
 share one queue in the web server, one at a time; a long one-time fill delays
 the recurring runs behind it.
 
-**Counts.** The card shows how often the fill runs, when next, how the last
+**Counts.** The account's page shows how often the fill runs, when next, how the last
 run ended and its counts: imported and *waiting* (younger than two hours).
 The counts are those of the last run, not of all runs. Runs are not written
 to the [audit log](./audit-log), like scheduled syncs; starting, changing,
@@ -407,7 +410,7 @@ the [webhook alert](./operations#webhook-alerts) names the fill and its
 mailbox. Fills of a disabled account do not run, not even a run that was about to
 start, and count as healthy; they run again once the account is enabled.
 
-**Stop and resume.** **Stop importing** on the card, or
+**Stop and resume.** **Stop importing** on the account's page, or
 `./ma account fill journal --cancel`, stops the fill (after its current batch
 if it runs) and deletes its password. What it imported stays. **Resume
 import**, or `--resume`, asks for the password and makes it keep running
@@ -416,7 +419,7 @@ stop it, then resume it with the new password. With several fills, the
 command line takes `--fill ID`; `./ma account fill journal` lists them.
 
 **Turning a one-time fill into a recurring one.** An ended one-time fill has
-**Keep importing new mail** on its card, or
+**Keep importing new mail** on the account's page, or
 `./ma account fill journal --keep-running`. The password is asked for again.
 The first run scans its IMAP folders again from the start and imports what
 the cut-off left out; what the fill imported before is recognised without
