@@ -1,7 +1,8 @@
 // Checks the built site (docs/.vitepress/dist) after `vitepress build`, as
 // part of `pnpm build`: the pklnx theme (#237) brings IBM Plex and Carbon
 // icons, whose licence texts must ship in every build; the default theme's
-// Inter font must not; the brand files the config names must be there; and no
+// Inter font must not; the Carbon icons' Apache-2.0 notice must survive
+// minification; the brand files the config names must be there; and no
 // Carbon or IBM package may be installed for the docs (the theme's
 // @carbon/styles peer is optional and stays out).
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -64,6 +65,19 @@ if (!files.some((f) => f.startsWith("assets/") && /IBMPlexSans-Regular.*\.woff2$
 // system font instead of IBM Plex.
 if (!css.some((c) => /:root\{--font-sans:var\(--vp-font-family-base\);--font-mono:var\(--vp-font-family-mono\)\}/.test(c))) {
   fail("no CSS points Tailwind's --font-sans and --font-mono at the theme's fonts");
+}
+
+// The Carbon icons' Apache-2.0 notice. theme/vitepress.css opens with it as a
+// /*! legal comment, but the minifier (Lightning CSS) drops that comment; the
+// notice survives inside each icon's SVG data-URI, percent-encoded. Every one
+// of the theme's Carbon icons must still carry it. If a design-system bump
+// adds or removes an icon, update the count (the failure says how many were
+// found).
+const CARBON_NOTICE = "Copyright%20IBM%20Corp.%2C%20Apache-2.0";
+const CARBON_NOTICE_COUNT = 14;
+const noticeCount = css.reduce((n, c) => n + c.split(CARBON_NOTICE).length - 1, 0);
+if (noticeCount !== CARBON_NOTICE_COUNT) {
+  fail(`built CSS has ${noticeCount} Carbon icon Apache-2.0 notices (${CARBON_NOTICE}), expected ${CARBON_NOTICE_COUNT}`);
 }
 
 // The home page head and footer.

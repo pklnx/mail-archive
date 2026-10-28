@@ -288,16 +288,27 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
   (UI and docs), GitHub Actions and Docker images. PostgreSQL major versions
   are excluded because they need a data migration.
 - Dependabot does not update URL dependencies such as
-  `@pklnx/design-system` (the theme, see [Web UI](#web-ui)): bump them by
-  hand in a pull request. Download the new release's tarball, verify it
-  with `gh attestation verify pklnx-design-system-X.Y.Z.tgz --repo
-  pklnx/design-system --signer-workflow
+  `@pklnx/design-system` (the theme, see [Web UI](#web-ui); used by both
+  `web/` and `docs/`): bump them by hand in a pull request. Download the new
+  release's tarball and verify it with `gh attestation verify
+  pklnx-design-system-X.Y.Z.tgz --repo pklnx/design-system --signer-workflow
   pklnx/design-system/.github/workflows/release.yml --source-ref
-  refs/heads/main` (pinned to the release workflow), change the URL in
-  `web/package.json`, run `pnpm install`, and compare the `integrity` line
-  in `web/pnpm-lock.yaml` with the one in the release notes (and its
-  SHA256 with the release's `SHA256SUMS`). Note the check in the pull
-  request.
+  refs/heads/main --format json` (pinned to the release workflow). Without a
+  `gh` login that command exits 4; then fetch the public attestation of the
+  tarball's SHA256 and verify against that bundle instead:
+  `curl -sS https://api.github.com/repos/pklnx/design-system/attestations/sha256:<sha256>`,
+  write each `attestations[].bundle` as one JSON line into `b.jsonl`, and add
+  `--bundle b.jsonl` to the command above. As a counter-proof, the same
+  command with a wrong `--repo` must fail. Then change the URL in both
+  `web/package.json` and `docs/package.json`, run `pnpm install` in `web/`
+  and in `docs/`, and compare the `integrity` line in `web/pnpm-lock.yaml`
+  and `docs/pnpm-lock.yaml` with the one in the release notes (and the
+  tarball's SHA256 with the release's `SHA256SUMS`). `pnpm build` in `docs/`
+  runs `scripts/check-dist.mjs`, which counts the Carbon icons' Apache-2.0
+  notice in the built CSS; if the new release adds or removes an icon, update
+  the expected count there. If the release changes brand files, copy them
+  unchanged and update `brand-assets.json`. Note the verification output in
+  the pull request.
 - GitHub Actions are pinned to commit SHAs; workflows run with read-only
   permissions unless a job needs more.
 - Direct Go dependencies are few: go-imap v2 (still in beta) with go-sasl,
