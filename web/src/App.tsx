@@ -256,6 +256,7 @@ export function App({ user, logout }: Props) {
           onClick={() => !foldersOpen && setMenuOpen((open) => !open)}
         />
         <HeaderName
+          className="app-header__name"
           href="/"
           prefix=""
           onClick={(e: MouseEvent) => {
