@@ -235,9 +235,12 @@ export function UsersPage() {
             else if (kind === "passkeys") void run(() => usersApi.removePasskeys(name));
             else {
               // Removed from its detail page: the list replaces the page.
+              // Removed from its row: the row goes, and the focus goes to
+              // the list's h1 instead of falling to the body.
               const fromDetail = state.id === name;
               void run(() => usersApi.remove(name)).then((ok) => {
                 if (ok && fromDetail) toList(true);
+                else if (ok) heading.current?.focus();
               });
             }
           }}

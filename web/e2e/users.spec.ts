@@ -42,6 +42,15 @@ test("add a user, copy the generated password, lock and unlock", async ({ page, 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(user.getByText("locked", { exact: true })).toHaveCount(0);
   await expect(user).toContainText("must change password");
+
+  // Removing from the row asks first; the row goes and the focus goes to the list's heading.
+  await user.getByRole("button", { name: `Actions for ${name}` }).click();
+  await page.getByRole("menuitem", { name: "Remove" }).click();
+  const remove = page.getByRole("dialog", { name: `Remove “${name}”?` });
+  await remove.getByRole("button", { name: "Remove" }).click();
+  await expect(remove).toHaveCount(0);
+  await expect(user).toHaveCount(0);
+  await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeFocused();
 });
 
 test("a user's page: open it from the table, act from its menu, remove the user, back on the list", async ({ page }) => {

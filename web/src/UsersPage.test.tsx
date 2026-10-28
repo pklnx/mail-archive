@@ -319,6 +319,26 @@ describe("UsersPage", () => {
     await waitFor(() => expect(changes()).toEqual([{ method: "DELETE", url: "/api/users/bob", body: undefined }]));
   });
 
+  it("puts the focus on the list's h1 when a removed user's row goes", async () => {
+    // The server forgets bob once he is removed, so his row goes on the reload.
+    const fallback = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    let gone = false;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+      if (init?.method === "DELETE" && url === "/api/users/bob") gone = true;
+      if ((init?.method ?? "GET") === "GET" && url === "/api/users" && gone) {
+        return new Response(JSON.stringify({ users: users.filter((u) => u.name !== "bob") }), { headers: { "Content-Type": "application/json" } });
+      }
+      return fallback(url, init);
+    });
+    await show();
+    pick("bob", t.removeUser);
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.removeUser }));
+    await waitFor(() => expect(screen.queryByRole("link", { name: "bob" })).toBeNull());
+    expect(changes()).toEqual([{ method: "DELETE", url: "/api/users/bob", body: undefined }]);
+    expect(window.location.search).toBe("?view=users");
+    await waitFor(() => expect(document.activeElement).toBe(h1(t.usersTitle)));
+  });
+
   describe("a user named by legal holds", () => {
     /** Answers the removal of bob with 409 and the given body. */
     function refuseRemoval(body: Record<string, unknown>) {
