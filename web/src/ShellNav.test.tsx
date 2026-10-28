@@ -4,7 +4,7 @@ import { applySettings, messagesFor, t } from "./i18n";
 import { ShellNav } from "./ShellNav";
 import type { ViewState } from "./urlState";
 
-const view = (patch: Partial<ViewState> = {}): ViewState => ({ q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", add: "", edit: "", import: "", ...patch });
+const view = (patch: Partial<ViewState> = {}): ViewState => ({ q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", ...patch });
 
 function nav(props: Partial<Parameters<typeof ShellNav>[0]> = {}) {
   const go = vi.fn();
@@ -54,7 +54,8 @@ describe("ShellNav", () => {
     expect(within(el).getByRole("link", { name: t.allMail }).getAttribute("href")).toBe("/");
     // A plain click stays in the app.
     expect(fireEvent.click(accounts)).toBe(false);
-    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "", m: "", view: "accounts" });
+    // It opens the section's list, also from a detail page (id=) of that section.
+    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "", m: "", view: "accounts", tab: "", id: "", add: "", import: "" });
     expect(onClose).toHaveBeenCalledTimes(1);
     // Ctrl-click is left to the browser (a new tab).
     expect(fireEvent.click(accounts, { ctrlKey: true })).toBe(true);
@@ -73,7 +74,7 @@ describe("ShellNav", () => {
     expect(link.getAttribute("title")).toBe(t.onlyInArchiveHint);
     expect(link.getAttribute("href")).toBe("?gone=1");
     fireEvent.click(link);
-    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "1", m: "", view: "" });
+    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "1", m: "", view: "", tab: "", id: "", add: "", import: "" });
     cleanup();
     // Still there while it is open, so the current place does not vanish.
     const open = nav({ gone: 0, state: view({ gone: "1" }) }).nav;

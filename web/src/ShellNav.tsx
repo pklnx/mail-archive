@@ -20,7 +20,7 @@ interface Props {
   go: (patch: Partial<ViewState>) => void;
 }
 
-const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", add: "", edit: "", import: "" };
+const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "" };
 
 /**
  * The shell's side navigation: the fixed sections of the app. Accounts and
@@ -40,7 +40,8 @@ export const ShellNav = forwardRef<HTMLElement, Props>(function ShellNav({ id, s
         // A Ctrl/Cmd, Shift or Alt click opens the place in a new tab or window.
         if (!isPlainClick(e)) return;
         e.preventDefault();
-        go({ account: "", folder: "", gone: "", m: "", view: "", ...patch });
+        // A section opens on its list, as its href does.
+        go({ account: "", folder: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", ...patch });
         onClose();
       }}
     >

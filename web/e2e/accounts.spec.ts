@@ -32,7 +32,7 @@ test("add an IMAP account, choose folders, sync, remove it, delete it completely
   // Leave Trash out of the next syncs, on the account's Edit page.
   const editing = main.getByRole("heading", { name: `Edit “${name}”`, level: 1 });
   await card.getByRole("button", { name: "Edit" }).click();
-  await expect(page).toHaveURL(new RegExp(`[?&]edit=${name}$`));
+  await expect(page).toHaveURL(new RegExp(`[?&]id=${name}$`));
   await expect(editing).toBeVisible();
   await main.getByRole("button", { name: "Choose folders" }).click();
   await expect(main.getByRole("checkbox", { name: "INBOX" })).toBeChecked();

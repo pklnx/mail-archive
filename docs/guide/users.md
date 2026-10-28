@@ -39,9 +39,21 @@ On the command line, `./ma user add NAME` asks for a password instead, and
 ## Managing users
 
 The users page is a table with each user's role, state, sign-in (2FA,
-passkeys, API keys), accounts and last login. For every other user, the
-menu (⋮) at the end of the row offers the actions below; the ones that
-delete or lock out ask in a dialog first. Admins can:
+passkeys, API keys), accounts and last login. On a phone the table shows
+the name, the state and the menu; role and last login are in a second line
+under the name.
+
+The name opens the **user's page**: the role and state, a row of tiles
+(accounts, last login, two-factor authentication, passkeys, when the user
+was created) and the user's [API keys](#api-keys). The page has its own
+address, so Back, reload and bookmarks work.
+
+![A user's page](/screenshots/user-detail.png)
+
+For every other user, the menu (⋮) at the end of the row and the menu on
+the user's page offer the actions below; the user's page also has **Reset
+password** as a button. The actions that delete or lock out ask in a dialog
+first. Admins can:
 
 - **Reset 2FA:** only shown while the user has 2FA on. Turns it off and logs
   the user out everywhere. Admins, and everyone when 2FA is required, set it
@@ -53,22 +65,24 @@ delete or lock out ask in a dialog first. Admins can:
   out.
 - **Remove passkeys:** removes all passkeys of the user and logs them out
   everywhere, for example after a lost phone.
-- **API keys:** when the user has keys, the arrow at the start of the row
-  lists them; **Revoke** stops one at once, after asking. This also works
-  for your own keys.
+- **API keys:** the user's page lists their keys; **Revoke** stops one at
+  once, after asking. This also works for your own keys, on your own page.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in;
   their API keys stop working until they are unlocked.
 - **Make admin / Remove admin.**
 - **Remove:** only for users without accounts. A user who still owns accounts
   (also removed ones) must hand them over first, on the command line:
-  `./ma account move NAME --user OLD --to NEW`.
+  `./ma account move NAME --user OLD --to NEW`. Removed from the user's page,
+  the list takes its place.
 
 A user whose accounts keep failing to sync is marked with the number of
 those accounts, so you can tell them.
 
 The last admin who can log in can be neither locked, removed nor demoted.
-Admins cannot change their own login on this page: they use their profile,
-or another admin does it.
+Admins cannot change their own login on this page: their own row has no
+menu, and their own user's page has no actions but **Revoke** for their API
+keys and a link to their profile. They use their profile, or another admin
+does it.
 
 Admins manage logins and never see other users' mail. They do see the
 [audit log](./audit-log) of every user on the **Log** page: searches with
@@ -183,7 +197,7 @@ Changing your password keeps your keys, so scripts do not break. Revoke a
 key if it may be known to others.
 
 Admins see the number of keys per user on the users page and can list and
-revoke any user's keys there. A password reset by an admin revokes the
+revoke any user's keys on the user's page. A password reset by an admin revokes the
 user's keys unless the admin unticks the box. Locking a user suspends their
 keys until the user is unlocked; removing a user deletes them. On the
 command line, `./ma user api-keys NAME` lists and `./ma user revoke-api-keys

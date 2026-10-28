@@ -1,19 +1,14 @@
-import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import {
   Button,
   Checkbox,
   CodeSnippet,
-  FeatureFlags,
   MenuItem,
   MenuItemDivider,
-  OverflowMenu,
   Table,
   TableBody,
   TableCell,
   TableContainer,
-  TableExpandedRow,
-  TableExpandHeader,
-  TableExpandRow,
   TableHead,
   TableHeader,
   TableRow,
@@ -25,8 +20,11 @@ import { Add } from "@carbon/icons-react";
 import { ApiKeyItems } from "./ApiKeys";
 import { ApiError, apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
 import { AppModal, DangerModal } from "./DangerModal";
-import { relativeTime } from "./format";
+import { relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
+import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
+import { settingsText } from "./settingsText";
+import { formatState, parseState, useViewState } from "./urlState";
 
 /**
  * The text of a failed request. A user named by a legal hold gets a sentence
@@ -43,31 +41,59 @@ const message = (err: unknown) => {
 /** A confirmation that is open: what it does, and for whom. */
 type Asking = { kind: "reset" | "lock" | "twoFactor" | "passkeys" | "remove"; user: ManagedUser } | null;
 
-/** User management for admins: logins only, never other users' mail. */
+/** The URL of a user's detail page, or of the list. */
+const hrefOf = (id = "") => formatState({ ...parseState(""), view: "users", id });
+
+const RoleTag = ({ user }: { user: ManagedUser }) => (
+  <Tag size="sm" type={user.admin ? "purple" : "gray"}>
+    {user.admin ? t.roleAdmin : t.roleUser}
+  </Tag>
+);
+
+const StateTag = ({ user }: { user: ManagedUser }) =>
+  user.locked ? (
+    <Tag size="sm" type="red">
+      {t.stateLocked}
+    </Tag>
+  ) : user.mustChangePassword ? (
+    <Tag size="sm" type="warm-gray">
+      {t.stateMustChange}
+    </Tag>
+  ) : (
+    <Tag size="sm" type="green">
+      {t.stateActive}
+    </Tag>
+  );
+
+const lastLogin = (u: ManagedUser) => (u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never);
+
+/**
+ * User management for admins: logins only, never other users' mail. The
+ * list is a table; each user has a detail page (?view=users&id=NAME) with
+ * the same actions and the user's API keys.
+ */
 export function UsersPage() {
+  const [state, update] = useViewState();
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [generated, setGenerated] = useState<GeneratedPassword | null>(null);
   const [asking, setAsking] = useState<Asking>(null);
-  // The users whose API keys are shown, and every user's keys.
-  const [showKeys, setShowKeys] = useState<Set<string>>(new Set());
   const [keys, setKeys] = useState<ApiKey[]>([]);
-  const id = useId();
-  // The menu buttons by user, so the focus can go back to one after a
-  // confirmation (its menu item is gone by then).
-  const menus = useRef(new Map<string, HTMLElement>());
+  const menus = useMenuButtons();
   const heading = useRef<HTMLHeadingElement>(null);
 
-  const reload = useCallback(() => {
-    const listed = usersApi.list().then(
-      (u) => {
-        setUsers(u);
-        setError("");
-      },
-      (err: unknown) => setError(message(err)),
-    );
-    apiKeyApi.listAll().then(setKeys, () => setKeys([]));
+  const reload = useCallback(async () => {
+    const [listed] = await Promise.all([
+      usersApi.list().then(
+        (u) => {
+          setUsers(u);
+          setError("");
+        },
+        (err: unknown) => setError(message(err)),
+      ),
+      apiKeyApi.listAll().then(setKeys, () => setKeys([])),
+    ]);
     return listed;
   }, []);
   useEffect(() => {
@@ -75,7 +101,7 @@ export function UsersPage() {
   }, [reload]);
 
   // The error of a failed action is set after the reload, whose success
-  // would clear it otherwise.
+  // would clear it otherwise. Resolves to whether the action succeeded.
   const run = async (action: () => Promise<unknown>) => {
     setError("");
     let failure = "";
@@ -86,176 +112,90 @@ export function UsersPage() {
     }
     await reload();
     if (failure) setError(failure);
+    return !failure;
   };
 
-  const toggleKeys = (name: string) =>
-    setShowKeys((cur) => {
-      const next = new Set(cur);
-      if (!next.delete(name)) next.add(name);
-      return next;
-    });
+  const detail = users && state.id ? users.find((u) => u.name === state.id) : undefined;
+  // A user that does not exist (any more) returns to the list.
+  const unknown = users !== null && state.id !== "" && !detail;
+  useEffect(() => {
+    if (unknown) update({ id: "" }, { replace: true });
+  }, [unknown, update]);
+  usePageFocus(users === null ? null : detail ? `user:${detail.name}` : "list", heading);
 
   const ask = (kind: NonNullable<Asking>["kind"], user: ManagedUser) => setAsking({ kind, user });
-  const focusBack = () => (asking && menus.current.get(asking.user.name)?.querySelector<HTMLButtonElement>("button")) ?? heading.current;
+  const focusBack = () => (asking && menus.button(asking.user.name)) ?? heading.current;
+  const open = (name: string) => update({ id: name });
+  const toList = (replace = false) => update({ id: "" }, { replace });
+
+  /** The actions of the menu, for a row and for the detail page. */
+  const items = (u: ManagedUser, withReset: boolean) => (
+    <>
+      {withReset && <MenuItem label={t.resetPassword} onClick={() => ask("reset", u)} />}
+      <MenuItem label={u.locked ? t.unlock : t.lock} onClick={() => (u.locked ? void run(() => usersApi.setLocked(u.name, false)) : ask("lock", u))} />
+      <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => usersApi.setAdmin(u.name, !u.admin))} />
+      {u.twoFactorEnabled && <MenuItem label={t.twoFactorReset} onClick={() => ask("twoFactor", u)} />}
+      {u.passkeys > 0 && <MenuItem label={t.removePasskeys} onClick={() => ask("passkeys", u)} />}
+      <MenuItemDivider />
+      <MenuItem label={t.removeUser} kind="danger" onClick={() => ask("remove", u)} />
+    </>
+  );
+
+  const notices = (
+    <>
+      {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
+      {error && (
+        <p role="alert" className="app-text-error">
+          {error}
+        </p>
+      )}
+    </>
+  );
 
   return (
     <div className="accounts-page">
       <div className="page page--wide">
-        <header className="page-header">
-          <div className="page-header__row">
-            <h1 ref={heading} tabIndex={-1} className="page-header__title type-heading-04 users-page__heading">
-              {t.usersTitle}
-            </h1>
-            <div className="page-header__actions">
-              <Button kind="primary" renderIcon={Add} onClick={() => setAdding(true)}>
-                {t.addUser}
-              </Button>
-            </div>
-          </div>
-          <p className="page-header__intro app-text-secondary">{t.adminsSeeNoMail}</p>
-        </header>
-
-        {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
-        {error && (
-          <p role="alert" className="app-text-error">
-            {error}
-          </p>
-        )}
-        {!users && !error && <p className="app-text-secondary">{t.loading}</p>}
-
-        {users && (
-          // The OverflowMenu of Carbon v12 (on Menu): the older one adds two
-          // tab stops named "Focus sentinel" to every open menu.
-          <FeatureFlags enableV12Overflowmenu>
-          <TableContainer className="users-table">
-            <Table aria-label={t.usersTitle} size="lg" overflowMenuOnHover={false}>
-              <TableHead>
-                <TableRow>
-                  <TableExpandHeader id={`${id}-expand`}>
-                    <span className="cds--visually-hidden">{t.showApiKeys}</span>
-                  </TableExpandHeader>
-                  <TableHeader>{t.colUser}</TableHeader>
-                  <TableHeader>{t.colRole}</TableHeader>
-                  <TableHeader>{t.colState}</TableHeader>
-                  <TableHeader>{t.colSignIn}</TableHeader>
-                  <TableHeader>{t.colAccounts}</TableHeader>
-                  <TableHeader>{t.colLastLogin}</TableHeader>
-                  <TableHeader>
-                    <span className="cds--visually-hidden">{t.colActions}</span>
-                  </TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {users.map((u, i) => {
-                  const own = keys.filter((k) => k.user === u.name);
-                  const open = showKeys.has(u.name);
-                  const cells = (
-                    <>
-                      <TableCell>
-                        <span className="users-table__name">{u.name}</span>
-                        {u.self && <span className="app-text-secondary"> ({t.you})</span>}
-                        {u.self && <span className="users-table__hint app-text-secondary app-text-small">{t.selfHint}</span>}
-                      </TableCell>
-                      <TableCell>
-                        <Tag size="sm" type={u.admin ? "purple" : "gray"}>
-                          {u.admin ? t.roleAdmin : t.roleUser}
-                        </Tag>
-                      </TableCell>
-                      <TableCell>
-                        {u.locked ? (
-                          <Tag size="sm" type="red">
-                            {t.stateLocked}
-                          </Tag>
-                        ) : u.mustChangePassword ? (
-                          <Tag size="sm" type="warm-gray">
-                            {t.stateMustChange}
-                          </Tag>
-                        ) : (
-                          <Tag size="sm" type="green">
-                            {t.stateActive}
-                          </Tag>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <span className="users-table__lines">
-                          <span>{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
-                          {u.passkeys > 0 && <span className="app-text-secondary">{t.passkeyCount(u.passkeys)}</span>}
-                          {u.apiKeys > 0 && <span className="app-text-secondary">{t.apiKeyCount(u.apiKeys)}</span>}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <span className="users-table__lines">
-                          <span className="app-tabular">{u.accounts}</span>
-                          {u.failingAccounts > 0 && (
-                            <span>
-                              <Tag size="sm" type="red">
-                                {t.failingCount(u.failingAccounts)}
-                              </Tag>
-                            </span>
-                          )}
-                        </span>
-                      </TableCell>
-                      <TableCell>{u.lastLoginAt ? relativeTime(u.lastLoginAt) : t.never}</TableCell>
-                      <TableCell className="cds--table-column-menu">
-                        {!u.self && (
-                          <OverflowMenu
-                            ref={(el: HTMLElement | null) => {
-                              if (el) menus.current.set(u.name, el);
-                              else menus.current.delete(u.name);
-                            }}
-                            label={t.userActions(u.name)}
-                            size="lg"
-                            menuAlignment="bottom-end"
-                            tooltipAlignment="left"
-                          >
-                            <MenuItem label={t.resetPassword} onClick={() => ask("reset", u)} />
-                            <MenuItem
-                              label={u.locked ? t.unlock : t.lock}
-                              onClick={() => (u.locked ? void run(() => usersApi.setLocked(u.name, false)) : ask("lock", u))}
-                            />
-                            <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => usersApi.setAdmin(u.name, !u.admin))} />
-                            {u.twoFactorEnabled && <MenuItem label={t.twoFactorReset} onClick={() => ask("twoFactor", u)} />}
-                            {u.passkeys > 0 && <MenuItem label={t.removePasskeys} onClick={() => ask("passkeys", u)} />}
-                            <MenuItemDivider />
-                            <MenuItem label={t.removeUser} kind="danger" onClick={() => ask("remove", u)} />
-                          </OverflowMenu>
-                        )}
-                      </TableCell>
-                    </>
-                  );
-                  if (own.length === 0) {
-                    return (
-                      <TableRow key={u.name}>
-                        <TableCell headers={`${id}-expand`} />
-                        {cells}
-                      </TableRow>
-                    );
-                  }
-                  return (
-                    <Fragment key={u.name}>
-                      <TableExpandRow
-                        aria-label={t.apiKeysOf(u.name)}
-                        // Names the key list only while it exists.
-                        aria-controls={open ? `${id}-keys-${i}` : undefined}
-                        expandHeader={`${id}-expand`}
-                        expandIconDescription={open ? t.hideApiKeys : t.apiKeysOf(u.name)}
-                        isExpanded={open}
-                        onExpand={() => toggleKeys(u.name)}
-                      >
-                        {cells}
-                      </TableExpandRow>
-                      {open && (
-                        <TableExpandedRow colSpan={8} id={`${id}-keys-${i}`}>
-                          <ApiKeyItems keys={own} revoke={(k) => void run(() => apiKeyApi.revokeAny(k.id))} />
-                        </TableExpandedRow>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          </FeatureFlags>
+        {detail ? (
+          <UserDetail
+            user={detail}
+            keys={keys.filter((k) => k.user === detail.name)}
+            heading={heading}
+            notices={notices}
+            toList={() => toList()}
+            openProfile={() => update({ view: "profile" })}
+            reset={() => ask("reset", detail)}
+            menu={
+              !detail.self && (
+                <RowMenu label={t.userActions(detail.name)} register={menus.register(detail.name)}>
+                  {items(detail, false)}
+                </RowMenu>
+              )
+            }
+            revoke={(k) => run(() => apiKeyApi.revokeAny(k.id))}
+          />
+        ) : (
+          <>
+            <header className="page-header">
+              <div className="page-header__row">
+                <h1 ref={heading} tabIndex={-1} className="page-header__title type-heading-04 app-page-title">
+                  {t.usersTitle}
+                </h1>
+                <div className="page-header__actions">
+                  <Button kind="primary" renderIcon={Add} onClick={() => setAdding(true)}>
+                    {t.addUser}
+                  </Button>
+                </div>
+              </div>
+              <p className="page-header__intro app-text-secondary">{t.adminsSeeNoMail}</p>
+            </header>
+            {notices}
+            {!users && !error && <p className="app-text-secondary">{t.loading}</p>}
+            {users && <UserTable users={users} open={open} menu={(u) => (
+              <RowMenu label={t.userActions(u.name)} register={menus.register(u.name)}>
+                {items(u, true)}
+              </RowMenu>
+            )} />}
+          </>
         )}
       </div>
 
@@ -265,7 +205,7 @@ export function UsersPage() {
           added={(g) => {
             setAdding(false);
             setGenerated(g);
-            reload();
+            void reload();
           }}
         />
       )}
@@ -293,11 +233,200 @@ export function UsersPage() {
             if (kind === "lock") void run(() => usersApi.setLocked(name, true));
             else if (kind === "twoFactor") void run(() => usersApi.reset2FA(name));
             else if (kind === "passkeys") void run(() => usersApi.removePasskeys(name));
-            else void run(() => usersApi.remove(name));
+            else {
+              // Removed from its detail page: the list replaces the page.
+              // Removed from its row: the row goes, and the focus goes to
+              // the list's h1 instead of falling to the body.
+              const fromDetail = state.id === name;
+              void run(() => usersApi.remove(name)).then((ok) => {
+                if (ok && fromDetail) toList(true);
+                else if (ok) heading.current?.focus();
+              });
+            }
           }}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The users as a table. The name is the row header and links to the user's
+ * page; the own row has no menu. Below 42rem the secondary columns give way
+ * to a second line under the name.
+ */
+function UserTable({ users, open, menu }: { users: ManagedUser[]; open: (name: string) => void; menu: (u: ManagedUser) => ReactNode }) {
+  return (
+    <TableContainer className="users-table app-table">
+      <Table aria-label={t.usersTitle} size="lg" overflowMenuOnHover={false}>
+        <TableHead>
+          <TableRow>
+            <TableHeader>{t.colUser}</TableHeader>
+            <TableHeader className="app-wide-only">{t.colRole}</TableHeader>
+            <TableHeader>{t.colState}</TableHeader>
+            <TableHeader className="app-wide-only">{t.colSignIn}</TableHeader>
+            <TableHeader className="app-wide-only">{t.colAccounts}</TableHeader>
+            <TableHeader className="app-wide-only">{t.colLastLogin}</TableHeader>
+            <TableHeader>
+              <span className="cds--visually-hidden">{t.colActions}</span>
+            </TableHeader>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {users.map((u) => (
+            <TableRow key={u.name}>
+              <TableHeader scope="row">
+                <AppLink href={hrefOf(u.name)} go={() => open(u.name)} className="users-table__name">
+                  {u.name}
+                </AppLink>
+                {u.self && <span className="app-text-secondary"> ({t.you})</span>}
+                {u.self && <span className="users-table__hint app-text-secondary app-text-small">{t.selfHint}</span>}
+                <span className="users-table__more app-narrow-only app-text-secondary app-text-small">
+                  <span>
+                    {u.admin ? t.roleAdmin : t.roleUser} · {lastLogin(u)}
+                  </span>
+                  {u.failingAccounts > 0 && (
+                    <span>
+                      <Tag size="sm" type="red">
+                        {t.failingCount(u.failingAccounts)}
+                      </Tag>
+                    </span>
+                  )}
+                </span>
+              </TableHeader>
+              <TableCell className="app-wide-only">
+                <RoleTag user={u} />
+              </TableCell>
+              <TableCell>
+                <StateTag user={u} />
+              </TableCell>
+              <TableCell className="app-wide-only">
+                <span className="users-table__lines">
+                  <span>{u.twoFactorEnabled ? t.twoFactorShortOn : t.twoFactorShortOff}</span>
+                  {u.passkeys > 0 && <span className="app-text-secondary">{t.passkeyCount(u.passkeys)}</span>}
+                  {u.apiKeys > 0 && <span className="app-text-secondary">{t.apiKeyCount(u.apiKeys)}</span>}
+                </span>
+              </TableCell>
+              <TableCell className="app-wide-only">
+                <span className="users-table__lines">
+                  <span className="app-tabular">{u.accounts}</span>
+                  {u.failingAccounts > 0 && (
+                    <span>
+                      <Tag size="sm" type="red">
+                        {t.failingCount(u.failingAccounts)}
+                      </Tag>
+                    </span>
+                  )}
+                </span>
+              </TableCell>
+              <TableCell className="app-wide-only">{lastLogin(u)}</TableCell>
+              <TableCell className="cds--table-column-menu">{!u.self && menu(u)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+}
+
+/**
+ * A user's page: the role and state, Reset password and the other actions,
+ * the summary tiles and the API keys with Revoke. The own user's page has
+ * no user actions (they are on the profile), but keeps Revoke.
+ */
+function UserDetail({
+  user,
+  keys,
+  heading,
+  notices,
+  toList,
+  openProfile,
+  reset,
+  menu,
+  revoke,
+}: {
+  user: ManagedUser;
+  keys: ApiKey[];
+  heading: RefObject<HTMLHeadingElement | null>;
+  notices: ReactNode;
+  toList: () => void;
+  openProfile: () => void;
+  reset: () => void;
+  menu: ReactNode;
+  revoke: (k: ApiKey) => Promise<unknown>;
+}) {
+  const s = settingsText();
+  const id = useId();
+  const keysHeading = useRef<HTMLHeadingElement>(null);
+  // After a revoke, the key's Revoke button is gone: the focus goes to the
+  // section's heading once the reloaded keys are shown.
+  const [revoked, setRevoked] = useState(0);
+  useLayoutEffect(() => {
+    if (revoked > 0) keysHeading.current?.focus();
+  }, [revoked]);
+  return (
+    <>
+      <DetailHeader
+        parent={{ label: t.usersTitle, href: hrefOf(), go: toList }}
+        title={user.name}
+        heading={heading}
+        tags={
+          <>
+            <RoleTag user={user} />
+            <StateTag user={user} />
+          </>
+        }
+        actions={
+          !user.self && (
+            <Button kind="tertiary" onClick={reset}>
+              {t.resetPassword}
+            </Button>
+          )
+        }
+        menu={menu}
+      >
+        {user.self && (
+          <p className="page-header__intro app-text-secondary">
+            {t.selfHint}{" "}
+            <AppLink href="?view=profile" go={openProfile}>
+              {s.openProfile}
+            </AppLink>
+          </p>
+        )}
+      </DetailHeader>
+      {notices}
+      <SummaryTiles
+        items={[
+          {
+            label: t.colAccounts,
+            value: (
+              <span className="app-inline-list">
+                <span className="app-tabular">{user.accounts}</span>
+                {user.failingAccounts > 0 && (
+                  <Tag size="sm" type="red">
+                    {t.failingCount(user.failingAccounts)}
+                  </Tag>
+                )}
+              </span>
+            ),
+          },
+          { label: t.colLastLogin, value: lastLogin(user) },
+          { label: t.twoFactor, value: user.twoFactorEnabled ? t.twoFactorStateOn : t.twoFactorStateOff },
+          { label: t.passkeys, value: <span className="app-tabular">{user.passkeys}</span> },
+          { label: s.created, value: shortDate(user.createdAt) },
+        ]}
+      />
+      <section className="page__section" aria-labelledby={`${id}-keys`}>
+        <h2 id={`${id}-keys`} ref={keysHeading} tabIndex={-1} className="type-heading-03 app-page-title">
+          {t.apiKeys}
+        </h2>
+        {keys.length === 0 ? (
+          <p className="app-text-secondary">{t.apiKeyNone}</p>
+        ) : (
+          <ApiKeyItems keys={keys} revoke={(k) => void revoke(k).then(() => setRevoked((n) => n + 1))} />
+        )}
+      </section>
+    </>
   );
 }
 

@@ -152,6 +152,20 @@ const views: View[] = [
     },
   },
 
+  // A user's page: Reset password is tertiary, the rest is in the menu.
+  { name: "Users, user page", open: (page) => mainPage(page, "/?view=users&id=kim", "kim") },
+  { name: "Users, own user page", open: (page) => mainPage(page, "/?view=users&id=demo", "demo") },
+  {
+    name: "Users, user page, Reset password dialog",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=users&id=kim", "kim");
+      await main.getByRole("button", { name: "Reset password" }).click();
+      const dialog = page.getByRole("dialog", { name: "Reset the password of “kim”?" });
+      await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+      return dialog;
+    },
+  },
+
   { name: "Log", open: (page) => mainPage(page, "/?view=log", "Log") },
 
   // Each tab is a view. The signal is a control of the panel.
