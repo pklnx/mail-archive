@@ -184,6 +184,13 @@ make docs-screenshots DEMO_DATABASE_URL='postgres://mailarchive:<password>@local
 
 It needs a Chromium for Playwright (`npx playwright install chromium`, or set
 `CHROMIUM_PATH`). Run it after visible UI changes and commit the new images.
+The shots use a fixed clock (`DOCS_NOW` in `scripts/docs-screenshots.sh`):
+the demo dates its mail from it, the browser's clock stands just after it,
+and times the server records during the run are moved next to it. Two runs
+give the same images, so only real UI changes show up in the diff and the
+output can be committed as it is. Retention is still decided against the
+real clock: when a shot starts to differ because of it, move `DOCS_NOW`
+forward and commit the full set of new images once.
 The demo alone: `go run ./tools/demo -db URL`, then open
 <http://localhost:18080> (passkeys need the host name, not the IP address).
 
