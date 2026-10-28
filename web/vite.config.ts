@@ -19,7 +19,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     // web/e2e holds the Playwright suite (`pnpm e2e`), not Vitest tests.
-    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "build/**/*.test.ts", "scripts/**/*.test.mjs"],
     setupFiles: ["src/test/setup.ts"],
   },
 });

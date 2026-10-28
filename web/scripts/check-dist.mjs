@@ -4,10 +4,15 @@
 // Fails on:
 // - "s81c.com" anywhere in the build,
 // - a CSS url() or @import with an absolute URL (http:, https:, //host),
-// - no @font-face with a local font file in the CSS.
+// - no @font-face with a local font file in the CSS,
+// - the initial JS of the mail view (#288): over the budget, a lazy chunk
+//   missing or in the initial bundle, or a closure that differs from the
+//   entry plus its modulepreload links (initialBundle.mjs).
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkBundle } from "./initialBundle.mjs";
+import { initialBudget, lazyChunks } from "./lazyChunks.mjs";
 
 const dist = fileURLToPath(new URL("../../internal/web/ui/dist/", import.meta.url));
 const remoteURL = /url\(\s*["']?\s*(?:[a-z][a-z0-9+.-]*:)?\/\//i;
@@ -40,3 +45,15 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(`check-dist: ${all.length} files, no remote URLs, local fonts present`);
+
+const bundle = checkBundle(dist, { budget: initialBudget, chunks: lazyChunks });
+const kB = (n) => `${(n / 1000).toFixed(1)} kB`;
+console.log(
+  `check-dist: initial JS ${bundle.raw} bytes (${kB(bundle.raw)}, gzip ${kB(bundle.gzip)}) in ${bundle.closure.length} chunk(s), ` +
+    `budget ${initialBudget} (${initialBudget - bundle.raw} bytes left)`,
+);
+if (bundle.problems.length) {
+  console.error(`check-dist: the initial bundle of the mail view is wrong:\n  ${bundle.problems.join("\n  ")}`);
+  process.exit(1);
+}
+console.log(`check-dist: lazy chunks ${lazyChunks.join(", ")} present, none in the initial bundle`);

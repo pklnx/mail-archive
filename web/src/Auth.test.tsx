@@ -167,6 +167,42 @@ describe("login", () => {
   });
 });
 
+// The forced screens after login bring their forms with the Profile chunk
+// (#288): a skeleton first, then the form.
+describe("forced screens after login", () => {
+  it("asks for an own password: the form loads, the change is sent, then the app shows", async () => {
+    serve({
+      "GET /api/session": [{ status: 200, body: { user: { ...user, mustChangePassword: true } } }],
+      "PUT /api/profile/password": [{ status: 204 }],
+    });
+    renderGate();
+    expect(await screen.findByRole("heading", { name: t.chooseOwnPassword })).toBeTruthy();
+    const current = (await screen.findByLabelText(t.currentPassword, { selector: "input" })) as HTMLInputElement;
+    // The skeleton is gone once the form is there.
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+    fireEvent.change(current, { target: { value: "old-password" } });
+    fireEvent.change(screen.getByLabelText(t.newPassword, { selector: "input" }), { target: { value: "a-new-password-1" } });
+    fireEvent.change(screen.getByLabelText(t.repeatPassword, { selector: "input" }), { target: { value: "a-new-password-1" } });
+    fireEvent.click(screen.getByRole("button", { name: t.changePassword }));
+    expect(await screen.findByText("app for kim")).toBeTruthy();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/session", "PUT /api/profile/password"]);
+    expect(calls[1]!.body).toEqual({ current: "old-password", new: "a-new-password-1" });
+  });
+
+  it("asks for two-factor setup when it is required: the setup loads its state", async () => {
+    serve({
+      "GET /api/session": [{ status: 200, body: { user: { ...user, twoFactorEnabled: false, twoFactorRequired: true } } }],
+      "GET /api/profile/2fa": [{ status: 200, body: { enabled: false, required: true, admin: false, setupPending: false } }],
+    });
+    renderGate();
+    expect(await screen.findByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
+    expect(await screen.findByText(t.twoFactorSetupText)).toBeTruthy();
+    expect(screen.getByRole("button", { name: t.twoFactorSetup })).toBeTruthy();
+    expect(screen.queryByText("app for kim")).toBeNull();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/session", "GET /api/profile/2fa"]);
+  });
+});
+
 describe("login in German", () => {
   // Carbon's English defaults that the login screens must not show.
   const english = ["Show password", "Hide password", "close notification", "error icon", "Copy to clipboard", "Copied", "Show more", "Focus sentinel"];
