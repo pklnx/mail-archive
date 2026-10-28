@@ -15,6 +15,41 @@ const errors = [];
 const desktop = { width: 1280, height: 800 };
 const phoneSize = { width: 390, height: 780 };
 
+// The fixed clock (scripts/docs-screenshots.sh): the demo dated its mail from
+// DOCS_NOW, and the browser's clock stands 10 minutes after it.
+const minute = 60000;
+const bucket = 10 * minute;
+const docsNow = Date.parse(process.env.DOCS_NOW ?? "");
+if (Number.isNaN(docsNow)) throw new Error("set DOCS_NOW (run through make docs-screenshots)");
+const browserNow = docsNow + bucket;
+// The moment the demo was ready, in Unix seconds; without it, now.
+const ready = process.env.DOCS_READY ? Number(process.env.DOCS_READY) * 1000 : Date.now();
+
+// The times the server records during this run (syncs and the next one,
+// logins, received times, the log) follow the real clock. In API answers,
+// each RFC 3339 time from an hour before the demo was ready to two days
+// after moves to DOCS_NOW plus its distance from that moment, rounded to
+// 10 minutes. That keeps their order and hides how long the run took. The
+// mail's own dates (at or before DOCS_NOW) and dates years ahead, such as
+// retention dates, are outside that window and stay as they are.
+const timestamp = /"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))"/g;
+function pinTimes(json) {
+  return json.replace(timestamp, (whole, value) => {
+    const t = Date.parse(value);
+    if (Number.isNaN(t) || t < ready - 60 * minute || t > ready + 2 * 24 * 60 * minute) return whole;
+    return JSON.stringify(new Date(docsNow + Math.round((t - ready) / bucket) * bucket).toISOString());
+  });
+}
+
+// One set of context options for every context, the login's included: a
+// fixed user agent, so the log's Client column does not follow the
+// installed Chromium.
+const contextOptions = {
+  locale: "en-US",
+  timezoneId: "Europe/Berlin",
+  userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+};
+
 // The demo login from tools/demo. Admins need 2FA, so the demo admin has a
 // fixed TOTP secret.
 const login = { username: "demo", password: "demo-password" };
@@ -40,7 +75,7 @@ function totp() {
 let session;
 async function loginOnce() {
   if (session) return session;
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext(contextOptions);
   const res = await ctx.request.post(base + "/api/session", { data: login, headers: { Origin: base } });
   if (!res.ok()) throw new Error(`demo login failed: ${res.status()}`);
   const { challenge } = await res.json();
@@ -55,13 +90,19 @@ async function loginOnce() {
 async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = false } = {}) {
   const storageState = loggedIn ? await loginOnce() : undefined;
   const ctx = await browser.newContext({
-    locale: "en-US",
-    timezoneId: "Europe/Berlin",
+    ...contextOptions,
     colorScheme,
     viewport,
     deviceScaleFactor: 2,
     storageState,
     ...(phone && { isMobile: true, hasTouch: true }),
+  });
+  // Date stands still; timers keep running (Carbon's animations, debounces).
+  await ctx.clock.setFixedTime(browserNow);
+  await ctx.route(base + "/api/**", async (route) => {
+    const response = await route.fetch();
+    if (!(response.headers()["content-type"] ?? "").includes("application/json")) return route.fulfill({ response });
+    return route.fulfill({ response, body: pinTimes(await response.text()) });
   });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(String(e)));
@@ -120,7 +161,7 @@ for (const scheme of ["light", "dark"]) {
   const p = await page("light");
   await p.goto(base + "/");
   // Mail to the tax advisor from the last month, with words from the body.
-  const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const since = new Date(docsNow - 30 * 86400000).toISOString().slice(0, 10);
   await p.getByRole("searchbox", { name: "Search mail" }).fill(`to:taxadvisor after:${since} receipts`);
   const list = p.getByRole("list", { name: "Messages" });
   await list.locator("mark").first().waitFor();

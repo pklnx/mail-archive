@@ -13,14 +13,65 @@ body,
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* The app behaves like an application, not a website (#283).
+   - The page does not bounce or pull to refresh (only vertically, so the
+     trackpad's back and forward swipe still works). The panes keep their
+     scrolling to themselves, further down. On phones an open message still
+     scrolls the page (#200), only without the bounce.
+   - No grey flash on tap, and no zoom on double tap. touch-action is set
+     on every element, not inherited from html, so it also holds inside the
+     scrolling panes in every engine; :where() keeps it at specificity 0,
+     so a rule like the resizer's touch-action: none wins. Pinch zoom
+     stays. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+:where(html, body, body *) {
+  touch-action: manipulation;
+}
+
+/* The app's chrome is not selectable as text: a long press or a double
+   click on navigation, buttons or the list does not start a selection.
+   Opt-in, so everything else (the open message, the management pages'
+   data) stays selectable, and fields always do. */
+.app-shell > .cds--header,
+.shell-nav,
+.folder-tree,
+.folder-rail,
+.mail-place,
+.mail-toolbar,
+.quick-filters,
+.mail-list__count,
+.mail-list__group,
+.mail-row,
+.reader-bar,
+.message__actions,
+.conversation__entry,
+.cds--btn,
+.cds--tabs,
+.cds--overflow-menu-options {
+  user-select: none;
+}
+input,
+textarea,
+select,
+[contenteditable] {
+  user-select: text;
+}
+
 /* Below 16px iOS Safari zooms into the page when a field gets focus. For
-   every field, Carbon's included: a deliberate deviation from its 14px
-   fields, on phones only. */
-@media (max-width: 767px) {
+   every field, Carbon's included, on touch screens and narrow windows:
+   Carbon's body-compact-02 size (type-scale(3), 16px) instead of its 14px
+   body-compact-01. A desktop with a mouse keeps Carbon's 14px fields. */
+@media (max-width: 767px), (pointer: coarse) {
   input:not([type="checkbox"], [type="radio"]),
   select,
   textarea {
-    font-size: 16px;
+    font-size: var(--cds-body-compact-02-font-size, 1rem);
   }
 }
 
@@ -228,6 +279,7 @@ body,
   flex-direction: column;
   block-size: 100%;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding-block-end: 1rem;
   font-size: 0.875rem;
   letter-spacing: 0.16px;
@@ -306,6 +358,11 @@ body,
 .folder-tree__warning {
   fill: var(--cds-support-error);
 }
+/* Pressed (#283): Carbon has no :active for SideNav links and tree nodes. */
+.shell-nav .cds--side-nav__link:active,
+.folder-tree .cds--tree-node__label:active {
+  background-color: var(--cds-layer-active-01);
+}
 .folder-tree__node--path > .cds--tree-node__label {
   color: var(--cds-text-secondary);
 }
@@ -337,6 +394,7 @@ body,
 .folder-rail__accounts {
   display: flex;
   overflow: hidden auto;
+  overscroll-behavior-y: contain;
   flex: 1;
   flex-direction: column;
   align-items: center;
@@ -366,6 +424,9 @@ body,
 }
 .folder-rail__account:hover {
   background-color: var(--cds-layer-hover-01);
+}
+.folder-rail__account:active {
+  background-color: var(--cds-layer-active-01);
 }
 .folder-rail__account:focus-visible {
   outline: 2px solid var(--cds-focus);
@@ -436,6 +497,7 @@ body,
 @media (min-width: 48rem) {
   .reader-scroll {
     overflow-y: auto;
+    overscroll-behavior-y: contain;
     container-type: size;
   }
   .reader-scroll:focus-visible {
@@ -576,6 +638,7 @@ body,
 }
 .mail-list__items {
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   flex: 1;
   min-block-size: 0;
   margin: 0;
@@ -630,6 +693,11 @@ body,
 .mail-row--selected:hover {
   background-color: var(--cds-layer-selected-01);
   box-shadow: inset 3px 0 0 var(--cds-border-interactive);
+}
+/* Pressed (#283): also on touch screens, where there is no hover. */
+.mail-row:active,
+.mail-row--selected:active {
+  background-color: var(--cds-layer-active-01);
 }
 .mail-row--nested {
   padding-inline-start: 2rem;
@@ -1202,6 +1270,7 @@ body,
   padding: 0.5rem 1rem;
   overflow-y: auto;
   background-color: var(--cds-layer-01);
+  overscroll-behavior-y: contain;
   box-shadow: 0 2px 6px var(--cds-shadow, rgba(0, 0, 0, 0.3));
 }
 .conversation-overlay--sheet .conversation-overlay__scrim {
@@ -1259,6 +1328,9 @@ body,
 .conversation__entry:hover {
   background-color: var(--cds-layer-hover-01);
 }
+.conversation__entry:active {
+  background-color: var(--cds-layer-active-01);
+}
 .conversation__entry:focus-visible {
   outline: 2px solid var(--cds-focus);
   outline-offset: -2px;
@@ -1267,7 +1339,8 @@ body,
   cursor: default;
   font-weight: 600;
 }
-.conversation__entry--self:hover {
+.conversation__entry--self:hover,
+.conversation__entry--self:active {
   background: transparent;
 }
 .conversation__date {
@@ -1452,6 +1525,7 @@ body,
 .accounts-page {
   height: 100%;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   font-size: 0.875rem;
   line-height: 1.42857;
   letter-spacing: 0.16px;

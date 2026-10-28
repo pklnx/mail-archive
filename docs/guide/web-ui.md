@@ -74,6 +74,15 @@ Everything you select is part of the URL, so the back button, reloads and
 bookmarks work. Back in the browser after paging returns to the list, not to
 the previous message.
 
+The interface behaves like an app rather than a web page: the page does not
+bounce or reload when you pull past its end, and a double tap does not zoom
+in (pinching still does). Lists and panes scroll on their own. The
+navigation, the buttons and the message list are not selectable as text, so
+a long press or a double click there does not start a selection; the open
+message (its subject, addresses, date and text) can be selected and copied
+as before. On touch screens, text fields use a larger font, so the phone
+does not zoom in when you tap into one.
+
 On a smaller screen, such as a tablet or a phone, the menu button at the
 left of the header opens the navigation over the page; choosing an entry,
 the button again or <kbd>Esc</kbd> closes it. The folders are behind the
