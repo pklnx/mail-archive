@@ -27,7 +27,7 @@ Read the PR, its diff and the changed files in full. Look for: plan fidelity, da
    3. HTML mail and attachments cannot execute with the application's privileges.
    4. Secrets stay protected.
    5. Retention and purge affect only the intended data.
-5. **Deterministic gate.** If the repository has `make review-gate`, run it on the head (or read the output the coordinator passes), do not repeat its findings, and spend the review on what tools cannot see: plan fidelity, semantics, races, serving-layer behaviour.
+5. **Deterministic gate** (`docs/development/review-gate.md`). Read its output first: the CI `review-gate` job, or `make review-gate` on the head. Give every finding an outcome: fixed, not affected (reason), or an exception on the issue with an expiry per that doc. A red, missing or skipped gate is not a pass. Don't repeat its findings; spend the review on what tools cannot see: plan fidelity, semantics, races, serving-layer behaviour.
 
 ## Checks
 State the verified head SHA. Read CI status once (don't watch). Run the tests of the changed code (`TEST_DATABASE_URL=postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable go test -race -count=1 ./internal/<pkg>/ -run <filter>`). Apply at least one counter-proof of your own; for a regression test, show that it fails without the fix. For a PR that changes a start file, check that the body states the start-file sizes.
