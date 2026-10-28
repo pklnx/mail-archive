@@ -62,7 +62,7 @@ describe("the pages under Accounts", () => {
     show("/?view=accounts", data([account("work")]));
     expect(heading(t.accountsTitle)).toBeTruthy();
     fireEvent.click(within(screen.getByRole("region", { name: "work" })).getByRole("button", { name: t.edit }));
-    expect(window.location.search).toBe("?view=accounts&edit=work");
+    expect(window.location.search).toBe("?view=accounts&id=work");
     expect(heading(t.editAccountTitle("work"))).toBeTruthy();
     expect((screen.getByLabelText(t.fieldHost) as HTMLInputElement).value).toBe("imap.example.com");
     const crumbs = screen.getByRole("navigation", { name: t.carbon.breadcrumb });
@@ -100,9 +100,12 @@ describe("the pages under Accounts", () => {
 
   it("wait while the list loads, then decide", () => {
     window.history.replaceState(null, "", "/?view=accounts&edit=work");
+    const before = window.history.length;
     const view = render(<AccountsPage accounts={{ data: null, error: "", reload: () => {} }} admin renamed={() => {}} showGone={() => {}} />);
     expect(screen.getByText(t.loading)).toBeTruthy();
-    expect(window.location.search).toBe("?view=accounts&edit=work");
+    // An old edit= link opens the same page; the URL now says id= (history replace).
+    expect(window.location.search).toBe("?view=accounts&id=work");
+    expect(window.history.length).toBe(before);
     view.rerender(<AccountsPage accounts={{ data: data([account("work")]), error: "", reload: () => {} }} admin renamed={() => {}} showGone={() => {}} />);
     expect(heading(t.editAccountTitle("work"))).toBeTruthy();
   });

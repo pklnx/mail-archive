@@ -1,10 +1,13 @@
 // The Users page on Carbon (#168 part 5): the table, the actions menu, and
 // the danger confirmations, each of which sends its request only after it
-// was confirmed, and the same request as before.
+// was confirmed, and the same request as before. Each user has a detail page
+// (#285 part 1) with the same actions and the user's API keys.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiKey, ManagedUser } from "./api";
+import { shortDate } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
+import { settingsTextFor } from "./settingsText";
 import { UsersPage } from "./UsersPage";
 
 function user(name: string, more: Partial<ManagedUser> = {}): ManagedUser {
@@ -25,19 +28,28 @@ const bobKey: ApiKey = {
   id: 7, name: "backup", hint: "wxyz", scopes: ["read"], createdAt: "2026-10-01T00:00:00Z", expiresAt: null, lastUsedAt: null,
   revokedAt: null, state: "active", user: "bob",
 } as ApiKey;
+const aliceKey: ApiKey = { ...bobKey, id: 9, name: "laptop", user: "alice" };
+/** The keys whose DELETE was answered: listed as revoked from then on. */
+let revoked: Set<number>;
 
 let requests: { method: string; url: string; body: unknown }[];
 /** The requests that change something: everything but the list reloads. */
 const changes = () => requests.filter((r) => r.method !== "GET");
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/?view=users");
   requests = [];
+  revoked = new Set();
   vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
     const method = init?.method ?? "GET";
     requests.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
     if (method === "GET" && url === "/api/users") return json({ users });
-    if (method === "GET" && url === "/api/api-keys") return json({ keys: [bobKey] });
+    if (method === "GET" && url === "/api/api-keys") {
+      return json({ keys: [bobKey, aliceKey].map((k) => (revoked.has(k.id) ? { ...k, state: "revoked" } : k)) });
+    }
+    const key = /^\/api\/api-keys\/(\d+)$/.exec(String(url));
+    if (method === "DELETE" && key) revoked.add(Number(key[1]));
     if (method === "POST" && url === "/api/users") return json({ name: "erin", password: "Erin-Generated-1" }, 201);
     if (method === "POST" && String(url).endsWith("/password")) return json({ name: "bob", password: "Bob-Generated-2" });
     return new Response(null, { status: 204 });
@@ -47,12 +59,22 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.history.replaceState(null, "", "/");
 });
 
 async function show() {
   render(<UsersPage />);
   await screen.findByText("bob");
 }
+
+/** Opens a user's page from the URL, as a reload or a bookmark does. */
+async function showUser(name: string) {
+  window.history.replaceState(null, "", `/?view=users&id=${name}`);
+  render(<UsersPage />);
+  await screen.findByRole("heading", { level: 1, name });
+}
+
+const h1 = (name: string) => screen.getByRole("heading", { level: 1, name });
 
 const row = (name: string) => screen.getByText(name, { exact: true, selector: ".users-table__name" }).closest("tr")!;
 
@@ -73,7 +95,12 @@ describe("UsersPage", () => {
     expect(bob.getByText(t.twoFactorShortOn)).toBeTruthy();
     expect(bob.getByText(t.passkeyCount(2))).toBeTruthy();
     expect(bob.getByText(t.apiKeyCount(1))).toBeTruthy();
-    expect(bob.getByText(t.failingCount(1))).toBeTruthy();
+    // In the Accounts column, and in the second line under the name that
+    // replaces the secondary columns below 42rem (layout.css shows one).
+    expect(bob.getAllByText(t.failingCount(1))).toHaveLength(2);
+    expect(bob.getByText(`${t.roleUser} · ${t.never}`).closest(".app-narrow-only")).toBeTruthy();
+    const wide = screen.getAllByRole("columnheader").filter((h) => h.classList.contains("app-wide-only")).map((h) => h.textContent);
+    expect(wide).toEqual([t.colRole, t.colSignIn, t.colAccounts, t.colLastLogin]);
     expect(within(row("carol")).getByText(t.stateLocked)).toBeTruthy();
     expect(within(row("dave")).getByText(t.stateMustChange)).toBeTruthy();
     const alice = within(row("alice"));
@@ -81,6 +108,185 @@ describe("UsersPage", () => {
     expect(alice.getByText(t.selfHint)).toBeTruthy();
     expect(screen.queryByRole("button", { name: t.userActions("alice") })).toBeNull();
     expect(screen.getByRole("button", { name: t.userActions("bob") })).toBeTruthy();
+  });
+
+  it("has one row per user, with the name as its row header and a link to the user's page", async () => {
+    await show();
+    const headers = screen.getAllByRole("rowheader");
+    expect(headers.map((h) => within(h).getByRole("link").textContent)).toEqual(["alice", "bob", "carol", "dave"]);
+    expect(headers.every((h) => h.tagName === "TH" && h.getAttribute("scope") === "row")).toBe(true);
+    const link = within(row("bob")).getByRole("link", { name: "bob" });
+    expect(link.getAttribute("href")).toBe("?view=users&id=bob");
+    // The row has no visible action: only the link and the menu are controls.
+    expect(within(row("bob")).getAllByRole("button")).toEqual([screen.getByRole("button", { name: t.userActions("bob") })]);
+    // Ctrl-click is left to the browser (a new tab).
+    expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);
+    expect(window.location.search).toBe("?view=users");
+  });
+
+  it("opens a user's page from the row as a history entry; the breadcrumb and Back return", async () => {
+    await show();
+    const length = window.history.length;
+    expect(fireEvent.click(within(row("bob")).getByRole("link", { name: "bob" }))).toBe(false);
+    expect(window.location.search).toBe("?view=users&id=bob");
+    expect(window.history.length).toBe(length + 1);
+    expect(h1("bob")).toBeTruthy();
+    // An in-app page change moves the focus to the new page's h1.
+    expect(document.activeElement).toBe(h1("bob"));
+    const crumbs = screen.getByRole("navigation", { name: t.carbon.breadcrumb });
+    expect(within(crumbs).getByRole("link", { name: t.usersTitle }).getAttribute("href")).toBe("?view=users");
+    fireEvent.click(within(crumbs).getByRole("link", { name: t.usersTitle }));
+    expect(window.location.search).toBe("?view=users");
+    expect(document.activeElement).toBe(h1(t.usersTitle));
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.search).toBe("?view=users&id=bob"));
+    expect(document.activeElement).toBe(h1("bob"));
+  });
+
+  it("opens a user's page from the URL without moving the focus; an unknown user returns to the list", async () => {
+    await showUser("bob");
+    expect(document.activeElement).toBe(document.body);
+    cleanup();
+    window.history.replaceState(null, "", "/?view=log");
+    window.history.pushState(null, "", "/?view=users&id=nobody");
+    render(<UsersPage />);
+    await waitFor(() => expect(window.location.search).toBe("?view=users"));
+    expect(h1(t.usersTitle)).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+    // The list replaced the URL of the unknown user.
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.search).toBe("?view=log"));
+  });
+
+  it("shows a user's page: tags, Reset password, the menu, the tiles and the API keys", async () => {
+    await showUser("bob");
+    const header = h1("bob").closest("header")!;
+    expect(within(header).getByText(t.roleUser)).toBeTruthy();
+    expect(within(header).getByText(t.stateActive)).toBeTruthy();
+    expect(within(header).getByRole("button", { name: t.resetPassword }).className).toContain("cds--btn--tertiary");
+    fireEvent.click(within(header).getByRole("button", { name: t.userActions("bob") }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([t.lock, t.makeAdmin, t.twoFactorReset, t.removePasskeys, t.removeUser]);
+    expect(screen.getByRole("menuitem", { name: t.removeUser }).className).toContain("danger");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    const tiles = Object.fromEntries([...document.querySelectorAll(".app-summary__tile")].map((el) => [el.querySelector("dt")!.textContent, el.querySelector("dd")!.textContent]));
+    expect(tiles).toEqual({
+      [t.colAccounts]: `1${t.failingCount(1)}`,
+      [t.colLastLogin]: t.never,
+      [t.twoFactor]: t.twoFactorStateOn,
+      [t.passkeys]: "2",
+      [settingsTextFor("en").created]: shortDate("2026-10-01T00:00:00Z"),
+    });
+    const keys = screen.getByRole("region", { name: t.apiKeys });
+    expect(within(keys).getByText("backup")).toBeTruthy();
+    // Only bob's keys.
+    expect(within(keys).queryByText("laptop")).toBeNull();
+    // No other page lists keys: the table has no expandable rows any more.
+    cleanup();
+    window.history.replaceState(null, "", "/?view=users");
+    await show();
+    expect(screen.queryByText("backup")).toBeNull();
+    expect(document.querySelector(".cds--table-expand")).toBeNull();
+  });
+
+  it("says when a user has no API keys", async () => {
+    await showUser("carol");
+    expect(within(screen.getByRole("region", { name: t.apiKeys })).getByText(t.apiKeyNone)).toBeTruthy();
+  });
+
+  it("removes a user from the page only after confirming, then shows the list in its place", async () => {
+    // The entry before the user's page, to see where Back leads afterwards.
+    window.history.replaceState(null, "", "/?view=log");
+    window.history.pushState(null, "", "/?view=users&id=bob");
+    render(<UsersPage />);
+    await screen.findByRole("heading", { level: 1, name: "bob" });
+    fireEvent.click(screen.getByRole("button", { name: t.userActions("bob") }));
+    fireEvent.click(screen.getByRole("menuitem", { name: t.removeUser }));
+    expect(within(dialog()).getByText(t.removeUserTitle("bob"))).toBeTruthy();
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.cancel }));
+    expect(changes()).toEqual([]);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: t.userActions("bob") }));
+
+    fireEvent.click(screen.getByRole("button", { name: t.userActions("bob") }));
+    fireEvent.click(screen.getByRole("menuitem", { name: t.removeUser }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.removeUser }));
+    await waitFor(() => expect(window.location.search).toBe("?view=users"));
+    expect(changes()).toEqual([{ method: "DELETE", url: "/api/users/bob", body: undefined }]);
+    expect(document.activeElement).toBe(h1(t.usersTitle));
+    // The list replaced the page: Back does not lead to the removed user.
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.search).toBe("?view=log"));
+  });
+
+  it("stays on the page when the removal is refused, with the reason", async () => {
+    const fallback = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) =>
+      init?.method === "DELETE" && url === "/api/users/bob"
+        ? new Response(JSON.stringify({ error: "x", code: "on_hold", holdIds: [3] }), { status: 409, headers: { "Content-Type": "application/json" } })
+        : fallback(url, init),
+    );
+    await showUser("bob");
+    fireEvent.click(screen.getByRole("button", { name: t.userActions("bob") }));
+    fireEvent.click(screen.getByRole("menuitem", { name: t.removeUser }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.removeUser }));
+    expect(await screen.findByText(t.userOnHold([3]))).toBeTruthy();
+    expect(window.location.search).toBe("?view=users&id=bob");
+    expect(h1("bob")).toBeTruthy();
+  });
+
+  it("runs the other actions from the page with the same confirmations", async () => {
+    await showUser("bob");
+    fireEvent.click(screen.getByRole("button", { name: t.resetPassword }));
+    expect(within(dialog()).getByText(t.resetPasswordTitle("bob"))).toBeTruthy();
+    expect(changes()).toEqual([]);
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.confirmReset }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "POST", url: "/api/users/bob/password", body: { removePasskeys: true, revokeApiKeys: true } }]));
+    // The generated password shows on the user's page too.
+    const panel = await screen.findByRole("status");
+    expect(within(panel).getByText("Bob-Generated-2")).toBeTruthy();
+    expect(h1("bob")).toBeTruthy();
+
+    const menu = screen.getByRole("button", { name: t.userActions("bob") });
+    fireEvent.click(menu);
+    fireEvent.click(screen.getByRole("menuitem", { name: t.lock }));
+    expect(within(dialog()).getByText(t.lockTitle("bob"))).toBeTruthy();
+    expect(changes()).toHaveLength(1);
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.lock }));
+    await waitFor(() => expect(changes()[1]).toEqual({ method: "PATCH", url: "/api/users/bob", body: { locked: true } }));
+    expect(document.activeElement).toBe(menu);
+
+    fireEvent.click(menu);
+    fireEvent.click(screen.getByRole("menuitem", { name: t.makeAdmin }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(changes()[2]).toEqual({ method: "PATCH", url: "/api/users/bob", body: { admin: true } }));
+  });
+
+  it("revokes a key on the page only after confirming, and puts the focus on the API keys heading", async () => {
+    await showUser("bob");
+    const keys = screen.getByRole("region", { name: t.apiKeys });
+    fireEvent.click(within(keys).getByRole("button", { name: t.apiKeyRevoke }));
+    expect(changes()).toEqual([]);
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.apiKeyRevoke }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "DELETE", url: "/api/api-keys/7", body: undefined }]));
+    // The Revoke button went with the key's state; the focus did not fall to the body.
+    await waitFor(() => expect(within(keys).queryByRole("button", { name: t.apiKeyRevoke })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(within(keys).getByRole("heading", { level: 2, name: t.apiKeys })));
+  });
+
+  it("shows the own user's page without user actions, but with Revoke for the own keys", async () => {
+    await showUser("alice");
+    expect(screen.queryByRole("button", { name: t.resetPassword })).toBeNull();
+    expect(screen.queryByRole("button", { name: t.userActions("alice") })).toBeNull();
+    expect(screen.getByText(t.selfHint, { exact: false })).toBeTruthy();
+    const profile = screen.getByRole("link", { name: settingsTextFor("en").openProfile });
+    expect(profile.getAttribute("href")).toBe("?view=profile");
+    fireEvent.click(profile);
+    expect(window.location.search).toBe("?view=profile");
+    cleanup();
+    await showUser("alice");
+    const keys = screen.getByRole("region", { name: t.apiKeys });
+    fireEvent.click(within(keys).getByRole("button", { name: t.apiKeyRevoke }));
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.apiKeyRevoke }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "DELETE", url: "/api/api-keys/9", body: undefined }]));
   });
 
   it("offers Reset 2FA and Remove passkeys only where there is something to reset", async () => {
@@ -257,26 +463,6 @@ describe("UsersPage", () => {
     expect(within(panel).getByRole("button", { name: t.carbon.copy })).toBeTruthy();
   });
 
-  it("shows a user's API keys and revokes one only after confirming", async () => {
-    await show();
-    expect(screen.queryByText("backup")).toBeNull();
-    const expand = screen.getByRole("button", { name: t.apiKeysOf("bob") });
-    // The expand cell names its header; aria-controls only names a list that exists.
-    const header = document.getElementById(expand.closest("td")!.getAttribute("headers")!);
-    expect(header?.tagName).toBe("TH");
-    for (const name of ["alice", "carol"]) expect(document.getElementById(row(name).querySelector("td")!.getAttribute("headers")!)).toBe(header);
-    expect(expand.getAttribute("aria-controls")).toBeNull();
-    fireEvent.click(expand);
-    expect(screen.getByText("backup")).toBeTruthy();
-    expect(document.getElementById(expand.getAttribute("aria-controls")!)?.textContent).toContain("backup");
-    fireEvent.click(screen.getByRole("button", { name: t.apiKeyRevoke }));
-    expect(changes()).toEqual([]);
-    fireEvent.click(within(dialog()).getByRole("button", { name: t.apiKeyRevoke }));
-    await waitFor(() => expect(changes()).toEqual([{ method: "DELETE", url: "/api/api-keys/7", body: undefined }]));
-    // Users without keys have nothing to expand.
-    expect(screen.queryByRole("button", { name: t.apiKeysOf("carol") })).toBeNull();
-  });
-
   it("returns the focus to the user's menu button after a confirmation", async () => {
     await show();
     const menu = screen.getByRole("button", { name: t.userActions("bob") });
@@ -309,7 +495,6 @@ describe("German", () => {
       await screen.findByText("bob");
       expect(screen.getByRole("heading", { level: 1, name: de.usersTitle })).toBeTruthy();
       expect(screen.getByRole("columnheader", { name: de.colSignIn })).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: de.apiKeysOf("bob") }));
       fireEvent.click(screen.getByRole("button", { name: de.userActions("bob") }));
       expect(screen.getByRole("menuitem", { name: de.twoFactorReset })).toBeTruthy();
       noEnglish();
@@ -323,6 +508,29 @@ describe("German", () => {
       fireEvent.click(screen.getByRole("button", { name: de.addUser }));
       noEnglish();
       await act(async () => {});
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
+  });
+
+  it("shows a user's page in German", async () => {
+    applySettings({ language: "de", locale: "de" });
+    try {
+      const de = messagesFor("de");
+      const sde = settingsTextFor("de");
+      await showUser("bob");
+      expect(screen.getByRole("navigation", { name: de.carbon.breadcrumb })).toBeTruthy();
+      expect(screen.getByText(sde.created)).toBeTruthy();
+      expect(screen.getByRole("region", { name: de.apiKeys })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.userActions("bob") }));
+      expect(screen.getByRole("menuitem", { name: de.removeUser })).toBeTruthy();
+      noEnglish();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      cleanup();
+      await showUser("alice");
+      expect(screen.getByRole("link", { name: sde.openProfile })).toBeTruthy();
+      noEnglish();
+      expect(document.body.textContent).not.toMatch(/Created|Open your profile/);
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
