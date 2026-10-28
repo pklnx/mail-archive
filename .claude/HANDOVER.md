@@ -17,5 +17,3 @@ Current state only. At session end replace these sections; never append. History
 
 ## Maintainer actions
 - None.
-
-`FOLLOWUPS.md` is being migrated to `followup` issues (#294); it is not read at start.
