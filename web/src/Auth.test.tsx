@@ -309,6 +309,23 @@ describe("logout (#327)", () => {
     expect(await screen.findByLabelText(t.userName)).toBeTruthy();
     expect(deletes()).toBe(2);
   });
+
+  it("keeps the two-factor setup screen with an alert when the DELETE fails, then signs out", async () => {
+    serve({
+      "GET /api/session": [{ status: 200, body: { user: { ...user, twoFactorEnabled: false, twoFactorRequired: true } } }],
+      "GET /api/profile/2fa": [{ status: 200, body: { enabled: false, required: true, admin: false, setupPending: false } }],
+      "DELETE /api/session": [failed, { status: 204 }],
+    });
+    renderGate();
+    expect(await screen.findByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
+    await screen.findByText(t.twoFactorSetupText);
+    logOut();
+    await waitFor(() => expect(alertText()).toContain(t.logoutFailed("store unavailable")));
+    expect(screen.getByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
+    logOut();
+    expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    expect(deletes()).toBe(2);
+  });
 });
 
 describe("login in German", () => {
