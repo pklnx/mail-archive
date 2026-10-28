@@ -1,0 +1,26 @@
+# squawk config of the review gate (scripts/review-gate.sh), which lints the
+# `-- +goose Up` section of added migrations. The rules kept are about data
+# loss, table rewrites and breaking clients. The excluded ones are about lock
+# times or style: migrations run through `./ma migrate` before the server
+# starts, and lock_timeout is set in Go (internal/store/attest.go). Reasons per
+# rule: docs/development/review-gate.md.
+pg_version = "18.0"
+# goose wraps each migration in a transaction unless the file says
+# `-- +goose NO TRANSACTION`; the gate then passes --no-assume-in-transaction.
+assume_in_transaction = true
+excluded_rules = [
+  "require-lock-timeout",
+  "require-statement-timeout",
+  "require-timeout-settings",
+  "prefer-bigint-over-int",
+  "prefer-bigint-over-smallint",
+  "prefer-identity",
+  "ban-char-field",
+  "prefer-robust-stmts",
+  "constraint-missing-not-valid",
+  "require-concurrent-index-creation",
+  "adding-foreign-key-constraint",
+  "disallowed-unique-constraint",
+  "ban-drop-constraint",
+  "ban-drop-not-null",
+]

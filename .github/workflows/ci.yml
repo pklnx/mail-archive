@@ -104,6 +104,52 @@ jobs:
       # the Go checksum database.
       - run: make vuln
 
+  review-gate:
+    # Deterministic checks on what a pull request changes, for the reviewer
+    # (docs/development/review-gate.md): noctx on added Go lines, squawk on
+    # new migrations, migration-changed, actionlint on changed workflows. Not
+    # a required check; the reviewer records an outcome for each finding, and
+    # a red or missing gate is not a pass. Pushes to main run only the
+    # self-test, which also saves the tool caches that pull requests read.
+    runs-on: ubuntu-latest
+    # A cold run builds golangci-lint (about 1 min); a warm one takes seconds.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history, so the base commit is reachable for the diff.
+          fetch-depth: 0
+      # The tool builds get a Go cache of their own, keyed on the Makefile
+      # (where the versions are pinned), and the npm cache is keyed on the
+      # gate's lockfile; no cache action is needed.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: Makefile
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: tools/review-gate/package-lock.json
+      - run: make review-gate-tools
+      - run: make review-gate-test
+      - name: Gate
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          rc=0
+          make -s review-gate BASE="$BASE_SHA" >"$RUNNER_TEMP/gate.out" || rc=$?
+          cat "$RUNNER_TEMP/gate.out"
+          {
+            echo '### review-gate'
+            echo '```'
+            cat "$RUNNER_TEMP/gate.out"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
   docker:
     runs-on: ubuntu-latest
     # Room for a run with a cold layer cache.
