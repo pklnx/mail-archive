@@ -59,6 +59,18 @@ test.describe("desktop", () => {
     await expect(action(page)).toHaveAttribute("aria-expanded", "false");
     await expect(action(page)).not.toBeFocused();
     expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true);
+
+    // Shift+Tab backwards out of it: past the action to the name link; the panel closes and the shortcuts work again.
+    await action(page).click();
+    await expect(panel(page).getByRole("link", { name: "Profile" })).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(action(page)).toBeFocused();
+    await expect(panel(page)).toBeVisible();
+    await page.keyboard.press("Shift+Tab");
+    await expect(panel(page)).toHaveCount(0);
+    await expect(action(page)).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("j");
+    await expect(page).toHaveURL(/[?&]m=/);
   });
 
   test("opens the shortcuts overview from the panel, loading its chunk; Escape returns the focus to the action", async ({ page }) => {

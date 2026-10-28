@@ -587,6 +587,22 @@ describe("user panel (#284)", () => {
     expect(document.activeElement).toBe(search);
   });
 
+  it("closes when Shift+Tab takes the focus back past its action, and the shortcuts work again", async () => {
+    await renderApp();
+    await screen.findByRole("button", { name: /First/ });
+    open();
+    // Shift+Tab from Profile: to the action (the panel stays open), then to the name link before it.
+    act(() => action().focus());
+    expect(panel()).not.toBeNull();
+    const name = within(screen.getByRole("banner")).getByRole("link", { name: t.appName });
+    act(() => name.focus());
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(name);
+    key(name, "j");
+    expect(params().get("m")).toBe("m1");
+  });
+
   it("opens Profile on a plain click and returns the focus to the action; leaves a Ctrl click to the browser", async () => {
     await renderApp();
     open();

@@ -1,13 +1,17 @@
-import type { FocusEvent, ForwardRefExoticComponent, MouseEvent, ReactNode, RefAttributes, RefObject } from "react";
+import type { ComponentProps, FocusEvent, ForwardRefExoticComponent, MouseEvent, ReactNode, RefAttributes, RefObject } from "react";
 import { HeaderGlobalAction, HeaderPanel, Switcher, SwitcherDivider, SwitcherItem } from "@carbon/react";
 import { UserAvatar } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { t } from "./i18n";
 
-// Carbon passes these props on, but its types lack them: HeaderPanel takes
-// an id and a blur listener on its <div>, and SwitcherItem renders the
-// element given as `as` (a <button> here) through the UI Shell's Link.
+// Carbon passes these props on, but its types lack them: HeaderGlobalAction
+// and HeaderPanel take a blur listener (HeaderPanel also an id) on their
+// element, and SwitcherItem renders the element given as `as` (a <button>
+// here) through the UI Shell's Link.
+const Action = HeaderGlobalAction as unknown as ForwardRefExoticComponent<
+  ComponentProps<typeof HeaderGlobalAction> & { onBlur: (e: FocusEvent<HTMLElement>) => void } & RefAttributes<HTMLButtonElement>
+>;
 const Panel = HeaderPanel as unknown as ForwardRefExoticComponent<
   {
     id: string;
@@ -15,7 +19,7 @@ const Panel = HeaderPanel as unknown as ForwardRefExoticComponent<
     expanded: boolean;
     addFocusListeners: false;
     onHeaderPanelFocus: () => void;
-    onBlur: (e: FocusEvent<HTMLDivElement>) => void;
+    onBlur: (e: FocusEvent<HTMLElement>) => void;
     children: ReactNode;
   } & RefAttributes<HTMLDivElement>
 >;
@@ -53,17 +57,18 @@ export function UserPanel({ name, id, open, actionRef, panelRef, toggle, close, 
   const theme = useTheme();
   const next: Theme = theme === "dark" ? "light" : "dark";
   const label = t.userPanelOf(name);
-  // Only a keyboard Tab out of the panel closes it here. A null target is
-  // a click in WebKit or Firefox on macOS, which focus nothing on mousedown:
-  // closing then would unmount the item before its click. Carbon's outside
-  // click listener closes the panel for clicks elsewhere.
-  const onBlur = (e: FocusEvent<HTMLDivElement>) => {
+  // Only a keyboard Tab out of the panel or its action (Shift+Tab from the
+  // first item passes the action) closes it here. A null target is a click
+  // in WebKit or Firefox on macOS, which focus nothing on mousedown: closing
+  // then would unmount the item before its click. Carbon's outside click
+  // listener closes the panel for clicks elsewhere.
+  const onBlur = (e: FocusEvent<HTMLElement>) => {
     const to = e.relatedTarget;
-    if (to instanceof Element && !e.currentTarget.contains(to) && !actionRef.current?.contains(to)) close(false);
+    if (open && to instanceof Element && !panelRef.current?.contains(to) && !actionRef.current?.contains(to)) close(false);
   };
   return (
     <>
-      <HeaderGlobalAction
+      <Action
         ref={actionRef}
         aria-label={label}
         aria-expanded={open}
@@ -71,9 +76,10 @@ export function UserPanel({ name, id, open, actionRef, panelRef, toggle, close, 
         isActive={open}
         tooltipAlignment="end"
         onClick={toggle}
+        onBlur={onBlur}
       >
         <UserAvatar size={20} />
-      </HeaderGlobalAction>
+      </Action>
       <Panel
         ref={panelRef}
         id={id}
