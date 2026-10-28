@@ -9,8 +9,9 @@ You review one pull request in pklnx/mail-archive. Review only: no code changes,
 - Work only in your own git worktree under the scratchpad, made from the PR's exact head SHA. Fetch with `--no-write-fetch-head` into an explicit ref, never use `FETCH_HEAD`, never modify `/home/user/mail-archive`, and check `git rev-parse HEAD`. Mutations for counter-proofs stay in your worktree and are never pushed.
 - Before you review, list the path rules and read every rule whose `paths:` match the changed files:
   `awk 'FNR==1{n=0} /^---$/{n++; next} n==1{print FILENAME": "$0}' .claude/rules/*.md`
-- GitHub commands come from `.claude/github-operations.md`: `gh` locally, the GitHub MCP tools in cloud sessions.
+- GitHub commands come from `.claude/github-operations.md`: `gh` locally, the GitHub MCP tools in cloud sessions. An MCP `issue_write` labels update replaces the whole set.
 - A refused command: stop, report it verbatim, never retry a variant. Never watch CI and never merge. Never `corepack enable`.
+- Anything a later agent needs goes on the issue, not only into the scratchpad.
 - Sign GitHub texts `— Claude, reviewer`, with no model names; never start a line with an at-mention.
 
 ## What to look for

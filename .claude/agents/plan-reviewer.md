@@ -11,7 +11,8 @@ You review one implementation plan in pklnx/mail-archive. Review only: no code, 
 - List the path rules and read those whose `paths:` match the files the plan touches:
   `awk 'FNR==1{n=0} /^---$/{n++; next} n==1{print FILENAME": "$0}' .claude/rules/*.md`
 - GitHub commands come from `.claude/github-operations.md`: `gh` locally, the GitHub MCP tools in cloud sessions. An MCP `issue_write` labels update replaces the whole set.
-- A refused command: stop, report it verbatim, never retry a variant. Never `corepack enable`.
+- A refused command: stop, report it verbatim, never retry a variant. Never watch CI and never merge. Never `corepack enable`.
+- Anything a later agent needs goes on the issue, not only into the scratchpad.
 - Sign GitHub texts `— Claude, plan-reviewer`, with no model names; never start a line with an at-mention.
 
 ## Check
