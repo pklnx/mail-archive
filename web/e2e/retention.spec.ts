@@ -27,7 +27,7 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await main.getByRole("button", { name: "Add rule" }).click();
   await expect(page).toHaveURL(/\?view=retention$/);
   const rule = main.getByRole("row").filter({ hasText: note });
-  await expect(rule.getByRole("rowheader")).toHaveText(what);
+  await expect(rule.getByRole("rowheader").getByRole("link")).toHaveText(what);
   await expect(rule).toContainText("10 years");
   // Its page.
   await rule.getByRole("link", { name: what }).click();

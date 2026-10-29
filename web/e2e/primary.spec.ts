@@ -79,7 +79,7 @@ const messages = (page: Page) => page.getByRole("list", { name: "Messages" });
 
 /** A request to the demo's API, as the page sends it (same origin). */
 async function api(page: Page, method: string, url: string, data?: unknown): Promise<unknown> {
-  const res = await page.request.fetch(url, { method, data, headers: { Origin: origin } });
+  const res = await page.request.fetch(url, { method, data, headers: { Origin: origin, "Content-Type": "application/json" } });
   expect(res.ok(), `${method} ${url}: ${res.status()}`).toBe(true);
   return (res.headers()["content-type"] ?? "").includes("application/json") ? res.json() : null;
 }
@@ -119,7 +119,9 @@ async function cancelRun(page: Page) {
 }
 async function runPage(page: Page): Promise<Locator> {
   const n = await proposeRun(page);
-  const main = await mainPage(page, `/?view=retention&tab=runs&id=${runId}`, `Run ${runId}: ${n} message(s)`);
+  await page.goto(`/?view=retention&tab=runs&id=${runId}`);
+  const main = page.getByRole("main");
+  await expect(main.getByRole("heading", { name: `Run ${runId}: ${n} message(s), `, level: 1 })).toBeVisible();
   await expect(main.getByRole("button", { name: `Delete ${n} messages` })).toBeVisible();
   return main;
 }

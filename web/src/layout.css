@@ -2158,12 +2158,17 @@ select,
 .retention-table .cds--data-table-content {
   position: relative;
 }
-.runs-table__number {
-  text-align: end;
+/* The groups of a run fit a phone: the heads wrap too, and a path wraps
+   at its slashes (<wbr>), never inside a name. */
+.run-groups td,
+.run-groups th {
+  vertical-align: top;
 }
-/* A group's path wraps at its slashes (<wbr>), never inside a name. */
-.runs-table__path {
-  min-inline-size: 8rem;
+.run-groups .cds--data-table-content {
+  position: relative;
+}
+.run-groups__number {
+  text-align: end;
 }
 .run-hashes {
   max-block-size: 16rem;

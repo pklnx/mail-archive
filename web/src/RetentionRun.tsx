@@ -254,23 +254,23 @@ function RunGroups({ review, title }: { review: DeletionReview; title: string })
       <h2 id={`${id}-groups`} className="type-heading-03">
         {title}
       </h2>
-      <TableContainer className="runs-table app-table">
+      <TableContainer className="run-groups app-table">
         <Table size="sm" aria-label={t.runGroupsHead}>
           <TableHead>
             <TableRow>
               <TableHeader>{t.runGroupsHead}</TableHeader>
               <TableHeader>{t.runYear}</TableHeader>
-              <TableHeader className="runs-table__number">{t.runMessages}</TableHeader>
+              <TableHeader className="run-groups__number">{t.runMessages}</TableHeader>
             </TableRow>
           </TableHead>
           <TableBody>
             {review.groups.map((g) => (
               <TableRow key={`${g.owner}/${g.account}/${g.folder}/${g.year}`}>
-                <TableCell className="runs-table__path">
+                <TableCell>
                   <PathText text={`${g.owner || "-"} / ${g.account} / ${g.folder}`} />
                 </TableCell>
                 <TableCell className="app-tabular">{g.year}</TableCell>
-                <TableCell className="app-tabular runs-table__number">{g.messages}</TableCell>
+                <TableCell className="app-tabular run-groups__number">{g.messages}</TableCell>
               </TableRow>
             ))}
           </TableBody>
