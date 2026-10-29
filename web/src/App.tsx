@@ -5,7 +5,7 @@ import { isPlainClick } from "./clicks";
 import { dialogOpen, ownedByWidget } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
 import { MessageList } from "./MessageList";
-import { MessageView } from "./MessageView";
+import { MessageView, focusLost } from "./MessageView";
 import { ActiveFilters, QuickFilters, editTarget, type FocusRequest } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
@@ -294,6 +294,37 @@ export function App({ user, logout, logoutError }: Props) {
     if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
   }, [state.m]);
 
+  // The focus when a message opens or closes (#311). It moves only when the
+  // element that had it disappears: on phones at every switch between the
+  // list and the reader (the hidden one is display: none), at any width when
+  // it fell to body because its element unmounted. After the scroll reset
+  // above, so focusing the row also scrolls it into view on phones.
+  const readerFocus = useRef(false);
+  const listPane = useRef<HTMLElement>(null);
+  const placeTitle = useRef<HTMLHeadingElement>(null);
+  const lastOpen = useRef(state.m);
+  useEffect(() => {
+    const closed = lastOpen.current;
+    lastOpen.current = state.m;
+    if (state.m) {
+      // The reader replaces the list: its message takes the focus once it shows.
+      if (phone && !closed) readerFocus.current = true;
+      return;
+    }
+    readerFocus.current = false;
+    // Only in the mail view: an action that closes the message and opens
+    // another page leaves the focus to that page (plan review on #311).
+    if (!closed || state.view !== "" || (!phone && !focusLost())) return;
+    const rows = Array.from(listPane.current?.querySelectorAll<HTMLElement>("button[data-id]") ?? []);
+    const row = rows.find((r) => r.dataset.id === closed);
+    if (row) row.focus();
+    // Not in the list (opened from the conversation, the Log page or a link):
+    // on phones the place is read out; from 48rem that heading is hidden.
+    else if (phone) placeTitle.current?.focus();
+    else (rows[0] ?? search.current)?.focus();
+    // Runs when a message opens or closes; the width and view are read at that moment.
+  }, [state.m]);
+
   // A failed Log out: on phones the page may be scrolled down (a message is
   // open), so bring the alert under the header into view.
   useEffect(() => {
@@ -478,11 +509,13 @@ export function App({ user, logout, logoutError }: Props) {
           </aside>
           {foldersOpen && <div aria-hidden className="folder-pane__scrim" onClick={closeFolders} />}
 
-          <section inert={pageInert} className="mail-pane mail-pane--list">
+          <section ref={listPane} inert={pageInert} className="mail-pane mail-pane--list">
             {/* Phones: where the user is, the search below at full width. Menu
                 and the user panel are in the header. */}
             <div className="mail-place">
-              <h1 className="mail-place__title">{place.title}</h1>
+              <h1 ref={placeTitle} tabIndex={-1} className="mail-place__title">
+                {place.title}
+              </h1>
               {place.sub && <p className="mail-place__sub">{place.sub}</p>}
             </div>
             <div className="mail-toolbar">
@@ -622,7 +655,7 @@ export function App({ user, logout, logoutError }: Props) {
                   className="mail-pane__fill reader-scroll"
                   {...(!phone && { tabIndex: 0, role: "region", "aria-label": t.readingPane })}
                 >
-                  <MessageView id={state.m} open={(m) => update({ m })} />
+                  <MessageView id={state.m} open={(m) => update({ m })} focusRequest={readerFocus} />
                 </div>
               </>
             ) : (

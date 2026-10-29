@@ -220,6 +220,8 @@ function Row({ m, selected, open, nested, count, gone }: RowProps) {
     <button
       ref={ref}
       type="button"
+      // The app finds the row by it, to return the focus when the message closes (#311).
+      data-id={m.id}
       onClick={() => open(m.id)}
       aria-current={on ? "true" : undefined}
       className={`mail-row${nested ? " mail-row--nested" : ""}${on ? " mail-row--selected" : ""}`}

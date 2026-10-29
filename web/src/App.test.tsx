@@ -1089,3 +1089,149 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
     expect(window.location.search).toBe("?view=log");
   });
 });
+
+describe("the focus when a message opens and closes (#311)", () => {
+  beforeEach(() => {
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  const row = (id: string) => document.querySelector<HTMLElement>(`button[data-id="${id}"]`);
+  const subject = (id: string) => screen.findByRole("heading", { level: 1, name: `Subject ${id}` });
+  const params = () => new URLSearchParams(window.location.search);
+  const placeTitle = () => document.querySelector<HTMLElement>(".mail-place__title");
+  const openRow = async (id: string) => {
+    await screen.findByRole("button", { name: /First/ });
+    const r = row(id)!;
+    act(() => r.focus());
+    fireEvent.click(r);
+    return r;
+  };
+
+  describe("on phones", () => {
+    beforeEach(() => screenWidth(false));
+
+    it("focuses the subject when a row opens and the row again on Back to the list", async () => {
+      await renderApp();
+      const r = await openRow("m1");
+      const h1 = await subject("m1");
+      await waitFor(() => expect(document.activeElement).toBe(h1));
+      fireEvent.click(screen.getByRole("button", { name: t.backToList }));
+      expect(params().get("m")).toBeNull();
+      expect(document.activeElement).toBe(r);
+    });
+
+    it("focuses the row again after the browser's Back", async () => {
+      await renderApp();
+      const r = await openRow("m2");
+      const h1 = await subject("m2");
+      await waitFor(() => expect(document.activeElement).toBe(h1));
+      act(() => window.history.back());
+      await waitFor(() => expect(params().get("m")).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(r));
+    });
+
+    it("focuses the list's heading on Back when the message is not in the list", async () => {
+      window.history.replaceState(null, "", "/?m=zz");
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      await subject("zz");
+      fireEvent.click(screen.getByRole("button", { name: t.backToList }));
+      expect(params().get("m")).toBeNull();
+      expect(document.activeElement).toBe(placeTitle());
+      expect(placeTitle()!.tabIndex).toBe(-1);
+    });
+
+    it("leaves the focus alone when an action closes the message and opens another page (plan review on #311)", async () => {
+      window.history.replaceState(null, "", "/?m=m1");
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      await subject("m1");
+      // Accounts from the SideNav: the overlay returns the focus to the menu button, and it stays there.
+      menuButton().focus();
+      fireEvent.click(menuButton());
+      fireEvent.click(within(sideNav()).getByRole("link", { name: t.navAccounts }));
+      expect(params().get("view")).toBe("accounts");
+      expect(document.activeElement).toBe(menuButton());
+    });
+  });
+
+  describe("on desktop", () => {
+    beforeEach(() => screenWidth(true));
+
+    it("keeps the focus on a clicked row while the message shows", async () => {
+      await renderApp();
+      const r = await openRow("m1");
+      await subject("m1");
+      await screen.findByRole("article");
+      expect(document.activeElement).toBe(r);
+    });
+
+    it("focuses the row when Escape closes the message from the reading pane", async () => {
+      await renderApp();
+      const r = await openRow("m2");
+      await subject("m2");
+      const region = screen.getByRole("region", { name: t.readingPane });
+      act(() => region.focus());
+      key(region, "Escape");
+      expect(params().get("m")).toBeNull();
+      expect(document.activeElement).toBe(r);
+    });
+
+    it("leaves the focus where the user put it when u closes the message", async () => {
+      await renderApp();
+      await openRow("m1");
+      await subject("m1");
+      const node = screen.getByRole("treeitem", { name: "INBOX 5" });
+      act(() => node.focus());
+      key(node, "u");
+      expect(params().get("m")).toBeNull();
+      expect(document.activeElement).toBe(node);
+    });
+
+    it("focuses the first row when the closed message is not in the list, and the search field when the list is empty", async () => {
+      window.history.replaceState(null, "", "/?m=zz");
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      const h1 = await subject("zz");
+      // A deep link: the focus was lost, so the subject took it.
+      expect(document.activeElement).toBe(h1);
+      key(h1, "u");
+      expect(document.activeElement).toBe(row("m1"));
+      cleanup();
+      listed = [];
+      window.history.replaceState(null, "", "/?m=zz");
+      await renderApp();
+      await screen.findByText(t.noMessages, { selector: ".empty-state__title" });
+      key(await subject("zz"), "u");
+      expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: t.searchMail }));
+    });
+
+    it("moves the focus from the subject to the next message's subject with j", async () => {
+      window.history.replaceState(null, "", "/?m=m1");
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      const h1 = await subject("m1");
+      expect(document.activeElement).toBe(h1);
+      await waitFor(() => {
+        key(document.activeElement!, "j");
+        expect(params().get("m")).toBe("m2");
+      });
+      const next = await subject("m2");
+      await waitFor(() => expect(document.activeElement).toBe(next));
+    });
+
+    it("leaves the focus in the search field when a message opens by a URL change", async () => {
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      const search = screen.getByRole("searchbox", { name: t.searchMail });
+      act(() => search.focus());
+      act(() => {
+        window.history.pushState(null, "", "/?m=m1");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      await screen.findByRole("article");
+      await subject("m1");
+      expect(document.activeElement).toBe(search);
+    });
+  });
+});

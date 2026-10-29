@@ -341,6 +341,9 @@ They do not apply while you type in a field (<kbd>Esc</kbd> leaves the
 field), while a dialog is open or while the user panel is open. With no message open, the reading pane
 points to <kbd>?</kbd>.
 
+On a phone, opening a message moves the focus to its subject, and going back
+returns it to the message in the list.
+
 ## Install as an app
 
 The UI can be added to the home screen or the dock and then opens in its
