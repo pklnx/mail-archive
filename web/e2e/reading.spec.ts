@@ -307,6 +307,16 @@ for (const size of sizes) {
       // Escape closed only the panel, not the message.
       await expect(article.getByRole("heading", { level: 1 })).toHaveText(/^Re: Offsite planning/);
 
+      // A click on the panel's title, which cannot take focus (#311): the focus
+      // stays in the panel, not on body, so Escape still closes it.
+      await toggle.click();
+      await expect(dialog.locator('[aria-current="true"]')).toBeFocused();
+      await dialog.locator(".conversation__title").click();
+      await expect(dialog.locator(".conversation__entry:focus")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(toggle).toBeFocused();
+
       // A click over the mail frame, far down the pane, hits the scrim and closes it.
       await toggle.click();
       await expect(dialog).toBeVisible();

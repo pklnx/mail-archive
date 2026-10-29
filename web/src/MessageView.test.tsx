@@ -360,6 +360,42 @@ describe("the conversation overlay (#203)", () => {
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
+  // A click on the title, the padding or a date focuses the dialog itself, not body (#311): its keys still work.
+  it("takes the focus itself; Escape from there closes it and focuses the toggle", async () => {
+    conversation = six();
+    const { button } = await toggle();
+    fireEvent.click(button);
+    const dialog = screen.getByRole("dialog", { name: t.conversation });
+    expect(dialog.tabIndex).toBe(-1);
+    dialog.focus();
+    expect(document.activeElement).toBe(dialog);
+    // The focus inside the panel does not close it.
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("goes from the dialog itself to the first entry with Tab and ArrowDown, to the last with Shift+Tab and ArrowUp", async () => {
+    conversation = six();
+    const { button } = await toggle();
+    fireEvent.click(button);
+    const dialog = screen.getByRole("dialog");
+    const focused = () => document.activeElement?.textContent ?? "";
+    for (const [k, shiftKey, to] of [
+      ["Tab", false, "Message 1"],
+      ["ArrowDown", false, "Message 1"],
+      ["Home", false, "Message 1"],
+      ["Tab", true, "Message 6"],
+      ["ArrowUp", false, "Message 6"],
+      ["End", false, "Message 6"],
+    ] as const) {
+      dialog.focus();
+      fireEvent.keyDown(dialog, { key: k, shiftKey });
+      expect(focused(), `${shiftKey ? "Shift+" : ""}${k}`).toContain(to);
+    }
+  });
+
   it("closes on a scrim click (focus back on the toggle) and on a click elsewhere", async () => {
     conversation = six();
     const { button } = await toggle();

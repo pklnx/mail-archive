@@ -95,16 +95,29 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
   const kind = searching ? "matches" : filter.group ? "conversations" : "messages";
   // Every message of the "only in archive" view is gone from the servers.
   const gone = filter.gone === true;
+  // The state of the last load, for screen readers. One status that stays mounted: a live
+  // region has to exist before its text changes, or it may not be read (#311).
+  const result = error
+    ? t.loadMessagesFailed(error)
+    : items.length > 0
+      ? t.resultCount(items.length, !done, kind)
+      : searching
+        ? t.noMatches
+        : t.noMessages;
   let group = "";
   return (
     <div className="mail-list">
+      <p role="status" className="cds--visually-hidden">
+        {/* The span is the form loadingGuard.test.ts allows for "Loading…". */}
+        {loading ? <span className="cds--visually-hidden">{t.loading}</span> : result}
+      </p>
       {items.length > 0 && (
         <p className="mail-list__count">
           <span>{t.resultCount(items.length, !done, kind)}</span>
           <span>{t.newestFirst}</span>
         </p>
       )}
-      <ul aria-label={t.messages} aria-busy={loading} className="mail-list__items">
+      <ul aria-label={t.messages} className="mail-list__items">
         {items.map((m) => {
           // A heading where the date group changes (the list is newest first).
           const g = dateGroup(m.sortAt);
@@ -140,14 +153,7 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
             <Empty searching={searching} clearSearch={clearSearch} searchEverywhere={searchEverywhere} />
           </li>
         )}
-        {loading && (
-          <>
-            <li className="cds--visually-hidden" role="status">
-              {t.loading}
-            </li>
-            <RowsSkeleton rows={items.length ? 1 : 6} />
-          </>
-        )}
+        {loading && <RowsSkeleton rows={items.length ? 1 : 6} />}
         {!done && <li ref={sentinel} aria-hidden className="mail-list__sentinel" />}
       </ul>
     </div>

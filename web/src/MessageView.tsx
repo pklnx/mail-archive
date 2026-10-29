@@ -506,12 +506,13 @@ function ConversationPanel({
       return;
     }
     const list = entries(panel.current);
+    // -1 with the focus on the dialog itself: forward goes to the first entry, back to the last.
     const i = list.indexOf(document.activeElement as HTMLElement);
     const to =
       e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)
         ? (i + 1) % list.length
         : e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)
-          ? (i - 1 + list.length) % list.length
+          ? (i < 0 ? list.length - 1 : i - 1 + list.length) % list.length
           : e.key === "Home"
             ? 0
             : e.key === "End"
@@ -531,6 +532,8 @@ function ConversationPanel({
         role="dialog"
         aria-modal="true"
         aria-label={t.conversation}
+        // As Carbon's Modal: a click on a part that cannot take focus focuses the dialog, not body, so its keys still work.
+        tabIndex={-1}
         className="conversation"
         style={wide && at ? { insetBlockStart: at.top, insetInlineEnd: at.end, maxBlockSize: `min(28rem, ${Math.max(0, host.clientHeight - at.top - 16)}px)` } : undefined}
         onKeyDown={onKey}
