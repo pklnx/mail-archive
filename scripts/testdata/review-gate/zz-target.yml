@@ -1,7 +1,7 @@
 # zizmor: the pull_request_target trigger (runs with write token and secrets).
 name: Target
-on: # want dangerous-triggers
-  pull_request_target:
+on:
+  pull_request_target: # want dangerous-triggers
     types: [opened]
 permissions:
   contents: read
