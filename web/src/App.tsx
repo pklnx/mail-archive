@@ -243,10 +243,10 @@ export function App({ user, logout, logoutError }: Props) {
         return;
       }
       if (ownedByWidget(e)) {
-        // Escape leaves a field, as before; Carbon's Search clears itself first (below).
+        // Escape leaves a field or a select, as before; Carbon's Search clears itself first (below).
         const el = e.target instanceof HTMLElement ? e.target : null;
         // Not in the filter popover: Escape there closes its calendar, then the popover (FilterPanel.tsx).
-        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA"].includes(el.tagName) && !el.closest(".cds--search, .cds--popover-content")) el.blur();
+        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) && !el.closest(".cds--search, .cds--popover-content")) el.blur();
         return;
       }
       const mail = state.view === "";

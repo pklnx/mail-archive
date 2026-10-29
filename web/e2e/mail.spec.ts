@@ -78,7 +78,8 @@ test("only in archive, and search all mail from an account", async ({ page }) =>
   await tree.getByRole("treeitem", { name: "work", exact: true }).click();
   await expect(page).toHaveURL(/[?&]account=work/);
   await page.getByRole("searchbox", { name: "Search mail" }).fill("premium");
-  await expect(page.getByText("No messages match your search.")).toBeVisible();
+  // In the list: the list's hidden status reads the same text (#311).
+  await expect(list.getByText("No messages match your search.")).toBeVisible();
   await page.getByRole("button", { name: "Search all mail" }).click();
   await expect(page).not.toHaveURL(/[?&]account=/);
   await expect(list.getByRole("button", { name: /Your 2026 premium invoice/ })).toBeVisible();

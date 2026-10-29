@@ -103,7 +103,8 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await page.goto("/?q=" + encodeURIComponent("hearing date"));
   await expect(page.getByRole("list", { name: "Messages" }).getByRole("button", { name: /Case 4711: hearing date/ })).toBeVisible();
   await page.goto("/?q=" + encodeURIComponent("tax assessment"));
-  await expect(page.getByText("No messages match your search.")).toBeVisible();
+  // In the list: the list's hidden status reads the same text (#311).
+  await expect(page.getByRole("list", { name: "Messages" }).getByText("No messages match your search.")).toBeVisible();
 
   // Release the hold on its page: it stays, released.
   await page.goto("/?view=retention&tab=holds");

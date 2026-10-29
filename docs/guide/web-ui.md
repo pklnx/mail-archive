@@ -224,7 +224,9 @@ folder limits the search to it.
 
 Search covers subject, sender and body text. Words are matched in German and
 English forms: `invoices` finds `invoice`, `Rechnungen` finds `Rechnung`.
-Matches are highlighted in the result snippets.
+Matches are highlighted in the result snippets. Screen readers hear the
+number of results when a search or a further page of the list finishes
+loading.
 
 ### Filters
 

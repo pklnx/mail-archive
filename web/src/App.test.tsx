@@ -1037,6 +1037,7 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
         }
         if (path === "/api/api-keys") return json({ keys: [] });
         if (path === "/api/retention/rules") return json({ rules: [], accounts: [], minYears: 6, defaultTimeZone: "Europe/Berlin" });
+        if (path.startsWith("/api/audit?")) return json({ entries: [] });
         return base(path);
       }),
     );
@@ -1072,5 +1073,19 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
     years.focus();
     key(years, "?");
     expect(shortcutsDialog()).toBeNull();
+  });
+  it("leaves a select on Escape, as a text field (#311)", async () => {
+    window.history.replaceState(null, "", "/?view=log");
+    render(<App user={user(true)} logout={() => {}} logoutError="" />);
+    const select = await screen.findByLabelText(t.logAction);
+    expect(select.tagName).toBe("SELECT");
+    select.focus();
+    // A key of the select stays its own.
+    key(select, "?");
+    expect(shortcutsDialog()).toBeNull();
+    expect(document.activeElement).toBe(select);
+    key(select, "Escape");
+    expect(document.activeElement).not.toBe(select);
+    expect(window.location.search).toBe("?view=log");
   });
 });
