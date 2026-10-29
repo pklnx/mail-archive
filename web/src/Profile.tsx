@@ -7,6 +7,7 @@ import {
   PasswordInput,
   Select,
   SelectItem,
+  SkeletonText,
   Tab,
   TabList,
   TabPanel,
@@ -20,6 +21,7 @@ import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetup
 import { applySettings, canonical, languages, lang, messagesFor, needsReload, settings, t, type Settings } from "./i18n";
 import { ApiKeySection } from "./ApiKeys";
 import { AppModal } from "./DangerModal";
+import { Loading } from "./lazyView";
 import { FormError, Success } from "./notices";
 import { PasskeySection } from "./Passkeys";
 import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
@@ -387,7 +389,14 @@ export function TwoFactorSetup({
     finally { setBusy(false); }
   };
 
-  if (!state) return error ? <FormError text={error} /> : <p className="app-text-secondary">{t.loading}</p>;
+  if (!state)
+    return error ? (
+      <FormError text={error} />
+    ) : (
+      <Loading>
+        <SkeletonText paragraph lineCount={3} />
+      </Loading>
+    );
   const tag = status && (
     <div>
       <Tag size="md" type={state.enabled ? "green" : "gray"}>

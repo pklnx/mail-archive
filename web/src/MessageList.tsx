@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { Button, InlineLoading, SkeletonText, Tag } from "@carbon/react";
+import { Button, SkeletonText, Tag } from "@carbon/react";
 import { Attachment, ChevronDown, Email, Search } from "@carbon/icons-react";
 import { listMessages, type Filter, type MessageSummary } from "./api";
 import { useAsync } from "./useAsync";
@@ -155,12 +155,13 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
 }
 
 /** Rows of the list while it loads, in the shape of the content. Screen readers hear "Loading" instead. */
-function RowsSkeleton({ rows }: { rows: number }) {
+function RowsSkeleton({ rows, nested = false }: { rows: number; nested?: boolean }) {
   return Array.from({ length: rows }, (_, i) => (
-    <li key={i} aria-hidden className="mail-row mail-row--skeleton">
+    <li key={i} aria-hidden className={nested ? "mail-row mail-row--nested mail-row--skeleton" : "mail-row mail-row--skeleton"}>
       <SkeletonText width={["40%", "30%", "50%"][i % 3]} />
       <SkeletonText width={["75%", "66%", "50%"][i % 3]} />
-      <SkeletonText width="85%" />
+      {/* A message of a conversation has no snippet line. */}
+      {!nested && <SkeletonText width="85%" />}
     </li>
   ));
 }
@@ -304,9 +305,12 @@ function ThreadMembers({ id, filter, newest, count, selected, open }: ThreadMemb
   return (
     <ul id={id} aria-label={t.conversation} className="mail-thread__members">
       {res.status === "loading" && (
-        <li className="mail-thread__note">
-          <InlineLoading description={t.loading} iconDescription={t.loading} />
-        </li>
+        <>
+          <li className="cds--visually-hidden" role="status">
+            {t.loading}
+          </li>
+          <RowsSkeleton rows={Math.min(count - 1, 3)} nested />
+        </>
       )}
       {res.status === "error" && <li className="mail-thread__note app-text-error">{t.loadMessagesFailed(res.error.message)}</li>}
       {res.status === "ok" &&

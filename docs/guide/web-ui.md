@@ -365,6 +365,11 @@ as the interactive colour of buttons, links and selected items, in both
 modes. The keyboard focus is outlined in Purple in light mode and in white
 in dark mode.
 
+While something loads, grey placeholders in its shape stand in for it.
+Panels and sheets slide or fade in as they open, such as the navigation, the
+folders on small screens, the conversation and the user panel; with the
+system's "reduce motion" setting they appear at once.
+
 ![Dark mode](/screenshots/mail-dark.png)
 
 The UI is in German or English. Each user chooses the language and the

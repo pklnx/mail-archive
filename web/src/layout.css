@@ -811,7 +811,6 @@ select,
 }
 .mail-thread__toggle svg {
   fill: currentColor;
-  transition: transform 110ms;
 }
 .mail-thread__toggle--open svg {
   transform: rotate(180deg);
@@ -2241,4 +2240,78 @@ select,
 }
 .recovery-modal__codes {
   max-inline-size: 100%;
+}
+
+/* Motion (#287). Carbon's precompiled CSS has no motion custom properties
+   ($duration-*, motion() are Sass only), so these carry Carbon's names and
+   the values of @carbon/motion's tokens/motion.tokens.json; motion.test.ts
+   pins them to that file. */
+:root {
+  --app-duration-fast-02: 110ms;
+  --app-duration-moderate-01: 150ms;
+  --app-easing-entrance-productive: cubic-bezier(0, 0, 0.38, 0.9);
+  --app-easing-entrance-expressive: cubic-bezier(0, 0, 0.3, 1);
+}
+/* Only a from step and no fill mode: nothing of an animation stays on the
+   element afterwards (a transform left behind would make it the containing
+   block of its fixed descendants). */
+@keyframes app-slide-in-start {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* Carbon's "contextual" surface: a panel that opens from its control. */
+@keyframes app-contextual-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@keyframes app-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+}
+/* The app's own motion exists only here, so "reduce motion" leaves none
+   (motion.test.ts checks it). The folder overlay and the conversation move
+   when they open and close at once (maintainer decision on #287). */
+@media (prefers-reduced-motion: no-preference) {
+  .mail-thread__toggle svg {
+    transition: transform var(--app-duration-fast-02);
+  }
+  .conversation-overlay:not(.conversation-overlay--sheet) .conversation {
+    /* It opens under its toggle at the pane's end edge. */
+    transform-origin: top right;
+    animation: app-contextual-in var(--app-duration-fast-02) var(--app-easing-entrance-expressive);
+  }
+  .conversation-overlay--sheet .conversation {
+    animation: app-sheet-in var(--app-duration-moderate-01) var(--app-easing-entrance-productive);
+  }
+  .conversation-overlay--sheet .conversation-overlay__scrim {
+    animation: app-fade-in var(--app-duration-fast-02) var(--app-easing-entrance-productive);
+  }
+}
+/* Below lg only: from lg up the folder column is no overlay and never moves. */
+@media (prefers-reduced-motion: no-preference) and (max-width: 65.98rem) {
+  .folder-pane--overlay {
+    animation: app-slide-in-start var(--app-duration-fast-02) var(--app-easing-entrance-productive);
+  }
+  .folder-pane__scrim {
+    animation: app-fade-in var(--app-duration-fast-02) var(--app-easing-entrance-productive);
+  }
+}
+/* Carbon animates its SideNav, the SideNav's overlay and the HeaderPanel
+   (the user panel) without a reduced-motion rule of its own. */
+@media (prefers-reduced-motion: reduce) {
+  .app-shell > .cds--side-nav,
+  .app-shell > .cds--side-nav__overlay,
+  .cds--header-panel.app-user-panel {
+    transition: none;
+  }
 }

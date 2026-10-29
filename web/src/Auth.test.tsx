@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UNAUTHORIZED_EVENT, type User } from "./api";
 import { AuthGate } from "./Auth";
 import { applySettings, messagesFor, t } from "./i18n";
+import { expectLoaded, expectLoading } from "./test/loading";
 
 const user: User = {
   name: "kim", admin: false, mustChangePassword: false, twoFactorEnabled: true, twoFactorRequired: false, language: "auto", locale: "auto",
@@ -167,9 +168,78 @@ describe("login", () => {
   });
 });
 
+/** The "Loading…" statuses on the page now. */
+const loadingStatuses = () => screen.queryAllByRole("status").filter((s) => s.textContent?.includes(t.loading));
+
+/** Records the most "Loading…" statuses the page had at once, at every DOM change. */
+function countStatuses() {
+  let most = loadingStatuses().length;
+  const observer = new MutationObserver(() => {
+    most = Math.max(most, loadingStatuses().length);
+  });
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+  return {
+    most: () => most,
+    stop: () => observer.disconnect(),
+  };
+}
+
+describe("start-up gate (#287)", () => {
+  it("shows only a hidden status while the session is checked, no skeleton and no visible text", async () => {
+    let answer!: (r: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>((r) => (answer = r)));
+    const { container } = renderGate();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe(t.loading);
+    expect(status.className).toContain("cds--visually-hidden");
+    expect(container.querySelector(".cds--skeleton__text")).toBeNull();
+    // No login-shaped placeholder: no heading, no field.
+    expect(screen.queryAllByRole("heading")).toHaveLength(0);
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    await act(async () => answer(new Response(JSON.stringify(noSession.body), { status: 401, headers: { "Content-Type": "application/json" } })));
+    expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
 // The forced screens after login bring their forms with the Profile chunk
 // (#288): a skeleton first, then the form.
 describe("forced screens after login", () => {
+  it("shows the 2FA section's own status after the forced password screen, never two at once (#287)", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    const json = (body: unknown, status = 200) => new Response(body === null ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const key = `${init?.method ?? "GET"} ${String(input)}`;
+      if (key === "GET /api/session") return json({ user: { ...user, mustChangePassword: true, twoFactorEnabled: false, twoFactorRequired: true } });
+      if (key === "PUT /api/profile/password") return json(null, 204);
+      if (key === "GET /api/profile/2fa") {
+        await released;
+        return json({ enabled: false, required: true, admin: false, setupPending: false });
+      }
+      throw new Error(`unexpected request ${key}`);
+    });
+    const statuses = countStatuses();
+    renderGate();
+    // The forced password screen: the Profile chunk loads, then the form.
+    const current = await screen.findByLabelText(t.currentPassword, { selector: "input" });
+    expectLoaded();
+    fireEvent.change(current, { target: { value: "old-password" } });
+    fireEvent.change(screen.getByLabelText(t.newPassword, { selector: "input" }), { target: { value: "a-new-password-1" } });
+    fireEvent.change(screen.getByLabelText(t.repeatPassword, { selector: "input" }), { target: { value: "a-new-password-1" } });
+    fireEvent.click(screen.getByRole("button", { name: t.changePassword }));
+    // Then the 2FA screen: the chunk is there, the section loads its state and says so.
+    expect(await screen.findByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector(".app-view-fallback")).toBeNull());
+    const status = expectLoading(document.querySelector(".auth-page__form")!)!;
+    expect(status.closest(".app-view-fallback")).toBeNull();
+    await act(async () => release());
+    expect(await screen.findByRole("button", { name: t.twoFactorSetup })).toBeTruthy();
+    expectLoaded();
+    statuses.stop();
+    expect(statuses.most()).toBe(1);
+  });
+
   it("asks for an own password: the form loads, the change is sent, then the app shows", async () => {
     serve({
       "GET /api/session": [{ status: 200, body: { user: { ...user, mustChangePassword: true } } }],
@@ -178,8 +248,8 @@ describe("forced screens after login", () => {
     renderGate();
     expect(await screen.findByRole("heading", { name: t.chooseOwnPassword })).toBeTruthy();
     const current = (await screen.findByLabelText(t.currentPassword, { selector: "input" })) as HTMLInputElement;
-    // The skeleton is gone once the form is there.
-    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+    // The skeleton and its status are gone once the form is there.
+    expectLoaded();
     fireEvent.change(current, { target: { value: "old-password" } });
     fireEvent.change(screen.getByLabelText(t.newPassword, { selector: "input" }), { target: { value: "a-new-password-1" } });
     fireEvent.change(screen.getByLabelText(t.repeatPassword, { selector: "input" }), { target: { value: "a-new-password-1" } });

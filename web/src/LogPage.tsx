@@ -18,6 +18,7 @@ import { foldEntries, shortUserAgent } from "./auditLog";
 import { isPlainClick } from "./clicks";
 import { timestamp } from "./format";
 import { t } from "./i18n";
+import { TableSkeleton } from "./tableSkeleton";
 import { formatState, parseState } from "./urlState";
 
 /** The action groups of the filter, as the API names them. */
@@ -206,7 +207,12 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
             </Button>
           </div>
         )}
-        {loading && rows.length === 0 && <p className="app-text-secondary">{t.loading}</p>}
+        {loading && rows.length === 0 && (
+          <TableSkeleton
+            size="md"
+            columns={[{ header: t.logTime }, { header: t.logAction }, { header: t.logWho }, { header: t.logTarget }, { header: t.logClient }]}
+          />
+        )}
       </div>
     </div>
   );

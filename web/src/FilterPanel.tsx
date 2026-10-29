@@ -5,7 +5,7 @@ import { inputFormat, presetOf, presetRange, presets, type Preset } from "./date
 import { filterText } from "./filterText";
 import { lang, locale, t } from "./i18n";
 import { parseQuery, setToken, type TokenKey } from "./searchSyntax";
-import { useMediaQuery } from "./breakpoints";
+import { md, useMediaQuery } from "./breakpoints";
 import type { FilterField, FocusRequest } from "./SearchFilters";
 
 interface Props {
@@ -55,7 +55,7 @@ export function FilterPanel({ id, query, setQuery, group, setGroup, focus, onFoc
   const setRange = (after: string, before: string) => setQuery(setToken(setToken(query, "after", after), "before", before));
   const [custom, setCustom] = useState(false);
   const selected: Preset = custom ? "custom" : presetOf(p.after, p.before, new Date());
-  const wide = useMediaQuery("(min-width: 42rem)");
+  const wide = useMediaQuery(md);
   const picker = useRef<PickerHandle | null>(null);
   const fieldId = (field: FilterField) => `${id}-${field}`;
 

@@ -24,6 +24,7 @@ import { relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
 import { settingsText } from "./settingsText";
+import { TableSkeleton } from "./tableSkeleton";
 import { formatState, parseState, useViewState } from "./urlState";
 
 /**
@@ -189,7 +190,19 @@ export function UsersPage() {
               <p className="page-header__intro app-text-secondary">{t.adminsSeeNoMail}</p>
             </header>
             {notices}
-            {!users && !error && <p className="app-text-secondary">{t.loading}</p>}
+            {!users && !error && (
+              <TableSkeleton
+                columns={[
+                  { header: t.colUser },
+                  { header: t.colRole, wide: true },
+                  { header: t.colState },
+                  { header: t.colSignIn, wide: true },
+                  { header: t.colAccounts, wide: true },
+                  { header: t.colLastLogin, wide: true },
+                  { header: "" },
+                ]}
+              />
+            )}
             {users && <UserTable users={users} open={open} menu={(u) => (
               <RowMenu label={t.userActions(u.name)} register={menus.register(u.name)}>
                 {items(u, true)}
