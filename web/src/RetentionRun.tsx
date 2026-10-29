@@ -126,9 +126,9 @@ export function RunPage({ id, state, listed, heading, parent, changed }: RunPage
 
   // After Delete or Cancel run the list is loaded again, and the run's new
   // state decides: the server answers a confirm with 202 and no body, which
-  // the client reads as an error (api.ts is unchanged in this part). The
-  // action is done only when the run reached the state of the chosen action:
-  // confirmed or done after Delete, cancelled after Cancel run. Otherwise
+  // the client reads as null, not as an error. The action is done only
+  // when the run reached the state of the chosen action: confirmed or done
+  // after Delete, cancelled after Cancel run. Otherwise
   // the error shows with the state the run has now, for example when
   // another admin confirmed it while this one cancelled it. When the state
   // cannot be loaded, it says so and sends nothing more.

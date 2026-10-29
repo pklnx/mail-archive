@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
 
 describe("folderQuestion", () => {
   it("returns the folders the server asks about", () => {
@@ -180,5 +180,26 @@ describe("listMessages", () => {
     await listMessages({ gone: false }, null);
     const params = fetch.mock.calls.map((c) => Object.fromEntries(new URL(String(c[0]), "http://x").searchParams));
     expect(params).toEqual([{ account: "work", gone: "1", limit: "50" }, { limit: "50" }]);
+  });
+});
+
+describe("write responses", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reads a 202 without a body as null (the retention confirm answer)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 202 }));
+    await expect(retentionApi.confirm(1, 3)).resolves.toBeNull();
+  });
+
+  it("still returns the parsed body of a 202 with JSON", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ queued: 1 }), { status: 202 }));
+    await expect(accountsApi.sync("demo")).resolves.toEqual({ queued: 1 });
+  });
+
+  it("still throws on a non-empty body that is not JSON", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>", { status: 202 }));
+    await expect(accountsApi.sync("demo")).rejects.toBeInstanceOf(SyntaxError);
   });
 });
