@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import {
-  Accordion,
-  AccordionItem,
   Button,
   Checkbox,
   Form,
   InlineNotification,
   Layer,
+  Link,
+  MenuItem,
   NumberInput,
   Select,
   SelectItem,
@@ -18,6 +18,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  TableToolbar,
+  TableToolbarContent,
   TabList,
   TabPanel,
   TabPanels,
@@ -25,24 +27,29 @@ import {
   Tag,
   TextArea,
   TextInput,
-  Tile,
   Toggle,
 } from "@carbon/react";
 import { Add } from "@carbon/icons-react";
 import {
   retentionApi,
   usersApi,
-  type DeletionReview,
   type DeletionRun,
   type LegalHold,
   type ManagedUser,
   type RetentionAccount,
+  type RetentionRule,
   type RetentionRules,
 } from "./api";
-import { AppModal, DangerModal } from "./DangerModal";
+import { DangerModal } from "./DangerModal";
 import { day, fileSize } from "./format";
 import { t, translateWithId } from "./i18n";
+import { RunPage, RunStateTag } from "./RetentionRun";
 import { parseQuery } from "./searchSyntax";
+import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
+import { settingsText } from "./settingsText";
+import { formatState, parseState, useViewState, type ViewState } from "./urlState";
+
+export { countMatches } from "./RetentionRun";
 
 const message = (err: unknown) => t.failed(err instanceof Error ? err.message : String(err));
 
@@ -72,391 +79,885 @@ export function runOpen(r: Pick<DeletionRun, "state">): boolean {
   return r.state === "proposed" || r.state === "confirmed";
 }
 
+/** What a rule covers, as its row shows it: owner / account / folder. */
+const ruleWhat = (r: RetentionRule) => `${accountLabel({ owner: r.owner, name: r.account, removed: r.accountRemoved })} / ${r.folder || t.ruleAllFolders}`;
+
+const tabs = ["rules", "holds", "runs"] as const;
+type TabName = (typeof tabs)[number];
+
 /**
- * Whether the typed count confirms a deletion run: the exact number, so an
- * empty field is not "0" and "2.0" or "1e1" are not a count.
+ * The pages under Retention, from the URL: a tab's list (&tab=holds; empty
+ * is rules), an entry's page (&tab=holds&id=8) and the add pages (&add=rule,
+ * &add=hold).
  */
-export function countMatches(typed: string, candidates: number): boolean {
-  return typed.trim() === String(candidates);
+type Page = { kind: "list"; tab: TabName } | { kind: "add"; tab: "rules" | "holds" } | { kind: "detail"; tab: TabName; id: number | null };
+
+function pageOf(s: ViewState): Page {
+  if (s.add === "rule") return { kind: "add", tab: "rules" };
+  if (s.add === "hold") return { kind: "add", tab: "holds" };
+  const tab = (s.tab || "rules") as TabName;
+  if (s.id) return { kind: "detail", tab, id: /^\d+$/.test(s.id) ? Number(s.id) : null };
+  return { kind: "list", tab };
 }
 
-const views = ["rules", "holds", "runs"] as const;
+/** The URL key of a tab: rules is the default, so it has none. */
+const tabKey = (tab: TabName) => (tab === "rules" ? "" : tab);
 
-/** Retention rules, legal holds and deletion runs, for admins. */
+/** The URL of a page under Retention. */
+const hrefOf = (patch: Partial<ViewState> = {}) => formatState({ ...parseState(""), view: "retention", ...patch });
+
+const guide = "https://pklnx.github.io/mail-archive/guide/retention";
+
+/**
+ * Retention rules, legal holds and deletion runs, for admins (#285 part 3):
+ * a tab each, in the URL, with a table and a page per entry; Add rule and
+ * Add hold are pages of their own. Only the open tab loads its data.
+ */
 export function RetentionPage() {
-  const [view, setView] = useState<(typeof views)[number]>("rules");
+  const s = settingsText();
+  const [state, update] = useViewState();
+  const page = pageOf(state);
+  const tab = page.tab;
   const [data, setData] = useState<RetentionRules | null>(null);
   const [error, setError] = useState("");
+  // The error of the last action, for the page it was started on.
+  const [failure, setFailure] = useState<{ page: string; text: string } | null>(null);
+  // "Hold added", from the add page, on the Holds tab until the tab changes.
+  const [notice, setNotice] = useState("");
+  const [showReleased, setShowReleased] = useState(false);
+  const [asking, setAsking] = useState<{ kind: "rule"; rule: RetentionRule } | { kind: "hold"; hold: LegalHold } | null>(null);
+  const menus = useMenuButtons();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const tabsBox = useRef<HTMLDivElement>(null);
+  // A row that had the focus went away (its rule removed, its hold released
+  // while released holds are hidden): the focus goes to the selected tab.
+  const lostRow = useRef(false);
 
-  const reload = useCallback(() => {
-    retentionApi.rules().then(
-      (d) => {
-        setData(d);
-        setError("");
-      },
-      (err: unknown) => setError(message(err)),
-    );
-  }, []);
-  useEffect(reload, [reload]);
+  const reload = useCallback(
+    () =>
+      retentionApi.rules().then(
+        (d) => {
+          setData(d);
+          setError("");
+        },
+        (err: unknown) => setError(message(err)),
+      ),
+    [],
+  );
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
-  const status = (
+  // The holds of the Holds tab, and of a hold's page, which needs the
+  // released ones too. Kept with the choice they were loaded for.
+  const holdsShown = tab === "holds" && page.kind !== "add";
+  const released = showReleased || page.kind === "detail";
+  const [holds, setHolds] = useState<{ released: boolean; list: LegalHold[] } | null>(null);
+  const [holdsError, setHoldsError] = useState("");
+  const reloadHolds = useCallback(
+    () =>
+      retentionApi.holds(released).then(
+        (list) => {
+          setHolds({ released, list });
+          setHoldsError("");
+        },
+        (err: unknown) => setHoldsError(message(err)),
+      ),
+    [released],
+  );
+  useEffect(() => {
+    if (holdsShown) void reloadHolds();
+  }, [holdsShown, reloadHolds]);
+  const holdList = holds?.released === released ? holds.list : null;
+
+  // The runs, for the Runs tab and a run's page; null when loading them failed.
+  const runsShown = tab === "runs";
+  const [runs, setRuns] = useState<DeletionRun[] | null>(null);
+  const [runsError, setRunsError] = useState("");
+  const reloadRuns = useCallback(
+    () =>
+      retentionApi.runs().then(
+        (r) => {
+          setRuns(r);
+          setRunsError("");
+          return r;
+        },
+        (err: unknown) => {
+          setRunsError(message(err));
+          return null;
+        },
+      ),
+    [],
+  );
+  useEffect(() => {
+    if (runsShown) void reloadRuns();
+  }, [runsShown, reloadRuns]);
+  // A confirmed run deletes in the background: poll until it is done.
+  const polling = runsShown && (runs?.some((r) => r.state === "confirmed") ?? false);
+  useEffect(() => {
+    if (!polling) return;
+    const id = setInterval(() => void reloadRuns(), 3000);
+    return () => clearInterval(id);
+  }, [polling, reloadRuns]);
+
+  // The entry of a detail page, once its list is loaded.
+  let rule: RetentionRule | undefined;
+  let hold: LegalHold | undefined;
+  let run: DeletionRun | undefined;
+  let loaded = true;
+  if (page.kind === "detail") {
+    if (tab === "rules") {
+      loaded = data !== null;
+      rule = data?.rules.find((r) => r.id === page.id);
+    } else if (tab === "holds") {
+      loaded = holdList !== null;
+      hold = holdList?.find((h) => h.id === page.id);
+    } else {
+      loaded = runs !== null;
+      run = runs?.find((r) => r.id === page.id);
+    }
+  }
+  // An entry that does not exist (any more) returns to its tab's list.
+  const unknown = page.kind === "detail" && loaded && !rule && !hold && !run;
+  useEffect(() => {
+    if (unknown) update({ id: "" }, { replace: true });
+  }, [unknown, update]);
+  const shown = page.kind === "detail" && !unknown ? `${tab}:${page.id}` : page.kind === "add" ? `add:${tab}` : "list";
+  usePageFocus(page.kind === "detail" && !loaded ? null : shown, heading);
+
+  useLayoutEffect(() => {
+    if (!lostRow.current) return;
+    lostRow.current = false;
+    if (shown === "list") tabsBox.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+  });
+
+  // Opening a page is a history entry; finishing one replaces it, so Back
+  // does not lead into a form that is done.
+  const go = (p: Partial<ViewState>, replace = false) => update({ view: "retention", tab: tabKey(tab), id: "", add: "", ...p }, { replace });
+  const toTab = (replace = false) => go({}, replace);
+  const lost = () => {
+    lostRow.current = true;
+  };
+
+  // Runs an action and loads the list again; resolves to whether it worked.
+  const act = async (action: () => Promise<unknown>, again: () => Promise<unknown>) => {
+    setFailure(null);
+    let text = "";
+    try {
+      await action();
+    } catch (err) {
+      text = message(err);
+    }
+    await again();
+    if (text) setFailure({ page: shown, text });
+    return !text;
+  };
+  const notices = failure?.page === shown && (
+    <p role="alert" className="app-text-error">
+      {failure.text}
+    </p>
+  );
+  const status = (err: string, loading: boolean) => (
     <>
-      {error && (
+      {err && (
         <p role="alert" className="app-text-error">
-          {error}
+          {err}
         </p>
       )}
-      {!data && !error && <p className="app-text-secondary">{t.loading}</p>}
+      {loading && !err && <p className="app-text-secondary">{t.loading}</p>}
     </>
   );
+  const parent = { label: t.retentionTitle, href: hrefOf({ tab: tabKey(tab) }), go: () => toTab() };
+
+  let content: ReactNode;
+  if (page.kind === "add" && tab === "rules") {
+    content = (
+      <>
+        <DetailHeader parent={parent} title={t.ruleAdd} heading={heading} />
+        {status(error, !data)}
+        {data && (
+          <RuleForm
+            data={data}
+            cancel={() => toTab(true)}
+            added={() => {
+              void reload();
+              toTab(true);
+            }}
+          />
+        )}
+      </>
+    );
+  } else if (page.kind === "add") {
+    content = (
+      <>
+        <DetailHeader parent={parent} title={t.holdAdd} heading={heading} />
+        {status(error, !data)}
+        {data && (
+          <HoldForm
+            accounts={data.accounts}
+            cancel={() => toTab(true)}
+            added={(matched) => {
+              setNotice(t.holdAdded(matched));
+              toTab(true);
+            }}
+          />
+        )}
+      </>
+    );
+  } else if (page.kind === "detail" && !loaded) {
+    content = status(tab === "rules" ? error : tab === "holds" ? holdsError : runsError, true);
+  } else if (rule) {
+    const r = rule;
+    content = (
+      <RuleDetail
+        rule={r}
+        heading={heading}
+        parent={parent}
+        notices={notices}
+        menu={
+          <MenuSlot lost={() => heading.current?.focus()}>
+            <RowMenu label={t.userActions(ruleWhat(r))} register={menus.register(`rule:${r.id}`)}>
+              <MenuItem label={t.ruleRemove} kind="danger" onClick={() => setAsking({ kind: "rule", rule: r })} />
+            </RowMenu>
+          </MenuSlot>
+        }
+      />
+    );
+  } else if (hold) {
+    const h = hold;
+    content = (
+      <HoldDetail
+        hold={h}
+        heading={heading}
+        parent={parent}
+        notices={notices}
+        // Released, the hold has nothing left in its menu: the focus goes to the h1.
+        menu={
+          !h.releasedAt && (
+            <MenuSlot lost={() => heading.current?.focus()}>
+              <RowMenu label={t.userActions(h.name)} register={menus.register(`hold:${h.id}`)}>
+                <MenuItem label={t.holdRelease} kind="danger" onClick={() => setAsking({ kind: "hold", hold: h })} />
+              </RowMenu>
+            </MenuSlot>
+          )
+        }
+      />
+    );
+  } else if (run) {
+    content = <RunPage key={run.id} id={run.id} state={run.state} listed={run} heading={heading} parent={parent} changed={reloadRuns} />;
+  } else {
+    content = (
+      <>
+        <header className="page-header">
+          <h1 ref={heading} tabIndex={-1} className="page-header__title type-heading-04 app-page-title">
+            {t.retentionTitle}
+          </h1>
+        </header>
+        <div ref={tabsBox}>
+          {/* Only the open tab is mounted: each one loads its data when it is shown. */}
+          <Tabs
+            selectedIndex={tabs.indexOf(tab)}
+            onChange={({ selectedIndex }) => {
+              // The notice and an action's error belong to the tab they were shown on.
+              setNotice("");
+              setFailure(null);
+              go({ tab: tabKey(tabs[selectedIndex] ?? "rules") }, true);
+            }}
+          >
+            <TabList
+              aria-label={t.retentionTitle}
+              contained
+              leftOverflowButtonProps={{ "aria-label": t.carbon.scrollLeft }}
+              rightOverflowButtonProps={{ "aria-label": t.carbon.scrollRight }}
+            >
+              <Tab>{t.retentionRulesTab}</Tab>
+              <Tab>{t.retentionHoldsTab}</Tab>
+              <Tab>{t.runsTab}</Tab>
+            </TabList>
+            {/* A contained tab's panel is a layer of its own: the table and
+                fields in it sit on the next one. */}
+            <TabPanels>
+              <TabPanel className="retention-panel">
+                {tab === "rules" && (
+                  <Layer>
+                    <Help text={s.rulesHelp} anchor="rules" />
+                    {notices}
+                    {status(error, !data)}
+                    {data && (
+                      <RulesTable
+                        rules={data.rules}
+                        menus={menus}
+                        open={(id) => go({ id: String(id) })}
+                        add={() => go({ add: "rule" })}
+                        remove={(r) => setAsking({ kind: "rule", rule: r })}
+                        lost={lost}
+                      />
+                    )}
+                  </Layer>
+                )}
+              </TabPanel>
+              <TabPanel className="retention-panel">
+                {tab === "holds" && (
+                  <Layer>
+                    <Help text={s.holdsHelp} anchor="legal-holds" />
+                    {notices}
+                    {status(error || holdsError, false)}
+                    {notice && (
+                      <InlineNotification
+                        kind="success"
+                        lowContrast
+                        hideCloseButton
+                        role="status"
+                        className="notification--full"
+                        statusIconDescription={t.carbon.status.success}
+                        title={notice}
+                      />
+                    )}
+                    <HoldsTable
+                      holds={holdList}
+                      showReleased={showReleased}
+                      setShowReleased={setShowReleased}
+                      menus={menus}
+                      open={(id) => go({ id: String(id) })}
+                      add={() => {
+                        setNotice("");
+                        go({ add: "hold" });
+                      }}
+                      release={(h) => setAsking({ kind: "hold", hold: h })}
+                      lost={lost}
+                    />
+                  </Layer>
+                )}
+              </TabPanel>
+              <TabPanel className="retention-panel">
+                {tab === "runs" && (
+                  <Layer>
+                    <Help text={s.runsHelp} anchor="deletion-runs" />
+                    <RunsTable
+                      runs={runs}
+                      error={runsError}
+                      open={(id) => go({ id: String(id) })}
+                      reload={reloadRuns}
+                    />
+                  </Layer>
+                )}
+              </TabPanel>
+            </TabPanels>
+          </Tabs>
+        </div>
+      </>
+    );
+  }
 
   return (
     <div className="accounts-page">
-      <div className="page">
-        <header className="page-header">
-          <h1 className="page-header__title type-heading-04">{t.retentionTitle}</h1>
-        </header>
-        {/* Only the open tab is mounted: each one loads its data when it is shown. */}
-        <Tabs selectedIndex={views.indexOf(view)} onChange={({ selectedIndex }) => setView(views[selectedIndex] ?? "rules")}>
-          <TabList
-            aria-label={t.retentionTitle}
-            contained
-            leftOverflowButtonProps={{ "aria-label": t.carbon.scrollLeft }}
-            rightOverflowButtonProps={{ "aria-label": t.carbon.scrollRight }}
-          >
-            <Tab>{t.retentionRulesTab}</Tab>
-            <Tab>{t.retentionHoldsTab}</Tab>
-            <Tab>{t.runsTab}</Tab>
-          </TabList>
-          {/* A contained tab's panel is a layer of its own: the tiles and
-              fields in it sit on the next one. */}
-          <TabPanels>
-            <TabPanel className="retention-panel">
-              {view === "rules" && (
-                <Layer>
-                  {status}
-                  {data && <RulesTab data={data} reload={reload} />}
-                </Layer>
-              )}
-            </TabPanel>
-            <TabPanel className="retention-panel">
-              {view === "holds" && (
-                <Layer>
-                  {status}
-                  {data && <HoldsTab accounts={data.accounts} />}
-                </Layer>
-              )}
-            </TabPanel>
-            <TabPanel className="retention-panel">
-              {view === "runs" && (
-                <Layer>
-                  <RunsTab />
-                </Layer>
-              )}
-            </TabPanel>
-          </TabPanels>
-        </Tabs>
-      </div>
-    </div>
-  );
-}
-
-function RulesTab({ data, reload }: { data: RetentionRules; reload: () => void }) {
-  const [error, setError] = useState("");
-  const [accountId, setAccountId] = useState("");
-  const [folder, setFolder] = useState("");
-  const [years, setYears] = useState("10");
-  const [timeZone, setTimeZone] = useState(data.defaultTimeZone);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  // A period shorter than the legal minimum waits for its confirmation.
-  const [short, setShort] = useState<number | null>(null);
-  const [removing, setRemoving] = useState<{ id: number; what: string } | null>(null);
-  const id = useId();
-  const account = data.accounts.find((a) => String(a.id) === accountId);
-  const n = Number(years);
-  const tooShort = years !== "" && Number.isFinite(n) && n >= 1 && n < data.minYears;
-
-  const send = async (n: number, force: boolean) => {
-    if (!account) return;
-    setBusy(true);
-    setError("");
-    try {
-      await retentionApi.addRule({ accountId: account.id, folder, years: n, timeZone, note, force });
-      setFolder("");
-      setNote("");
-      reload();
-    } catch (err) {
-      setError(message(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const add = (e: FormEvent) => {
-    e.preventDefault();
-    if (!account || busy) return;
-    const n = Number(years);
-    if (n < data.minYears) setShort(n);
-    else void send(n, false);
-  };
-
-  const remove = async (id: number) => {
-    setError("");
-    try {
-      await retentionApi.removeRule(id);
-    } catch (err) {
-      setError(message(err));
-    }
-    reload();
-  };
-
-  return (
-    <section className="retention-section">
-      <p className="app-text-secondary">{t.retentionNote}</p>
-      <p className="app-text-secondary">{t.retentionLegal}</p>
-      {data.rules.length === 0 ? (
-        <p>{t.ruleNone}</p>
-      ) : (
-        <ul className="retention-list">
-          {data.rules.map((r) => {
-            const what = `${accountLabel({ owner: r.owner, name: r.account, removed: r.accountRemoved })} / ${r.folder || t.ruleAllFolders}`;
-            return (
-              <li key={r.id}>
-                <Tile className="retention-tile">
-                  <div className="retention-tile__body">
-                    <h2 className="retention-tile__name">{what}</h2>
-                    <p>
-                      {t.ruleYearsCount(r.years)} · {r.timeZone}
-                    </p>
-                    {r.note && <p className="app-text-secondary app-break-words">{r.note}</p>}
-                    <p className="app-text-secondary app-text-small">{t.ruleCreated(r.createdBy, day(r.createdAt))}</p>
-                  </div>
-                  <div className="retention-tile__actions">
-                    <Button kind="danger--tertiary" size="sm" onClick={() => setRemoving({ id: r.id, what })}>
-                      {t.ruleRemove}
-                    </Button>
-                  </div>
-                </Tile>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {error && (
-        <p role="alert" className="app-text-error">
-          {error}
-        </p>
-      )}
-
-      <section className="page__section retention-form">
-        <h2 className="type-heading-03">{t.ruleAdd}</h2>
-        <Form onSubmit={add} className="page-form">
-          <div className="form-row form-row--two">
-            <Select
-              id={`${id}-account`}
-              labelText={t.ruleAccount}
-              value={accountId}
-              required
-              onChange={(e) => {
-                setAccountId(e.target.value);
-                setFolder("");
-              }}
-            >
-              <SelectItem value="" text="" />
-              {data.accounts.map((a) => (
-                <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
-              ))}
-            </Select>
-            <Select id={`${id}-folder`} labelText={t.ruleFolder} value={folder} disabled={!account} onChange={(e) => setFolder(e.target.value)}>
-              <SelectItem value="" text={t.ruleAllFolders} />
-              {account?.folders.map((f) => (
-                <SelectItem key={f} value={f} text={f} />
-              ))}
-            </Select>
-          </div>
-          <div className="form-row form-row--two">
-            <NumberInput
-              id={`${id}-years`}
-              label={t.ruleYears}
-              min={1}
-              max={100}
-              allowEmpty
-              required
-              value={years}
-              invalidText={t.ruleYearsInvalid}
-              warn={tooShort}
-              warnText={t.ruleShortWarn(data.minYears)}
-              translateWithId={translateWithId}
-              onChange={(_, { value }) => setYears(String(value))}
-            />
-            <TextInput id={`${id}-tz`} labelText={t.ruleTimeZone} value={timeZone} required onChange={(e) => setTimeZone(e.target.value)} />
-          </div>
-          <TextInput
-            id={`${id}-note`}
-            labelText={t.ruleNote}
-            value={note}
-            maxLength={500}
-            placeholder={t.ruleNotePlaceholder}
-            onChange={(e) => setNote(e.target.value)}
-          />
-          <div className="form-actions">
-            <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || !account}>
-              {t.ruleAdd}
-            </Button>
-          </div>
-        </Form>
-      </section>
-
-      {short !== null && (
+      <div className={page.kind === "add" ? "page" : "page page--wide"}>{content}</div>
+      {asking?.kind === "rule" && (
         <DangerModal
           size="sm"
-          modalHeading={t.ruleShortTitle}
-          primaryButtonText={t.ruleAddAnyway}
-          secondaryButtonText={t.cancel}
-          onRequestClose={() => setShort(null)}
-          onRequestSubmit={() => {
-            const n = short;
-            setShort(null);
-            void send(n, true);
-          }}
-        >
-          <p>{t.ruleShort(short, data.minYears)}</p>
-        </DangerModal>
-      )}
-      {removing && (
-        <DangerModal
-          size="sm"
-          modalHeading={t.ruleRemoveTitle(removing.what)}
+          modalHeading={t.ruleRemoveTitle(ruleWhat(asking.rule))}
           primaryButtonText={t.ruleRemove}
           secondaryButtonText={t.cancel}
-          onRequestClose={() => setRemoving(null)}
+          returnFocus={() => menus.button(`rule:${asking.rule.id}`) ?? heading.current}
+          onRequestClose={() => setAsking(null)}
           onRequestSubmit={() => {
-            const { id } = removing;
-            setRemoving(null);
-            void remove(id);
+            const { id } = asking.rule;
+            setAsking(null);
+            // Removed from its page: the list replaces the page. From its
+            // row: the row goes, and the focus with it to the Rules tab.
+            const fromDetail = page.kind === "detail";
+            void act(() => retentionApi.removeRule(id), reload).then((ok) => {
+              if (ok && fromDetail) toTab(true);
+            });
           }}
         >
           <p>{t.ruleRemoveText}</p>
         </DangerModal>
       )}
-    </section>
-  );
-}
-
-function HoldsTab({ accounts }: { accounts: RetentionAccount[] }) {
-  const [holds, setHolds] = useState<LegalHold[] | null>(null);
-  const [released, setReleased] = useState(false);
-  const [users, setUsers] = useState<ManagedUser[]>([]);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [releasing, setReleasing] = useState<LegalHold | null>(null);
-  const id = useId();
-
-  const reload = useCallback(() => {
-    retentionApi.holds(released).then(setHolds, (err: unknown) => setError(message(err)));
-  }, [released]);
-  useEffect(reload, [reload]);
-  useEffect(() => {
-    usersApi.list().then(setUsers, () => setUsers([]));
-  }, []);
-
-  const release = async (h: LegalHold, note: string) => {
-    setError("");
-    try {
-      await retentionApi.releaseHold(h.id, note);
-    } catch (err) {
-      setError(message(err));
-    }
-    reload();
-  };
-
-  return (
-    <section className="retention-section">
-      <p className="app-text-secondary">{t.holdNote}</p>
-      <Toggle
-        id={`${id}-released`}
-        size="sm"
-        labelText={t.holdShowReleased}
-        labelA={t.carbon.toggleOff}
-        labelB={t.carbon.toggleOn}
-        toggled={released}
-        onToggle={setReleased}
-      />
-      {error && (
-        <p role="alert" className="app-text-error">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <InlineNotification
-          kind="success"
-          lowContrast
-          hideCloseButton
-          role="status"
-          className="notification--full"
-          statusIconDescription={t.carbon.status.success}
-          title={notice}
-        />
-      )}
-      {holds && holds.length === 0 && <p>{t.holdNone}</p>}
-      {holds && holds.length > 0 && (
-        <ul className="retention-list">
-          {holds.map((h) => (
-            <li key={h.id}>
-              <Tile className={`retention-tile${h.releasedAt ? " retention-tile--off" : ""}`}>
-                <div className="retention-tile__body">
-                  <div className="retention-tile__head">
-                    <h2 className="retention-tile__name">{h.name}</h2>
-                    {h.releasedAt && (
-                      <Tag size="sm" type="gray">
-                        {t.holdReleasedTag}
-                      </Tag>
-                    )}
-                  </div>
-                  <p className="app-break-words">{holdScope(h)}</p>
-                  {h.reason && <p className="app-text-secondary app-break-words">{h.reason}</p>}
-                  <p className="app-text-secondary app-text-small app-break-words">
-                    {h.releasedAt ? t.holdReleased(h.releasedBy, day(h.releasedAt), h.releaseNote) : t.ruleCreated(h.createdBy, day(h.createdAt))}
-                  </p>
-                </div>
-                {!h.releasedAt && (
-                  <div className="retention-tile__actions">
-                    <Button kind="danger--tertiary" size="sm" onClick={() => setReleasing(h)}>
-                      {t.holdRelease}
-                    </Button>
-                  </div>
-                )}
-              </Tile>
-            </li>
-          ))}
-        </ul>
-      )}
-      <HoldForm
-        accounts={accounts}
-        users={users}
-        added={(matched) => {
-          setNotice(t.holdAdded(matched));
-          reload();
-        }}
-      />
-      {releasing && (
+      {asking?.kind === "hold" && (
         <ReleaseHoldModal
-          hold={releasing}
-          cancel={() => setReleasing(null)}
+          hold={asking.hold}
+          returnFocus={() => menus.button(`hold:${asking.hold.id}`) ?? heading.current}
+          cancel={() => setAsking(null)}
           confirm={(note) => {
-            const h = releasing;
-            setReleasing(null);
-            void release(h, note);
+            const { id } = asking.hold;
+            setAsking(null);
+            void act(() => retentionApi.releaseHold(id, note), reloadHolds);
           }}
         />
       )}
-    </section>
+    </div>
+  );
+}
+
+/** The helper line of a tab, with a link to the guide. */
+function Help({ text, anchor }: { text: string; anchor: string }) {
+  const s = settingsText();
+  return (
+    <p className="retention-help app-text-secondary app-text-small">
+      {text}{" "}
+      <Link href={`${guide}#${anchor}`} target="_blank" rel="noreferrer" inline size="sm">
+        {s.guideLink}
+      </Link>
+    </p>
+  );
+}
+
+/**
+ * Calls lost when the element, about to go, has the focus. Checked in a
+ * layout effect's cleanup, which runs while the element is still in the
+ * document.
+ */
+function useFocusLoss(element: () => Element | null | undefined, lost: () => void) {
+  const onLost = useRef(lost);
+  const get = useRef(element);
+  useLayoutEffect(() => {
+    onLost.current = lost;
+  });
+  useLayoutEffect(() => {
+    const el = get.current();
+    return () => {
+      if (el?.contains(document.activeElement)) onLost.current();
+    };
+  }, []);
+}
+
+/** A menu that hands the focus on (lost) when it goes while it has the focus: its last item is done. */
+function MenuSlot({ lost, children }: { lost: () => void; children: ReactNode }) {
+  const box = useRef<HTMLSpanElement>(null);
+  useFocusLoss(() => box.current, lost);
+  return <span ref={box}>{children}</span>;
+}
+
+/**
+ * A row of the rules or holds: the name is the row header and links to the
+ * entry's page. When its menu goes while it has the focus (a released hold
+ * that stays listed), the name link takes the focus; when the whole row
+ * goes, lost hands it on.
+ */
+function EntryRow({
+  name,
+  href,
+  open,
+  more,
+  menu,
+  lost,
+  children,
+}: {
+  name: string;
+  href: string;
+  open: () => void;
+  more: ReactNode;
+  menu: ReactNode;
+  lost: () => void;
+  children: ReactNode;
+}) {
+  const nameBox = useRef<HTMLSpanElement>(null);
+  const menuLost = useRef(false);
+  useFocusLoss(() => nameBox.current?.closest("tr"), lost);
+  useLayoutEffect(() => {
+    if (!menuLost.current) return;
+    menuLost.current = false;
+    nameBox.current?.querySelector("a")?.focus();
+  });
+  return (
+    <TableRow>
+      <TableHeader scope="row">
+        <span ref={nameBox}>
+          <AppLink href={href} go={open} className="retention-table__name">
+            {name}
+          </AppLink>
+        </span>
+        <span className="retention-table__more app-narrow-only app-text-secondary app-text-small">{more}</span>
+      </TableHeader>
+      {children}
+      <TableCell className="cds--table-column-menu">
+        {menu && (
+          <MenuSlot
+            lost={() => {
+              menuLost.current = true;
+            }}
+          >
+            {menu}
+          </MenuSlot>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** A tab's toolbar: its one primary action, and more controls before it. */
+function Toolbar({ children }: { children: ReactNode }) {
+  return (
+    <TableToolbar aria-label={t.colActions}>
+      <TableToolbarContent className="retention-toolbar">{children}</TableToolbarContent>
+    </TableToolbar>
+  );
+}
+
+function RulesTable({
+  rules,
+  menus,
+  open,
+  add,
+  remove,
+  lost,
+}: {
+  rules: RetentionRule[];
+  menus: ReturnType<typeof useMenuButtons>;
+  open: (id: number) => void;
+  add: () => void;
+  remove: (r: RetentionRule) => void;
+  lost: () => void;
+}) {
+  const s = settingsText();
+  return (
+    <TableContainer className="retention-table app-table">
+      <Toolbar>
+        <Button kind="primary" renderIcon={Add} onClick={add}>
+          {t.ruleAdd}
+        </Button>
+      </Toolbar>
+      {rules.length === 0 ? (
+        <p className="retention-table__empty">{t.ruleNone}</p>
+      ) : (
+        <Table aria-label={t.retentionRulesTab} size="lg" overflowMenuOnHover={false}>
+          <TableHead>
+            <TableRow>
+              <TableHeader>{s.colRule}</TableHeader>
+              <TableHeader>{s.colPeriod}</TableHeader>
+              <TableHeader className="app-wide-only">{t.ruleNote}</TableHeader>
+              <TableHeader className="app-wide-only">{s.created}</TableHeader>
+              <TableHeader>
+                <span className="cds--visually-hidden">{t.colActions}</span>
+              </TableHeader>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rules.map((r) => {
+              const what = ruleWhat(r);
+              const created = t.ruleCreated(r.createdBy, day(r.createdAt));
+              return (
+                <EntryRow
+                  key={r.id}
+                  name={what}
+                  href={hrefOf({ id: String(r.id) })}
+                  open={() => open(r.id)}
+                  more={
+                    <>
+                      {r.note && <span className="app-break-words">{r.note}</span>}
+                      <span>{created}</span>
+                    </>
+                  }
+                  menu={
+                    <RowMenu label={t.userActions(what)} register={menus.register(`rule:${r.id}`)}>
+                      <MenuItem label={t.ruleRemove} kind="danger" onClick={() => remove(r)} />
+                    </RowMenu>
+                  }
+                  lost={lost}
+                >
+                  <TableCell>
+                    {t.ruleYearsCount(r.years)} · {r.timeZone}
+                  </TableCell>
+                  <TableCell className="app-wide-only app-break-words">{r.note}</TableCell>
+                  <TableCell className="app-wide-only app-text-secondary">{created}</TableCell>
+                </EntryRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </TableContainer>
+  );
+}
+
+const HoldTag = ({ hold }: { hold: LegalHold }) =>
+  hold.releasedAt ? (
+    <Tag size="sm" type="gray">
+      {t.holdReleasedTag}
+    </Tag>
+  ) : (
+    <Tag size="sm" type="green">
+      {settingsText().holdActive}
+    </Tag>
+  );
+
+function HoldsTable({
+  holds,
+  showReleased,
+  setShowReleased,
+  menus,
+  open,
+  add,
+  release,
+  lost,
+}: {
+  holds: LegalHold[] | null;
+  showReleased: boolean;
+  setShowReleased: (on: boolean) => void;
+  menus: ReturnType<typeof useMenuButtons>;
+  open: (id: number) => void;
+  add: () => void;
+  release: (h: LegalHold) => void;
+  lost: () => void;
+}) {
+  const s = settingsText();
+  const id = useId();
+  return (
+    <TableContainer className="retention-table app-table">
+      <Toolbar>
+        <Toggle
+          id={`${id}-released`}
+          size="sm"
+          className="retention-toolbar__toggle"
+          labelText={t.holdShowReleased}
+          labelA={t.carbon.toggleOff}
+          labelB={t.carbon.toggleOn}
+          toggled={showReleased}
+          onToggle={setShowReleased}
+        />
+        <Button kind="primary" renderIcon={Add} onClick={add}>
+          {t.holdAdd}
+        </Button>
+      </Toolbar>
+      {!holds && <p className="retention-table__empty app-text-secondary">{t.loading}</p>}
+      {holds && holds.length === 0 && <p className="retention-table__empty">{t.holdNone}</p>}
+      {holds && holds.length > 0 && (
+        <Table aria-label={t.retentionHoldsTab} size="lg" overflowMenuOnHover={false}>
+          <TableHead>
+            <TableRow>
+              <TableHeader>{s.colHold}</TableHeader>
+              <TableHeader className="app-wide-only">{s.colCovers}</TableHeader>
+              <TableHeader>{s.colStatus}</TableHeader>
+              <TableHeader className="app-wide-only">{s.created}</TableHeader>
+              <TableHeader>
+                <span className="cds--visually-hidden">{t.colActions}</span>
+              </TableHeader>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {holds.map((h) => (
+              <EntryRow
+                key={h.id}
+                name={h.name}
+                href={hrefOf({ tab: "holds", id: String(h.id) })}
+                open={() => open(h.id)}
+                more={<span className="app-break-words">{holdScope(h)}</span>}
+                menu={
+                  !h.releasedAt && (
+                    <RowMenu label={t.userActions(h.name)} register={menus.register(`hold:${h.id}`)}>
+                      <MenuItem label={t.holdRelease} kind="danger" onClick={() => release(h)} />
+                    </RowMenu>
+                  )
+                }
+                lost={lost}
+              >
+                <TableCell className="app-wide-only app-break-words">{holdScope(h)}</TableCell>
+                <TableCell>
+                  <HoldTag hold={h} />
+                </TableCell>
+                <TableCell className="app-wide-only app-text-secondary">{t.ruleCreated(h.createdBy, day(h.createdAt))}</TableCell>
+              </EntryRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </TableContainer>
+  );
+}
+
+/** The runs: the run is the row header and links to its page, which has its actions. */
+function RunsTable({
+  runs,
+  error,
+  open,
+  reload,
+}: {
+  runs: DeletionRun[] | null;
+  error: string;
+  open: (id: number) => void;
+  reload: () => Promise<DeletionRun[] | null>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState("");
+  const propose = async () => {
+    setBusy(true);
+    setFailed("");
+    try {
+      const run = await retentionApi.propose();
+      // The new run's page, once the list has it.
+      await reload();
+      open(run.id);
+    } catch (err) {
+      setFailed(message(err));
+      void reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const anyOpen = runs?.some(runOpen);
+  const shownError = failed || error;
+  return (
+    <TableContainer className="retention-table runs-table app-table">
+      {/* A new run only while none is open. */}
+      {!anyOpen && (
+        <Toolbar>
+          <Button kind="primary" renderIcon={Add} disabled={busy || !runs} onClick={() => void propose()}>
+            {t.runPropose}
+          </Button>
+        </Toolbar>
+      )}
+      {shownError && (
+        <p role="alert" className="retention-table__empty app-text-error">
+          {shownError}
+        </p>
+      )}
+      {!runs && !error && <p className="retention-table__empty app-text-secondary">{t.loading}</p>}
+      {runs && runs.length === 0 && <p className="retention-table__empty">{t.runNone}</p>}
+      {runs && runs.length > 0 && (
+        <Table aria-label={t.runsTab} size="lg">
+          <TableHead>
+            <TableRow>
+              <TableHeader>{t.runColRun}</TableHeader>
+              <TableHeader>{t.runColState}</TableHeader>
+              <TableHeader className="app-wide-only">{t.runColResult}</TableHeader>
+              <TableHeader className="app-wide-only">{t.runColProposed}</TableHeader>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {runs.map((r) => {
+              const result = r.state === "done" || r.deleted + r.kept > 0 ? t.runResult(r.deleted, r.kept) : "";
+              const proposedBy = t.runProposedBy(r.createdBy, day(r.createdAt));
+              return (
+                <TableRow key={r.id}>
+                  <TableHeader scope="row">
+                    <AppLink href={hrefOf({ tab: "runs", id: String(r.id) })} go={() => open(r.id)} className="retention-table__name">
+                      {t.runLine(r.id, r.candidates, fileSize(r.bytes))}
+                    </AppLink>
+                    <span className="retention-table__more app-narrow-only app-text-secondary app-text-small">
+                      {result && <span>{result}</span>}
+                      <span>{proposedBy}</span>
+                    </span>
+                  </TableHeader>
+                  <TableCell>
+                    <RunStateTag state={r.state} />
+                  </TableCell>
+                  <TableCell className="app-wide-only">{result}</TableCell>
+                  <TableCell className="app-wide-only app-text-secondary">{proposedBy}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </TableContainer>
+  );
+}
+
+/** A rule's page: what it covers, its period and note; Remove rule in the menu. Rules are not edited. */
+function RuleDetail({
+  rule: r,
+  heading,
+  parent,
+  notices,
+  menu,
+}: {
+  rule: RetentionRule;
+  heading: RefObject<HTMLHeadingElement | null>;
+  parent: { label: string; href: string; go: () => void };
+  notices: ReactNode;
+  menu: ReactNode;
+}) {
+  const s = settingsText();
+  const id = useId();
+  return (
+    <>
+      <DetailHeader
+        parent={parent}
+        title={`${r.owner || "-"} / ${r.account} / ${r.folder || t.ruleAllFolders}`}
+        heading={heading}
+        tags={
+          r.accountRemoved && (
+            <Tag size="sm" type="gray">
+              {s.accountRemoved}
+            </Tag>
+          )
+        }
+        menu={menu}
+      />
+      {notices}
+      <SummaryTiles
+        items={[
+          { label: s.colPeriod, value: t.ruleYearsCount(r.years) },
+          { label: t.ruleTimeZone, value: r.timeZone },
+          { label: s.created, value: <span className="app-summary__lines">{t.ruleCreated(r.createdBy, day(r.createdAt))}</span> },
+        ]}
+      />
+      {r.note && (
+        <section className="page__section" aria-labelledby={`${id}-note`}>
+          <h2 id={`${id}-note`} className="type-heading-03">
+            {t.ruleNote}
+          </h2>
+          <p className="app-break-words">{r.note}</p>
+        </section>
+      )}
+    </>
+  );
+}
+
+/** A hold's page: its scope, the reason and, once released, the note; Release in the menu while it is active. */
+function HoldDetail({
+  hold: h,
+  heading,
+  parent,
+  notices,
+  menu,
+}: {
+  hold: LegalHold;
+  heading: RefObject<HTMLHeadingElement | null>;
+  parent: { label: string; href: string; go: () => void };
+  notices: ReactNode;
+  menu: ReactNode;
+}) {
+  const s = settingsText();
+  const id = useId();
+  return (
+    <>
+      <DetailHeader parent={parent} title={h.name} heading={heading} tags={<HoldTag hold={h} />} menu={menu} />
+      {notices}
+      <SummaryTiles
+        items={[
+          { label: s.colCovers, value: <span className="app-summary__lines">{holdScope(h)}</span> },
+          { label: s.created, value: <span className="app-summary__lines">{t.ruleCreated(h.createdBy, day(h.createdAt))}</span> },
+          ...(h.releasedAt
+            ? [{ label: s.released, value: <span className="app-summary__lines">{t.holdReleased(h.releasedBy, day(h.releasedAt), h.releaseNote)}</span> }]
+            : []),
+        ]}
+      />
+      {h.reason && (
+        <section className="page__section" aria-labelledby={`${id}-reason`}>
+          <h2 id={`${id}-reason`} className="type-heading-03">
+            {t.holdReason}
+          </h2>
+          <p className="app-break-words">{h.reason}</p>
+        </section>
+      )}
+    </>
   );
 }
 
 /** Releasing a hold asks for the note that is kept with it; an empty note sends nothing. */
-export function ReleaseHoldModal({ hold, cancel, confirm }: { hold: LegalHold; cancel: () => void; confirm: (note: string) => void }) {
+export function ReleaseHoldModal({
+  hold,
+  returnFocus,
+  cancel,
+  confirm,
+}: {
+  hold: LegalHold;
+  returnFocus?: () => HTMLElement | null | undefined;
+  cancel: () => void;
+  confirm: (note: string) => void;
+}) {
   const [note, setNote] = useState("");
   const id = useId();
   const ok = note.trim() !== "";
@@ -470,6 +971,7 @@ export function ReleaseHoldModal({ hold, cancel, confirm }: { hold: LegalHold; c
       primaryButtonText={t.holdRelease}
       primaryButtonDisabled={!ok}
       secondaryButtonText={t.cancel}
+      returnFocus={returnFocus}
       onRequestClose={cancel}
       onRequestSubmit={submit}
     >
@@ -489,16 +991,144 @@ export function ReleaseHoldModal({ hold, cancel, confirm }: { hold: LegalHold; c
   );
 }
 
-function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; users: ManagedUser[]; added: (matched?: number) => void }) {
+/** The Add rule page's form, with the confirmation of a period shorter than the legal one. */
+function RuleForm({ data, cancel, added }: { data: RetentionRules; cancel: () => void; added: () => void }) {
+  const [error, setError] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [folder, setFolder] = useState("");
+  const [years, setYears] = useState("10");
+  const [timeZone, setTimeZone] = useState(data.defaultTimeZone);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  // A period shorter than the legal minimum waits for its confirmation.
+  const [short, setShort] = useState<number | null>(null);
+  const id = useId();
+  const account = data.accounts.find((a) => String(a.id) === accountId);
+  const n = Number(years);
+  const tooShort = years !== "" && Number.isFinite(n) && n >= 1 && n < data.minYears;
+
+  const send = async (n: number, force: boolean) => {
+    if (!account) return;
+    setBusy(true);
+    setError("");
+    try {
+      await retentionApi.addRule({ accountId: account.id, folder, years: n, timeZone, note, force });
+      added();
+    } catch (err) {
+      setError(message(err));
+      setBusy(false);
+    }
+  };
+
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    if (!account || busy) return;
+    const n = Number(years);
+    if (n < data.minYears) setShort(n);
+    else void send(n, false);
+  };
+
+  return (
+    <>
+      <Form onSubmit={add} className="page-form">
+        <div className="form-row form-row--two">
+          <Select
+            id={`${id}-account`}
+            labelText={t.ruleAccount}
+            value={accountId}
+            required
+            onChange={(e) => {
+              setAccountId(e.target.value);
+              setFolder("");
+            }}
+          >
+            <SelectItem value="" text="" />
+            {data.accounts.map((a) => (
+              <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
+            ))}
+          </Select>
+          <Select id={`${id}-folder`} labelText={t.ruleFolder} value={folder} disabled={!account} onChange={(e) => setFolder(e.target.value)}>
+            <SelectItem value="" text={t.ruleAllFolders} />
+            {account?.folders.map((f) => (
+              <SelectItem key={f} value={f} text={f} />
+            ))}
+          </Select>
+        </div>
+        <div className="form-row form-row--two">
+          <NumberInput
+            id={`${id}-years`}
+            label={t.ruleYears}
+            min={1}
+            max={100}
+            allowEmpty
+            required
+            value={years}
+            invalidText={t.ruleYearsInvalid}
+            warn={tooShort}
+            warnText={t.ruleShortWarn(data.minYears)}
+            translateWithId={translateWithId}
+            onChange={(_, { value }) => setYears(String(value))}
+          />
+          <TextInput id={`${id}-tz`} labelText={t.ruleTimeZone} value={timeZone} required onChange={(e) => setTimeZone(e.target.value)} />
+        </div>
+        <TextInput
+          id={`${id}-note`}
+          labelText={t.ruleNote}
+          value={note}
+          maxLength={500}
+          placeholder={t.ruleNotePlaceholder}
+          onChange={(e) => setNote(e.target.value)}
+        />
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        )}
+        <div className="form-actions">
+          <Button kind="secondary" onClick={cancel} disabled={busy}>
+            {t.cancel}
+          </Button>
+          <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || !account}>
+            {t.ruleAdd}
+          </Button>
+        </div>
+      </Form>
+
+      {short !== null && (
+        <DangerModal
+          size="sm"
+          modalHeading={t.ruleShortTitle}
+          primaryButtonText={t.ruleAddAnyway}
+          secondaryButtonText={t.cancel}
+          onRequestClose={() => setShort(null)}
+          onRequestSubmit={() => {
+            const n = short;
+            setShort(null);
+            void send(n, true);
+          }}
+        >
+          <p>{t.ruleShort(short, data.minYears)}</p>
+        </DangerModal>
+      )}
+    </>
+  );
+}
+
+/** The Add hold page's form: a hold without user, account or filter needs the box for the whole archive. */
+function HoldForm({ accounts, cancel, added }: { accounts: RetentionAccount[]; cancel: () => void; added: (matched?: number) => void }) {
   const [name, setName] = useState("");
   const [reason, setReason] = useState("");
   const [user, setUser] = useState("");
   const [accountId, setAccountId] = useState("");
   const [query, setQuery] = useState("");
   const [all, setAll] = useState(false);
+  const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const id = useId();
+  useEffect(() => {
+    usersApi.list().then(setUsers, () => setUsers([]));
+  }, []);
   const p = parseQuery(query);
   const filter = p.text || p.from || p.to || p.attachment || p.hasAttachment
     ? { q: p.text, from: p.from, to: p.to, attachment: p.attachment, hasAttachment: p.hasAttachment }
@@ -522,401 +1152,56 @@ function HoldForm({ accounts, users, added }: { accounts: RetentionAccount[]; us
         until: p.before ? new Date(`${p.before}T00:00:00`).toISOString() : null,
         all: unscoped && all,
       });
-      setName("");
-      setReason("");
-      setQuery("");
-      setAll(false);
       added(res.matched);
     } catch (err) {
       setError(message(err));
-    } finally {
       setBusy(false);
     }
   };
 
   return (
-    <section className="page__section retention-form">
-      <h2 className="type-heading-03">{t.holdAdd}</h2>
-      <Form onSubmit={(e) => void submit(e)} className="page-form">
-        <div className="form-row form-row--two">
-          <TextInput id={`${id}-name`} labelText={t.holdName} value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
-          <TextInput id={`${id}-reason`} labelText={t.holdReason} value={reason} maxLength={2000} required onChange={(e) => setReason(e.target.value)} />
-        </div>
-        <div className="form-row form-row--two">
-          <Select id={`${id}-user`} labelText={t.holdUser} value={user} onChange={(e) => setUser(e.target.value)}>
-            <SelectItem value="" text={t.holdAnyUser} />
-            {users.map((u) => (
-              <SelectItem key={u.name} value={u.name} text={u.name} />
-            ))}
-          </Select>
-          <Select id={`${id}-account`} labelText={t.holdAccount} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-            <SelectItem value="" text={t.holdAnyAccount} />
-            {accounts.map((a) => (
-              <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
-            ))}
-          </Select>
-        </div>
-        <TextInput id={`${id}-filter`} labelText={t.holdFilter} helperText={t.holdFilterHint} value={query} onChange={(e) => setQuery(e.target.value)} />
-        {unscoped && (
-          <Checkbox
-            id={`${id}-all`}
-            labelText={t.holdAll}
-            helperText={t.holdAllNeeded}
-            checked={all}
-            onChange={(_, { checked }) => setAll(checked)}
-          />
-        )}
-        {error && (
-          <p role="alert" className="app-text-error">
-            {error}
-          </p>
-        )}
-        <div className="form-actions">
-          <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || (unscoped && !all)}>
-            {t.holdAdd}
-          </Button>
-        </div>
-      </Form>
-    </section>
-  );
-}
-
-const runTag = { proposed: "blue", confirmed: "magenta", done: "green", cancelled: "gray" } as const;
-
-function RunsTab() {
-  const [runs, setRuns] = useState<DeletionRun[] | null>(null);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const reviewButtons = useRef(new Map<number, HTMLButtonElement>());
-
-  // The runs as loaded, or null when loading them failed.
-  const reload = useCallback(
-    () =>
-      retentionApi.runs().then(
-        (r) => {
-          setRuns(r);
-          setError("");
-          return r;
-        },
-        (err: unknown) => {
-          setError(message(err));
-          return null;
-        },
-      ),
-    [],
-  );
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-  // A confirmed run deletes in the background: poll until it is done.
-  const deleting = runs?.some((r) => r.state === "confirmed") ?? false;
-  useEffect(() => {
-    if (!deleting) return;
-    const id = setInterval(() => void reload(), 3000);
-    return () => clearInterval(id);
-  }, [deleting, reload]);
-
-  const propose = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const run = await retentionApi.propose();
-      setSelected(run.id);
-    } catch (err) {
-      setError(message(err));
-    } finally {
-      setBusy(false);
-    }
-    void reload();
-  };
-
-  const open = runs?.find(runOpen);
-  const shown = runs?.find((r) => r.id === selected);
-  return (
-    <section className="retention-section">
-      <p className="app-text-secondary">{t.runsNote}</p>
-      <p className="app-text-secondary">{t.runsCLI}</p>
-      {!open && (
-        <div>
-          <Button kind="primary" renderIcon={Add} disabled={busy || !runs} onClick={() => void propose()}>
-            {t.runPropose}
-          </Button>
-        </div>
+    <Form onSubmit={(e) => void submit(e)} className="page-form">
+      <div className="form-row form-row--two">
+        <TextInput id={`${id}-name`} labelText={t.holdName} value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
+        <TextInput id={`${id}-reason`} labelText={t.holdReason} value={reason} maxLength={2000} required onChange={(e) => setReason(e.target.value)} />
+      </div>
+      <div className="form-row form-row--two">
+        <Select id={`${id}-user`} labelText={t.holdUser} value={user} onChange={(e) => setUser(e.target.value)}>
+          <SelectItem value="" text={t.holdAnyUser} />
+          {users.map((u) => (
+            <SelectItem key={u.name} value={u.name} text={u.name} />
+          ))}
+        </Select>
+        <Select id={`${id}-account`} labelText={t.holdAccount} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+          <SelectItem value="" text={t.holdAnyAccount} />
+          {accounts.map((a) => (
+            <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
+          ))}
+        </Select>
+      </div>
+      <TextInput id={`${id}-filter`} labelText={t.holdFilter} helperText={t.holdFilterHint} value={query} onChange={(e) => setQuery(e.target.value)} />
+      {unscoped && (
+        <Checkbox
+          id={`${id}-all`}
+          labelText={t.holdAll}
+          helperText={t.holdAllNeeded}
+          checked={all}
+          onChange={(_, { checked }) => setAll(checked)}
+        />
       )}
       {error && (
         <p role="alert" className="app-text-error">
           {error}
         </p>
       )}
-      {runs && runs.length === 0 && <p>{t.runNone}</p>}
-      {runs && runs.length > 0 && (
-        <TableContainer className="runs-table">
-          <Table aria-label={t.runsTab} size="md">
-            <TableHead>
-              <TableRow>
-                <TableHeader>{t.runColRun}</TableHeader>
-                <TableHeader>{t.runColState}</TableHeader>
-                <TableHeader>{t.runColResult}</TableHeader>
-                <TableHeader>{t.runColProposed}</TableHeader>
-                <TableHeader>
-                  <span className="cds--visually-hidden">{t.colActions}</span>
-                </TableHeader>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {runs.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell>{t.runLine(r.id, r.candidates, fileSize(r.bytes))}</TableCell>
-                  <TableCell>
-                    <Tag size="sm" type={runTag[r.state as keyof typeof runTag] ?? "gray"}>
-                      {t.runState(r.state)}
-                    </Tag>
-                  </TableCell>
-                  <TableCell>{r.state === "done" || r.deleted + r.kept > 0 ? t.runResult(r.deleted, r.kept) : ""}</TableCell>
-                  <TableCell className="app-text-secondary">{t.runProposedBy(r.createdBy, day(r.createdAt))}</TableCell>
-                  <TableCell className="runs-table__action">
-                    <Button
-                      ref={(el: HTMLButtonElement | null) => {
-                        if (el) reviewButtons.current.set(r.id, el);
-                        else reviewButtons.current.delete(r.id);
-                      }}
-                      kind={r.state === "proposed" ? "tertiary" : "ghost"}
-                      size="sm"
-                      onClick={() => setSelected(r.id)}
-                    >
-                      {t.runShow}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-      {selected !== null && (
-        <RunReview
-          key={selected}
-          id={selected}
-          state={shown?.state}
-          title={shown ? t.runLine(shown.id, shown.candidates, fileSize(shown.bytes)) : t.runShow}
-          returnFocus={() => reviewButtons.current.get(selected)}
-          changed={reload}
-          close={() => setSelected(null)}
-        />
-      )}
-    </section>
-  );
-}
-
-/** The states a run must reach for an action to have done what was asked. */
-const reached = { confirm: ["confirmed", "done"], cancel: ["cancelled"] } as const;
-
-/**
- * The review of a deletion run in a Modal: the groups, the hashes and, for a
- * proposed run, the typed-count confirmation and Cancel run. Delete is
- * enabled only by the exact count. Closing the Modal changes nothing.
- * state is the run's state in the polled list: the review loads again when
- * it changes, so a deletion that finishes shows its hashes' states.
- */
-export function RunReview({
-  id,
-  state,
-  title,
-  returnFocus,
-  changed,
-  close,
-}: {
-  id: number;
-  state?: string;
-  title: string;
-  returnFocus?: () => HTMLElement | null | undefined;
-  changed: () => Promise<DeletionRun[] | null>;
-  close: () => void;
-}) {
-  const [review, setReview] = useState<DeletionReview | null>(null);
-  const [count, setCount] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  // After an action whose outcome could not be loaded: nothing more is sent.
-  const [unknown, setUnknown] = useState(false);
-  // The run's state after an action that did not reach it, when it changed elsewhere.
-  const [nowState, setNowState] = useState<string | null>(null);
-  const field = useRef<HTMLInputElement>(null);
-  const fieldId = useId();
-
-  useEffect(() => {
-    let current = true;
-    retentionApi.run(id).then(
-      (r) => {
-        if (current) setReview(r);
-      },
-      (err: unknown) => {
-        if (current) setError((e) => e || message(err));
-      },
-    );
-    return () => {
-      current = false;
-    };
-  }, [id, state]);
-
-  const run = review?.run;
-  const proposed = run?.state === "proposed";
-  const confirmable = proposed && run.candidates > 0;
-  const matches = confirmable && !unknown && countMatches(count, run.candidates);
-  useLayoutEffect(() => {
-    if (confirmable) field.current?.focus();
-  }, [confirmable]);
-
-  // After Delete or Cancel run the list is loaded again, and the run's new
-  // state decides: the server answers a confirm with 202 and no body, which
-  // the client reads as an error (api.ts is unchanged in this part). The
-  // review closes only when the run reached the state of the chosen action:
-  // confirmed or done after Delete, cancelled after Cancel run. Otherwise it
-  // stays open with the error and the state the run has now, for example
-  // when another admin confirmed it while this one cancelled it. When the
-  // state cannot be loaded, it says so and sends nothing more.
-  const act = async (kind: keyof typeof reached, action: () => Promise<unknown>) => {
-    if (busy || unknown || !run) return;
-    setBusy(true);
-    setError("");
-    setNowState(null);
-    let failed = "";
-    try {
-      await action();
-    } catch (err) {
-      failed = message(err);
-    }
-    const runs = await changed();
-    const now = runs?.find((r) => r.id === run.id);
-    setBusy(false);
-    if (now && (reached[kind] as readonly string[]).includes(now.state)) {
-      close();
-      return;
-    }
-    if (!now) {
-      setUnknown(true);
-      setError(t.runStateUnknown);
-      return;
-    }
-    setError(failed);
-    if (now.state !== "proposed" || !failed) setNowState(now.state);
-  };
-  // The error, and the state the run has now if it changed elsewhere; that
-  // line follows the polled state (confirmed, later done).
-  // A run never goes back to proposed, so a polled "proposed" is older than nowState.
-  const nowLine = nowState ? t.runNowState(t.runState(state && state !== "proposed" ? state : nowState)) : "";
-  const shownError = [error, nowLine].filter(Boolean).join(" ");
-  const confirm = () => {
-    if (run && matches && !busy) void act("confirm", () => retentionApi.confirm(run.id, Number(count.trim())));
-  };
-  const cancelRun = () => {
-    if (run && proposed && !busy && !unknown) void act("cancel", () => retentionApi.cancel(run.id));
-  };
-  const heading = run ? `${t.runLine(run.id, run.candidates, fileSize(run.bytes))} · ${t.runState(run.state)}` : title;
-
-  const footer = !proposed
-    ? { passiveModal: true }
-    : confirmable
-      ? {
-          primaryButtonText: t.runConfirm,
-          primaryButtonDisabled: !matches,
-          secondaryButtons: [
-            { buttonText: t.close, onClick: () => !busy && close() },
-            { buttonText: t.runCancel, onClick: cancelRun },
-          ],
-          onRequestSubmit: confirm,
-        }
-      : {
-          primaryButtonText: t.runCancel,
-          primaryButtonDisabled: unknown,
-          secondaryButtonText: t.close,
-          onRequestSubmit: cancelRun,
-        };
-
-  return (
-    <AppModal
-      danger={confirmable}
-      size="md"
-      aria-label={heading}
-      modalHeading={heading}
-      hasScrollingContent
-      preventCloseOnClickOutside
-      returnFocus={returnFocus}
-      loadingStatus={busy ? "active" : "inactive"}
-      loadingDescription={t.loading}
-      loadingIconDescription={t.loading}
-      onRequestClose={() => {
-        if (!busy) close();
-      }}
-      {...footer}
-    >
-      <div className="modal-stack">
-        {!review && !error && <p className="app-text-secondary">{t.loading}</p>}
-        {review && review.groups.length > 0 && (
-          <TableContainer>
-            <Table size="sm" aria-label={t.runGroupsHead}>
-              <TableHead>
-                <TableRow>
-                  <TableHeader>{t.runGroupsHead}</TableHeader>
-                  <TableHeader>{t.runYear}</TableHeader>
-                  <TableHeader className="runs-table__number">{t.runMessages}</TableHeader>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {review.groups.map((g) => (
-                  <TableRow key={`${g.owner}/${g.account}/${g.folder}/${g.year}`}>
-                    <TableCell className="app-break-all">
-                      {g.owner || "-"} / {g.account} / {g.folder}
-                    </TableCell>
-                    <TableCell className="app-tabular">{g.year}</TableCell>
-                    <TableCell className="app-tabular runs-table__number">{g.messages}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        )}
-        {review && run && review.candidates.length > 0 && (
-          <Accordion>
-            <AccordionItem title={t.runHashes(review.listed, run.candidates)}>
-              <ul className="run-hashes">
-                {review.candidates.map((c) => (
-                  <li key={c.sha256} className={c.state === "kept" ? "app-text-secondary" : undefined}>
-                    {c.sha256} {c.state !== "pending" && `(${c.state})`}
-                  </li>
-                ))}
-              </ul>
-            </AccordionItem>
-          </Accordion>
-        )}
-        {proposed && run.candidates === 0 && <p>{t.runEmpty}</p>}
-        {confirmable && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              confirm();
-            }}
-          >
-            <TextInput
-              id={`${fieldId}-count`}
-              ref={field}
-              data-modal-primary-focus=""
-              className="purge__count"
-              labelText={t.runConfirmPrompt(run.candidates)}
-              inputMode="numeric"
-              autoComplete="off"
-              value={count}
-              onChange={(e) => setCount(e.target.value)}
-            />
-          </form>
-        )}
-        {shownError && (
-          <p role="alert" className="app-text-error">
-            {shownError}
-          </p>
-        )}
+      <div className="form-actions">
+        <Button kind="secondary" onClick={cancel} disabled={busy}>
+          {t.cancel}
+        </Button>
+        <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || (unscoped && !all)}>
+          {t.holdAdd}
+        </Button>
       </div>
-    </AppModal>
+    </Form>
   );
 }

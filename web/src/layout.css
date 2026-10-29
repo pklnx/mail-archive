@@ -1966,7 +1966,8 @@ select,
 /* On a phone the table scrolls sideways; headings and short values stay on one line. */
 .users-table thead th,
 .accounts-table thead th,
-.runs-table th,
+.retention-table thead th,
+.runs-table thead th,
 .log-table th,
 .users-table__lines {
   white-space: nowrap;
@@ -2112,68 +2113,57 @@ select,
   max-inline-size: 14rem;
 }
 
-/* Retention. */
+/* Retention: a table per tab, and the pages of rules, holds and runs. */
 .retention-panel {
   padding-block: 1.5rem 2rem;
 }
-.retention-section {
-  display: flex;
-  flex-direction: column;
+.retention-help {
+  max-inline-size: 48rem;
+  margin-block-end: 1rem;
+}
+.retention-toolbar {
+  align-items: center;
+  justify-content: flex-end;
   gap: 1rem;
 }
-.retention-section > p {
-  max-inline-size: 48rem;
+.retention-toolbar__toggle {
+  flex: 0 1 auto;
+  padding-inline: 1rem;
 }
-.retention-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.retention-tile {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.5rem 1rem;
-}
-.retention-tile--off .retention-tile__body {
-  color: var(--cds-text-secondary);
-}
-.retention-tile__body {
-  display: flex;
-  flex: 1 1 18rem;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-inline-size: 0;
-}
-.retention-tile__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 0.75rem;
-}
-.retention-tile__head .cds--tag {
-  margin: 0;
-}
-.retention-tile__name {
-  /* heading-02 */
-  font-size: 1rem;
+.retention-table__name {
   font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: 0;
   overflow-wrap: anywhere;
 }
-.retention-tile__actions {
+.retention-table__more {
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-block-start: 0.25rem;
 }
-.retention-form {
-  margin-block-start: 1rem;
+.retention-table__empty {
+  padding: 1rem;
 }
-.runs-table__action {
-  text-align: end;
+.retention-table .cds--tag {
+  margin: 0;
+  white-space: nowrap;
+}
+.retention-table td,
+.retention-table tbody th {
+  vertical-align: top;
+}
+.retention-table .cds--data-table td,
+.retention-table .cds--data-table tbody th {
+  padding-block: 0.75rem;
+}
+.retention-table .cds--data-table-content {
+  position: relative;
 }
 .runs-table__number {
   text-align: end;
+}
+/* A group's path wraps at its slashes (<wbr>), never inside a name. */
+.runs-table__path {
+  min-inline-size: 8rem;
 }
 .run-hashes {
   max-block-size: 16rem;
