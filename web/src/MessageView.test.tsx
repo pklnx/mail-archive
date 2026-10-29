@@ -366,7 +366,7 @@ describe("the conversation overlay (#203)", () => {
     const { button } = await toggle();
     fireEvent.click(button);
     const dialog = screen.getByRole("dialog", { name: t.conversation });
-    expect(dialog.tabIndex).toBe(-1);
+    expect(dialog.getAttribute("tabindex")).toBe("-1");
     dialog.focus();
     expect(document.activeElement).toBe(dialog);
     // The focus inside the panel does not close it.
