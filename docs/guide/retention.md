@@ -101,8 +101,11 @@ in 2026 counts from 2015. The year ends in the rule's time zone (default
 
 ![Retention rules in the web UI](/screenshots/retention.png)
 
-Or in the web UI: **Retention → Rules**. A rule covers an account, or one of
-its folders. Rules under 6 years need a confirmation. Because the longest
+Or in the web UI: **Retention → Rules**, a table with **Add rule** above it;
+the form is a page of its own. Each rule has a page too, from the link in its
+row, and **Remove** is in the row's menu (⋯) and in the page's. A rule
+covers an account, or one of its folders. Rules under 6 years need a
+confirmation. Because the longest
 period wins, a folder rule cannot shorten an account rule: to keep a
 newsletter folder shorter, give the account no account-wide rule and give
 each folder its own.
@@ -142,8 +145,10 @@ during a tax audit, a lawsuit or an investigation.
 ./ma hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon
 ```
 
-Or **Retention → Legal holds**, with the filter in the search syntax. Every
-condition must match: a user, an account, a period, a search filter. A
+Or **Retention → Legal holds** → **Add hold**, with the filter in the search
+syntax. The table lists the active holds, **Show released holds** the others
+too; each hold has its page with the reason, and **Release** is in its menu
+(⋯). Every condition must match: a user, an account, a period, a search filter. A
 filter is matched by search when the hold is added and before every
 deletion, and its matches are only ever added; until then the hold covers
 its whole scope. Only admins see holds.
@@ -160,10 +165,14 @@ is on hold cannot move to another user.
 ./ma retention confirm 3       # type the number of messages, then it deletes
 ```
 
-Or **Retention → Deletion runs**: the web UI shows the counts and the hashes,
-not subjects (admins do not read other users' mail there). Confirming, in a dialog, needs
-the number of messages typed in. The web server then deletes in the
-background; the page shows the progress.
+Or **Retention → Deletion runs** → **New deletion run**, which opens the
+run's page. It shows the counts by owner, account, folder and year, and the
+hashes, not subjects (admins do not read other users' mail there).
+**Delete N messages** asks for the number of messages, typed in, in a
+dialog; **Cancel run** is in the page's menu (⋯). The web server then deletes
+in the background; the page shows the progress.
+
+![A deletion run's page with the Delete dialog](/screenshots/retention-run.png)
 
 Every message is checked again when it is deleted: a rule removed, a hold
 added or a new place since the preview keeps it. An interrupted run resumes.

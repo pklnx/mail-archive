@@ -1,5 +1,5 @@
 import { devices, type Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { animationsDone, expect, test } from "./fixtures";
 
 // The message view scrolls as one unit (#200): the reading pane from 48rem,
 // the page on phones. The HTML frame is as tall as the mail (#203): it is
@@ -279,6 +279,8 @@ for (const size of sizes) {
       await expect(dialog.getByRole("listitem")).toHaveCount(6);
       await expect(dialog.locator('[aria-current="true"]')).toBeFocused();
       expect((await frame.boundingBox())!.y).toBe(frameTop);
+      // It moves in as it opens (#287): measured once it is in place.
+      await animationsDone(dialog);
       if (phone) {
         // A sheet as wide as the screen, right below the reader bar.
         const box = (await dialog.boundingBox())!;

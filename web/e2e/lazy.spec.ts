@@ -63,6 +63,9 @@ const views = [
   // A detail page loads its view's chunk too.
   { view: "users&id=kim", heading: "kim" },
   { view: "retention", heading: "Retention" },
+  { view: "retention&tab=holds", heading: "Retention" },
+  // The demo's one rule.
+  { view: "retention&id=1", heading: "/ work /" },
 ];
 for (const { view, heading } of views) {
   test(`${view} loads by direct URL and on reload`, async ({ page }) => {

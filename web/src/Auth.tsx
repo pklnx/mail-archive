@@ -32,8 +32,10 @@ export function AuthGate({ children }: Props) {
   // stale alert never comes back after a new login.
   const [logoutError, setLogoutError] = useState("");
 
-  // The user's settings apply before the app renders: until then only
-  // "Loading…" or the login page is on screen.
+  // The user's settings apply before the app renders: until then only the
+  // empty background (with a hidden "Loading…" status) or the login page is
+  // on screen. No skeleton: a login-shaped one would flash before the mail
+  // view on every start (#287).
   const setState = useCallback((s: GateState) => {
     if ("user" in s && s.user) applySettings({ language: s.user.language, locale: s.user.locale });
     setGateState(s);
@@ -53,7 +55,9 @@ export function AuthGate({ children }: Props) {
   if ("loading" in state) {
     return (
       <Centered>
-        <p className="auth-page__text">{t.loading}</p>
+        <p role="status" className="cds--visually-hidden">
+          {t.loading}
+        </p>
       </Centered>
     );
   }

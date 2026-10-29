@@ -15,6 +15,7 @@ import {
   RadioButtonGroup,
   Select,
   SelectItem,
+  SkeletonText,
   Tag,
   TextInput,
   Tooltip,
@@ -25,6 +26,7 @@ import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 import { postfixSetup } from "./journalSetup";
+import { Loading } from "./lazyView";
 
 // The parts of the Accounts pages (#285 part 2) that the list and the
 // account's detail page share: the status texts and tags, and the forms.
@@ -736,7 +738,11 @@ export function FolderForm({ account, locked, onCancel, onSaved }: { account: Ac
 
   return (
     <Form onSubmit={(e) => void save(e)} className="page-form">
-      {!folders && busy && <p className="app-text-secondary">{t.loading}</p>}
+      {!folders && busy && (
+        <Loading>
+          <SkeletonText paragraph lineCount={5} />
+        </Loading>
+      )}
       {folders && <p className="app-text-secondary">{t.foldersHint}</p>}
       {folders && (
         <div className="checkbox-list">

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applySettings, messagesFor, settings, t } from "./i18n";
 import { DisplaySettings, ProfilePage, RecoveryCodes, TwoFactorSetup, formatChoices, formatLabel } from "./Profile";
+import { expectLoaded, expectLoading } from "./test/loading";
 
 const codes = Array.from({ length: 10 }, (_, i) => `abcd-efgh-jkmn-pqr${i}`);
 const sheet = { user: "patrick", origin: "https://mail.example.org", createdAt: new Date(2026, 9, 12), codes };
@@ -243,6 +244,35 @@ describe("ProfilePage", () => {
     expect(screen.queryByRole("button", { name: t.apiKeyCreate })).toBeNull();
     // The hidden sections are mounted and load anyway.
     await waitFor(() => expect(requests.map((r) => r.url)).toEqual(expect.arrayContaining(["/api/profile/passkeys", "/api/profile/api-keys"])));
+  });
+
+  it("shows skeletons while the sections load, with one status per tab (#287)", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (/^\/api\/profile\/(2fa|passkeys|api-keys)$/.test(String(input)) && (init?.method ?? "GET") === "GET") await released;
+      return answer(input, init);
+    });
+    renderPage();
+    open(t.tabSecurity);
+    const security = screen.getByRole("tabpanel", { name: t.tabSecurity });
+    // 2FA announces; the passkeys below it load at the same time and only show their skeleton.
+    const status = expectLoading(security)!;
+    expect(within(security).getByRole("heading", { name: t.twoFactor }).closest("section")!.contains(status)).toBe(true);
+    const passkeys = within(security).getByRole("heading", { name: t.passkeys }).closest("section")!;
+    expectLoading(passkeys, { announce: false });
+    open(t.apiKeys);
+    const keys = screen.getByRole("tabpanel", { name: t.apiKeys });
+    expect(expectLoading(keys)!.querySelector(".cds--skeleton__heading")).not.toBeNull();
+    await act(async () => release());
+    expect(await within(keys).findByRole("button", { name: t.apiKeyCreate })).toBeTruthy();
+    expectLoaded(keys);
+    open(t.tabSecurity);
+    expect(await within(security).findByRole("button", { name: t.passkeyAdd })).toBeTruthy();
+    expectLoaded(security);
   });
 
   it("shows each section in its tab", async () => {

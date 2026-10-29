@@ -228,3 +228,22 @@ export function accountRow(page: Page, name: string): Locator {
 export function acceptDialog(page: Page, text?: string): void {
   page.once("dialog", (d) => void d.accept(text));
 }
+
+/**
+ * Waits until the element's own animations and transitions have finished
+ * (#287): a signal from the browser, not a delay. Only the element's own,
+ * not its subtree's, and none that repeat for ever (Carbon's skeleton
+ * pulse), so it always resolves; with none running it resolves at once,
+ * and a cancelled one counts as finished.
+ */
+export async function animationsDone(target: Locator): Promise<void> {
+  await target.evaluate((el) =>
+    Promise.all(
+      el
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        // A cancelled animation (the element removed or hidden on the way) rejects with AbortError: done as well.
+        .map((a) => a.finished.catch(() => undefined)),
+    ).then(() => undefined),
+  );
+}

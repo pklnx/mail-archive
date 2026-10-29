@@ -25,9 +25,11 @@ import { DangerModal } from "./DangerModal";
 import { FillForm } from "./FillPanel";
 import { formatCount, formatEvery, formatInterval } from "./format";
 import { t } from "./i18n";
+import { ViewFallback } from "./lazyView";
 import { ErrorText, isBusy, lastActivity, messageCount, NewAccount, StateTags, syncableCount, TypeTag, usePurgeCancelled } from "./accountParts";
 import { AppLink, RowMenu, useMenuButtons, usePageFocus } from "./settingsParts";
 import { settingsText } from "./settingsText";
+import { TableSkeleton } from "./tableSkeleton";
 import type { AccountsState } from "./useAccounts";
 import { formatState, parseState, useViewState, type ViewState } from "./urlState";
 
@@ -208,7 +210,7 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
     // The list never loaded: say so instead of loading for ever (#310).
     content = <ErrorText text={t.loadAccountsFailed(error)} alert />;
   } else if (!data || waiting) {
-    content = <p className="app-text-secondary">{t.loading}</p>;
+    content = <ViewFallback inline />;
   } else if (page.kind === "add") {
     content = (
       <>
@@ -407,6 +409,7 @@ function AccountList(p: ListProps) {
       </header>
       {p.error && !data && <ErrorText text={t.loadAccountsFailed(p.error)} />}
       {p.notices}
+      {!data && !p.error && <AccountsSkeleton />}
 
       {data && active.length === 0 && <p className="app-text-secondary">{t.noAccounts}</p>}
       {data && active.length > 0 && <AccountTable {...p} data={data} accounts={active} />}
@@ -428,6 +431,23 @@ function AccountList(p: ListProps) {
         </div>
       )}
     </>
+  );
+}
+
+/** The accounts table while the list loads, with the table's columns. */
+function AccountsSkeleton() {
+  const s = settingsText();
+  return (
+    <TableSkeleton
+      columns={[
+        { header: t.accountSection },
+        { header: s.colType, wide: true },
+        { header: s.colStatus },
+        { header: t.messages, wide: true },
+        { header: s.colLastActivity, wide: true },
+        { header: "" },
+      ]}
+    />
   );
 }
 
