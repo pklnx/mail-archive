@@ -31,6 +31,17 @@ func (s *Store) HoldBlobWaitSlotForTest(ctx context.Context) (release func(), er
 	return s.blobWaitSlot(ctx)
 }
 
+// TryBlobWaitSlotForTest takes a wait slot of the blob lock if one is free
+// right now, without waiting: ok is false while every slot is held.
+func (s *Store) TryBlobWaitSlotForTest() (release func(), ok bool) {
+	select {
+	case s.blobWait <- struct{}{}:
+		return func() { <-s.blobWait }, true
+	default:
+		return nil, false
+	}
+}
+
 // AcquiredConnsForTest returns how many connections of the pool are in use.
 func (s *Store) AcquiredConnsForTest() int32 {
 	return s.pool.Stat().AcquiredConns()

@@ -311,3 +311,71 @@ func TestBusySinceUsesClaimTime(t *testing.T) {
 		t.Errorf("queued fill: since %v, want now", got)
 	}
 }
+
+// TestKeepEarliestClaim (#193): when the sync runner and the fill runner
+// both claim one account, the earliest claim wins, whichever loadBusy reads
+// first. This tests the rule, not the loops in loadBusy that apply it.
+func TestKeepEarliestClaim(t *testing.T) {
+	early := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	late := early.Add(time.Minute)
+	for _, c := range []struct {
+		name   string
+		claims []time.Time
+		want   time.Time // zero: no claim
+	}{
+		{"first claim", []time.Time{late}, late},
+		{"later claim ignored", []time.Time{early, late}, early},
+		{"earlier claim replaces", []time.Time{late, early}, early},
+		{"zero time ignored", []time.Time{late, {}}, late},
+		{"zero time alone", []time.Time{{}}, time.Time{}},
+		{"zero time first, then a claim", []time.Time{{}, late}, late},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := map[int64]time.Time{}
+			for _, at := range c.claims {
+				keepEarliestClaim(m, 7, at)
+			}
+			got, ok := m[7]
+			if c.want.IsZero() {
+				if ok {
+					t.Fatalf("claim %v, want none", got)
+				}
+				return
+			}
+			if !ok || !got.Equal(c.want) {
+				t.Fatalf("claim %v (%v), want %v", got, ok, c.want)
+			}
+			if len(m) != 1 {
+				t.Errorf("%d accounts claimed, want 1", len(m))
+			}
+		})
+	}
+
+	// Both runners' Pending() for the same accounts, read in both orders:
+	// account 1 was claimed first by the sync runner, account 2 by the fill
+	// runner, account 3 only by the fill runner.
+	syncPending := map[int64]time.Time{1: early, 2: late}
+	fillPending := map[int64]time.Time{1: late, 2: early, 3: late}
+	want := map[int64]time.Time{1: early, 2: early, 3: late}
+	for name, order := range map[string][]map[int64]time.Time{
+		"sync runner first": {syncPending, fillPending},
+		"fill runner first": {fillPending, syncPending},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := map[int64]time.Time{}
+			for _, pending := range order {
+				for id, at := range pending {
+					keepEarliestClaim(m, id, at)
+				}
+			}
+			if len(m) != len(want) {
+				t.Fatalf("claims %v, want %v", m, want)
+			}
+			for id, at := range want {
+				if !m[id].Equal(at) {
+					t.Errorf("account %d: claim %v, want %v", id, m[id], at)
+				}
+			}
+		})
+	}
+}
