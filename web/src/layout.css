@@ -1818,7 +1818,9 @@ select,
 }
 .app-detail-title {
   display: flex;
-  flex: 1;
+  /* At least 14rem before the actions wrap below it: a long title (a run's
+     line) keeps its width on a phone. */
+  flex: 1 1 14rem;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 1rem;

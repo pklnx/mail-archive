@@ -61,9 +61,11 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   const groups = main.getByRole("region", { name: "Groups" });
   await expect(groups.getByRole("cell", { name: "demo / personal / Archive/2014" })).toBeVisible();
 
-  // On a phone: no sideways scroll, the groups table fits, the tiles wrap.
+  // On a phone: no sideways scroll, the title keeps its width beside the
+  // actions, the groups table fits, the tiles wrap.
   await page.setViewportSize({ width: 375, height: 800 });
   expect(await noSideScroll(page)).toBe(true);
+  expect(await title.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(200);
   const box = groups.locator(".cds--data-table-content");
   expect(await box.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   const tiles = await main.locator(".app-summary__tile").evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => ({ top: r.top, left: r.left, right: r.right })));
