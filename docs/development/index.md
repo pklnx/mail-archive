@@ -200,11 +200,27 @@ It needs a Chromium for Playwright (`npx playwright install chromium`, or set
 `CHROMIUM_PATH`). Run it after visible UI changes and commit the new images.
 The shots use a fixed clock (`DOCS_NOW` in `scripts/docs-screenshots.sh`):
 the demo dates its mail from it, the browser's clock stands just after it,
-and times the server records during the run are moved next to it. Two runs
-give the same images, so only real UI changes show up in the diff and the
-output can be committed as it is. Retention is still decided against the
-real clock: when a shot starts to differ because of it, move `DOCS_NOW`
-forward and commit the full set of new images once.
+and times the server records during the run are moved next to it
+(`docs/scripts/pin-times.mjs`). Two runs give the same images, so only real
+UI changes show up in the diff and the output can be committed as it is.
+`DOCS_SCREENSHOTS_DIR` sets another output folder.
+
+The run fails when an API answer has a time after `DOCS_NOW` that the
+rewrite did not move (the error names the path, the key and the value), or
+when it ends more than 4 minutes after the demo was ready. Such a time
+comes from the real clock and would change from day to day: pin it in the
+rewrite's window, derive it from `DOCS_NOW` in the demo, or, if it is stable
+(derived from a mail date, like `retainUntil`), add its API path and key to
+`STABLE_TIMES`. `pnpm test` in `docs` runs the unit tests of the rewrite and
+the check; CI runs them with the docs build. Retention is still decided
+against the real clock: move `DOCS_NOW` forward and commit the full set of
+new images once if it ever flips a shot.
+
+Known gaps. The check sees only RFC 3339 strings in JSON answers. It misses
+a real-clock time at or before `DOCS_NOW` (it looks like a mail date),
+date-only strings, epoch numbers and answers that are not JSON. It does not
+compare two runs either, so randomness or an unstable order shows up only
+when the next `make docs-screenshots` changes an image.
 The demo alone: `go run ./tools/demo -db URL`, then open
 <http://localhost:18080> (passkeys need the host name, not the IP address).
 
