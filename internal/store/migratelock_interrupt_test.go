@@ -237,7 +237,7 @@ func interruptLockChild(t *testing.T, ctx context.Context, cancel context.Cancel
 	for {
 		n, err := waiters()
 		if err != nil {
-			t.Fatal(err)
+			childFailed("count the waiters for the lock: %v", err)
 		}
 		if n > 0 {
 			break

@@ -176,7 +176,9 @@ func TestSessionSettingBreaksConnection(t *testing.T) {
 // function, with an empty holder, waits for goose's lock and migrates once
 // it is free.
 func TestMigrateWaitsWhenHolderLookupFails(t *testing.T) {
-	defer store.SetGooseLockHolderQuery("SELECT $1::bigint / 0, NULL::text, NULL::float8")()
+	// A cleanup, not a defer: cleanups run last in, first out, so the
+	// query is restored only after the cleanup below has collected Migrate.
+	t.Cleanup(store.SetGooseLockHolderQuery("SELECT $1::bigint / 0, NULL::text, NULL::float8"))
 	dbURL := storetest.NewUnmigrated(t)
 	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	defer cancel()

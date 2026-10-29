@@ -157,6 +157,8 @@ func reconcileCost(t *testing.T, n int) {
 			select {
 			case <-stop:
 				return
+			// A sample rate, not a wait: the sampler waits for no state,
+			// and the result does not depend on it.
 			case <-time.After(2 * time.Millisecond):
 			}
 		}

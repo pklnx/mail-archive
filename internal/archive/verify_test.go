@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // archiveEnv is a database and blob store with one user, account and folder.
@@ -301,6 +303,14 @@ func TestSyncWaitsForVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	limit, cancel := context.WithTimeout(f.ctx, testwait.Limit(t))
+	defer cancel()
+	observer, err := pgx.Connect(limit, f.dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = observer.Close(context.Background()) }()
+
 	lockRelease, ok, err := f.store.TryLockBlobs(f.ctx)
 	if err != nil || !ok {
 		t.Fatal(ok, err)
@@ -310,16 +320,34 @@ func TestSyncWaitsForVerify(t *testing.T) {
 	defer unlock()
 	done := make(chan archive.AccountResult, 1)
 	go func() { done <- f.syncer.SyncAccount(f.ctx, acc) }()
-	select {
-	case r := <-done:
-		t.Fatalf("sync ran while the blob lock was held: %+v", r)
-	case <-time.After(300 * time.Millisecond):
+	// The sync's wait for the blob lock shows in pg_locks, not as a
+	// signal, so this polls, bounded by the test's wait limit.
+	for {
+		var n int
+		if err := observer.QueryRow(limit, `SELECT count(*) FROM pg_locks
+			WHERE locktype = 'advisory' AND classid = $1 AND NOT granted
+			  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, 0x6d62).Scan(&n); err != nil {
+			t.Fatalf("waiting for the sync to wait for the blob lock: %v", err)
+		}
+		if n > 0 {
+			break
+		}
+		select {
+		case r := <-done:
+			t.Fatalf("sync ran while the blob lock was held: %+v", r)
+		default:
+		}
 	}
 	if n := f.countBlobFiles(); n != 0 {
 		t.Fatalf("%d blobs written while the blob lock was held", n)
 	}
 	unlock()
-	expectResult(t, <-done, 2, 2)
+	select {
+	case r := <-done:
+		expectResult(t, r, 2, 2)
+	case <-limit.Done():
+		t.Fatal("the sync still waits after the blob lock was released")
+	}
 
 	res, err := archive.Verify(f.ctx, f.store, f.blobs, archive.VerifyOptions{Logger: quiet})
 	if err != nil {

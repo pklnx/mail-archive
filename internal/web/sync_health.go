@@ -136,6 +136,14 @@ type busyState struct {
 	holdUntil time.Time
 }
 
+// keepEarliestClaim keeps the earliest claim of an account in m: a zero
+// time is no claim, and a later claim does not replace an earlier one.
+func keepEarliestClaim(m map[int64]time.Time, id int64, at time.Time) {
+	if cur, ok := m[id]; !at.IsZero() && (!ok || at.Before(cur)) {
+		m[id] = at
+	}
+}
+
 // loadBusy reads the runners' pending sets first, then the held sync
 // locks, then the last runs. A runner claims an account in the same step
 // that takes it from the queue and ends the claim only after the sync
@@ -149,29 +157,23 @@ type busyState struct {
 func (s *Server) loadBusy(ctx context.Context) (busyState, error) {
 	b := busyState{claimedAt: map[int64]time.Time{}, fillsClaimedAt: map[int64]time.Time{}}
 	pending := map[int64]bool{}
-	// claim keeps the earliest claim of an account.
-	claim := func(m map[int64]time.Time, id int64, at time.Time) {
-		if cur, ok := m[id]; !at.IsZero() && (!ok || at.Before(cur)) {
-			m[id] = at
-		}
-	}
 	if s.runner != nil {
 		for id, at := range s.runner.Pending() {
 			pending[id] = true
-			claim(b.claimedAt, id, at)
+			keepEarliestClaim(b.claimedAt, id, at)
 		}
 	}
 	if s.fills != nil {
 		// A pending fill shows as a sync of its smtp account.
 		for id, at := range s.fills.Pending() {
 			pending[id] = true
-			claim(b.claimedAt, id, at)
+			keepEarliestClaim(b.claimedAt, id, at)
 		}
 		fills := s.fills.PendingFills()
 		b.fillsQueued = make(map[int64]bool, len(fills))
 		for id, at := range fills {
 			b.fillsQueued[id] = true
-			claim(b.fillsClaimedAt, id, at)
+			keepEarliestClaim(b.fillsClaimedAt, id, at)
 		}
 		b.holdUntil = s.fills.HoldUntil
 	}

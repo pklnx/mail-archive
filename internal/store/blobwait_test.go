@@ -5,12 +5,12 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // Tests of the bounded blob lock waits (#178). An observer connection
@@ -53,7 +53,7 @@ func newBlobWaitFixture(t *testing.T, n int) *blobWaitFixture {
 	t.Helper()
 	st, url := storetest.NewWithURL(t)
 	observer := connect(t, url)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	t.Cleanup(cancel)
 	small, err := store.Open(ctx, storetest.WithMaxConns(t, url, n))
 	if err != nil {
@@ -323,9 +323,9 @@ func TestBlobWaitCancelled(t *testing.T) {
 			if err := f.result(c); err != nil {
 				t.Fatalf("C: %v", err)
 			}
-			if n := f.small.AcquiredConnsForTest(); n != 0 {
-				t.Errorf("%d connections still in use", n)
-			}
+			// pgxpool may give a connection back after its caller has the
+			// result (a cancelled one is destroyed asynchronously).
+			f.until("no connection in use", func() bool { return f.small.AcquiredConnsForTest() == 0 })
 		})
 	}
 }
@@ -371,8 +371,13 @@ func TestBlobTryPathHoldsLock(t *testing.T) {
 		if err := f.result(f.deliverWith(f.ctx, 1, fileExists)); err != nil {
 			t.Fatalf("delivery: %v", err)
 		}
-		if <-checked {
-			t.Error("verify got the blob lock while the delivery was in its transaction")
+		select {
+		case held := <-checked:
+			if held {
+				t.Error("verify got the blob lock while the delivery was in its transaction")
+			}
+		case <-f.ctx.Done():
+			t.Fatal("the delivery never ran its file check")
 		}
 		if !f.tryBlobs() {
 			t.Error("the delivery kept the blob lock after its commit")
@@ -420,10 +425,43 @@ func TestParkedSyncReleasesAccountLock(t *testing.T) {
 	if r.err != nil || r.ok {
 		t.Fatalf("sync after the account was locked elsewhere: %v %v", r.ok, r.err)
 	}
-	if n := f.small.AcquiredConnsForTest(); n != 0 {
-		t.Errorf("%d connections still in use", n)
-	}
+	f.until("no connection in use", func() bool { return f.small.AcquiredConnsForTest() == 0 })
 	if !f.tryBlobs() {
 		t.Error("the sync kept the blob lock")
+	}
+}
+
+// TestBlobWaitSlotFreeWhileWaitingForFence: a writer frees its wait slot
+// as soon as it has the blob lock, before it waits for the attestation
+// fence. A writer that waits for an attestation must not keep the next
+// writer from waiting for the blob lock.
+func TestBlobWaitSlotFreeWhileWaitingForFence(t *testing.T) {
+	f := newBlobWaitFixture(t, 4)
+	if _, err := f.observer.Exec(f.ctx, "SELECT pg_advisory_lock($1, 0)", fenceClass); err != nil {
+		t.Fatal(err)
+	}
+	f.lockBlobs()
+	d := f.deliver(f.ctx, 1)
+	f.until("the delivery waits for the blob lock in PostgreSQL", func() bool { return f.waitingInPostgres() == 1 })
+	// The delivery holds the only slot while it waits for the blob lock.
+	if release, ok := f.small.TryBlobWaitSlotForTest(); ok {
+		release()
+		t.Fatal("the slot is free while the delivery waits for the blob lock")
+	}
+
+	f.unlockBlobs()
+	waitForRow(t, f.observer, d, "the delivery to wait for the fence", waitingForFence, fenceClass)
+	release, ok := f.small.TryBlobWaitSlotForTest()
+	if !ok {
+		t.Fatal("the slot is still held while the delivery waits for the fence")
+	}
+	release()
+
+	var unlocked bool
+	if err := f.observer.QueryRow(f.ctx, "SELECT pg_advisory_unlock($1, 0)", fenceClass).Scan(&unlocked); err != nil || !unlocked {
+		t.Fatalf("unlock the fence: %v %v", unlocked, err)
+	}
+	if err := f.result(d); err != nil {
+		t.Fatalf("delivery: %v", err)
 	}
 }

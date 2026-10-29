@@ -12,6 +12,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // runUser runs a user subcommand with stdin as input.
@@ -81,6 +82,8 @@ func TestUserCommands(t *testing.T) {
 }
 
 // runCmd runs a command (account, sync, status, user) with stdin as input.
+// Its context ends at the test's wait limit (testwait.Limit), a guard
+// against a hang: every command it runs ends by itself.
 func runCmd(t *testing.T, root *cobra.Command, stdin string, args ...string) error {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -94,7 +97,9 @@ func runCmd(t *testing.T, root *cobra.Command, stdin string, args ...string) err
 	defer func() { os.Stdin = old; _ = r.Close() }()
 	root.SetArgs(args)
 	root.SilenceUsage, root.SilenceErrors = true, true
-	return root.ExecuteContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	return root.ExecuteContext(ctx)
 }
 
 func TestAccountOwners(t *testing.T) {
