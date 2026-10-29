@@ -1065,6 +1065,9 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
   it("leaves the keys to the fields of Retention", async () => {
     window.history.replaceState(null, "", "/?view=retention");
     render(<App user={user(true)} logout={() => {}} logoutError="" />);
+    // The rule form is on its own page (#285 part 3), opened from the Rules tab.
+    fireEvent.click(await screen.findByRole("button", { name: t.ruleAdd }));
+    expect(window.location.search).toBe("?view=retention&add=rule");
     const years = await screen.findByLabelText(t.ruleYears);
     years.focus();
     key(years, "?");
