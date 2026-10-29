@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { accountsApi, type Account, type AccountsResponse } from "./api";
-import { SchedulePicker, scheduleNote, scheduleOptions } from "./AccountsPage";
+import { ScheduleForm, scheduleNote, scheduleOptions } from "./accountParts";
 import { durationMinutes, formatEvery } from "./format";
 import { messagesFor, t } from "./i18n";
 
@@ -84,12 +84,12 @@ describe("scheduleOptions", () => {
   });
 });
 
-describe("SchedulePicker", () => {
+describe("ScheduleForm", () => {
   it("sends only a changed choice", async () => {
     const update = vi.spyOn(accountsApi, "update").mockResolvedValue(undefined);
     const saved = vi.fn();
-    render(<SchedulePicker account={account("default")} data={data()} onSaved={saved} />);
-    const save = screen.getByText(t.saveSchedule) as HTMLButtonElement;
+    render(<ScheduleForm account={account("default")} data={data()} onCancel={() => {}} onSaved={saved} />);
+    const save = screen.getByText(t.saveSchedule).closest("button") as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     fireEvent.click(save);
     expect(update).not.toHaveBeenCalled();
@@ -97,20 +97,28 @@ describe("SchedulePicker", () => {
     expect(save.disabled).toBe(false);
     fireEvent.click(save);
     expect(update).toHaveBeenCalledWith("work", { syncInterval: "30m0s" });
-    expect(await screen.findByText(t.saved)).toBeTruthy();
-    expect(saved).toHaveBeenCalled();
+    await waitFor(() => expect(saved).toHaveBeenCalled());
   });
   it("keeps a value below a raised floor without sending it", () => {
     const update = vi.spyOn(accountsApi, "update");
-    render(<SchedulePicker account={account("10m0s")} data={data({ syncIntervalMin: "15m0s" })} onSaved={() => {}} />);
+    render(<ScheduleForm account={account("10m0s")} data={data({ syncIntervalMin: "15m0s" })} onCancel={() => {}} onSaved={() => {}} />);
     const select = screen.getByLabelText(t.scheduleTitle) as HTMLSelectElement;
     expect(select.value).toBe("10m0s");
     fireEvent.click(screen.getByText(t.saveSchedule));
     expect(update).not.toHaveBeenCalled();
   });
   it("is disabled while the schedule is off", () => {
-    render(<SchedulePicker account={account("default")} data={data({ syncInterval: "" })} onSaved={() => {}} />);
+    render(<ScheduleForm account={account("default")} data={data({ syncInterval: "" })} onCancel={() => {}} onSaved={() => {}} />);
     expect((screen.getByLabelText(t.scheduleTitle) as HTMLSelectElement).disabled).toBe(true);
     expect(screen.getByText(t.scheduleOffHint)).toBeTruthy();
+  });
+  it("does not save while an earlier rename is not in the list yet", () => {
+    const update = vi.spyOn(accountsApi, "update");
+    render(<ScheduleForm account={account("default")} data={data()} locked onCancel={() => {}} onSaved={() => {}} />);
+    fireEvent.change(screen.getByLabelText(t.scheduleTitle), { target: { value: "30m0s" } });
+    const save = screen.getByText(t.saveSchedule).closest("button") as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.submit(save.closest("form")!);
+    expect(update).not.toHaveBeenCalled();
   });
 });

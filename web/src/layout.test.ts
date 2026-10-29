@@ -87,7 +87,7 @@ describe("class names", () => {
 
   it("uses only Carbon's classes and those of layout.css", () => {
     const defined = layoutClasses();
-    expect(defined.has("account-tile")).toBe(true);
+    expect(defined.has("accounts-table")).toBe(true);
     const unknown = components().flatMap(({ file, code }) =>
       usedClasses(code)
         .filter((c) => !c.startsWith("cds--") && !isDefined(defined, c))

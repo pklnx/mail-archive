@@ -199,3 +199,32 @@ export function day(iso: string | null): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : dateFmt().format(d);
 }
+
+/**
+ * Local calendar days (#286). A search date (after:, before:) is a day
+ * "YYYY-MM-DD" in the browser's time zone; `new Date("YYYY-MM-DD")` would
+ * be UTC midnight, the day before west of UTC. Days move with setDate, never
+ * by 86 400 000 ms, which is off by one across a DST change.
+ */
+export function dateOfDay(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y!, m! - 1, d);
+}
+
+/** The local day of a date as "YYYY-MM-DD". */
+export function dayOfDate(date: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${String(date.getFullYear()).padStart(4, "0")}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
+}
+
+/** The day n days after ymd (before it for a negative n). */
+export function shiftDay(ymd: string, n: number): string {
+  const d = dateOfDay(ymd);
+  d.setDate(d.getDate() + n);
+  return dayOfDate(d);
+}
+
+/** A search day (parseQuery checked it) for the tags, in the user's date format. */
+export function localDay(ymd: string): string {
+  return dateFmt().format(dateOfDay(ymd));
+}

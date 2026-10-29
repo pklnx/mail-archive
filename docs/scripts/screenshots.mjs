@@ -158,6 +158,19 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The user panel, opened from the person icon in the header (#284).
+  const p = await page("light");
+  await openMessage(p, "Photos from the weekend");
+  await p.getByRole("banner").getByRole("button", { name: `User (${login.username})`, exact: true }).click();
+  await p.getByRole("list", { name: `User (${login.username})` }).getByRole("button", { name: "Log out" }).waitFor();
+  // Off the action, its tooltip closes; the panel stays open.
+  await p.mouse.move(0, 0);
+  await p.locator(".cds--popover--open").waitFor({ state: "detached" });
+  await shot(p, "user-panel");
+  await p.context().close();
+}
+
+{
   const p = await page("light");
   await p.goto(base + "/");
   // Mail to the tax advisor from the last month, with words from the body.
@@ -169,6 +182,21 @@ for (const scheme of ["light", "dark"]) {
   await p.getByRole("main").getByRole("heading", { name: /Documents for the tax return/ }).waitFor();
   await bodyShown(p);
   await shot(p, "search");
+  await p.context().close();
+}
+
+{
+  // The filters over the list (#286): a recipient and the preset Last 30 days.
+  const p = await page("light");
+  await p.goto(base + "/?q=to%3Ataxadvisor");
+  await p.getByRole("list", { name: "Messages" }).getByRole("button").first().waitFor();
+  await p.getByRole("button", { name: "Filters", exact: true }).click();
+  const filters = p.getByRole("group", { name: "Filters", exact: true });
+  await filters.getByText("Last 30 days", { exact: true }).click();
+  await p.waitForURL(/[?&]q=to%3Ataxadvisor(%20|\+)after%3A/);
+  await p.waitForFunction(() => document.querySelector('.search-filters input[id$="-after"]')?.value !== "");
+  // The focus stays in the filters: a blur to nowhere would close them.
+  await shot(p, "search-filters", { keepFocus: true });
   await p.context().close();
 }
 
@@ -231,13 +259,15 @@ for (const scheme of ["light", "dark"]) {
   const p = await page("light");
   await p.goto(base + "/?view=accounts");
   const main = p.getByRole("main");
-  await main.getByText(/Last sync/).first().waitFor();
+  await main.getByRole("cell", { name: /^Last sync/ }).first().waitFor();
   await shot(p, "accounts");
 
-  // Deleting the removed account "old-provider" completely: the preview
-  // and the typed-count confirmation in a danger Modal. Nothing is confirmed.
+  // Deleting the removed account "old-provider" completely, from its row's
+  // menu: the preview and the typed-count confirmation in a danger Modal.
+  // Nothing is confirmed.
   await main.getByRole("button", { name: /^Removed accounts/ }).click();
-  await main.getByRole("button", { name: "Delete completely…" }).click();
+  await main.getByRole("button", { name: "Actions for old-provider" }).click();
+  await p.getByRole("menuitem", { name: "Delete completely…" }).click();
   const purge = p.getByRole("dialog", { name: /Delete “old-provider” completely\?/ });
   await purge.getByLabel(/^Type \d+ to confirm$/).waitFor();
   await shot(p, "account-purge", { keepFocus: true });
@@ -247,16 +277,18 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // Editing the IMAP account "personal": its own page, with the folders. A
-  // taller window shows the whole page, from its heading to the folders.
-  const p = await page("light", { width: 1280, height: 1100 });
-  await p.goto(base + "/?view=accounts&edit=personal");
+  // The page of the IMAP account "personal": the title row, the tiles and
+  // the sections, with Folders open for editing. A taller window shows the
+  // whole page, from its heading to the folders.
+  const p = await page("light", { width: 1280, height: 1300 });
+  await p.goto(base + "/?view=accounts&id=personal");
   const main = p.getByRole("main");
-  await main.getByRole("heading", { name: "Edit “personal”" }).waitFor();
-  await main.getByRole("button", { name: "Choose folders" }).click();
-  await main.getByRole("checkbox").first().waitFor();
-  await main.getByRole("button", { name: "Save folder selection" }).waitFor();
-  await shot(p, "account-edit");
+  await main.getByRole("heading", { name: "personal", level: 1 }).waitFor();
+  const folders = main.getByRole("region", { name: "Folders" });
+  await folders.getByRole("button", { name: "Edit" }).click();
+  await folders.getByRole("checkbox").first().waitFor();
+  await folders.getByRole("button", { name: "Save folder selection" }).waitFor();
+  await shot(p, "account-detail");
   await p.context().close();
 }
 
@@ -297,6 +329,12 @@ for (const scheme of ["light", "dark"]) {
   await p.getByRole("menuitem", { name: "Reset password" }).waitFor();
   await shot(p, "users", { keepFocus: true });
   await p.keyboard.press("Escape");
+
+  // kim's page: role and state, Reset password and the menu, the tiles and the API keys.
+  await p.goto(base + "/?view=users&id=kim");
+  await main.getByRole("heading", { name: "kim", level: 1 }).waitFor();
+  await main.getByRole("region", { name: "API keys" }).waitFor();
+  await shot(p, "user-detail");
 
   await p.goto(base + "/?view=retention");
   await main.getByRole("tab", { name: "Rules", selected: true }).waitFor();

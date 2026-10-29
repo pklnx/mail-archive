@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
-import { Button, Header, HeaderGlobalAction, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, Search } from "@carbon/react";
-import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders, Keyboard, Logout, UserAvatar } from "@carbon/icons-react";
+import { Button, Header, HeaderGlobalBar, HeaderMenuButton, HeaderName, IconButton, InlineNotification, Popover, PopoverContent, Search } from "@carbon/react";
+import { ArrowLeft, ChevronDown, ChevronUp, Filter, Folders } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { dialogOpen, ownedByWidget } from "./dialogs";
 import { HealthBanner } from "./HealthBanner";
 import { MessageList } from "./MessageList";
 import { MessageView } from "./MessageView";
-import { ActiveFilters, QuickFilters, SearchFilters, editTarget, type FocusRequest } from "./SearchFilters";
+import { ActiveFilters, QuickFilters, editTarget, type FocusRequest } from "./SearchFilters";
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
-import { ThemeToggle } from "./ThemeToggle";
-import { lg, matchesNow, twoPane, useMediaQuery } from "./breakpoints";
+import { UserPanel } from "./UserPanel";
+import { lg, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
@@ -31,13 +31,17 @@ const RetentionPage = lazyNamed(() => import("./RetentionPage"), "RetentionPage"
 const LogPage = lazyNamed(() => import("./LogPage"), "LogPage");
 const ProfilePage = lazyNamed(() => import("./Profile"), "ProfilePage");
 const ShortcutsModal = lazyNamed(() => import("./ShortcutsModal"), "ShortcutsModal");
+// The filter form with its date picker (#286), mounted while its popover is open.
+const FilterPanel = lazyNamed(() => import("./FilterPanel"), "FilterPanel");
 
 interface Props {
   user: User;
   logout: () => void;
+  /** Why the last Log out failed ("" if it did not): shown as an alert under the header. */
+  logoutError: string;
 }
 
-export function App({ user, logout }: Props) {
+export function App({ user, logout, logoutError }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   // Below lg the shell's SideNav (menuOpen) and the folder column
@@ -52,12 +56,19 @@ export function App({ user, logout }: Props) {
       setFoldersOpen(false);
     }
   }, [wide]);
-  // The filter button toggles the filter panel under the search; the set
+  // The filter button opens the filter form in a Carbon Popover; the set
   // filters show as tags either way. It is marked while one is set.
   const prefixed = hasPrefix(query) || state.group === "1";
-  // Open from the two-pane width up, closed on phones (maintainer decision on #195).
-  const [filtersOpen, setFiltersOpen] = useState(() => matchesNow(twoPane));
+  // Closed to start with on every width (maintainer decision on #286; it replaces #195's open panel).
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersId = useId();
+  const filtersButton = useRef<HTMLButtonElement>(null);
+  // Whether the form's calendar is open right now (FilterPanel sets it while
+  // mounted). Flatpickr's calendar lies outside the popover and overlaps
+  // the date field, so a click into the field can end on the calendar: its
+  // click event then targets body, and Carbon's outside click would close
+  // the popover. A real outside click closes the calendar on mousedown first.
+  const calendarOpen = useRef<() => boolean>(() => false);
   // Phones (one pane): the yes/no filters are one-tap quick filters and
   // have no tag of their own. Follows rotation.
   const phone = !useMediaQuery(twoPane);
@@ -68,6 +79,9 @@ export function App({ user, logout }: Props) {
   const editFilters = () => {
     const field = editTarget(query, state.group === "1", phone);
     if (!field) return;
+    // Its click does not reach Carbon's outside click listeners (ActiveFilters),
+    // so the user panel's would not close it either.
+    setUserOpen(false);
     setFiltersOpen(true);
     setFocusRequest((r) => ({ field, n: r.n + 1 }));
   };
@@ -84,6 +98,16 @@ export function App({ user, logout }: Props) {
   const layout = useSidebarLayout(user.name);
   const asideId = useId();
   const navId = useId();
+  // The header's user panel (UserPanel.tsx). Its state is here: the key
+  // listener below needs it, and it hands over to and from the SideNav.
+  const [userOpen, setUserOpen] = useState(false);
+  const userId = useId();
+  const userAction = useRef<HTMLButtonElement>(null);
+  const userPanel = useRef<HTMLDivElement>(null);
+  const closeUser = (returnFocus: boolean) => {
+    setUserOpen(false);
+    if (returnFocus) userAction.current?.focus();
+  };
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
@@ -170,6 +194,12 @@ export function App({ user, logout }: Props) {
       opener.current = null;
     }
   }, [overlay]);
+  // The user panel: focus moves to its first item when it opens. Declared
+  // after the overlay effect, so it runs after that one's focus return when
+  // the panel replaces the SideNav (a child's effect would run before it).
+  useEffect(() => {
+    if (userOpen) userPanel.current?.querySelector<HTMLElement>(".cds--switcher__item-link")?.focus();
+  }, [userOpen]);
   const hide = overlay !== "" || undefined;
   const closeFolders = useCallback(() => setFoldersOpen(false), []);
   // Escape closes the folder overlay. In the capture phase: Carbon's
@@ -204,10 +234,19 @@ export function App({ user, logout }: Props) {
         if (e.key === "Escape") setMenuOpen(false);
         return;
       }
+      // Before ownedByWidget: an open tooltip of the panel's action would claim the Escape.
+      if (userOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          closeUser(true);
+        }
+        return;
+      }
       if (ownedByWidget(e)) {
         // Escape leaves a field, as before; Carbon's Search clears itself first (below).
         const el = e.target instanceof HTMLElement ? e.target : null;
-        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA"].includes(el.tagName) && !el.closest(".cds--search")) el.blur();
+        // Not in the filter popover: Escape there closes its calendar, then the popover (FilterPanel.tsx).
+        if (e.key === "Escape" && el && ["INPUT", "TEXTAREA"].includes(el.tagName) && !el.closest(".cds--search, .cds--popover-content")) el.blur();
         return;
       }
       const mail = state.view === "";
@@ -255,6 +294,12 @@ export function App({ user, logout }: Props) {
     if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
   }, [state.m]);
 
+  // A failed Log out: on phones the page may be scrolled down (a message is
+  // open), so bring the alert under the header into view.
+  useEffect(() => {
+    if (logoutError && document.scrollingElement) document.scrollingElement.scrollTop = 0;
+  }, [logoutError]);
+
   const gone = accounts.data?.accounts.reduce((n, a) => n + a.goneMessages, 0) ?? 0;
   const pageInert = hide;
 
@@ -271,7 +316,12 @@ export function App({ user, logout }: Props) {
           aria-expanded={menuOpen}
           isActive={menuOpen}
           // Never from behind the folder overlay (inert there anyway): one overlay does not open another.
-          onClick={() => !foldersOpen && setMenuOpen((open) => !open)}
+          onClick={() => {
+            if (foldersOpen) return;
+            // The SideNav replaces the user panel; its overlay effect moves the focus.
+            setUserOpen(false);
+            setMenuOpen((open) => !open);
+          }}
         />
         <HeaderName
           className="app-header__name"
@@ -290,23 +340,35 @@ export function App({ user, logout }: Props) {
           {t.appName}
         </HeaderName>
         <HeaderGlobalBar>
-          <span className="app-header__user" aria-hidden>
-            {user.name}
-          </span>
-          <HeaderGlobalAction className="app-header__shortcuts" aria-label={t.shortcuts} onClick={openShortcuts}>
-            <Keyboard size={20} />
-          </HeaderGlobalAction>
-          <ThemeToggle header />
-          <HeaderGlobalAction
-            aria-label={t.profileOf(user.name)}
-            isActive={state.view === "profile"}
-            onClick={() => show("profile")}
-          >
-            <UserAvatar size={20} />
-          </HeaderGlobalAction>
-          <HeaderGlobalAction aria-label={t.logOut} tooltipAlignment="end" onClick={logout}>
-            <Logout size={20} />
-          </HeaderGlobalAction>
+          <UserPanel
+            name={user.name}
+            id={userId}
+            open={userOpen}
+            actionRef={userAction}
+            panelRef={userPanel}
+            toggle={() => {
+              if (userOpen) return closeUser(true);
+              // The panel replaces the SideNav: no focus return to the menu button.
+              opener.current = null;
+              setMenuOpen(false);
+              setUserOpen(true);
+            }}
+            close={closeUser}
+            profile={() => {
+              closeUser(true);
+              show("profile");
+            }}
+            shortcuts={() => {
+              closeUser(true);
+              shortcutsOpener.current = userAction.current;
+              setShortcuts(true);
+            }}
+            logout={() => {
+              // Close the panel first, so on a phone it does not cover a failure alert.
+              closeUser(true);
+              logout();
+            }}
+          />
         </HeaderGlobalBar>
       </Header>
       <ShellNav
@@ -328,6 +390,16 @@ export function App({ user, logout }: Props) {
       />
       <div className="app-shell__body">
       <div inert={pageInert}>
+        {logoutError && (
+          <InlineNotification
+            kind="error"
+            lowContrast
+            hideCloseButton
+            role="alert"
+            statusIconDescription={t.carbon.status.error}
+            subtitle={logoutError}
+          />
+        )}
         <HealthBanner
           data={accounts.data}
           admin={user.admin}
@@ -408,7 +480,7 @@ export function App({ user, logout }: Props) {
 
           <section inert={pageInert} className="mail-pane mail-pane--list">
             {/* Phones: where the user is, the search below at full width. Menu
-                and theme are in the header. */}
+                and the user panel are in the header. */}
             <div className="mail-place">
               <h1 className="mail-place__title">{place.title}</h1>
               {place.sub && <p className="mail-place__sub">{place.sub}</p>}
@@ -445,33 +517,61 @@ export function App({ user, logout }: Props) {
                   if (e.key === "Escape" && !e.currentTarget.value) e.currentTarget.blur();
                 }}
               />
-              <IconButton
-                kind="ghost"
-                size="md"
+              <Popover
+                open={filtersOpen}
                 align="bottom-end"
-                label={t.filters}
-                className={prefixed ? "mail-toolbar__filters--set" : undefined}
-                isSelected={filtersOpen}
-                aria-expanded={filtersOpen}
-                aria-controls={filtersId}
-                onClick={() => setFiltersOpen((open) => !open)}
+                autoAlign
+                onRequestClose={() => !calendarOpen.current() && setFiltersOpen(false)}
               >
-                <Filter />
-              </IconButton>
+                <IconButton
+                  ref={filtersButton}
+                  kind="ghost"
+                  size="md"
+                  align="bottom-end"
+                  label={t.filters}
+                  className={prefixed ? "mail-toolbar__filters--set" : undefined}
+                  aria-expanded={filtersOpen}
+                  aria-controls={filtersId}
+                  onClick={() => setFiltersOpen((open) => !open)}
+                  // Carbon closes the popover on Escape only from inside its content.
+                  onKeyDown={(e: ReactKeyboardEvent) => {
+                    if (e.key === "Escape" && filtersOpen) {
+                      e.preventDefault();
+                      setFiltersOpen(false);
+                    }
+                  }}
+                >
+                  <Filter />
+                </IconButton>
+                <PopoverContent id={filtersId} className="filter-popover__content">
+                  {/* PopoverContent is always in the DOM: mounted only while open, so the chunk loads on first open. */}
+                  {filtersOpen && (
+                    <LazyView inline>
+                      <FilterPanel
+                        id={filtersId}
+                        query={query}
+                        setQuery={setQuery}
+                        group={state.group === "1"}
+                        setGroup={setGroup}
+                        focus={focusRequest.n > focusDone ? focusRequest : undefined}
+                        onFocused={setFocusDone}
+                        calendarOpen={calendarOpen}
+                      />
+                    </LazyView>
+                  )}
+                </PopoverContent>
+              </Popover>
             </div>
             {phone && <QuickFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} />}
-            {filtersOpen && (
-              <SearchFilters
-                id={filtersId}
-                query={query}
-                setQuery={setQuery}
-                group={state.group === "1"}
-                setGroup={setGroup}
-                focus={focusRequest.n > focusDone ? focusRequest : undefined}
-                onFocused={setFocusDone}
-              />
-            )}
-            <ActiveFilters query={query} setQuery={setQuery} group={state.group === "1"} setGroup={setGroup} quick={phone} onEdit={editFilters} />
+            <ActiveFilters
+              query={query}
+              setQuery={setQuery}
+              group={state.group === "1"}
+              setGroup={setGroup}
+              quick={phone}
+              onEdit={editFilters}
+              fallbackFocus={filtersButton}
+            />
             <div className="mail-pane__fill">
               <MessageList
                 filter={filter}

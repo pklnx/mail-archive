@@ -4,8 +4,17 @@
 with your user.
 
 The header at the top holds the logo and the name of the app, which leads to
-all mail, and on the right your name, the keyboard shortcuts, the light/dark switch,
-your [profile](./users#your-profile) and **Log out**. The navigation on the
+all mail, the menu button on smaller screens (see [Layout](#layout)) and, on
+the right, the person icon. That icon opens the user panel with your name,
+your [profile](./users#your-profile), **Keyboard shortcuts**, the light/dark
+switch and **Log out**; a click outside it or <kbd>Esc</kbd> closes it. If
+signing out fails (the server cannot be reached or answers with an error),
+you stay signed in: an error under the header says so, with the reason, and
+**Log out** again tries once more.
+
+![The user panel, opened from the person icon](/screenshots/user-panel.png)
+
+The navigation on the
 left lists **All mail**, **Only in archive** (once there is such mail, see
 below), [Accounts](./accounts), **Log** (the [audit log](./audit-log) of what
 you did) and **Profile**; admins also find [Users](./users) and
@@ -117,8 +126,9 @@ below the bar at the top; a tap outside it closes it.
 When one of your accounts keeps failing to sync (by default three syncs in a
 row) or has not synced successfully for two of its sync intervals, a banner above
 the mail names it: red for failing, amber for not synced for a while.
-**Open accounts** leads to the account page, where the card says how often
-in a row and since when the sync failed, with the last error. The banner
+**Open accounts** leads to the Accounts page, where the account's row is
+tagged *failing*; the account's own page says how often in a row and since
+when the sync failed, with the last error under *Last sync*. The banner
 disappears after the next successful sync. It refreshes with the account
 list every 30 seconds; screen readers hear it when the set of failing
 accounts changes. Disabled accounts never appear in it.
@@ -239,24 +249,41 @@ Recipients and attachment names are found only with `to:` and `attachment:`,
 not by plain words: otherwise your own address would match nearly every
 message you received. The contents of attachments are not searched.
 
-The filter panel under the search field sets the same prefixes for From, To
-or Cc, the date range and attachments. It writes them into the search field,
-and prefixes you type show up in it. The filter button right of the search
-field shows and hides the panel; it is open at first on larger screens and
-closed on a phone, and the button is marked while a prefix or grouping is
-set. The URL keeps the whole search, so Back, reload and bookmarks keep the
-filters.
+The filter button right of the search field opens the filters over the
+list; they are closed at first on every screen, and the button is marked
+while a prefix or grouping is set. They set the same prefixes for From, To
+or Cc, the date range and attachments: they write them into the search
+field, and prefixes you type show up in them. The URL keeps the whole
+search, so Back, reload and bookmarks keep the filters. A click outside the
+filters, the filter button or <kbd>Esc</kbd> closes them.
+
+The date range has two fields, **Since** and **Until**; both days count.
+Type the dates in your date format (the hint below the fields shows it,
+for example `mm/dd/yyyy`), or pick them in the calendar that opens below
+the field. In the search field the range becomes `after:` the first day and
+`before:` the day after the last one. Above the fields, **Any time**,
+**Last 7 days**, **Last 30 days**, **This year** and **Custom** choose a
+range in one step: the presets set only the first day (today counts among
+the seven and thirty days), **Any time** removes both dates, and **Custom**
+keeps them and moves to **Since**. A range you edit yourself, or one no
+preset gives, shows as **Custom**. In the calendar, <kbd>Esc</kbd> closes
+the calendar first and then the filters.
+
+![The filters with Last 30 days chosen](/screenshots/search-filters.png)
 
 Every filter that is set also shows as a tag below the search field, with
-its value, for example `From: sam`; the × on a tag removes that filter.
-**Edit filters** after the tags opens the filter panel and moves the focus
-to the field of the first tag, in the panel's order (From, To or Cc, the
-date range, attachments, grouping).
+its value, for example `From: sam`; the × on a tag removes that filter, and
+the focus moves on to the next tag. A date range shows as one tag with both
+days, for example `Date: Oct 1, 2026 – Oct 31, 2026`. **Edit filters**
+after the tags opens the filters and moves the focus to the field of the
+first tag, in their order (From, To or Cc, the date range, attachments,
+grouping).
 
-On a phone, **Has attachment** and **Group by conversation** are two tags
-of their own right below the search field: one tap turns the filter on or
-off, without opening the panel. A selected one is highlighted, and these
-two filters do not show again among the tags of set filters.
+On a phone the filters fill the width of the screen. **Has attachment** and
+**Group by conversation** are two tags of their own right below the search
+field: one tap turns the filter on or off, without opening the filters. A
+selected one is highlighted, and these two filters do not show again among
+the tags of set filters.
 
 A message has an attachment when a part is marked as one, or when it is a
 named file that is not text, such as a PDF that Apple Mail sends inline.
@@ -282,7 +309,7 @@ together here, also from different accounts.
 
 ![A reply with its conversation open over the text](/screenshots/conversation.png)
 
-"Group by conversation" in the filter panel (on a phone also a tag below
+"Group by conversation" in the filters (on a phone also a tag below
 the search field) lists one row per conversation:
 its newest message, with the number of its messages as a badge. The arrow
 on the right shows the earlier ones below it. With a search or filters, a
@@ -304,12 +331,12 @@ half of a conversation.
 | <kbd>/</kbd> | Moves to the search field. |
 | <kbd>j</kbd> | Next message; with no message open, opens the first one. |
 | <kbd>k</kbd> | Previous message. |
-| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation or the folders opened over the page. |
+| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation, the folders opened over the page or the user panel. |
 | <kbd>g</kbd> then <kbd>a</kbd> | All mail. |
 | <kbd>?</kbd> | Lists the shortcuts. |
 
 They do not apply while you type in a field (<kbd>Esc</kbd> leaves the
-field) or while a dialog is open. With no message open, the reading pane
+field), while a dialog is open or while the user panel is open. With no message open, the reading pane
 points to <kbd>?</kbd>.
 
 ## Install as an app
@@ -328,8 +355,9 @@ web page: it needs the server and stores nothing for offline use.
 
 ## Appearance and language
 
-Light and dark mode follow the system. The sun/moon button in the header
-overrides it, also on the login page. The choice is remembered in the
+Light and dark mode follow the system. **Switch to dark mode** or **Switch
+to light mode** in the user panel overrides it; on the login page the
+sun/moon button does. The choice is remembered in the
 browser.
 
 The colours are those of the pklnx design system: IBM's Carbon with Purple

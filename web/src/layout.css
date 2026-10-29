@@ -115,27 +115,31 @@ select,
   position: relative;
   top: -0.0390625rem;
 }
-/* The header's user name, from Carbon's md up; the shortcuts button only
-   there too, where a keyboard is likely. */
-.app-header__user {
-  display: none;
-  align-self: center;
-  padding-inline: 0.5rem;
-  color: var(--cds-text-secondary);
+/* The user panel (UserPanel.tsx) opens below the header, which reaches
+   under the notch, and keeps its last item above the home indicator. */
+.cds--header-panel.app-user-panel {
+  inset-block-start: calc(3rem + env(safe-area-inset-top));
+  padding-block-end: env(safe-area-inset-bottom);
+}
+/* Its first row, the user name: text, not an item. */
+.app-user-panel__name {
+  align-self: stretch;
+  padding: 1rem 1rem 0.5rem;
+  color: var(--cds-text-primary);
   font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
   letter-spacing: 0.16px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
-.app-shell .app-header__shortcuts {
-  display: none;
-}
-@media (min-width: 42rem) {
-  .app-header__user {
-    display: block;
-  }
-  .app-shell .app-header__shortcuts {
-    display: flex;
-  }
+/* Its items that are buttons look like the link items. */
+:where(.app-user-panel) button.cds--switcher__item-link {
+  inline-size: 100%;
+  border: 0;
+  background-color: transparent;
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
 }
 
 /* The shell's SideNav sits below the header, which reaches under the notch.
@@ -579,17 +583,33 @@ select,
   fill: var(--cds-icon-interactive);
 }
 
-/* The filter panel and the set filters under the search. */
+/* The filter form in the filter button's popover (#286): one column, at
+   most the viewport wide; Carbon's horizontal radio group does not wrap, so
+   it is vertical below 42rem (FilterPanel.tsx). */
+.filter-popover__content {
+  max-inline-size: calc(100vw - 1rem);
+}
 .search-filters {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem 0.5rem;
-  padding: 0.75rem 0.5rem;
-  border-block-end: 1px solid var(--cds-border-subtle-01);
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  inline-size: 36rem;
+  max-inline-size: 100%;
+  padding: 1rem;
   background-color: var(--cds-layer-01);
 }
 .search-filters .cds--form-item.cds--checkbox-wrapper {
   margin: 0;
+}
+.search-filters .cds--date-picker--range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.search-filters .cds--date-picker--range .cds--date-picker__input,
+.search-filters .cds--date-picker--range .cds--date-picker-container {
+  inline-size: 100%;
+  min-inline-size: 0;
 }
 /* Phones: the two yes/no filters as one-tap tags, in their own row. */
 .quick-filters {
@@ -1609,72 +1629,14 @@ select,
   max-inline-size: 40rem;
 }
 
-/* The account tiles. */
-.account-list {
+.removed-accounts .cds--accordion__content {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-}
-.account-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-inline-size: 0;
-}
-.account-tile__body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.account-tile__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem 0.75rem;
-  margin-block-end: 0.25rem;
-}
-.account-tile__name {
-  /* heading-02 */
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: 0;
-  overflow-wrap: anywhere;
-}
-.account-tile__tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.25rem;
-}
-.account-tile__tags .cds--tag {
-  margin: 0;
-}
-.account-tile__count {
-  margin-inline-start: auto;
-  color: var(--cds-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-.account-tile__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-block-start: 0.5rem;
-}
-/* Rows of small buttons without icons: Carbon keeps room for an icon on
-   the right; here it only makes the row wrap sooner. */
-.account-tile__actions .cds--btn,
-.fill__row .cds--btn {
-  padding-inline-end: 0.9375rem;
-}
-.account-tile .cds--inline-notification {
-  margin-block: 0.25rem;
-}
-.removed-accounts .cds--accordion__content {
   padding-inline-end: 0;
 }
 
-/* The mail server setup inside an smtp tile or after creating one. */
+/* The mail server setup on an smtp account's page or after creating one. */
 .postfix {
   display: flex;
   flex-direction: column;
@@ -1685,7 +1647,7 @@ select,
   max-inline-size: none;
 }
 
-/* The import from IMAP inside an smtp tile. */
+/* An import from IMAP on an smtp account's page. */
 .fill {
   display: flex;
   flex-direction: column;
@@ -1703,6 +1665,11 @@ select,
   align-items: flex-end;
   gap: 0.5rem;
   margin-block-start: 0.5rem;
+}
+/* Rows of small buttons without icons: Carbon keeps room for an icon on
+   the right; here it only makes the row wrap sooner. */
+.fill__row .cds--btn {
+  padding-inline-end: 0.9375rem;
 }
 .fill__form {
   display: flex;
@@ -1843,9 +1810,136 @@ select,
   gap: 1rem;
 }
 
-/* Users. */
-.users-page__heading {
+/* The settings pages (Accounts, Users, Retention): tables and detail pages. */
+/* A heading the focus moves to on a page change or after an action. */
+.app-page-title {
+  margin: 0;
   outline: none;
+}
+.app-detail-title {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  min-inline-size: 0;
+}
+.app-detail-title__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.app-detail-title__tags .cds--tag {
+  margin: 0;
+}
+.app-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 1px;
+  margin: 0;
+}
+.app-summary__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+.app-summary__value {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.app-summary__value .cds--tag {
+  margin: 0;
+}
+/* A row header of a table reads like the other cells. */
+.app-table tbody th {
+  background-color: inherit;
+  font-weight: 400;
+}
+/* Below 42rem a table keeps its main columns; the others show as a second
+   line under the name, which is hidden from 42rem up so it is read once. */
+@media (max-width: 41.98rem) {
+  .app-table .app-wide-only {
+    display: none;
+  }
+}
+@media (min-width: 42rem) {
+  .app-table .app-narrow-only {
+    display: none;
+  }
+}
+
+/* Accounts: the table, and the sections of an account's page. */
+.accounts-table__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.accounts-table__more {
+  display: block;
+  margin-block-start: 0.25rem;
+}
+.accounts-table__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+.accounts-table__tags .cds--tag {
+  margin: 0;
+  white-space: nowrap;
+}
+.accounts-table__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+.app-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+/* Label and value pairs: the read view of a section. */
+.app-fields {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+.app-fields__row {
+  display: contents;
+}
+.app-fields dd {
+  margin: 0;
+}
+.app-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+/* A tile whose value is a sentence: body text, not the large figure. */
+.app-summary__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  line-height: 1.42857;
+}
+
+/* Users. */
+.users-table__more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  margin-block-start: 0.25rem;
+}
+.users-table__more .cds--tag {
+  margin: 0;
 }
 .users-table__name {
   font-weight: 600;
@@ -1870,7 +1964,8 @@ select,
   white-space: nowrap;
 }
 /* On a phone the table scrolls sideways; headings and short values stay on one line. */
-.users-table th,
+.users-table thead th,
+.accounts-table thead th,
 .runs-table th,
 .log-table th,
 .users-table__lines {
@@ -1881,6 +1976,9 @@ select,
   white-space: normal;
 }
 .users-table td,
+.users-table tbody th,
+.accounts-table td,
+.accounts-table tbody th,
 .log-table td,
 .runs-table td {
   vertical-align: top;
@@ -1888,34 +1986,44 @@ select,
 /* The scrolling box of a table also holds its visually hidden labels
    (position: absolute); otherwise they widen the page on a phone. */
 .users-table .cds--data-table-content,
+.accounts-table .cds--data-table-content,
 .log-table .cds--data-table-content,
 .runs-table .cds--data-table-content {
   position: relative;
 }
 .users-table .cds--data-table td,
+.users-table .cds--data-table tbody th,
+.accounts-table .cds--data-table td,
+.accounts-table .cds--data-table tbody th,
 .log-table .cds--data-table td {
   padding-block: 0.75rem;
 }
-.users-table .cds--table-column-menu {
+.users-table .cds--table-column-menu,
+.accounts-table .cds--table-column-menu {
   padding-block: 0.25rem;
 }
 /* Below Carbon's lg breakpoint the table scrolls sideways; the actions
    column stays at the inline end, so every row's menu is on screen. */
 @media (max-width: 65.98rem) {
   .users-table th:last-child,
-  .users-table td.cds--table-column-menu {
+  .users-table td.cds--table-column-menu,
+  .accounts-table th:last-child,
+  .accounts-table td.cds--table-column-menu {
     position: sticky;
     inset-inline-end: 0;
     z-index: 1;
     box-shadow: inset 1px 0 0 var(--cds-border-subtle-01);
   }
-  .users-table td.cds--table-column-menu {
+  .users-table td.cds--table-column-menu,
+  .accounts-table td.cds--table-column-menu {
     background-color: var(--cds-layer);
   }
-  .users-table tr:hover td.cds--table-column-menu {
+  .users-table tr:hover td.cds--table-column-menu,
+  .accounts-table tr:hover td.cds--table-column-menu {
     background-color: var(--cds-layer-hover);
   }
-  .users-table th:last-child {
+  .users-table th:last-child,
+  .accounts-table th:last-child {
     background-color: var(--cds-layer-accent);
   }
 }

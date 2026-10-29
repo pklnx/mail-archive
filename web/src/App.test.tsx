@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Account, AccountsResponse, Folder, MessageDetail, MessageSummary, User } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
+import { filterTextFor } from "./filterText";
 import { lg, twoPane as twoPaneQuery } from "./breakpoints";
 
 const f = (name: string, messages = 1): Folder => ({ name, delimiter: "/", messages, lastSyncedAt: null, lastReconciledAt: null });
@@ -52,6 +53,19 @@ const detail = (id: string): MessageDetail => ({
 let listed: MessageSummary[] = [];
 
 const original = window.matchMedia;
+// jsdom lays nothing out: every box is 0 × 0 at the origin, so the filter
+// popover's autoAlign (floating-ui's hide middleware) would hide its content
+// as if its button were out of view. A box of its own for every element.
+const rect = Element.prototype.getBoundingClientRect;
+beforeEach(() => {
+  Element.prototype.getBoundingClientRect = () => DOMRect.fromRect({ x: 100, y: 100, width: 32, height: 32 });
+  // The viewport floating-ui clips to.
+  Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: 1024 });
+  Object.defineProperty(document.documentElement, "clientHeight", { configurable: true, value: 768 });
+});
+afterEach(() => {
+  Element.prototype.getBoundingClientRect = rect;
+});
 beforeEach(() => {
   listed = [];
   window.history.replaceState(null, "", "/");
@@ -86,7 +100,7 @@ afterEach(() => {
 let shortcutsLoaded = false;
 beforeEach(async () => {
   if (shortcutsLoaded) return;
-  render(<App user={user()} logout={() => {}} />);
+  render(<App user={user()} logout={() => {}} logoutError="" />);
   fireEvent.keyDown(document.body, { key: "?" });
   await screen.findByRole("dialog", { name: t.shortcuts });
   cleanup();
@@ -94,8 +108,8 @@ beforeEach(async () => {
   shortcutsLoaded = true;
 });
 
-async function renderApp(admin = false) {
-  render(<App user={user(admin)} logout={() => {}} />);
+async function renderApp(admin = false, logout = () => {}, logoutError = "") {
+  render(<App user={user(admin)} logout={logout} logoutError={logoutError} />);
   // The accounts are loaded: the tree has them.
   await screen.findByRole("treeitem", { name: /^work$/, hidden: true });
 }
@@ -212,14 +226,18 @@ describe("phone navigation (below lg)", () => {
       const de = messagesFor("de");
       await renderApp(true);
       expect(screen.getByRole("button", { name: de.showMenu })).toBeTruthy();
-      expect(screen.getByRole("button", { name: de.profileOf("alice") })).toBeTruthy();
-      expect(screen.getByRole("button", { name: de.logOut })).toBeTruthy();
-      expect(screen.getByRole("button", { name: de.shortcuts })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.userPanelOf("alice") }));
+      const panel = screen.getByRole("list", { name: de.userPanelOf("alice") });
+      expect(within(panel).getByRole("link", { name: de.profile })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: de.logOut })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: de.shortcuts })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: de.switchTheme("dark") })).toBeTruthy();
+      key(document.activeElement!, "Escape");
       fireEvent.click(screen.getByRole("button", { name: de.navFolders }));
       expect(screen.getByRole("dialog", { name: de.navFolders })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.closeFolders })).toBeTruthy();
       const html = document.body.innerHTML;
-      for (const s of ["Open navigation", "All folders", "Main navigation", "Log out", "Folders", "Profile"]) expect(html, s).not.toContain(s);
+      for (const s of ["Open navigation", "All folders", "Main navigation", "Log out", "Folders", "Profile", "User (", "Keyboard shortcuts", "Switch to"]) expect(html, s).not.toContain(s);
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
@@ -421,20 +439,23 @@ describe("keyboard shortcuts in the mail view", () => {
     expect(params().get("m")).toBeNull();
   });
 
-  it("toggles the filter panel with the filter button and shows the set filters as tags", async () => {
+  it("toggles the filter popover with the filter button and shows the set filters as tags", async () => {
     window.history.replaceState(null, "", "/?q=from%3Asam%20invoice");
     await renderApp();
     const button = screen.getByRole("button", { name: t.filters });
-    // Open on a desktop to start with (below).
-    expect(button.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(button);
+    // Closed to start with; the button tells it as expanded, not as pressed (#311).
     expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
     expect(screen.queryByRole("group", { name: t.filters })).toBeNull();
     const tags = screen.getByRole("list", { name: t.activeFilters });
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    const panel = screen.getByRole("group", { name: t.filters });
-    expect(button.getAttribute("aria-controls")).toBe(panel.id);
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+    const panel = await screen.findByRole("group", { name: t.filters });
+    // aria-controls names the popover, which holds the form.
+    const content = document.getElementById(button.getAttribute("aria-controls")!);
+    expect(content?.className).toBe("cds--popover");
+    expect(content?.contains(panel)).toBe(true);
     expect((within(panel).getByRole("textbox", { name: t.from }) as HTMLInputElement).value).toBe("sam");
     fireEvent.click(within(tags).getByRole("button", { name: t.removeFilter(t.from) }));
     expect(searchbox().value).toBe("invoice");
@@ -452,10 +473,10 @@ describe("keyboard shortcuts in the mail view", () => {
       await screen.findByRole("button", { name: /First/ });
       expect(screen.getByRole("searchbox", { name: de.searchMail })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.carbon.clearSearch })).toBeTruthy();
-      // Open on a desktop from the start.
-      expect(screen.getByRole("button", { name: de.filters }).getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByRole("group", { name: de.filters })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.filters }));
+      expect(await screen.findByRole("group", { name: de.filters })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.removeFilter(de.hasAttachment) })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: de.userPanelOf("alice") }));
       fireEvent.click(screen.getByRole("button", { name: de.shortcuts }));
       expect(screen.getByRole("dialog", { name: de.shortcuts })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.carbon.closeModal })).toBeTruthy();
@@ -492,32 +513,323 @@ describe("keyboard shortcuts while the SideNav overlay is open (below lg)", () =
   });
 });
 
-describe("the filter panel's first state", () => {
+describe("user panel (#284)", () => {
+  beforeEach(() => {
+    screenWidth(true);
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  const action = () => screen.getByRole("button", { name: t.userPanelOf("alice") });
+  const panel = () => screen.queryByRole("list", { name: t.userPanelOf("alice") });
+  const items = () => Array.from(panel()!.querySelectorAll<HTMLElement>(".cds--switcher__item-link"));
+  const item = (name: string) => items().find((el) => el.textContent === name)!;
+  const params = () => new URLSearchParams(window.location.search);
+  const open = () => {
+    act(() => action().focus());
+    fireEvent.click(action());
+    expect(panel()).not.toBeNull();
+  };
+
+  for (const wide of [false, true]) {
+    it(`leaves the header the menu button, the name and one user action (${wide ? "desktop" : "phone"}); closed, the panel holds nothing`, async () => {
+      screenWidth(wide);
+      await renderApp();
+      const header = screen.getByRole("banner");
+      // Carbon hides the menu button from lg up with CSS; it is in the DOM at both widths.
+      expect(within(header).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([t.showMenu, t.userPanelOf("alice")]);
+      expect(within(header).getAllByRole("link").map((l) => l.textContent)).toEqual([t.appName]);
+      // The name is no text of its own there (the action's tooltip names it).
+      expect(within(header).queryByText("alice")).toBeNull();
+      expect(panel()).toBeNull();
+      expect(header.querySelectorAll(".cds--switcher__item-link")).toHaveLength(0);
+      expect(action().getAttribute("aria-expanded")).toBe("false");
+    });
+  }
+
+  it("opens on a click with the focus on Profile: name, Profile, Keyboard shortcuts, theme, Log out, each named by its text and in the tab order", async () => {
+    await renderApp();
+    open();
+    expect(action().getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(action().getAttribute("aria-controls")!)?.contains(panel())).toBe(true);
+    expect(document.activeElement).toBe(item(t.profile));
+    expect(Array.from(panel()!.children).map((li) => li.textContent)).toEqual(["alice", t.profile, t.shortcuts, t.switchTheme("dark"), "", t.logOut]);
+    for (const el of items()) {
+      expect(el.getAttribute("aria-label")).toBe(el.textContent);
+      expect(el.tabIndex).toBe(0);
+    }
+    expect(item(t.profile).getAttribute("href")).toBe("/?view=profile");
+  });
+
+  it("closes on Escape, also with the action's tooltip open, focuses the action and leaves the message open; the other shortcuts are off meanwhile", async () => {
+    window.history.replaceState(null, "", "/?m=m1");
+    await renderApp();
+    await screen.findByRole("article");
+    open();
+    const profile = item(t.profile);
+    for (const k of ["j", "k", "?", "/", "u"]) key(profile, k);
+    expect(params().get("m")).toBe("m1");
+    expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull();
+    expect(document.activeElement).toBe(profile);
+    // The pointer still over the action: its tooltip is open, which would claim the Escape (ownedByWidget).
+    fireEvent.mouseEnter(action());
+    await waitFor(() => expect(document.querySelector(".cds--popover--open")).not.toBeNull());
+    key(profile, "Escape");
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(action());
+    expect(params().get("m")).toBe("m1");
+  });
+
+  it("keeps the panel open when a click blurs the focus first (WebKit, Firefox on macOS): Log out still works", async () => {
+    const logout = vi.fn();
+    await renderApp(false, logout);
+    open();
+    // Those browsers focus nothing on mousedown: the focus leaves the item to nowhere before the click.
+    fireEvent.focusOut(item(t.profile), { relatedTarget: null });
+    expect(panel()).not.toBeNull();
+    fireEvent.click(item(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open when the focus goes to its action, and closes when Tab takes it elsewhere, leaving the focus there", async () => {
+    await renderApp();
+    open();
+    act(() => action().focus());
+    expect(panel()).not.toBeNull();
+    act(() => item(t.logOut).focus());
+    const search = screen.getByRole("searchbox", { name: t.searchMail });
+    act(() => search.focus());
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(search);
+  });
+
+  it("closes when Shift+Tab takes the focus back past its action, and the shortcuts work again", async () => {
+    await renderApp();
+    await screen.findByRole("button", { name: /First/ });
+    open();
+    // Shift+Tab from Profile: to the action (the panel stays open), then to the name link before it.
+    act(() => action().focus());
+    expect(panel()).not.toBeNull();
+    const name = within(screen.getByRole("banner")).getByRole("link", { name: t.appName });
+    act(() => name.focus());
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(name);
+    key(name, "j");
+    expect(params().get("m")).toBe("m1");
+  });
+
+  it("opens Profile on a plain click and returns the focus to the action; leaves a Ctrl click to the browser", async () => {
+    await renderApp();
+    open();
+    expect(fireEvent.click(item(t.profile), { ctrlKey: true })).toBe(true);
+    expect(params().get("view")).toBeNull();
+    expect(panel()).not.toBeNull();
+    expect(fireEvent.click(item(t.profile))).toBe(false);
+    expect(params().get("view")).toBe("profile");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("opens the shortcuts; closing them returns the focus to the action", async () => {
+    await renderApp();
+    open();
+    fireEvent.click(item(t.shortcuts));
+    expect(panel()).toBeNull();
+    const dialog = await screen.findByRole("dialog", { name: t.shortcuts });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    key(document.activeElement!, "Escape");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull());
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("switches the theme and stays open; the item's text and name follow", async () => {
+    await renderApp();
+    open();
+    fireEvent.click(item(t.switchTheme("dark")));
+    expect(document.documentElement.classList.contains("cds--g100")).toBe(true);
+    expect(panel()).not.toBeNull();
+    const theme = items()[2]!;
+    expect(theme.textContent).toBe(t.switchTheme("light"));
+    expect(theme.getAttribute("aria-label")).toBe(t.switchTheme("light"));
+    fireEvent.click(theme);
+    expect(document.documentElement.classList.contains("cds--white")).toBe(true);
+    document.documentElement.className = "";
+  });
+
+  it("logs out", async () => {
+    const logout = vi.fn();
+    await renderApp(false, logout);
+    open();
+    fireEvent.click(item(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on Log out, with the focus back on its action, so a failure alert is not covered (#327)", async () => {
+    const logout = vi.fn();
+    await renderApp(false, logout);
+    open();
+    fireEvent.click(item(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("shows a failed Log out as an alert in the banner slot under the header (#327)", async () => {
+    await renderApp(false, () => {}, t.logoutFailed("500 Internal Server Error"));
+    // HealthBanner's own live region is an (empty) alert too.
+    const alerts = screen.getAllByRole("alert").filter((el) => el.textContent?.includes(t.logoutFailed("500 Internal Server Error")));
+    expect(alerts).toHaveLength(1);
+    const alert = alerts[0]!;
+    expect(alert.classList.contains("cds--inline-notification")).toBe(true);
+    // The slot is the first child of the shell body, above the main view.
+    const slot = document.querySelector(".app-shell__body")!.firstElementChild!;
+    expect(slot.contains(alert)).toBe(true);
+  });
+
+  it("shows no logout alert without a logout error", async () => {
+    await renderApp();
+    expect(screen.getAllByRole("alert").filter((el) => el.textContent)).toHaveLength(0);
+    expect(document.querySelector(".app-shell__body .cds--inline-notification")).toBeNull();
+  });
+
+  it("closes on a click outside and toggles with its action", async () => {
+    await renderApp();
+    open();
+    fireEvent.click(screen.getByRole("searchbox", { name: t.searchMail }));
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+    open();
+    fireEvent.click(action());
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(action());
+  });
+
+  it("moves between the items with the arrow keys", async () => {
+    await renderApp();
+    open();
+    key(item(t.profile), "ArrowDown");
+    expect(document.activeElement).toBe(item(t.shortcuts));
+    key(item(t.shortcuts), "ArrowDown");
+    expect(document.activeElement).toBe(item(t.switchTheme("dark")));
+    key(item(t.switchTheme("dark")), "ArrowDown");
+    expect(document.activeElement).toBe(item(t.logOut));
+    key(item(t.logOut), "ArrowUp");
+    expect(document.activeElement).toBe(item(t.switchTheme("dark")));
+  });
+
+  it("takes over from the SideNav and hands back to it, with the focus in the one that is open (below lg)", async () => {
+    screenWidth(false);
+    await renderApp();
+    menuButton().focus();
+    fireEvent.click(menuButton());
+    expect(document.activeElement).toBe(within(sideNav()).getByRole("link", { name: t.allMail }));
+    fireEvent.click(action());
+    expect(screen.getByRole("button", { name: t.showMenu }).getAttribute("aria-expanded")).toBe("false");
+    expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+    expect(panel()).not.toBeNull();
+    expect(document.activeElement).toBe(item(t.profile));
+    // As in WebKit, the click focuses nothing: no focus-out from the panel to another element closes it.
+    act(() => item(t.profile).blur());
+    expect(panel()).not.toBeNull();
+    fireEvent.click(menuButton());
+    expect(panel()).toBeNull();
+    expect(sideNav().className).toContain("cds--side-nav--expanded");
+    expect(document.activeElement).toBe(within(sideNav()).getByRole("link", { name: t.allMail }));
+  });
+});
+
+describe("the filter popover (#286)", () => {
   const panel = () => screen.queryByRole("group", { name: t.filters });
   const button = () => screen.getByRole("button", { name: t.filters });
-
-  it("starts open from 48rem (two panes), also below lg", async () => {
-    screenWidth(false, true);
-    await renderApp();
-    expect(panel()).not.toBeNull();
-    expect(button().getAttribute("aria-expanded")).toBe("true");
+  const open = async () => {
     fireEvent.click(button());
-    expect(panel()).toBeNull();
-  });
+    return screen.findByRole("group", { name: t.filters }, { timeout: 10000 });
+  };
+  const since = () => screen.getByLabelText(filterTextFor("en").since) as HTMLInputElement & { _flatpickr: { isOpen: boolean } };
 
-  it("starts open on a desktop (lg)", async () => {
-    screenWidth(true);
-    await renderApp();
-    expect(panel()).not.toBeNull();
-  });
-
-  it("starts closed on phones, and the button opens it", async () => {
-    screenWidth(false, false);
+  it.each([
+    ["a phone", false, false],
+    ["two panes below lg", false, true],
+    ["a desktop (lg)", true, true],
+  ])("starts closed on %s, and the button opens it", async (_, wide, twoPane) => {
+    screenWidth(wide, twoPane);
     await renderApp();
     expect(panel()).toBeNull();
     expect(button().getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(button());
+    await open();
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("closes on Escape from the filter button, and on an outside click", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => button().focus());
+    key(button(), "Escape");
+    expect(panel()).toBeNull();
+    expect(button().getAttribute("aria-expanded")).toBe("false");
+    // Escape on the closed popover's button is the app's again (no message open: nothing).
+    await open();
+    fireEvent.click(document.body);
+    expect(panel()).toBeNull();
+  });
+
+  it("ignores close requests while the calendar is open: a click into a date field can end on the calendar", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => since().focus());
+    expect(since()._flatpickr.isOpen).toBe(true);
+    // A real browser: mousedown on the field, mouseup on the calendar, which
+    // overlaps the field's lower edge; the click then targets body.
+    fireEvent.mouseDown(since());
+    fireEvent.click(document.body);
+    expect(since()._flatpickr.isOpen).toBe(true);
     expect(panel()).not.toBeNull();
+  });
+
+  it("closes on an outside click after the form was unmounted with its calendar open", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => since().focus());
+    expect(since()._flatpickr.isOpen).toBe(true);
+    // Closed with the calendar still open (Carbon keeps it open for a click that started in the field).
+    fireEvent.mouseDown(since());
+    fireEvent.click(button());
+    expect(panel()).toBeNull();
+    await open();
+    fireEvent.click(document.body);
+    expect(panel()).toBeNull();
+  });
+
+  it("keeps the focus in a date field on Escape: the first closes the calendar, the next the popover", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    act(() => since().focus());
+    key(since(), "Escape");
+    expect(since()._flatpickr.isOpen).toBe(false);
+    expect(document.activeElement).toBe(since());
+    expect(panel()).not.toBeNull();
+    key(since(), "Escape");
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(button());
+  });
+
+  it("closes the user panel when Edit filters opens the popover", async () => {
+    window.history.replaceState(null, "", "/?q=from%3Asam");
+    screenWidth(true);
+    await renderApp();
+    const userAction = screen.getByRole("button", { name: t.userPanelOf("alice") });
+    fireEvent.click(userAction);
+    expect(userAction.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: t.editFilters }));
+    expect(userAction.getAttribute("aria-expanded")).toBe("false");
+    const p = await screen.findByRole("group", { name: t.filters });
+    await waitFor(() => expect(document.activeElement).toBe(within(p).getByRole("textbox", { name: t.from })));
   });
 });
 
@@ -607,7 +919,7 @@ describe("quick filters on phones and the Edit filters button (#196)", () => {
     expect(tagList()).toBeNull();
   });
 
-  it("opens the closed panel with Edit filters and focuses the first tag's field; j types there and Escape leaves it", async () => {
+  it("opens the closed popover with Edit filters and focuses the first tag's field once the form loaded; j types there and Escape closes it", async () => {
     window.history.replaceState(null, "", "/?q=from%3Asam%20after%3A2026-01-01");
     screenWidth(false, false);
     await renderApp();
@@ -622,38 +934,47 @@ describe("quick filters on phones and the Edit filters button (#196)", () => {
     expect(panel()).toBeNull();
     fireEvent.click(editButton()!);
     expect(filtersButton().getAttribute("aria-expanded")).toBe("true");
-    const from = within(panel()!).getByRole("textbox", { name: t.from });
-    expect(document.activeElement).toBe(from);
+    const from = within(await screen.findByRole("group", { name: t.filters })).getByRole("textbox", { name: t.from });
+    await waitFor(() => expect(document.activeElement).toBe(from));
     // A field owns its keys: j does not open a message.
     key(from, "j");
     expect(params().get("m")).toBeNull();
+    // Escape in a field of the popover closes it; the focus goes to the filter button.
     key(from, "Escape");
-    expect(document.activeElement).not.toBe(from);
-    // A second press with the panel open focuses again.
+    expect(panel()).toBeNull();
+    expect(document.activeElement).toBe(filtersButton());
+    // Edit filters again opens and focuses again.
     fireEvent.click(editButton()!);
-    expect(document.activeElement).toBe(from);
-    // Closing and reopening the panel with its button takes no focus.
-    from.blur();
+    const again = within(await screen.findByRole("group", { name: t.filters })).getByRole("textbox", { name: t.from });
+    await waitFor(() => expect(document.activeElement).toBe(again));
+    // A second press with the popover open focuses again (focus elsewhere in it first: a blur to nowhere closes it).
+    const to = within(panel()!).getByRole("textbox", { name: t.toOrCc });
+    act(() => to.focus());
+    fireEvent.click(editButton()!);
+    expect(document.activeElement).toBe(again);
+    // Closing and reopening the popover with its button takes no focus.
     fireEvent.click(filtersButton());
     expect(panel()).toBeNull();
     fireEvent.click(filtersButton());
-    expect(panel()).not.toBeNull();
+    expect(await screen.findByRole("group", { name: t.filters })).toBeTruthy();
     expect(document.activeElement).toBe(document.body);
   });
 
-  it("only moves the focus when the panel is already open, to Before or the checkbox by the rule", async () => {
+  it("focuses Until or the checkbox by the rule, also when the popover is already open", async () => {
     window.history.replaceState(null, "", "/?q=before%3A2026-02-01");
     screenWidth(true);
     await renderApp();
-    expect(panel()).not.toBeNull();
+    fireEvent.click(filtersButton());
+    const p = await screen.findByRole("group", { name: t.filters });
     fireEvent.click(editButton()!);
-    expect(document.activeElement).toBe(within(panel()!).getByLabelText(t.before));
+    expect(document.activeElement).toBe(within(p).getByLabelText(filterTextFor("en").until));
     expect(filtersButton().getAttribute("aria-expanded")).toBe("true");
     cleanup();
     window.history.replaceState(null, "", "/?q=has%3Aattachment");
     await renderApp();
     fireEvent.click(editButton()!);
-    expect(document.activeElement).toBe(within(panel()!).getByRole("checkbox", { name: t.hasAttachment }));
+    const checkbox = within(await screen.findByRole("group", { name: t.filters })).getByRole("checkbox", { name: t.hasAttachment });
+    await waitFor(() => expect(document.activeElement).toBe(checkbox));
   });
 
   it("still removes exactly one filter with a tag's ×, and leaves the panel as it was", async () => {
@@ -723,7 +1044,7 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
 
   it("leaves the keys to the actions menu and to the danger Modal on Users", async () => {
     window.history.replaceState(null, "", "/?view=users");
-    render(<App user={user(true)} logout={() => {}} />);
+    render(<App user={user(true)} logout={() => {}} logoutError="" />);
     fireEvent.click(await screen.findByRole("button", { name: t.userActions("bob") }));
     const item = screen.getByRole("menuitem", { name: t.removeUser });
     key(item, "?");
@@ -743,7 +1064,7 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
 
   it("leaves the keys to the fields of Retention", async () => {
     window.history.replaceState(null, "", "/?view=retention");
-    render(<App user={user(true)} logout={() => {}} />);
+    render(<App user={user(true)} logout={() => {}} logoutError="" />);
     const years = await screen.findByLabelText(t.ruleYears);
     years.focus();
     key(years, "?");

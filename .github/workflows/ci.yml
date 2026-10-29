@@ -107,7 +107,7 @@ jobs:
   review-gate:
     # Deterministic checks on what a pull request changes, for the reviewer
     # (docs/development/review-gate.md): noctx on added Go lines, squawk on
-    # new migrations, migration-changed, oxlint on added web/src lines,
+    # new migrations, migration-changed, oxlint on all of web/src,
     # actionlint and zizmor on changed workflows (zizmor is pip-installed from
     # hash-pinned wheels into a venv with the runner's python3; no
     # setup-python, no new action). Not a required check; the reviewer
@@ -139,8 +139,11 @@ jobs:
       - run: make review-gate-test
       # oxlint's type-aware rules need the UI's dependencies. They are
       # installed (as in the web job, from the lockfile, install scripts
-      # blocked) only when the pull request changes web/src TypeScript; the
-      # corepack download comes from the npm cache above.
+      # blocked) only when the pull request changes what the gate runs oxlint
+      # for: web/src TypeScript, the web dependencies and tsconfigs, the
+      # oxlint config and lockfile (the same list as in
+      # scripts/review-gate.sh); the corepack download comes from the npm
+      # cache above.
       - name: Web dependencies
         if: github.event_name == 'pull_request'
         env:
@@ -150,12 +153,14 @@ jobs:
           IBM_TELEMETRY_DISABLED: "true"
         run: |
           mb=$(git merge-base "$BASE_SHA" HEAD)
-          if git diff --name-only --no-renames "$mb" HEAD -- 'web/src/*.ts' 'web/src/*.tsx' | grep -q .; then
+          if git diff --name-only --no-renames "$mb" HEAD -- 'web/src/*.ts' 'web/src/*.tsx' \
+            web/package.json web/pnpm-lock.yaml 'web/tsconfig*.json' \
+            tools/review-gate/oxlintrc.json tools/review-gate/package-lock.json | grep -q .; then
             # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
             npm install -g corepack@0.36.0 && corepack enable
             cd web && pnpm install --frozen-lockfile
           else
-            echo 'no web/src TypeScript changes: web dependencies not needed'
+            echo 'no web/src TypeScript, web dependency or oxlint config changes: web dependencies not needed'
           fi
       - name: Gate
         if: github.event_name == 'pull_request'

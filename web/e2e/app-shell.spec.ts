@@ -127,6 +127,12 @@ test.describe("desktop", () => {
       page.locator(".mail-row").first(),
     ];
     for (const el of chrome) expect(await userSelect(el)).toBe("none");
+    // The user panel's items (#284), inside the header.
+    await page.getByRole("banner").getByRole("button", { name: "User (demo)", exact: true }).click();
+    const item = page.getByRole("list", { name: "User (demo)" }).getByRole("button", { name: "Keyboard shortcuts" });
+    await expect(item).toBeVisible();
+    expect(await userSelect(item)).toBe("none");
+    await page.keyboard.press("Escape");
 
     await openMessage(page, /Photos from the weekend/);
     expect(await userSelect(page.locator(".reader-bar"))).toBe("none");
@@ -174,8 +180,8 @@ test.describe("desktop", () => {
     expect(await search.evaluate((e: HTMLInputElement) => [e.selectionStart, e.selectionEnd])).toEqual([0, "receipts".length]);
 
     // The data on a management page.
-    await page.goto("/?view=accounts");
-    const address = page.getByRole("main").getByText(/alex@example\.com · /).first();
+    await page.goto("/?view=accounts&id=personal");
+    const address = page.getByRole("main").getByText("alex@example.com", { exact: true });
     await expect(address).toBeVisible();
     expect(await userSelect(address)).not.toBe("none");
   });
@@ -233,6 +239,10 @@ for (const size of [
       const from = panel.getByRole("textbox", { name: "From" });
       await expect(from).toBeVisible();
       expect(await fontSize(from)).toBeGreaterThanOrEqual(16);
+      // The date range's fields too (Carbon sets .875rem on them).
+      const since = panel.getByRole("textbox", { name: "Since" });
+      await expect(since).toBeVisible();
+      expect(await fontSize(since)).toBeGreaterThanOrEqual(16);
     });
   });
 }

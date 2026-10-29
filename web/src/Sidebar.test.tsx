@@ -23,7 +23,7 @@ const data = (): AccountsResponse => ({
   manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 });
 
-const view = (account = "", folder = ""): ViewState => ({ q: "", account, folder, group: "", gone: "", m: "", view: "", add: "", edit: "", import: "" });
+const view = (account = "", folder = ""): ViewState => ({ q: "", account, folder, group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "" });
 
 function Harness({ state, d, select, show = () => {} }: { state: ViewState; d: AccountsResponse | null; select: (a: string, f: string) => void; show?: (v: string) => void }) {
   const collapsed = useCollapsed("alice", d);
@@ -470,7 +470,9 @@ describe("Folder column rail", () => {
     expect(target?.closest(".folder-pane__full")).not.toBeNull();
     unmount();
     render(<Panel />);
-    act(() => fireEvent.click(expandButton()));
+    act(() => {
+      fireEvent.click(expandButton());
+    });
     target = drawerFocusTarget(screen.getByTestId("aside"));
     expect(target).toBe(node(/^work$/));
   });

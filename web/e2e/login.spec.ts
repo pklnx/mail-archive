@@ -41,9 +41,12 @@ test("login with password and authentication code", async ({ page }) => {
   await page.getByRole("button", { name: "Log in" }).click();
 
   // kim has no accounts: the mail view opens empty, with kim logged in.
-  await expect(page.getByRole("button", { name: twoFactorUser.name })).toBeVisible();
+  const user = page.getByRole("button", { name: `User (${twoFactorUser.name})`, exact: true });
+  await expect(user).toBeVisible();
   await expect(page.getByRole("searchbox", { name: "Search mail" })).toBeVisible();
-  await page.getByRole("button", { name: "Log out" }).click();
+  // Log out is in the user panel (#284).
+  await user.click();
+  await page.getByRole("list", { name: `User (${twoFactorUser.name})` }).getByRole("button", { name: "Log out" }).click();
   await expect(page.getByLabel("User name")).toBeVisible();
 });
 
