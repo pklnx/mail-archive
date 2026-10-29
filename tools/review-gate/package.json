@@ -6,6 +6,6 @@
   "dependencies": {
     "oxlint": "1.88.0",
     "oxlint-tsgolint": "7.0.2004",
-    "squawk-cli": "2.68.0"
+    "squawk-cli": "2.70.0"
   }
 }

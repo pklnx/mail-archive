@@ -137,13 +137,15 @@ Makefile sets.
 
 Each tool is pinned to the newest release that was at least 14 days old when
 it was pinned. Bump them by hand, together with this table. Dependabot updates
-the npm tools through `tools/review-gate/package.json`.
+the npm tools through `tools/review-gate/package.json`. Its `cooldown` of 14
+days (`.github/dependabot.yml`) enforces the same rule, so it proposes only
+releases that are at least 14 days old; security updates are exempt.
 
 | Tool | Version | Released | Pinned in | Install | Licence |
 |---|---|---|---|---|---|
 | golangci-lint | v2.14.0 (the same as the `lint` job) | 2026-09-24 | `Makefile` (`GOLANGCI_LINT_VERSION`) | `go install` from the Go module proxy, built with the project's toolchain into `bin/golangci-lint-<version>/` and verified through the Go checksum database | GPL-3.0 (a development tool, not shipped) |
 | actionlint | v1.7.12 | 2026-03-30 | `Makefile` (`ACTIONLINT_VERSION`) | the same, into `bin/actionlint-<version>/` | MIT |
-| squawk-cli | 2.68.0 | 2026-10-08 | `tools/review-gate/package-lock.json` | `npm ci --ignore-scripts` into `tools/review-gate/node_modules/`; the platform binary is an optional dependency with an integrity hash, without a download at install time | Apache-2.0 OR MIT |
+| squawk-cli | 2.70.0 (2.69.0 is from 2026-10-14) | 2026-10-15 | `tools/review-gate/package-lock.json` | `npm ci --ignore-scripts` into `tools/review-gate/node_modules/`; the platform binary is an optional dependency with an integrity hash, without a download at install time | Apache-2.0 OR MIT |
 | oxlint | 1.88.0 (1.89.0 is from 2026-10-19, younger than 14 days on 2026-10-28) | 2026-10-13 | `tools/review-gate/package-lock.json` | the same `npm ci --ignore-scripts`; the platform binary is an optional dependency with an integrity hash, no install script | MIT |
 | oxlint-tsgolint | 7.0.2004 (7.0.2005 is from 2026-10-22; oxlint 1.88.0 needs `>=7.0.2003`) | 2026-10-10 | `tools/review-gate/package-lock.json` | the same; the engine for the type-aware rules, platform binary as an optional dependency, no install script | MIT |
 | zizmor | 1.30.1 (1.31.0 and 1.31.1 are from 2026-10-15, younger than 14 days on 2026-10-28) | 2026-09-09 | `tools/review-gate/requirements.txt` | PyPI wheels only, every wheel hash-pinned: `pip install --require-hashes --only-binary=:all: --no-deps` into the venv `bin/zizmor-venv/`, with the system `python3` (`make review-gate-tools`) | MIT |
