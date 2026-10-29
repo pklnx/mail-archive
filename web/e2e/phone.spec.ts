@@ -65,11 +65,15 @@ test("phone: the navigation and the folders, open a message, back to the list", 
   await expect(message.getByRole("heading", { level: 1 })).toHaveText("Documents for the tax return");
   // One column: the list is out of view while the message is open.
   await expect(list).toBeHidden();
+  // The row that had the focus is hidden: the subject takes it (#311).
+  await expect(message.getByRole("heading", { level: 1 })).toBeFocused();
 
   await page.getByRole("button", { name: "Back to the list" }).click();
   await expect(page.getByRole("article")).toHaveCount(0);
   await expect(list).toBeVisible();
   await expect(item).toBeVisible();
+  // The Back button is gone: the focus returns to the message's row (#311).
+  await expect(item).toBeFocused();
 });
 
 test("phone: the quick filters toggle with one tap, Edit filters opens the filter popover", async ({ page }) => {

@@ -14,15 +14,39 @@ interface Props {
   id: string;
   /** Opens another message, from the conversation. */
   open: (id: string) => void;
+  /**
+   * A focus request: while it is true, the next message to show (or its
+   * load error) takes the focus. The app sets it when the reader replaces
+   * the list on phones (#311).
+   */
+  focusRequest?: RefObject<boolean>;
 }
 
-export function MessageView({ id, open }: Props) {
+/**
+ * Whether the focus is lost: on body, or nowhere. A message that shows
+ * then takes it; focus the user put somewhere is never taken away (#311).
+ */
+export function focusLost() {
+  return !document.activeElement || document.activeElement === document.body;
+}
+
+/** Focuses el once it shows if a request is pending or the focus is lost, and clears the request. */
+function useTakeFocus(el: RefObject<HTMLElement | null>, request: RefObject<boolean>) {
+  useEffect(() => {
+    if (!request.current && !focusLost()) return;
+    request.current = false;
+    el.current?.focus();
+  }, [el, request]);
+}
+
+export function MessageView({ id, open, focusRequest }: Props) {
   const res = useAsync((signal) => getMessage(id, signal), [id]);
-  // Set when a message is picked in the conversation: its subject gets the
-  // focus once it shows, so the new message is announced.
-  const focusSubject = useRef(false);
+  // Also set when a message is picked in the conversation: its subject gets
+  // the focus once it shows, so the new message is announced.
+  const ownRequest = useRef(false);
+  const focusSubject = focusRequest ?? ownRequest;
   if (res.status === "loading") return <MessageSkeleton />;
-  if (res.status === "error") return <p className="message__note app-text-error">{t.loadMessageFailed(res.error.message)}</p>;
+  if (res.status === "error") return <LoadError key={id} message={res.error.message} focusRequest={focusSubject} />;
   // key: reset view options (HTML/text, images) for each message. The
   // loaded message's id: right after id changes, res still holds the last one.
   return (
@@ -35,6 +59,17 @@ export function MessageView({ id, open }: Props) {
         open(m);
       }}
     />
+  );
+}
+
+/** The message could not load: the note takes the focus as the subject would. */
+function LoadError({ message, focusRequest }: { message: string; focusRequest: RefObject<boolean> }) {
+  const note = useRef<HTMLParagraphElement>(null);
+  useTakeFocus(note, focusRequest);
+  return (
+    <p ref={note} tabIndex={-1} className="message__note app-text-error">
+      {t.loadMessageFailed(message)}
+    </p>
   );
 }
 
@@ -72,11 +107,10 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
     conversationToggle.current?.focus();
   }, [conversationOpen]);
   const subject = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
-    if (!focusSubject.current) return;
-    focusSubject.current = false;
-    subject.current?.focus();
-  }, [focusSubject]);
+  useTakeFocus(subject, focusSubject);
+  // "Load remote images" removes itself: the focus goes to Download, the
+  // action before it in the same row.
+  const download = useRef<HTMLAnchorElement>(null);
   const attachments = msg.parts.filter((p) => p.attachment);
   // Journal mail has its envelope, filled and imported mail its origin.
   const delivery = msg.locations.filter((l) => l.envelope || l.filled);
@@ -167,7 +201,14 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
   // A text button on phones too: its privacy hint is its tooltip, which a tap may not show.
   const remoteImages = html && !images && (
     <Tooltip description={t.remoteImagesHint} align="bottom">
-      <Button kind="tertiary" size="sm" onClick={() => setImages(true)}>
+      <Button
+        kind="tertiary"
+        size="sm"
+        onClick={() => {
+          download.current?.focus();
+          setImages(true);
+        }}
+      >
         {t.loadRemoteImages}
       </Button>
     </Tooltip>
@@ -220,6 +261,7 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
           )}
           {/* Button, not IconButton: its types have no download. */}
           <Button
+            ref={download}
             as="a"
             kind="ghost"
             size={wide ? "sm" : "md"}

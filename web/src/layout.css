@@ -981,10 +981,16 @@ select,
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
-.message__subject:focus {
+/* The subject, the load error and the list's heading on phones take the
+   focus when a message opens or closes (#311): Carbon's ring, from the keyboard only. */
+.message__subject:focus,
+.message__note:focus,
+.mail-place__title:focus {
   outline: none;
 }
-.message__subject:focus-visible {
+.message__subject:focus-visible,
+.message__note:focus-visible,
+.mail-place__title:focus-visible {
   outline: 2px solid var(--cds-focus);
 }
 /* Phones: two lines until Details opens; screen readers hear it in full. */

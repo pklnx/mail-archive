@@ -451,3 +451,53 @@ describe("no frame gate (#203)", () => {
     expect(within(article).queryByText("Show full message")).toBeNull();
   });
 });
+
+describe("the focus when a message shows (#311)", () => {
+  it("moves the focus to Download when Load remote images removes itself", async () => {
+    const article = await show();
+    const button = within(article).getByRole("button", { name: t.loadRemoteImages });
+    button.focus();
+    fireEvent.click(button);
+    expect(within(article).queryByRole("button", { name: t.loadRemoteImages })).toBeNull();
+    const download = within(article).getByRole("link", { name: t.downloadEml });
+    expect(document.activeElement).toBe(download);
+  });
+
+  it("focuses the subject on a pending request, and when the focus is lost; otherwise leaves it where it is", async () => {
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    const request = { current: true };
+    const { unmount } = render(<MessageView id={id} open={() => {}} focusRequest={request} />);
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(document.activeElement).toBe(h1);
+    expect(request.current).toBe(false);
+    unmount();
+    // No request, the focus somewhere real: it stays.
+    elsewhere.focus();
+    const second = render(<MessageView id={id} open={() => {}} focusRequest={request} />);
+    await screen.findByRole("heading", { level: 1 });
+    expect(document.activeElement).toBe(elsewhere);
+    second.unmount();
+    // No request, the focus lost: the subject takes it.
+    elsewhere.remove();
+    expect(document.activeElement).toBe(document.body);
+    render(<MessageView id={id} open={() => {}} focusRequest={request} />);
+    const h1b = await screen.findByRole("heading", { level: 1 });
+    expect(document.activeElement).toBe(h1b);
+  });
+
+  it("focuses the load error on a pending request", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "Content-Type": "application/json" } })));
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    const request = { current: true };
+    render(<MessageView id={id} open={() => {}} focusRequest={request} />);
+    const note = await screen.findByText((_, el) => el?.tagName === "P" && el.classList.contains("message__note"));
+    expect(note.tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(note);
+    expect(request.current).toBe(false);
+    elsewhere.remove();
+  });
+});

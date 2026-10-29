@@ -46,9 +46,12 @@ test("search, open a message, switch text and HTML, go back with u", async ({ pa
   await message.getByRole("button", { name: "Show HTML" }).click();
   await expect(message.getByTitle("Message content").contentFrame().getByRole("heading", { name: "Hi Alex," })).toBeVisible();
 
+  // The focus is in the reading pane, which u removes: it returns to the row (#311).
+  await expect(message.getByRole("button", { name: "Show text" })).toBeFocused();
   await page.keyboard.press("u");
   await expect(page.getByRole("article")).toHaveCount(0);
   await expect(page).not.toHaveURL(/[?&]m=/);
+  await expect(hit).toBeFocused();
   // The search stays.
   await expect(page.getByRole("searchbox", { name: "Search mail" })).toHaveValue("weekend");
   await expect(hit).toBeVisible();
