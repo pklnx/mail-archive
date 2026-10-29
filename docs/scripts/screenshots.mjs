@@ -336,9 +336,10 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("region", { name: "API keys" }).waitFor();
   await shot(p, "user-detail");
 
+  // The rules: the table with Add rule above it.
   await p.goto(base + "/?view=retention");
   await main.getByRole("tab", { name: "Rules", selected: true }).waitFor();
-  await main.getByText("§147 AO: business letters and invoices").waitFor();
+  await main.getByRole("cell", { name: "§147 AO: business letters and invoices" }).waitFor();
   await shot(p, "retention");
 
   await p.goto(base + "/?view=profile");
@@ -388,6 +389,31 @@ for (const scheme of ["light", "dark"]) {
   await p.getByRole("list", { name: "Active filters" }).getByRole("button", { name: "Edit filters" }).waitFor();
   await p.getByRole("list", { name: "Messages" }).getByRole("button", { name: /Photos from the weekend/ }).waitFor();
   await shot(p, "mail-phone-filters");
+  await p.context().close();
+}
+
+{
+  // A deletion run's page, with the typed-count confirmation of Delete
+  // open; nothing is confirmed. Last, so its rule and run are on no other
+  // shot (the log, the message view). A ten-year rule for personal /
+  // Archive/2014, whose mail is twelve years old, gives the run its
+  // candidates.
+  const p = await page("light", { width: 1280, height: 900 });
+  const api = async (method, path, data) => {
+    const res = await p.request.fetch(base + path, { method, data, headers: { Origin: base, "Content-Type": "application/json" } });
+    if (!res.ok()) throw new Error(`${method} ${path}: ${res.status()}`);
+    return res.json();
+  };
+  const { accounts } = await api("GET", "/api/retention/rules");
+  const personal = accounts.find((a) => a.name === "personal");
+  await api("POST", "/api/retention/rules", { accountId: personal.id, folder: "Archive/2014", years: 10, timeZone: "Europe/Berlin", note: "", force: false });
+  const run = await api("POST", "/api/retention/runs");
+  await p.goto(base + `/?view=retention&tab=runs&id=${run.id}`);
+  const main = p.getByRole("main");
+  await main.getByRole("region", { name: "Groups" }).getByRole("cell").first().waitFor();
+  await main.getByRole("button", { name: `Delete ${run.candidates} messages` }).click();
+  await p.getByRole("dialog").getByLabel(/^To delete, type the number of messages/).waitFor();
+  await shot(p, "retention-run", { keepFocus: true });
   await p.context().close();
 }
 
