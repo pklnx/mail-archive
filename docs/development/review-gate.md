@@ -137,7 +137,9 @@ Makefile sets.
 
 Each tool is pinned to the newest release that was at least 14 days old when
 it was pinned. Bump them by hand, together with this table. Dependabot updates
-the npm tools through `tools/review-gate/package.json`.
+the npm tools through `tools/review-gate/package.json`. Its `cooldown` of 14
+days (`.github/dependabot.yml`) enforces the same rule, so it proposes only
+releases that are at least 14 days old; security updates are exempt.
 
 | Tool | Version | Released | Pinned in | Install | Licence |
 |---|---|---|---|---|---|

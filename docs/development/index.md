@@ -303,7 +303,9 @@ A rerun caused by a flaky test is logged in [Flaky tests](./flaky-tests).
   An advisory that cannot be fixed now gets a follow-up issue as well.
 - Dependabot opens weekly update pull requests for Go modules, npm packages
   (UI and docs), GitHub Actions and Docker images. PostgreSQL major versions
-  are excluded because they need a data migration.
+  are excluded because they need a data migration. Dependabot waits 14 days
+  after a release before it opens a version update (`cooldown` in
+  `.github/dependabot.yml`); security updates are exempt.
 - Dependabot does not update URL dependencies such as
   `@pklnx/design-system` (the theme, see [Web UI](#web-ui); used by both
   `web/` and `docs/`): bump them by hand in a pull request. Download the new
