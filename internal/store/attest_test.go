@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 
 // fenceClass is the attestation fence's lock class (attestFenceClass).
 const fenceClass = 0x6d64
+
+// waitingForFence counts the ungranted fence locks of the test's database:
+// a statement that waits for the fence. Its argument is fenceClass.
+const waitingForFence = `SELECT count(*) FROM pg_locks
+	WHERE locktype = 'advisory' AND classid = $1 AND NOT granted
+	  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`
 
 func shaOf(i int) string { return fmt.Sprintf("%064x", i) }
 
@@ -98,6 +105,9 @@ func TestAttestFence(t *testing.T) {
 	ctx := context.Background()
 	st, url := storetest.NewWithURL(t)
 	writer := connect(t, url)
+	observer := connect(t, url)
+	limit, cancel := context.WithTimeout(ctx, testwait.Limit(t))
+	defer cancel()
 
 	tx, err := writer.Begin(ctx)
 	if err != nil {
@@ -114,32 +124,46 @@ func TestAttestFence(t *testing.T) {
 	}
 	defer unlock()
 	got := make(chan store.AttestBounds, 1)
+	// taken ends the wait for the fence wait at once if the snapshot is
+	// taken, or WithAttestSnapshot ends, without waiting.
+	taken := make(chan error, 1)
 	release := make(chan struct{})
+	// Also on failure: the snapshot's connection goes back before the
+	// store closes.
+	stop := sync.OnceFunc(func() { close(release) })
+	defer stop()
 	done := make(chan error, 1)
 	go func() {
-		done <- st.WithAttestSnapshot(ctx, func(snap *store.AttestSnapshot) error {
+		err := st.WithAttestSnapshot(ctx, func(snap *store.AttestSnapshot) error {
 			got <- snap.Bounds
+			taken <- fmt.Errorf("snapshot taken: %+v", snap.Bounds)
 			<-release
 			return nil
 		})
+		select {
+		case taken <- fmt.Errorf("snapshot ended: %w", err):
+		default:
+		}
+		done <- err
 	}()
+	waitForRow(t, observer, taken, "the snapshot to wait for the fence", waitingForFence, fenceClass)
 	select {
 	case b := <-got:
 		t.Fatalf("snapshot taken while a writer was in progress: %+v", b)
-	case <-time.After(300 * time.Millisecond):
+	default:
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	b := <-got
+	b := receive(t, limit, got, "snapshot after the writer committed")
 	if b.MessagesUpto != seq || b.Total != 1 {
 		t.Errorf("bounds %+v, want upto %d and total 1", b, seq)
 	}
 
 	// The fence is released while the attestation still runs.
 	later := make(chan int64, 1)
+	c := connect(t, url)
 	go func() {
-		c := connect(t, url)
 		tx, err := c.Begin(ctx)
 		if err != nil {
 			t.Error(err)
@@ -163,11 +187,11 @@ func TestAttestFence(t *testing.T) {
 		if s <= b.MessagesUpto {
 			t.Errorf("later writer got seq %d, not above %d", s, b.MessagesUpto)
 		}
-	case <-time.After(5 * time.Second):
+	case <-limit.Done():
 		t.Fatal("a writer waited for the whole attestation")
 	}
-	close(release)
-	if err := <-done; err != nil {
+	stop()
+	if err := receive(t, limit, done, "end of the attestation"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -187,6 +211,8 @@ func TestWritesTakeFence(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	limit, cancel := context.WithTimeout(ctx, testwait.Limit(t))
+	defer cancel()
 	writes := map[string]func() error{
 		"SaveBatch": func() error {
 			_, err := st.SaveBatch(ctx, f.ID, 1, []store.MessageMeta{receivedMeta(1)}, []store.Location{{FolderID: f.ID, UID: 1}})
@@ -204,15 +230,11 @@ func TestWritesTakeFence(t *testing.T) {
 		}
 		done := make(chan error, 1)
 		go func() { done <- write() }()
-		select {
-		case err := <-done:
-			t.Errorf("%s did not wait for the fence: %v", name, err)
-		case <-time.After(300 * time.Millisecond):
-		}
+		waitForRow(t, fence, done, name+" to wait for the fence", waitingForFence, fenceClass)
 		if _, err := fence.Exec(ctx, "SELECT pg_advisory_unlock($1, 0)", fenceClass); err != nil {
 			t.Fatal(err)
 		}
-		if err := <-done; err != nil {
+		if err := receive(t, limit, done, name+" after the fence was released"); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -234,9 +256,7 @@ func TestAttestSnapshotLockTimeoutReleases(t *testing.T) {
 	watch := connect(t, url)
 	done := make(chan error, 1)
 	go func() { done <- st.WithAttestSnapshot(ctx, func(*store.AttestSnapshot) error { return nil }) }()
-	waitForRow(t, watch, done, "the snapshot to wait for the fence", `SELECT count(*) FROM pg_locks
-		WHERE locktype = 'advisory' AND classid = $1 AND NOT granted
-		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, fenceClass)
+	waitForRow(t, watch, done, "the snapshot to wait for the fence", waitingForFence, fenceClass)
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("snapshot taken while a writer held the fence")

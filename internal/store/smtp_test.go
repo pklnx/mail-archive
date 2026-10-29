@@ -15,6 +15,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 func createSMTPAccount(t *testing.T, st *store.Store, owner *int64, name string, addrs ...string) *store.Account {
@@ -413,8 +414,11 @@ func TestSearchEnvelopeRecipients(t *testing.T) {
 }
 
 func TestReceiveMessageBlobLock(t *testing.T) {
-	st := storetest.New(t)
+	st, url := storetest.NewWithURL(t)
+	observer := connect(t, url)
 	ctx := context.Background()
+	limit, cancel := context.WithTimeout(ctx, testwait.Limit(t))
+	defer cancel()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
 
 	// verify holds the blob lock exclusive: the delivery waits for it.
@@ -430,19 +434,12 @@ func TestReceiveMessageBlobLock(t *testing.T) {
 		_, err := st.ReceiveMessage(ctx, a.ID, receivedMeta(1), envelope("x@example.com"), present)
 		done <- err
 	}()
-	select {
-	case err := <-done:
-		t.Fatalf("delivered while verify held the lock: %v", err)
-	case <-time.After(300 * time.Millisecond):
-	}
+	waitForRow(t, observer, done, "the delivery to wait for the blob lock", `SELECT count(*) FROM pg_locks
+		WHERE locktype = 'advisory' AND classid = $1 AND objid = 0 AND NOT granted
+		  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, blobClass)
 	once.Do(unlock)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("delivery still waits after the lock was released")
+	if err := receive(t, limit, done, "delivery after the lock was released"); err != nil {
+		t.Fatal(err)
 	}
 	// After the commit, verify gets the lock again.
 	unlock, ok, err = st.TryLockBlobs(ctx)
