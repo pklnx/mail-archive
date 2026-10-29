@@ -400,7 +400,7 @@ for (const scheme of ["light", "dark"]) {
   // candidates.
   const p = await page("light", { width: 1280, height: 900 });
   const api = async (method, path, data) => {
-    const res = await p.request.fetch(base + path, { method, data, headers: { Origin: base } });
+    const res = await p.request.fetch(base + path, { method, data, headers: { Origin: base, "Content-Type": "application/json" } });
     if (!res.ok()) throw new Error(`${method} ${path}: ${res.status()}`);
     return res.json();
   };
