@@ -1170,6 +1170,26 @@ describe("the focus when a message opens and closes (#311)", () => {
       expect(placeTitle()!.tabIndex).toBe(-1);
     });
 
+    it("focuses the row on the browser's Back also when the focus is somewhere real: the list was hidden", async () => {
+      await renderApp();
+      const r = await openRow("m1");
+      await subject("m1");
+      act(() => menuButton().focus());
+      act(() => window.history.back());
+      await waitFor(() => expect(params().get("m")).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(r));
+    });
+
+    it("returns the focus to the row in the mail view a non-admin gets for view=users", async () => {
+      window.history.replaceState(null, "", "/?view=users&m=m1");
+      await renderApp();
+      await screen.findByRole("button", { name: /First/ });
+      await subject("m1");
+      fireEvent.click(screen.getByRole("button", { name: t.backToList }));
+      expect(params().get("m")).toBeNull();
+      expect(document.activeElement).toBe(row("m1"));
+    });
+
     it("leaves the focus alone when an action closes the message and opens another page (plan review on #311)", async () => {
       window.history.replaceState(null, "", "/?m=m1");
       await renderApp();

@@ -318,7 +318,7 @@ export function App({ user, logout, logoutError }: Props) {
     readerFocus.current = false;
     // Only in the mail view: an action that closes the message and opens
     // another page leaves the focus to that page (plan review on #311).
-    if (!closed || state.view !== "" || (!phone && !focusLost())) return;
+    if (!closed || !mailView || (!phone && !focusLost())) return;
     const rows = Array.from(listPane.current?.querySelectorAll<HTMLElement>("button[data-id]") ?? []);
     const row = rows.find((r) => r.dataset.id === closed);
     if (row) row.focus();
