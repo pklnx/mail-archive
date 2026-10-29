@@ -1,5 +1,6 @@
 import { devices, type Page } from "@playwright/test";
 import { animationsDone, expect, test } from "./fixtures";
+import { conversationToggle, frameOf, mailReady, openLong } from "./mailFrame";
 
 // The message view scrolls as one unit (#200): the reading pane from 48rem,
 // the page on phones. The HTML frame is as tall as the mail (#203): it is
@@ -18,32 +19,6 @@ const sizes = [
 ];
 
 const sandbox = "allow-same-origin allow-popups allow-popups-to-escape-sandbox";
-const frameOf = (page: Page) => page.getByRole("article").getByTitle("Message content");
-
-// Everything about the mail's document is read from the parent page through
-// iframe.contentDocument (the frame is same-origin), and clicks into it are
-// mouse clicks at coordinates: no Playwright locator or evaluate runs inside
-// the frame. Such a call initializes the frame's main world, which can run
-// the guards' init script there; if the frame is still its initial
-// about:blank, that is a different document than the mail.
-
-/** Whether the frame shows a loaded mail (not its initial about:blank), and its text matches if asked. */
-function mailLoaded(page: Page, text?: RegExp): Promise<boolean> {
-  return frameOf(page).evaluate(
-    (f: HTMLIFrameElement, src) => {
-      const doc = f.contentDocument;
-      if (!doc || !/\/api\/messages\/[0-9a-f]{64}\/html$/.test(new URL(doc.URL).pathname) || doc.readyState !== "complete") return false;
-      return src === null || new RegExp(src).test(doc.body.textContent ?? "");
-    },
-    text ? text.source : null,
-  );
-}
-
-/** Waits until the frame shows a loaded mail (and the text, if asked). */
-async function mailReady(page: Page, text?: RegExp) {
-  await expect.poll(() => mailLoaded(page, text)).toBe(true);
-}
-
 /** The center of the mail's link with this text (also in an open shadow root), in page coordinates (the frame's box plus the link's box in it). */
 function linkCenter(page: Page, name: string): Promise<{ x: number; y: number }> {
   return frameOf(page).evaluate((f: HTMLIFrameElement, name) => {
@@ -54,32 +29,6 @@ function linkCenter(page: Page, name: string): Promise<{ x: number; y: number }>
     const box = f.getBoundingClientRect();
     return { x: box.left + f.clientLeft + r.left + r.width / 2, y: box.top + f.clientTop + r.top + r.height / 2 };
   }, name);
-}
-
-/** The conversation's toggle in the action row (#203). */
-const conversationToggle = (page: Page) => page.getByRole("article").getByRole("button", { name: /^Conversation \(\d+\)$/ });
-
-/** Waits until the open message is laid out: heading, the conversation's toggle (it loads on its own) and the frame's content. */
-async function ready(page: Page, subject: RegExp) {
-  const article = page.getByRole("article");
-  await expect(article.getByRole("heading", { level: 1 })).toHaveText(subject);
-  await expect(conversationToggle(page)).toBeVisible();
-  await mailReady(page);
-}
-
-/**
- * Opens the long HTML mail. Found by its word "itinerary", then opened in
- * the full list (?m=), so j has a next message.
- */
-async function openLong(page: Page) {
-  await page.goto("/?q=itinerary");
-  const list = page.getByRole("list", { name: "Messages" });
-  await expect(list.getByRole("button")).toHaveCount(1);
-  await list.getByRole("button").click();
-  await expect(page).toHaveURL(/[?&]m=[0-9a-f]{64}/);
-  const m = new URL(page.url()).searchParams.get("m")!;
-  await page.goto(`/?m=${m}`);
-  await ready(page, /^Re: Offsite planning/);
 }
 
 /**

@@ -15,6 +15,7 @@ import { lg, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
+import { useFrameFocusClose } from "./useFrameFocusClose";
 import { useCollapsed } from "./sidebarState";
 import { railWidth, useSidebarLayout } from "./sidebarLayout";
 import { useViewState } from "./urlState";
@@ -108,6 +109,9 @@ export function App({ user, logout, logoutError }: Props) {
     setUserOpen(false);
     if (returnFocus) userAction.current?.focus();
   };
+  // A click into the mail frame reaches neither popover's own close (#349).
+  useFrameFocusClose(userOpen, () => closeUser(false));
+  useFrameFocusClose(filtersOpen, () => setFiltersOpen(false));
 
   // Follow the URL when it changes from outside (back button).
   useEffect(() => setQuery(state.q), [state.q]);
