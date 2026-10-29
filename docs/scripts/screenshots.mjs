@@ -5,9 +5,11 @@
 import { createHmac } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright-core";
+import { bucket, describeUnpinned, minute, pinTimes } from "./pin-times.mjs";
 
 const base = process.env.DEMO_URL ?? "http://localhost:18080";
-const out = new URL("../public/screenshots/", import.meta.url).pathname;
+// DOCS_SCREENSHOTS_DIR sets the output folder; by default it is the docs' own.
+const out = process.env.DOCS_SCREENSHOTS_DIR || new URL("../public/screenshots/", import.meta.url).pathname;
 await mkdir(out, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -17,29 +19,19 @@ const phoneSize = { width: 390, height: 780 };
 
 // The fixed clock (scripts/docs-screenshots.sh): the demo dated its mail from
 // DOCS_NOW, and the browser's clock stands 10 minutes after it.
-const minute = 60000;
-const bucket = 10 * minute;
 const docsNow = Date.parse(process.env.DOCS_NOW ?? "");
 if (Number.isNaN(docsNow)) throw new Error("set DOCS_NOW (run through make docs-screenshots)");
 const browserNow = docsNow + bucket;
 // The moment the demo was ready, in Unix seconds; without it, now.
 const ready = process.env.DOCS_READY ? Number(process.env.DOCS_READY) * 1000 : Date.now();
 
-// The times the server records during this run (syncs and the next one,
-// logins, received times, the log) follow the real clock. In API answers,
-// each RFC 3339 time from an hour before the demo was ready to two days
-// after moves to DOCS_NOW plus its distance from that moment, rounded to
-// 10 minutes. That keeps their order and hides how long the run took. The
-// mail's own dates (at or before DOCS_NOW) and dates years ahead, such as
-// retention dates, are outside that window and stay as they are.
-const timestamp = /"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))"/g;
-function pinTimes(json) {
-  return json.replace(timestamp, (whole, value) => {
-    const t = Date.parse(value);
-    if (Number.isNaN(t) || t < ready - 60 * minute || t > ready + 2 * 24 * 60 * minute) return whole;
-    return JSON.stringify(new Date(docsNow + Math.round((t - ready) / bucket) * bucket).toISOString());
-  });
-}
+// The times the server records during this run follow the real clock; the
+// answers' times are moved next to DOCS_NOW (pin-times.mjs). A time after
+// DOCS_NOW that stays unmoved fails the run at the end.
+const unpinned = [];
+// The run must end well inside half a 10-minute bucket after the demo was
+// ready, or the rounded times would move into the next bucket.
+const runLimit = 4 * minute;
 
 // One set of context options for every context, the login's included: a
 // fixed user agent, so the log's Client column does not follow the
@@ -102,7 +94,9 @@ async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = 
   await ctx.route(base + "/api/**", async (route) => {
     const response = await route.fetch();
     if (!(response.headers()["content-type"] ?? "").includes("application/json")) return route.fulfill({ response });
-    return route.fulfill({ response, body: pinTimes(await response.text()) });
+    const result = pinTimes(await response.text(), { path: new URL(route.request().url()).pathname, docsNow, ready });
+    unpinned.push(...result.unpinned);
+    return route.fulfill({ response, body: result.body });
   });
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(String(e)));
@@ -418,6 +412,16 @@ for (const scheme of ["light", "dark"]) {
 }
 
 await browser.close();
+if (unpinned.length) {
+  errors.push(
+    `times after DOCS_NOW outside the pinned window (real-clock times that change from run to run; ` +
+      `pin them in the window, derive them from DOCS_NOW in the demo, or list a stable field in STABLE_TIMES in pin-times.mjs):\n` +
+      describeUnpinned([...new Map(unpinned.map((u) => [`${u.path} ${u.key}=${u.value}`, u])).values()]),
+  );
+}
+if (Date.now() > ready + runLimit) {
+  errors.push(`the run ended ${Math.round((Date.now() - ready) / minute)} minutes after the demo was ready; the limit is ${runLimit / minute}`);
+}
 if (errors.length) {
   console.error(errors.join("\n"));
   process.exit(1);
