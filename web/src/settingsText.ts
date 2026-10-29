@@ -57,7 +57,7 @@ const de: typeof en = {
   rulesHelp:
     "Eine Regel bewahrt Mails eine Anzahl Jahre auf, gezählt ab dem Ende des Jahres, in dem sie empfangen oder gesendet wurden. Eine Regel allein löscht nichts; das tut ein Löschlauf. Ohne Regel bleiben Mails für immer. Die Frist ist eine Rechtsfrage (GoBD).",
   holdsHelp: "Ein Legal Hold verhindert das Löschen der Mails, die er umfasst, egal was die Regeln sagen. Holds werden mit einer Notiz aufgehoben, nie gelöscht.",
-  runsHelp: "Ein Lauf listet, was jetzt gelöscht werden darf; gelöscht wird erst nach Ihrer Bestätigung. Betreff und Absender zeigt nur die Kommandozeile (retention show ID). Die Dateien werden nach der Nachfrist entfernt.",
+  runsHelp: "Ein Lauf listet, was jetzt gelöscht werden darf; gelöscht wird erst nach Ihrer Bestätigung. Betreff und Absender zeigt nur die Kommandozeile (retention show ID). Die Dateien werden nach der Karenzzeit entfernt.",
   colRule: "Regel",
   colPeriod: "Frist",
   colHold: "Hold",
