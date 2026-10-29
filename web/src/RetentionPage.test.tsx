@@ -454,6 +454,18 @@ describe("RetentionPage", () => {
       expect(within(row("Old case")).queryByRole("button")).toBeNull();
     });
 
+    it("keeps the focus on the toggle when the released holds go", async () => {
+      await show("&tab=holds", "Case 4711");
+      const toggle = screen.getByRole("switch", { name: t.holdShowReleased });
+      fireEvent.click(toggle);
+      await screen.findByText("Old case");
+      toggle.focus();
+      fireEvent.click(toggle);
+      // The rows go without the focus: it stays where it is.
+      await waitFor(() => expect(screen.queryByText("Old case")).toBeNull());
+      expect(document.activeElement).toBe(toggle);
+    });
+
     it("releases a hold from its row only with a note, after confirming, and puts the focus on the Holds tab", async () => {
       await show("&tab=holds", "Case 4711");
       pick("Case 4711", t.holdRelease);

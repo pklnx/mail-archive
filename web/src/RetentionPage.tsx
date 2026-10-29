@@ -228,7 +228,8 @@ export function RetentionPage() {
   useLayoutEffect(() => {
     if (!lostRow.current) return;
     lostRow.current = false;
-    if (shown === "list") tabsBox.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+    // Only the list has the tabs.
+    tabsBox.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
   });
 
   // Opening a page is a history entry; finishing one replaces it, so Back
