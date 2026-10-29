@@ -1,3 +1,6 @@
+# cooldown: Dependabot waits 14 days after a release before it proposes the
+# version update (same as the pin rule in docs/development/review-gate.md).
+# It applies to version updates only; security updates are exempt.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -5,6 +8,8 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
     groups:
       go-dependencies:
         patterns: ["*"]
@@ -13,6 +18,8 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
     groups:
       web-dependencies:
         patterns: ["*"]
@@ -21,6 +28,8 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
     groups:
       docs-dependencies:
         patterns: ["*"]
@@ -29,26 +38,36 @@ updates:
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
   - package-ecosystem: pip # zizmor of the review gate (requirements.txt)
     directory: /tools/review-gate
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
     labels: [dependencies]
+    cooldown:
+      default-days: 14
     ignore:
       # A PostgreSQL major upgrade needs pg_upgrade or dump/restore of the
       # data volume, so it is done deliberately, not through Dependabot.
