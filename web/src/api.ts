@@ -419,7 +419,10 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T 
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) throw await errorFor(path, res);
-  return res.status === 204 ? null : ((await res.json()) as T);
+  // A 204, or a 2xx such as the retention confirm's 202, may carry no body:
+  // that is null. A non-empty body that is not JSON still throws.
+  const text = await res.text();
+  return text === "" ? null : (JSON.parse(text) as T);
 }
 
 const accountPath = (name: string) => `/api/accounts/${encodeURIComponent(name)}`;
