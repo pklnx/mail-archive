@@ -2244,7 +2244,7 @@ select,
 
 /* Motion (#287). Carbon's precompiled CSS has no motion custom properties
    ($duration-*, motion() are Sass only), so these carry Carbon's names and
-   the values of @carbon/motion's tokens/motion.tokens.json; layout.test.ts
+   the values of @carbon/motion's tokens/motion.tokens.json; motion.test.ts
    pins them to that file. */
 :root {
   --app-duration-fast-02: 110ms;
@@ -2279,7 +2279,7 @@ select,
   }
 }
 /* The app's own motion exists only here, so "reduce motion" leaves none
-   (layout.test.ts checks it). The folder overlay and the conversation move
+   (motion.test.ts checks it). The folder overlay and the conversation move
    when they open and close at once (maintainer decision on #287). */
 @media (prefers-reduced-motion: no-preference) {
   .mail-thread__toggle svg {
