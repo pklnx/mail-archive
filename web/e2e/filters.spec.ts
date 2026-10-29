@@ -6,6 +6,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { isChunkOf } from "../scripts/lazyChunks.mjs";
 import { expect, test } from "./fixtures";
+import { clickIntoFrame, openLong } from "./mailFrame";
 
 const fileOf = (path: string) => path.split("/").pop() ?? "";
 
@@ -159,3 +160,19 @@ for (const size of [
     });
   });
 }
+
+test.describe("desktop, with a mail open", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test("a click into the mail frame closes the popover, also with the calendar open (#349)", async ({ page }) => {
+    await openLong(page);
+    const { button, form, since, calendar } = parts(page);
+    await button.click();
+    await since.click();
+    await expect(calendar).toBeVisible();
+    await clickIntoFrame(page);
+    await expect(form).toHaveCount(0);
+    await expect(calendar).toHaveCount(0);
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+});

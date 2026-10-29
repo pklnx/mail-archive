@@ -108,6 +108,15 @@ beforeEach(async () => {
   shortcutsLoaded = true;
 });
 
+/** The focus moves into a same-origin frame: the window blurs while the iframe is the active element (#349). */
+function intoFrame() {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  act(() => frame.focus());
+  expect(document.activeElement).toBe(frame);
+  act(() => void window.dispatchEvent(new Event("blur")));
+  frame.remove();
+}
+
 async function renderApp(admin = false, logout = () => {}, logoutError = "") {
   render(<App user={user(admin)} logout={logout} logoutError={logoutError} />);
   // The accounts are loaded: the tree has them.
@@ -738,6 +747,17 @@ describe("user panel (#284)", () => {
     expect(sideNav().className).toContain("cds--side-nav--expanded");
     expect(document.activeElement).toBe(within(sideNav()).getByRole("link", { name: t.allMail }));
   });
+
+  it("closes when the focus moves into the mail frame, not when the window blurs with the focus on a panel item (#349)", async () => {
+    await renderApp();
+    open();
+    act(() => item(t.profile).focus());
+    act(() => void window.dispatchEvent(new Event("blur")));
+    expect(panel()).not.toBeNull();
+    intoFrame();
+    expect(panel()).toBeNull();
+    expect(action().getAttribute("aria-expanded")).toBe("false");
+  });
 });
 
 describe("the filter popover (#286)", () => {
@@ -830,6 +850,15 @@ describe("the filter popover (#286)", () => {
     expect(userAction.getAttribute("aria-expanded")).toBe("false");
     const p = await screen.findByRole("group", { name: t.filters });
     await waitFor(() => expect(document.activeElement).toBe(within(p).getByRole("textbox", { name: t.from })));
+  });
+
+  it("closes when the focus moves into the mail frame (#349)", async () => {
+    screenWidth(true);
+    await renderApp();
+    await open();
+    intoFrame();
+    expect(panel()).toBeNull();
+    expect(button().getAttribute("aria-expanded")).toBe("false");
   });
 });
 

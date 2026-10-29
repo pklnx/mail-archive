@@ -8,6 +8,7 @@ import { devices, type Page } from "@playwright/test";
 import { isChunkOf } from "../scripts/lazyChunks.mjs";
 import { admin } from "./demo";
 import { expect, test } from "./fixtures";
+import { clickIntoFrame, openLong } from "./mailFrame";
 
 const label = `User (${admin.name})`;
 const action = (page: Page) => page.getByRole("banner").getByRole("button", { name: label, exact: true });
@@ -69,6 +70,16 @@ async function logoutFailsThenWorks(page: Page, open: () => Promise<void>, logOu
 
 test.describe("desktop", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
+
+  test("a click into the mail frame closes the panel (#349)", async ({ page }) => {
+    await openLong(page);
+    await action(page).click();
+    await expect(panel(page)).toBeVisible();
+    await expect(action(page)).toHaveAttribute("aria-expanded", "true");
+    await clickIntoFrame(page);
+    await expect(panel(page)).toHaveCount(0);
+    await expect(action(page)).toHaveAttribute("aria-expanded", "false");
+  });
 
   test("a click opens the panel below the header; Enter opens it with the focus on Profile, Tab walks it, Escape and a Tab out close it", async ({ page }) => {
     await ready(page);
