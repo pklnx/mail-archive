@@ -5,6 +5,7 @@ import {
   Button,
   InlineLoading,
   MenuItem,
+  SkeletonText,
   Table,
   TableBody,
   TableCell,
@@ -19,6 +20,7 @@ import { retentionApi, type DeletionReview, type DeletionRun } from "./api";
 import { DangerModal } from "./DangerModal";
 import { day, fileSize } from "./format";
 import { t } from "./i18n";
+import { Loading } from "./lazyView";
 import { DetailHeader, RowMenu, SummaryTiles } from "./settingsParts";
 import { settingsText } from "./settingsText";
 
@@ -213,7 +215,13 @@ export function RunPage({ id, state, listed, heading, parent, changed }: RunPage
           ]}
         />
       )}
-      {!review && !error && <p className="app-text-secondary">{t.loading}</p>}
+      {/* The groups and the message list load after the run's head. */}
+      {!review && !error && (
+        <Loading>
+          <SkeletonText heading width="30%" />
+          <SkeletonText paragraph lineCount={4} />
+        </Loading>
+      )}
       {proposed && run.candidates === 0 && <p>{t.runEmpty}</p>}
       {review && review.groups.length > 0 && <RunGroups review={review} title={s.groups} />}
       {review && run && review.candidates.length > 0 && (

@@ -1,10 +1,11 @@
 // The Log page on Carbon (#168 part 5): the filters build the same query
 // as before, the table, folded rows, the message link and Load more.
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditQuery, type AuditEntry } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
 import { defaultFilter, LogPage } from "./LogPage";
+import { expectLoaded, expectLoading } from "./test/loading";
 
 const sha = "a".repeat(64);
 let n = 0;
@@ -45,6 +46,26 @@ afterEach(() => {
 const audit = () => urls.filter((u) => u.startsWith("/api/audit"));
 
 describe("LogPage", () => {
+  it("shows a table skeleton with the log's columns while the first page loads (#287)", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+      if (String(url).startsWith("/api/audit")) await released;
+      return answer(url, init);
+    });
+    render(<LogPage admin open={() => {}} />);
+    const table = expectLoading()!.querySelector(".cds--data-table.cds--skeleton")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([t.logTime, t.logAction, t.logWho, t.logTarget, t.logClient]);
+    expect(table.className).toContain("cds--data-table--md");
+    expect(screen.queryByText(t.logEmpty)).toBeNull();
+    await act(async () => release());
+    await screen.findByText("Invoice 42");
+    expectLoaded();
+  });
+
   it("builds the same query from the filters as before", async () => {
     render(<LogPage admin open={() => {}} />);
     await screen.findByText("Invoice 42");

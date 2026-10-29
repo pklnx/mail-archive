@@ -1,10 +1,12 @@
 // LazyView (#288): the skeleton while a lazy view loads, the load-error
 // notice when its chunk does not, and every other error rethrown.
 import { Component, act, type ReactNode } from "react";
+import { SkeletonText } from "@carbon/react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChunkLoadError, LazyView, lazyNamed } from "./lazyView";
+import { ChunkLoadError, LazyView, Loading, lazyNamed } from "./lazyView";
 import { applySettings, messagesFor, t } from "./i18n";
+import { expectLoaded, expectLoading } from "./test/loading";
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -42,7 +44,7 @@ afterEach(() => {
 });
 
 describe("LazyView", () => {
-  it("shows a skeleton without text while the view loads, then the view", async () => {
+  it("shows a skeleton with a hidden status while the view loads, then the view", async () => {
     const load = deferred<Mod>();
     const Lazy = lazyNamed(() => load.promise, "View");
     const { container } = render(
@@ -50,15 +52,16 @@ describe("LazyView", () => {
         <Lazy text="Loaded" />
       </LazyView>,
     );
-    const fallback = container.querySelector('[aria-busy="true"]')!;
-    expect(fallback).not.toBeNull();
+    const fallback = expectLoading(container)!;
     expect(fallback.className).toContain("page");
     expect(fallback.querySelectorAll(".cds--skeleton__text").length).toBeGreaterThan(1);
     expect(fallback.querySelector(".cds--skeleton__heading")).not.toBeNull();
-    expect(fallback.textContent).toBe("");
+    // Screen readers hear "Loading…"; on screen there are only skeletons.
+    expect(screen.getByRole("status").textContent).toBe(t.loading);
+    expect(container.querySelector("[aria-busy]")).toBeNull();
     await act(async () => load.resolve({ View }));
     expect(await screen.findByRole("heading", { name: "Loaded" })).toBeTruthy();
-    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expectLoaded(container);
   });
 
   it("shows the load-error notice when the chunk does not load; Retry reloads; another view still loads", async () => {
@@ -151,5 +154,39 @@ describe("LazyView", () => {
     expect(alert.textContent).toContain("Diese Seite konnte nicht geladen werden");
     expect(alert.textContent).toContain("Die App wurde vielleicht aktualisiert. Zum Fortfahren neu laden.");
     expect(screen.getByRole("button", { name: de.retry }).textContent).toBe("Erneut versuchen");
+  });
+});
+
+describe("Loading", () => {
+  it("is a status with the hidden text and the skeleton hidden from screen readers", () => {
+    const { container } = render(
+      <Loading>
+        <SkeletonText paragraph lineCount={2} />
+      </Loading>,
+    );
+    const status = expectLoading(container)!;
+    expect(status.querySelector(".cds--visually-hidden")!.textContent).toBe(t.loading);
+    expect(status.querySelector(".cds--skeleton__text")!.closest("[aria-hidden]")).not.toBeNull();
+  });
+
+  it("with announce={false} is only the skeleton, without a status", () => {
+    const { container } = render(
+      <Loading announce={false}>
+        <SkeletonText paragraph lineCount={2} />
+      </Loading>,
+    );
+    expectLoading(container, { announce: false });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  it("says Loading in German", () => {
+    applySettings({ language: "de", locale: "de" });
+    render(
+      <Loading>
+        <SkeletonText />
+      </Loading>,
+    );
+    expect(screen.getByRole("status").textContent).toBe(messagesFor("de").loading);
   });
 });

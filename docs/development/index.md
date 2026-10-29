@@ -77,8 +77,16 @@ shortcuts overview with `lazyNamed()` from `web/src/lazyView.tsx`, each in a
 `LazyView` (a skeleton while the chunk loads, and a notice with a Retry button
 that reloads the page when the chunk does not load, e.g. after an upgrade);
 the forced password and 2FA screens in `Auth.tsx` take their forms from the
-Profile chunk. `check-dist` also checks the initial JS: the entry script of
-`index.html` and every chunk it imports statically
+Profile chunk. Every loading state is a Carbon skeleton in `Loading` from
+`lazyView.tsx` (tables: `TableSkeleton` from `tableSkeleton.tsx`), whose
+status says "Loading…" to screen readers only: one status at a time per
+screen, so a second part that loads at the same time passes
+`announce={false}`. Visible "Loading…" text is not allowed;
+`web/src/loadingGuard.test.ts` enforces it. The app's own motion is written
+only inside `@media (prefers-reduced-motion: no-preference)` in `layout.css`,
+with Carbon's motion tokens as `--app-duration-*` / `--app-easing-*`
+(`web/src/motion.test.ts`). `check-dist` also checks the initial JS: the
+entry script of `index.html` and every chunk it imports statically
 (`web/scripts/initialBundle.mjs`). It prints that size, raw and gzip, on every
 build (`check-dist: initial JS … bytes`), and fails when it is over 579 000
 bytes (the #282 number), when a lazy chunk is missing or in the initial

@@ -32,13 +32,35 @@ export function lazyNamed<M extends Record<K, ComponentType<any>>, K extends key
   );
 }
 
-/** While a view loads: Carbon skeletons in the view's page frame (none for a form in a column), no text. */
+/**
+ * A loading state (#287): Carbon skeletons in the shape of what loads, and
+ * for screen readers a status that says "Loading…" (visually hidden), never
+ * visible text. One status per screen: a second part that loads at the same
+ * time passes announce={false} and shows only its skeleton. The status has
+ * no aria-busy, which could hold its text back until it is gone.
+ */
+export function Loading({ announce = true, className, children }: { announce?: boolean; className?: string; children: ReactNode }) {
+  if (!announce)
+    return (
+      <div aria-hidden className={className}>
+        {children}
+      </div>
+    );
+  return (
+    <div role="status" className={className}>
+      <span className="cds--visually-hidden">{t.loading}</span>
+      <div aria-hidden>{children}</div>
+    </div>
+  );
+}
+
+/** While a view loads: Carbon skeletons in the view's page frame (none for a form in a column), and the hidden status. */
 export function ViewFallback({ inline = false }: { inline?: boolean }) {
   return (
-    <div className={inline ? "app-view-fallback" : "page app-view-fallback"} aria-busy="true">
+    <Loading className={inline ? "app-view-fallback" : "page app-view-fallback"}>
       <SkeletonText heading width="40%" />
       <SkeletonText paragraph lineCount={3} />
-    </div>
+    </Loading>
   );
 }
 

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AccountsResponse, User } from "./api";
 import { t } from "./i18n";
+import { expectLoading } from "./test/loading";
 
 // A chunk that is still on its way.
 vi.mock("./FilterPanel", () => new Promise(() => {}));
@@ -43,6 +44,8 @@ it("shows the skeleton in the popover, and Edit filters closes the user panel at
   const button = screen.getByRole("button", { name: t.filters });
   expect(button.getAttribute("aria-expanded")).toBe("true");
   const popover = document.getElementById(button.getAttribute("aria-controls")!)!;
-  expect(popover.querySelector('.app-view-fallback[aria-busy="true"] .cds--skeleton__text')).not.toBeNull();
-  expect(popover.textContent).toBe("");
+  // The skeleton, and "Loading…" only for screen readers (#287).
+  expect(popover.querySelector(".app-view-fallback .cds--skeleton__text")).not.toBeNull();
+  expectLoading(popover);
+  expect(popover.textContent).toBe(t.loading);
 });

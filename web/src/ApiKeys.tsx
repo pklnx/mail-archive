@@ -23,6 +23,7 @@ import { ApiError, apiKeyApi, profileApi, retryAfter, type ApiKey, type ApiKeyLi
 import { DangerModal } from "./DangerModal";
 import { relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
+import { ViewFallback } from "./lazyView";
 import { FormError } from "./notices";
 
 /** The expiry choices, in days; null is no expiry. */
@@ -221,7 +222,7 @@ export function ApiKeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: num
     };
   }, [twoFactorVersion]);
 
-  if (!list) return error ? <FormError text={error} /> : <p className="app-text-secondary">{t.loading}</p>;
+  if (!list) return error ? <FormError text={error} /> : <ViewFallback inline />;
 
   const active = list.keys.filter((k) => k.state === "active").length;
   const toggle = (s: ApiKeyScope, on: boolean) => setScopes((cur) => (on ? [...cur.filter((x) => x !== s), s] : cur.filter((x) => x !== s)));

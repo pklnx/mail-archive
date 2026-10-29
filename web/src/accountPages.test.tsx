@@ -12,6 +12,30 @@ import { dialogOpen } from "./dialogs";
 import { fill } from "./fillFixture";
 import { applySettings, messagesFor, t } from "./i18n";
 import { settingsText, settingsTextFor } from "./settingsText";
+import { expectLoaded, expectLoading } from "./test/loading";
+
+/** A promise and its resolve, for a request left pending. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/** matchMedia that matches the queries in `on`. */
+function stubMedia(on: string[]) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: on.includes(query),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
 
 function account(name: string, more: Partial<Account> = {}): Account {
   return {
@@ -37,7 +61,7 @@ const data = (accounts: Account[], more: Partial<AccountsResponse> = {}): Accoun
 let requests: { method: string; url: string; body: unknown }[];
 /** The requests that change something: everything but the reads. */
 const changes = () => requests.filter((r) => r.method !== "GET");
-let answer: (url: string, method: string) => Response | undefined;
+let answer: (url: string, method: string) => Response | Promise<Response> | undefined;
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 
 beforeEach(() => {
@@ -46,7 +70,7 @@ beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
     const method = init?.method ?? "GET";
     requests.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const own = answer(String(url), method);
+    const own = await answer(String(url), method);
     if (own) return own;
     if (String(url).endsWith("/api/accounts") && method === "POST") return json({ name: "journal" }, 201);
     if (String(url).endsWith("/server-folders")) {
@@ -62,6 +86,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
 });
 
@@ -167,12 +192,14 @@ describe("the pages under Accounts", () => {
     window.history.replaceState(null, "", "/?view=accounts&edit=work");
     const before = window.history.length;
     const { rerender } = show("/?view=accounts&edit=work", null);
-    expect(screen.getByText(t.loading)).toBeTruthy();
+    // A skeleton in the page's shape with a hidden status, no visible "Loading…" (#287).
+    expect(expectLoading()!.querySelector(".cds--skeleton__heading")).not.toBeNull();
     // An old edit= link opens the same page; the URL now says id= (history replace).
     expect(window.location.search).toBe("?view=accounts&id=work");
     expect(window.history.length).toBe(before);
     rerender(data([account("work")]));
     expect(h1("work")).toBeTruthy();
+    expectLoaded();
     // The first page shown takes no focus.
     expect(document.activeElement).toBe(document.body);
   });
@@ -182,6 +209,7 @@ describe("the pages under Accounts", () => {
       show(`/${url}`, null, true, "connection refused");
       expect(screen.getByRole("alert").textContent, url).toBe(t.loadAccountsFailed("connection refused"));
       expect(screen.queryByText(t.loading), url).toBeNull();
+      expect(document.querySelector(".cds--skeleton__text"), url).toBeNull();
       cleanup();
     }
   });
@@ -195,7 +223,7 @@ describe("the pages under Accounts", () => {
     fireEvent.click(await screen.findByRole("button", { name: t.importFromIMAP }));
     expect(window.location.search).toBe("?view=accounts&import=journal");
     // The list is still the old one: the page waits instead of leaving.
-    expect(screen.getByText(t.loading)).toBeTruthy();
+    expectLoading();
     expect(reload).toHaveBeenCalled();
     rerender(data([smtp("journal")]));
     expect(h1(t.importFromIMAP)).toBeTruthy();
@@ -204,6 +232,37 @@ describe("the pages under Accounts", () => {
 });
 
 describe("the accounts table", () => {
+  it("is a skeleton with the table's columns while the list loads, without a toolbar's English label (#287)", () => {
+    const s = settingsText();
+    stubMedia(["(min-width: 42rem)"]);
+    const { rerender } = show("/?view=accounts", null);
+    expect(h1(t.accountsTitle)).toBeTruthy();
+    const status = expectLoading()!;
+    const table = status.querySelector(".cds--data-table.cds--skeleton")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([t.accountSection, s.colType, s.colStatus, t.messages, s.colLastActivity, ""]);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(5);
+    expect(table.className).toContain("cds--data-table--lg");
+    expect(document.querySelector(".cds--table-toolbar, [aria-label='data table toolbar']")).toBeNull();
+    rerender(data([account("work")]));
+    expectLoaded();
+    expect(row("work")).toBeTruthy();
+  });
+
+  it("has only the phone's columns in its skeleton below 42rem", () => {
+    const s = settingsText();
+    stubMedia([]);
+    show("/?view=accounts", null);
+    const table = expectLoading()!.querySelector(".cds--data-table.cds--skeleton")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([t.accountSection, s.colStatus, ""]);
+    expect(table.querySelectorAll("tbody tr:first-child td")).toHaveLength(3);
+  });
+
+  it("shows the error, not a skeleton, when the list cannot be loaded", () => {
+    show("/?view=accounts", null, true, "connection refused");
+    expect(screen.getByText(t.loadAccountsFailed("connection refused"))).toBeTruthy();
+    expectLoaded();
+  });
+
   it("has one row per account, with the name as its row header and a link to the account's page", () => {
     show("/?view=accounts", data([account("work"), smtp("journal"), imported("files"), account("old", { removed: true })]));
     const table = within(screen.getByRole("table", { name: t.accountsTitle }));
@@ -417,6 +476,17 @@ describe("the removed accounts", () => {
     cleanup();
     show("/?view=accounts", data([account("old", { removed: true })]));
     expect(menu("old")).toEqual([[t.purgeStart, false]]);
+  });
+
+  it("show a skeleton in the purge dialog while its preview loads (#287)", async () => {
+    const pending = deferred<Response>();
+    answer = (url, method) => (url.endsWith("/purge") && method === "GET" ? pending.promise : undefined);
+    show("/?view=accounts", data([account("old", { removed: true })]));
+    pick("old", t.purgeStart);
+    expectLoading(screen.getByRole("dialog"));
+    await act(async () => pending.resolve(json(preview())));
+    expect(await screen.findByLabelText(t.purgeTypeCount(3))).toBeTruthy();
+    expectLoaded(screen.getByRole("dialog"));
   });
 
   it("put the focus back on the menu's button when the purge dialog closes without confirming", async () => {
@@ -670,6 +740,19 @@ describe("the account's page", () => {
     fireEvent.click(await section(t.folders).findByRole("button", { name: t.saveFolders }));
     expect((await section(t.folders).findByText(t.failed("Saved."))).className).toContain("app-text-error");
     expect(section(t.folders).getByRole("checkbox", { name: "INBOX" })).toBeTruthy();
+  });
+
+  it("shows a skeleton while the server's folders load, then the folders (#287)", async () => {
+    const folders = deferred<Response>();
+    answer = (url) => (url.endsWith("/server-folders") ? folders.promise : undefined);
+    show("/?view=accounts&id=work", data([account("work")]));
+    fireEvent.click(section(t.folders).getByRole("button", { name: t.edit }));
+    const box = screen.getByRole("region", { name: t.folders });
+    const status = expectLoading(box)!;
+    expect(status.querySelectorAll(".cds--skeleton__text")).toHaveLength(5);
+    await act(async () => folders.resolve(json({ folders: [{ name: "INBOX", selected: true }] })));
+    expect(await section(t.folders).findByLabelText("INBOX")).toBeTruthy();
+    expectLoaded(box);
   });
 
   it("shows a failed folder load in the error colour, with Cancel", async () => {

@@ -1,9 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { InlineNotification, ProgressBar, TextInput } from "@carbon/react";
+import { InlineNotification, ProgressBar, SkeletonText, TextInput } from "@carbon/react";
 import { accountsApi, ApiError, type AccountPurge, type PurgeBlockers, type PurgePreview } from "./api";
 import { DangerModal } from "./DangerModal";
 import { fileSize, formatCount, formatDuration } from "./format";
 import { t } from "./i18n";
+import { Loading } from "./lazyView";
 
 function message(err: unknown): string {
   return t.failed(err instanceof Error ? err.message : String(err));
@@ -206,7 +207,9 @@ export function PurgeDialog({ name, onClose, onConfirmed, onConflict }: DialogPr
             {error}
           </p>
         ) : (
-          <p className="app-text-secondary">{t.loading}</p>
+          <Loading>
+            <SkeletonText paragraph lineCount={3} />
+          </Loading>
         )}
       </DangerModal>
     );

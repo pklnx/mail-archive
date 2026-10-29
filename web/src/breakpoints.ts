@@ -6,6 +6,9 @@ import { useSyncExternalStore } from "react";
 
 export const lg = "(min-width: 66rem)";
 
+/** Carbon's md. From here up a settings table shows its secondary columns (layout.css, .app-wide-only). */
+export const md = "(min-width: 42rem)";
+
 /** From here up the mail view shows the list and the reading pane side by side (layout.css). */
 export const twoPane = "(min-width: 48rem)";
 

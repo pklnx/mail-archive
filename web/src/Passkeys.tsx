@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 
 import {
   Button,
   PasswordInput,
+  SkeletonText,
   Table,
   TableBody,
   TableCell,
@@ -16,6 +17,7 @@ import { ApiError, passkeyApi, profileApi, retryAfter, type Passkey, type Passke
 import { AppModal, DangerModal } from "./DangerModal";
 import { relativeTime } from "./format";
 import { t } from "./i18n";
+import { Loading } from "./lazyView";
 import { FormError, Success } from "./notices";
 import { browserError, creationOptions, credentialJSON, forgetPasskey, passkeysSupported } from "./webauthn";
 
@@ -67,7 +69,15 @@ export function PasskeySection({ twoFactorVersion = 0 }: { twoFactorVersion?: nu
     };
   }, [twoFactorVersion]);
 
-  if (!list) return error ? <FormError text={error} /> : <p className="app-text-secondary">{t.loading}</p>;
+  // It loads with the 2FA section above it, whose status says "Loading…": one status per screen.
+  if (!list)
+    return error ? (
+      <FormError text={error} />
+    ) : (
+      <Loading announce={false}>
+        <SkeletonText paragraph lineCount={2} />
+      </Loading>
+    );
   if (!list.available) return <p className="app-text-secondary">{t.passkeysUnavailable}</p>;
 
   const here = list.origin === window.location.origin;

@@ -8,6 +8,7 @@ import type { ApiKey, ManagedUser } from "./api";
 import { shortDate } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
 import { settingsTextFor } from "./settingsText";
+import { expectLoaded, expectLoading } from "./test/loading";
 import { UsersPage } from "./UsersPage";
 
 function user(name: string, more: Partial<ManagedUser> = {}): ManagedUser {
@@ -59,8 +60,37 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
 });
+
+/** matchMedia that matches the queries in `on`. */
+function stubMedia(on: string[]) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: on.includes(query),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
+/** Leaves GET /api/users pending; resolve answers it with the users. */
+function pendingList() {
+  let resolve!: () => void;
+  const answered = new Promise<void>((r) => {
+    resolve = r;
+  });
+  const fetch = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+    if ((init?.method ?? "GET") === "GET" && url === "/api/users") await answered;
+    return fetch(url, init);
+  });
+  return resolve;
+}
 
 async function show() {
   render(<UsersPage />);
@@ -87,6 +117,32 @@ function pick(name: string, item: string) {
 const dialog = () => screen.getByRole("dialog");
 
 describe("UsersPage", () => {
+  it("shows a table skeleton with the table's columns while the list loads, then the table (#287)", async () => {
+    stubMedia(["(min-width: 42rem)"]);
+    const resolve = pendingList();
+    render(<UsersPage />);
+    expect(h1(t.usersTitle)).toBeTruthy();
+    const table = expectLoading()!.querySelector(".cds--data-table.cds--skeleton")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([
+      t.colUser, t.colRole, t.colState, t.colSignIn, t.colAccounts, t.colLastLogin, "",
+    ]);
+    expect(table.querySelectorAll("tbody tr:first-child td")).toHaveLength(7);
+    expect(table.className).toContain("cds--data-table--lg");
+    // No toolbar: Carbon's has an English aria-label.
+    expect(document.querySelector(".cds--table-toolbar")).toBeNull();
+    await act(async () => resolve());
+    await screen.findByText("bob");
+    expectLoaded();
+  });
+
+  it("has only the columns a phone shows in the skeleton below 42rem", () => {
+    stubMedia([]);
+    pendingList();
+    render(<UsersPage />);
+    const table = expectLoading()!.querySelector(".cds--data-table.cds--skeleton")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([t.colUser, t.colState, ""]);
+  });
+
   it("shows each user's role, state and sign-in; the own row has the hint and no actions", async () => {
     await show();
     const bob = within(row("bob"));

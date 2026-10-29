@@ -10,6 +10,7 @@ import { applySettings, messagesFor, t } from "./i18n";
 import { accountLabel, countMatches, holdScope, RetentionPage, runOpen } from "./RetentionPage";
 import { RunPage } from "./RetentionRun";
 import { settingsTextFor } from "./settingsText";
+import { expectLoaded, expectLoading } from "./test/loading";
 
 const s = settingsTextFor("en");
 
@@ -121,6 +122,8 @@ let confirmFails: boolean;
 let runsFail: boolean;
 /** A test's own answer to a change, if it has one. */
 let answer: ((method: string, url: string) => Response | Promise<Response> | undefined) | null;
+/** Holds a read back until the promise it returns settles (a rejection fails the request). */
+let gate: ((url: string) => Promise<void> | undefined) | null;
 const changes = () => requests.filter((r) => r.method !== "GET");
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 
@@ -130,6 +133,7 @@ beforeEach(() => {
   confirmFails = false;
   runsFail = false;
   answer = null;
+  gate = null;
   ruleList = [rule5, rule7];
   holdList = [
     hold({ id: 8, name: "Case 4711", user: "alice", reason: "lawsuit 12 O 345/26" }),
@@ -150,6 +154,7 @@ beforeEach(() => {
     const u = String(url);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ method, url: u, body });
+    if (method === "GET" && gate) await gate(u);
     if (method !== "GET" && answer) {
       const res = await answer(method, u);
       if (res) return res;
@@ -237,6 +242,91 @@ async function openDelete() {
 
 /** The state tag in the title row of run 3's page. */
 const runTitle = (state: string) => within(h1(t.runLine(3, 2, "2.0 KB")).closest("header")!).getByText(t.runState(state));
+
+/** Holds back the reads whose URL starts with prefix; the returned function answers them. */
+function holdBack(prefix: string) {
+  let release!: () => void;
+  const released = new Promise<void>((r) => {
+    release = r;
+  });
+  gate = (u) => (u.startsWith(prefix) ? released : undefined);
+  return () => act(async () => release());
+}
+
+/** The header texts of the table skeleton in root. */
+const skeletonHeaders = (root: HTMLElement) => [...root.querySelectorAll(".cds--data-table.cds--skeleton th")].map((th) => th.textContent);
+
+describe("loading states (#287)", () => {
+  it("shows the rules table as a skeleton while it loads, then the rules", async () => {
+    const release = holdBack("/api/retention/rules");
+    render(<RetentionPage />);
+    const status = expectLoading()!;
+    // Below 42rem (jsdom has no matching media query): the columns a phone shows.
+    expect(skeletonHeaders(status)).toEqual([s.colRule, s.colPeriod, ""]);
+    await release();
+    await screen.findByText(what5);
+    expectLoaded();
+  });
+
+  it("shows the holds and the runs as skeletons while they load", async () => {
+    window.history.replaceState(null, "", "/?view=retention&tab=holds");
+    let release = holdBack("/api/legal-holds");
+    render(<RetentionPage />);
+    expect(skeletonHeaders(expectLoading()!)).toEqual([s.colHold, s.colStatus, ""]);
+    // The toolbar with Add stays usable above it.
+    expect(screen.getByRole("button", { name: t.holdAdd })).toBeTruthy();
+    await release();
+    await screen.findByText("Case 4711");
+    expectLoaded();
+    release = holdBack("/api/retention/runs");
+    fireEvent.click(tab(t.runsTab));
+    expect(skeletonHeaders(expectLoading()!)).toEqual([t.runColRun, t.runColState]);
+    await release();
+    await screen.findByText(t.runLine(3, 2, "2.0 KB"));
+    expectLoaded();
+  });
+
+  it("shows the error, not a skeleton, when the holds do not load", async () => {
+    window.history.replaceState(null, "", "/?view=retention&tab=holds");
+    gate = (u) => (u.startsWith("/api/legal-holds") ? Promise.reject(new TypeError("Failed to fetch")) : undefined);
+    render(<RetentionPage />);
+    expect((await screen.findByRole("alert")).textContent).toContain("Failed to fetch");
+    expectLoaded();
+  });
+
+  it("shows a page skeleton while an entry's list loads, then its page", async () => {
+    window.history.replaceState(null, "", "/?view=retention&id=5");
+    const release = holdBack("/api/retention/rules");
+    render(<RetentionPage />);
+    expect(expectLoading()!.querySelector(".cds--skeleton__heading")).not.toBeNull();
+    await release();
+    expect(await screen.findByRole("heading", { level: 1, name: what5 })).toBeTruthy();
+    expectLoaded();
+  });
+
+  it("shows a form skeleton under the title while an add page loads", async () => {
+    window.history.replaceState(null, "", "/?view=retention&add=rule");
+    const release = holdBack("/api/retention/rules");
+    render(<RetentionPage />);
+    expect(h1(t.ruleAdd)).toBeTruthy();
+    expect(expectLoading()!.querySelector(".cds--skeleton__text")).not.toBeNull();
+    await release();
+    await waitFor(() => expectLoaded());
+  });
+
+  it("shows a skeleton for a run's groups while its review loads", async () => {
+    window.history.replaceState(null, "", "/?view=retention&tab=runs&id=3");
+    const release = holdBack("/api/retention/runs/3");
+    render(<RetentionPage />);
+    // The run's head and tiles come from the list; the review loads after.
+    await screen.findByRole("heading", { level: 1, name: t.runLine(3, 2, "2.0 KB") });
+    expect(document.querySelector(".app-summary__tile")).not.toBeNull();
+    expectLoading();
+    await release();
+    expect(await screen.findByRole("region", { name: s.groups })).toBeTruthy();
+    expectLoaded();
+  });
+});
 
 describe("RetentionPage", () => {
   it("has the three sections as Carbon tabs in the URL, and loads each when it is shown", async () => {

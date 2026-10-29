@@ -10,6 +10,7 @@ import {
   NumberInput,
   Select,
   SelectItem,
+  SkeletonText,
   Tab,
   Table,
   TableBody,
@@ -43,10 +44,12 @@ import {
 import { DangerModal } from "./DangerModal";
 import { day, fileSize } from "./format";
 import { t, translateWithId } from "./i18n";
+import { Loading, ViewFallback } from "./lazyView";
 import { RunPage, RunStateTag } from "./RetentionRun";
 import { parseQuery } from "./searchSyntax";
 import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
 import { settingsText } from "./settingsText";
+import { TableSkeleton } from "./tableSkeleton";
 import { formatState, parseState, useViewState, type ViewState } from "./urlState";
 
 export { countMatches } from "./RetentionRun";
@@ -258,15 +261,21 @@ export function RetentionPage() {
       {failure.text}
     </p>
   );
-  const status = (err: string, loading: boolean) => (
+  // The error of a load, or while it loads the skeleton in the shape of what comes.
+  const status = (err: string, skeleton: ReactNode) => (
     <>
       {err && (
         <p role="alert" className="app-text-error">
           {err}
         </p>
       )}
-      {loading && !err && <p className="app-text-secondary">{t.loading}</p>}
+      {!err && skeleton}
     </>
+  );
+  const formSkeleton = (
+    <Loading>
+      <SkeletonText paragraph lineCount={4} />
+    </Loading>
   );
   const parent = { label: t.retentionTitle, href: hrefOf({ tab: tabKey(tab) }), go: () => toTab() };
 
@@ -275,7 +284,7 @@ export function RetentionPage() {
     content = (
       <>
         <DetailHeader parent={parent} title={t.ruleAdd} heading={heading} />
-        {status(error, !data)}
+        {status(error, !data && formSkeleton)}
         {data && (
           <RuleForm
             data={data}
@@ -292,7 +301,7 @@ export function RetentionPage() {
     content = (
       <>
         <DetailHeader parent={parent} title={t.holdAdd} heading={heading} />
-        {status(error, !data)}
+        {status(error, !data && formSkeleton)}
         {data && (
           <HoldForm
             accounts={data.accounts}
@@ -306,7 +315,7 @@ export function RetentionPage() {
       </>
     );
   } else if (page.kind === "detail" && !loaded) {
-    content = status(tab === "rules" ? error : tab === "holds" ? holdsError : runsError, true);
+    content = status(tab === "rules" ? error : tab === "holds" ? holdsError : runsError, <ViewFallback inline />);
   } else if (rule) {
     const r = rule;
     content = (
@@ -383,7 +392,20 @@ export function RetentionPage() {
                   <Layer>
                     <Help text={s.rulesHelp} anchor="rules" />
                     {notices}
-                    {status(error, !data)}
+                    {status(
+                      error,
+                      !data && (
+                        <TableSkeleton
+                          columns={[
+                            { header: s.colRule },
+                            { header: s.colPeriod },
+                            { header: t.ruleNote, wide: true },
+                            { header: s.created, wide: true },
+                            { header: "" },
+                          ]}
+                        />
+                      ),
+                    )}
                     {data && (
                       <RulesTable
                         rules={data.rules}
@@ -402,7 +424,7 @@ export function RetentionPage() {
                   <Layer>
                     <Help text={s.holdsHelp} anchor="legal-holds" />
                     {notices}
-                    {status(error || holdsError, false)}
+                    {status(error || holdsError, null)}
                     {notice && (
                       <InlineNotification
                         kind="success"
@@ -425,6 +447,7 @@ export function RetentionPage() {
                         go({ add: "hold" });
                       }}
                       release={(h) => setAsking({ kind: "hold", hold: h })}
+                      failed={holdsError !== ""}
                       lost={lost}
                     />
                   </Layer>
@@ -691,6 +714,7 @@ function HoldsTable({
   open,
   add,
   release,
+  failed,
   lost,
 }: {
   holds: LegalHold[] | null;
@@ -700,6 +724,8 @@ function HoldsTable({
   open: (id: number) => void;
   add: () => void;
   release: (h: LegalHold) => void;
+  /** The list did not load: the tab's alert says why, and no skeleton shows. */
+  failed: boolean;
   lost: () => void;
 }) {
   const s = settingsText();
@@ -721,7 +747,17 @@ function HoldsTable({
           {t.holdAdd}
         </Button>
       </Toolbar>
-      {!holds && <p className="retention-table__empty app-text-secondary">{t.loading}</p>}
+      {!holds && !failed && (
+        <TableSkeleton
+          columns={[
+            { header: s.colHold },
+            { header: s.colCovers, wide: true },
+            { header: s.colStatus },
+            { header: s.created, wide: true },
+            { header: "" },
+          ]}
+        />
+      )}
       {holds && holds.length === 0 && <p className="retention-table__empty">{t.holdNone}</p>}
       {holds && holds.length > 0 && (
         <Table aria-label={t.retentionHoldsTab} size="lg" overflowMenuOnHover={false}>
@@ -813,7 +849,16 @@ function RunsTable({
           {shownError}
         </p>
       )}
-      {!runs && !error && <p className="retention-table__empty app-text-secondary">{t.loading}</p>}
+      {!runs && !error && (
+        <TableSkeleton
+          columns={[
+            { header: t.runColRun },
+            { header: t.runColState },
+            { header: t.runColResult, wide: true },
+            { header: t.runColProposed, wide: true },
+          ]}
+        />
+      )}
       {runs && runs.length === 0 && <p className="retention-table__empty">{t.runNone}</p>}
       {runs && runs.length > 0 && (
         <Table aria-label={t.runsTab} size="lg">
