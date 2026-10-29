@@ -141,7 +141,7 @@ func TestAttestFence(t *testing.T) {
 			return nil
 		})
 		select {
-		case taken <- fmt.Errorf("snapshot ended: %v", err):
+		case taken <- fmt.Errorf("snapshot ended: %w", err):
 		default:
 		}
 		done <- err
