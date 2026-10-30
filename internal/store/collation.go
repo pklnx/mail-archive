@@ -119,7 +119,9 @@ func (s *Store) Collation(ctx context.Context) (CollationState, error) {
 		 WHERE d.datname = current_database()`, collationMarker).
 		Scan(&c.Database, &c.User, &c.Provider, &c.StoredVersion, &c.ActualVersion, &c.Marker)
 	if err != nil {
-		return c, fmt.Errorf("read the database collation: %w", err)
+		// A cancel during the write comes back from pgx as a bare i/o
+		// timeout; withCtxErr makes it wrap the cancel (#308).
+		return c, fmt.Errorf("read the database collation: %w", withCtxErr(ctx, err))
 	}
 	return c, nil
 }
@@ -141,42 +143,58 @@ func (s *Store) RebuildIndexesIfNeeded(ctx context.Context, notify func(Collatio
 	// A single statement without arguments runs outside a transaction
 	// block, which REINDEX DATABASE requires.
 	if _, err := s.pool.Exec(ctx, "REINDEX DATABASE "+pgx.Identifier{c.Database}.Sanitize()); err != nil {
-		return false, rebuildError(c, err)
+		return false, rebuildError(ctx, c, err)
 	}
 	// format() quotes the name and the version on the server.
 	var stmt string
 	if err := s.pool.QueryRow(ctx, `SELECT format('ALTER DATABASE %I SET `+collationMarker+` = %L', current_database(), $1::text)`,
 		*c.ActualVersion).Scan(&stmt); err != nil {
-		return true, markerError(c, err)
+		return true, markerError(ctx, c, err)
 	}
 	if _, err := s.pool.Exec(ctx, stmt); err != nil {
-		return true, markerError(c, err)
+		return true, markerError(ctx, c, err)
 	}
 	return true, nil
 }
 
 // markerError is the error when the indexes were rebuilt but the marker
 // could not be set, typically because the database user is no superuser.
-// Until it is set, the other commands keep refusing.
-func markerError(c CollationState, err error) error {
+// Until it is set, the other commands keep refusing. When ctx has ended
+// (Ctrl-C), the user is no cause: the error wraps ctx's error and asks to
+// run migrate again instead of giving superuser advice.
+func markerError(ctx context.Context, c CollationState, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("the index rebuild is done, but recording it was interrupted, so nothing was migrated: %w.\n"+
+			"Until it is recorded, the other commands refuse to run. Run migrate again",
+			withCtxErr(ctx, err))
+	}
 	return fmt.Errorf("the index rebuild is done, but recording it failed, so nothing was migrated: %w.\n"+
 		"Until it is recorded, the other commands refuse to run. Record it as a superuser, then run migrate again:\n  %s",
 		err, c.MarkerCommand())
 }
 
-func rebuildError(c CollationState, err error) error {
-	var b strings.Builder
-	b.WriteString("index rebuild failed, nothing was migrated: ")
-	b.WriteString(err.Error())
+// rebuildError is the error of a failed REINDEX. It wraps err, so callers
+// can match it with errors.Is and errors.As.
+//
+// The duplicate-key branch comes first: a unique violation is a real data
+// conflict that needs the restore advice, even when a Ctrl-C arrives at the
+// same time. Otherwise, when ctx has ended, the rebuild was only
+// interrupted, and the next migrate simply rebuilds again: no hand command.
+func rebuildError(ctx context.Context, c CollationState, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		detail := ""
 		if pgErr.Detail != "" {
-			fmt.Fprintf(&b, " (%s)", pgErr.Detail)
+			detail = fmt.Sprintf(" (%s)", pgErr.Detail)
 		}
-		b.WriteString(".\nTwo rows collide under the new sort order: something wrote to the database before the rebuild. " +
-			"Restore the backup from before the upgrade, see \"Restore\" in docs/guide/operations.md")
-	} else {
-		fmt.Fprintf(&b, ".\nTo rebuild the indexes and record it by hand, %s", c.ManualCommand())
+		return fmt.Errorf("index rebuild failed, nothing was migrated: %w%s.\n"+
+			"Two rows collide under the new sort order: something wrote to the database before the rebuild. "+
+			"Restore the backup from before the upgrade, see \"Restore\" in docs/guide/operations.md", err, detail)
 	}
-	return errors.New(b.String())
+	if ctx.Err() != nil {
+		return fmt.Errorf("index rebuild interrupted, nothing was migrated: %w.\nRun migrate again to rebuild the indexes",
+			withCtxErr(ctx, err))
+	}
+	return fmt.Errorf("index rebuild failed, nothing was migrated: %w.\nTo rebuild the indexes and record it by hand, %s",
+		err, c.ManualCommand())
 }
