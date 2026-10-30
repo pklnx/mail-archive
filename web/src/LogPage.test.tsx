@@ -11,6 +11,7 @@ import { filterTextFor } from "./filterText";
 import { applySettings, messagesFor, t } from "./i18n";
 import { defaultFilter, LogPage } from "./LogPage";
 import { expectLoaded, expectLoading } from "./test/loading";
+import { cases, fieldsOf, focusOf, run, watch, type Range } from "./test/dateRangeCases";
 
 const sha = "a".repeat(64);
 let n = 0;
@@ -64,11 +65,11 @@ const fpOf = (label: string) => (field(label) as unknown as { _flatpickr: Flatpi
 // flatpickr's range plugin empties To 10 ms after a change that leaves no
 // dates (rangePlugin.js onChange), so field checks wait for the fields.
 
-/** Types into a field and commits it the way a user does: Enter, or leaving the field. */
+/** Types into a field and commits it the way a user does: Enter (with keyCode, as browsers send it), or leaving the field. */
 function type(input: HTMLInputElement, value: string, commit: "enter" | "blur") {
   act(() => input.focus());
   fireEvent.change(input, { target: { value } });
-  if (commit === "enter") fireEvent.keyDown(input, { key: "Enter" });
+  if (commit === "enter") fireEvent.keyDown(input, { key: "Enter", keyCode: 13 });
   else act(() => input.blur());
 }
 
@@ -332,9 +333,8 @@ describe("LogPage date range", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  // The cases of an emptied From or a lone To where the fields and the query
-  // agree (plan review of #377, note 1). The ones where they do not, in the
-  // filters too, are #385.
+  // An emptied From or a lone To (plan review of #377, note 1; #385): the
+  // fields show exactly the dates that are sent.
   describe("fields and query agree", () => {
     it("From emptied and left, from the default period: no dates", async () => {
       const { from, to } = await german();
@@ -343,19 +343,15 @@ describe("LogPage date range", () => {
       await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
     });
 
-    it("From emptied with both set: left, no dates; Enter, To becomes the range", async () => {
+    it("From emptied with both set: left or Enter, no dates (#385)", async () => {
       const { from, to, fp } = await german();
-      act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
-      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
-      type(from(), "", "blur");
-      await waitFor(() => expect(audit().at(-1)).toBe(query({})));
-      await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
-
-      act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
-      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
-      type(from(), "", "enter");
-      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-20", until: "2026-10-20" })));
-      await waitFor(() => expect([from().value, to().value]).toEqual(["20.10.2026", "20.10.2026"]));
+      for (const commit of ["blur", "enter"] as const) {
+        act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
+        await waitFor(() => expect(audit().at(-1), commit).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
+        type(from(), "", commit);
+        await waitFor(() => expect(audit().at(-1), commit).toBe(query({})));
+        await waitFor(() => expect([from().value, to().value], commit).toEqual(["", ""]));
+      }
     });
 
     it("only To typed, with the default From: Enter and leaving the field", async () => {
@@ -369,13 +365,53 @@ describe("LogPage date range", () => {
       }
     });
 
-    it("only To typed after From was emptied, with Enter: the day becomes the start", async () => {
-      const { from, to } = await german();
+    it("only To typed after From was emptied, with Enter: no dates, To emptied (#385)", async () => {
+      const { from, to, de } = await german();
       type(from(), "", "blur");
       await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+      const count = audit().length;
       type(to(), "05.10.2026", "enter");
-      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-05" })));
-      await waitFor(() => expect([from().value, to().value]).toEqual(["05.10.2026", ""]));
+      await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
+      // The next change is the only new request.
+      fireEvent.change(screen.getByLabelText(de.logAction), { target: { value: "read" } });
+      await waitFor(() => expect(audit().at(-1)).toBe(query({ group: "read" })));
+      expect(audit()).toHaveLength(count + 1);
+    });
+  });
+
+  // The shared case table of DateRange (#385), with each field left as a
+  // browser leaves it (test/dateRangeCases.ts).
+  describe("the case table", () => {
+    let watching: ReturnType<typeof watch>;
+    beforeEach(() => {
+      watching = watch();
+    });
+    afterEach(() => watching.stop());
+
+    const rangeOf = (url: string): Range => {
+      const p = new URL(url, "http://x").searchParams;
+      return { start: p.get("since") ?? "", end: p.get("until") ?? "" };
+    };
+
+    it.each(cases)("$name", async (c) => {
+      const { from, to, fp, de } = await german();
+      if (c.initial === "both") {
+        act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
+        await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
+      }
+      const action = () => screen.getByLabelText(de.logAction);
+      const picker = { from, to, other: action };
+      const count = audit().length;
+      run(picker, c.steps);
+      // The next change is sent after every request of the steps.
+      fireEvent.change(action(), { target: { value: "read" } });
+      await waitFor(() => expect(audit().at(-1)).toContain("action=read"));
+      expect(audit().slice(count, -1), "requests").toHaveLength(c.edits);
+      const applied = rangeOf(audit().at(-1)!);
+      if (c.range) expect(applied).toEqual(c.range);
+      await waitFor(() => expect([from().value, to().value]).toEqual(fieldsOf(applied)));
+      expect(document.activeElement).toBe(focusOf(picker, c.focus));
+      expect(watching.errors).toEqual([]);
     });
   });
 

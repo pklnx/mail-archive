@@ -9,6 +9,9 @@ import { FilterPanel } from "./FilterPanel";
 import type { FocusRequest } from "./SearchFilters";
 import { filterTextFor } from "./filterText";
 import { applySettings, messagesFor } from "./i18n";
+import { shiftDay } from "./format";
+import { parseQuery } from "./searchSyntax";
+import { cases, fieldsOf, focusOf, initialRange, run, watch, type Range, type Step } from "./test/dateRangeCases";
 
 const ft = filterTextFor("en");
 
@@ -167,6 +170,82 @@ describe("FilterPanel date range", () => {
     } finally {
       window.removeEventListener("keydown", outer);
     }
+  });
+});
+
+// The shared case table of DateRange (#385), in German, with each field
+// left as a browser leaves it (test/dateRangeCases.ts): the fields show
+// exactly the after: and before: of the search, before: the day after the
+// end.
+describe("FilterPanel date range: fields and search agree", () => {
+  let watching: ReturnType<typeof watch>;
+  beforeEach(() => {
+    applySettings({ language: "de", locale: "de" });
+    watching = watch();
+  });
+  afterEach(() => watching.stop());
+
+  const dt = filterTextFor("de");
+  const ab = () => screen.getByLabelText(dt.since) as HTMLInputElement;
+  const bis = () => screen.getByLabelText(dt.until) as HTMLInputElement;
+  const other = () => screen.getByRole("textbox", { name: messagesFor("de").from });
+  const picker = { from: ab, to: bis, other };
+  /** The search text of a range, before: the day after its end. */
+  const queryOf = (r: Range) => `tax after:${r.start}${r.end ? ` before:${shiftDay(r.end, 1)}` : ""}`;
+  const rangeOf = (q: string): Range => {
+    const p = parseQuery(q);
+    return { start: p.after, end: p.before ? shiftDay(p.before, -1) : "" };
+  };
+
+  it.each(cases)("$name", (c) => {
+    const start = queryOf(initialRange[c.initial]);
+    const { seen } = setup(start);
+    run(picker, c.steps);
+    expect(seen.queries, "setQuery calls").toHaveLength(c.edits);
+    const applied = rangeOf(seen.queries.at(-1) ?? start);
+    if (c.range) expect(applied).toEqual(c.range);
+    expect([ab().value, bis().value]).toEqual(fieldsOf(applied));
+    expect(document.activeElement).toBe(focusOf(picker, c.focus));
+    expect(watching.errors).toEqual([]);
+  });
+
+  it("P a range, then a preset with a start only: Bis is emptied", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 28, 12));
+    const { last } = setup(queryOf(initialRange.both));
+    fireEvent.click(radio(dt.presets.last7));
+    expect(last()).toBe("tax after:2026-10-22");
+    expect([ab().value, bis().value]).toEqual(["22.10.2026", ""]);
+  });
+
+  // An end alone (typed in the search) has no start to show: the fields stay
+  // empty and keep it, whatever is pressed (maintainer decision 1a).
+  it.each([
+    ["Ab focused, Enter", [["focus", "from"], ["enter", "from"]]],
+    ["Ab focused, press outside", [["focus", "from"], ["leave", "outside"]]],
+    ["Bis focused, press outside", [["focus", "to"], ["leave", "outside"]]],
+    ["Bis focused, Enter", [["focus", "to"], ["enter", "to"]]],
+  ] as [string, Step[]][])("Q before: alone, %s: kept, nothing sent", (_, steps) => {
+    const { seen } = setup("tax before:2026-10-11");
+    run(picker, steps);
+    expect(seen.queries).toEqual([]);
+    expect([ab().value, bis().value]).toEqual(["", ""]);
+    expect(watching.errors).toEqual([]);
+  });
+
+  it("R the search text changes from a range to before: alone while the form is open: kept, nothing sent", () => {
+    const calls: string[] = [];
+    let edit!: (q: string) => void;
+    function Search() {
+      const [query, setQuery] = useState(queryOf(initialRange.both));
+      edit = setQuery;
+      const calendarOpen = useRef<() => boolean>(() => false);
+      return <FilterPanel id="f" query={query} setQuery={(q) => { calls.push(q); setQuery(q); }} group={false} setGroup={() => {}} calendarOpen={calendarOpen} />;
+    }
+    render(<Search />);
+    act(() => edit("tax before:2026-10-11"));
+    expect(calls).toEqual([]);
+    expect([ab().value, bis().value]).toEqual(["", ""]);
   });
 });
 

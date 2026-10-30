@@ -273,7 +273,9 @@ The date range has two fields, **Since** and **Until**; both days count.
 Type the dates in your date format (the hint below the fields shows it,
 for example `mm/dd/yyyy`), or pick them in the calendar that opens below
 the field. In the search field the range becomes `after:` the first day and
-`before:` the day after the last one. Above the fields, **Any time**,
+`before:` the day after the last one. Emptying **Since** removes the
+whole range; emptying **Until** leaves it open at the end. A date the field
+cannot read is put back. Above the fields, **Any time**,
 **Last 7 days**, **Last 30 days**, **This year** and **Custom** choose a
 range in one step: the presets set only the first day (today counts among
 the seven and thirty days), **Any time** removes both dates, and **Custom**
