@@ -1,5 +1,8 @@
 // The guards' exceptions for the sandboxed mail frame stay narrow. No
 // browser needed: these check the matcher on the messages Chromium logs.
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
 import { origin } from "./demo";
 import { formatConsoleError, formatFrameEvents, fromMailFrame, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo } from "./fixtures";
@@ -186,4 +189,48 @@ test("a script blocked in a sandboxed frame outside the mail frame still fails t
     `console error: ${sentinel} ()`,
   ]);
   expect(await page.title()).toBe("");
+});
+
+// guards.takeProblems() empties the guard, so only the guards' own tests here
+// may call it; anything else declares its errors with expectConsoleError. A
+// shared helper counts too: it would silence the guard for every spec that
+// uses it.
+base("only guards.spec.ts calls takeProblems", () => {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && f !== "fixtures.ts" && f !== "guards.spec.ts");
+  expect(files).toContain("reading.spec.ts");
+  expect(files.filter((f) => readFileSync(join(dir, f), "utf8").includes("takeProblems"))).toEqual([]);
+});
+
+// expectConsoleError: a declared error, as often as declared, is no problem;
+// one more is, and so is one that never comes. The tests log through the
+// page and waits for the console event, as logSentinel does.
+const declared = "declared-console-error";
+
+async function logError(page: Page, context: BrowserContext, text: string) {
+  // Registered after the fixture's own listener, so the fixture has seen the
+  // message when this resolves.
+  const logged = context.waitForEvent("console", { predicate: (m) => m.text() === text });
+  await page.evaluate((text) => console.error(text), text);
+  await logged;
+}
+
+test("an expected console error, logged once, is no problem", async ({ page, context, guards }) => {
+  guards.expectConsoleError(new RegExp(`^${declared}$`));
+  await logError(page, context, declared);
+  expect(guards.takeProblems()).toEqual([]);
+});
+
+test("an expected console error logged more often than expected is a problem from the next one on", async ({ page, context, guards }) => {
+  guards.expectConsoleError(new RegExp(`^${declared}`));
+  await logError(page, context, `${declared} 1`);
+  await logError(page, context, `${declared} 2`);
+  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([`console error: ${declared} 2 ()`]);
+});
+
+// The teardown's problem is the failure this test expects; the body is only
+// the declaration, so nothing else can fail it.
+test("an expected console error that never comes fails the test", async ({ guards }) => {
+  test.fail();
+  guards.expectConsoleError(new RegExp(`^${declared}$`));
 });
