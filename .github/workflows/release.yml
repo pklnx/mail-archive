@@ -5,12 +5,17 @@ name: Release
 # labels of the pull requests merged since the last release decide the bump
 # (breaking → major, feature or db-migration → minor, else patch); the first
 # semver release is 1.0.0. The input `version` overrides the proposal. It
-# builds and pushes the image for linux/amd64 and linux/arm64 to ghcr.io with
-# the tags X.Y.Z, X.Y, X and latest, then creates the tag vX.Y.Z and a GitHub
-# release with the Docker Compose bundle (scripts/release-bundle.sh) and notes:
-# a head from scripts/release-notes.sh, then the pull requests grouped by
-# label (.github/release.yml). Run it after CI on main is green; a dry run
-# shows the proposed version, the pull requests behind it and the notes head.
+# runs two jobs. `release` builds and pushes the image for linux/amd64 and
+# linux/arm64 to ghcr.io with the exact tag X.Y.Z only, then creates the tag
+# vX.Y.Z and a GitHub release with the Docker Compose bundle
+# (scripts/release-bundle.sh) and notes: a head from scripts/release-notes.sh,
+# then the pull requests grouped by label (.github/release.yml). After it,
+# `floating-tags` checks that the release is published and is the highest
+# version, moves X.Y, X and latest to the digest the build pushed and checks
+# that all four tags have that digest. So a failed release never leaves a
+# floating tag on a build without a release. Run it after CI on main is
+# green; a dry run shows the proposed version, the pull requests behind it,
+# the tags and the notes head, and skips `floating-tags`.
 
 on:
   workflow_dispatch:
@@ -41,6 +46,12 @@ jobs:
       contents: write # the tag and the release
       packages: write # the image on ghcr.io
       pull-requests: read # the pull requests behind the commits, for the version
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.version.outputs.image }}
+      minor: ${{ steps.version.outputs.minor }}
+      major: ${{ steps.version.outputs.major }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       # No job-level `if:`: a run from another ref fails here visibly instead
       # of a silent green skip. It runs before the checkout.
@@ -118,9 +129,17 @@ jobs:
             echo "last=$last"
             echo "base=$base"
             echo "image=$image"
-            echo "tags=$image:$version,$image:${version%.*},$image:${version%%.*},$image:latest"
+            echo "minor=${version%.*}"
+            echo "major=${version%%.*}"
+            # Only the exact tag; the job floating-tags moves the others
+            # after the release.
+            echo "tags=$image:$version"
           } >> "$GITHUB_OUTPUT"
-          echo "**Releasing $version** as $image" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "**Releasing $version** as $image"
+            echo
+            echo "- Tags: \`$version\` (this job, not in a dry run); \`${version%.*}\`, \`${version%%.*}\`, \`latest\` (job floating-tags, after the release; skipped in a dry run)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Also stops a re-run of a finished release before anything is built
       # or pushed.
@@ -175,6 +194,7 @@ jobs:
         run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
 
       - name: Build and push amd64 and arm64 images
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -218,3 +238,128 @@ jobs:
           gh release create "v$VERSION" dist/mail-archive.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "mail-archive $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes "${start[@]}"
+
+  # Moves X.Y, X and latest only after the release exists, to the digest the
+  # build pushed as X.Y.Z (not to the mutable tag). Idempotent: after a
+  # failure here, "Re-run failed jobs" runs only this job with the outputs
+  # of the successful release job.
+  floating-tags:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # the checkout, the release and its tag
+      packages: write # the tags on ghcr.io
+    steps:
+      # A draft is invisible with contents: read and reads as not found,
+      # which also fails here. matching-refs is a prefix match, so the ref
+      # is compared exactly; an annotated tag is dereferenced.
+      - name: Release is published
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! info=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease --jq '[.tagName, .isDraft, .isPrerelease] | @tsv' 2>&1); then
+            echo "::error::release v$VERSION not found: $info"
+            exit 1
+          fi
+          if [ "$info" != "v$VERSION"$'\t'"false"$'\t'"false" ]; then
+            echo "::error::release v$VERSION is a draft or a pre-release (tag, draft, pre-release: $info)"
+            exit 1
+          fi
+          line=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v$VERSION" \
+            --jq '.[] | [.ref, .object.type, .object.sha] | @tsv' |
+            awk -F '\t' -v ref="refs/tags/v$VERSION" '$1 == ref { print $2 "\t" $3 }')
+          if [ -z "$line" ]; then
+            echo "::error::tag v$VERSION not found"
+            exit 1
+          fi
+          type=${line%%$'\t'*}
+          sha=${line#*$'\t'}
+          for _ in 1 2 3 4 5; do
+            [ "$type" = tag ] || break
+            line=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '[.object.type, .object.sha] | @tsv')
+            type=${line%%$'\t'*}
+            sha=${line#*$'\t'}
+          done
+          if [ "$type" != commit ] || [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "::error::tag v$VERSION points to $type $sha, not to $GITHUB_SHA"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tags, for the highest version
+          persist-credentials: false
+
+      # Today always true: the version must be greater than the last release
+      # and the concurrency group serialises runs. Guards latest and X against
+      # moving backwards, e.g. on a re-run of an old run after a newer release.
+      - name: Highest version
+        shell: bash
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          last=$(scripts/next-version.sh last)
+          if [ "$last" != "$VERSION" ]; then
+            echo "::error::v$VERSION is not the highest release (that is v${last:-none}); the floating tags stay"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Move X.Y, X and latest
+        shell: bash
+        env:
+          IMAGE: ${{ needs.release.outputs.image }}
+          DIGEST: ${{ needs.release.outputs.digest }}
+          MINOR: ${{ needs.release.outputs.minor }}
+          MAJOR: ${{ needs.release.outputs.major }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no image digest from the release job: '$DIGEST'"
+            exit 1
+          fi
+          for tag in "$MINOR" "$MAJOR" latest; do
+            docker buildx imagetools create -t "$IMAGE:$tag" "$IMAGE@$DIGEST"
+          done
+
+      - name: Digests are equal
+        shell: bash
+        env:
+          IMAGE: ${{ needs.release.outputs.image }}
+          DIGEST: ${{ needs.release.outputs.digest }}
+          VERSION: ${{ needs.release.outputs.version }}
+          MINOR: ${{ needs.release.outputs.minor }}
+          MAJOR: ${{ needs.release.outputs.major }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Image tags"
+            echo
+            echo "| Tag | Digest |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bad=0
+          for tag in "$VERSION" "$MINOR" "$MAJOR" latest; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+            echo "| \`$tag\` | \`$got\` |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$IMAGE:$tag has digest $got, not $DIGEST"
+              bad=1
+            fi
+          done
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "Build digest: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
+          exit "$bad"
