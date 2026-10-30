@@ -69,6 +69,19 @@ ANALYZE audit_log;`
 			}
 			check(t, explain(t, &rec), "_pkey")
 		})
+		// Several users and actors with actions keep the backward pkey
+		// scan: the union is a filter, not an index condition.
+		t.Run("who", func(t *testing.T) {
+			var rec explainer
+			_, err := db.New(&rec).ListAuditEntries(ctx, db.ListAuditEntriesParams{
+				Viewer: 1, Since: since, Until: until, UserIds: []int64{3, 4}, Actors: []string{"cli", "api_key"},
+				Patterns: []string{"message.open", "message.search"}, CursorAt: cursor, CursorID: 1, Lim: 101,
+			})
+			if !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			check(t, explain(t, &rec), "_pkey")
+		})
 		t.Run("own", func(t *testing.T) {
 			var rec explainer
 			_, err := db.New(&rec).ListAuditEntriesForUser(ctx, db.ListAuditEntriesForUserParams{

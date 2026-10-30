@@ -399,11 +399,12 @@ func (s *Store) ExportAudit(ctx context.Context, f AuditFilter, fn func(AuditRec
 type AuditPage struct {
 	// Viewer is who reads the log. Without All, only the viewer's own
 	// entries are listed; with All (admins), every user's, optionally
-	// narrowed to UserID or Actor.
+	// narrowed to the entries whose user is one of UserIDs or whose actor is
+	// one of Actors (a union, like several actions). Both empty means all.
 	Viewer       int64
 	All          bool
-	UserID       *int64
-	Actor        string
+	UserIDs      []int64
+	Actors       []string
 	Since, Until time.Time
 	Actions      []string // groups or actions; none means all
 	// After the entry (CursorAt, CursorID) of the previous page.
@@ -421,7 +422,7 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 	var rows []db.ListAuditEntriesRow
 	if p.All {
 		rows, err = s.q.ListAuditEntries(ctx, db.ListAuditEntriesParams{
-			Viewer: p.Viewer, Since: p.Since, Until: p.Until, UserID: p.UserID, Actor: nullString(p.Actor),
+			Viewer: p.Viewer, Since: p.Since, Until: p.Until, UserIds: p.UserIDs, Actors: p.Actors,
 			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
 		})
 	} else {
