@@ -146,9 +146,10 @@ during a tax audit, a lawsuit or an investigation.
 ```
 
 Or **Retention → Legal holds** → **Add hold**, with the filter in the search
-syntax. The table lists the active holds, **Show released holds** the others
-too; each hold has its page with the reason, and **Release** is in its menu
-(⋯). Every condition must match: a user, an account, a period, a search filter. A
+syntax. The table lists the active holds; the filter button (funnel icon) in
+its toolbar shows released holds too (**Show released holds**). Each hold
+has its page with the reason, and **Release** is in its menu (⋯). Every
+condition must match: a user, an account, a period, a search filter. A
 filter is matched by search when the hold is added and before every
 deletion, and its matches are only ever added; until then the hold covers
 its whole scope. Only admins see holds.

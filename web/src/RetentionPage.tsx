@@ -1,13 +1,27 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Button,
   Checkbox,
   Form,
+  IconButton,
   InlineNotification,
   Layer,
   Link,
   MenuItem,
   NumberInput,
+  Popover,
+  PopoverContent,
   Select,
   SelectItem,
   SkeletonText,
@@ -28,9 +42,8 @@ import {
   Tag,
   TextArea,
   TextInput,
-  Toggle,
 } from "@carbon/react";
-import { Add } from "@carbon/icons-react";
+import { Add, Filter } from "@carbon/icons-react";
 import {
   retentionApi,
   usersApi,
@@ -614,8 +627,54 @@ function EntryRow({
 function Toolbar({ children }: { children: ReactNode }) {
   return (
     <TableToolbar aria-label={t.colActions}>
-      <TableToolbarContent className="retention-toolbar__content">{children}</TableToolbarContent>
+      <TableToolbarContent>{children}</TableToolbarContent>
     </TableToolbar>
+  );
+}
+
+/**
+ * The holds toolbar's filter (#375): a filter button that opens a popover
+ * with one checkbox, as the search's filters do (App.tsx). The box applies
+ * at once; while it is checked, the button's icon says so.
+ */
+function HoldsFilter({ showReleased, setShowReleased }: { showReleased: boolean; setShowReleased: (on: boolean) => void }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} align="bottom-end" autoAlign onRequestClose={() => setOpen(false)}>
+      <IconButton
+        kind="ghost"
+        size="lg"
+        align="bottom-end"
+        label={t.filters}
+        className={showReleased ? "retention-toolbar__filter--set" : undefined}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+        // Carbon closes the popover on Escape only from inside its content.
+        onKeyDown={(e: ReactKeyboardEvent) => {
+          if (e.key === "Escape" && open) {
+            e.preventDefault();
+            setOpen(false);
+          }
+        }}
+      >
+        <Filter />
+      </IconButton>
+      <PopoverContent id={id} className="filter-popover__content">
+        {/* PopoverContent is always in the DOM: the checkbox only while open. */}
+        {open && (
+          <Layer className="retention-filter" role="group" aria-label={t.filters}>
+            <Checkbox
+              id={`${id}-released`}
+              labelText={t.holdShowReleased}
+              checked={showReleased}
+              onChange={(_, { checked }) => setShowReleased(checked)}
+            />
+          </Layer>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -729,20 +788,10 @@ function HoldsTable({
   lost: () => void;
 }) {
   const s = settingsText();
-  const id = useId();
   return (
     <TableContainer className="retention-table app-table">
       <Toolbar>
-        <Toggle
-          id={`${id}-released`}
-          size="sm"
-          className="retention-toolbar__toggle"
-          labelText={t.holdShowReleased}
-          labelA={t.carbon.toggleOff}
-          labelB={t.carbon.toggleOn}
-          toggled={showReleased}
-          onToggle={setShowReleased}
-        />
+        <HoldsFilter showReleased={showReleased} setShowReleased={setShowReleased} />
         <Button kind="primary" renderIcon={Add} onClick={add}>
           {t.holdAdd}
         </Button>

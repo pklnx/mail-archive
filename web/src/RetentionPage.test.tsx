@@ -212,6 +212,13 @@ const tab = (name: string) => screen.getByRole("tab", { name });
 /** The row of an entry, by the text of its name link. */
 const row = (name: string) => screen.getByRole("link", { name }).closest("tr")!;
 const menuButton = (name: string) => screen.getByRole("button", { name: t.userActions(name) });
+/** The Legal holds toolbar's filter button (#375). */
+const filterButton = () => screen.getByRole("button", { name: t.filters });
+/** Opens the holds filter if it is closed: its checkbox. */
+async function openFilter() {
+  if (filterButton().getAttribute("aria-expanded") !== "true") fireEvent.click(filterButton());
+  return screen.findByRole("checkbox", { name: t.holdShowReleased });
+}
 
 /** Opens the actions menu of an entry and picks an item. */
 function pick(name: string, item: string) {
@@ -522,6 +529,21 @@ describe("RetentionPage", () => {
   });
 
   describe("legal holds", () => {
+    // jsdom lays nothing out: every box is 0 × 0 at the origin, so the filter
+    // popover's autoAlign (floating-ui's hide middleware) would hide its
+    // content as if its button were out of view (as in App.test.tsx).
+    const rect = Element.prototype.getBoundingClientRect;
+    beforeEach(() => {
+      Element.prototype.getBoundingClientRect = () => DOMRect.fromRect({ x: 100, y: 100, width: 32, height: 32 });
+      Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: 1024 });
+      Object.defineProperty(document.documentElement, "clientHeight", { configurable: true, value: 768 });
+    });
+    afterEach(() => {
+      Element.prototype.getBoundingClientRect = rect;
+      delete (document.documentElement as { clientWidth?: number }).clientWidth;
+      delete (document.documentElement as { clientHeight?: number }).clientHeight;
+    });
+
     it("has a row per active hold with its scope and state, and Release in its menu", async () => {
       await show("&tab=holds", "Case 4711");
       const link = within(row("Case 4711")).getByRole("link", { name: "Case 4711" });
@@ -535,25 +557,85 @@ describe("RetentionPage", () => {
       expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([t.holdRelease]);
     });
 
-    it("shows released holds with the toggle, without a menu", async () => {
+    it("has a closed filter button in the toolbar, not a switch (#375)", async () => {
       await show("&tab=holds", "Case 4711");
-      fireEvent.click(screen.getByRole("switch", { name: t.holdShowReleased }));
+      expect(screen.queryByRole("switch")).toBeNull();
+      const button = filterButton();
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(button.closest(".cds--table-toolbar")).toBeTruthy();
+      expect(button.className).not.toContain("retention-toolbar__filter--set");
+      expect(screen.queryByRole("checkbox", { name: t.holdShowReleased })).toBeNull();
+      // The button's popover is the one it controls.
+      const content = document.getElementById(button.getAttribute("aria-controls")!)!;
+      expect(content.className).toBe("cds--popover");
+      fireEvent.click(button);
+      expect(content.contains(await screen.findByRole("group", { name: t.filters }))).toBe(true);
+    });
+
+    it("shows released holds with the filter's checkbox, without a menu", async () => {
+      await show("&tab=holds", "Case 4711");
+      const box = await openFilter();
+      expect(filterButton().getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(box);
       await screen.findByText("Old case");
       expect(requests.some((r) => r.url === "/api/legal-holds?released=1")).toBe(true);
       expect(within(row("Old case")).getByText(t.holdReleasedTag)).toBeTruthy();
       expect(within(row("Old case")).queryByRole("button")).toBeNull();
+      // The popover stays open over the reloaded list.
+      expect(filterButton().getAttribute("aria-expanded")).toBe("true");
     });
 
-    it("keeps the focus on the toggle when the released holds go", async () => {
+    it("keeps the focus on the checkbox when the released holds go", async () => {
       await show("&tab=holds", "Case 4711");
-      const toggle = screen.getByRole("switch", { name: t.holdShowReleased });
-      fireEvent.click(toggle);
+      const box = await openFilter();
+      fireEvent.click(box);
       await screen.findByText("Old case");
-      toggle.focus();
-      fireEvent.click(toggle);
+      box.focus();
+      fireEvent.click(box);
       // The rows go without the focus: it stays where it is.
       await waitFor(() => expect(screen.queryByText("Old case")).toBeNull());
-      expect(document.activeElement).toBe(toggle);
+      expect(document.activeElement).toBe(box);
+      expect(filterButton().getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("closes the filter with Escape, from the checkbox and from the button, and puts the focus on the button", async () => {
+      await show("&tab=holds", "Case 4711");
+      const box = await openFilter();
+      box.focus();
+      fireEvent.keyDown(box, { key: "Escape" });
+      await waitFor(() => expect(filterButton().getAttribute("aria-expanded")).toBe("false"));
+      expect(document.activeElement).toBe(filterButton());
+      fireEvent.click(filterButton());
+      expect(filterButton().getAttribute("aria-expanded")).toBe("true");
+      fireEvent.keyDown(filterButton(), { key: "Escape" });
+      expect(filterButton().getAttribute("aria-expanded")).toBe("false");
+      expect(document.activeElement).toBe(filterButton());
+    });
+
+    it("marks the filter button while the box is checked, open or closed", async () => {
+      await show("&tab=holds", "Case 4711");
+      const box = await openFilter();
+      fireEvent.click(box);
+      await screen.findByText("Old case");
+      expect(filterButton().className).toContain("retention-toolbar__filter--set");
+      fireEvent.click(filterButton());
+      expect(filterButton().getAttribute("aria-expanded")).toBe("false");
+      expect(filterButton().className).toContain("retention-toolbar__filter--set");
+      fireEvent.click(await openFilter());
+      await waitFor(() => expect(screen.queryByText("Old case")).toBeNull());
+      expect(filterButton().className).not.toContain("retention-toolbar__filter--set");
+    });
+
+    it("keeps the choice over a switch to the Rules tab and back", async () => {
+      await show("&tab=holds", "Case 4711");
+      fireEvent.click(await openFilter());
+      await screen.findByText("Old case");
+      fireEvent.click(tab(t.retentionRulesTab));
+      await screen.findByText("demo / personal / Archive/2014");
+      fireEvent.click(tab(t.retentionHoldsTab));
+      await screen.findByText("Old case");
+      expect(filterButton().className).toContain("retention-toolbar__filter--set");
+      expect(((await openFilter()) as HTMLInputElement).checked).toBe(true);
     });
 
     it("releases a hold from its row only with a note, after confirming, and puts the focus on the Holds tab", async () => {
@@ -581,7 +663,7 @@ describe("RetentionPage", () => {
 
     it("puts the focus on the hold's name when its row stays after Release", async () => {
       await show("&tab=holds", "Case 4711");
-      fireEvent.click(screen.getByRole("switch", { name: t.holdShowReleased }));
+      fireEvent.click(await openFilter());
       await screen.findByText("Old case");
       pick("Case 4711", t.holdRelease);
       fireEvent.change(within(dialog()).getByLabelText(t.holdReleaseNote), { target: { value: "done" } });
