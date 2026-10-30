@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        When the maintainer labels this issue `plan`, an implementation plan is posted here as a comment
+        When this issue is labelled `plan`, an implementation plan is posted here as a comment
         and the label changes to `review`. It is implemented once an independent plan reviewer or the maintainer approves it with `ready`.
   - type: textarea
     id: problem
