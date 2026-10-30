@@ -32,7 +32,7 @@ export function focusLost() {
 
 /** Focuses el once it shows if a request is pending or the focus is lost, and clears the request. */
 function useTakeFocus(el: RefObject<HTMLElement | null>, request: RefObject<boolean>) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!request.current && !focusLost()) return;
     request.current = false;
     el.current?.focus();
