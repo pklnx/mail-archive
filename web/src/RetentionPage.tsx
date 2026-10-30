@@ -614,7 +614,7 @@ function EntryRow({
 function Toolbar({ children }: { children: ReactNode }) {
   return (
     <TableToolbar aria-label={t.colActions}>
-      <TableToolbarContent className="retention-toolbar">{children}</TableToolbarContent>
+      <TableToolbarContent className="retention-toolbar__content">{children}</TableToolbarContent>
     </TableToolbar>
   );
 }

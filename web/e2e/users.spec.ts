@@ -1,5 +1,6 @@
 import { origin, unique } from "./demo";
 import { expect, test } from "./fixtures";
+import { menuAtRowEnd } from "./layout";
 
 test("add a user, copy the generated password, lock and unlock", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
@@ -130,4 +131,24 @@ test("on a phone the users table and a user's page fit the width", async ({ page
   expect(tiles).toHaveLength(5);
   expect(new Set(tiles.map((r) => r.top)).size).toBeGreaterThan(1);
   for (const r of tiles) expect(r.left >= 0 && r.right <= 375).toBe(true);
+});
+
+// A user's page on a phone in German (#369): "Passwort zurücksetzen" and the
+// menu share a line, the menu at its end, down to 320 px, with no sideways
+// scroll. The UI follows the browser's language while the user's is "auto".
+test.describe("in German", () => {
+  test.use({ locale: "de-DE" });
+  for (const width of [320, 375, 402]) {
+    test(`at ${width} px a user's page keeps its menu at the end of the actions row`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/?view=users");
+      const main = page.getByRole("main");
+      await expect(main.getByRole("heading", { name: "Benutzer", level: 1 })).toBeVisible();
+      const row = main.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /^kim/ }) });
+      await row.getByRole("link", { name: "kim", exact: true }).click();
+      await expect(main.getByRole("heading", { name: "kim", level: 1 })).toBeVisible();
+      await expect(main.locator(".page-header__actions").getByRole("button", { name: "Passwort zurücksetzen" })).toBeVisible();
+      await menuAtRowEnd(page, main, /^Aktionen für kim$/);
+    });
+  }
 });

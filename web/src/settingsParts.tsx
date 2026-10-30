@@ -27,6 +27,8 @@ export function AppLink({ href, go, className, children }: { href: string; go: (
  * The head of a detail page: a breadcrumb back to the list, the title as the
  * page's h1 (the focus target of a page change) with its tags, the primary
  * actions and the overflow menu, and below them a helper line (children).
+ * With both, the buttons wrap as a group and the menu stays at the row end,
+ * on the line of the last button (#369).
  */
 export function DetailHeader({
   parent,
@@ -62,8 +64,8 @@ export function DetailHeader({
             {tags && <div className="app-detail-title__tags">{tags}</div>}
           </div>
           {(actions || menu) && (
-            <div className="page-header__actions">
-              {actions}
+            <div className={actions && menu ? "page-header__actions page-header__actions--menu" : "page-header__actions"}>
+              {actions && menu ? <div className="page-header__buttons">{actions}</div> : actions}
               {menu}
             </div>
           )}
