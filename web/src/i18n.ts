@@ -691,9 +691,6 @@ const en = {
     breadcrumb: "Breadcrumb",
     /** The status icon of a notification, by kind. */
     status: { error: "Error", warning: "Warning", info: "Information", success: "Done" },
-    /** The side labels of a Toggle. */
-    toggleOff: "Off",
-    toggleOn: "On",
     /** The (hidden) scroll buttons of a TabList. */
     scrollLeft: "Scroll left",
     scrollRight: "Scroll right",
@@ -1385,8 +1382,6 @@ const de: Messages = {
     showLess: "Weniger anzeigen",
     breadcrumb: "Navigationspfad",
     status: { error: "Fehler", warning: "Warnung", info: "Information", success: "Erledigt" },
-    toggleOff: "Aus",
-    toggleOn: "An",
     scrollLeft: "Nach links blättern",
     scrollRight: "Nach rechts blättern",
     ids: {

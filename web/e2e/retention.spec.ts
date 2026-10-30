@@ -140,6 +140,35 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await expect(main.locator(".app-detail-title__tags")).toHaveText("released");
   await expect(holdTitle).toBeFocused();
 
+  // Back on the Holds tab the released hold is hidden; the toolbar's filter
+  // shows it with its tag, and hides it again (#375).
+  await page.goto("/?view=retention&tab=holds");
+  const holds = main.getByRole("tabpanel");
+  await expect(holds.locator(".retention-table table:not(.cds--skeleton), .retention-table__empty").first()).toBeVisible();
+  const heldRow = holds.getByRole("row").filter({ hasText: hold });
+  await expect(heldRow).toHaveCount(0);
+  const filter = holds.getByRole("button", { name: "Filters", exact: true });
+  await expect(filter).toHaveAttribute("aria-expanded", "false");
+  await filter.click();
+  await expect(filter).toHaveAttribute("aria-expanded", "true");
+  const showReleased = page.getByRole("checkbox", { name: "Show released holds" });
+  await expect(showReleased).not.toBeChecked();
+  // Carbon draws the box on the label, over the input: a person clicks that.
+  const releasedLabel = page.locator(`label[for="${await showReleased.getAttribute("id")}"]`);
+  await releasedLabel.click();
+  await expect(showReleased).toBeChecked();
+  await expect(heldRow).toContainText("released");
+  await page.keyboard.press("Escape");
+  await expect(filter).toHaveAttribute("aria-expanded", "false");
+  await expect(showReleased).toHaveCount(0);
+  await expect(filter).toBeFocused();
+  await expect(filter).toHaveClass(/\bretention-toolbar__filter--set\b/);
+  await filter.click();
+  await releasedLabel.click();
+  await expect(showReleased).not.toBeChecked();
+  await expect(heldRow).toHaveCount(0);
+  await expect(filter).not.toHaveClass(/\bretention-toolbar__filter--set\b/);
+
   // Remove the rule from its row: the row goes, the focus is on the Rules tab.
   await page.goto("/?view=retention");
   await main.getByRole("button", { name: `Actions for ${what}` }).click();
@@ -170,48 +199,38 @@ test("on a phone the retention tables fit the width and their menus are on scree
     await expect(main.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
     await expect(main.getByRole("tabpanel").getByRole("button", { name: tab === "Legal holds" ? "Add hold" : "New deletion run" })).toBeInViewport();
     if (tab === "Legal holds") {
-      // The toolbar's toggle fits beside or above Add hold, whole, not under it and inside the
-      // toolbar's background (#339, #335 I8, #370).
-      await holdsToolbarFits(page, main.getByRole("tabpanel"), { add: "Add hold", toggle: "Show released holds", off: "Off" });
+      // The toolbar's filter and Add hold lie inside its background, apart
+      // (#339, #335 I8, #370, #375).
+      await holdsToolbarFits(page, main.getByRole("tabpanel"), { add: "Add hold", filter: "Filters" });
     }
     expect(await noSideScroll(page)).toBe(true);
   }
 });
 
-// The Legal holds toolbar on a phone in German (#370): the toggle's label is
-// longer than in English, so the toggle takes its own line above "Hold
-// anlegen" and the toolbar grows to hold both. 320 px is a guard. The UI
-// follows the browser's language while the user's language is "auto".
+// The Legal holds toolbar in German (#370, #375): the filter button and "Hold
+// anlegen" lie inside Carbon's 48 px toolbar at desktop and phone widths;
+// 672 px is just above the phone layout's breakpoint, 320 px is a guard.
+// The UI follows the browser's language while the user's language is "auto".
 test.describe("in German", () => {
   test.use({ locale: "de-DE" });
-  for (const width of [375, 402, 320]) {
-    test(`at ${width} px the Legal holds toolbar holds its toggle and Hold anlegen`, async ({ page }) => {
+  for (const width of [1280, 672, 402, 375, 320]) {
+    test(`at ${width} px the Legal holds toolbar holds its filter and Hold anlegen`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await page.goto("/?view=retention&tab=holds");
       const main = page.getByRole("main");
       await expect(main.getByRole("heading", { name: "Aufbewahrung", level: 1 })).toBeVisible();
       await expect(main.getByRole("tab", { name: "Legal Holds" })).toHaveAttribute("aria-selected", "true");
-      await holdsToolbarFits(page, main.getByRole("tabpanel"), { add: "Hold anlegen", toggle: "Aufgehobene Holds zeigen", off: "Aus" });
+      const panel = main.getByRole("tabpanel");
+      await holdsToolbarFits(page, panel, { add: "Hold anlegen", filter: "Filter" });
+      if (width === 320) {
+        // The open filter is whole on screen, and the page does not scroll sideways.
+        await panel.getByRole("button", { name: "Filter", exact: true }).click();
+        // Carbon draws the box on the label; the input itself is visually hidden.
+        const box = page.getByRole("checkbox", { name: "Aufgehobene Holds zeigen" });
+        await expect(page.locator(`label[for="${await box.getAttribute("id")}"]`)).toBeInViewport({ ratio: 1 });
+        await expect(page.getByRole("group", { name: "Filter" })).toBeInViewport({ ratio: 1 });
+        expect(await noSideScroll(page)).toBe(true);
+      }
     });
   }
 });
-
-// From 42rem up the Legal holds toolbar keeps Carbon's 48 px with the toggle
-// beside Add hold (#370): 672 px is just above the phone layout's breakpoint.
-for (const width of [1280, 672]) {
-  test(`at ${width} px the Legal holds toolbar is one 48 px line`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 800 });
-    await page.goto("/?view=retention&tab=holds");
-    const panel = page.getByRole("main").getByRole("tabpanel");
-    const add = panel.getByRole("button", { name: "Add hold" });
-    await expect(add).toBeVisible();
-    await expect(panel.getByRole("switch", { name: "Show released holds" })).toHaveCount(1);
-    const toolbar = (await panel.locator(".cds--table-toolbar").boundingBox())!;
-    expect(Math.abs(toolbar.height - 48), `toolbar height ${toolbar.height}`).toBeLessThanOrEqual(0.5);
-    const toggle = (await panel.locator(".retention-toolbar__toggle").boundingBox())!;
-    const button = (await add.boundingBox())!;
-    const centre = (b: { y: number; height: number }) => b.y + b.height / 2;
-    expect(Math.abs(centre(toggle) - centre(button)), `toggle ${JSON.stringify(toggle)}, Add hold ${JSON.stringify(button)}`).toBeLessThanOrEqual(2);
-    expect(await noSideScroll(page)).toBe(true);
-  });
-}
