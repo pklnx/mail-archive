@@ -7,7 +7,8 @@ import { Button, FeatureFlags, IconButton, SkeletonText, TreeNode, TreeView } fr
 import { Close, SidePanelClose, SidePanelOpen, WarningFilled } from "@carbon/icons-react";
 import { t } from "./i18n";
 import { railLabel } from "./accountName";
-import { maxWidth, minWidth, step, type SidebarLayout } from "./sidebarLayout";
+import { minWidth, step, type SidebarLayout } from "./sidebarLayout";
+import { decimal } from "./format";
 import type { AccountsState } from "./useAccounts";
 import type { ViewState } from "./urlState";
 import type { Account } from "./api";
@@ -320,7 +321,8 @@ export function SidebarPanel({ layout, controls, ...props }: PanelProps) {
 
 /** The drag handle on the column's right edge (window-splitter pattern). */
 function SidebarResizer({ layout, controls, onCollapse }: { layout: SidebarLayout; controls: string; onCollapse: () => void }) {
-  const { width, setWidth, commitWidth, resetWidth } = layout;
+  // width is already bounded by the cap (max); dragging and keys clamp to it.
+  const { width, max, setWidth, commitWidth, resetWidth } = layout;
   const [dragging, setDragging] = useState(false);
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
@@ -363,7 +365,7 @@ function SidebarResizer({ layout, controls, onCollapse }: { layout: SidebarLayou
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const next =
-      e.key === "ArrowRight" ? width + step : e.key === "ArrowLeft" ? width - step : e.key === "Home" ? minWidth : e.key === "End" ? maxWidth : null;
+      e.key === "ArrowRight" ? width + step : e.key === "ArrowLeft" ? width - step : e.key === "Home" ? minWidth : e.key === "End" ? max : null;
     if (next !== null) {
       e.preventDefault();
       commitWidth(next);
@@ -380,9 +382,9 @@ function SidebarResizer({ layout, controls, onCollapse }: { layout: SidebarLayou
       aria-label={t.resizeSidebar}
       aria-controls={controls}
       aria-valuemin={minWidth}
-      aria-valuemax={maxWidth}
+      aria-valuemax={max}
       aria-valuenow={width}
-      aria-valuetext={t.sidebarWidth(width)}
+      aria-valuetext={t.sidebarWidth(decimal(width))}
       tabIndex={0}
       className={dragging ? "folder-pane__resizer folder-pane__resizer--dragging" : "folder-pane__resizer"}
       onPointerDown={onPointerDown}

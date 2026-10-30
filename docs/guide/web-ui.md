@@ -52,7 +52,9 @@ labels when you point at it or move the focus into it.
   sync; until then, and for removed accounts, the list stays flat.
 
   The column's width is yours to set, from 12 to 28 rem (192 to 448 pixels
-  at the default font size). Drag the handle on its right edge, or focus the
+  at the default font size); on narrower desktop windows the widest setting
+  is narrower, so the message keeps room, and your width comes back on a
+  wider window. Drag the handle on its right edge, or focus the
   handle: the left and right arrow keys change the width, **Home** and
   **End** set the narrowest and the widest, and **Enter** collapses the
   column. A double-click on the handle resets the width. The button next to
@@ -72,7 +74,9 @@ labels when you point at it or move the focus into it.
   before the server renumbered that folder; the message is listed there
   again under its new number if it is still on the server. A place marked
   *no longer on the server* (in amber, with the date it was last seen) was
-  deleted there; the archive keeps the message.
+  deleted there; the archive keeps the message. A tap, a click, **Enter** or
+  **Space** on a marked place shows its explanation; **Escape** or a click
+  elsewhere closes it.
 
 Above an open message, the arrows go to the previous and next message of
 the list, with the position in between ("3 of 42"; "3 of 42+" while more

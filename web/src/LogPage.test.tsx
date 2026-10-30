@@ -114,11 +114,35 @@ describe("LogPage", () => {
     const search = within(rows[2]!);
     expect(search.getByText("“invoice”")).toBeTruthy();
     expect(search.getByText(t.logViaKey("backup"))).toBeTruthy();
-    expect(within(rows[3]!).getByText(t.logCLI)).toBeTruthy();
+    // For an admin the command line is in the Who column, not in the detail.
+    const cli = within(rows[3]!).getByText(t.logCLI);
+    expect(cli.tagName).toBe("TD");
+    expect(within(rows[3]!).getAllByRole("cell")[2]).toBe(cli);
     expect(within(rows[3]!).getByText("work")).toBeTruthy();
     const failed = within(rows[4]!).getByText(t.auditAction("auth.login_failed"));
     expect(failed.className).toContain("app-text-error");
     expect(within(rows[4]!).getByText("password, wrong_password")).toBeTruthy();
+  });
+
+  it("shows the Who column only to admins, and the command line in the detail for the others (#310)", async () => {
+    render(<LogPage admin={false} open={() => {}} />);
+    await screen.findByText("Invoice 42");
+    const rows = screen.getAllByRole("row");
+    expect(within(rows[0]!).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([t.logTime, t.logAction, t.logTarget, t.logClient]);
+    for (const r of rows.slice(1)) expect(within(r).getAllByRole("cell")).toHaveLength(4);
+    // The CLI entry: "command line" in its target cell, as a detail line.
+    const cli = within(rows[3]!).getByText(t.logCLI);
+    expect(cli.className).toContain("log-table__detail");
+    expect(cli.closest("td")).toBe(within(rows[3]!).getByText("work").closest("td"));
+    // A session entry gets no such line.
+    expect(within(rows[1]!).queryByText(t.logCLI)).toBeNull();
+  });
+
+  it("shows the table skeleton without the Who column to a non-admin", () => {
+    vi.mocked(globalThis.fetch).mockImplementation(() => new Promise<Response>(() => {}));
+    render(<LogPage admin={false} open={() => {}} />);
+    const table = expectLoading()!.querySelector(".cds--data-table.cds--skeleton")!;
+    expect([...table.querySelectorAll("th")].map((th) => th.textContent)).toEqual([t.logTime, t.logAction, t.logTarget, t.logClient]);
   });
 
   it("unfolds and folds the repeats", async () => {

@@ -197,8 +197,11 @@ export function reconcileNote(a: Account): { gone: string | null; check: string 
 
 export function syncStatus(a: Account): { text: string; error?: string } {
   const run = a.sync.lastRun;
+  // While running, the counts are the running run's. A finished lastRun is
+  // the previous one, whose counts would flash until the new run is listed.
+  const current = run && run.finishedAt === null ? run : null;
   if (a.kind === "import") {
-    if (a.sync.state === "running") return { text: t.importRunning(run?.fetched ?? 0, run?.new ?? 0) };
+    if (a.sync.state === "running") return { text: t.importRunning(current?.fetched ?? 0, current?.new ?? 0) };
     if (!run) return { text: t.importedNote };
     const when = relativeTime(run.finishedAt ?? run.startedAt);
     if (run.status === "ok") return { text: t.lastImportOk(when, run.new) };
@@ -206,7 +209,7 @@ export function syncStatus(a: Account): { text: string; error?: string } {
     return { text: t.lastImportFailed(when), error: run.error };
   }
   if (a.sync.state === "queued") return { text: t.stateQueued };
-  if (a.sync.state === "running") return { text: t.stateRunning(run?.fetched ?? 0, run?.new ?? 0) };
+  if (a.sync.state === "running") return { text: t.stateRunning(current?.fetched ?? 0, current?.new ?? 0) };
   if (!run) return { text: t.neverSynced };
   const when = relativeTime(run.finishedAt ?? run.startedAt);
   switch (run.status) {
