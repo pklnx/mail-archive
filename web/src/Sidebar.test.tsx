@@ -231,7 +231,7 @@ describe("Folder tree account state", () => {
       expect(screen.getByRole("treeitem", { name: de.allFolders })).toBeTruthy();
       expect(screen.getByRole("treeitem", { name: `alt ${de.removed}` })).toBeTruthy();
       for (const name of [de.collapseAll, de.expandAll, de.collapseSidebar, de.closeFolders]) expect(screen.getByRole("button", { name })).toBeTruthy();
-      expect(screen.getByRole("separator", { name: de.resizeSidebar }).getAttribute("aria-valuetext")).toBe(de.sidebarWidth(14));
+      expect(screen.getByRole("separator", { name: de.resizeSidebar }).getAttribute("aria-valuetext")).toBe(de.sidebarWidth("14"));
       const html = document.body.innerHTML;
       for (const s of ["All folders", "Collapse", "Expand", "Resize", "removed", "Close"]) expect(html).not.toContain(s);
     } finally {
@@ -241,9 +241,21 @@ describe("Folder tree account state", () => {
 });
 
 // The column's content as App renders it: full tree with resize handle, or the rail.
-function Panel({ state = view(), d = data(), select = () => {}, onClose = () => {} }: { state?: ViewState; d?: AccountsResponse; select?: (a: string, f: string) => void; onClose?: () => void }) {
+function Panel({
+  state = view(),
+  d = data(),
+  select = () => {},
+  onClose = () => {},
+  cap,
+}: {
+  state?: ViewState;
+  d?: AccountsResponse;
+  select?: (a: string, f: string) => void;
+  onClose?: () => void;
+  cap?: number;
+}) {
   const collapsed = useCollapsed("alice", d);
-  const layout = useSidebarLayout("alice");
+  const layout = useSidebarLayout("alice", cap);
   return (
     <aside id="aside" data-testid="aside">
       <SidebarPanel
@@ -275,7 +287,7 @@ describe("Folder column width", () => {
     expect(s.getAttribute("aria-valuemin")).toBe("12");
     expect(s.getAttribute("aria-valuemax")).toBe("28");
     expect(s.getAttribute("aria-valuenow")).toBe("14");
-    expect(s.getAttribute("aria-valuetext")).toBe(t.sidebarWidth(14));
+    expect(s.getAttribute("aria-valuetext")).toBe(t.sidebarWidth("14"));
     expect(s.getAttribute("aria-orientation")).toBe("vertical");
     expect(s.getAttribute("aria-controls")).toBe("aside");
     expect(s.tabIndex).toBe(0);
@@ -342,6 +354,57 @@ describe("Folder column width", () => {
     fireEvent.pointerDown(separator(), { clientX: 100, button: 0 });
     unmount();
     expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("reads the width in the user's number format (#310)", () => {
+    localStorage.setItem(layoutKey, JSON.stringify({ v: 1, width: 13.25, collapsed: false }));
+    render(<Panel />);
+    expect(separator().getAttribute("aria-valuetext")).toBe("13.25 rem wide");
+    expect(now()).toBe(13.25);
+    cleanup();
+    applySettings({ language: "de", locale: "de" });
+    try {
+      render(<Panel />);
+      const s = screen.getByRole("separator", { name: messagesFor("de").resizeSidebar });
+      expect(s.getAttribute("aria-valuetext")).toBe("13,25 rem breit");
+      // The value itself stays a number.
+      expect(s.getAttribute("aria-valuenow")).toBe("13.25");
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
+  });
+
+  it("stops at the cap: value, maximum, End, arrows and dragging, and saves the clamped width (#310)", () => {
+    localStorage.setItem(layoutKey, JSON.stringify({ v: 1, width: 28, collapsed: false }));
+    const { rerender } = render(<Panel cap={16.75} />);
+    const s = separator();
+    expect(now()).toBe(16.75);
+    expect(s.getAttribute("aria-valuemax")).toBe("16.75");
+    expect(s.getAttribute("aria-valuetext")).toBe(t.sidebarWidth("16.75"));
+    // Applying the cap saved nothing.
+    expect(stored()?.width).toBe(28);
+    fireEvent.keyDown(s, { key: "ArrowLeft" });
+    expect(now()).toBe(15.75);
+    fireEvent.keyDown(s, { key: "ArrowRight" });
+    fireEvent.keyDown(s, { key: "ArrowRight" });
+    expect(now()).toBe(16.75);
+    expect(stored()?.width).toBe(16.75);
+    fireEvent.keyDown(s, { key: "Home" });
+    expect(now()).toBe(12);
+    fireEvent.keyDown(s, { key: "End" });
+    expect(now()).toBe(16.75);
+    expect(stored()?.width).toBe(16.75);
+    fireEvent.keyDown(s, { key: "Home" });
+    fireEvent.pointerDown(s, { clientX: 0, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 2000 });
+    expect(now()).toBe(16.75);
+    fireEvent.pointerUp(window);
+    expect(stored()?.width).toBe(16.75);
+    // A wider window: the full range again.
+    rerender(<Panel cap={28} />);
+    expect(separator().getAttribute("aria-valuemax")).toBe("28");
+    fireEvent.keyDown(separator(), { key: "End" });
+    expect(now()).toBe(28);
   });
 
   it("resets the width with a double-click", () => {

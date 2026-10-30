@@ -1,5 +1,6 @@
-import { devices } from "@playwright/test";
+import { devices, type Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
+import { mailReady, openLong } from "./mailFrame";
 
 // A phone with a touch screen: one column at a time; the side navigation
 // and the folder tree are overlays.
@@ -124,4 +125,82 @@ test("phone: the quick filters toggle with one tap, Edit filters opens the filte
   await tags.getByRole("button", { name: "Remove filter: From" }).click();
   await expect(tags).toHaveCount(0);
   await expect(page).not.toHaveURL(/from%3Asam/);
+});
+
+// A swipe that starts on a scrim does not scroll the page behind it; a tap
+// on it still closes the overlay (#310). The page scrolls while a message is
+// open (#200). The swipe is a real touch sequence through the DevTools
+// protocol (Input.synthesizeScrollGesture with a touch source does not
+// scroll in the headless shell); each call returns once the page has
+// handled the event.
+async function swipeUp(page: Page, x: number, y: number) {
+  const cdp = await page.context().newCDPSession(page);
+  // Event timestamps, not real time: 50ms per step, then the finger rests
+  // before it lifts, so no fling follows (it would swallow the next tap).
+  const t0 = Date.now() / 1000;
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", i: number, at: number) =>
+    cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y: y - i * 30 }], timestamp: t0 + at });
+  await touch("touchStart", 0, 0);
+  for (let i = 1; i <= 10; i++) await touch("touchMove", i, i * 0.05);
+  await touch("touchMove", 10, 1);
+  await touch("touchEnd", 10, 1.05);
+  await cdp.detach();
+}
+/** The page's scroll position after two frames, so a scroll from the swipe has been applied. */
+const scrollY = (page: Page) => page.evaluate(() => new Promise<number>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(window.scrollY)))));
+/** Whether the page can scroll at all, so an unchanged scrollY says something. */
+const scrolls = (page: Page) => page.evaluate(() => document.scrollingElement!.scrollHeight > innerHeight + 100);
+const rem = 16;
+
+test("phone: a swipe on the SideNav's scrim does not scroll the message behind it; a tap closes it", async ({ page }) => {
+  await openLong(page);
+  await expect.poll(() => scrolls(page)).toBe(true);
+  const nav = page.getByRole("navigation", { name: "Main navigation" });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(nav).toHaveClass(/cds--side-nav--expanded/);
+  const scrim = page.locator(".app-shell > .cds--side-nav__overlay");
+  await expect(scrim).toBeVisible();
+  const view = page.viewportSize()!;
+  // Right of the 16rem panel, below the header.
+  const x = Math.round((16 * rem + view.width) / 2);
+  const y = Math.round(view.height / 2);
+  const before = await scrollY(page);
+  await swipeUp(page, x, y);
+  expect(await scrollY(page)).toBe(before);
+  await page.touchscreen.tap(x, y);
+  await expect(nav).not.toHaveClass(/cds--side-nav--expanded/);
+  // The same swipe without the scrim scrolls the page: the check above is not vacuous.
+  await swipeUp(page, x, y);
+  expect(await scrollY(page)).toBeGreaterThan(before);
+});
+
+test("phone: a swipe on the Folders scrim does not scroll the message behind it; a tap closes it", async ({ page }) => {
+  // Only history brings the overlay over an open message: the Folders
+  // button is in the list, which a phone hides while reading.
+  await page.goto("/?q=itinerary");
+  const list = page.getByRole("list", { name: "Messages" });
+  await list.getByRole("button", { name: /Offsite planning/ }).click();
+  await expect(page).toHaveURL(/[?&]m=[0-9a-f]{64}/);
+  await page.goBack();
+  await expect(list).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "Folders" });
+  await page.getByRole("button", { name: "Folders", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(/[?&]m=[0-9a-f]{64}/);
+  await mailReady(page);
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => scrolls(page)).toBe(true);
+  const view = page.viewportSize()!;
+  // Right of the overlay, min(20rem, 100vw - 3rem) wide.
+  const x = Math.round((Math.min(20 * rem, view.width - 3 * rem) + view.width) / 2);
+  const y = Math.round(view.height / 2);
+  const before = await scrollY(page);
+  await swipeUp(page, x, y);
+  expect(await scrollY(page)).toBe(before);
+  await page.touchscreen.tap(x, y);
+  await expect(dialog).toHaveCount(0);
+  // The same swipe without the scrim scrolls the page: the check above is not vacuous.
+  await swipeUp(page, x, y);
+  expect(await scrollY(page)).toBeGreaterThan(before);
 });

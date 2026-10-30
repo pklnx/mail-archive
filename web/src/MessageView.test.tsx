@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageView } from "./MessageView";
 import type { ConversationEntry, Location, MessageDetail } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
+import { locationLabel } from "./format";
 
 const id = "a".repeat(64);
 
@@ -152,15 +153,38 @@ describe("the message header", () => {
     expect(document.getElementById(origin.getAttribute("aria-controls")!)!.textContent).toContain(t.originImportedFrom("old-mails"));
   });
 
-  it("explains renumbered and gone locations in tooltips", async () => {
-    detail = message({
-      locations: [location(), location({ folder: "Old", superseded: true }), location({ folder: "Gone", goneAt: "2026-10-02T00:00:00Z" })],
-    });
+  it("explains renumbered and gone locations in toggletips (#310)", async () => {
+    const old = location({ folder: "Old", superseded: true });
+    const gone = location({ folder: "Gone", goneAt: "2026-10-02T00:00:00Z" });
+    detail = message({ locations: [location(), old, gone] });
     const article = await show();
-    const hints = [...article.querySelectorAll("[aria-describedby]")].map((el) => document.getElementById(el.getAttribute("aria-describedby")!)?.textContent);
-    expect(hints).toContain(t.renumberedHint);
-    expect(hints).toContain(t.goneFromServerHint);
-    expect(within(article).getByText("personal / INBOX")).toBeTruthy();
+    fireEvent.click(within(article).getByRole("button", { name: t.details }));
+    // A location without a hint is a plain tag, not a button.
+    expect(within(article).getByText("personal / INBOX").closest("button")).toBeNull();
+    for (const [l, hint] of [
+      [old, t.renumberedHint],
+      [gone, t.goneFromServerHint],
+    ] as const) {
+      // Named by the location, not by Carbon's English default label.
+      const button = within(article).getByRole("button", { name: locationLabel(l) });
+      const tip = button.closest(".cds--toggletip")!;
+      const content = document.getElementById(button.getAttribute("aria-controls")!)!;
+      expect(content.textContent).toBe(hint);
+      expect(tip.contains(content)).toBe(true);
+      // A plain tag as a span inside: no button and no div in the button.
+      expect(button.querySelector("button, div")).toBeNull();
+      expect(button.querySelector("span.cds--tag")?.textContent).toBe(locationLabel(l));
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(tip.className).not.toContain("cds--toggletip--open");
+      fireEvent.click(button);
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+      expect(tip.className).toContain("cds--toggletip--open");
+      fireEvent.keyDown(button, { key: "Escape" });
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(tip.className).not.toContain("cds--toggletip--open");
+      expect(document.activeElement).toBe(button);
+    }
+    expect(document.body.innerHTML).not.toContain("Show information");
   });
 
   it("speaks German, Carbon's texts included", async () => {
@@ -177,13 +201,15 @@ describe("the message header", () => {
     const article = await show();
     fireEvent.click(within(article).getByRole("button", { name: de.details }));
     expect(within(article).getByRole("button", { name: de.loadRemoteImages })).toBeTruthy();
+    // The location's toggletip is named by the German location text (#310).
+    expect(within(article).getByRole("button", { name: `personal / Old (${de.renumbered})` }).getAttribute("aria-expanded")).toBe("false");
     expect(within(article).getByRole("button", { name: de.envelope("journal") })).toBeTruthy();
     expect(within(article).getByRole("list", { name: de.attachments })).toBeTruthy();
     const html = document.body.innerHTML;
     for (const s of ["Load remote images", "Show text", "Download", "Envelope", "Found in", "Attachments", "renumbered", "title", "Close", "Dismiss"]) {
       expect(html, s).not.toContain(`>${s}`);
     }
-    for (const s of ["Remote images can", "The server renumbered", "very large"]) expect(html, s).not.toContain(s);
+    for (const s of ["Remote images can", "The server renumbered", "very large", "Show information"]) expect(html, s).not.toContain(s);
   });
 });
 

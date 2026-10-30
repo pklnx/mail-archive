@@ -345,6 +345,62 @@ describe("desktop navigation (lg and up)", () => {
     expect(window.location.search).toBe("");
   });
 
+  it("caps the sidebar by the mail view's width, also after another page and back (#310)", async () => {
+    // A ResizeObserver the test drives, and a width for the mail view only.
+    const observers: { el: Element; fire: () => void; disconnected: boolean }[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        entry?: { el: Element; fire: () => void; disconnected: boolean };
+        constructor(private cb: () => void) {}
+        observe(el: Element) {
+          this.entry = { el, fire: () => this.cb(), disconnected: false };
+          observers.push(this.entry);
+        }
+        unobserve() {}
+        disconnect() {
+          if (this.entry) this.entry.disconnected = true;
+        }
+      },
+    );
+    let mailView = 63 * 16; // a 1056px window minus the 3rem rail
+    const box = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      return this.classList.contains("mail-view") ? DOMRect.fromRect({ width: mailView, height: 800 }) : box.call(this);
+    };
+    localStorage.setItem("mail-archive.sidebar-layout.alice", JSON.stringify({ v: 1, width: 28, collapsed: false }));
+    await renderApp();
+    const separator = () => screen.getByRole("separator", { name: t.resizeSidebar });
+    const view = () => document.querySelector<HTMLElement>(".mail-view")!;
+    // Only the mail view's: Carbon's components and the mail frame have their own.
+    const live = () => observers.filter((o) => !o.disconnected && o.el.classList.contains("mail-view"));
+    // Measured when the mail view mounts, before any resize notification.
+    expect(separator().getAttribute("aria-valuenow")).toBe("14");
+    expect(separator().getAttribute("aria-valuemax")).toBe("14");
+    expect(view().style.getPropertyValue("--sidebar-w")).toBe("14rem");
+    expect(live().map((o) => o.el)).toEqual([view()]);
+    mailView = 80 * 16;
+    act(() => live()[0]!.fire());
+    expect(separator().getAttribute("aria-valuenow")).toBe("28");
+
+    // Another page unmounts the mail view; its observer goes.
+    fireEvent.click(within(sideNav()).getByRole("link", { name: t.log }));
+    expect(document.querySelector(".mail-view")).toBeNull();
+    expect(live()).toEqual([]);
+    mailView = 65.875 * 16;
+    fireEvent.click(within(sideNav()).getByRole("link", { name: t.allMail }));
+    await screen.findByRole("separator", { name: t.resizeSidebar });
+    expect(live().map((o) => o.el)).toEqual([view()]);
+    // Rounded down to 0.25rem: 16.875 is 16.75.
+    expect(separator().getAttribute("aria-valuenow")).toBe("16.75");
+    mailView = 70 * 16;
+    act(() => live()[0]!.fire());
+    expect(separator().getAttribute("aria-valuenow")).toBe("21");
+    expect(view().style.getPropertyValue("--sidebar-w")).toBe("21rem");
+    // A narrower window saved nothing: the preference is still 28.
+    expect(JSON.parse(localStorage.getItem("mail-archive.sidebar-layout.alice")!).width).toBe(28);
+  });
+
   it("ignores the shortcuts while typing in the search field", async () => {
     window.history.replaceState(null, "", "/?account=work");
     await renderApp();

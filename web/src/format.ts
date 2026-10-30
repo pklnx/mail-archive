@@ -103,6 +103,11 @@ export function fileSize(bytes: number): string {
   return `${v.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false })} ${units[i]}`;
 }
 
+/** A number with up to two decimals in the user's number format, without grouping ("13,25" in German). */
+export function decimal(n: number): string {
+  return n.toLocaleString(locale, { maximumFractionDigits: 2, useGrouping: false });
+}
+
 /** The display name of an address like `"Jane Doe" <jane@x>`. */
 export function senderName(from: string): string {
   const m = /^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/.exec(from);
