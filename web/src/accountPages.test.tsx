@@ -296,23 +296,29 @@ describe("the accounts table", () => {
     expect(wide).toEqual([s.colType, t.messages, s.colLastActivity]);
   });
 
-  it("keeps Sync visible on IMAP rows only, disabled while the account syncs", async () => {
+  it("puts Sync first in the menu of IMAP rows only, disabled while the account syncs, and hands the focus back to the row's menu button (#378)", async () => {
     show("/?view=accounts", data([account("work"), busy(account("busy")), smtp("journal"), imported("files")]));
-    const sync = within(row("work")).getByRole("button", { name: t.syncNow }) as HTMLButtonElement;
-    expect((within(row("busy")).getByRole("button", { name: t.syncNow }) as HTMLButtonElement).disabled).toBe(true);
+    // No row has a Sync button of its own any more.
+    for (const name of ["work", "busy", "journal", "files"]) expect(within(row(name)).queryByRole("button", { name: t.syncNow })).toBeNull();
+    expect(menu("busy")[0]).toEqual([t.syncNow, true]);
     expect(within(row("busy")).getByText(t.syncing)).toBeTruthy();
-    expect(within(row("journal")).queryByRole("button", { name: t.syncNow })).toBeNull();
-    expect(within(row("files")).queryByRole("button", { name: t.syncNow })).toBeNull();
-    expect(sync.className).toContain("cds--btn--ghost");
-    fireEvent.click(sync);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(menu("journal").map(([label]) => label)).not.toContain(t.syncNow);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(menu("files").map(([label]) => label)).not.toContain(t.syncNow);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(menu("work")[0]).toEqual([t.syncNow, false]);
+    fireEvent.click(screen.getByRole("menuitem", { name: t.syncNow }));
     await waitFor(() => expect(changes()).toEqual([{ method: "POST", url: "/api/accounts/work/sync", body: undefined }]));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(menuButton("work"));
   });
 
   it("holds exactly the actions of each kind in the row menu, Remove last", () => {
     show("/?view=accounts", data([account("work"), account("off", { enabled: false }), smtp("journal"), imported("files")]));
-    expect(menu("work")).toEqual([[t.checkServer, false], [t.edit, false], [t.disable, false], [t.remove, false]]);
+    expect(menu("work")).toEqual([[t.syncNow, false], [t.checkServer, false], [t.edit, false], [t.disable, false], [t.remove, false]]);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    expect(menu("off").map(([label]) => label)).toEqual([t.checkServer, t.edit, t.enable, t.remove]);
+    expect(menu("off").map(([label]) => label)).toEqual([t.syncNow, t.checkServer, t.edit, t.enable, t.remove]);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(menu("journal")).toEqual([[t.mailServerSetup, false], [t.importFromIMAP, false], [t.edit, false], [t.disable, false], [t.remove, false]]);
     expect(screen.getByRole("menuitem", { name: t.remove }).className).toContain("danger");
@@ -320,10 +326,10 @@ describe("the accounts table", () => {
     expect(menu("files")).toEqual([[t.remove, false]]);
   });
 
-  it("keeps today's disabled states: Remove and Check server while busy, Import from IMAP while busy or while a fill runs", () => {
+  it("keeps today's disabled states: Sync, Remove and Check server while busy, Import from IMAP while busy or while a fill runs", () => {
     const filling = smtp("filling", { fills: [fill()], fill: fill() });
     show("/?view=accounts", data([busy(account("work")), busy(smtp("journal")), filling]));
-    expect(menu("work")).toEqual([[t.checkServer, true], [t.edit, false], [t.disable, false], [t.remove, true]]);
+    expect(menu("work")).toEqual([[t.syncNow, true], [t.checkServer, true], [t.edit, false], [t.disable, false], [t.remove, true]]);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(menu("journal")).toEqual([[t.mailServerSetup, false], [t.importFromIMAP, true], [t.edit, false], [t.disable, false], [t.remove, true]]);
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });

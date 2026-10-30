@@ -106,6 +106,10 @@ export function RowMenu({ label, register, children }: { label: string; register
         size="lg"
         menuAlignment="bottom-end"
         tooltipAlignment="left"
+        // Placed with position: fixed: inside a table's scrolling box the
+        // label of a long name, wrapped below the last row, made the box
+        // scroll (#378).
+        tooltipAutoAlign
         // Carbon keeps a mouse click from focusing the trigger, so the menu
         // would hand the focus back to whatever had it before (the page's h1,
         // say), and so would a confirmation opened from the menu. Focused

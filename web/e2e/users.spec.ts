@@ -1,6 +1,6 @@
 import { origin, unique } from "./demo";
 import { expect, test } from "./fixtures";
-import { menuAtRowEnd } from "./layout";
+import { menuAtRowEnd, rowsAligned } from "./layout";
 
 test("add a user, copy the generated password, lock and unlock", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
@@ -131,6 +131,12 @@ test("on a phone the users table and a user's page fit the width", async ({ page
   expect(tiles).toHaveLength(5);
   expect(new Set(tiles.map((r) => r.top)).size).toBeGreaterThan(1);
   for (const r of tiles) expect(r.left >= 0 && r.right <= 375).toBe(true);
+});
+
+// The cells of a row share one top alignment, the ⋮ too (#378).
+test("the cells of a row in the users table share one top alignment", async ({ page }) => {
+  await page.goto("/?view=users");
+  await rowsAligned(page.getByRole("main").getByRole("table"), 2);
 });
 
 // A user's page on a phone in German (#369): "Passwort zurücksetzen" and the

@@ -453,8 +453,8 @@ function AccountsSkeleton() {
 
 /**
  * The active accounts. The name is the row header and links to the
- * account's page; Sync stays visible on IMAP rows, the rest is in the row's
- * menu with today's disabled states. Below 42rem the secondary columns give
+ * account's page; every row action is in the row's menu (Sync first on
+ * IMAP rows, #378) with today's disabled states. Below 42rem the secondary columns give
  * way to a second line under the name.
  */
 function AccountTable({ data, accounts, ...p }: ListProps & { data: AccountsResponse; accounts: Account[] }) {
@@ -487,6 +487,7 @@ function AccountTable({ data, accounts, ...p }: ListProps & { data: AccountsResp
                 {manage && a.kind === "smtp" && (
                   <MenuItem label={t.importFromIMAP} disabled={busy || a.fills.some((f) => f.status === "running")} onClick={() => p.openImport(a.name)} />
                 )}
+                {manage && a.kind === "imap" && <MenuItem label={t.syncNow} disabled={busy} onClick={() => void p.run(() => accountsApi.sync(a.name))} />}
                 {manage && a.kind === "imap" && (
                   <MenuItem label={t.checkServer} disabled={busy} onClick={() => void p.run(() => accountsApi.reconcile(a.name))} />
                 )}
@@ -525,16 +526,7 @@ function AccountTable({ data, accounts, ...p }: ListProps & { data: AccountsResp
                 </TableCell>
                 <TableCell className="app-wide-only app-tabular">{formatCount(count)}</TableCell>
                 <TableCell className={activity.error ? "app-wide-only app-text-error" : "app-wide-only"}>{activity.text}</TableCell>
-                <TableCell className="cds--table-column-menu">
-                  <span className="accounts-table__actions">
-                    {manage && a.kind === "imap" && (
-                      <Button kind="ghost" size="sm" disabled={busy} onClick={() => void p.run(() => accountsApi.sync(a.name))}>
-                        {t.syncNow}
-                      </Button>
-                    )}
-                    {menu}
-                  </span>
-                </TableCell>
+                <TableCell className="cds--table-column-menu">{menu}</TableCell>
               </TableRow>
             );
           })}
