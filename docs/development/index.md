@@ -288,6 +288,8 @@ in `CLAUDE.md` at the repository root.
 | `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
 | `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
 | `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
+| `followup` | Non-blocking finding from a review, CI or the day's work; its body names the source. |
+| `device-checks` | The open round of manual device checks, one at a time; see [Issues, plans and releases](./process). |
 
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.

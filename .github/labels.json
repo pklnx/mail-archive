@@ -11,5 +11,6 @@
   { "name": "ready",         "color": "0e8a16", "description": "Plan approved by a plan reviewer or the maintainer; ready to implement" },
   { "name": "second-review", "color": "fef2c0", "description": "Risky pull request; needs a second, independent review in a Claude session (marker only)" },
   { "name": "security",      "color": "b60205", "description": "Security hardening (never an undisclosed vulnerability)" },
-  { "name": "followup",      "color": "bfd4f2", "description": "Non-blocking follow-up from a review or CI; the body names its source" }
+  { "name": "followup",      "color": "bfd4f2", "description": "Non-blocking follow-up from a review or CI; the body names its source" },
+  { "name": "device-checks", "color": "5319e7", "description": "The open round of manual device checks (one at a time)" }
 ]
