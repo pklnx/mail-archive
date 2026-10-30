@@ -99,12 +99,15 @@ test.describe("in German", () => {
         const { main, from, to, calendar } = await open(page);
         const day = await today(page);
         const since = await defaultSince(page);
-        // The calendar shows From's month; today is at most one month on.
+        // The calendar opens at From's month. The default From is 30 days
+        // back, which can be two months back (on 1 March, and on 2 March in a
+        // non-leap year), so go forward until today's cell is there, at most
+        // twice. flatpickr redraws the month on the click itself.
         const todayCell = calendar.locator(".flatpickr-day.today:not(.prevMonthDay):not(.nextMonthDay)");
         const openAtToday = async () => {
           await from.click();
           await expect(calendar).toBeVisible();
-          if ((await todayCell.count()) === 0) await calendar.getByLabel("Nächster Monat").click();
+          for (let i = 0; i < 2 && (await todayCell.count()) === 0; i++) await calendar.getByLabel("Nächster Monat").click();
           await expect(todayCell).toHaveCount(1);
         };
         // With the default From set, a click on today ends the range there.
