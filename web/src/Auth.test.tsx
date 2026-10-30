@@ -38,6 +38,8 @@ function serve(queue: Record<string, Answer[]>) {
 }
 
 const noSession: Answer = { status: 401, body: { error: "not logged in" } };
+/** No session, at the server's public URL: the login page offers passkeys (#380). */
+const withPasskeys: Answer = { status: 401, body: { error: "not logged in", setupRequired: false, passkeyOrigin: window.location.origin } };
 
 function renderGate() {
   return render(<AuthGate>{(u) => <p>app for {u.name}</p>}</AuthGate>);
@@ -65,11 +67,17 @@ async function logIn(name: string, pw: string) {
 beforeEach(() => {
   calls = [];
   applySettings({ language: "en", locale: "en" });
+  // A browser with passkeys but without autofill (no
+  // isConditionalMediationAvailable), so no passkey request starts (#380).
+  vi.stubGlobal("PublicKeyCredential", function PublicKeyCredential() {});
+  Object.defineProperty(navigator, "credentials", { value: {}, configurable: true });
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  delete (navigator as { credentials?: unknown }).credentials;
   applySettings({ language: "en", locale: "en" });
 });
 
@@ -295,7 +303,7 @@ describe("logout (#327)", () => {
   const deletes = () => calls.filter((c) => c.method === "DELETE" && c.path === "/api/session").length;
 
   it("shows the login page after a successful Log out, with one DELETE", async () => {
-    serve({ "GET /api/session": [session], "DELETE /api/session": [{ status: 204 }] });
+    serve({ "GET /api/session": [session, noSession], "DELETE /api/session": [{ status: 204 }] });
     renderApp();
     await screen.findByText("app for kim");
     logOut();
@@ -305,7 +313,7 @@ describe("logout (#327)", () => {
   });
 
   it("stays signed in with the reason when the DELETE fails, and Log out again retries", async () => {
-    serve({ "GET /api/session": [session], "DELETE /api/session": [failed, { status: 204 }] });
+    serve({ "GET /api/session": [session, noSession], "DELETE /api/session": [failed, { status: 204 }] });
     renderApp();
     await screen.findByText("app for kim");
     logOut();
@@ -367,7 +375,7 @@ describe("logout (#327)", () => {
 
   it("keeps the own-password screen with an alert when the DELETE fails, then signs out", async () => {
     serve({
-      "GET /api/session": [{ status: 200, body: { user: { ...user, mustChangePassword: true } } }],
+      "GET /api/session": [{ status: 200, body: { user: { ...user, mustChangePassword: true } } }, noSession],
       "DELETE /api/session": [failed, { status: 204 }],
     });
     renderGate();
@@ -382,7 +390,7 @@ describe("logout (#327)", () => {
 
   it("keeps the two-factor setup screen with an alert when the DELETE fails, then signs out", async () => {
     serve({
-      "GET /api/session": [{ status: 200, body: { user: { ...user, twoFactorEnabled: false, twoFactorRequired: true } } }],
+      "GET /api/session": [{ status: 200, body: { user: { ...user, twoFactorEnabled: false, twoFactorRequired: true } } }, withPasskeys],
       "GET /api/profile/2fa": [{ status: 200, body: { enabled: false, required: true, admin: false, setupPending: false } }],
       "DELETE /api/session": [failed, { status: 204 }],
     });
@@ -394,7 +402,102 @@ describe("logout (#327)", () => {
     expect(screen.getByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
     logOut();
     expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+    // The re-read session brings the passkey option back (#380).
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
     expect(deletes()).toBe(2);
+  });
+});
+
+describe("passkeys on the login page after the session ends (#380)", () => {
+  const session: Answer = { status: 200, body: { user } };
+  const elsewhere: Answer = { status: 401, body: { error: "not logged in", setupRequired: false, passkeyOrigin: "https://mail.example.org" } };
+
+  function renderApp() {
+    return render(
+      <AuthGate>
+        {(u, logout) => (
+          <div>
+            <p>app for {u.name}</p>
+            <button onClick={logout}>{t.logOut}</button>
+          </div>
+        )}
+      </AuthGate>,
+    );
+  }
+  const logOut = () => fireEvent.click(screen.getByRole("button", { name: t.logOut }));
+  const sessionReads = () => calls.filter((c) => c.method === "GET" && c.path === "/api/session").length;
+
+  it("offers passkeys after Log out from the app", async () => {
+    serve({ "GET /api/session": [session, withPasskeys], "DELETE /api/session": [{ status: 204 }] });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
+    expect(screen.getByText(t.or)).toBeTruthy();
+    expect(screen.getByLabelText(t.userName).getAttribute("autocomplete")).toBe("username webauthn");
+  });
+
+  it("offers passkeys after Log out on the own-password screen", async () => {
+    serve({
+      "GET /api/session": [{ status: 200, body: { user: { ...user, mustChangePassword: true } } }, withPasskeys],
+      "DELETE /api/session": [{ status: 204 }],
+    });
+    renderGate();
+    expect(await screen.findByRole("heading", { name: t.chooseOwnPassword })).toBeTruthy();
+    logOut();
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
+  });
+
+  it("offers passkeys again after a password login on the login page and Log out", async () => {
+    serve({
+      "GET /api/session": [withPasskeys, withPasskeys],
+      "POST /api/session": [{ status: 200, body: { user } }],
+      "DELETE /api/session": [{ status: 204 }],
+    });
+    renderApp();
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
+    await logIn("kim", "kim-password");
+    await screen.findByText("app for kim");
+    logOut();
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
+  });
+
+  it("offers passkeys after a 401 elsewhere", async () => {
+    serve({ "GET /api/session": [session, withPasskeys] });
+    renderApp();
+    await screen.findByText("app for kim");
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
+  });
+
+  for (const [name, answer] of [
+    ["another origin", elsewhere],
+    ["no origin", noSession],
+  ] as const) {
+    it(`offers no passkeys after Log out when the server sends ${name}`, async () => {
+      serve({ "GET /api/session": [session, answer], "DELETE /api/session": [{ status: 204 }] });
+      renderApp();
+      await screen.findByText("app for kim");
+      logOut();
+      expect(await screen.findByLabelText(t.userName)).toBeTruthy();
+      expect(sessionReads()).toBe(2);
+      expect(screen.queryByRole("button", { name: t.passkeySignIn })).toBeNull();
+      expect(screen.getByLabelText(t.userName).getAttribute("autocomplete")).toBe("username");
+    });
+  }
+
+  it("shows the error screen when the session cannot be read after Log out; Retry leads to the login page", async () => {
+    serve({
+      "GET /api/session": [session, { status: 500, body: { error: "store unavailable" } }, withPasskeys],
+      "DELETE /api/session": [{ status: 204 }],
+    });
+    renderApp();
+    await screen.findByText("app for kim");
+    logOut();
+    expect(await screen.findByText(t.failed("store unavailable"))).toBeTruthy();
+    expect(screen.queryByText("app for kim")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: t.retry }));
+    expect(await screen.findByRole("button", { name: t.passkeySignIn })).toBeTruthy();
   });
 });
 

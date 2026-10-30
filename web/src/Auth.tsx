@@ -74,11 +74,12 @@ export function AuthGate({ children }: Props) {
   if (state.user) {
     // A failed DELETE leaves the session (and its cookie) alive: the user
     // stays on the current screen, signed in, with the reason; Log out again
-    // retries. An ended session answers 204, so it signs out as usual.
+    // retries. An ended session answers 204; then the gate reads the session
+    // again, so the login page has the server's passkey origin (#380).
     const logout = () => {
       setLogoutError("");
       sessionApi.logout().then(
-        () => setState({ user: null, setupRequired: false }),
+        () => check(),
         (err: unknown) => setLogoutError(t.logoutFailed(err instanceof Error ? err.message : String(err))),
       );
     };

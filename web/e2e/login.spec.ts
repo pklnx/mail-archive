@@ -16,8 +16,12 @@ const passwordField = (page: Page) => page.getByLabel("Password", { exact: true 
 // (for its character counter), so the one alert with text is the error.
 const loginError = (page: Page) => page.getByRole("alert").filter({ hasText: /\S/ });
 
+// The demo's public URL is the test origin, so the login page offers passkeys.
+const passkeyButton = (page: Page) => page.getByRole("button", { name: "Sign in with a passkey" });
+
 test("login with password and authentication code", async ({ page }) => {
   await page.goto("/");
+  await expect(passkeyButton(page)).toBeVisible();
   // Carbon's type scale applies: heading-04 for the app name (28px), not
   // body text. Its tokens are scoped inside Carbon's CSS, so a class that
   // relies on them silently falls back to 16px with line-height 1.
@@ -48,6 +52,8 @@ test("login with password and authentication code", async ({ page }) => {
   await user.click();
   await page.getByRole("list", { name: `User (${twoFactorUser.name})` }).getByRole("button", { name: "Log out" }).click();
   await expect(page.getByLabel("User name")).toBeVisible();
+  // After Log out the passkey option is back without a reload (#380).
+  await expect(passkeyButton(page)).toBeVisible();
 });
 
 test("login errors: wrong password and locked user", async ({ page, guards }) => {
