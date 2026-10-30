@@ -2,6 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import type { AccountsResponse } from "../src/api";
 import { imapPort, spareLogin, unique } from "./demo";
 import { accountRow, expect, test } from "./fixtures";
+import { menuAtRowEnd } from "./layout";
 
 test("add an IMAP account, choose folders on its page, sync, remove it, delete it completely", async ({ page }) => {
   const name = unique("e2e");
@@ -208,6 +209,34 @@ test("on a phone the accounts table and an account's page fit the width", async 
   for (const r of tiles) expect(r.left >= 0 && r.right <= 375).toBe(true);
   await main.getByRole("region", { name: "Connection" }).getByRole("button", { name: "Edit" }).click();
   expect(await noSideScroll()).toBe(true);
+});
+
+// An account's page on a phone in German (#369): "Synchronisieren" and
+// "Server prüfen" fill a line, and the menu stays at the end of the row, on
+// the last button's line, not on a line of its own. The UI follows the
+// browser's language while the user's language is "auto".
+test.describe("in German", () => {
+  test.use({ locale: "de-DE" });
+  for (const width of [375, 402]) {
+    test(`at ${width} px an account's page keeps its menu at the end of the actions row`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/?view=accounts");
+      const main = page.getByRole("main");
+      await expect(main.getByRole("heading", { name: "Konten", level: 1 })).toBeVisible();
+      await accountRow(page, "personal").getByRole("link", { name: "personal", exact: true }).click();
+      await expect(main.getByRole("heading", { name: "personal", level: 1 })).toBeVisible();
+      const actions = main.locator(".page-header__actions");
+      await expect(actions.getByRole("button", { name: "Synchronisieren" })).toBeVisible();
+      await expect(actions.getByRole("button", { name: "Server prüfen" })).toBeVisible();
+      await menuAtRowEnd(page, main, /^Aktionen für personal$/);
+      // The menu opens with its items on screen.
+      await actions.getByRole("button", { name: "Aktionen für personal" }).click();
+      const items = page.getByRole("menuitem");
+      await expect(items).toHaveCount(2);
+      for (const item of await items.all()) await expect(item).toBeInViewport({ ratio: 1 });
+      await page.keyboard.press("Escape");
+    });
+  }
 });
 
 /** Whether the element is what the page hits at its own centre: on screen and covered by nothing. */

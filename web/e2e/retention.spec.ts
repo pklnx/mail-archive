@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { unique } from "./demo";
 import { expect, test } from "./fixtures";
+import { holdsToolbarFits, menuAtRowEnd } from "./layout";
 
 type Box = { x: number; y: number; width: number; height: number };
 /** Whether two boxes share any area. */
@@ -87,6 +88,10 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   expect(tiles).toHaveLength(5);
   expect(new Set(tiles.map((r) => r.top)).size).toBeGreaterThan(1);
   for (const r of tiles) expect(r.left >= 0 && r.right <= 375).toBe(true);
+  // The menu stays at the end of the actions row, on Delete's line, here and at 320 px (#369).
+  await menuAtRowEnd(page, main, /^Actions for /);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await menuAtRowEnd(page, main, /^Actions for /);
   await page.setViewportSize({ width: 1280, height: 720 });
 
   const open = main.getByRole("button", { name: "Delete 2 messages" });
@@ -165,15 +170,48 @@ test("on a phone the retention tables fit the width and their menus are on scree
     await expect(main.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
     await expect(main.getByRole("tabpanel").getByRole("button", { name: tab === "Legal holds" ? "Add hold" : "New deletion run" })).toBeInViewport();
     if (tab === "Legal holds") {
-      // The toolbar's toggle fits beside or above Add hold, whole and not under it (#339, #335 I8).
-      // Carbon's switch button is visually hidden; its label and drawn switch are what shows.
-      await expect(main.getByRole("tabpanel").getByRole("switch", { name: "Show released holds" })).toHaveCount(1);
-      const label = main.getByRole("tabpanel").locator(".retention-toolbar__toggle");
-      await expect(label).toBeInViewport({ ratio: 1 });
-      await expect(label.locator(".cds--toggle__switch")).toBeInViewport({ ratio: 1 });
-      const add = (await main.getByRole("tabpanel").getByRole("button", { name: "Add hold" }).boundingBox())!;
-      expect(overlap((await label.boundingBox())!, add)).toBe(false);
+      // The toolbar's toggle fits beside or above Add hold, whole, not under it and inside the
+      // toolbar's background (#339, #335 I8, #370).
+      await holdsToolbarFits(page, main.getByRole("tabpanel"), { add: "Add hold", toggle: "Show released holds", off: "Off" });
     }
     expect(await noSideScroll(page)).toBe(true);
   }
 });
+
+// The Legal holds toolbar on a phone in German (#370): the toggle's label is
+// longer than in English, so the toggle takes its own line above "Hold
+// anlegen" and the toolbar grows to hold both. 320 px is a guard. The UI
+// follows the browser's language while the user's language is "auto".
+test.describe("in German", () => {
+  test.use({ locale: "de-DE" });
+  for (const width of [375, 402, 320]) {
+    test(`at ${width} px the Legal holds toolbar holds its toggle and Hold anlegen`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/?view=retention&tab=holds");
+      const main = page.getByRole("main");
+      await expect(main.getByRole("heading", { name: "Aufbewahrung", level: 1 })).toBeVisible();
+      await expect(main.getByRole("tab", { name: "Legal Holds" })).toHaveAttribute("aria-selected", "true");
+      await holdsToolbarFits(page, main.getByRole("tabpanel"), { add: "Hold anlegen", toggle: "Aufgehobene Holds zeigen", off: "Aus" });
+    });
+  }
+});
+
+// From 42rem up the Legal holds toolbar keeps Carbon's 48 px with the toggle
+// beside Add hold (#370): 672 px is just above the phone layout's breakpoint.
+for (const width of [1280, 672]) {
+  test(`at ${width} px the Legal holds toolbar is one 48 px line`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/?view=retention&tab=holds");
+    const panel = page.getByRole("main").getByRole("tabpanel");
+    const add = panel.getByRole("button", { name: "Add hold" });
+    await expect(add).toBeVisible();
+    await expect(panel.getByRole("switch", { name: "Show released holds" })).toHaveCount(1);
+    const toolbar = (await panel.locator(".cds--table-toolbar").boundingBox())!;
+    expect(Math.abs(toolbar.height - 48), `toolbar height ${toolbar.height}`).toBeLessThanOrEqual(0.5);
+    const toggle = (await panel.locator(".retention-toolbar__toggle").boundingBox())!;
+    const button = (await add.boundingBox())!;
+    const centre = (b: { y: number; height: number }) => b.y + b.height / 2;
+    expect(Math.abs(centre(toggle) - centre(button)), `toggle ${JSON.stringify(toggle)}, Add hold ${JSON.stringify(button)}`).toBeLessThanOrEqual(2);
+    expect(await noSideScroll(page)).toBe(true);
+  });
+}
