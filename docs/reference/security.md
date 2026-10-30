@@ -390,7 +390,8 @@ on the public ntfy.sh server, use a protected topic or a long random one.
 Identical messages are stored once, even when several users archived them.
 Whether a message is gone from a server is recorded per location, and each
 user only sees their own accounts' locations: in the message view, in
-**Only in archive** (`gone=1`), and in the counts on the account page and in
+**Only in archive** (`gone=1`), in the tag on list rows (`gone` in the
+list JSON), and in the counts on the account page and in
 `GET /api/status`. If Alice deletes a message that Bob also archived, Bob
 cannot tell. The log reports counts and folder names, never subjects,
 addresses or UIDs.

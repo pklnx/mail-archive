@@ -270,20 +270,26 @@ ANALYZE;`
 		p     db.SearchMessagesParams
 		index string
 		also  []string
+		// threads explains SearchThreads instead of SearchMessages.
+		threads bool
 	}{
+		// The main lists: the per-row gone flag looks up each row's
+		// locations instead of reading them all (#310).
+		{name: "list", index: "message_locations_sha_idx"},
+		{name: "threads", index: "message_locations_sha_idx", threads: true},
 		// to: on To and Cc, or on the envelope matches found first by
 		// EnvelopeMatches: both arms through an index of messages.
 		{"to", db.SearchMessagesParams{ToPattern: str("%finanzamt%"), ToShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}},
-			"messages_rcpt_trgm_idx", []string{"messages_pkey"}},
+			"messages_rcpt_trgm_idx", []string{"messages_pkey"}, false},
 		// With too many envelope matches it checks the envelopes of each
 		// message it walks, through their keys.
 		{"to walk", db.SearchMessagesParams{ToPattern: str("%example.com%"), ToWalk: true}, "messages_sort_idx",
-			[]string{"message_locations_sha_idx", "envelopes_pkey"}},
-		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx", nil},
-		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx", nil},
+			[]string{"message_locations_sha_idx", "envelopes_pkey"}, false},
+		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx", nil, false},
+		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx", nil, false},
 		// Only in the archive: starts from the few gone locations instead of
 		// checking every message.
-		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx", nil},
+		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx", nil, false},
 	}
 	explain := func(t *testing.T, rec *explainer) string {
 		t.Helper()
@@ -301,7 +307,13 @@ ANALYZE;`
 		t.Run(c.name, func(t *testing.T) {
 			c.p.Owner, c.p.RowLimit = owner, 51
 			var rec explainer
-			if _, err := db.New(&rec).SearchMessages(ctx, c.p); !errors.Is(err, errRecorded) {
+			var err error
+			if c.threads {
+				_, err = db.New(&rec).SearchThreads(ctx, db.SearchThreadsParams(c.p))
+			} else {
+				_, err = db.New(&rec).SearchMessages(ctx, c.p)
+			}
+			if !errors.Is(err, errRecorded) {
 				t.Fatalf("record: %v", err)
 			}
 			plan := explain(t, &rec)

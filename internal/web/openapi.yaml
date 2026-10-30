@@ -3735,6 +3735,11 @@ components:
         count:
           type: integer
           description: In grouped rows, the number of matching messages of the conversation.
+        gone:
+          type: boolean
+          description: >-
+            In listings only, and only when true: the message is only in the archive, exactly as `gone=1` would list
+            it (with `account`, in that account). Not in the message detail.
     Message:
       allOf:
         - $ref: "#/components/schemas/MessageSummary"
