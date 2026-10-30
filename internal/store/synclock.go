@@ -40,6 +40,10 @@ const attestWriterClass = 0x6d65
 // returns false if another session holds the lock. The lock is held on a
 // dedicated connection until unlock is called; if the process dies,
 // PostgreSQL releases it with the connection.
+//
+// It writes no blobs and takes no blob lock. Production code uses
+// TryLockSyncForWrite, RemoveAccountLocked or PurgeSession.TryLockSync;
+// this one serves tests and callers that write no blobs.
 func (s *Store) TryLockSync(ctx context.Context, accountID int64) (unlock func(), ok bool, err error) {
 	return s.tryLockSync(ctx, accountID, false)
 }
