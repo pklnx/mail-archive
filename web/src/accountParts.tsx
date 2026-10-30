@@ -56,10 +56,16 @@ export function Notice({ kind, text, alert }: { kind: "error" | "warning" | "inf
   );
 }
 
-/** A source tag with its explanation in a tooltip; a button, so the keyboard reaches the tooltip too. */
+/**
+ * A source tag with its explanation in a tooltip; a button, so the keyboard
+ * reaches the tooltip too. autoAlign places the tooltip with position: fixed:
+ * inside the accounts table's scrolling box an absolute one below the last
+ * row made the box scroll and clipped the tooltip, and WebKit kept the box
+ * scrolling after it closed (#378).
+ */
 function SourceTag({ text, hint }: { text: string; hint: string }) {
   return (
-    <Tooltip description={hint} align="bottom">
+    <Tooltip description={hint} align="bottom" autoAlign>
       <OperationalTag size="sm" type="cool-gray" text={text} />
     </Tooltip>
   );

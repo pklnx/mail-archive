@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import type { AccountsResponse } from "../src/api";
 import { imapPort, spareLogin, unique } from "./demo";
 import { accountRow, expect, test } from "./fixtures";
-import { menuAtRowEnd } from "./layout";
+import { menuAtRowEnd, rowsAligned } from "./layout";
 
 test("add an IMAP account, choose folders on its page, sync, remove it, delete it completely", async ({ page }) => {
   const name = unique("e2e");
@@ -87,10 +87,15 @@ test("add an IMAP account, choose folders on its page, sync, remove it, delete i
   await expect(page).toHaveURL(/\?view=accounts$/);
   await expect(listTitle).toBeFocused();
 
-  // A manual sync from the row finds nothing new; the archived mail stays.
+  // A manual sync from the row's menu (its first item, #378) finds nothing
+  // new; the archived mail stays, and the focus goes back to the row's ⋮.
   const synced = page.waitForResponse((r) => r.url().endsWith(`/api/accounts/${name}/sync`) && r.request().method() === "POST");
-  await row.getByRole("button", { name: "Sync", exact: true }).click();
+  const rowMenu = row.getByRole("button", { name: `Actions for ${name}` });
+  await rowMenu.click();
+  await expect(page.getByRole("menuitem").first()).toHaveText("Sync");
+  await page.getByRole("menuitem", { name: "Sync", exact: true }).click();
   expect((await synced).ok()).toBe(true);
+  await expect(rowMenu).toBeFocused();
   await expect(row.getByText(/^Last sync .*: 0 new$/)).toBeVisible();
   await expect(row.getByRole("cell", { name: "4", exact: true })).toBeVisible();
 
@@ -223,6 +228,10 @@ test.describe("in German", () => {
       await page.goto("/?view=accounts");
       const main = page.getByRole("main");
       await expect(main.getByRole("heading", { name: "Konten", level: 1 })).toBeVisible();
+      // The list row's menu starts with its Sync (#378).
+      await accountRow(page, "personal").getByRole("button", { name: "Aktionen für personal" }).click();
+      await expect(page.getByRole("menuitem").first()).toHaveText("Synchronisieren");
+      await page.keyboard.press("Escape");
       await accountRow(page, "personal").getByRole("link", { name: "personal", exact: true }).click();
       await expect(main.getByRole("heading", { name: "personal", level: 1 })).toBeVisible();
       const actions = main.locator(".page-header__actions");
@@ -254,16 +263,18 @@ const scrollTable = (page: Page, x: number) =>
     return { left: e.scrollLeft, scrolls: e.scrollWidth > e.clientWidth };
   }, x);
 
-// A long account name on a phone (#333, #335 I7): the row's Sync and menu
-// stay on screen and on top. At 375 px the name wraps and the table fits; at
-// 320 px it scrolls sideways, and the actions column stays at the inline end
-// at both ends of the scroll. The name is changed in the browser's copy of
-// GET /api/accounts only; the server's data stays as it is.
+// A long account name on a phone (#333, #335 I7): the row's menu stays on
+// screen and on top, and opens with Sync first (#378). At 375 and 320 px the
+// name wraps and the table fits (Sync no longer takes room in the row, #378);
+// at 280 px it scrolls sideways, and the actions column stays at the inline
+// end at both ends of the scroll. The name is changed in the browser's copy
+// of GET /api/accounts only; the server's data stays as it is.
 for (const { width, scrolls } of [
   { width: 375, scrolls: false },
-  { width: 320, scrolls: true },
+  { width: 320, scrolls: false },
+  { width: 280, scrolls: true },
 ]) {
-  test(`at ${width} px a row with a long account name keeps its Sync and menu in the sticky actions column`, async ({ page }) => {
+  test(`at ${width} px a row with a long account name keeps its menu in the sticky actions column`, async ({ page }) => {
     const long = "a-really-long-account-name-for-the-sticky-actions-column-600";
     expect(long).toHaveLength(60);
     await page.route(/\/api\/accounts$/, async (route) => {
@@ -278,17 +289,83 @@ for (const { width, scrolls } of [
     await page.goto("/?view=accounts");
     const row = accountRow(page, long);
     await expect(row.getByRole("link", { name: long, exact: true })).toBeVisible();
-    const sync = row.getByRole("button", { name: "Sync", exact: true });
     const menu = row.getByRole("button", { name: `Actions for ${long}` });
     // At 320 px the box scrolls sideways: only stickiness keeps the actions on screen.
     expect((await scrollTable(page, 0)).scrolls).toBe(scrolls);
     for (const x of scrolls ? [0, -1] : [0]) {
       const at = await scrollTable(page, x);
       if (x === -1) expect(at.left).toBeGreaterThan(0);
-      for (const el of [sync, menu]) {
-        await expect(el).toBeInViewport({ ratio: 1 });
-        expect(await onTop(el), `on top at scrollLeft ${at.left}`).toBe(true);
-      }
+      await expect(menu).toBeInViewport({ ratio: 1 });
+      expect(await onTop(menu), `on top at scrollLeft ${at.left}`).toBe(true);
     }
+    await menu.click();
+    await expect(page.getByRole("menuitem").first()).toHaveText("Sync");
+    await expect(page.getByRole("menuitem", { name: "Sync", exact: true })).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press("Escape");
   });
 }
+
+/** The active accounts table's scroll box: whether it scrolls, down or sideways. */
+const tableBox = (page: Page) =>
+  page.locator(".accounts-table .cds--data-table-content").first().evaluate((e) => ({ height: e.scrollHeight, client: e.clientHeight, width: e.scrollWidth, clientWidth: e.clientWidth }));
+
+// The accounts table is no vertical scroll box (#378): with one row or all
+// of the demo's, at rest and with a tooltip open below the last row. The
+// type tag's tooltip, inside the box, made it scroll and was clipped;
+// WebKit (not run here) kept the box scrolling after it closed. The one-row
+// list and the long name exist in the browser's copy of GET /api/accounts
+// only; the server's data stays as it is. The last active row is an IMAP
+// account, so it has a type tag with a tooltip.
+const longName = "a-really-long-account-name-for-the-tooltip-of-the-row-menu-60";
+for (const width of [1600, 1000]) {
+  for (const rows of ["one", "all", "one, long name"] as const) {
+    test(`at ${width} px the accounts table has no vertical scroll box, with ${rows} row(s), also with the last row's tooltips open`, async ({ page }) => {
+      await page.route(/\/api\/accounts$/, async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const data = (await response.json()) as AccountsResponse;
+        const personal = data.accounts.find((a) => a.name === "personal")!;
+        const others = data.accounts.filter((a) => a !== personal && (rows === "all" || a.removed));
+        if (rows === "one, long name") personal.name = longName;
+        data.accounts = [...others, personal];
+        await route.fulfill({ response, json: data });
+      });
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/?view=accounts");
+      const name = rows === "one, long name" ? longName : "personal";
+      const table = page.getByRole("main").getByRole("table", { name: "Accounts" });
+      const last = table.locator("tbody tr").last();
+      await expect(last.getByRole("rowheader").getByRole("link", { name, exact: true })).toBeVisible();
+      if (rows !== "all") await expect(table.locator("tbody tr")).toHaveCount(1);
+      const fits = async (what: string) => {
+        const box = await tableBox(page);
+        expect(box.height, `${what}: ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.client);
+        if (width === 1600) expect(box.width, `${what}: ${JSON.stringify(box)}`).toBeLessThanOrEqual(box.clientWidth);
+      };
+      await fits("at rest");
+      const tag = last.getByRole("button", { name: "snapshot (IMAP)" });
+      await tag.hover();
+      const hint = page.getByRole("tooltip", { name: /^Archives what is in the mailbox at each sync\./ });
+      await expect(hint).toBeVisible();
+      await fits("with the type tag's tooltip open");
+      // The role is on Carbon's wrapper (as wide as the table); the box is its content.
+      expect(await onTop(hint.locator(".cds--popover-content")), "the type tag's tooltip is on top").toBe(true);
+      await last.getByRole("button", { name: `Actions for ${name}` }).hover();
+      const label = page.getByRole("tooltip", { name: `Actions for ${name}` });
+      await expect(label).toBeVisible();
+      await expect(hint).toBeHidden();
+      await fits("with the menu's tooltip open");
+      expect(await onTop(label.locator(".cds--popover-content")), "the menu's tooltip is on top").toBe(true);
+    });
+  }
+}
+
+// The cells of a row share one top alignment, the ⋮ too, in the active and
+// the removed accounts tables (#378).
+test("the cells of a row in both accounts tables share one top alignment", async ({ page }) => {
+  await page.goto("/?view=accounts");
+  const main = page.getByRole("main");
+  await rowsAligned(main.getByRole("table", { name: "Accounts" }), 2);
+  await main.getByRole("button", { name: /^Removed accounts \(\d+\)$/ }).click();
+  await rowsAligned(main.getByRole("table", { name: "Removed accounts" }));
+});

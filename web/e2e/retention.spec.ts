@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { unique } from "./demo";
 import { expect, test } from "./fixtures";
-import { holdsToolbarFits, menuAtRowEnd } from "./layout";
+import { holdsToolbarFits, menuAtRowEnd, rowsAligned } from "./layout";
 
 type Box = { x: number; y: number; width: number; height: number };
 /** Whether two boxes share any area. */
@@ -176,6 +176,14 @@ test("on a phone the retention tables fit the width and their menus are on scree
     }
     expect(await noSideScroll(page)).toBe(true);
   }
+});
+
+// The cells of a row share one top alignment, the ⋮ too (#378).
+test("the cells of a row in the retention rules table share one top alignment", async ({ page }) => {
+  await page.goto("/?view=retention");
+  const main = page.getByRole("main");
+  await expect(main.getByRole("row").filter({ hasText: "§147 AO" })).toBeVisible();
+  await rowsAligned(main.getByRole("tabpanel").getByRole("table"));
 });
 
 // The Legal holds toolbar on a phone in German (#370): the toggle's label is

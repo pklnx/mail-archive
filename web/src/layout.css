@@ -1919,12 +1919,6 @@ select,
   margin: 0;
   white-space: nowrap;
 }
-.accounts-table__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.25rem;
-}
 .app-section-head {
   display: flex;
   flex-wrap: wrap;
@@ -2021,16 +2015,25 @@ select,
 .runs-table .cds--data-table-content {
   position: relative;
 }
+.log-table .cds--data-table td {
+  padding-block: 0.75rem;
+}
+/* A row of a table with a row menu is Carbon's lg 3rem: the first text
+   line's centre and the 3rem menu trigger's centre both sit at 1.5rem, so
+   the cells share one top alignment (#378). The menu cell's selector must
+   outrank the text cells' one, or the trigger starts 0.875rem down. */
 .users-table .cds--data-table td,
 .users-table .cds--data-table tbody th,
 .accounts-table .cds--data-table td,
 .accounts-table .cds--data-table tbody th,
-.log-table .cds--data-table td {
-  padding-block: 0.75rem;
+.retention-table .cds--data-table td,
+.retention-table .cds--data-table tbody th {
+  padding-block: 0.875rem;
 }
-.users-table .cds--table-column-menu,
-.accounts-table .cds--table-column-menu {
-  padding-block: 0.25rem;
+.users-table .cds--data-table td.cds--table-column-menu,
+.accounts-table .cds--data-table td.cds--table-column-menu,
+.retention-table .cds--data-table td.cds--table-column-menu {
+  padding-block: 0;
 }
 /* Below Carbon's lg breakpoint the table scrolls sideways; the actions
    column stays at the inline end, so every row's menu is on screen. */
@@ -2193,10 +2196,6 @@ select,
 .retention-table td,
 .retention-table tbody th {
   vertical-align: top;
-}
-.retention-table .cds--data-table td,
-.retention-table .cds--data-table tbody th {
-  padding-block: 0.75rem;
 }
 .retention-table .cds--data-table-content {
   position: relative;
