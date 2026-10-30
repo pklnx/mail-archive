@@ -144,8 +144,10 @@ release, titled `X.Y.Z` (no `v`), with a one-sentence goal as description.
 - Version check: the dry run's proposed version (`scripts/next-version.sh`,
   label based) must equal the milestone title. If it differs (for example a
   `breaking` pull request slipped in), the coordinator renames the milestone
-  to the proposal and tells the maintainer. Never use the `version` input to
-  go below the proposal.
+  to the proposal and tells the maintainer. The one exception: when only
+  reverted pull requests raise the proposal, the `version` input lowers it
+  to the milestone title, and the coordinator says so on the release.
+  Otherwise never use the `version` input to go below the proposal.
 - Patch releases: a bug goes into the next patch milestone (`X.Y.Z+1`).
   Releases come from `main`, without release branches and without backports,
   so once the first pull request of the next minor or major milestone is
@@ -198,7 +200,8 @@ is a warning, not a block. The run fails when:
 
 The optional `version` input overrides the proposal. Use it to correct the
 bump, for example when a `feature` or `breaking` pull request was reverted
-within the range: the reverted pull request still counts.
+within the range: the reverted pull request still counts. Never set it
+below the proposal for any other reason ([Milestones](#milestones)).
 
 The workflow has two jobs. The job `release` builds the image for
 `linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/pklnx/mail-archive`
