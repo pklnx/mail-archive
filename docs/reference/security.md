@@ -278,8 +278,13 @@ The sandbox allows the frame the app's origin (`allow-same-origin`) but
 never scripts, in the iframe's attribute and in the response's own CSP,
 which also applies when the URL is opened on its own. The web UI needs the
 same origin to read the height of the mail and make the frame as tall as
-it, so the message scrolls as one page. No script runs in the mail: the
-sandbox has no `allow-scripts`, and `script-src 'none'` is a second layer.
+it (up to 50,000 CSS pixels), so the message scrolls as one page. It reads
+only the document's geometry, never its content. A mail longer than that
+keeps the frame at the height of the visible area and scrolls inside it; a
+mail whose own CSS sizes it by the frame's height (`100vh`) gets at least
+that height and scrolls inside the frame for the rest. No script runs in the
+mail: the sandbox has no `allow-scripts`, and `script-src 'none'` is a second
+layer.
 The accepted cost: if a browser bug ever ran script in the frame, it would
 run with the app's origin and could use the API.
 
@@ -308,10 +313,11 @@ IMAP connections. Two layers stop them:
   unusable. The app's CSP (`frame-src 'self'`) lets no external page into
   the frame: a link that would open in the frame itself (`target="_self"`,
   or an SVG link, which ignores `<base target>`) shows the browser's error
-  page there. Whenever the frame leaves the mail's document, it is `inert`
-  again until the blocker is on the next mail document, the error page
-  included. So Back (or Forward) to the mail is guarded like its first
-  load, also while a remote image holds it.
+  page there, except `about:blank`, which the CSP lets through and which
+  shows an empty page. Whenever the frame leaves the mail's document, it is
+  `inert` again until the blocker is on the next mail document, the error
+  page or the empty page included. So Back (or Forward) to the mail is
+  guarded like its first load, also while a remote image holds it.
 
 The second layer has to see the links. A mail can hide them in three ways:
 behind SVG `<use>`, which shows a copy of the link in a tree the web UI
