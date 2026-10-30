@@ -217,6 +217,48 @@ test.describe("desktop", () => {
 
 // Touch screens: a tablet wider than 767px and a phone. pointer: coarse
 // matches with hasTouch and isMobile.
+// A wide sidebar never squeezes the reader below what the default width
+// leaves it at the narrowest desktop window (#310). The browser's grid
+// sizing is what matters here, so it is checked in a real one.
+test.describe("the sidebar's usable maximum (#310)", () => {
+  const key = "mail-archive.sidebar-layout.demo";
+  const width = (el: Locator) => el.evaluate((e) => e.getBoundingClientRect().width);
+
+  test("a stored 28rem is capped on a narrow desktop window and comes back on a wide one", async ({ page }) => {
+    await page.setViewportSize({ width: 1056, height: 800 });
+    await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ v: 1, width: 28, collapsed: false })), key);
+    await page.goto("/");
+    const separator = page.getByRole("separator", { name: "Resize sidebar" });
+    const folders = page.locator(".folder-pane");
+    const reader = page.locator(".mail-pane--reader");
+    const stored = () => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null")?.width, key);
+    await expect(separator).toHaveAttribute("aria-valuenow", "14");
+    await expect(separator).toHaveAttribute("aria-valuemax", "14");
+    // 23rem, with 1px for subpixel layout.
+    expect(await width(reader)).toBeGreaterThanOrEqual(23 * 16 - 1);
+    expect(Math.abs((await width(folders)) - 14 * 16)).toBeLessThanOrEqual(1);
+    // The cap is applied, not saved.
+    expect(await stored()).toBe(28);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(separator).toHaveAttribute("aria-valuenow", "28");
+    await expect(separator).toHaveAttribute("aria-valuemax", "28");
+    expect(Math.abs((await width(folders)) - 28 * 16)).toBeLessThanOrEqual(1);
+
+    // End and the arrows stop at the cap.
+    await page.setViewportSize({ width: 1056, height: 800 });
+    await expect(separator).toHaveAttribute("aria-valuenow", "14");
+    await separator.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(separator).toHaveAttribute("aria-valuenow", "13");
+    await page.keyboard.press("End");
+    await expect(separator).toHaveAttribute("aria-valuenow", "14");
+    await page.keyboard.press("ArrowRight");
+    await expect(separator).toHaveAttribute("aria-valuenow", "14");
+    expect(await width(reader)).toBeGreaterThanOrEqual(23 * 16 - 1);
+  });
+});
+
 for (const size of [
   { name: "tablet 820×1180", viewport: { width: 820, height: 1180 } },
   { name: "phone 390×780", viewport: { width: 390, height: 780 } },

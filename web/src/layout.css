@@ -22,7 +22,10 @@ body,
      on every element, not inherited from html, so it also holds inside the
      scrolling panes in every engine; :where() keeps it at specificity 0,
      so a rule like the resizer's touch-action: none wins. Pinch zoom
-     stays. */
+     stays.
+   - A pan that starts on a scrim (the SideNav's and the Folders overlay's)
+     does nothing, so it does not scroll the page behind; a tap still
+     closes (#310). */
 html,
 body {
   overscroll-behavior-y: none;
@@ -155,6 +158,7 @@ select,
 }
 .app-shell > .cds--side-nav__overlay {
   inset-block-start: calc(3rem + env(safe-area-inset-top));
+  touch-action: none;
 }
 .shell-nav__count {
   color: var(--cds-text-secondary);
@@ -217,6 +221,7 @@ select,
   z-index: 6900;
   inset: calc(3rem + env(safe-area-inset-top)) 0 0;
   background-color: var(--cds-overlay);
+  touch-action: none;
 }
 .folder-pane__full {
   block-size: 100%;
@@ -1037,6 +1042,12 @@ select,
   /* Carbon stops tags at 13rem; locations are long. Long ones still end in an ellipsis, with the full text in a tooltip. */
   max-inline-size: 100%;
   margin: 0;
+}
+/* A location with a hint: its tag in a toggletip's button, which may shrink with it. */
+.message__tags .cds--toggletip,
+.message__tags .cds--toggletip-button {
+  max-inline-size: 100%;
+  min-inline-size: 0;
 }
 .message__delivery .cds--accordion__content {
   display: flex;

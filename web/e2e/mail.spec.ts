@@ -72,9 +72,26 @@ test("only in archive, and search all mail from an account", async ({ page }) =>
   await expect(gone).toBeVisible();
   await expect(list.getByRole("button")).toHaveCount(1);
   await gone.click();
-  // The location tag is a button (its tooltip explains it), behind Details (#203).
+  // The location tag is a toggletip button, behind Details (#203). A click,
+  // Enter and Space open its hint; Escape closes it (#310).
   await page.getByRole("article").getByRole("button", { name: "Details" }).click();
-  await expect(page.getByRole("article").getByRole("button", { name: /no longer on the server/ })).toBeVisible();
+  const where = page.getByRole("article").getByRole("button", { name: /no longer on the server/ });
+  const hint = page.getByText("The server no longer lists this message here. The archive keeps it.");
+  await expect(where).toBeVisible();
+  await expect(hint).toBeHidden();
+  await where.click();
+  await expect(hint).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(hint).toBeHidden();
+  await expect(where).toBeFocused();
+  // The message stays open: Escape went to the toggletip.
+  await expect(page.getByRole("article")).toBeVisible();
+  for (const key of ["Enter", "Space"]) {
+    await where.press(key);
+    await expect(hint, key).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(hint, key).toBeHidden();
+  }
 
   // In the work account the word is not found; "Search all mail" finds it.
   await page.goto("/");

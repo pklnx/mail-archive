@@ -161,7 +161,8 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
                 <TableRow>
                   <TableHeader>{t.logTime}</TableHeader>
                   <TableHeader>{t.logAction}</TableHeader>
-                  <TableHeader>{t.logWho}</TableHeader>
+                  {/* Only admins see other users' entries; for the others the column would be empty (#310). */}
+                  {admin && <TableHeader>{t.logWho}</TableHeader>}
                   <TableHeader>{t.logTarget}</TableHeader>
                   <TableHeader>{t.logClient}</TableHeader>
                 </TableRow>
@@ -210,7 +211,7 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
         {loading && rows.length === 0 && (
           <TableSkeleton
             size="md"
-            columns={[{ header: t.logTime }, { header: t.logAction }, { header: t.logWho }, { header: t.logTarget }, { header: t.logClient }]}
+            columns={[{ header: t.logTime }, { header: t.logAction }, ...(admin ? [{ header: t.logWho }] : []), { header: t.logTarget }, { header: t.logClient }]}
           />
         )}
       </div>
@@ -237,9 +238,11 @@ function EntryRow({
   nested?: boolean;
 }) {
   const target = targetLabel(e);
-  const detail = [entryDetail(e), e.apiKey ? t.logViaKey(e.apiKey) : ""].filter(Boolean);
+  const cli = e.actor === "cli";
+  // Without the Who column (not an admin) the command line goes into the detail line.
+  const detail = [entryDetail(e), e.apiKey ? t.logViaKey(e.apiKey) : "", !admin && cli ? t.logCLI : ""].filter(Boolean);
   const failed = e.action === "auth.login_failed";
-  const who = [admin ? (e.user ?? "") : "", e.actor === "cli" ? t.logCLI : ""].filter(Boolean).join(" · ");
+  const who = [e.user ?? "", cli ? t.logCLI : ""].filter(Boolean).join(" · ");
   const sha = e.target?.type === "message" && e.target.subject ? e.target.id : "";
   return (
     <TableRow id={id} className={nested ? "log-table__nested" : undefined}>
@@ -250,7 +253,7 @@ function EntryRow({
           {fold}
         </span>
       </TableCell>
-      <TableCell>{who}</TableCell>
+      {admin && <TableCell>{who}</TableCell>}
       <TableCell className="log-table__target">
         {target &&
           (sha ? (

@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { Accordion, AccordionItem, Button, IconButton, OperationalTag, SkeletonText, Tag, Tooltip } from "@carbon/react";
+import { Accordion, AccordionItem, Button, IconButton, SkeletonText, Tag, Toggletip, ToggletipButton, ToggletipContent, Tooltip } from "@carbon/react";
 import { ChevronDown, ChevronUp, Document, Download, Forum, Html, Image, TextAlignLeft } from "@carbon/icons-react";
 import { getConversation, getMessage, messageURL, type Conversation, type ConversationEntry, type Location, type MessageDetail, type Part } from "./api";
 import { fileSize, locationLabel, longDate, originText, retentionDay, senderName, shortDate } from "./format";
@@ -394,7 +394,10 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
 
 /**
  * Where the message was found. A renumbered or gone location explains
- * itself in a tooltip; its tag is a button, so the keyboard reaches it.
+ * itself in a toggletip: a tap, click, Enter or Space opens it, Escape or a
+ * click elsewhere closes it (#310). The button is named by the location (Carbon's
+ * default label is an English "Show information"), and holds a plain tag
+ * as a span: no button inside the button, no div inside it.
  */
 function LocationTag({ l }: { l: Location }) {
   const hint = l.superseded ? t.renumberedHint : l.goneAt ? t.goneFromServerHint : "";
@@ -406,9 +409,14 @@ function LocationTag({ l }: { l: Location }) {
     );
   }
   return (
-    <Tooltip description={hint} align="bottom">
-      <OperationalTag size="sm" type={l.superseded ? "cool-gray" : "warm-gray"} text={locationLabel(l)} />
-    </Tooltip>
+    <Toggletip align="bottom">
+      <ToggletipButton label={locationLabel(l)}>
+        <Tag as="span" size="sm" type={l.superseded ? "cool-gray" : "warm-gray"}>
+          {locationLabel(l)}
+        </Tag>
+      </ToggletipButton>
+      <ToggletipContent>{hint}</ToggletipContent>
+    </Toggletip>
   );
 }
 
