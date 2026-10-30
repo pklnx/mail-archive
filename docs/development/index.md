@@ -130,8 +130,13 @@ in `rootFiles` (`internal/web/ui/ui.go`), or the server answers 404 for it.
 `web/e2e` holds a Playwright suite that drives the UI in Chromium against
 the demo server (see [Documentation](#documentation)): login with 2FA and its
 errors, search and the message view, "Only in archive", accounts, retention,
-users and the phone layout. It needs Go, a PostgreSQL user with `CREATEDB`
-and a Chromium:
+users and the phone layout. It also checks dark mode (computed colours and
+contrast), phones and tablets through device emulation (touch, `pointer:
+coarse`, the iPhone's safe-area insets) and a model of Safari's and
+Firefox's focus on click (`web/e2e/clickModel.ts`). What only a real device,
+Safari, Firefox or a screen reader can show stays on the manual checklist in
+[#335](https://github.com/pklnx/mail-archive/issues/335). It needs Go, a
+PostgreSQL user with `CREATEDB` and a Chromium:
 
 ```sh
 make web-e2e DEMO_DATABASE_URL='postgres://mailarchive:<password>@localhost:5432/mailarchive?sslmode=disable'
@@ -155,9 +160,11 @@ The tests fail on page errors, console errors, CSP violations and requests
 to any other host (`web/e2e/fixtures.ts`). They use role and label queries,
 wait for elements and responses, never for time, and run without retries.
 Names a test creates are unique per run, and no test depends on another.
-CI runs the suite in the `web-e2e` job, which usually takes about two
-minutes. It installs only Playwright's headless Chromium, without apt, and
-checks its libraries (`scripts/ci-playwright-chromium.sh`): the runner image
+CI runs the suite in the `web-e2e` job. The suite itself (`pnpm e2e`, about
+170 tests on one worker) takes about six minutes there; the device checks of
+[#367](https://github.com/pklnx/mail-archive/issues/367) added about 40
+seconds of it, measured locally. The job installs only Playwright's headless
+Chromium, without apt, and checks its libraries (`scripts/ci-playwright-chromium.sh`): the runner image
 has them. If one is missing, the run shows a warning and installs them with
 apt, which can take 8 to 13 minutes when the runner's apt mirror is slow. The
 job's timeout is 20 minutes so that this fallback fits.

@@ -74,6 +74,14 @@ test("a user's page: open it from the table, act from its menu, remove the user,
   await expect(main.getByText("Created", { exact: true })).toBeVisible();
   await expect(main.getByRole("region", { name: "API keys" }).getByText("No API keys yet.")).toBeVisible();
 
+  // The breadcrumb is a navigation landmark; back through it the focus is on the list's h1, and on the page's h1 again (#330, #335 R2).
+  const crumbs = main.getByRole("navigation", { name: "Breadcrumb", exact: true });
+  await crumbs.getByRole("link", { name: "Users", exact: true }).click();
+  await expect(page).toHaveURL(/\?view=users$/);
+  await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeFocused();
+  await row.getByRole("link", { name, exact: true }).click();
+  await expect(title).toBeFocused();
+
   // Lock from the page's menu: it asks first.
   const menu = main.getByRole("button", { name: `Actions for ${name}` });
   await menu.click();

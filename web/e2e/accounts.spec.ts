@@ -1,3 +1,5 @@
+import type { Locator, Page } from "@playwright/test";
+import type { AccountsResponse } from "../src/api";
 import { imapPort, spareLogin, unique } from "./demo";
 import { accountRow, expect, test } from "./fixtures";
 
@@ -40,6 +42,15 @@ test("add an IMAP account, choose folders on its page, sync, remove it, delete i
   await expect(main.getByRole("button", { name: "Check server" })).toHaveAttribute("title", /compare every folder/);
   const connection = main.getByRole("region", { name: "Connection" });
   await expect(connection.getByText(spareLogin.username, { exact: true })).toBeVisible();
+  // Each section's Edit is described by its section's title; Edit puts the
+  // focus on the form's first field, Cancel back on Edit (#333, #335 R4).
+  for (const section of ["Connection", "Folders", "Schedule"]) {
+    await expect(main.getByRole("region", { name: section }).getByRole("button", { name: "Edit" })).toHaveAccessibleDescription(section);
+  }
+  await connection.getByRole("button", { name: "Edit" }).click();
+  await expect(connection.getByLabel("Name", { exact: true })).toBeFocused();
+  await connection.getByRole("button", { name: "Cancel" }).click();
+  await expect(connection.getByRole("button", { name: "Edit" })).toBeFocused();
 
   // Leave Trash out of the next syncs: Folders has its own Edit and Save.
   const folders = main.getByRole("region", { name: "Folders" });
@@ -49,6 +60,7 @@ test("add an IMAP account, choose folders on its page, sync, remove it, delete i
   // Meanwhile a choice in Schedule stays unsaved.
   const schedule = main.getByRole("region", { name: "Schedule" });
   await schedule.getByRole("button", { name: "Edit" }).click();
+  await expect(schedule.getByLabel("Schedule")).toBeFocused();
   await schedule.getByLabel("Schedule").selectOption({ label: "Every 30 minutes" });
   // Carbon draws the box on the label, over the input: a person clicks that.
   const trash = folders.getByRole("checkbox", { name: "Trash" });
@@ -197,3 +209,57 @@ test("on a phone the accounts table and an account's page fit the width", async 
   await main.getByRole("region", { name: "Connection" }).getByRole("button", { name: "Edit" }).click();
   expect(await noSideScroll()).toBe(true);
 });
+
+/** Whether the element is what the page hits at its own centre: on screen and covered by nothing. */
+const onTop = (el: Locator) =>
+  el.evaluate((e) => {
+    const r = e.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && e.contains(hit);
+  });
+
+/** The table's sideways scroll box, scrolled to x (-1: its end). */
+const scrollTable = (page: Page, x: number) =>
+  page.locator(".accounts-table .cds--data-table-content").first().evaluate((e, x) => {
+    e.scrollLeft = x === -1 ? e.scrollWidth : x;
+    return { left: e.scrollLeft, scrolls: e.scrollWidth > e.clientWidth };
+  }, x);
+
+// A long account name on a phone (#333, #335 I7): the row's Sync and menu
+// stay on screen and on top. At 375 px the name wraps and the table fits; at
+// 320 px it scrolls sideways, and the actions column stays at the inline end
+// at both ends of the scroll. The name is changed in the browser's copy of
+// GET /api/accounts only; the server's data stays as it is.
+for (const { width, scrolls } of [
+  { width: 375, scrolls: false },
+  { width: 320, scrolls: true },
+]) {
+  test(`at ${width} px a row with a long account name keeps its Sync and menu in the sticky actions column`, async ({ page }) => {
+    const long = "a-really-long-account-name-for-the-sticky-actions-column-600";
+    expect(long).toHaveLength(60);
+    await page.route(/\/api\/accounts$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const data = (await response.json()) as AccountsResponse;
+      const personal = data.accounts.find((a) => a.name === "personal")!;
+      personal.name = long;
+      await route.fulfill({ response, json: data });
+    });
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/?view=accounts");
+    const row = accountRow(page, long);
+    await expect(row.getByRole("link", { name: long, exact: true })).toBeVisible();
+    const sync = row.getByRole("button", { name: "Sync", exact: true });
+    const menu = row.getByRole("button", { name: `Actions for ${long}` });
+    // At 320 px the box scrolls sideways: only stickiness keeps the actions on screen.
+    expect((await scrollTable(page, 0)).scrolls).toBe(scrolls);
+    for (const x of scrolls ? [0, -1] : [0]) {
+      const at = await scrollTable(page, x);
+      if (x === -1) expect(at.left).toBeGreaterThan(0);
+      for (const el of [sync, menu]) {
+        await expect(el).toBeInViewport({ ratio: 1 });
+        expect(await onTop(el), `on top at scrollLeft ${at.left}`).toBe(true);
+      }
+    }
+  });
+}

@@ -6,6 +6,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { isChunkOf } from "../scripts/lazyChunks.mjs";
 import { expect, test } from "./fixtures";
+import { focusOnBody, useClickModel } from "./clickModel";
 import { clickIntoFrame, openLong } from "./mailFrame";
 
 const fileOf = (path: string) => path.split("/").pop() ?? "";
@@ -174,5 +175,104 @@ test.describe("desktop, with a mail open", () => {
     await expect(form).toHaveCount(0);
     await expect(calendar).toHaveCount(0);
     await expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+// Under the model of Safari's and Firefox's clicks (clickModel.ts), which
+// focus no clicked button, radio or checkbox: the popover must not close on
+// the blur that leaves the focus on the body (#335, S2).
+test.describe("desktop, Safari and Firefox click model", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test("a range picked in the calendar and a preset keep the popover open", async ({ page }) => {
+    await useClickModel(page);
+    await ready(page);
+    const { button, form, since, calendar } = parts(page);
+    await button.click();
+    await expect(form).toBeVisible();
+    await since.click();
+    await expect(calendar).toBeVisible();
+    const days = calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)");
+    await days.nth(2).click();
+    await days.nth(9).click();
+    await expect(calendar).toHaveCount(0);
+    await expect(form).toBeVisible();
+    const month = (await dayFromToday(page, 0)).slice(0, 7);
+    await expect(page).toHaveURL(new RegExp(`[?&]q=after%3A${month}-03(%20|\\+)before%3A${month}-11(&|$)`));
+
+    // A preset radio, pressed by hand: the mousedown leaves the focus on the body, so the model is active.
+    await form.getByText("Last 30 days", { exact: true }).hover();
+    await page.mouse.down();
+    expect(await focusOnBody(page)).toBe(true);
+    await page.mouse.up();
+    await expect(form.getByRole("radio", { name: "Last 30 days" })).toBeChecked();
+    await expect(page).toHaveURL(new RegExp(`[?&]q=after%3A${await dayFromToday(page, -29)}(&|$)`));
+    await expect(form).toBeVisible();
+  });
+});
+
+// With the user panel open, Edit filters closes the panel and opens the
+// popover at its field (#335, S2): with Chromium's clicks, and under the
+// click model, where the focus does not move, so no blur closes the panel and
+// Edit filters must close it itself (`editFilters` in App.tsx).
+for (const model of [false, true]) {
+  test.describe(model ? "desktop, Safari and Firefox click model" : "desktop 1280×800", () => {
+    test.use({ viewport: { width: 1280, height: 800 } });
+
+    test("with the user panel open, Edit filters closes it and opens the popover at its field", async ({ page }) => {
+      if (model) await useClickModel(page);
+      await ready(page, "/?q=from%3Asam");
+      const { form } = parts(page);
+      const user = page.getByRole("banner").getByRole("button", { name: /^User \(/ });
+      const userPanel = page.locator(".cds--header-panel.app-user-panel");
+      await user.click();
+      await expect(user).toHaveAttribute("aria-expanded", "true");
+      const edit = page.getByRole("list", { name: "Active filters" }).getByRole("button", { name: "Edit filters" });
+      await edit.hover();
+      await page.mouse.down();
+      // Under the model the focus is on the body now, not on Edit filters.
+      expect(await focusOnBody(page)).toBe(model);
+      await page.mouse.up();
+      await expect(form).toBeVisible();
+      await expect(form.getByRole("textbox", { name: "From" })).toBeFocused();
+      await expect(user).toHaveAttribute("aria-expanded", "false");
+      await expect(userPanel).not.toHaveClass(/cds--header-panel--expanded/);
+    });
+  });
+}
+
+test.describe("desktop 1280×800, the accessibility tree", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  // The names and descriptions a screen reader gets for the date range
+  // (#332, #335 R3), from Chromium's own accessibility tree.
+  test("the presets are a group named Date, Since and Until describe their format, the calendar has its label", async ({ page }) => {
+    await ready(page);
+    const { button, form, since } = parts(page);
+    await button.click();
+    const presets = form.getByRole("group", { name: "Date", exact: true });
+    await expect(presets.getByRole("radio")).toHaveCount(5);
+    for (const name of ["Any time", "Last 7 days", "Last 30 days", "This year", "Custom"]) await expect(presets.getByRole("radio", { name })).toBeVisible();
+    const until = form.getByRole("textbox", { name: "Until" });
+    const placeholder = await since.getAttribute("placeholder");
+    expect(placeholder).toBeTruthy();
+    await expect(since).toHaveAccessibleDescription(`Format: ${placeholder}`);
+    await expect(until).toHaveAccessibleDescription(`Format: ${placeholder}`);
+
+    // The calendar's label as Chromium exposes it. Closed, the query finds no node.
+    const cdp = await page.context().newCDPSession(page);
+    const calendarNode = async () => {
+      const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+      const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: ".flatpickr-calendar.open" });
+      if (!nodeId) return null;
+      const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+      const node = nodes[0];
+      return node ? { role: node.role?.value, name: node.name?.value, ignored: node.ignored } : null;
+    };
+    expect(await calendarNode()).toBeNull();
+    await since.click();
+    await expect(page.locator(".flatpickr-calendar.open")).toBeVisible();
+    expect(await calendarNode()).toEqual({ role: "application", name: "Calendar", ignored: false });
+    await cdp.detach();
   });
 });

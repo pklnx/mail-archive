@@ -109,3 +109,92 @@ test("? loads the shortcuts overview; Escape closes it and the focus goes back",
   await expect(dialog).toHaveCount(0);
   await expect(first).toBeFocused();
 });
+
+// One "Loading…" per screen, and no skeleton in the accessibility tree
+// (#287, #340; #335 R6), through the real lazy chunk and the real data load.
+// The screen's data request is held until the test releases it, so the
+// loading state can be observed; a MutationObserver installed before the
+// app's script records the most "Loading…" statuses present at once.
+// "Once" means at most one at any time, not one node for the whole load: by
+// design the lazy fallback's status (ViewFallback) comes first and the
+// view's own status follows it once the chunk is there, one after the
+// other, never both (lazyView.tsx, Loading and ViewFallback). A status in a
+// hidden tab panel (Profile keeps every panel mounted) is not counted: the
+// browser exposes nothing of a hidden panel.
+const loadingStates = [
+  { name: "Users", url: "/?view=users", held: /^\/api\/users$/, loaded: (p: Page) => p.getByRole("main").getByRole("link", { name: "kim", exact: true }) },
+  { name: "Accounts", url: "/?view=accounts", held: /^\/api\/accounts$/, loaded: (p: Page) => p.getByRole("main").getByRole("link", { name: "personal", exact: true }) },
+  { name: "Retention rules", url: "/?view=retention", held: /^\/api\/retention\/rules$/, loaded: (p: Page) => p.getByRole("main").getByRole("row").filter({ hasText: "§147 AO" }) },
+  { name: "Retention holds", url: "/?view=retention&tab=holds", held: /^\/api\/legal-holds$/, loaded: (p: Page) => p.getByRole("main").getByRole("tabpanel").getByRole("button", { name: "Add hold" }) },
+  { name: "Retention runs", url: "/?view=retention&tab=runs", held: /^\/api\/retention\/runs$/, loaded: (p: Page) => p.getByRole("main").getByRole("tabpanel").getByRole("button", { name: "New deletion run" }) },
+  { name: "Log", url: "/?view=log", held: /^\/api\/audit$/, loaded: (p: Page) => p.getByRole("main").getByRole("table") },
+  {
+    name: "Profile, Sign-in & security",
+    url: "/?view=profile",
+    tab: "Sign-in & security",
+    held: /^\/api\/profile\/(2fa|passkeys)$/,
+    loaded: (p: Page) => p.getByRole("main").getByRole("tabpanel", { name: "Sign-in & security" }).getByRole("button", { name: "Add passkey" }),
+  },
+  { name: "the start-up gate", url: "/", held: /^\/api\/session$/, noSkeleton: true, loaded: (p: Page) => p.getByRole("list", { name: "Messages" }).getByRole("button").first() },
+];
+
+for (const { name, url, tab, held, loaded, noSkeleton } of loadingStates) {
+  test(`${name}: one Loading… at a time while it loads, its skeletons hidden from screen readers`, async ({ page }) => {
+    await page.addInitScript((text) => {
+      const w = window as unknown as { loadingMost: number; loadingAt: string[] };
+      w.loadingMost = 0;
+      w.loadingAt = [];
+      // Only statuses a screen reader can get: rendered (not in a hidden tab
+      // panel) and outside any aria-hidden subtree.
+      const exposed = () =>
+        [...document.querySelectorAll('[role="status"]')].filter(
+          (e) => (e.textContent ?? "").includes(text) && e.checkVisibility({ visibilityProperty: true }) && !e.closest('[aria-hidden="true"]'),
+        );
+      new MutationObserver(() => {
+        const now = exposed();
+        if (now.length > w.loadingMost) {
+          w.loadingMost = now.length;
+          w.loadingAt = now.map((e) => e.parentElement?.closest("[class]")?.className ?? "");
+        }
+      }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true });
+    }, "Loading…");
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    await page.route(
+      (u) => held.test(u.pathname),
+      async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        await released;
+        await route.fallback();
+      },
+    );
+    const requested = page.waitForRequest((r) => r.method() === "GET" && held.test(new URL(r.url()).pathname));
+    await page.goto(url);
+    if (tab) await page.getByRole("main").getByRole("tab", { name: tab }).click();
+    await requested;
+
+    // Held: the status says Loading…, and every skeleton is inside an aria-hidden subtree.
+    const loading = page.getByRole("status").filter({ hasText: "Loading…" });
+    await expect(loading).toHaveCount(1);
+    const skeletons = () =>
+      page.evaluate(() => {
+        const all = [...document.querySelectorAll('[class*="skeleton"]')];
+        return { count: all.length, exposed: all.filter((e) => !e.closest('[aria-hidden="true"]')).map((e) => e.className) };
+      });
+    const during = await skeletons();
+    // The gate has no skeleton, only its status.
+    if (!noSkeleton) expect(during.count).toBeGreaterThan(0);
+    expect(during.exposed).toEqual([]);
+
+    release();
+    await expect(loaded(page)).toBeVisible();
+    await expect(loading).toHaveCount(0);
+    expect((await skeletons()).count).toBe(0);
+    // At least one status was seen (the hold made it observable), and never two at once.
+    const most = await page.evaluate(() => {
+      const w = window as unknown as { loadingMost: number; loadingAt: string[] };
+      return { most: w.loadingMost, at: w.loadingAt };
+    });
+    expect(most.most, `statuses at once, inside: ${most.at.join(" | ")}`).toBe(1);
+  });
+}
