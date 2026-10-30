@@ -11,7 +11,7 @@ import { filterTextFor } from "./filterText";
 import { applySettings, messagesFor } from "./i18n";
 import { shiftDay } from "./format";
 import { parseQuery } from "./searchSyntax";
-import { cases, fieldsOf, focusOf, initialRange, run, watch, type Range, type Step } from "./test/dateRangeCases";
+import { calendarOpen, cases, fieldsOf, focusOf, initialRange, run, watch, type Range, type Step } from "./test/dateRangeCases";
 
 const ft = filterTextFor("en");
 
@@ -206,6 +206,31 @@ describe("FilterPanel date range: fields and search agree", () => {
     if (c.range) expect(applied).toEqual(c.range);
     expect([ab().value, bis().value]).toEqual(fieldsOf(applied));
     expect(document.activeElement).toBe(focusOf(picker, c.focus));
+    expect(calendarOpen(picker), "calendar open").toBe(false);
+    expect(watching.errors).toEqual([]);
+  });
+
+  it("Es4 a start typed and left, a preset, then Ab emptied and Escape: no dates, not the old range", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 28, 12));
+    const { seen } = setup(queryOf(initialRange.both));
+    run(picker, [["type", "from", "03.10.2026"], ["leave", "outside"]]);
+    fireEvent.click(radio(dt.presets.last7));
+    run(picker, [["type", "from", ""], ["escape"]]);
+    expect(seen.queries).toEqual(["tax after:2026-10-03 before:2026-10-21", "tax after:2026-10-22", "tax"]);
+    expect([ab().value, bis().value]).toEqual(["", ""]);
+    expect(calendarOpen(picker)).toBe(false);
+    expect(watching.errors).toEqual([]);
+  });
+
+  it("Enter that confirms an IME composition commits nothing; the next Enter does", () => {
+    const { seen } = setup(queryOf(initialRange.both));
+    run(picker, [["type", "to", "25.10.2026"]]);
+    fireEvent.keyDown(bis(), { key: "Enter", keyCode: 229, isComposing: true });
+    expect(seen.queries).toEqual([]);
+    expect(bis().value).toBe("25.10.2026");
+    run(picker, [["enter", "to"]]);
+    expect(seen.queries).toEqual(["tax after:2026-10-01 before:2026-10-26"]);
     expect(watching.errors).toEqual([]);
   });
 

@@ -2,7 +2,8 @@
 // or committing them as a browser does. Both callers run this table
 // (LogPage.test.tsx, FilterPanel.test.tsx), in German; each row checks the
 // applied range, that the fields show exactly that range, the number of
-// edits, where focus is, and that nothing throws.
+// edits, where focus is, that the calendar is closed, and that nothing
+// throws.
 import { act, fireEvent } from "@testing-library/react";
 
 /** Inclusive ISO days, "" for none. */
@@ -24,7 +25,9 @@ export type Step =
   /** A press on the page (outside the picker) or on another field. */
   | ["leave", "outside" | "other"]
   /** A touch outside that starts a scroll: no blur, no click. */
-  | ["touch"];
+  | ["touch"]
+  /** Focus moves to another field without a key or a press (a script). */
+  | ["focusOther"];
 
 export interface Case {
   name: string;
@@ -44,6 +47,10 @@ export interface Picker {
   /** A field outside the picker. */
   other: () => HTMLElement;
 }
+
+/** The picker's calendar is shown (Escape in a field only hides it: Carbon). */
+export const calendarOpen = (p: Picker) =>
+  !!(p.from() as unknown as { _flatpickr?: { calendarContainer: HTMLElement } })._flatpickr?.calendarContainer.classList.contains("open");
 
 const start: Range = { start: "2026-09-28", end: "" };
 const both: Range = { start: "2026-10-01", end: "2026-10-20" };
@@ -106,6 +113,20 @@ export const cases: Case[] = [
   { name: "K2 both set, Bis changed, press outside: the new end", initial: "both", steps: [["type", "to", "25.10.2026"], ["leave", "outside"]], range: { start: "2026-10-01", end: "2026-10-25" }, edits: 1, focus: "body" },
   { name: "K3 Von only, Bis typed, Tab, press outside: the range", initial: "start", steps: [["type", "to", "05.10.2026"], ["tab", "to"], ["leave", "outside"]], range: { start: "2026-09-28", end: "2026-10-05" }, edits: 1, focus: "body" },
   { name: "K4 both set, Von changed, Enter: the new start", initial: "both", steps: [["type", "from", "05.10.2026"], ["enter", "from"]], range: { start: "2026-10-05", end: "2026-10-20" }, edits: 1, focus: "from" },
+  { name: "Es both set, Von emptied, Escape: no dates", initial: "both", steps: [["type", "from", ""], ["escape"]], range: none, edits: 1, focus: "from" },
+  // Carbon remembers the start of the last change event and puts it into an
+  // emptied start when the calendar closes.
+  {
+    name: "Es2 both set, Von changed and left, then emptied, Escape: no dates",
+    initial: "both",
+    steps: [["type", "from", "03.10.2026"], ["leave", "outside"], ["type", "from", ""], ["escape"]],
+    range: none,
+    edits: 2,
+    focus: "from",
+  },
+  { name: "Es3 both set, Bis emptied, Escape: open end", initial: "both", steps: [["type", "to", ""], ["escape"]], range: { start: "2026-10-01", end: "" }, edits: 1, focus: "to" },
+  // The calendar closes too, before flatpickr's focus listener reads Von alone.
+  { name: "K5 both set, Von changed, focus moved by a script: the new start", initial: "both", steps: [["type", "from", "05.10.2026"], ["focusOther"]], range: { start: "2026-10-05", end: "2026-10-20" }, edits: 1, focus: "other" },
   // A touch that starts a scroll settles like any press outside; flatpickr
   // reads the half-typed day leniently (out of scope), so only agreement and
   // one edit are pinned.
@@ -211,6 +232,9 @@ export function run(p: Picker, steps: Step[]) {
         break;
       case "touch":
         fireEvent.touchStart(document.body);
+        break;
+      case "focusOther":
+        act(() => p.other().focus());
         break;
     }
   }

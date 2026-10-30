@@ -154,7 +154,10 @@ export function DateRange({ ids, labels, size = "md", start, end, onChange, pick
     // Shift+Tab out of the start field: before Carbon closes the calendar and
     // puts an emptied start back.
     if (e.key === "Tab" && e.shiftKey && e.target === fields()[0]) return settle();
-    if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;
+    if (e.key !== "Enter") return;
+    // Enter that confirms an IME composition is the IME's: no commit, also
+    // not Carbon's or flatpickr's.
+    if (e.isComposing || e.keyCode === 229) return e.stopPropagation();
     // Before Carbon's, flatpickr's and the range plugin's Enter, which commit
     // one field each (and throw on an emptied one); focus stays in the field.
     e.preventDefault();
@@ -171,6 +174,12 @@ export function DateRange({ ids, labels, size = "md", start, end, onChange, pick
     if (inCalendar(e.relatedTarget)) return;
     settle();
     if (!inPicker(e.relatedTarget)) handle.current?.calendar?.close();
+  });
+  // Escape in a field closes the calendar (Carbon, flatpickr, FilterPanel's
+  // capture), and Carbon then puts an emptied start back from an older
+  // change: settle first, on the document, before React's capture listeners.
+  const onEscape = useEffectEvent((e: KeyboardEvent) => {
+    if (e.key === "Escape" && isField(e.target)) settle();
   });
   // flatpickr's documentClick (document mousedown or touchstart, bubble
   // phase) rewrites the start field before the blur: settle and close first.
@@ -191,12 +200,15 @@ export function DateRange({ ids, labels, size = "md", start, end, onChange, pick
     const key = (e: Event) => onKeyDown(e as KeyboardEvent);
     const blur = (e: Event) => onBlur(e as FocusEvent);
     const press = (e: Event) => onPress(e);
+    const escape = (e: Event) => onEscape(e as KeyboardEvent);
     const passive = { capture: true, passive: true };
     picker.addEventListener("keydown", key, true);
     picker.addEventListener("blur", blur, true);
     document.addEventListener("mousedown", press, true);
     document.addEventListener("touchstart", press, passive);
+    document.addEventListener("keydown", escape, true);
     return () => {
+      document.removeEventListener("keydown", escape, true);
       picker.removeEventListener("keydown", key, true);
       picker.removeEventListener("blur", blur, true);
       document.removeEventListener("mousedown", press, true);

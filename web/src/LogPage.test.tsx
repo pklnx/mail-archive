@@ -11,7 +11,7 @@ import { filterTextFor } from "./filterText";
 import { applySettings, messagesFor, t } from "./i18n";
 import { defaultFilter, LogPage } from "./LogPage";
 import { expectLoaded, expectLoading } from "./test/loading";
-import { cases, fieldsOf, focusOf, run, watch, type Range } from "./test/dateRangeCases";
+import { calendarOpen, cases, fieldsOf, focusOf, run, watch, type Range } from "./test/dateRangeCases";
 
 const sha = "a".repeat(64);
 let n = 0;
@@ -411,6 +411,7 @@ describe("LogPage date range", () => {
       if (c.range) expect(applied).toEqual(c.range);
       await waitFor(() => expect([from().value, to().value]).toEqual(fieldsOf(applied)));
       expect(document.activeElement).toBe(focusOf(picker, c.focus));
+      expect(calendarOpen(picker), "calendar open").toBe(false);
       expect(watching.errors).toEqual([]);
     });
   });
