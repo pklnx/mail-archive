@@ -12,7 +12,7 @@ Current state only. At session end replace these sections; never append. History
 ## Active decisions
 - #321: Disable stays usable while a sync runs; only Remove is blocked (6474522407).
 - German UI term for the deletion grace period is "Karenzzeit" (#339, 6501382946).
-- The coordinator picks the backlog order and sets `plan` itself. Within a ticket, tooling, CI and test-scope trade-offs are the coordinator's call, recorded on the issue. The maintainer gets product, UI and wording questions and secret-scan changes.
+- The coordinator picks the backlog order and sets `plan` itself (CLAUDE.md, process.md). Within a ticket, tooling, CI and test-scope trade-offs are the coordinator's call, recorded on the issue. The maintainer gets product, UI and wording questions and secret-scan changes.
 - Releases: no backports; only the newest line gets releases (#314, 6518415969). Old releases, tags and images stay, including `26.10-*`, as `docs/guide/operations.md` promises.
 
 ## Maintainer actions

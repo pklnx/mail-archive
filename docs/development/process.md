@@ -18,8 +18,8 @@ Every change starts as a GitHub issue:
 
 ## 2. Plan
 
-The maintainer labels an issue **`plan`** to ask for an implementation plan
-from a Claude session. The plan is posted as a `## Plan` comment on the issue, and the label
+The coordinator labels an issue **`plan`** when it picks it next from the backlog
+(the maintainer may also do so) to ask for an implementation plan from a Claude session. The plan is posted as a `## Plan` comment on the issue, and the label
 changes to **`review`**. A plan covers:
 
 - the approach and the files or components it touches,
@@ -104,7 +104,7 @@ needed and not read at start.
 
 | Label | Set by | Meaning |
 |---|---|---|
-| `plan` | maintainer | Please write an implementation plan (Claude session). |
+| `plan` | coordinator or maintainer | Please write an implementation plan (Claude session). |
 | `review` | planner | The plan is posted and waits for review. |
 | `ready` | plan reviewer or maintainer | The plan is approved; the issue may be implemented. |
 | `second-review` | coordinator or maintainer | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
