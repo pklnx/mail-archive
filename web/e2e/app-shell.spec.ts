@@ -1,5 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
+import type { AccountsResponse } from "../src/api";
 import { expect, test } from "./fixtures";
+import { openLong } from "./mailFrame";
 
 // The app shell behaves like an application, not a website (#283): the page
 // does not bounce or scroll, the panes do; no tap highlight and no zoom on
@@ -97,6 +99,47 @@ test.describe("desktop", () => {
     await page.mouse.wheel(0, 600);
     await expect.poll(() => list.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  });
+
+  // The health banner (#186) sits in the shell between the header and the
+  // view, so the view gets shorter by its height: the page still does not
+  // scroll and the reading pane still ends in the window. The demo has no
+  // failing account, so the accounts' answer is changed: the first enabled
+  // IMAP account keeps failing (every poll's answer, so the banner stays).
+  test("the health banner takes its height from the view, not from the page", async ({ page }) => {
+    let name = "";
+    await page.route(/\/api\/accounts$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const data = (await response.json()) as AccountsResponse;
+      const failing = data.accounts.find((a) => a.kind === "imap" && a.enabled && !a.removed)!;
+      failing.sync.health = "failing";
+      name = failing.name;
+      await route.fulfill({ response, json: data });
+    });
+    await openLong(page);
+    expect(name).not.toBe("");
+    const banner = page.getByRole("group").filter({ hasText: `Syncing keeps failing for ${name}.` });
+    await expect(banner).toBeVisible();
+    const header = (await page.locator(".app-shell > .cds--header").boundingBox())!;
+    expect((await banner.boundingBox())!.y).toBeGreaterThanOrEqual(header.y + header.height);
+
+    // The page does not scroll; the reading pane ends in the window.
+    expect(await page.evaluate(() => document.scrollingElement!.scrollHeight <= document.scrollingElement!.clientHeight)).toBe(true);
+    const reader = page.locator(".reader-scroll");
+    expect(await reader.evaluate((e) => e.getBoundingClientRect().bottom <= window.innerHeight)).toBe(true);
+    // The wheel scrolls the pane, not the page.
+    const box = (await reader.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 600);
+    await expect.poll(() => reader.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+    // Its action opens the accounts, and the banner stays.
+    await banner.getByRole("button", { name: "Open accounts" }).click();
+    await expect(page).toHaveURL(/\?view=accounts$/);
+    await expect(page.getByRole("main").getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
+    await expect(banner).toBeVisible();
   });
 
   test("no tap highlight, no double-tap zoom, the resizer keeps its own touch-action", async ({ page }) => {
