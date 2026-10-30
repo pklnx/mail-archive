@@ -19,6 +19,8 @@ Current state only. At session end replace these sections; never append. History
 - #321: Disable stays usable while a sync runs; only Remove is blocked (6474522407).
 - German UI term for the deletion grace period is "Karenzzeit" (#339, 6501382946).
 - The coordinator picks the backlog order and sets `plan` itself (CLAUDE.md, process.md). Within a ticket, tooling, CI and test-scope trade-offs are the coordinator's call, recorded on the issue. The maintainer gets product, UI and wording questions and secret-scan changes.
+- Releases are planned in milestones `X.Y.Z` (process.md, "Milestones"): the coordinator proposes scope and order, the maintainer confirms.
+- Product direction: a SaaS offering with one instance per customer; the self-hosted open source version stays. Target group: individuals and small businesses.
 - Releases in patch versions carry only `bug`/`docs` PRs; a `feature` PR makes the next release minor (`next-version.sh`). Releases: no backports; only the newest line gets releases (#314, 6518415969). Old releases, tags and images stay, including `26.10-*`, as `docs/guide/operations.md` promises.
 
 ## Maintainer actions
