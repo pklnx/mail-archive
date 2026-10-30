@@ -2,7 +2,8 @@
 // with Carbon's motion, on open only; Carbon's SideNav and user panel keep
 // their own transitions. With the system's "reduce motion" setting none of
 // it moves. Each check reads the computed style once the element is shown,
-// never after a wait for time.
+// never after a wait for time. Closing is at once: by the first animation
+// frame after the Escape the overlay is gone and nothing animates out.
 import { devices, type Locator, type Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 
@@ -18,6 +19,34 @@ const motionOf = (el: Locator) =>
 
 /** Whether any of a comma-separated list of durations is above zero. */
 const moves = (durations: string) => durations.split(",").some((d) => parseFloat(d) > 0);
+
+/**
+ * Presses Escape and reports, in the first animation frame after the
+ * keydown, whether the overlay is gone (no element matches gone) and the
+ * element that stays (stays, if given) runs no animation or transition. A
+ * one-shot reading, no retry: an exit animation or a delayed unmount would
+ * keep the overlay for several frames (#335, I9).
+ */
+async function escapeClosesAtOnce(page: Page, gone: string, stays?: string) {
+  await page.evaluate(
+    ([gone, stays]) => {
+      (window as unknown as { escapeCheck: Promise<unknown> }).escapeCheck = new Promise((resolve) =>
+        document.addEventListener(
+          "keydown",
+          () =>
+            requestAnimationFrame(() => {
+              const kept = stays ? document.querySelector(stays) : null;
+              resolve({ gone: document.querySelector(gone) === null, animations: kept ? kept.getAnimations().map((a) => (a as CSSAnimation).animationName ?? (a as CSSTransition).transitionProperty) : [] });
+            }),
+          { once: true, capture: true },
+        ),
+      );
+    },
+    [gone, stays] as const,
+  );
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(() => (window as unknown as { escapeCheck: Promise<unknown> }).escapeCheck)).toEqual({ gone: true, animations: [] });
+}
 
 async function mailList(page: Page) {
   await page.goto("/");
@@ -60,6 +89,9 @@ for (const reduced of [false, true]) {
         await expect(folders).toBeVisible();
         expect((await motionOf(folders)).animation).toBe(reduced ? "none" : "app-slide-in-start");
         expect((await motionOf(page.locator(".folder-pane__scrim"))).animation).toBe(reduced ? "none" : "app-fade-in");
+        // Closing is at once (maintainer decision on #287): the aside stays, without its overlay class.
+        await escapeClosesAtOnce(page, ".folder-pane--overlay, .folder-pane__scrim", "aside.folder-pane");
+        await expect(folders).toHaveCount(0);
       });
 
       test("the conversation sheet and its scrim", async ({ page }) => {
@@ -67,7 +99,7 @@ for (const reduced of [false, true]) {
         expect((await motionOf(dialog)).animation).toBe(reduced ? "none" : "app-sheet-in");
         expect((await motionOf(scrim)).animation).toBe(reduced ? "none" : "app-fade-in");
         // Closing is at once (maintainer decision on #287).
-        await page.keyboard.press("Escape");
+        await escapeClosesAtOnce(page, ".conversation-overlay");
         await expect(dialog).toHaveCount(0);
       });
     });
@@ -78,7 +110,7 @@ for (const reduced of [false, true]) {
       test("the conversation panel and the user panel", async ({ page }) => {
         const { dialog } = await openConversation(page);
         expect((await motionOf(dialog)).animation).toBe(reduced ? "none" : "app-contextual-in");
-        await page.keyboard.press("Escape");
+        await escapeClosesAtOnce(page, ".conversation-overlay");
         await expect(dialog).toHaveCount(0);
 
         await page.getByRole("banner").getByRole("button", { name: /^User \(/ }).click();

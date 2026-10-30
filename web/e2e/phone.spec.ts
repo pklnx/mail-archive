@@ -60,8 +60,9 @@ test("phone: the navigation and the folders, open a message, back to the list", 
   await expect(page).toHaveURL(/[?&]folder=Sent/);
   await expect(page.getByRole("heading", { name: "Sent", level: 1 })).toBeVisible();
 
+  // By tap, the touch path a phone takes (#335, I11).
   const item = list.getByRole("button", { name: /Documents for the tax return/ });
-  await item.click();
+  await item.tap();
   const message = page.getByRole("article");
   await expect(message.getByRole("heading", { level: 1 })).toHaveText("Documents for the tax return");
   // One column: the list is out of view while the message is open.
@@ -69,7 +70,7 @@ test("phone: the navigation and the folders, open a message, back to the list", 
   // The row that had the focus is hidden: the subject takes it (#311).
   await expect(message.getByRole("heading", { level: 1 })).toBeFocused();
 
-  await page.getByRole("button", { name: "Back to the list" }).click();
+  await page.getByRole("button", { name: "Back to the list" }).tap();
   await expect(page.getByRole("article")).toHaveCount(0);
   await expect(list).toBeVisible();
   await expect(item).toBeVisible();
@@ -125,6 +126,43 @@ test("phone: the quick filters toggle with one tap, Edit filters opens the filte
   await tags.getByRole("button", { name: "Remove filter: From" }).click();
   await expect(tags).toHaveCount(0);
   await expect(page).not.toHaveURL(/from%3Asam/);
+});
+
+// A location tag's toggletip by touch (#359): the demo's premium invoice is
+// gone from the server, so its tag explains itself. A tap opens the hint, a
+// tap on the hint keeps it, a tap elsewhere closes it (#335, I12 and R9).
+test("phone: a tap on a location tag opens its hint in view; a tap on the hint keeps it, a tap outside closes it", async ({ page }) => {
+  await page.goto("/?q=premium");
+  const list = page.getByRole("list", { name: "Messages" });
+  await expect(list.getByRole("button")).toHaveCount(1);
+  await list.getByRole("button", { name: /Your 2026 premium invoice/ }).tap();
+  const message = page.getByRole("article");
+  await message.getByRole("button", { name: "Details" }).tap();
+  const where = message.getByRole("button", { name: /no longer on the server/ });
+  await expect(where).toBeVisible();
+  // The button is named by its location exactly, the tag's own text.
+  const label = ((await where.locator(".cds--tag").textContent()) ?? "").trim();
+  expect(label).not.toBe("");
+  await expect(where).toHaveAccessibleName(label);
+  await expect(where).toHaveAttribute("aria-expanded", "false");
+  const id = await where.getAttribute("aria-controls");
+  expect(id).toBeTruthy();
+  // The element aria-controls names holds the hint.
+  const hint = page.locator(`[id="${id}"]`).getByText("The server no longer lists this message here. The archive keeps it.", { exact: true });
+  await expect(hint).toBeHidden();
+
+  await where.tap();
+  await expect(where).toHaveAttribute("aria-expanded", "true");
+  await expect(hint).toBeVisible();
+  await expect(hint).toBeInViewport({ ratio: 1 });
+  // A tap on the hint itself keeps it open, so the close below is not "any tap closes".
+  await hint.tap();
+  await expect(where).toHaveAttribute("aria-expanded", "true");
+  await expect(hint).toBeVisible();
+  // Outside: the subject.
+  await message.getByRole("heading", { level: 1 }).tap();
+  await expect(where).toHaveAttribute("aria-expanded", "false");
+  await expect(hint).toBeHidden();
 });
 
 // A swipe that starts on a scrim does not scroll the page behind it; a tap

@@ -2,6 +2,10 @@ import type { Page } from "@playwright/test";
 import { unique } from "./demo";
 import { expect, test } from "./fixtures";
 
+type Box = { x: number; y: number; width: number; height: number };
+/** Whether two boxes share any area. */
+const overlap = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
 const noSideScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
 
 // The demo's personal / Archive/2014 holds three twelve-year-old messages.
@@ -66,6 +70,17 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await page.setViewportSize({ width: 375, height: 800 });
   expect(await noSideScroll(page)).toBe(true);
   expect(await title.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(200);
+  // Delete and the menu are on screen, beside or below the title, never over it (#339, #335 I8).
+  const titleBox = (await title.boundingBox())!;
+  const actions = main.locator(".page-header__actions").getByRole("button");
+  await expect(actions).toHaveCount(2);
+  await expect(actions.first()).toHaveAccessibleName("Delete 2 messages");
+  await expect(actions.last()).toHaveAccessibleName(/^Actions for /);
+  for (const button of await actions.all()) {
+    await expect(button).toBeInViewport({ ratio: 1 });
+    const b = (await button.boundingBox())!;
+    expect(overlap(b, titleBox), `${await button.getAttribute("aria-label") ?? await button.textContent()} over the title`).toBe(false);
+  }
   const box = groups.locator(".cds--data-table-content");
   expect(await box.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   const tiles = await main.locator(".app-summary__tile").evaluateAll((els) => els.map((el) => el.getBoundingClientRect()).map((r) => ({ top: r.top, left: r.left, right: r.right })));
@@ -149,6 +164,16 @@ test("on a phone the retention tables fit the width and their menus are on scree
     await main.getByRole("tab", { name: tab }).click();
     await expect(main.getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
     await expect(main.getByRole("tabpanel").getByRole("button", { name: tab === "Legal holds" ? "Add hold" : "New deletion run" })).toBeInViewport();
+    if (tab === "Legal holds") {
+      // The toolbar's toggle fits beside or above Add hold, whole and not under it (#339, #335 I8).
+      // Carbon's switch button is visually hidden; its label and drawn switch are what shows.
+      await expect(main.getByRole("tabpanel").getByRole("switch", { name: "Show released holds" })).toHaveCount(1);
+      const label = main.getByRole("tabpanel").locator(".retention-toolbar__toggle");
+      await expect(label).toBeInViewport({ ratio: 1 });
+      await expect(label.locator(".cds--toggle__switch")).toBeInViewport({ ratio: 1 });
+      const add = (await main.getByRole("tabpanel").getByRole("button", { name: "Add hold" }).boundingBox())!;
+      expect(overlap((await label.boundingBox())!, add)).toBe(false);
+    }
     expect(await noSideScroll(page)).toBe(true);
   }
 });

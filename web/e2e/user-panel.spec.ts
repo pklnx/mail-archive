@@ -8,6 +8,7 @@ import { devices, type Page } from "@playwright/test";
 import { isChunkOf } from "../scripts/lazyChunks.mjs";
 import { admin } from "./demo";
 import { expect, test } from "./fixtures";
+import { focusOnBody, useClickModel } from "./clickModel";
 import { clickIntoFrame, openLong } from "./mailFrame";
 
 const label = `User (${admin.name})`;
@@ -145,6 +146,49 @@ test.describe("desktop", () => {
       () => panel(page).getByRole("button", { name: "Log out" }).click(),
     );
   });
+
+  // Safari and Firefox on macOS focus nothing on a click (clickModel.ts): the
+  // focus leaves the panel with no relatedTarget before the item's click, and
+  // the panel must stay open for it (#335, S1).
+  test("under the Safari and Firefox click model every item works by click", async ({ page, guards }) => {
+    guards.allowHTTPError("/api/session", 500);
+    await useClickModel(page);
+    await failLogoutOnce(page);
+    await ready(page);
+    const item = (name: string | RegExp) => panel(page).getByRole(name === "Profile" ? "link" : "button", { name });
+
+    // Profile, pressed by hand: the mousedown leaves the focus on the body, so the model is active.
+    await action(page).click();
+    await expect(panel(page)).toBeVisible();
+    await item("Profile").hover();
+    await page.mouse.down();
+    expect(await focusOnBody(page)).toBe(true);
+    await expect(panel(page)).toBeVisible();
+    await page.mouse.up();
+    await expect(page).toHaveURL(/\?view=profile$/);
+    await expect(page.getByRole("main").getByRole("heading", { name: "Profile", level: 1 })).toBeVisible();
+    await expect(panel(page)).toHaveCount(0);
+
+    await action(page).click();
+    await item("Keyboard shortcuts").click();
+    const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+
+    // The theme item switches the theme and keeps the panel open.
+    await action(page).click();
+    const html = page.locator("html");
+    const dark = (await html.getAttribute("class"))?.includes("cds--g100") ?? false;
+    await item(dark ? "Switch to light mode" : "Switch to dark mode").click();
+    await expect(html).toHaveClass(dark ? /(^|\s)cds--white(\s|$)/ : /(^|\s)cds--g100(\s|$)/);
+    await expect(item(dark ? "Switch to dark mode" : "Switch to light mode")).toBeVisible();
+
+    // Log out runs: its first answer is the 500 of failLogoutOnce, which never reaches the server.
+    await item("Log out").click();
+    await expect(logoutAlert(page)).toBeVisible();
+    await expect(action(page)).toBeVisible();
+  });
 });
 
 test.describe("phone", () => {
@@ -165,6 +209,14 @@ test.describe("phone", () => {
     // Outside: the start of the list's title, left of the panel.
     await page.getByRole("heading", { level: 1 }).tap({ position: { x: 4, y: 4 } });
     await expect(panel(page)).toHaveCount(0);
+    // Keyboard shortcuts by tap opens the overview (#335, I5).
+    await action(page).tap();
+    await panel(page).getByRole("button", { name: "Keyboard shortcuts" }).tap();
+    const shortcuts = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(shortcuts).toBeVisible();
+    await expect(panel(page)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(shortcuts).toHaveCount(0);
     await action(page).tap();
     await panel(page).getByRole("link", { name: "Profile" }).tap();
     await expect(page).toHaveURL(/\?view=profile$/);
@@ -193,5 +245,40 @@ test.describe("phone", () => {
       () => action(page).tap(),
       () => panel(page).getByRole("button", { name: "Log out" }).tap(),
     );
+  });
+});
+
+// The notch and the home indicator (#324, #335 I5): the safe-area insets of
+// an iPhone, set through the DevTools protocol. The header reaches under the
+// notch and grows by the top inset; the panel opens below it and keeps its
+// last item above the home indicator, also scrolled to its end.
+test.describe("phone with safe-area insets", () => {
+  const { defaultBrowserType: _, ...iphone } = devices["iPhone 13"];
+  // Short enough that the open panel scrolls.
+  test.use({ ...iphone, viewport: { width: 390, height: 240 } });
+  const insets = { top: 47, bottom: 34 };
+
+  test("the header grows by the top inset; the panel opens below it and its last item clears the bottom inset", async ({ page }) => {
+    await ready(page);
+    const header = page.locator(".app-shell > .cds--header");
+    const height = () => header.evaluate((e) => e.getBoundingClientRect().height);
+    // Without insets the header is 3rem: the override below is what changes it.
+    expect(await height()).toBe(48);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: { top: insets.top, bottom: insets.bottom, left: 0, right: 0 } });
+    await expect.poll(height).toBe(48 + insets.top);
+
+    await action(page).tap();
+    await expect(panel(page)).toBeVisible();
+    const box = page.locator(".cds--header-panel.app-user-panel");
+    const vh = page.viewportSize()!.height;
+    expect((await box.boundingBox())!.y).toBe(48 + insets.top);
+    expect(await box.evaluate((e) => getComputedStyle(e).paddingBlockEnd)).toBe(`${insets.bottom}px`);
+    // It scrolls; at its end the last item lies above the bottom inset.
+    expect(await box.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+    await box.evaluate((e) => e.scrollTo(0, e.scrollHeight));
+    const last = panel(page).getByRole("button", { name: "Log out" });
+    await expect.poll(async () => (await last.boundingBox())!.y + (await last.boundingBox())!.height).toBeLessThanOrEqual(vh - insets.bottom);
+    await cdp.detach();
   });
 });

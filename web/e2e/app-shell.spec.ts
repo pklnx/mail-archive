@@ -258,8 +258,6 @@ test.describe("desktop", () => {
   });
 });
 
-// Touch screens: a tablet wider than 767px and a phone. pointer: coarse
-// matches with hasTouch and isMobile.
 // A wide sidebar never squeezes the reader below what the default width
 // leaves it at the narrowest desktop window (#310). The browser's grid
 // sizing is what matters here, so it is checked in a real one.
@@ -302,8 +300,13 @@ test.describe("the sidebar's usable maximum (#310)", () => {
   });
 });
 
+// Touch screens: a tablet in portrait (wider than 767px), the same tablet in
+// landscape, where the wide layout (lg and up) applies, and a phone. pointer:
+// coarse matches with hasTouch and isMobile: the 16px rule follows the
+// pointer, not the width (#335, O1).
 for (const size of [
   { name: "tablet 820×1180", viewport: { width: 820, height: 1180 } },
+  { name: "tablet 1180×820", viewport: { width: 1180, height: 820 } },
   { name: "phone 390×780", viewport: { width: 390, height: 780 } },
 ]) {
   test.describe(size.name, () => {
@@ -315,6 +318,8 @@ for (const size of [
       const search = page.getByRole("searchbox", { name: "Search mail" });
       await expect(search).toBeVisible();
       expect(await fontSize(search)).toBeGreaterThanOrEqual(16);
+      // In landscape the wide layout applies: the folder column is a column, not an overlay.
+      if (size.viewport.width >= 66 * 16) await expect(page.locator("aside.folder-pane:not(.folder-pane--overlay)")).toBeVisible();
 
       const panel = page.getByRole("group", { name: "Filters", exact: true });
       if (!(await panel.isVisible())) {
