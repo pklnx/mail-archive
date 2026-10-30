@@ -66,6 +66,12 @@ test("only in archive, and search all mail from an account", async ({ page }) =>
   const tree = page.getByRole("tree", { name: "Accounts and folders" });
   const list = page.getByRole("list", { name: "Messages" });
 
+  // In All mail too, the row's own flag tags the message that is only in the
+  // archive, and no other row (#310).
+  const invoice = list.getByRole("button", { name: /Your 2026 premium invoice/ });
+  await expect(invoice).toContainText("Only in archive");
+  await expect(list.getByRole("button").filter({ hasText: "Only in archive" })).toHaveCount(1);
+
   await nav.getByRole("link", { name: /^Only in archive \d+$/ }).click();
   await expect(page).toHaveURL(/[?&]gone=1/);
   const gone = list.getByRole("button", { name: /Your 2026 premium invoice/ });

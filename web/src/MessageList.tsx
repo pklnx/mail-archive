@@ -93,8 +93,6 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
   }, [items, cursor, done, loading, error, load, onNav]);
 
   const kind = searching ? "matches" : filter.group ? "conversations" : "messages";
-  // Every message of the "only in archive" view is gone from the servers.
-  const gone = filter.gone === true;
   // The state of the last load, for screen readers. One status that stays mounted: a live
   // region has to exist before its text changes, or it may not be read (#311).
   const result = error
@@ -132,9 +130,9 @@ export function MessageList({ filter, selected, open, onNav, clearSearch, search
               )}
               <li>
                 {filter.group && m.thread && (m.count ?? 1) > 1 ? (
-                  <ThreadRow m={m} filter={filter} selected={selected} open={open} gone={gone} />
+                  <ThreadRow m={m} filter={filter} selected={selected} open={open} />
                 ) : (
-                  <Row m={m} selected={selected} open={open} gone={gone} />
+                  <Row m={m} selected={selected} open={open} />
                 )}
               </li>
             </Fragment>
@@ -205,11 +203,9 @@ interface RowProps {
   nested?: boolean;
   /** Messages of the conversation, shown as a tag. */
   count?: number;
-  /** The message is no longer on any server ("only in archive"). */
-  gone?: boolean;
 }
 
-function Row({ m, selected, open, nested, count, gone }: RowProps) {
+function Row({ m, selected, open, nested, count }: RowProps) {
   const on = m.id === selected;
   // Paging in the reading pane moves the selection; keep it in view.
   const ref = useRef<HTMLButtonElement>(null);
@@ -245,7 +241,9 @@ function Row({ m, selected, open, nested, count, gone }: RowProps) {
           <Highlight text={m.snippet} />
         </span>
       )}
-      {gone && !nested && (
+      {/* No longer on any server of the listing's account ("only in archive"), also in a
+          conversation: the tag tells its messages apart. */}
+      {m.gone && (
         <span className="mail-row__tags">
           <Tag as="span" size="sm" type="warm-gray">
             {t.onlyInArchive}
@@ -257,7 +255,7 @@ function Row({ m, selected, open, nested, count, gone }: RowProps) {
 }
 
 /** The newest message of a conversation; expands to all its matching messages. */
-function ThreadRow({ m, filter, selected, open, gone }: { m: MessageSummary; filter: Filter; selected: string; open: (id: string) => void; gone: boolean }) {
+function ThreadRow({ m, filter, selected, open }: { m: MessageSummary; filter: Filter; selected: string; open: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const count = m.count ?? 1;
   const id = `thread-${m.id}`;
@@ -266,7 +264,7 @@ function ThreadRow({ m, filter, selected, open, gone }: { m: MessageSummary; fil
     <>
       <div className="mail-thread">
         <div className="mail-thread__row">
-          <Row m={m} selected={selected} open={open} count={count} gone={gone} />
+          <Row m={m} selected={selected} open={open} count={count} />
         </div>
         <button
           type="button"

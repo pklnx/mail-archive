@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"testing"
 
@@ -149,4 +151,66 @@ func waitNewRun(f *manageFixture, name, after string) accountJSON {
 			a.Sync.LastRun.StartedAt.String() != after
 	}, func() any { return a.Sync })
 	return a
+}
+
+// A listing marks each row that is only in the archive with "gone": true,
+// in the listing's account, and leaves the field out otherwise; the
+// message detail never has it (#310).
+func TestGoneFlagInListJSON(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	alice, err := accountByName(f.st, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := f.st.GetOrCreateFolder(ctx, alice.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The server lists meeting (2) and rich (3), not the invoice (1), which
+	// is still in bob/INBOX of the same user.
+	if _, err := f.st.ReconcileFolder(ctx, inbox.ID, 1, []int64{2, 3}, []string{`\Seen`, `\Seen`}); err != nil {
+		t.Fatal(err)
+	}
+	// flags returns, per message name, the raw "gone" value of each row,
+	// or "absent".
+	flags := func(path string) map[string]string {
+		t.Helper()
+		var r struct {
+			Messages []map[string]json.RawMessage `json:"messages"`
+		}
+		f.getJSON(path, 200, &r)
+		out := map[string]string{}
+		for _, m := range r.Messages {
+			var id string
+			if err := json.Unmarshal(m["id"], &id); err != nil {
+				t.Fatal(err)
+			}
+			v, ok := m["gone"]
+			if !ok {
+				out[f.name(id)] = "absent"
+			} else {
+				out[f.name(id)] = string(v)
+			}
+		}
+		return out
+	}
+	inAlice := map[string]string{"invoice": "true", "meeting": "absent", "rich": "absent"}
+	for _, path := range []string{"/api/messages?account=alice", "/api/messages?account=alice&folder=INBOX", "/api/messages?account=alice&group=1"} {
+		if got := flags(path); !maps.Equal(got, inAlice) {
+			t.Errorf("%s: %v, want %v", path, got, inAlice)
+		}
+	}
+	// In all mail, bob's copy keeps the invoice on a server.
+	all := map[string]string{"invoice": "absent", "meeting": "absent", "rich": "absent", "newsletter": "absent"}
+	for _, path := range []string{"/api/messages", "/api/messages?group=1"} {
+		if got := flags(path); !maps.Equal(got, all) {
+			t.Errorf("%s: %v, want %v", path, got, all)
+		}
+	}
+	var detail map[string]json.RawMessage
+	f.getJSON("/api/messages/"+f.ids["invoice"], 200, &detail)
+	if v, ok := detail["gone"]; ok {
+		t.Errorf("the message detail has gone: %s", v)
+	}
 }

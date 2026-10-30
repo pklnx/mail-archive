@@ -86,12 +86,16 @@ type summaryJSON struct {
 	// matching messages in the thread, in grouped listings only.
 	Thread string `json:"thread,omitempty"`
 	Count  int64  `json:"count,omitempty"`
+	// Gone marks a row that is only in the archive (as with ?gone=1, in the
+	// listing's account), in listings only; the message detail leaves it
+	// out.
+	Gone bool `json:"gone,omitempty"`
 }
 
 func toSummary(m store.MessageSummary) summaryJSON {
 	return summaryJSON{
 		ID: m.SHA256, Size: m.Size, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt,
-		Snippet: m.Snippet, HasAttachment: m.HasAttachment, Thread: m.Thread, Count: m.Count,
+		Snippet: m.Snippet, HasAttachment: m.HasAttachment, Thread: m.Thread, Count: m.Count, Gone: m.Gone,
 	}
 }
 

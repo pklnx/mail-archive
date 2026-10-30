@@ -244,6 +244,8 @@ export interface MessageSummary {
   /** Grouped listings: the thread key and the number of matching messages in it. */
   thread?: string;
   count?: number;
+  /** Listings only: no longer on any server of the listing's account ("only in archive"), as with `gone=1`. */
+  gone?: boolean;
 }
 
 export interface MessagePage {
