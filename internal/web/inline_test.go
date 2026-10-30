@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pklnx/mail-archive/internal/mime"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -228,5 +229,48 @@ func TestPartRequestFromFrameStaysBlocked(t *testing.T) {
 	_ = resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Errorf("fetch: status %d", resp2.StatusCode)
+	}
+}
+
+// countingReadCloser counts the bytes read through it.
+type countingReadCloser struct {
+	r io.Reader
+	n *int64
+}
+
+func (c countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	*c.n += int64(n)
+	return n, err
+}
+
+func (countingReadCloser) Close() error { return nil }
+
+// The budget readInline passes is exactly what the walk counts down: once
+// the last referenced image is read, a large attachment after it is not.
+func TestInlineImagesStopsAfterLastImage(t *testing.T) {
+	const png = "\x89PNG\r\n\x1a\n-logo"
+	raw := cidMessage(`<p><img src="cid:logo@x"> <img src="cid:logo@x"></p>`, inlinePart{"image/png", "logo@x", png})
+	end := strings.LastIndex(raw, "--b--")
+	raw = raw[:end] + "--b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=big.pdf\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("P", 1<<20))) +
+		"\r\n" + raw[end:]
+	m := mime.Parse(strings.NewReader(raw))
+
+	var n int64
+	opened := 0
+	res, err := inlineImages(m.HTML, m.Parts, func() (io.ReadCloser, error) {
+		opened++
+		return countingReadCloser{strings.NewReader(raw), &n}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<p><img src="` + dataURL("image/png", png) + `"> <img src="` + dataURL("image/png", png) + `"></p>`
+	if res.HTML != want || res.Inlined != 2 || res.Omitted != 0 {
+		t.Errorf("got %+v\nwant HTML %s", res, want)
+	}
+	if opened != 1 || n >= 64<<10 {
+		t.Errorf("opened %d times, read %d bytes of a %d-byte message, want once and < %d", opened, n, len(raw), 64<<10)
 	}
 }
