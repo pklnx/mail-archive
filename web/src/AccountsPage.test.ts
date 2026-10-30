@@ -27,6 +27,8 @@ describe("syncStatus", () => {
     );
     expect(syncStatus(account({ state: "idle", lastRun: { ...run, status: "ok" } })).text).toMatch(/^Last sync .*: 3 new$/);
     const failed = syncStatus(account({ state: "idle", lastRun: { ...run, status: "failed", error: "login: denied" } }));
+    // A finished lastRun is the previous sync: its counts do not show (#310).
+    expect(syncStatus(account({ state: "running", lastRun: { ...run, status: "ok" } })).text).toBe("Syncing: 0 fetched, 0 new");
     expect(failed.text).toMatch(/failed$/);
     expect(failed.error).toBe("login: denied");
   });
@@ -36,6 +38,8 @@ describe("syncStatus", () => {
       "Importing: 7 read, 3 new",
     );
     expect(syncStatus(account({ state: "idle", lastRun: { ...run, status: "ok" } }, "import")).text).toMatch(/^Last import .*: 3 new$/);
+    // A finished lastRun is the previous import: its counts do not show.
+    expect(syncStatus(account({ state: "running", lastRun: { ...run, status: "ok" } }, "import")).text).toBe("Importing: 0 read, 0 new");
     const partial = syncStatus(account({ state: "idle", lastRun: { ...run, status: "partial", error: "1 message(s) skipped" } }, "import"));
     expect(partial.text).toMatch(/skipped messages$/);
     expect(partial.error).toBe("1 message(s) skipped");

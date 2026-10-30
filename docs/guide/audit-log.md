@@ -135,6 +135,8 @@ Everyone sees their own entries: logins (also failed attempts with their
 name), searches with their text, opened messages and downloads, changes,
 and requests with their API keys. Admins see every user's entries and the
 command line's, and can pick a user, the command line or API keys.
+The **Who** column is for admins; for everyone else, an entry from the
+command line says so under its target.
 
 ![Log page](/screenshots/log.png)
 

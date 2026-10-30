@@ -665,7 +665,8 @@ const en = {
   collapseSidebar: "Collapse sidebar",
   expandSidebar: "Expand sidebar",
   resizeSidebar: "Resize sidebar",
-  sidebarWidth: (n: number) => `${n} rem wide`,
+  /** The width, already in the number format (format.ts decimal). */
+  sidebarWidth: (n: string) => `${n} rem wide`,
   railFailing: "sync keeps failing",
   railStale: "not synced for a while",
   subtreeCount: (n: number) => `${n} messages in this folder and its subfolders; a message in several folders counts in each`,

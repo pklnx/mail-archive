@@ -17,7 +17,7 @@ import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
 import { useFrameFocusClose } from "./useFrameFocusClose";
 import { useCollapsed } from "./sidebarState";
-import { railWidth, useSidebarLayout } from "./sidebarLayout";
+import { railWidth, useSidebarCap, useSidebarLayout } from "./sidebarLayout";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
 import { LazyView, lazyNamed } from "./lazyView";
@@ -96,7 +96,9 @@ export function App({ user, logout, logoutError }: Props) {
   };
   const accounts = useAccounts();
   const collapsed = useCollapsed(user.name, accounts.data);
-  const layout = useSidebarLayout(user.name);
+  // The sidebar's usable maximum follows the mail view's width (#310).
+  const [sidebarCap, mailViewRef] = useSidebarCap();
+  const layout = useSidebarLayout(user.name, sidebarCap);
   const asideId = useId();
   const navId = useId();
   // The header's user panel (UserPanel.tsx). Its state is here: the key
@@ -482,6 +484,7 @@ export function App({ user, logout, logoutError }: Props) {
         </main>
       ) : (
         <div
+          ref={mailViewRef}
           className={`app-view mail-view${reading ? " mail-view--reading" : ""}`}
           // Only the lg template uses it; no transition, so nothing animates on load or while dragging.
           style={{ "--sidebar-w": `${layout.collapsed ? railWidth : layout.width}rem` } as CSSProperties}
