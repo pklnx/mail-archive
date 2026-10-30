@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject } from "react";
-import { Checkbox, DatePicker, DatePickerInput, Layer, RadioButton, RadioButtonGroup, TextInput } from "@carbon/react";
-import { dateOfDay, dayOfDate, shiftDay } from "./format";
-import { inputFormat, presetOf, presetRange, presets, type Preset } from "./datePresets";
+import { useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject } from "react";
+import { Checkbox, Layer, RadioButton, RadioButtonGroup, TextInput } from "@carbon/react";
+import { DateRange, type PickerHandle } from "./DateRange";
+import { shiftDay } from "./format";
+import { presetOf, presetRange, presets, type Preset } from "./datePresets";
 import { filterText } from "./filterText";
-import { lang, locale, t } from "./i18n";
+import { t } from "./i18n";
 import { parseQuery, setToken, type TokenKey } from "./searchSyntax";
 import { md, useMediaQuery } from "./breakpoints";
 import type { FilterField, FocusRequest } from "./SearchFilters";
@@ -24,22 +25,13 @@ interface Props {
   calendarOpen: MutableRefObject<() => boolean>;
 }
 
-/** Carbon's DatePicker ref: the flatpickr instance (DatePicker.js useImperativeHandle). */
-interface PickerHandle {
-  calendar?: { isOpen: boolean; close: () => void; calendarContainer?: HTMLElement } | null;
-}
-
-/** A native pattern for the input format: Carbon's default only fits m/d/Y. */
-const patternOf = (format: string) =>
-  format.replace(/[^dmY]/g, (c) => `\\${c}`).replace(/[dm]/g, "\\d{1,2}").replace("Y", "\\d{4}");
-
 /**
  * The filter form in the filter button's popover (#286), a lazy chunk of its
  * own: it is mounted only while the popover is open. The fields edit the
  * prefix tokens in the search text, so both stay in sync; attachment names
  * (attachment:) are typed only.
  *
- * The date range is one Carbon DatePicker with an inclusive end (Since /
+ * The date range is the shared DateRange with an inclusive end (Since /
  * Until); the search keeps the exclusive before: = end + 1 day. The presets
  * only fill after: and before:. The selected one follows the search, except
  * that Custom stays selected once it was chosen or the range was edited by
@@ -78,14 +70,6 @@ export function FilterPanel({ id, query, setQuery, group, setGroup, focus, onFoc
     document.getElementById(`${id}-${field}`)?.focus();
     acknowledge.current?.(request);
   }, [request, field, id]);
-
-  const { format, placeholder } = inputFormat(locale, ft.letters);
-  const hint = ft.format(placeholder);
-  // Local days, never strings (flatpickr would parse them with the input format).
-  const value = useMemo(
-    () => (p.after ? [dateOfDay(p.after), ...(p.before ? [dateOfDay(shiftDay(p.before, -1))] : [])] : []),
-    [p.after, p.before],
-  );
 
   const choose = (preset: Preset) => {
     if (preset === "custom") {
@@ -128,28 +112,18 @@ export function FilterPanel({ id, query, setQuery, group, setGroup, focus, onFoc
           <RadioButton key={preset} id={`${id}-preset-${preset}`} labelText={ft.presets[preset]} value={preset} />
         ))}
       </RadioButtonGroup>
-      <DatePicker
-        ref={picker as never}
-        datePickerType="range"
-        dateFormat={format}
-        locale={lang}
-        value={value}
-        nextMonthAriaLabel={ft.nextMonth}
-        prevMonthAriaLabel={ft.previousMonth}
-        onOpen={(_dates: Date[], _str: string, fp: { calendarContainer?: HTMLElement }) => fp.calendarContainer?.setAttribute("aria-label", ft.calendar)}
-        onChange={(dates: Date[]) => {
-          const [start, end] = dates;
-          const after = start ? dayOfDate(start) : "";
-          const before = end ? shiftDay(dayOfDate(end), 1) : "";
-          // Carbon clears the calendar itself when the search lost its dates (Any time): no edit.
-          if (after === p.after && before === p.before) return;
+      <DateRange
+        ids={{ start: fieldId("after"), end: fieldId("before") }}
+        labels={{ start: ft.since, end: ft.until }}
+        size="sm"
+        start={p.after}
+        end={p.before ? shiftDay(p.before, -1) : ""}
+        pickerRef={picker}
+        onChange={(after, last) => {
           setCustom(true);
-          setRange(after, before);
+          setRange(after, last ? shiftDay(last, 1) : "");
         }}
-      >
-        <DatePickerInput id={fieldId("after")} size="sm" labelText={ft.since} placeholder={placeholder} pattern={patternOf(format)} helperText={hint} />
-        <DatePickerInput id={fieldId("before")} size="sm" labelText={ft.until} placeholder={placeholder} pattern={patternOf(format)} helperText={hint} />
-      </DatePicker>
+      />
       <Checkbox id={fieldId("has")} labelText={t.hasAttachment} checked={p.hasAttachment} onChange={(_, { checked }) => set("has", checked ? "attachment" : "")} />
       <Checkbox id={fieldId("group")} labelText={t.groupByConversation} checked={group} onChange={(_, { checked }) => setGroup(checked)} />
     </Layer>

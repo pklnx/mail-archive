@@ -11,8 +11,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-  TextInput,
 } from "@carbon/react";
+import { DateRange } from "./DateRange";
 import { auditApi, usersApi, type AuditEntry, type AuditFilter, type ManagedUser } from "./api";
 import { foldEntries, shortUserAgent } from "./auditLog";
 import { isPlainClick } from "./clicks";
@@ -127,8 +127,14 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
         </header>
 
         <div className="log-filters">
-          <TextInput id={`${id}-from`} type="date" labelText={t.logFrom} value={filter.since} onChange={(e) => set({ since: e.target.value })} />
-          <TextInput id={`${id}-to`} type="date" labelText={t.logTo} value={filter.until} onChange={(e) => set({ until: e.target.value })} />
+          {/* The search filters' range picker (#377); the server takes a plain until as inclusive. */}
+          <DateRange
+            ids={{ start: `${id}-from`, end: `${id}-to` }}
+            labels={{ start: t.logFrom, end: t.logTo }}
+            start={filter.since}
+            end={filter.until}
+            onChange={(since, until) => set({ since, until })}
+          />
           <Select id={`${id}-action`} labelText={t.logAction} value={filter.group} onChange={(e) => set({ group: e.target.value })}>
             <SelectItem value="" text={t.logAllActions} />
             {auditGroups.map((g) => (

@@ -2106,7 +2106,26 @@ select,
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
   gap: 1rem;
-  align-items: end;
+  /* start, not end: the format hint under From/To would lift their fields above the Selects' (#377). */
+  align-items: start;
+}
+/* The range picker's wrappers drop out of the grid, so From and To are two
+   cells, as the Selects are, and not two fields squeezed into one (#377).
+   No box of theirs is measured: Carbon's event fix and flatpickr's
+   positioning use the DOM and the inputs. */
+.log-filters > .cds--form-item:has(> .cds--date-picker--range),
+.log-filters .cds--date-picker--range {
+  display: contents;
+}
+.log-filters .cds--date-picker--range .cds--date-picker-container,
+.log-filters .cds--date-picker--range .cds--date-picker__input {
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+/* Carbon's unnamed span around the input: grow with the cell, as the Selects do. */
+.log-filters .cds--date-picker--range .cds--date-picker-input__wrapper > span {
+  flex: 1 1 auto;
+  min-inline-size: 0;
 }
 .log-table__time {
   white-space: nowrap;
