@@ -290,7 +290,7 @@ for (const { width, scrolls } of [
     const row = accountRow(page, long);
     await expect(row.getByRole("link", { name: long, exact: true })).toBeVisible();
     const menu = row.getByRole("button", { name: `Actions for ${long}` });
-    // At 320 px the box scrolls sideways: only stickiness keeps the actions on screen.
+    // At 280 px the box scrolls sideways: only stickiness keeps the menu on screen.
     expect((await scrollTable(page, 0)).scrolls).toBe(scrolls);
     for (const x of scrolls ? [0, -1] : [0]) {
       const at = await scrollTable(page, x);
