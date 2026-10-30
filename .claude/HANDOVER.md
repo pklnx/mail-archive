@@ -16,5 +16,5 @@ Current state only. At session end replace these sections; never append. History
 - Releases: no backports; only the newest line gets releases (#314, 6518415969). Old releases, tags and images stay, including `26.10-*`, as `docs/guide/operations.md` promises.
 
 ## Maintainer actions
-- Manual device checks: the standing checklist in #335. The coordinator appends each merged UI PR's "Open manual checks" there.
+- Manual device checks run in rounds (maintainer decision, 2026-10-30; process.md, "4. Pull request"). Round 2 is #372 (label `device-checks`); the coordinator appends each merged UI PR's "Open manual checks" there and closes the round once the maintainer has gone through it.
 - The next patch release is the live test of the `floating-tags` job (#365): dry run first, then the real run; the checklist is in the #365 body. If the digest check fails, the tags still point to the right content; open a follow-up.
