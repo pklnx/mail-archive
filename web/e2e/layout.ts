@@ -100,15 +100,60 @@ export async function holdsToolbarFits(page: Page, panel: Locator, names: { add:
   expect(await sideScrolls(page), "the page scrolls sideways").toBe(false);
 }
 
-// Tooltips in scroll containers (#379). Kept self-contained: its own rect
-// reader, so it does not depend on the helpers above.
-type Box = { top: number; bottom: number; left: number; right: number };
+/**
+ * The vertical centres in each body row of a table: of every visible cell's
+ * first text line (a Range over its first visible text node) and of the row
+ * menu's icon (⋮), by cell. Cells with nothing visible to read are left out.
+ */
+export const rowCentres = (table: Locator) =>
+  table.evaluate((t) =>
+    [...t.querySelectorAll("tbody tr")].map((tr) => {
+      const centres: { cell: string; centre: number }[] = [];
+      for (const [i, cell] of [...tr.children].entries()) {
+        if (!(cell as HTMLElement).checkVisibility()) continue;
+        const icon = cell.querySelector(".cds--overflow-menu svg");
+        let box: DOMRect | null = icon ? icon.getBoundingClientRect() : null;
+        if (!box) {
+          const walk = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          for (let n = walk.nextNode(); n && !box; n = walk.nextNode()) {
+            const parent = n.parentElement;
+            if (!n.textContent?.trim() || !parent?.checkVisibility() || parent.closest(".cds--visually-hidden, .cds--popover-content")) continue;
+            const range = document.createRange();
+            range.selectNodeContents(n);
+            // The first line box of the text: a wrapped text has one per line.
+            const first = range.getClientRects()[0];
+            if (first && first.height > 0) box = first;
+          }
+        }
+        if (box) centres.push({ cell: icon ? `${i}: ⋮` : `${i}: ${(cell.textContent ?? "").trim().slice(0, 24)}`, centre: box.top + box.height / 2 });
+      }
+      return centres;
+    }),
+  );
+
+/**
+ * Every row of a table holds its cells on one top alignment: each cell's
+ * first line and the ⋮ sit within 1.5 px of the row header's first line
+ * (#378). `menus` is how many rows at least have a ⋮ that is checked.
+ */
+export async function rowsAligned(table: Locator, menus = 1) {
+  await expect(table.locator("tbody tr").first()).toBeVisible();
+  const all = await rowCentres(table);
+  expect(all.filter((cells) => cells.some((c) => c.cell.endsWith("⋮"))).length, `rows with a ⋮ in ${JSON.stringify(all)}`).toBeGreaterThanOrEqual(menus);
+  for (const cells of all) {
+    expect(cells.length, `cells of ${JSON.stringify(cells)}`).toBeGreaterThan(1);
+    const name = cells[0]!.centre;
+    for (const c of cells) expect(Math.abs(c.centre - name), `${c.cell} against the row header in ${JSON.stringify(cells)}`).toBeLessThanOrEqual(1.5);
+  }
+}
+
+// Tooltips in scroll containers (#379).
 
 /** A scroll container's sideways scroll state and box. */
 export const sideScroll = (container: Locator) =>
   container.evaluate((e) => {
     const r = e.getBoundingClientRect();
-    const box: Box = { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+    const box: Rect = { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
     return { scrollLeft: e.scrollLeft, scrollWidth: e.scrollWidth, clientWidth: e.clientWidth, box };
   });
 
@@ -122,7 +167,7 @@ export async function tooltipInside(page: Page, container: Locator, tip: Locator
   const c = await sideScroll(container);
   // Carbon puts role="tooltip" on the popover's anchor box; the bubble is
   // its .cds--popover-content.
-  const t = await tip.evaluate((e): Box => {
+  const t = await tip.evaluate((e): Rect => {
     const r = (e.matches(".cds--popover-content") ? e : (e.querySelector(".cds--popover-content") ?? e)).getBoundingClientRect();
     return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
   });

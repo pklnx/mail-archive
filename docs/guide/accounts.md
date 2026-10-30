@@ -86,13 +86,12 @@ Folder names are localized, for example `[Gmail]/Alle Nachrichten`. Run
 **Accounts** in the navigation lists your accounts as a table: the name,
 the type (*snapshot (IMAP)*, *complete (SMTP)* or *imported*), the state
 (*failing*, *disabled*, *receiving*, or a spinner while a sync runs), the
-number of messages and the last sync, import or received message. **Sync**
-stays in each IMAP account's row; the other actions are in the row's menu
-(**⋮**):
+number of messages and the last sync, import or received message. All of
+a row's actions are in its menu (**⋮**):
 
 | Account | Row menu |
 |---|---|
-| IMAP | **Check server**, **Edit**, **Disable** or **Enable**, **Remove** |
+| IMAP | **Sync**, **Check server**, **Edit**, **Disable** or **Enable**, **Remove** |
 | smtp | **Mail server setup**, **Import existing mail from IMAP**, **Edit**, **Disable** or **Enable**, **Remove** |
 | Import | **Remove** |
 
@@ -103,7 +102,7 @@ has no `MAIL_ARCHIVE_SECRET_KEY` and nothing else can be changed. On a
 phone the table keeps the name, the state and the actions; the number of
 messages and the last activity show under the name.
 
-![The Accounts page: the accounts as a table, with Sync in each IMAP row and the other actions in the row's menu](/screenshots/accounts.png)
+![The Accounts page: the accounts as a table, with each account's actions in its row menu](/screenshots/accounts.png)
 
 ### The account's page
 
