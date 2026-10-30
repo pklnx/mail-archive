@@ -1,5 +1,5 @@
 import { devices, type Page } from "@playwright/test";
-import { animationsDone, expect, test } from "./fixtures";
+import { animationsDone, escapeRegExp, expect, test } from "./fixtures";
 import { conversationToggle, frameOf, mailReady, openLong } from "./mailFrame";
 
 // The message view scrolls as one unit (#200): the reading pane from 48rem,
@@ -50,13 +50,14 @@ async function addToMail(page: Page, markup: string, where: "start" | "end", ima
 
 /**
  * The main scroller (the reading pane from 48rem, the page on phones): its
- * scrollTop, after moving it to the start or the end if asked.
+ * scrollTop, after moving it to the start, the end or to a position in
+ * pixels if asked.
  */
-function scrollTop(page: Page, phone: boolean, to?: "start" | "end"): Promise<number> {
+function scrollTop(page: Page, phone: boolean, to?: "start" | "end" | number): Promise<number> {
   return page.evaluate(
     ({ sel, to }) => {
       const s = sel ? document.querySelector(sel)! : document.scrollingElement!;
-      if (to) s.scrollTop = to === "end" ? s.scrollHeight : 0;
+      if (to !== undefined) s.scrollTop = to === "end" ? s.scrollHeight : to === "start" ? 0 : to;
       return s.scrollTop;
     },
     { sel: phone ? "" : ".reader-scroll", to },
@@ -273,6 +274,22 @@ for (const size of sizes) {
       await page.mouse.click(phone ? vp.width / 2 : vp.width - 40, vp.height - 20);
       await expect(dialog).toHaveCount(0);
       await expect(toggle).toBeFocused();
+      if (!phone) {
+        // The same with the pane scrolled (#210): the scrim covers the pane,
+        // not only the first screen of its content. A click that misses it
+        // lands on the frame or on inert content: the panel stays open, or
+        // it closes without the focus going back to the toggle. On phones
+        // the scrim is fixed, so the scroll cannot matter.
+        const top = (await toggle.boundingBox())!.y - (await rect(page, ".reader-scroll")).top;
+        expect(await scrollTop(page, phone, Math.floor(top / 2))).toBeGreaterThan(0);
+        await expect(toggle).toBeInViewport();
+        await toggle.click();
+        await expect(dialog).toBeVisible();
+        await page.mouse.click(vp.width - 40, vp.height - 20);
+        await expect(dialog).toHaveCount(0);
+        await expect(toggle).toBeFocused();
+        await scrollTop(page, phone, "start");
+      }
 
       // A pick opens that message, its subject focused.
       await toggle.click();
@@ -584,23 +601,13 @@ test.describe("the frame's sandbox and the API guard", () => {
       });
 
     // Away, in the frame itself: the error page, which the parent cannot read, and the frame inert.
+    // The refused framing, once each and nothing else: the guards' own
+    // message (the app page's listener) and the browser's.
+    guards.expectConsoleError(new RegExp(`^CSP violation: frame-src blocked https://links\\.example in ${escapeRegExp(page.url())}$`));
+    guards.expectConsoleError(/^Framing 'https:\/\/links\.example\/' violates the following Content Security Policy directive: "frame-src 'self'"\. The request has been blocked\./);
     const away = await linkCenter(page, "Away");
     await page.mouse.click(away.x, away.y);
     await expect.poll(frameState).toEqual({ url: null, state: null, inert: true });
-    // The refused framing, nothing else: the browser's message and the
-    // guards' own (the app page's listener), checked by their first line
-    // without the location, which the browser does not always give.
-    const appURL = page.url();
-    const lines = guards
-      .takeProblems()
-      .map((p) => p.split("\n")[0]!)
-      .sort();
-    expect(lines).toHaveLength(2);
-    expect(lines[0]!.startsWith(`console error: CSP violation: frame-src blocked https://links.example in ${appURL} `), lines[0]).toBe(true);
-    expect(
-      lines[1]!.startsWith(`console error: Framing 'https://links.example/' violates the following Content Security Policy directive: "frame-src 'self'". The request has been blocked.`),
-      lines[1],
-    ).toBe(true);
 
     // Back: the mail's document again, its load held by the image, the blocker on before inert goes.
     await page.evaluate(() => history.back());

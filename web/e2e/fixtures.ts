@@ -14,10 +14,13 @@ import { origin } from "./demo";
 
 export { expect };
 
+/** The text as a regular expression that matches it literally. */
+export const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 // Console errors that come from the mail's own HTML in the sandboxed message
 // frame (/api/messages/<id>/html), not from the app. The browser logs each
 // thing the frame's sandbox and CSP block, and blocking is their job.
-const escapedOrigin = origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapedOrigin = escapeRegExp(origin);
 const message = `${escapedOrigin}/api/messages/[0-9a-f]{64}`;
 // The HTML view of a message, with or without ?images=….
 const mailFrame = new RegExp(`^${message}/html(\\?[^#]*)?$`);
@@ -121,9 +124,18 @@ export interface Guards {
   /** An answer with this status to a request for this path is expected. */
   allowHTTPError(path: string, status: number): void;
   /**
-   * Returns the problems collected so far and forgets them. Only for a test
-   * of the guards themselves, which provokes a problem on purpose and checks
-   * its report; it must be the test's own page.
+   * A console error whose text matches is expected exactly count times. The
+   * matches up to count are not problems; any further match is one, and at
+   * the end of the test fewer matches than count are one too.
+   * The way for a normal spec to declare a console error it provokes.
+   */
+  expectConsoleError(text: RegExp, count?: number): void;
+  /**
+   * Returns the problems collected so far and forgets them. Only for the
+   * guards' own tests in guards.spec.ts, which provoke a problem on purpose
+   * and check its report; it must be the test's own page. Any other file
+   * declares its errors with expectConsoleError (a test in guards.spec.ts
+   * fails on any other use).
    */
   takeProblems(): string[];
   /** The rolling frame event log, formatted. */
@@ -148,6 +160,16 @@ export const test = base.extend<{ guards: Guards }>({
       context.pages().forEach(logFrames);
       context.on("page", logFrames);
       const allowed: { path: string; status: number }[] = [];
+      const expected: { text: RegExp; count: number; seen: number }[] = [];
+      // Up to count matches of an expectation are expected; a match beyond
+      // that is counted and reported, so a flood is never silenced.
+      const expectedConsoleError = (text: string) => {
+        const matching = expected.filter((e) => e.text.test(text));
+        const e = matching.find((e) => e.seen < e.count) ?? matching[0];
+        if (!e) return false;
+        e.seen++;
+        return e.seen <= e.count;
+      };
       // The browser logs every 4xx/5xx answer as a console error.
       const expectedHTTPError = (url: string, text: string) =>
         allowed.some((a) => {
@@ -175,7 +197,7 @@ export const test = base.extend<{ guards: Guards }>({
       context.on("console", (msg) => {
         if (msg.type() !== "error") return;
         const { url } = msg.location();
-        if (fromMailFrame(url, msg.text()) || expectedHTTPError(url, msg.text())) return;
+        if (fromMailFrame(url, msg.text()) || expectedHTTPError(url, msg.text()) || expectedConsoleError(msg.text())) return;
         problems.push(
           formatConsoleError(
             {
@@ -191,9 +213,13 @@ export const test = base.extend<{ guards: Guards }>({
       context.on("weberror", (err) => problems.push(`page error: ${err.error().stack ?? err.error().message}`));
       await use({
         allowHTTPError: (path, status) => allowed.push({ path, status }),
+        expectConsoleError: (text, count = 1) => void expected.push({ text, count, seen: 0 }),
         takeProblems: () => problems.splice(0),
         frameLog: () => formatFrameEvents(frameEvents),
       });
+      // Fewer than expected: a declared error that went missing. More were
+      // reported one by one as they came.
+      for (const e of expected) if (e.seen < e.count) problems.push(`expected console error ${e.text} ${e.count}×, saw ${e.seen}`);
       if (problems.length > 0) {
         // As files in the test's output folder (web/test-results/…), so the
         // CI artefact of a failed run holds them next to the trace; an

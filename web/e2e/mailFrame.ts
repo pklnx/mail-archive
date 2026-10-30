@@ -9,9 +9,10 @@ export const frameOf = (page: Page) => page.getByRole("article").getByTitle("Mes
 // Everything about the mail's document is read from the parent page through
 // iframe.contentDocument (the frame is same-origin), and clicks into it are
 // mouse clicks at coordinates: no Playwright locator or evaluate runs inside
-// the frame. Such a call initializes the frame's main world, which can run
-// the guards' init script there; if the frame is still its initial
-// about:blank, that is a different document than the mail.
+// the frame. Such a call runs Playwright's own script in the frame, and
+// Playwright injecting script into the sandboxed frame is what logged the
+// #260 errors (there, the trace snapshotter). If the frame is still its
+// initial about:blank, the call also reads a different document than the mail.
 
 /** Whether the frame shows a loaded mail (not its initial about:blank), and its text matches if asked. */
 function mailLoaded(page: Page, text?: RegExp): Promise<boolean> {
