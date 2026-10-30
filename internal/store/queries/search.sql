@@ -10,7 +10,27 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                     websearch_to_tsquery('english', sqlc.narg(query)::text),
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
-       END::text AS snippet
+       END::text AS snippet,
+       -- The row is only in the archive: exactly the gone filter's predicate
+       -- below, with its account scope, for this row. Each subquery uses
+       -- message_locations_sha_idx once per returned row; OFFSET 0 keeps
+       -- the planner from hashing all of the user's locations up front.
+       (EXISTS (
+            SELECT 1 FROM message_locations g
+            JOIN folders gf ON gf.id = g.folder_id
+            JOIN accounts ga ON ga.id = gf.account_id
+            WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
+              AND ga.owner_id = sqlc.arg(owner)::bigint AND ga.kind = 'imap'
+              AND (sqlc.narg(account)::text IS NULL OR ga.name = sqlc.narg(account)::text)
+            OFFSET 0)
+        AND NOT EXISTS (
+            SELECT 1 FROM message_locations p
+            JOIN folders pf ON pf.id = p.folder_id
+            JOIN accounts pa ON pa.id = pf.account_id
+            WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
+              AND pa.owner_id = sqlc.arg(owner)::bigint AND pa.kind = 'imap'
+              AND (sqlc.narg(account)::text IS NULL OR pa.name = sqlc.narg(account)::text)
+            OFFSET 0))::boolean AS gone
 FROM messages m
 WHERE
   -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
@@ -93,6 +113,26 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     websearch_to_tsquery('english', sqlc.narg(query)::text),
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
        END::text AS snippet,
+       -- The row is only in the archive: exactly the gone filter's predicate
+       -- below, with its account scope, for this row. Each subquery uses
+       -- message_locations_sha_idx once per returned row; OFFSET 0 keeps
+       -- the planner from hashing all of the user's locations up front.
+       (EXISTS (
+            SELECT 1 FROM message_locations g
+            JOIN folders gf ON gf.id = g.folder_id
+            JOIN accounts ga ON ga.id = gf.account_id
+            WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
+              AND ga.owner_id = sqlc.arg(owner)::bigint AND ga.kind = 'imap'
+              AND (sqlc.narg(account)::text IS NULL OR ga.name = sqlc.narg(account)::text)
+            OFFSET 0)
+        AND NOT EXISTS (
+            SELECT 1 FROM message_locations p
+            JOIN folders pf ON pf.id = p.folder_id
+            JOIN accounts pa ON pa.id = pf.account_id
+            WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
+              AND pa.owner_id = sqlc.arg(owner)::bigint AND pa.kind = 'imap'
+              AND (sqlc.narg(account)::text IS NULL OR pa.name = sqlc.narg(account)::text)
+            OFFSET 0))::boolean AS gone,
        COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE

@@ -1,6 +1,6 @@
 // The message list's status for screen readers (#311, part 1): one visually
 // hidden role="status" that stays mounted and reads the state of the last load,
-// and no aria-busy on the list.
+// and no aria-busy on the list. Also the "Only in archive" tag from the rows' flag (#310).
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MessagePage, MessageSummary } from "./api";
@@ -115,4 +115,37 @@ it("reads Loading… and then the new count for a further page", async () => {
   expect(await screen.findByText("Subject b")).toBeTruthy();
   expect(statuses()).toEqual([status]);
   expect(status.textContent).toBe(t.resultCount(2, false, "messages"));
+});
+
+/** The row button of a subject, and whether it holds the "Only in archive" tag. */
+const tagged = (subject: string) => {
+  const row = screen.getByText(subject).closest("button")!;
+  return [...row.querySelectorAll(".cds--tag")].some((tag) => tag.textContent === t.onlyInArchive);
+};
+
+it("tags each row that is only in the archive in any listing, from the row's flag (#310)", async () => {
+  render(<MessageList filter={{ account: "a" }} selected="" open={() => {}} />);
+  await answer({ messages: [{ ...msg("a"), gone: true }, msg("b")], nextCursor: null });
+  expect(await screen.findByText("Subject a")).toBeTruthy();
+  expect(tagged("Subject a")).toBe(true);
+  expect(tagged("Subject b")).toBe(false);
+});
+
+it("tags in the gone view only the rows with the flag", async () => {
+  render(<MessageList filter={{ gone: true }} selected="" open={() => {}} />);
+  await answer({ messages: [{ ...msg("a"), gone: true }, { ...msg("b"), gone: true }], nextCursor: null });
+  expect(await screen.findByText("Subject a")).toBeTruthy();
+  expect(tagged("Subject a")).toBe(true);
+  expect(tagged("Subject b")).toBe(true);
+});
+
+it("tags the rows of an expanded conversation that are only in the archive", async () => {
+  render(<MessageList filter={{ group: true }} selected="" open={() => {}} />);
+  await answer({ messages: [{ ...msg("a"), thread: "t", count: 3 }], nextCursor: null });
+  expect(tagged("Subject a")).toBe(false);
+  await act(async () => screen.getByRole("button", { name: t.showConversation(2) }).click());
+  await answer({ messages: [{ ...msg("a"), thread: "t" }, { ...msg("b"), gone: true }, msg("c")], nextCursor: null });
+  expect(await screen.findByText("Subject b")).toBeTruthy();
+  expect(tagged("Subject b")).toBe(true);
+  expect(tagged("Subject c")).toBe(false);
 });

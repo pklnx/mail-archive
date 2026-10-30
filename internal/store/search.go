@@ -64,6 +64,10 @@ type MessageSummary struct {
 	// number of the thread's messages that match the filter.
 	Thread string
 	Count  int64
+	// Gone: the row is only in the archive, by exactly the predicate of
+	// SearchFilter.Gone with the listing's Account. Set by SearchMessages
+	// and SearchThreads only.
+	Gone bool
 }
 
 // SearchMessages lists messages newest first, optionally filtered by a
@@ -82,7 +86,7 @@ func (s *Store) SearchMessages(ctx context.Context, f SearchFilter) ([]MessageSu
 	for _, r := range rows {
 		out = append(out, MessageSummary{
 			SHA256: r.Sha256, Size: r.Size, Subject: deref(r.Subject), From: deref(r.FromAddr),
-			SentAt: r.SentAt, SortAt: derefTime(r.SortAt), Snippet: r.Snippet, HasAttachment: r.HasAttachment,
+			SentAt: r.SentAt, SortAt: derefTime(r.SortAt), Snippet: r.Snippet, HasAttachment: r.HasAttachment, Gone: r.Gone,
 		})
 	}
 	return out, nil
@@ -120,7 +124,7 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 	for _, r := range rows {
 		out = append(out, MessageSummary{
 			SHA256: r.Sha256, Size: r.Size, Subject: deref(r.Subject), From: deref(r.FromAddr),
-			SentAt: r.SentAt, SortAt: derefTime(r.SortAt), Snippet: r.Snippet, HasAttachment: r.HasAttachment,
+			SentAt: r.SentAt, SortAt: derefTime(r.SortAt), Snippet: r.Snippet, HasAttachment: r.HasAttachment, Gone: r.Gone,
 			Thread: r.ThreadKey, Count: max(count[r.ThreadKey], 1),
 		})
 	}

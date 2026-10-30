@@ -329,3 +329,89 @@ func TestMarkFolderVanished(t *testing.T) {
 		t.Fatalf("states = %+v, %v", states, err)
 	}
 }
+
+// The per-row gone flag of a listing is exactly membership in the gone=1
+// listing with the same account (#310): over messages that are all gone,
+// gone in one folder and present in another, gone in one account and
+// present in another, only in an import account, and also in a removed
+// account, in every listing and in the thread listing.
+func TestGoneFlagMatchesFilter(t *testing.T) {
+	f := newReconcileFixture(t)
+	inbox := f.folder(f.alice, "a", "INBOX", store.KindIMAP)
+	other := f.folder(f.alice, "a", "Other", store.KindIMAP)
+	bInbox := f.folder(f.alice, "b", "INBOX", store.KindIMAP)
+	imported := f.folder(f.alice, "imp", "Archive", store.KindImport)
+	old := f.folder(f.alice, "old", "INBOX", store.KindIMAP)
+	bob := f.folder(f.bob, "a", "INBOX", store.KindIMAP)
+	f.save(inbox, 1, hashOf('g')) // all gone
+	f.save(inbox, 2, hashOf('f')) // gone here, present in a/Other
+	f.save(other, 1, hashOf('f'))
+	f.save(inbox, 3, hashOf('x')) // gone in a, present in b
+	f.save(bInbox, 1, hashOf('x'))
+	f.save(inbox, 4, hashOf('r')) // gone in a, also in a removed account
+	f.save(old, 1, hashOf('r'))
+	f.save(inbox, 5, hashOf('p')) // present
+	f.save(imported, 1, hashOf('i'))
+	f.save(bob, 1, hashOf('g')) // Bob's copy says nothing to Alice
+	f.reconcile(inbox, map[uint32]string{5: ""})
+	acc, err := f.st.GetOwnedAccount(f.ctx, f.alice.ID, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := f.st.DeleteOrRemoveAccount(f.ctx, acc.Ref()); err != nil || res != store.AccountRemoved {
+		t.Fatalf("remove: %v, %v", res, err)
+	}
+
+	type listing struct{ account, folder string }
+	listings := []listing{{"", ""}, {"a", ""}, {"a", "INBOX"}, {"a", "Other"}, {"b", ""}, {"imp", ""}, {"old", ""}}
+	flagged := map[listing][]string{}
+	for _, threads := range []bool{false, true} {
+		for _, l := range listings {
+			filter := store.SearchFilter{Owner: f.alice.ID, Account: l.account, Folder: l.folder, Limit: 50}
+			gone, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Owner: f.alice.ID, Account: l.account, Gone: true, Limit: 50})
+			if err != nil {
+				t.Fatal(err)
+			}
+			inGone := map[string]bool{}
+			for _, r := range gone {
+				inGone[r.SHA256] = true
+			}
+			search := f.st.SearchMessages
+			if threads {
+				search = f.st.SearchThreads
+			}
+			rows, err := search(f.ctx, filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) == 0 {
+				t.Fatalf("%+v (threads %v): empty listing", l, threads)
+			}
+			var got []string
+			for _, r := range rows {
+				if r.Gone != inGone[r.SHA256] {
+					t.Errorf("%+v (threads %v): %s gone = %v, in the gone=1 listing = %v", l, threads, r.SHA256[:1], r.Gone, inGone[r.SHA256])
+				}
+				if r.Gone {
+					got = append(got, r.SHA256[:1])
+				}
+			}
+			slices.Sort(got)
+			if !threads {
+				flagged[l] = got
+			} else if !slices.Equal(got, flagged[l]) {
+				t.Errorf("%+v: threads flag %v, messages %v", l, got, flagged[l])
+			}
+		}
+	}
+	// The fixture covers both values and the account scope.
+	want := map[listing][]string{
+		{"", ""}: {"g"}, {"a", ""}: {"g", "r", "x"}, {"a", "INBOX"}: {"g", "r", "x"}, {"a", "Other"}: nil,
+		{"b", ""}: nil, {"imp", ""}: nil, {"old", ""}: nil,
+	}
+	for l, w := range want {
+		if !slices.Equal(flagged[l], w) {
+			t.Errorf("%+v: flagged %v, want %v", l, flagged[l], w)
+		}
+	}
+}

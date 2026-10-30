@@ -241,7 +241,9 @@ message has `id`, `size`, `subject`, `from`, `sentAt`, `sortAt`,
 with U+E000 (start) and U+E001 (end). With `group=1` each row also has
 `thread` and `count`, the number of the conversation's messages that match;
 `thread=` with the same other parameters lists exactly those. The cursor
-works the same in both modes.
+works the same in both modes. A row that `gone=1` would list (with
+`account`, in that account) has `"gone": true`; other rows leave it out,
+and so does `GET /api/messages/{id}`.
 
 Recipients, attachment names, `hasAttachment` and conversations of messages
 archived before they were recorded are empty until `reindex` has run; see

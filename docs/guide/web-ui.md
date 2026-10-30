@@ -35,7 +35,8 @@ labels when you point at it or move the focus into it.
   another account). **All folders** under an account lists all of
   its mail. Once a [reconcile](./syncing#reconcile) found messages deleted
   on all your servers, **Only in archive** in the navigation lists them,
-  with their number.
+  with their number. In every list such a message carries the tag *Only in
+  archive*, also inside a conversation.
 
   Folders form a tree, split at the server's hierarchy delimiter (`/` or
   `.`): `Archive/2024` shows as `2024` under `Archive`, with the full name as
@@ -151,6 +152,11 @@ server** next to **Sync** syncs the account and compares every folder with
 the server right away; folders compared in the last 5 minutes are skipped,
 so a second click does not query the server again. Without the button, each
 folder is compared once a day. See [Reconcile](./syncing#reconcile).
+
+The tag *Only in archive* marks such a message in every list, not only
+under **Only in archive**. In an account or one of its folders, the tag
+follows that account: a message deleted from its server there shows it,
+even while another of your accounts still has a copy.
 
 ![A message that is only in the archive](/screenshots/only-in-archive.png)
 

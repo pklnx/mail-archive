@@ -411,7 +411,27 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     websearch_to_tsquery('german', $1::text) ||
                     websearch_to_tsquery('english', $1::text),
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
-       END::text AS snippet
+       END::text AS snippet,
+       -- The row is only in the archive: exactly the gone filter's predicate
+       -- below, with its account scope, for this row. Each subquery uses
+       -- message_locations_sha_idx once per returned row; OFFSET 0 keeps
+       -- the planner from hashing all of the user's locations up front.
+       (EXISTS (
+            SELECT 1 FROM message_locations g
+            JOIN folders gf ON gf.id = g.folder_id
+            JOIN accounts ga ON ga.id = gf.account_id
+            WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
+              AND ga.owner_id = $2::bigint AND ga.kind = 'imap'
+              AND ($3::text IS NULL OR ga.name = $3::text)
+            OFFSET 0)
+        AND NOT EXISTS (
+            SELECT 1 FROM message_locations p
+            JOIN folders pf ON pf.id = p.folder_id
+            JOIN accounts pa ON pa.id = pf.account_id
+            WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
+              AND pa.owner_id = $2::bigint AND pa.kind = 'imap'
+              AND ($3::text IS NULL OR pa.name = $3::text)
+            OFFSET 0))::boolean AS gone
 FROM messages m
 WHERE
   -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
@@ -419,16 +439,16 @@ WHERE
    OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
                     websearch_to_tsquery('german', $1::text) ||
                     websearch_to_tsquery('english', $1::text))
-   OR m.subject ILIKE $2::text
-   OR m.from_addr ILIKE $2::text)
+   OR m.subject ILIKE $4::text
+   OR m.from_addr ILIKE $4::text)
   -- Only messages found in one of the user's accounts.
   AND EXISTS (
        SELECT 1 FROM message_locations l
        JOIN folders f ON f.id = l.folder_id
        JOIN accounts a ON a.id = f.account_id
        WHERE l.message_sha256 = m.sha256
-         AND a.owner_id = $3::bigint
-         AND ($4::text IS NULL OR a.name = $4::text)
+         AND a.owner_id = $2::bigint
+         AND ($3::text IS NULL OR a.name = $3::text)
          AND ($5::text IS NULL OR f.name = $5::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -446,7 +466,7 @@ WHERE
            JOIN envelopes re ON re.location_id = rl.id
            JOIN folders rf ON rf.id = rl.folder_id
            JOIN accounts ra ON ra.id = rf.account_id
-           WHERE rl.message_sha256 = m.sha256 AND ra.owner_id = $3::bigint
+           WHERE rl.message_sha256 = m.sha256 AND ra.owner_id = $2::bigint
              AND re.rcpt_text ILIKE $7::text
            -- OFFSET 0 keeps the planner from hashing all matching envelopes
            -- up front: the check runs for each message of the walk.
@@ -465,15 +485,15 @@ WHERE
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
-         AND ga.owner_id = $3::bigint AND ga.kind = 'imap'
-         AND ($4::text IS NULL OR ga.name = $4::text)
+         AND ga.owner_id = $2::bigint AND ga.kind = 'imap'
+         AND ($3::text IS NULL OR ga.name = $3::text)
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-               AND pa.owner_id = $3::bigint AND pa.kind = 'imap'
-               AND ($4::text IS NULL OR pa.name = $4::text))))
+               AND pa.owner_id = $2::bigint AND pa.kind = 'imap'
+               AND ($3::text IS NULL OR pa.name = $3::text))))
   -- filters:end
   AND ($16::timestamptz IS NULL
        OR (m.sort_at, m.sha256) < ($16::timestamptz, $17::text))
@@ -483,9 +503,9 @@ LIMIT $18
 
 type SearchMessagesParams struct {
 	Query             *string
-	Pattern           *string
 	Owner             int64
 	Account           *string
+	Pattern           *string
 	Folder            *string
 	FromPattern       *string
 	ToPattern         *string
@@ -511,6 +531,7 @@ type SearchMessagesRow struct {
 	SortAt        *time.Time
 	HasAttachment bool
 	Snippet       string
+	Gone          bool
 }
 
 // Listing and search for the web API. Results are ordered by date (newest
@@ -518,9 +539,9 @@ type SearchMessagesRow struct {
 func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) ([]SearchMessagesRow, error) {
 	rows, err := q.db.Query(ctx, searchMessages,
 		arg.Query,
-		arg.Pattern,
 		arg.Owner,
 		arg.Account,
+		arg.Pattern,
 		arg.Folder,
 		arg.FromPattern,
 		arg.ToPattern,
@@ -552,6 +573,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 			&i.SortAt,
 			&i.HasAttachment,
 			&i.Snippet,
+			&i.Gone,
 		); err != nil {
 			return nil, err
 		}
@@ -573,6 +595,26 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     websearch_to_tsquery('english', $1::text),
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
        END::text AS snippet,
+       -- The row is only in the archive: exactly the gone filter's predicate
+       -- below, with its account scope, for this row. Each subquery uses
+       -- message_locations_sha_idx once per returned row; OFFSET 0 keeps
+       -- the planner from hashing all of the user's locations up front.
+       (EXISTS (
+            SELECT 1 FROM message_locations g
+            JOIN folders gf ON gf.id = g.folder_id
+            JOIN accounts ga ON ga.id = gf.account_id
+            WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
+              AND ga.owner_id = $2::bigint AND ga.kind = 'imap'
+              AND ($3::text IS NULL OR ga.name = $3::text)
+            OFFSET 0)
+        AND NOT EXISTS (
+            SELECT 1 FROM message_locations p
+            JOIN folders pf ON pf.id = p.folder_id
+            JOIN accounts pa ON pa.id = pf.account_id
+            WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
+              AND pa.owner_id = $2::bigint AND pa.kind = 'imap'
+              AND ($3::text IS NULL OR pa.name = $3::text)
+            OFFSET 0))::boolean AS gone,
        COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE
@@ -581,16 +623,16 @@ WHERE
    OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
                     websearch_to_tsquery('german', $1::text) ||
                     websearch_to_tsquery('english', $1::text))
-   OR m.subject ILIKE $2::text
-   OR m.from_addr ILIKE $2::text)
+   OR m.subject ILIKE $4::text
+   OR m.from_addr ILIKE $4::text)
   -- Only messages found in one of the user's accounts.
   AND EXISTS (
        SELECT 1 FROM message_locations l
        JOIN folders f ON f.id = l.folder_id
        JOIN accounts a ON a.id = f.account_id
        WHERE l.message_sha256 = m.sha256
-         AND a.owner_id = $3::bigint
-         AND ($4::text IS NULL OR a.name = $4::text)
+         AND a.owner_id = $2::bigint
+         AND ($3::text IS NULL OR a.name = $3::text)
          AND ($5::text IS NULL OR f.name = $5::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -608,7 +650,7 @@ WHERE
            JOIN envelopes re ON re.location_id = rl.id
            JOIN folders rf ON rf.id = rl.folder_id
            JOIN accounts ra ON ra.id = rf.account_id
-           WHERE rl.message_sha256 = m.sha256 AND ra.owner_id = $3::bigint
+           WHERE rl.message_sha256 = m.sha256 AND ra.owner_id = $2::bigint
              AND re.rcpt_text ILIKE $7::text
            -- OFFSET 0 keeps the planner from hashing all matching envelopes
            -- up front: the check runs for each message of the walk.
@@ -627,15 +669,15 @@ WHERE
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
-         AND ga.owner_id = $3::bigint AND ga.kind = 'imap'
-         AND ($4::text IS NULL OR ga.name = $4::text)
+         AND ga.owner_id = $2::bigint AND ga.kind = 'imap'
+         AND ($3::text IS NULL OR ga.name = $3::text)
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-               AND pa.owner_id = $3::bigint AND pa.kind = 'imap'
-               AND ($4::text IS NULL OR pa.name = $4::text))))
+               AND pa.owner_id = $2::bigint AND pa.kind = 'imap'
+               AND ($3::text IS NULL OR pa.name = $3::text))))
   -- filters:end
   AND NOT EXISTS (
       SELECT 1 FROM messages n
@@ -647,16 +689,16 @@ WHERE
          OR n.search @@ (websearch_to_tsquery('simple', $1::text) ||
                           websearch_to_tsquery('german', $1::text) ||
                           websearch_to_tsquery('english', $1::text))
-         OR n.subject ILIKE $2::text
-         OR n.from_addr ILIKE $2::text)
+         OR n.subject ILIKE $4::text
+         OR n.from_addr ILIKE $4::text)
         -- Only messages found in one of the user's accounts.
         AND EXISTS (
              SELECT 1 FROM message_locations l
              JOIN folders f ON f.id = l.folder_id
              JOIN accounts a ON a.id = f.account_id
              WHERE l.message_sha256 = n.sha256
-               AND a.owner_id = $3::bigint
-               AND ($4::text IS NULL OR a.name = $4::text)
+               AND a.owner_id = $2::bigint
+               AND ($3::text IS NULL OR a.name = $3::text)
                AND ($5::text IS NULL OR f.name = $5::text))
         -- Filters on single fields. Recipients and attachment names are only
         -- found here, not by the full-text query.
@@ -674,7 +716,7 @@ WHERE
                  JOIN envelopes re ON re.location_id = rl.id
                  JOIN folders rf ON rf.id = rl.folder_id
                  JOIN accounts ra ON ra.id = rf.account_id
-                 WHERE rl.message_sha256 = n.sha256 AND ra.owner_id = $3::bigint
+                 WHERE rl.message_sha256 = n.sha256 AND ra.owner_id = $2::bigint
                    AND re.rcpt_text ILIKE $7::text
                  -- OFFSET 0 keeps the planner from hashing all matching envelopes
                  -- up front: the check runs for each message of the walk.
@@ -693,15 +735,15 @@ WHERE
              JOIN folders gf ON gf.id = g.folder_id
              JOIN accounts ga ON ga.id = gf.account_id
              WHERE g.gone_at IS NOT NULL
-               AND ga.owner_id = $3::bigint AND ga.kind = 'imap'
-               AND ($4::text IS NULL OR ga.name = $4::text)
+               AND ga.owner_id = $2::bigint AND ga.kind = 'imap'
+               AND ($3::text IS NULL OR ga.name = $3::text)
                AND NOT EXISTS (
                    SELECT 1 FROM message_locations p
                    JOIN folders pf ON pf.id = p.folder_id
                    JOIN accounts pa ON pa.id = pf.account_id
                    WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-                     AND pa.owner_id = $3::bigint AND pa.kind = 'imap'
-                     AND ($4::text IS NULL OR pa.name = $4::text))))
+                     AND pa.owner_id = $2::bigint AND pa.kind = 'imap'
+                     AND ($3::text IS NULL OR pa.name = $3::text))))
         -- filters:end
   )
   AND ($16::timestamptz IS NULL
@@ -712,9 +754,9 @@ LIMIT $18
 
 type SearchThreadsParams struct {
 	Query             *string
-	Pattern           *string
 	Owner             int64
 	Account           *string
+	Pattern           *string
 	Folder            *string
 	FromPattern       *string
 	ToPattern         *string
@@ -740,6 +782,7 @@ type SearchThreadsRow struct {
 	SortAt        *time.Time
 	HasAttachment bool
 	Snippet       string
+	Gone          bool
 	ThreadKey     string
 }
 
@@ -750,9 +793,9 @@ type SearchThreadsRow struct {
 func (q *Queries) SearchThreads(ctx context.Context, arg SearchThreadsParams) ([]SearchThreadsRow, error) {
 	rows, err := q.db.Query(ctx, searchThreads,
 		arg.Query,
-		arg.Pattern,
 		arg.Owner,
 		arg.Account,
+		arg.Pattern,
 		arg.Folder,
 		arg.FromPattern,
 		arg.ToPattern,
@@ -784,6 +827,7 @@ func (q *Queries) SearchThreads(ctx context.Context, arg SearchThreadsParams) ([
 			&i.SortAt,
 			&i.HasAttachment,
 			&i.Snippet,
+			&i.Gone,
 			&i.ThreadKey,
 		); err != nil {
 			return nil, err
