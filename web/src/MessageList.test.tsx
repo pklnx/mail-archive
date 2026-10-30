@@ -131,7 +131,7 @@ it("tags each row that is only in the archive in any listing, from the row's fla
   expect(tagged("Subject b")).toBe(false);
 });
 
-it("tags in the gone view only the rows with the flag", async () => {
+it("tags every row of the gone view from its flag", async () => {
   render(<MessageList filter={{ gone: true }} selected="" open={() => {}} />);
   await answer({ messages: [{ ...msg("a"), gone: true }, { ...msg("b"), gone: true }], nextCursor: null });
   expect(await screen.findByText("Subject a")).toBeTruthy();
