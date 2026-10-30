@@ -413,9 +413,10 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
        END::text AS snippet,
        -- The row is only in the archive: exactly the gone filter's predicate
-       -- below, with its account scope, for this row. Each subquery uses
-       -- message_locations_sha_idx once per returned row; OFFSET 0 keeps
-       -- the planner from hashing all of the user's locations up front.
+       -- below, with its account scope, for this row. Each subquery looks
+       -- up the row's locations through an index of message_locations (sha,
+       -- or folder and sha), not a Seq Scan; OFFSET 0 keeps the planner from
+       -- hashing all of the user's locations up front.
        (EXISTS (
             SELECT 1 FROM message_locations g
             JOIN folders gf ON gf.id = g.folder_id
@@ -596,9 +597,10 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                     'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))
        END::text AS snippet,
        -- The row is only in the archive: exactly the gone filter's predicate
-       -- below, with its account scope, for this row. Each subquery uses
-       -- message_locations_sha_idx once per returned row; OFFSET 0 keeps
-       -- the planner from hashing all of the user's locations up front.
+       -- below, with its account scope, for this row. Each subquery looks
+       -- up the row's locations through an index of message_locations (sha,
+       -- or folder and sha), not a Seq Scan; OFFSET 0 keeps the planner from
+       -- hashing all of the user's locations up front.
        (EXISTS (
             SELECT 1 FROM message_locations g
             JOIN folders gf ON gf.id = g.folder_id

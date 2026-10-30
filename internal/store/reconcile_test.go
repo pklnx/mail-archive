@@ -352,8 +352,11 @@ func TestGoneFlagMatchesFilter(t *testing.T) {
 	f.save(old, 1, hashOf('r'))
 	f.save(inbox, 5, hashOf('p')) // present
 	f.save(imported, 1, hashOf('i'))
-	f.save(bob, 1, hashOf('g')) // Bob's copy says nothing to Alice
+	f.save(bob, 1, hashOf('g')) // Bob's copies say nothing to Alice:
+	f.save(bob, 2, hashOf('i')) // gone for Bob, only imported for Alice
+	f.save(bob, 3, hashOf('p')) // gone for Bob, present for Alice
 	f.reconcile(inbox, map[uint32]string{5: ""})
+	f.reconcile(bob, map[uint32]string{1: ""})
 	acc, err := f.st.GetOwnedAccount(f.ctx, f.alice.ID, "old")
 	if err != nil {
 		t.Fatal(err)
