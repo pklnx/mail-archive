@@ -288,6 +288,8 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		if !ok || err != nil {
 			return err
 		}
+		// A copy within one batch counts as present, even when retention
+		// leaves out the first copy; ImportJournal counts each copy (#306).
 		if inBatch[blob.SHA256] {
 			fr.Present++
 			return nil

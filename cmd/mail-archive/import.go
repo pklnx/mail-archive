@@ -186,6 +186,9 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 		label = o.from
 	}
 	if err := store.CheckImportLabel(label); err != nil {
+		if !o.labelSet {
+			return errors.New("the --from path cannot be the label (1 to 200 characters without control characters); set --label")
+		}
 		return fmt.Errorf("--label: %w", err)
 	}
 	limit, folders, skipped, err := importSource(name, o)
@@ -301,6 +304,8 @@ func importAccount(cmd *cobra.Command, a *app, name string) (*store.Account, err
 		}
 		if err == nil {
 			switch {
+			case acc.Kind == store.KindSMTP && acc.RemovedAt != nil:
+				return nil, fmt.Errorf("the smtp account %q was removed; choose another name for the import", name)
 			case acc.Kind == store.KindSMTP:
 				return nil, fmt.Errorf("%q is an smtp account; add --journal to import into its %s folder", name, store.SMTPFolder)
 			case acc.Kind != store.KindImport:

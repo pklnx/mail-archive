@@ -117,7 +117,7 @@ list commands are not recorded.
 | `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. Required for `.eml` files directly in `--from`. Not with `--journal`. |
 | `--user USER` | the only user | The owner of the account. |
 | `--journal` | off | Import into the folder `JOURNAL` of the existing smtp account `NAME`, like a fill: no envelope, and messages whose Message-ID the account received over SMTP are left out (counted as `JOURNALED`). Source folders are merged. |
-| `--label TEXT` | the `--from` path | With `--journal`: the origin the message view shows ("Imported from files: TEXT"), 1 to 200 characters. |
+| `--label TEXT` | the `--from` path; a longer one needs `--label` | With `--journal`: the origin the message view shows ("Imported from files: TEXT"), 1 to 200 characters. |
 | `--max-message-size SIZE` | `256MiB` | Larger messages are skipped; the import then exits `1` (`partial`). |
 | `--dry-run` | off | List folders and message counts, store nothing. |
 

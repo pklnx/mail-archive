@@ -237,6 +237,40 @@ func TestImportJournalRemovesJournaledFiles(t *testing.T) {
 	}
 }
 
+// Two copies of a journaled message in one batch both count as journaled,
+// not one as present, and the file is removed once (#306).
+func TestImportJournalDuplicateJournaled(t *testing.T) {
+	e := newArchiveEnv(t)
+	acc := e.smtpAccount("journal")
+	e.deliver(acc, append([]byte("Received: from mx by archive\r\n"), stored(journalRaw("j1", "journaled"))...))
+	dir := t.TempDir()
+	raw := journalRaw("j1", "journaled")
+	writeEML(t, dir, map[string]string{"a.eml": raw, "b.eml": raw}, time.Now())
+	if tot := e.importJournal(acc, e.smtpImport(acc, "files", "eml"), dir).Total(); tot.Read != 2 || tot.Journaled != 2 || tot.Present != 0 || tot.Added != 0 {
+		t.Fatalf("%+v", tot)
+	}
+
+	// The control: two copies of a new message are stored once.
+	dir = t.TempDir()
+	fresh := journalRaw("fresh", "fresh")
+	writeEML(t, dir, map[string]string{"a.eml": fresh, "b.eml": fresh}, time.Now())
+	if tot := e.importJournal(acc, e.smtpImport(acc, "fresh", "eml"), dir).Total(); tot.Read != 2 || tot.Added != 1 || tot.Present != 1 || tot.Journaled != 0 {
+		t.Fatalf("new copies %+v", tot)
+	}
+	if n := e.journalLocations(acc); n != 2 {
+		t.Errorf("%d locations", n)
+	}
+
+	sha := shaOf(stored(raw))
+	if n, err := archive.SweepBlobs(e.ctx, e.st, e.blobs, archive.SweepOptions{Logger: quiet}); err != nil || n != 1 || e.blobs.Exists(sha) {
+		t.Fatalf("sweep %d, %v, file there: %v", n, err, e.blobs.Exists(sha))
+	}
+	res, err := archive.Verify(e.ctx, e.st, e.blobs, archive.VerifyOptions{LockTimeout: time.Second, Logger: quiet})
+	if err != nil || res.Problems() != 0 {
+		t.Fatalf("verify %+v, %v", res, err)
+	}
+}
+
 // mbox files and Maildirs with subfolders are merged into JOURNAL; a
 // message in two subfolders is stored once.
 func TestImportJournalMboxAndMaildir(t *testing.T) {
@@ -314,34 +348,73 @@ func TestImportJournalRefuses(t *testing.T) {
 	}
 }
 
+// retainedOld imports an old message into JOURNAL and lets retention
+// delete it; it returns the message as the source holds it.
+func (e *archiveEnv) retainedOld(acc *store.Account) string {
+	e.t.Helper()
+	old := "Message-ID: <old@example.com>\nSubject: old\nDate: Fri, 05 Mar 2010 10:00:00 +0000\n\nold\n"
+	dir := e.t.TempDir()
+	writeEML(e.t, dir, map[string]string{"old.eml": old}, time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC))
+	if tot := e.importJournal(acc, e.smtpImport(acc, "files", "eml"), dir).Total(); tot.Added != 1 {
+		e.t.Fatalf("%+v", tot)
+	}
+	if _, err := e.st.AddRetentionRule(e.ctx, store.NewRetentionRule{AccountID: acc.ID, Folder: store.SMTPFolder, Years: 1}); err != nil {
+		e.t.Fatal(err)
+	}
+	run, err := e.st.ProposeDeletion(e.ctx, nil)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := e.st.ConfirmDeletionRun(e.ctx, run.ID, nil); err != nil {
+		e.t.Fatal(err)
+	}
+	if done, err := archive.ExecuteDeletionRun(e.ctx, e.st, run.ID, archive.DeletionOptions{Logger: quiet}); err != nil || done.Deleted != 1 {
+		e.t.Fatalf("deletion %+v, %v", done, err)
+	}
+	return old
+}
+
 // A message retention deleted from JOURNAL is not stored again.
 func TestImportJournalAfterRetention(t *testing.T) {
 	e := newArchiveEnv(t)
 	acc := e.smtpAccount("journal")
-	old := "Message-ID: <old@example.com>\nSubject: old\nDate: Fri, 05 Mar 2010 10:00:00 +0000\n\nold\n"
+	old := e.retainedOld(acc)
 	dir := t.TempDir()
 	writeEML(t, dir, map[string]string{"old.eml": old}, time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC))
-	if tot := e.importJournal(acc, e.smtpImport(acc, "files", "eml"), dir).Total(); tot.Added != 1 {
-		t.Fatalf("%+v", tot)
-	}
-	if _, err := e.st.AddRetentionRule(e.ctx, store.NewRetentionRule{AccountID: acc.ID, Folder: store.SMTPFolder, Years: 1}); err != nil {
-		t.Fatal(err)
-	}
-	run, err := e.st.ProposeDeletion(e.ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.st.ConfirmDeletionRun(e.ctx, run.ID, nil); err != nil {
-		t.Fatal(err)
-	}
-	if done, err := archive.ExecuteDeletionRun(e.ctx, e.st, run.ID, archive.DeletionOptions{Logger: quiet}); err != nil || done.Deleted != 1 {
-		t.Fatalf("deletion %+v, %v", done, err)
-	}
 	tot := e.importJournal(acc, e.smtpImport(acc, "again", "eml"), dir).Total()
 	if tot.Added != 0 || tot.Deleted != 1 || tot.New != 0 {
 		t.Fatalf("after retention %+v", tot)
 	}
 	if n := e.journalLocations(acc); n != 0 {
+		t.Errorf("%d locations", n)
+	}
+}
+
+// Two copies of a message retention deleted, in one batch, both count as
+// deleted, not one as present (#306).
+func TestImportJournalDuplicateAfterRetention(t *testing.T) {
+	e := newArchiveEnv(t)
+	acc := e.smtpAccount("journal")
+	old := e.retainedOld(acc)
+	dir := t.TempDir()
+	writeEML(t, dir, map[string]string{"old.eml": old, "copy.eml": old}, time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC))
+	tot := e.importJournal(acc, e.smtpImport(acc, "again", "eml"), dir).Total()
+	if tot.Read != 2 || tot.Deleted != 2 || tot.Present != 0 || tot.Added != 0 || tot.New != 0 {
+		t.Fatalf("after retention %+v", tot)
+	}
+	if n := e.journalLocations(acc); n != 0 {
+		t.Errorf("%d locations", n)
+	}
+
+	// The control: two copies of a new message are stored once.
+	dir = t.TempDir()
+	fresh := journalRaw("fresh", "fresh")
+	writeEML(t, dir, map[string]string{"a.eml": fresh, "b.eml": fresh}, time.Now())
+	tot = e.importJournal(acc, e.smtpImport(acc, "fresh", "eml"), dir).Total()
+	if tot.Read != 2 || tot.Added != 1 || tot.Present != 1 || tot.New != 1 || tot.Deleted != 0 {
+		t.Fatalf("new copies %+v", tot)
+	}
+	if n := e.journalLocations(acc); n != 1 {
 		t.Errorf("%d locations", n)
 	}
 }
