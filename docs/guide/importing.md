@@ -157,10 +157,13 @@ owned by the user `alice`:
 ```
 
 The message view shows these messages as "Imported from files: piler". What
-the account already received over SMTP is left out by its Message-ID, so
-nothing is stored twice inside the account, also when the piler stock was
-imported into an import account before. `.eml` files directly in `--from`
-need no `--folder` here.
+the account already received over SMTP is left out by its Message-ID, also
+when the piler stock was imported into an import account before. This is not
+a guarantee against every second copy: for example, a message without a
+Message-ID is always stored, and so is a mail with the same Message-ID but
+other bytes (delivered while the import runs, or imported earlier by a fill);
+see [Into an smtp account](#into-an-smtp-account). A duplicate beats a gap.
+`.eml` files directly in `--from` need no `--folder` here.
 
 ## Into an smtp account
 
