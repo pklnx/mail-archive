@@ -1,8 +1,13 @@
 // The Log page on Carbon (#168 part 5): the filters build the same query
-// as before, the table, folded rows, the message link and Load more.
+// as before, the table, folded rows, the message link and Load more. From/To
+// is the search filters' Carbon date range (#377); flatpickr runs in jsdom,
+// a real browser is covered by e2e/log.spec.ts.
+import { useRef, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditQuery, type AuditEntry } from "./api";
+import { FilterPanel } from "./FilterPanel";
+import { filterTextFor } from "./filterText";
 import { applySettings, messagesFor, t } from "./i18n";
 import { defaultFilter, LogPage } from "./LogPage";
 import { expectLoaded, expectLoading } from "./test/loading";
@@ -41,9 +46,31 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  applySettings({ language: "en", locale: "en" });
+  document.querySelectorAll(".flatpickr-calendar").forEach((c) => c.remove());
 });
 
 const audit = () => urls.filter((u) => u.startsWith("/api/audit"));
+/** The request URL of a filter. */
+const query = (f: Partial<ReturnType<typeof defaultFilter>>) => `/api/audit?${auditQuery({ since: "", until: "", group: "", who: "", ...f }, "")}`;
+
+type Flatpickr = { setDate: (d: Date[], change: boolean) => void; clear: () => void; open: () => void; calendarContainer: HTMLElement };
+const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+/** The flatpickr instance on the From field (Carbon's range picker has one for both fields). */
+const fpOf = (label: string) => (field(label) as unknown as { _flatpickr: Flatpickr })._flatpickr;
+
+// flatpickr's range plugin empties To 10 ms after a change that leaves no
+// dates (rangePlugin.js onChange), so field checks wait for the fields.
+
+/** Types into a field and commits it the way a user does: Enter, or leaving the field. */
+function type(input: HTMLInputElement, value: string, commit: "enter" | "blur") {
+  act(() => input.focus());
+  fireEvent.change(input, { target: { value } });
+  if (commit === "enter") fireEvent.keyDown(input, { key: "Enter" });
+  else act(() => input.blur());
+}
 
 describe("LogPage", () => {
   it("shows a table skeleton with the log's columns while the first page loads (#287)", async () => {
@@ -72,9 +99,10 @@ describe("LogPage", () => {
     const base = defaultFilter();
     expect(audit()).toEqual([`/api/audit?${auditQuery(base, "")}`]);
 
-    fireEvent.change(screen.getByLabelText(t.logFrom), { target: { value: "2026-10-01" } });
+    // The dates through the picker, as a user picks them (#377).
+    act(() => fpOf(t.logFrom).setDate([new Date(2026, 9, 1)], true));
     await waitFor(() => expect(audit().at(-1)).toBe("/api/audit?since=2026-10-01"));
-    fireEvent.change(screen.getByLabelText(t.logTo), { target: { value: "2026-10-31" } });
+    act(() => fpOf(t.logFrom).setDate([new Date(2026, 9, 1), new Date(2026, 9, 31)], true));
     await waitFor(() => expect(audit().at(-1)).toBe("/api/audit?since=2026-10-01&until=2026-10-31"));
     fireEvent.change(screen.getByLabelText(t.logAction), { target: { value: "read" } });
     await waitFor(() => expect(audit().at(-1)).toBe("/api/audit?since=2026-10-01&until=2026-10-31&action=read"));
@@ -192,6 +220,11 @@ describe("German", () => {
       await screen.findByText("Invoice 42");
       expect(screen.getByRole("heading", { level: 1, name: de.logTitle })).toBeTruthy();
       expect(screen.getByLabelText(de.logFrom)).toBeTruthy();
+      for (const label of [de.logFrom, de.logTo]) {
+        const input = screen.getByLabelText(label) as HTMLInputElement;
+        expect(input.placeholder, label).toBe("TT.MM.JJJJ");
+        expect(document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent, label).toBe("Format: TT.MM.JJJJ");
+      }
       expect(screen.getByRole("columnheader", { name: de.logClient })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.logFolded(2) })).toBeTruthy();
       expect(screen.getByRole("button", { name: de.logMore })).toBeTruthy();
@@ -200,5 +233,213 @@ describe("German", () => {
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
+  });
+});
+
+// From/To is the search filters' date range (#377): a text field in the
+// user's format with Carbon's calendar, an inclusive To sent unchanged
+// (the server takes a plain until as inclusive). The clock is frozen at noon
+// UTC, so the default since (a UTC day, defaultFilter) is the same day in
+// every time zone used here.
+describe("LogPage date range", () => {
+  const now = new Date(Date.UTC(2026, 9, 28, 12));
+  beforeEach(() => {
+    vi.stubEnv("TZ", "Europe/Berlin");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+  });
+
+  /** The page in German, loaded. */
+  async function german() {
+    applySettings({ language: "de", locale: "de" });
+    const de = messagesFor("de");
+    render(<LogPage admin open={() => {}} />);
+    await screen.findByText("Invoice 42");
+    return { from: () => field(de.logFrom), to: () => field(de.logTo), fp: () => fpOf(de.logFrom), de };
+  }
+
+  it("shows From and To as text fields in the user's format, with the hint and the default since", async () => {
+    // The day the default since is, computed as defaultFilter does (UTC).
+    const since = defaultFilter(now).since;
+    expect(since).toBe("2026-09-28");
+    for (const [lang, locale, placeholder, hint, shown] of [
+      ["en", "en-US", "mm/dd/yyyy", "Format: mm/dd/yyyy", "09/28/2026"],
+      ["de", "de", "TT.MM.JJJJ", "Format: TT.MM.JJJJ", "28.09.2026"],
+    ] as const) {
+      applySettings({ language: lang, locale });
+      const m = messagesFor(lang);
+      render(<LogPage admin={false} open={() => {}} />);
+      await screen.findByText("Invoice 42");
+      for (const label of [m.logFrom, m.logTo]) {
+        const input = field(label);
+        expect(input.type, `${locale} ${label}`).toBe("text");
+        expect(input.placeholder, `${locale} ${label}`).toBe(placeholder);
+        expect(document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent, `${locale} ${label}`).toBe(hint);
+      }
+      expect(field(m.logFrom).value, locale).toBe(shown);
+      expect(field(m.logTo).value, locale).toBe("");
+      cleanup();
+    }
+  });
+
+  it("sends typed German dates as ISO days, To unchanged (inclusive)", async () => {
+    const { from, to } = await german();
+    type(from(), "01.10.2026", "enter");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01" })));
+    type(to(), "31.10.2026", "enter");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31" })));
+    await waitFor(() => expect([from().value, to().value]).toEqual(["01.10.2026", "31.10.2026"]));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("sends a picked range, a single day and an open end as local days, also west of UTC", async () => {
+    for (const tz of ["Europe/Berlin", "America/Los_Angeles"]) {
+      vi.stubEnv("TZ", tz);
+      const { from, to, fp } = await german();
+      act(() => fp().setDate([new Date(2026, 9, 20), new Date(2026, 9, 25)], true));
+      await waitFor(() => expect(audit().at(-1), tz).toBe(query({ since: "2026-10-20", until: "2026-10-25" })));
+      await waitFor(() => expect([from().value, to().value], tz).toEqual(["20.10.2026", "25.10.2026"]));
+      // One day picked twice: since = until.
+      act(() => fp().setDate([new Date(2026, 9, 3), new Date(2026, 9, 3)], true));
+      await waitFor(() => expect(audit().at(-1), tz).toBe(query({ since: "2026-10-03", until: "2026-10-03" })));
+      cleanup();
+      urls = [];
+      // Only a start picked so far: since only.
+      const open = await german();
+      act(() => open.fp().setDate([new Date(2026, 9, 7)], true));
+      await waitFor(() => expect(audit().at(-1), tz).toBe(query({ since: "2026-10-07" })));
+      await waitFor(() => expect([open.from().value, open.to().value], tz).toEqual(["07.10.2026", ""]));
+      cleanup();
+      urls = [];
+    }
+  });
+
+  it("clears both dates: the server's default period, no error", async () => {
+    const { from, to, fp } = await german();
+    act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
+    act(() => fp().clear());
+    await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+    await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
+    expect(screen.queryByRole("alert")).toBeNull();
+    // Emptying the fields by hand does the same.
+    act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
+    type(to(), "", "blur");
+    type(from(), "", "blur");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+    await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // The cases of an emptied From or a lone To where the fields and the query
+  // agree (plan review of #377, note 1). The ones where they do not, in the
+  // filters too, are #385.
+  describe("fields and query agree", () => {
+    it("From emptied and left, from the default period: no dates", async () => {
+      const { from, to } = await german();
+      type(from(), "", "blur");
+      await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+      await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
+    });
+
+    it("From emptied with both set: left, no dates; Enter, To becomes the range", async () => {
+      const { from, to, fp } = await german();
+      act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
+      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
+      type(from(), "", "blur");
+      await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+      await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
+
+      act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
+      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
+      type(from(), "", "enter");
+      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-20", until: "2026-10-20" })));
+      await waitFor(() => expect([from().value, to().value]).toEqual(["20.10.2026", "20.10.2026"]));
+    });
+
+    it("only To typed, with the default From: Enter and leaving the field", async () => {
+      for (const commit of ["enter", "blur"] as const) {
+        const { from, to } = await german();
+        type(to(), "05.10.2026", commit);
+        await waitFor(() => expect(audit().at(-1), commit).toBe(query({ since: "2026-09-28", until: "2026-10-05" })));
+        await waitFor(() => expect([from().value, to().value], commit).toEqual(["28.09.2026", "05.10.2026"]));
+        cleanup();
+        urls = [];
+      }
+    });
+
+    it("only To typed after From was emptied, with Enter: the day becomes the start", async () => {
+      const { from, to } = await german();
+      type(from(), "", "blur");
+      await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+      type(to(), "05.10.2026", "enter");
+      await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-05" })));
+      await waitFor(() => expect([from().value, to().value]).toEqual(["05.10.2026", ""]));
+    });
+  });
+
+  it("never sends what is not an ISO day for invalid typing, and does what the search filters do", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    // The search filters' outcome for the same typing.
+    const filters: string[] = [];
+    function Filters() {
+      const [q, setQ] = useState("");
+      const open = useRef<() => boolean>(() => false);
+      return <FilterPanel id="f" query={q} setQuery={(v) => { filters.push(v); setQ(v); }} group={false} setGroup={() => {}} calendarOpen={open} />;
+    }
+    applySettings({ language: "de", locale: "de" });
+    const dt = filterTextFor("de");
+    render(<Filters />);
+    type(field(dt.since), "32.13.2026", "enter");
+    type(field(dt.until), "abc", "enter");
+    const filtersShow = [field(dt.since).value, field(dt.until).value];
+    const filtersAfter = /after:(\S+)/.exec(filters.at(-1) ?? "")?.[1] ?? "";
+    const filtersBefore = /before:(\S+)/.exec(filters.at(-1) ?? "")?.[1] ?? "";
+    cleanup();
+
+    const { from, to } = await german();
+    const before = audit().length;
+    type(from(), "32.13.2026", "enter");
+    type(to(), "abc", "enter");
+    // A later change shows the dates the typing left behind.
+    fireEvent.change(screen.getByLabelText(messagesFor("de").logAction), { target: { value: "read" } });
+    await waitFor(() => expect(audit().at(-1)).toContain("action=read"));
+    for (const u of audit().slice(before)) {
+      const p = new URL(u, "http://x").searchParams;
+      for (const k of ["since", "until"]) if (p.has(k)) expect(p.get(k), u).toMatch(iso);
+    }
+    const last = new URL(audit().at(-1)!, "http://x").searchParams;
+    await waitFor(() => expect([from().value, to().value]).toEqual(filtersShow));
+    expect(last.get("since") ?? "").toBe(filtersAfter);
+    // The filters keep an exclusive before:, the Log an inclusive until.
+    expect(last.get("until") ?? "").toBe(filtersBefore ? new Date(Date.parse(filtersBefore) - 86_400_000).toISOString().slice(0, 10) : "");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows a set range as local days, and a re-pick of the same days sends no request", async () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    const { from, to, fp, de } = await german();
+    act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 10)], true));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-10" })));
+    await waitFor(() => expect([from().value, to().value]).toEqual(["01.10.2026", "10.10.2026"]));
+    const count = audit().length;
+    act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 10)], true));
+    // The next change is the only new request.
+    fireEvent.change(screen.getByLabelText(de.logAction), { target: { value: "read" } });
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-10", group: "read" })));
+    expect(audit()).toHaveLength(count + 1);
+  });
+
+  it("labels the calendar in German", async () => {
+    const { fp } = await german();
+    const dt = filterTextFor("de");
+    act(() => fp().setDate([new Date(2026, 9, 1)], true));
+    act(() => fp().open());
+    const calendar = fp().calendarContainer;
+    expect(calendar.getAttribute("aria-label")).toBe(dt.calendar);
+    expect(calendar.querySelector(`[aria-label="${dt.nextMonth}"]`)).not.toBeNull();
+    expect(calendar.textContent).toContain("Oktober");
   });
 });

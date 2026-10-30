@@ -1,8 +1,9 @@
 import { lang, type Lang } from "./i18n";
 
-// The texts of the filter form (FilterPanel.tsx) that i18n.ts does not
-// have. Only the form imports this module, so it is part of its lazy chunk
-// and not of the initial bundle (#286).
+// The texts of the filter form (FilterPanel.tsx) and the date range
+// (DateRange.tsx) that i18n.ts does not have. Only the date range component
+// and the filter form import it; both are lazy, so it stays out of the
+// initial bundle (#286, #377).
 
 const en = {
   presets: { any: "Any time", last7: "Last 7 days", last30: "Last 30 days", year: "This year", custom: "Custom" },
