@@ -1,8 +1,9 @@
 # Issues, plans and releases
 
 Work goes through four steps: **issue → plan → approval → pull request**.
-Nothing is implemented before its plan is approved. The maintainer decides
-what gets planned and what gets built; labels carry these decisions.
+Nothing is implemented before its plan is approved. The coordinator picks
+what gets planned next; an approved plan decides what gets built, and the
+maintainer decides product, UI and wording questions. Labels carry these decisions.
 
 ## 1. Issue
 
