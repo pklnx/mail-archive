@@ -79,6 +79,14 @@ soon. The coordinator creates it after the merge, and its body names the pull
 request or review it comes from. Every other non-blocking remark stays in the
 review and is done with it.
 
+What CI cannot check (a real device, Safari, Firefox, a screen reader) the
+pull request lists under "Open manual checks". After the merge the coordinator
+appends these items to the open round of manual device checks: an issue titled
+"Manual device checks, round N" and labelled **`device-checks`**, one open at a
+time. The maintainer ticks what passed; a failed check gets a bug issue,
+linked on its item. When the maintainer has gone through a round, the
+coordinator closes it and opens the next one with every item still open.
+
 Go toolchain bumps change the `toolchain` line in `go.mod` and the `golang` tag
 in the `Dockerfile` together, in one pull request: the image build fails when
 they differ (`scripts/check-go-toolchain.sh`), also on a Dependabot bump of
@@ -114,6 +122,7 @@ needed and not read at start.
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change; `feature` makes at least a minor release. |
 | `security` | by hand | Security hardening (never an undisclosed vulnerability). Kind label; does not change the version (a patch release unless other labels raise it). |
 | `followup` | coordinator | Non-blocking finding from a review, CI or the day's work; its body names the source. |
+| `device-checks` | coordinator | The open round of manual device checks (one at a time; see Pull request). |
 
 Label changes do not notify anyone by themselves: after setting `plan` or
 `ready`, say so in the chat with the implementer (for example "plan #18" or

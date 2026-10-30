@@ -134,8 +134,10 @@ users and the phone layout. It also checks dark mode (computed colours and
 contrast), phones and tablets through device emulation (touch, `pointer:
 coarse`, the iPhone's safe-area insets) and a model of Safari's and
 Firefox's focus on click (`web/e2e/clickModel.ts`). What only a real device,
-Safari, Firefox or a screen reader can show stays on the manual checklist in
-[#335](https://github.com/pklnx/mail-archive/issues/335). It needs Go, a
+Safari, Firefox or a screen reader can show stays on the manual checklist,
+the open issue labelled
+[`device-checks`](https://github.com/pklnx/mail-archive/issues?q=is%3Aissue%20is%3Aopen%20label%3Adevice-checks).
+It needs Go, a
 PostgreSQL user with `CREATEDB` and a Chromium:
 
 ```sh
@@ -286,6 +288,8 @@ in `CLAUDE.md` at the repository root.
 | `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
 | `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
 | `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
+| `followup` | Non-blocking finding from a review, CI or the day's work; its body names the source. |
+| `device-checks` | The open round of manual device checks, one at a time; see [Issues, plans and releases](./process). |
 
 Labels are defined in `.github/labels.json` and synced to GitHub when that
 file changes on `main`.
