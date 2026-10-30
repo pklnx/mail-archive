@@ -36,12 +36,22 @@ async function placed(page: Page) {
 /**
  * Answers the app's DELETE /api/session in the browser, never reaching the
  * server (the admin session is shared by all tests): first with a 500, then
- * with a 204. Other requests to the path go through.
+ * with a 204. After the 204 the gate reads the session again (#380); as the
+ * server's session lives on, the GETs from then on get the 401 that a real
+ * logout would give. Other requests to the path go through.
  */
 async function failLogoutOnce(page: Page) {
   let n = 0;
   await page.route("/api/session", (route) => {
-    if (route.request().method() !== "DELETE") return route.continue();
+    const method = route.request().method();
+    if (method === "GET" && n >= 2) {
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "login required", setupRequired: false, passkeyOrigin: new URL(page.url()).origin }),
+      });
+    }
+    if (method !== "DELETE") return route.continue();
     n++;
     if (n === 1) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "store unavailable" }) });
     return route.fulfill({ status: 204 });
@@ -138,6 +148,8 @@ test.describe("desktop", () => {
 
   test("a failed Log out shows an alert under the header and keeps the app; Log out again signs out", async ({ page, guards }) => {
     guards.allowHTTPError("/api/session", 500);
+    // The faked logout's re-read of the session (failLogoutOnce).
+    guards.allowHTTPError("/api/session", 401);
     await failLogoutOnce(page);
     await ready(page);
     await logoutFailsThenWorks(
@@ -152,6 +164,8 @@ test.describe("desktop", () => {
   // the panel must stay open for it (#335, S1).
   test("under the Safari and Firefox click model every item works by click", async ({ page, guards }) => {
     guards.allowHTTPError("/api/session", 500);
+    // The faked logout's re-read of the session (failLogoutOnce).
+    guards.allowHTTPError("/api/session", 401);
     await useClickModel(page);
     await failLogoutOnce(page);
     await ready(page);
@@ -226,6 +240,8 @@ test.describe("phone", () => {
 
   test("a failed Log out with a message open and the page scrolled down shows the alert in view", async ({ page, guards }) => {
     guards.allowHTTPError("/api/session", 500);
+    // The faked logout's re-read of the session (failLogoutOnce).
+    guards.allowHTTPError("/api/session", 401);
     await failLogoutOnce(page);
     await page.goto("/?q=itinerary");
     const list = page.getByRole("list", { name: "Messages" });
