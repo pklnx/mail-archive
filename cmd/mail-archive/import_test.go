@@ -345,6 +345,31 @@ func TestImportJournalCommand(t *testing.T) {
 	if err := conn.QueryRow(ctx, "SELECT label FROM smtp_imports ORDER BY id DESC LIMIT 1").Scan(&label); err != nil || label != tbFixture {
 		t.Errorf("default label %q, %v", label, err)
 	}
+
+	// A --from path that cannot be the label names --from (#306); with
+	// --label it gets past the label check.
+	long := "/" + strings.Repeat("x", store.MaxImportLabel)
+	_, err = run("alice@example.com", "--journal", "--from", long, "--format", "mbox")
+	if err == nil || !strings.Contains(err.Error(), "--from") || !strings.Contains(err.Error(), "set --label") || strings.Contains(err.Error(), "--label:") {
+		t.Errorf("long --from: %v", err)
+	}
+	_, err = run("alice@example.com", "--journal", "--from", long, "--format", "mbox", "--label", "x")
+	if err == nil || strings.Contains(err.Error(), "label") {
+		t.Errorf("long --from with --label: %v", err)
+	}
+
+	// A removed smtp account is not offered --journal (#306).
+	gone := &store.Account{Name: "gone@example.com", Enabled: true, OwnerID: &anna.ID}
+	if err := st.CreateSMTPAccount(ctx, gone, []string{"gone@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE accounts SET removed_at = now() WHERE id = $1", gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = run("gone@example.com", "--from", tbFixture, "--format", "mbox")
+	if err == nil || !strings.Contains(err.Error(), `the smtp account "gone@example.com" was removed`) || strings.Contains(err.Error(), "add --journal") {
+		t.Errorf("removed smtp account: %v", err)
+	}
 }
 
 func connectDB(t *testing.T, url string) *pgx.Conn {

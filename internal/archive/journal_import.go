@@ -21,6 +21,13 @@ import (
 // and counts as Journaled. The source folders are merged; their names only
 // label the counts.
 //
+// Copies of the same bytes count one by one, in one batch as in two (#306):
+// each copy of a journaled message counts as Journaled, each copy of one
+// retention deleted from the folder as Deleted, and of a new message the
+// first is Added and the others Present. Retention decides per hash: two
+// copies with different dates (mbox From_ lines) both count as Deleted if
+// either is old enough, as in a fill batch.
+//
 // It holds the account's sync lock for writing, which keeps fills, syncs
 // and removal out, while deliveries go on; a busy lock is ErrSyncRunning. A
 // re-run adds only what is missing. Batches committed before an error stay.
@@ -97,7 +104,6 @@ type journalImport struct {
 	fr                            *ImportFolderResult
 	log                           *slog.Logger
 	batch                         []journalPending
-	inBatch                       map[string]bool
 }
 
 // journalPending is a message waiting for the Message-ID check.
@@ -109,7 +115,6 @@ type journalPending struct {
 }
 
 func (j *journalImport) run(ctx context.Context, sf mailbox.SourceFolder) error {
-	j.inBatch = map[string]bool{}
 	err := j.im.readSource(sf, j.fr, j.log, func(body io.Reader, m sourceMessage) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -126,10 +131,6 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 	blob, created, ok, err := j.im.put(body, m, j.fr, j.log)
 	if !ok || err != nil {
 		return err
-	}
-	if j.inBatch[blob.SHA256] {
-		j.fr.Present++
-		return nil
 	}
 	present, err := j.im.Store.LocationInFolder(ctx, j.folderID, blob.SHA256)
 	if err != nil {
@@ -156,7 +157,6 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 			date = *h.Date
 		}
 	}
-	j.inBatch[blob.SHA256] = true
 	j.batch = append(j.batch, journalPending{
 		blob: blob, created: created, messageID: h.MessageID,
 		loc: store.Location{FolderID: j.folderID, Flags: flags, InternalDate: date},
@@ -214,7 +214,6 @@ func (j *journalImport) flush(ctx context.Context) error {
 		j.fr.Added += len(metas) - res.Skipped - present
 	}
 	j.batch = j.batch[:0]
-	clear(j.inBatch)
 	if j.im.Progress != nil {
 		j.im.Progress(*j.fr)
 	}
