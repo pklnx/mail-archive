@@ -157,3 +157,45 @@ func TestInlinePartsLimits(t *testing.T) {
 		t.Errorf("empty: %v", keys(got))
 	}
 }
+
+// withAttachment adds a base64 application/pdf attachment with body after
+// the last part of a message built by inlineMessage.
+func withAttachment(raw string, body []byte) string {
+	end := strings.LastIndex(raw, "--b--")
+	return raw[:end] + "--b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=big.pdf\r\n" +
+		"Content-Transfer-Encoding: base64\r\n\r\n" + base64.StdEncoding.EncodeToString(body) + "\r\n" + raw[end:]
+}
+
+func TestInlinePartsStopsAfterBudget(t *testing.T) {
+	img := []byte("small-image")
+	raw := withAttachment(inlineMessage(img), []byte(strings.Repeat("P", 1<<20)))
+	wantImage := func(p Part) bool { return p.Index == 1 }
+
+	// The budget is exactly the wanted part: once it is read, the trailing
+	// attachment is not drained from the source.
+	var n int64
+	got, err := InlineParts(countingReader{strings.NewReader(raw), &n}, wantImage, int64(len(img)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(keys(got)) != "[1]" || string(got[1]) != string(img) {
+		t.Errorf("exact budget: got %v", keys(got))
+	}
+	if n >= 64<<10 {
+		t.Errorf("exact budget: read %d bytes of a %d-byte message, want < %d", n, len(raw), 64<<10)
+	}
+
+	// A budget larger than the wanted parts is never used up: the walk goes
+	// to the end, as before, and returns the same parts.
+	n = 0
+	got, err = InlineParts(countingReader{strings.NewReader(raw), &n}, wantImage, int64(len(img))+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(keys(got)) != "[1]" || string(got[1]) != string(img) {
+		t.Errorf("larger budget: got %v", keys(got))
+	}
+	if n != int64(len(raw)) {
+		t.Errorf("larger budget: read %d bytes, want the whole message (%d)", n, len(raw))
+	}
+}

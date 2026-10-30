@@ -186,7 +186,9 @@ func OpenPart(r io.Reader, index int, maxSize int64) (Part, []byte, error) {
 // maxTotal bounds the decoded bytes held in memory: each wanted part is read
 // through a limit of what is left of maxTotal, and a part that does not fit
 // is skipped (at most the remaining budget plus one byte of it is read), so
-// later, smaller parts may still be returned.
+// later, smaller parts may still be returned. Once maxTotal decoded bytes
+// have been returned, no later part could fit, so the walk stops there and
+// the rest of the message is not read.
 //
 // A part whose body cannot be decoded (for example corrupt base64) is
 // skipped too. The first such error is returned together with the parts
@@ -209,6 +211,9 @@ func inlineParts(r io.Reader, want func(Part) bool, maxTotal int64, wrap func(io
 		left    = maxTotal
 		partErr error
 	)
+	// spent ends the walk once the budget is used up: every later part
+	// would be skipped, and walking on would only drain its bytes.
+	spent := errors.New("budget spent")
 	err = ent.Walk(func(path []int, part *message.Entity, _ error) error {
 		if err := guard(path, part, index); err != nil {
 			return err
@@ -216,9 +221,12 @@ func inlineParts(r io.Reader, want func(Part) bool, maxTotal int64, wrap func(io
 		if part.MultipartReader() != nil {
 			return nil
 		}
+		if left <= 0 {
+			return spent
+		}
 		p := describe(part, index)
 		index++
-		if left <= 0 || !want(p) {
+		if !want(p) {
 			return nil
 		}
 		b, err := io.ReadAll(io.LimitReader(wrap(part.Body), left+1))
@@ -233,7 +241,7 @@ func inlineParts(r io.Reader, want func(Part) bool, maxTotal int64, wrap func(io
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errLimit) {
+	if err != nil && !errors.Is(err, spent) && !errors.Is(err, errLimit) {
 		return out, err
 	}
 	return out, partErr
