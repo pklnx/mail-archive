@@ -128,11 +128,45 @@ Label changes do not notify anyone by themselves: after setting `plan` or
 `ready`, say so in the chat with the implementer (for example "plan #18" or
 "ready: #18, #19").
 
+## Milestones
+
+Releases are planned with GitHub milestones: one milestone per planned
+release, titled `X.Y.Z` (no `v`), with a one-sentence goal as description.
+
+- The coordinator proposes the scope and order of a milestone; the
+  maintainer confirms. Then the coordinator assigns the issues (the main
+  issue and its sub-issues) and keeps the milestone current. Adding or
+  removing an issue after the confirmation needs the maintainer's OK, except
+  for bugs in the milestone's own work. A pull request gets the milestone of
+  its issue.
+- A release is made when every issue of its milestone is closed and CI on
+  `main` is green.
+- Version check: the dry run's proposed version (`scripts/next-version.sh`,
+  label based) must equal the milestone title. If it differs (for example a
+  `breaking` pull request slipped in), the coordinator renames the milestone
+  to the proposal and tells the maintainer. The one exception: when only
+  reverted pull requests raise the proposal, the `version` input lowers it
+  to the milestone title, and the coordinator says so on the release.
+  Otherwise never use the `version` input to go below the proposal.
+- Patch releases: a bug goes into the next patch milestone (`X.Y.Z+1`).
+  Releases come from `main`, without release branches and without backports,
+  so once the first pull request of the next minor or major milestone is
+  merged, every later release is at least that version; open bug fixes then
+  move into that milestone. The coordinator releases pending patch
+  milestones before merging the first pull request of the next minor when
+  that is reasonable.
+- After the release the coordinator closes the milestone. An issue closed as
+  not planned is removed from its milestone.
+
+Commands: `.claude/github-operations.md`.
+
 ## Releases
 
 Releases are published from `main` by hand: **Actions → Release → Run
 workflow** (`.github/workflows/release.yml`), after CI on `main` is green. A
 dry run builds everything without pushing an image or creating a release.
+A release is made when its milestone is done, and the dry run's version must
+match the milestone title ([Milestones](#milestones)).
 
 The version is semantic, `X.Y.Z` (`scripts/next-version.sh`). The labels of
 the pull requests merged into `main` since the last release decide it, not
@@ -166,7 +200,8 @@ is a warning, not a block. The run fails when:
 
 The optional `version` input overrides the proposal. Use it to correct the
 bump, for example when a `feature` or `breaking` pull request was reverted
-within the range: the reverted pull request still counts.
+within the range: the reverted pull request still counts. Never set it
+below the proposal for any other reason ([Milestones](#milestones)).
 
 The workflow has two jobs. The job `release` builds the image for
 `linux/amd64` and `linux/arm64`, pushes it to `ghcr.io/pklnx/mail-archive`

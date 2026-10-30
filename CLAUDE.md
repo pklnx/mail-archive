@@ -1,6 +1,6 @@
 # Workflow
 
-Roles: maintainer (human) decides product, UI and wording questions and may set `plan` and `ready`; coordinator (Claude) picks the backlog order, sets `plan`, plans, delegates, merges; implementer (one PR each), reviewer (review only) and plan-reviewer (never the planner) are defined in `.claude/agents/`; models per dev-process `models.md`. If a session does not offer a role as agent type, start a general agent with "Act as the role in `.claude/agents/<role>.md`". All runs in Claude sessions on the subscription; no Claude GitHub Action.
+Roles: maintainer (human) decides product, UI and wording questions and may set `plan` and `ready`; coordinator (Claude) picks the backlog order, proposes milestone scope, sets `plan`, plans, delegates, merges; implementer (one PR each), reviewer (review only) and plan-reviewer (never the planner) are defined in `.claude/agents/`; models per dev-process `models.md`. If a session does not offer a role as agent type, start a general agent with "Act as the role in `.claude/agents/<role>.md`". All runs in Claude sessions on the subscription; no Claude GitHub Action.
 
 Language: chat with the maintainer in German; GitHub and code in English. Every GitHub text ends with `— Claude, <role>` (no model names on GitHub).
 
@@ -11,6 +11,7 @@ Language: chat with the maintainer in German; GitHub and code in English. Every 
 6. Review: session reviewer always for app code; risky PRs (deletes, schema changes (`db-migration`), rewriting user data, changes to the serving layer (static file serving, response headers, CSP, routing)) get a second, independent session reviewer, a separate reviewer agent that does not see the first review beforehand: the coordinator adds `second-review` to every risky PR (also every migration PR) as a marker; the label triggers nothing. PRs without app code (docs, CI, test-only): one session review (Sonnet) + green required checks.
 7. Merge: approving review + green required checks; squash merge pinned to the reviewed head SHA. Never auto-merge, never change rulesets or repo settings.
    - A PR that touches the secret scan's allowlist or configuration (files listed in `docs/development/process.md`, "4. Pull request") is merged only after the maintainer's explicit OK. The coordinator asks via AskUserQuestion, names the changed entries (file, rule id, path or fingerprint) and never posts secret values; the OK is noted on the PR.
+8. Releases are planned in milestones (`docs/development/process.md`, "Milestones").
 
 ## GitHub operations
 Local sessions use `gh`; cloud sessions the GitHub MCP tools (via ToolSearch). Commands per operation: `.claude/github-operations.md`, read before the first GitHub write. An MCP `issue_write` labels update replaces the whole set.
