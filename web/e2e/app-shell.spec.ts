@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import type { AccountsResponse } from "../src/api";
 import { expect, test } from "./fixtures";
+import { sideScroll, tooltipInside } from "./layout";
 import { openLong } from "./mailFrame";
 
 // The app shell behaves like an application, not a website (#283): the page
@@ -297,6 +298,76 @@ test.describe("the sidebar's usable maximum (#310)", () => {
     await page.keyboard.press("ArrowRight");
     await expect(separator).toHaveAttribute("aria-valuenow", "14");
     expect(await width(reader)).toBeGreaterThanOrEqual(23 * 16 - 1);
+  });
+});
+
+// A tooltip inside a scroll container must not widen it: the container
+// would get a sideways scroll range, and Safari keeps it scrolled after the
+// tooltip closes (#379). Everything is read in the parent page.
+test.describe("tooltips stay inside their scroll containers (#379)", () => {
+  const key = "mail-archive.sidebar-layout.demo";
+  for (const lang of [
+    { locale: "en-US", collapse: "Collapse sidebar", resize: "Resize sidebar" },
+    { locale: "de-DE", collapse: "Seitenleiste einklappen", resize: "Breite der Seitenleiste ändern" },
+  ]) {
+    test.describe(lang.locale, () => {
+      test.use({ locale: lang.locale, viewport: { width: 1440, height: 900 } });
+
+      for (const width of [12, 28]) {
+        test(`the collapse button's tooltip at ${width}rem, on hover and on focus`, async ({ page }) => {
+          await page.addInitScript(({ key, width }) => localStorage.setItem(key, JSON.stringify({ v: 1, width, collapsed: false })), { key, width });
+          await page.goto("/");
+          const column = page.locator(".folder-tree");
+          const button = column.getByRole("button", { name: lang.collapse });
+          const tip = page.getByRole("tooltip", { name: lang.collapse });
+          await expect(page.getByRole("separator", { name: lang.resize })).toHaveAttribute("aria-valuenow", String(width));
+          await expect(button).toBeVisible();
+          // Off the column first, so the hover is a fresh one.
+          await page.mouse.move(1300, 450);
+          await expect(tip).toBeHidden();
+
+          await button.hover();
+          await tooltipInside(page, column, tip, `hover at ${width}rem`);
+          await page.mouse.move(1300, 450);
+          await expect(tip).toBeHidden();
+          expect((await sideScroll(column)).scrollLeft, "not scrolled after the hover").toBe(0);
+
+          await button.focus();
+          await tooltipInside(page, column, tip, `focus at ${width}rem`);
+          await button.blur();
+          await expect(tip).toBeHidden();
+          expect((await sideScroll(column)).scrollLeft, "not scrolled after the focus").toBe(0);
+        });
+      }
+    });
+  }
+
+  test.describe("de-DE, the reading pane", () => {
+    test.use({ locale: "de-DE" });
+    const invoice = /Your 2026 premium invoice/;
+
+    // A message without HTML: Download is the row's first button.
+    test("Download .eml's tooltip opens inside the pane", async ({ page }) => {
+      await page.setViewportSize({ width: 1056, height: 800 });
+      await page.goto("/?gone=1");
+      await page.getByRole("list", { name: "Nachrichten" }).getByRole("button", { name: invoice }).click();
+      const article = page.getByRole("article");
+      await expect(article.getByRole("heading", { name: invoice })).toBeVisible();
+      await article.getByRole("link", { name: ".eml herunterladen" }).focus();
+      await tooltipInside(page, page.locator(".reader-scroll"), page.getByRole("tooltip", { name: ".eml herunterladen" }), "Download .eml", { viewport: true });
+    });
+
+    test("the location toggletip in Details opens inside the pane", async ({ page }) => {
+      await page.setViewportSize({ width: 800, height: 900 });
+      await page.goto("/?gone=1");
+      await page.getByRole("list", { name: "Nachrichten" }).getByRole("button", { name: invoice }).click();
+      const article = page.getByRole("article");
+      await article.getByRole("button", { name: "Details" }).click();
+      await article.getByRole("button", { name: /nicht mehr auf dem Server/ }).click();
+      const hint = "Der Server führt diese Nachricht hier nicht mehr. Das Archiv behält sie.";
+      const tip = page.locator(".cds--popover-content").filter({ hasText: hint });
+      await tooltipInside(page, page.locator(".reader-scroll"), tip, "location toggletip", { viewport: true });
+    });
   });
 });
 

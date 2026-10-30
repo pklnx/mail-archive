@@ -95,11 +95,14 @@ export function FolderTree({ state, accounts, select, show, collapsed, onCollaps
         <h2 className="folder-tree__title">{t.navFolders}</h2>
         {onCollapse && (
           // Only where the column is always visible; the overlay closes instead.
+          // The column scrolls, so a tooltip inside it would widen it at its
+          // edge: autoAlign positions it fixed, outside the column (#379).
           <IconButton
             ref={collapseRef}
             kind="ghost"
             size="sm"
-            align="bottom"
+            align="bottom-end"
+            autoAlign
             label={t.collapseSidebar}
             wrapperClasses="folder-tree__collapse"
             aria-expanded="true"
