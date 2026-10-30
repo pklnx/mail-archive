@@ -2,9 +2,16 @@ package store
 
 import (
 	"context"
+	"net"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// WithDialForTest is an Open option that replaces the dialer of every
+// connection.
+func WithDialForTest(d func(ctx context.Context, network, addr string) (net.Conn, error)) Option {
+	return func(c *openConfig) { c.dial = d }
+}
 
 // QueryRowForTest runs a query on a connection of the store's pool.
 func (s *Store) QueryRowForTest(ctx context.Context, sql string, args ...any) pgx.Row {

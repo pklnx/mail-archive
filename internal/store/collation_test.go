@@ -5,16 +5,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 func strp(s string) *string { return &s }
@@ -59,13 +62,13 @@ func TestCollationReason(t *testing.T) {
 func TestRebuildError(t *testing.T) {
 	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
 	dup := &pgconn.PgError{Code: "23505", Message: `could not create unique index "accounts_name_key"`, Detail: "Key (name)=(a) is duplicated."}
-	msg := store.RebuildError(c, dup).Error()
+	msg := store.RebuildError(context.Background(), c, dup).Error()
 	for _, want := range []string{"nothing was migrated", "accounts_name_key", "Key (name)=(a) is duplicated.", "Restore"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("duplicate key: %q lacks %q", msg, want)
 		}
 	}
-	msg = store.RebuildError(c, &pgconn.PgError{Code: "42501", Message: "must be owner of database mailarchive"}).Error()
+	msg = store.RebuildError(context.Background(), c, &pgconn.PgError{Code: "42501", Message: "must be owner of database mailarchive"}).Error()
 	for _, want := range []string{"nothing was migrated", "must be owner", "as a superuser",
 		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "REINDEX DATABASE \"mailarchive\""`,
 		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE \"mailarchive\" SET mail_archive.collation_reindexed = '2.41'"`} {
@@ -76,14 +79,57 @@ func TestRebuildError(t *testing.T) {
 	if i, j := strings.Index(msg, "REINDEX DATABASE"), strings.Index(msg, "ALTER DATABASE"); i < 0 || j < i {
 		t.Errorf("the marker command does not follow the REINDEX: %q", msg)
 	}
-	if msg := store.RebuildError(c, errors.New("boom")).Error(); !strings.Contains(msg, "REINDEX DATABASE") {
+	if msg := store.RebuildError(context.Background(), c, errors.New("boom")).Error(); !strings.Contains(msg, "REINDEX DATABASE") {
 		t.Errorf("other: %q", msg)
+	}
+}
+
+func TestRebuildErrorWrapsAndCancels(t *testing.T) {
+	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// A cancel: wraps the cause, no hand command.
+	err := store.RebuildError(cancelled, c, errors.New("write failed: i/o timeout"))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("does not wrap context.Canceled: %v", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "interrupted, nothing was migrated") || strings.Contains(msg, "REINDEX DATABASE") {
+		t.Errorf("cancel: %q", msg)
+	}
+
+	// A duplicate key together with a cancel still gets the restore advice.
+	dup := &pgconn.PgError{Code: "23505", Message: "dup"}
+	err = store.RebuildError(cancelled, c, dup)
+	if msg := err.Error(); !strings.Contains(msg, "Restore") || strings.Contains(msg, "interrupted") {
+		t.Errorf("duplicate key and cancel: %q", msg)
+	}
+
+	// A live ctx keeps the cause matchable.
+	denied := &pgconn.PgError{Code: "42501", Message: "must be owner"}
+	var pgErr *pgconn.PgError
+	if err := store.RebuildError(context.Background(), c, denied); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Errorf("does not wrap the PgError: %v", err)
+	}
+}
+
+func TestMarkerErrorCancelled(t *testing.T) {
+	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.MarkerError(cancelled, c, errors.New("write failed: i/o timeout"))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("does not wrap context.Canceled: %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "run migrate again") && !strings.Contains(msg, "Run migrate again") || strings.Contains(msg, "superuser") {
+		t.Errorf("cancel: %q", msg)
 	}
 }
 
 func TestMarkerError(t *testing.T) {
 	c := store.CollationState{Database: "mailarchive", User: "mailarchive", ActualVersion: strp("2.41")}
-	msg := store.MarkerError(c, &pgconn.PgError{Code: "42501", Message: `permission denied to set parameter "mail_archive.collation_reindexed"`}).Error()
+	msg := store.MarkerError(context.Background(), c, &pgconn.PgError{Code: "42501", Message: `permission denied to set parameter "mail_archive.collation_reindexed"`}).Error()
 	for _, want := range []string{"index rebuild is done", "recording it failed", "nothing was migrated", "permission denied", "as a superuser",
 		`docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "ALTER DATABASE \"mailarchive\" SET mail_archive.collation_reindexed = '2.41'"`} {
 		if !strings.Contains(msg, want) {
@@ -370,5 +416,99 @@ func TestRebuildMarkerNeedsSuperuser(t *testing.T) {
 	}
 	if c, err := st.Collation(ctx); err != nil || c.NeedsIndexRebuild() {
 		t.Fatalf("still needs a rebuild after the manual marker: %+v %v", c, err)
+	}
+}
+
+// dialHook wraps every connection of a store; a Write that carries marker
+// runs onWrite and then fails like pgx's deadline cancel (an i/o timeout
+// that does not wrap context.Canceled).
+type dialHook struct {
+	net.Conn
+	marker  string
+	onWrite func()
+}
+
+func (c dialHook) Write(b []byte) (int, error) {
+	if strings.Contains(string(b), c.marker) {
+		c.onWrite()
+		return 0, &net.OpError{Op: "write", Net: "tcp", Err: os.ErrDeadlineExceeded}
+	}
+	return c.Conn.Write(b)
+}
+
+func TestCollationCancelDuringWrite(t *testing.T) {
+	_, url := storetest.NewWithURL(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		var d net.Dialer
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return dialHook{Conn: conn, marker: "pg_db_role_setting", onWrite: cancel}, nil
+	}
+	st, err := store.Open(context.Background(), url, store.WithDialForTest(dial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_, err = st.Collation(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("want context.Canceled, got %v", err)
+	}
+}
+
+func TestRebuildIndexesCancelled(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	storetest.SimulateAlpineDatabase(t, url)
+	bg := context.Background()
+	holder, err := pgx.Connect(bg, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Close(bg) }()
+	tx, err := holder.Begin(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(bg) }()
+	if _, err := tx.Exec(bg, "LOCK TABLE users IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	waiter, err := pgx.Connect(bg, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = waiter.Close(bg) }()
+
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := st.RebuildIndexesIfNeeded(ctx, nil)
+		done <- err
+	}()
+	waitForLockWait(t, waiter, done)
+	cancel()
+	var rerr error
+	select {
+	case rerr = <-done:
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("RebuildIndexesIfNeeded did not return after the cancel")
+	}
+	if !errors.Is(rerr, context.Canceled) {
+		t.Errorf("want context.Canceled, got %v", rerr)
+	}
+	if rerr != nil && strings.Contains(rerr.Error(), "REINDEX DATABASE") {
+		t.Errorf("a cancel asks for a hand rebuild: %v", rerr)
+	}
+	_ = tx.Rollback(bg)
+	c, err := st.Collation(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.NeedsIndexRebuild() {
+		t.Errorf("the marker was set after a cancelled rebuild: %+v", c)
 	}
 }

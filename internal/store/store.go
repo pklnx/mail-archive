@@ -59,6 +59,8 @@ type openConfig struct {
 	// tracer is the pgx query tracer of every connection; only tests set
 	// it.
 	tracer pgx.QueryTracer
+	// dial replaces the dialer of every connection; only tests set it.
+	dial pgconn.DialFunc
 }
 
 // ForMigrations sets up the store for `migrate` and `migrate down`, so
@@ -121,6 +123,9 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	}
 	if oc.tracer != nil {
 		cfg.ConnConfig.Tracer = oc.tracer
+	}
+	if oc.dial != nil {
+		cfg.ConnConfig.DialFunc = oc.dial
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

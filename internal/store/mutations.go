@@ -223,9 +223,9 @@ const (
 // with archived mail is marked as removed instead: its mail stays searchable
 // and keeps showing where it came from, but the password is wiped and the
 // account is never synced again. It is checked against ref like
-// UpdateAccount. The caller must hold the account's sync lock (TryLockSync),
-// so that no sync writes folders or messages for it meanwhile; a caller
-// without it uses RemoveAccountLocked.
+// UpdateAccount. The caller must hold the account's sync lock on the connection of
+// ctx, as RemoveAccountLocked does, so that no sync writes folders or
+// messages for it meanwhile; a caller without it uses RemoveAccountLocked.
 func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (RemoveResult, error) {
 	var result RemoveResult
 	err := s.inTx(ctx, func(q *db.Queries) error {
