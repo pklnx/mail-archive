@@ -268,6 +268,9 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
             hasIconOnly
             iconDescription={t.downloadEml}
             tooltipPosition="bottom"
+            // Opens to the right like the button before it; centred, it
+            // starts left of the pane and is cut off (#379).
+            tooltipAlignment="start"
             renderIcon={Download}
             href={messageURL.raw(msg.id)}
             download
@@ -409,7 +412,9 @@ function LocationTag({ l }: { l: Location }) {
     );
   }
   return (
-    <Toggletip align="bottom">
+    // autoAlign: no fixed side fits every place the tag wraps to; it flips
+    // inside the reading pane instead of widening it (#379).
+    <Toggletip align="bottom" autoAlign>
       <ToggletipButton label={locationLabel(l)}>
         <Tag as="span" size="sm" type={l.superseded ? "cool-gray" : "warm-gray"}>
           {locationLabel(l)}

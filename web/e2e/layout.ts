@@ -75,3 +75,39 @@ export async function holdsToolbarFits(page: Page, panel: Locator, names: { add:
   expect(below.top, "the table starts below the toolbar").toBeGreaterThanOrEqual(box.bottom - 0.5);
   expect(await sideScrolls(page), "the page scrolls sideways").toBe(false);
 }
+
+// Tooltips in scroll containers (#379). Kept self-contained: its own rect
+// reader, so it does not depend on the helpers above.
+type Box = { top: number; bottom: number; left: number; right: number };
+
+/** A scroll container's sideways scroll state and box. */
+export const sideScroll = (container: Locator) =>
+  container.evaluate((e) => {
+    const r = e.getBoundingClientRect();
+    const box: Box = { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+    return { scrollLeft: e.scrollLeft, scrollWidth: e.scrollWidth, clientWidth: e.clientWidth, box };
+  });
+
+/**
+ * An open tooltip (or toggletip) neither widens nor scrolls its scroll
+ * container sideways, and its bubble lies inside the container's box
+ * (±0.5px) and, with `viewport`, inside the window.
+ */
+export async function tooltipInside(page: Page, container: Locator, tip: Locator, name: string, opts: { viewport?: boolean } = {}) {
+  await expect(tip).toBeVisible();
+  const c = await sideScroll(container);
+  // Carbon puts role="tooltip" on the popover's anchor box; the bubble is
+  // its .cds--popover-content.
+  const t = await tip.evaluate((e): Box => {
+    const r = (e.matches(".cds--popover-content") ? e : (e.querySelector(".cds--popover-content") ?? e)).getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+  });
+  const where = `${name}: tooltip ${JSON.stringify(t)}, container ${JSON.stringify(c)}`;
+  expect(c.scrollLeft, `the container is not scrolled sideways, ${where}`).toBe(0);
+  expect(c.scrollWidth, `the container does not get wider, ${where}`).toBe(c.clientWidth);
+  expect(t.left >= c.box.left - 0.5 && t.right <= c.box.right + 0.5, `the tooltip lies inside the container, ${where}`).toBe(true);
+  if (opts.viewport) {
+    const width = await page.evaluate(() => document.documentElement.clientWidth);
+    expect(t.left >= -0.5 && t.right <= width + 0.5, `the tooltip lies inside the window (${width}px), ${where}`).toBe(true);
+  }
+}
