@@ -15,11 +15,59 @@ const today = (page: Page) =>
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
 
-/** The Log's default since: 30 days ago as a UTC day, as LogPage's defaultFilter has it. */
-const defaultSince = (page: Page) => page.evaluate(() => new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10));
+/** The Log's default since: the local day 30 days back, as LogPage's defaultFilter has it. */
+const defaultSince = (page: Page) =>
+  page.evaluate(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
 
-/** Whether the page's local day is the UTC day: the server's since/until are UTC days. */
-const sameDayAsUTC = (page: Page) => page.evaluate(() => new Date().getDate() === new Date().getUTCDate());
+/**
+ * The instant the request carries for a local day (#402): the start of the
+ * day as since (startOf), the start of the next day as until (endOf).
+ * Computed before a request promise is set up, so auditRequest stays
+ * synchronous.
+ */
+const localMidnight = (page: Page, day: string, after: number) =>
+  page.evaluate(
+    ([day, after]) => {
+      const [y, m, d] = day.split("-").map(Number);
+      return new Date(y!, m! - 1, d! + after).toISOString();
+    },
+    [day, after] as const,
+  );
+const startOf = (page: Page, day: string) => localMidnight(page, day, 0);
+const endOf = (page: Page, day: string) => localMidnight(page, day, 1);
+
+/** The local days of a request's since and until (until is exclusive), as YYYY-MM-DD or null. */
+const daysOf = (page: Page, p: URLSearchParams) =>
+  page.evaluate(
+    ([since, until]) => {
+      const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const before = (iso: string) => {
+        const d = new Date(iso);
+        d.setDate(d.getDate() - 1);
+        return d;
+      };
+      return { since: since ? day(new Date(since)) : null, until: until ? day(before(until)) : null };
+    },
+    [p.get("since"), p.get("until")] as const,
+  );
+
+/**
+ * Fixes the page's clock at 00:01 of today's local day (capped at the real
+ * now), before the page loads: the hour after local midnight in which a
+ * plain since=today was read as a UTC day after the server's default until
+ * and answered 400 (#402). Timers keep running.
+ */
+async function justAfterMidnight(page: Page) {
+  const at = await page.evaluate(() => {
+    const n = new Date();
+    return Math.min(new Date(n.getFullYear(), n.getMonth(), n.getDate(), 0, 1).getTime(), n.getTime());
+  });
+  await page.clock.setFixedTime(at);
+}
 
 /** The next /api/audit request that has these query parameters. */
 const auditRequest = (page: Page, params: Record<string, string>) =>
@@ -96,9 +144,17 @@ test.describe("in German", () => {
       });
 
       test("a picked range and a picked single day send since/until as local days; a typed past range shows no entries", async ({ page }) => {
+        await justAfterMidnight(page);
+        // Today's entry in the log, whatever the hour.
+        expect((await page.request.get("/api/messages?q=log-local-days")).status()).toBe(200);
         const { main, from, to, calendar } = await open(page);
         const day = await today(page);
-        const since = await defaultSince(page);
+        const since = await startOf(page, await defaultSince(page));
+        const [start, end] = [await startOf(page, day), await endOf(page, day)];
+        // East of UTC, local midnight is 22:00 or 23:00 UTC of the day before.
+        const [y, m, d] = day.split("-");
+        const utcDayBefore = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d) - 1)).toISOString().slice(0, 10);
+        expect(start).toMatch(new RegExp(`^${utcDayBefore}T2[23]:00:00\\.000Z$`));
         // The calendar opens at From's month. The default From is 30 days
         // back, which can be two months back (on 1 March, and on 2 March in a
         // non-leap year), so go forward until today's cell is there, at most
@@ -112,9 +168,9 @@ test.describe("in German", () => {
         };
         // With the default From set, a click on today ends the range there.
         await openAtToday();
-        const ended = auditRequest(page, { since, until: day });
+        const ended = auditRequest(page, { since, until: end });
         await todayCell.click();
-        await ended;
+        expect((await (await ended).response())?.status()).toBe(200);
         await expect(calendar).toHaveCount(0);
         // Emptied From, left with a click outside: no dates (the server's 30
         // days). (Tab moves into the calendar and commits nothing: #385.)
@@ -125,26 +181,26 @@ test.describe("in German", () => {
         await expect(from).toHaveValue("");
         await expect(to).toHaveValue("");
         await expect(calendar).toHaveCount(0);
-        // A new range: today as start and end.
+        // A new range: today alone, then today as start and end.
         await openAtToday();
+        const alone = auditRequest(page, { since: start });
         await todayCell.click();
-        const picked = auditRequest(page, { since: day, until: day });
+        expect((await (await alone).response())?.status()).toBe(200);
+        const picked = auditRequest(page, { since: start, until: end });
         await todayCell.click();
-        await picked;
+        expect((await (await picked).response())?.status()).toBe(200);
         await expect(calendar).toHaveCount(0);
-        const [y, m, d] = day.split("-");
         await expect(from).toHaveValue(`${d}.${m}.${y}`);
         await expect(to).toHaveValue(`${d}.${m}.${y}`);
-        // Today's entries (at least the demo admin's login of this run),
-        // unless the local day starts before the UTC day the server counts in.
-        if (await sameDayAsUTC(page)) await expect(main.getByRole("table", { name: "Protokoll" }).getByRole("row").nth(1)).toBeVisible();
+        // Today's entries (at least the search above).
+        await expect(main.getByRole("table", { name: "Protokoll" }).getByRole("row").nth(1)).toBeVisible();
         await noSideScroll(page);
 
         // Typed, committed with Enter as a user does.
         await from.fill("01.01.2020");
         await from.press("Enter");
         await to.fill("31.01.2020");
-        const typed = auditRequest(page, { since: "2020-01-01", until: "2020-01-31" });
+        const typed = auditRequest(page, { since: "2019-12-31T23:00:00.000Z", until: "2020-01-31T23:00:00.000Z" });
         await to.press("Enter");
         await typed;
         await expect(main.getByText("Keine Einträge in diesem Zeitraum.")).toBeVisible();
@@ -172,11 +228,11 @@ test.describe("in German", () => {
     /** A range typed and committed with Enter: 01.01.2020 – 20.01.2020. */
     async function typedRange(page: Page, from: Locator, to: Locator) {
       await from.fill("01.01.2020");
-      const start = auditRequest(page, { since: "2020-01-01" });
+      const start = auditRequest(page, { since: "2019-12-31T23:00:00.000Z" });
       await from.press("Enter");
       await start;
       await to.fill("20.01.2020");
-      const range = auditRequest(page, { since: "2020-01-01", until: "2020-01-20" });
+      const range = auditRequest(page, { since: "2019-12-31T23:00:00.000Z", until: "2020-01-20T23:00:00.000Z" });
       await to.press("Enter");
       await range;
     }
@@ -195,7 +251,7 @@ test.describe("in German", () => {
     test("Von clicked, then a click outside: nothing sent, Von keeps the default day", async ({ page }) => {
       const { main, from, to, calendar } = await open(page);
       const shown = await from.inputValue();
-      const since = await defaultSince(page);
+      const since = await startOf(page, await defaultSince(page));
       const seen = auditRequests(page);
       await from.click();
       await expect(calendar).toBeVisible();
@@ -212,21 +268,23 @@ test.describe("in German", () => {
 
     test("a picked range, Bis emptied, then a click outside: an open end", async ({ page }) => {
       const { main, from, to, calendar } = await open(page);
-      const since = await defaultSince(page);
+      const sinceDay = await defaultSince(page);
+      const since = await startOf(page, sinceDay);
+      const until = await endOf(page, await today(page));
       // With the default Von, a click on today ends the range there (the
       // calendar opens at Von's month, up to two months back).
       const todayCell = calendar.locator(".flatpickr-day.today:not(.prevMonthDay):not(.nextMonthDay)");
       await from.click();
       await expect(calendar).toBeVisible();
       for (let i = 0; i < 2 && (await todayCell.count()) === 0; i++) await calendar.getByLabel("Nächster Monat").click();
-      const picked = auditRequest(page, { since, until: await today(page) });
+      const picked = auditRequest(page, { since, until });
       await todayCell.click();
       await picked;
       await to.fill("");
       const ended = auditRequest(page, { since });
       await main.getByRole("heading", { name: "Protokoll", level: 1 }).click();
       await ended;
-      await expect(from).toHaveValue(since.split("-").reverse().join("."));
+      await expect(from).toHaveValue(sinceDay.split("-").reverse().join("."));
       await expect(to).toHaveValue("");
     });
 
@@ -234,11 +292,11 @@ test.describe("in German", () => {
       const { from, to, calendar } = await open(page);
       await typedRange(page, from, to);
       await to.fill("25.01.2020");
-      const typed = auditRequest(page, { since: "2020-01-01", until: "2020-01-25" });
+      const typed = auditRequest(page, { since: "2019-12-31T23:00:00.000Z", until: "2020-01-25T23:00:00.000Z" });
       await to.press("Enter");
       await typed;
       await from.click();
-      const picked = auditRequest(page, { since: "2020-01-05", until: "2020-01-25" });
+      const picked = auditRequest(page, { since: "2020-01-04T23:00:00.000Z", until: "2020-01-25T23:00:00.000Z" });
       await calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)", { hasText: /^5$/ }).click();
       await picked;
       await expect(from).toHaveValue("05.01.2020");
@@ -255,14 +313,14 @@ test.describe("in German", () => {
       await from.click();
       const sent = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/audit");
       await calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)", { hasText: /^15$/ }).click();
-      const p = new URL((await sent).url()).searchParams;
+      const p = await daysOf(page, new URL((await sent).url()).searchParams);
       // The range plugin forgets the old end 10 ms after a clear (its own
       // timer); a person is slower, a test need not be: either way the fields
       // show exactly the sent range, starting at the clicked day.
-      expect(p.get("since")).toMatch(/-15$/);
+      expect(p.since).toMatch(/-15$/);
       const german = (day: string | null) => (day ? day.split("-").reverse().join(".") : "");
-      await expect(from).toHaveValue(german(p.get("since")));
-      await expect(to).toHaveValue(german(p.get("until")));
+      await expect(from).toHaveValue(german(p.since));
+      await expect(to).toHaveValue(german(p.until));
     });
   });
 

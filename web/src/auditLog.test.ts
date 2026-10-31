@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditQuery, type AuditEntry } from "./api";
 import { foldEntries, shortUserAgent } from "./auditLog";
 import { defaultFilter, entryDetail, targetLabel } from "./LogPage";
@@ -59,10 +59,13 @@ describe("foldEntries", () => {
   });
 });
 
+// The days go as instants of local midnight (#402), so the zone is fixed.
 describe("auditQuery", () => {
+  beforeEach(() => vi.stubEnv("TZ", "Europe/Berlin"));
+  afterEach(() => vi.unstubAllEnvs());
   it("turns the filter into query parameters", () => {
-    expect(auditQuery({ since: "2026-10-01", until: "", group: "read", who: "" })).toBe("since=2026-10-01&action=read");
-    expect(auditQuery({ since: "", until: "2026-10-31", group: "", who: "cli" }, "abc")).toBe("until=2026-10-31&actor=cli&cursor=abc");
+    expect(auditQuery({ since: "2026-10-01", until: "", group: "read", who: "" })).toBe("since=2026-09-30T22%3A00%3A00.000Z&action=read");
+    expect(auditQuery({ since: "", until: "2026-10-31", group: "", who: "cli" }, "abc")).toBe("until=2026-10-31T23%3A00%3A00.000Z&actor=cli&cursor=abc");
     expect(auditQuery({ since: "", until: "", group: "", who: "api_key" })).toBe("actor=api_key");
     expect(auditQuery({ since: "", until: "", group: "", who: "alice" })).toBe("user=alice");
   });
