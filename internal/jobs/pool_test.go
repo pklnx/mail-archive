@@ -978,3 +978,50 @@ func TestPoolSameJobClaimedAgainWhileFinishing(t *testing.T) {
 	close(release)
 	h.stateUntil("test", "a", store.JobDone)
 }
+
+// TestPoolHeartbeatPerClaim: another pool reaps a job of this pool and
+// this pool claims it again while its old handler still runs. The
+// heartbeat compares leases per claim: it cancels the old claim, whose
+// lease is gone, and keeps the new one, although both have the same ID.
+func TestPoolHeartbeatPerClaim(t *testing.T) {
+	h := newHarness(t, 2)
+	ps := h.countPasses()
+	var rec recorder
+	var cancelled atomic.Int32
+	var cancelSig testwait.Signal
+	release := make(chan struct{})
+	h.register(Kind{Name: "test", Handler: func(ctx context.Context, j Job) error {
+		rec.add(j)
+		select {
+		case <-ctx.Done():
+			cancelled.Add(1)
+			cancelSig.Notify()
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}})
+	h.enqueue(newJob("test", "a", store.PriorityNew))
+	h.start()
+	rec.waitFor(t, 1, "the first claim")
+	id := h.row("test", "a").ID
+	// Another pool reaped it (its lease had expired) and it is due again.
+	h.exec(`UPDATE jobs SET state = 'queued', lease_token = NULL, lease_until = NULL, run_after = now() WHERE id = $1`, id)
+	ps.poll(h)
+	if jobs := rec.waitFor(t, 2, "the second claim"); jobs[1].ID != id {
+		t.Fatalf("claims %+v", jobs)
+	}
+	h.beat()
+	testwait.Until(t, &cancelSig, "the old claim cancelled", func() bool { return cancelled.Load() == 1 })
+	h.mu.Lock()
+	lost := len(h.lost)
+	h.mu.Unlock()
+	if lost != 1 {
+		t.Fatalf("%d claims lost, want 1", lost)
+	}
+	close(release)
+	h.stateUntil("test", "a", store.JobDone)
+	if c := cancelled.Load(); c != 1 {
+		t.Errorf("%d claims cancelled, want 1 (the new one finished)", c)
+	}
+}
