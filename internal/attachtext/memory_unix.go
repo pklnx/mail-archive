@@ -36,6 +36,10 @@ type mmapAllocator struct {
 type allocHooks struct {
 	free  func() // after Free gave the pages back
 	unmap func() // after release unmapped a mapping
+	// grow runs when the module grows its memory, before the grow
+	// completes: that is while WebAssembly code runs, outside any of
+	// go-pdfium's callbacks.
+	grow func()
 }
 
 func newAllocator() *mmapAllocator {
@@ -98,6 +102,9 @@ func (m *linearMemory) Reallocate(size uint64) []byte {
 	m.a.mu.Lock()
 	m.a.peak = max(m.a.peak, size)
 	m.a.mu.Unlock()
+	if m.a.hooks.grow != nil {
+		m.a.hooks.grow()
+	}
 	return m.buf[:size]
 }
 

@@ -110,3 +110,11 @@ func ScopeEnvelopeIDs(sc Scope) []int64 { return sc.envelopeIDs() }
 
 // ShareView is shareView: what an owner sees of another user's read.
 var ShareView = shareView
+
+// SetMaxAttachmentMatches changes how many attachment matches a query
+// takes as a list, until the returned function restores it.
+func SetMaxAttachmentMatches(n int) (restore func()) {
+	old := maxAttachmentMatches
+	maxAttachmentMatches = n
+	return func() { maxAttachmentMatches = old }
+}

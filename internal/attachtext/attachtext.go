@@ -120,7 +120,8 @@ func isPDF(data []byte) bool {
 }
 
 // Extractor extracts attachment text. It is safe for concurrent use; PDFs
-// are read one at a time per Extractor. The zero value is not usable; use
+// are read one at a time in the whole process, also across Extractors (see
+// pdfEngine); text, CSV and HTML attachments are read alongside. The zero value is not usable; use
 // New.
 type Extractor struct {
 	pdf *pdfEngine
@@ -152,9 +153,11 @@ func (e *Extractor) Close() error {
 
 // Message extracts the text of the attachments of a raw message, at most
 // MaxAttachments of them, within messageTimeout and MaxMessageText.
-// Attachments of other types get no Result. The error is ctx's when ctx
-// was cancelled (not when a deadline passed): the results are incomplete
-// then and must not be stored.
+// Attachments of other types get no Result. Attachments that the deadline
+// (messageTimeout, or ctx's) never reached get StatusTimeout. The error is
+// ctx's when ctx was cancelled (not when a deadline passed): the results are
+// incomplete then and must not be stored. It wraps ErrUnavailable when the
+// message has a PDF and the PDF module cannot be compiled.
 func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, messageTimeout)
 	defer cancel()
@@ -173,11 +176,17 @@ func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) 
 		return 0
 	}
 	_ = mime.Attachments(r, limit, func(a mime.Attachment) bool {
-		if ctx.Err() != nil {
-			ctxEr = ctx.Err()
+		if err := ctx.Err(); err != nil && !isDeadline(err) {
+			ctxEr = err
 			return false
 		}
-		res, err := e.attachment(ctx, a, min(MaxText, left))
+		var res Result
+		var err error
+		if ctx.Err() != nil {
+			res = unreached(a)
+		} else {
+			res, err = e.attachment(ctx, a, min(MaxText, left))
+		}
 		if err != nil {
 			ctxEr = err
 			return false
@@ -196,6 +205,22 @@ func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) 
 }
 
 func isDeadline(err error) bool { return errors.Is(err, context.DeadlineExceeded) }
+
+// unreached is the Result of an attachment that the message's deadline did
+// not leave time for: StatusTimeout, so that the row records it, unless
+// its size or decoding already decide.
+func unreached(a mime.Attachment) Result {
+	res := Result{Part: a.Index, Filename: a.Filename, Status: StatusTimeout}
+	switch {
+	case a.TooLarge:
+		res.Status = StatusTooLarge
+	case a.Err != nil:
+		res.Status = StatusFailed
+	case candidate(a.Part) == kindPDF && !isPDF(a.Data) && !pdfTypes[a.ContentType]:
+		return Result{} // a file named .pdf that is not one
+	}
+	return res
+}
 
 // attachment extracts one attachment. A Result without Status means it
 // is not one of the types read.

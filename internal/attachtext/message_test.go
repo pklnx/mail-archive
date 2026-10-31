@@ -1,15 +1,20 @@
 package attachtext
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
 	"github.com/pklnx/mail-archive/internal/mime"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // part is one MIME part of a test message.
@@ -153,5 +158,134 @@ func TestMessageCancelled(t *testing.T) {
 	raw = message(attach("application/pdf", "a.pdf", pdftest.Text("a")))
 	if res, err := shared.Message(ctx, strings.NewReader(raw)); !errors.Is(err, context.Canceled) || res != nil {
 		t.Errorf("during a PDF: %v, %v", res, err)
+	}
+}
+
+// Attachments that the message's deadline never reached get a row with
+// StatusTimeout, so that the message is recorded as done (#416); size and
+// decoding still decide where they can without reading.
+func TestMessageDeadlineUnreached(t *testing.T) {
+	ctx := newDeadlineCtx()
+	setHooks(t, pdfHooks{start: ctx.expire})
+	raw := message(
+		attach("application/pdf", "first.pdf", pdftest.Text("first")),
+		attach("text/plain", "later.txt", []byte("later")),
+		attach("application/pdf", "second.pdf", pdftest.Text("second")),
+		attach("application/octet-stream", "fake.pdf", []byte("not a pdf at all")),
+		attach("text/plain", "big.txt", []byte(strings.Repeat("x", MaxTextSize+1))),
+	)
+	got, err := shared.Message(ctx, strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, r := range got {
+		lines = append(lines, fmt.Sprintf("%d %s %s %q", r.Part, r.Filename, r.Status, r.Text))
+	}
+	want := `0 first.pdf timeout "",1 later.txt timeout "",2 second.pdf timeout "",4 big.txt too_large ""`
+	if strings.Join(lines, ",") != want {
+		t.Errorf("got  %s\nwant %s", strings.Join(lines, ","), want)
+	}
+}
+
+// A module that cannot be compiled is reported once, as an error, and every
+// PDF then fails with ErrUnavailable, also inside a message; text
+// attachments are not affected.
+func TestPDFCompileFailureCached(t *testing.T) {
+	var logs bytes.Buffer
+	e := New(slog.New(slog.NewTextHandler(&logs, nil)))
+	calls := 0
+	e.pdf.hooks.compile = func() error { calls++; return errors.New("injected: out of memory") }
+	for range 3 {
+		if _, err := e.PDF(context.Background(), pdftest.Text("a")); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("PDF: %v", err)
+		}
+	}
+	raw := message(attach("text/plain", "a.txt", []byte("a")), attach("application/pdf", "a.pdf", pdftest.Text("a")))
+	if res, err := e.Message(context.Background(), strings.NewReader(raw)); !errors.Is(err, ErrUnavailable) || res != nil {
+		t.Fatalf("Message: %v, %v", res, err)
+	}
+	if res, err := e.Message(context.Background(), strings.NewReader(message(attach("text/plain", "a.txt", []byte("a"))))); err != nil || len(res) != 1 {
+		t.Fatalf("text only: %v, %v", res, err)
+	}
+	if calls != 1 {
+		t.Errorf("compiled %d times", calls)
+	}
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 1 || strings.Count(logs.String(), "cannot compile") != 1 {
+		t.Errorf("logged %d errors:\n%s", n, logs.String())
+	}
+}
+
+// One PDF at a time in the process, also across Extractors (two job
+// workers share one; reindex and the web server do not share a process):
+// a second PDF waits while the first runs (maintainer decision 12, #390).
+func TestPDFOneAtATimePerProcess(t *testing.T) {
+	other := New(nil)
+	t.Cleanup(func() { _ = other.Close() })
+	var (
+		inside, waited testwait.Signal
+		mu             sync.Mutex
+		running, most  int
+	)
+	enter := func() {
+		mu.Lock()
+		running++
+		most = max(most, running)
+		mu.Unlock()
+	}
+	leave := func() {
+		mu.Lock()
+		running--
+		mu.Unlock()
+	}
+	release := make(chan struct{})
+	firstIn := inside.C()
+	setHooks(t, pdfHooks{start: func() {
+		enter()
+		inside.Notify()
+		select {
+		case <-release:
+		case <-time.After(testwait.Limit(t)):
+			t.Error("not released")
+		}
+	}})
+	other.pdf.hooks.start = func() { enter() }
+	waitC := waited.C()
+	onPDFWait = waited.Notify
+	t.Cleanup(func() { onPDFWait = nil })
+
+	done := make(chan Result, 2)
+	go func() {
+		res, _ := shared.PDF(context.Background(), pdftest.Text("first"))
+		leave()
+		done <- res
+	}()
+	select {
+	case <-firstIn:
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the first PDF did not start")
+	}
+	secondIn := make(chan struct{})
+	other.pdf.hooks.start = func() { enter(); close(secondIn) }
+	go func() {
+		res, _ := other.PDF(context.Background(), pdftest.Text("second"))
+		leave()
+		done <- res
+	}()
+	select {
+	case <-waitC:
+	case <-secondIn:
+		t.Fatal("the second PDF ran while the first was open")
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the second PDF neither waited nor ran")
+	}
+	close(release)
+	for range 2 {
+		if res := <-done; res.Status != StatusOK {
+			t.Errorf("status %s", res.Status)
+		}
+	}
+	if most != 1 {
+		t.Errorf("%d PDFs at once", most)
 	}
 }

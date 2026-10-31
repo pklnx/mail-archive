@@ -262,12 +262,20 @@ INSERT INTO folders (account_id, name, uidvalidity)
 SELECT id, 'INBOX', 1 FROM accounts WHERE owner_id = (SELECT id FROM users WHERE name = 'reader');
 INSERT INTO account_shares (account_id, user_id)
 SELECT a.id, u.id FROM accounts a, users u WHERE a.name = 'a' AND u.name = 'reader';
+-- Attachment text of every message with an attachment; half of them are
+-- done (#390).
+INSERT INTO attachment_texts (message_sha256, part_index, filename, status, body_text)
+SELECT sha256, 1, 'rechnung.pdf', 'ok', 'Rechnung Betrag ' || substr(sha256, 1, 12) FROM messages WHERE has_attachment;
+INSERT INTO attachment_index_state (message_sha256, version)
+SELECT sha256, 1 FROM messages WHERE has_attachment AND sort_at < timestamptz '2022-11-01';
+INSERT INTO jobs (kind, key, message_sha256, priority, max_attempts, state, finished_at)
+SELECT 'attachment_text', message_sha256, message_sha256, 100, 3, 'done', now() FROM attachment_index_state;
 ANALYZE;`
 	if _, err := conn.Exec(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
 	// Merge the GIN pending lists, as autovacuum does on a live archive.
-	if _, err := conn.Exec(ctx, "VACUUM ANALYZE envelopes"); err != nil {
+	if _, err := conn.Exec(ctx, "VACUUM ANALYZE envelopes, attachment_texts"); err != nil {
 		t.Fatal(err)
 	}
 	var owner, reader int64
@@ -298,6 +306,11 @@ ANALYZE;`
 		also  []string
 		// threads explains SearchThreads instead of SearchMessages.
 		threads bool
+		// noSeqScan explains with sequential and plain index scans off: on
+		// this small seed the planner reads a query's OR with a Seq Scan or
+		// walks messages_sort_idx (as before #390), so the case shows that
+		// every arm of the OR can use an index (a BitmapOr).
+		noSeqScan bool
 	}{
 		// The main lists: the per-row gone flag looks up each row's
 		// locations instead of reading them all (#310).
@@ -306,16 +319,26 @@ ANALYZE;`
 		// to: on To and Cc, or on the envelope matches found first by
 		// EnvelopeMatches: both arms through an index of messages.
 		{"to", db.SearchMessagesParams{ToPattern: str("%finanzamt%"), ToShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}},
-			"messages_rcpt_trgm_idx", []string{"messages_pkey"}, false},
+			"messages_rcpt_trgm_idx", []string{"messages_pkey"}, false, false},
 		// With too many envelope matches it checks the envelopes of each
 		// message it walks, through their keys.
 		{"to walk", db.SearchMessagesParams{ToPattern: str("%example.com%"), ToWalk: true}, "messages_sort_idx",
-			[]string{"message_locations_sha_idx", "envelopes_pkey"}, false},
-		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx", nil, false},
-		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx", nil, false},
+			[]string{"message_locations_sha_idx", "envelopes_pkey"}, false, false},
+		{"attachment", db.SearchMessagesParams{AttachmentPattern: str("%rechnung-4200%"), HasAttachment: true}, "messages_attachment_trgm_idx", nil, false, false},
+		{"has attachment", db.SearchMessagesParams{HasAttachment: true}, "messages_attachment_sort_idx", nil, false, false},
+		// A query: the full-text index, and the attachment matches found
+		// first by AttachmentMatches through the primary key (#390).
+		{"query", db.SearchMessagesParams{Query: str("Zahlungsziel"), Pattern: str("%Zahlungsziel%"), AttShas: []string{}},
+			"messages_search_idx", []string{"BitmapOr"}, false, true},
+		{"query with attachment matches", db.SearchMessagesParams{Query: str("Zahlungsziel"), Pattern: str("%Zahlungsziel%"),
+			AttShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}}, "messages_search_idx", []string{"BitmapOr", "messages_pkey"}, false, true},
+		// With too many attachment matches it checks the attachments of each
+		// message it walks, through their key.
+		{"attachment walk", db.SearchMessagesParams{Query: str("Rechnung"), Pattern: str("%Rechnung%"), AttWalk: true}, "messages_sort_idx",
+			[]string{"attachment_texts_pkey"}, false, false},
 		// Only in the archive: starts from the few gone locations instead of
 		// checking every message.
-		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx", nil, false},
+		{"gone", db.SearchMessagesParams{Gone: true}, "message_locations_gone_idx", nil, false, false},
 	}
 	explain := func(t *testing.T, rec *explainer) string {
 		t.Helper()
@@ -343,6 +366,12 @@ ANALYZE;`
 				if !errors.Is(err, errRecorded) {
 					t.Fatalf("record: %v", err)
 				}
+				if c.noSeqScan {
+					if _, err := conn.Exec(ctx, "SET enable_seqscan = off; SET enable_indexscan = off"); err != nil {
+						t.Fatal(err)
+					}
+					defer func() { _, _ = conn.Exec(ctx, "RESET enable_seqscan; RESET enable_indexscan") }()
+				}
 				plan := explain(t, &rec)
 				if !strings.Contains(plan, c.index) {
 					t.Errorf("plan does not use %s:\n%s", c.index, plan)
@@ -354,6 +383,9 @@ ANALYZE;`
 					if !strings.Contains(plan, index) {
 						t.Errorf("plan does not use %s:\n%s", index, plan)
 					}
+				}
+				if strings.Contains(plan, "Seq Scan on attachment_texts") {
+					t.Errorf("plan reads every attachment text:\n%s", plan)
 				}
 				if strings.HasPrefix(c.name, "to") && strings.Contains(plan, "Seq Scan on envelopes") {
 					t.Errorf("plan reads every envelope:\n%s", plan)
@@ -372,6 +404,49 @@ ANALYZE;`
 		plan := explain(t, &rec)
 		if !strings.Contains(plan, "envelopes_rcpt_trgm_idx") || strings.Contains(plan, "Seq Scan on envelopes") {
 			t.Errorf("plan does not use envelopes_rcpt_trgm_idx:\n%s", plan)
+		}
+	})
+
+	// Finding the attachment matches of a query uses their full-text index.
+	t.Run("attachment matches", func(t *testing.T) {
+		var rec explainer
+		var word string
+		if err := conn.QueryRow(ctx, `SELECT substr(message_sha256, 1, 12) FROM attachment_texts LIMIT 1`).Scan(&word); err != nil {
+			t.Fatal(err)
+		}
+		p := db.AttachmentMatchesParams{Query: word, Accounts: store.ScopeIDs(scopes[0].sc), RowLimit: 5001}
+		if _, err := db.New(&rec).AttachmentMatches(ctx, p); !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		plan := explain(t, &rec)
+		if !strings.Contains(plan, "attachment_texts_search_idx") || strings.Contains(plan, "Seq Scan on attachment_texts") {
+			t.Errorf("plan does not use attachment_texts_search_idx:\n%s", plan)
+		}
+	})
+
+	// The backfill walks the messages with attachments newest first and
+	// looks up each one's state by key. The jobs that are not done are
+	// read once per batch (the queue holds about one batch of them).
+	t.Run("attachment pending", func(t *testing.T) {
+		var rec explainer
+		at := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+		after := strings.Repeat("8", 64)
+		for _, p := range []db.ListAttachmentPendingParams{
+			{Version: store.AttachmentIndexVersion, RowLimit: 1000},
+			{Version: store.AttachmentIndexVersion, RowLimit: 1000, AfterSortAt: &at, AfterSha: &after},
+		} {
+			if _, err := db.New(&rec).ListAttachmentPending(ctx, p); !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			plan := explain(t, &rec)
+			for _, index := range []string{"messages_attachment_sort_idx", "attachment_index_state_pkey"} {
+				if !strings.Contains(plan, index) {
+					t.Errorf("plan does not use %s:\n%s", index, plan)
+				}
+			}
+			if strings.Contains(strings.ReplaceAll(plan, "Seq Scan on jobs", ""), "Seq Scan") {
+				t.Errorf("plan has a Seq Scan:\n%s", plan)
+			}
 		}
 	})
 

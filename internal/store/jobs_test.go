@@ -136,9 +136,11 @@ func (f *jobsFixture) message(c byte) string {
 	return sha
 }
 
-// downJobsMigration rolls back 00032_jobs, for tests of older migrations.
+// downJobsMigration rolls back 00033_attachment_text and 00032_jobs, for
+// tests of older migrations.
 func downJobsMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downAttachmentTextMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00032_jobs") {
 		t.Fatalf("down: %q %v", m, err)
 	}
@@ -578,6 +580,7 @@ func TestRetryFailedJobs(t *testing.T) {
 // insert wait past a lock_timeout of 1 s.
 func TestJobsMigration(t *testing.T) {
 	f := newJobsFixture(t)
+	downAttachmentTextMigration(t, f.st)
 	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00032_jobs") {
 		t.Fatalf("down: %q %v", m, err)
 	}

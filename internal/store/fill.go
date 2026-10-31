@@ -527,6 +527,9 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
 			res.New += int(n)
+			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
+				return err
+			}
 			add = append(add, pending{m, locs[i]})
 		}
 		if len(add) > 0 {

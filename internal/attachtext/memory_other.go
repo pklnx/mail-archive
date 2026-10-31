@@ -15,6 +15,7 @@ type mmapAllocator struct {
 type allocHooks struct {
 	free  func()
 	unmap func()
+	grow  func()
 }
 
 func newAllocator() *mmapAllocator { return &mmapAllocator{} }

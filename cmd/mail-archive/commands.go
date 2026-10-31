@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
@@ -17,9 +18,11 @@ import (
 	"golang.org/x/term"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/pklnx/mail-archive/internal/jobs"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web"
 )
@@ -999,7 +1002,7 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 			archive.CatchUpAtStart(cmd.Context(), a.store, a.cfg.AttestDir(), log)
 			// Background jobs, beside the notifier and the schedule; stopped
 			// before the store closes, releasing running jobs.
-			stopJobs, err := startJobs(cmd.Context(), a, log)
+			stopJobs, err := startJobs(cmd.Context(), a, blobs, log)
 			if err != nil {
 				return err
 			}
@@ -1099,12 +1102,19 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 func newReindexCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reindex",
-		Short: "Extract search data from messages archived by an older version",
+		Short: "Extract search data from messages archived by an older version, and attachment text",
 		Long: `Extract the body text, the To and Cc recipients and the attachment names of
 messages archived by an older version, so search and its filters find them.
-Needed once after an upgrade that says so; sync and import index new messages
-themselves. Reads every message stored by an older version. Safe to
-interrupt and rerun, and to run while the web server and syncs run.`,
+Then extract the text of PDF and text attachments of all messages that have
+none yet, in the foreground, until none is left (the web server, or the
+worker service, does the same in the background; installations that run
+only sync or import from cron get attachment text only from this command).
+` + config.EnvJobWorkers + ` (default 1) sets how many messages run at a time; PDFs
+are read one at a time. Messages that another process is extracting, or that
+wait for a retry, are left to it; the command says how many. Needed once
+after an upgrade that says so; sync and import index new messages
+themselves. Safe to interrupt and rerun, and to run while the web server,
+the worker and syncs run.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -1116,14 +1126,60 @@ interrupt and rerun, and to run while the web server and syncs run.`,
 			if err != nil {
 				return err
 			}
-			n, err := archive.Reindex(cmd.Context(), a.store, blobs, newLogger(a.cfg.LogLevel))
+			log := newLogger(a.cfg.LogLevel)
+			n, err := archive.Reindex(cmd.Context(), a.store, blobs, log)
 			if errors.Is(err, archive.ErrReindexRunning) {
 				return err
 			}
-			fmt.Printf("updated %d message(s)\n", n)
-			return err
+			if err != nil {
+				fmt.Printf("updated %d message(s)\n", n)
+				return err
+			}
+			extracted, left, err := reindexAttachments(cmd.Context(), a, blobs, log)
+			fmt.Printf("updated %d message(s), extracted text of %d attachment(s)\n", n, extracted)
+			if err != nil {
+				return err
+			}
+			if left > 0 {
+				fmt.Printf("%d attachment job(s) are held by another process or wait for a retry; they finish there\n", left)
+			}
+			return nil
 		},
 	}
+}
+
+// reindexAttachments enqueues the attachment backfill and works off the
+// attachment kinds in the foreground until none is due. It returns how
+// many attachments with text it stored and how many of the kinds' jobs
+// are left to other processes or to a retry.
+func reindexAttachments(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (int64, int64, error) {
+	if _, err := a.store.EnqueueJobs(ctx, []store.NewJob{store.AttachmentBackfillJob()}, false); err != nil {
+		return 0, 0, err
+	}
+	x := attachmentIndexer(a, blobs, log)
+	defer func() { _ = processExtractor(log).Close() }()
+	kinds := &jobs.Registry{}
+	if err := x.Register(kinds); err != nil {
+		return 0, 0, err
+	}
+	pool := &jobs.Pool{Store: a.store, Kinds: kinds, Workers: max(a.cfg.JobWorkers, 1), Logger: log, UntilIdle: true}
+	if err := pool.Run(ctx); err != nil {
+		return x.Extracted(), 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return x.Extracted(), 0, err
+	}
+	stats, err := a.store.JobStats(ctx)
+	if err != nil {
+		return x.Extracted(), 0, err
+	}
+	var left int64
+	for _, s := range stats {
+		if s.Kind == store.JobAttachmentText || s.Kind == store.JobAttachmentBackfill {
+			left += s.Queued + s.Retrying + s.Running
+		}
+	}
+	return x.Extracted(), left, nil
 }
 
 func newStatusCmd() *cobra.Command {
