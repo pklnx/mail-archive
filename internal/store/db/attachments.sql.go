@@ -69,6 +69,76 @@ func (q *Queries) AttachmentMatches(ctx context.Context, arg AttachmentMatchesPa
 	return items, nil
 }
 
+const attachmentSnippets = `-- name: AttachmentSnippets :many
+SELECT s.sha::text AS sha256, a.part_index, a.filename,
+       ts_headline('german', a.body_text,
+           websearch_to_tsquery('simple', $1::text) ||
+           websearch_to_tsquery('german', $1::text) ||
+           websearch_to_tsquery('english', $1::text),
+           'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))::text AS snippet
+FROM unnest($2::bpchar[]) AS s (sha)
+CROSS JOIN LATERAL (
+    SELECT ax.part_index, ax.filename, ax.body_text
+    FROM attachment_texts ax
+    WHERE ax.message_sha256 = s.sha
+      -- Only rows with text, as in AttachmentMatches.
+      AND ax.body_text IS NOT NULL
+      AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
+                        websearch_to_tsquery('german', $1::text) ||
+                        websearch_to_tsquery('english', $1::text))
+    ORDER BY ax.part_index
+    LIMIT 1) a
+WHERE EXISTS (
+    SELECT 1 FROM message_locations l
+    JOIN folders f ON f.id = l.folder_id
+    WHERE l.message_sha256 = s.sha
+      AND f.account_id = ANY ($3::bigint[]))
+ORDER BY 1
+`
+
+type AttachmentSnippetsParams struct {
+	Query    string
+	Shas     []string
+	Accounts []int64
+}
+
+type AttachmentSnippetsRow struct {
+	Sha256    string
+	PartIndex int32
+	Filename  string
+	Snippet   string
+}
+
+// For listed messages that matched by an attachment only: the matching
+// attachment with the lowest part index, and a snippet of its text marked
+// like the body snippets of SearchMessages. Only messages found in one of
+// the scope's accounts. Each hash is looked up on its own through the
+// primary key, and the snippet is made for one attachment per message.
+func (q *Queries) AttachmentSnippets(ctx context.Context, arg AttachmentSnippetsParams) ([]AttachmentSnippetsRow, error) {
+	rows, err := q.db.Query(ctx, attachmentSnippets, arg.Query, arg.Shas, arg.Accounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AttachmentSnippetsRow
+	for rows.Next() {
+		var i AttachmentSnippetsRow
+		if err := rows.Scan(
+			&i.Sha256,
+			&i.PartIndex,
+			&i.Filename,
+			&i.Snippet,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countAttachmentPending = `-- name: CountAttachmentPending :one
 SELECT count(*)::bigint
 FROM messages m

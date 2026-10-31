@@ -238,6 +238,13 @@ function Row({ m, selected, open, nested, count }: RowProps) {
       <span className="mail-row__subject">{m.subject || t.noSubject}</span>
       {m.snippet && !nested && (
         <span className="mail-row__snippet">
+          {/* Only an attachment matched the search: its name before the snippet from its text. */}
+          {m.matchedAttachment && (
+            <span className="mail-row__match">
+              <Attachment size={12} aria-hidden />
+              {t.inAttachment(m.matchedAttachment.filename || t.part(m.matchedAttachment.part))}{" "}
+            </span>
+          )}
           <Highlight text={m.snippet} />
         </span>
       )}

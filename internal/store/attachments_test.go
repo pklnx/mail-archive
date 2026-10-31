@@ -113,6 +113,108 @@ func TestSearchAttachmentText(t *testing.T) {
 	}
 }
 
+// A row that matched by an attachment only names the matching attachment
+// with the lowest part index and shows a snippet of its text; a row whose
+// subject, sender or body matched keeps its body snippet (#390, part 4).
+func TestSearchMatchedAttachment(t *testing.T) {
+	f := newSearchFixture(t)
+	f.add("privat/INBOX", withAttachment(searchMsg{sha: "pdf", subject: "Post", from: "x@example.com", sent: "2026-01-03T00:00:00Z",
+		body: "Anbei die Unterlagen.", data: store.IndexData{ThreadID: "t1"}}))
+	f.texts("pdf",
+		store.AttachmentText{Part: 2, Filename: "scan.pdf", Status: "no_text"},
+		store.AttachmentText{Part: 3, Filename: "Rechnung-2026-10.pdf", Status: "ok", Text: "Wartungsvertrag Rechnungsbetrag 1.234,56 Euro"},
+		store.AttachmentText{Part: 5, Filename: "Anlage.pdf", Status: "ok", Text: "Wartungsvertrag Lieferschein"})
+	// The body matches too: the body snippet, no attachment.
+	f.add("privat/INBOX", withAttachment(searchMsg{sha: "body", subject: "Re: Post", from: "y@example.com", sent: "2026-01-04T00:00:00Z",
+		body: "Der Wartungsvertrag liegt bei.", data: store.IndexData{ThreadID: "t2"}}))
+	f.texts("body", store.AttachmentText{Part: 2, Filename: "Vertrag.pdf", Status: "ok", Text: "Wartungsvertrag"})
+	// The subject matches as a substring.
+	f.add("arbeit/INBOX", withAttachment(searchMsg{sha: "subj", subject: "Wartungsvertragsentwurf", from: "z@example.com", sent: "2026-01-02T00:00:00Z",
+		body: "Hallo", data: store.IndexData{ThreadID: "t3"}}))
+	f.texts("subj", store.AttachmentText{Part: 2, Filename: "Entwurf.pdf", Status: "ok", Text: "Wartungsvertrag"})
+
+	mark := func(word string) string { return store.HighlightStart + word + store.HighlightEnd }
+	check := func(name string, rows []store.MessageSummary, want map[string]*store.MatchedAttachment, snippet map[string]string) {
+		t.Helper()
+		for _, r := range rows {
+			sha := strings.TrimSpace(r.SHA256)
+			w, ok := want[sha]
+			if !ok {
+				t.Errorf("%s: unexpected row %s", name, sha)
+				continue
+			}
+			if (w == nil) != (r.MatchedAttachment == nil) || w != nil && *w != *r.MatchedAttachment {
+				t.Errorf("%s, %s: matched attachment %+v, want %+v", name, sha, r.MatchedAttachment, w)
+			}
+			if !strings.Contains(r.Snippet, snippet[sha]) {
+				t.Errorf("%s, %s: snippet %q does not contain %q", name, sha, r.Snippet, snippet[sha])
+			}
+		}
+		if len(rows) != len(want) {
+			t.Errorf("%s: %d rows, want %d", name, len(rows), len(want))
+		}
+	}
+	viewer := storetest.Viewer(t, f.st, f.owner)
+	for _, walk := range []bool{false, true} {
+		if walk {
+			defer store.SetMaxAttachmentMatches(0)()
+		}
+		for _, c := range []struct {
+			query   string
+			want    map[string]*store.MatchedAttachment
+			snippet map[string]string
+		}{
+			// Two attachments match: the lower part index.
+			{"Wartungsvertrag",
+				map[string]*store.MatchedAttachment{"pdf": {Part: 3, Filename: "Rechnung-2026-10.pdf"}, "body": nil, "subj": nil},
+				map[string]string{"pdf": mark("Wartungsvertrag") + " Rechnungsbetrag", "body": mark("Wartungsvertrag") + " liegt", "subj": "Hallo"}},
+			// Only the second one matches.
+			{"Lieferschein",
+				map[string]*store.MatchedAttachment{"pdf": {Part: 5, Filename: "Anlage.pdf"}},
+				map[string]string{"pdf": mark("Lieferschein")}},
+		} {
+			for _, grouped := range []bool{false, true} {
+				search := f.st.SearchMessages
+				if grouped {
+					search = f.st.SearchThreads
+				}
+				rows, err := search(f.ctx, store.SearchFilter{Scope: viewer, Query: c.query, Limit: 10})
+				if err != nil {
+					t.Fatal(err)
+				}
+				check(fmt.Sprintf("walk %v, grouped %v, %s", walk, grouped, c.query), rows, c.want, c.snippet)
+			}
+		}
+	}
+	// Without a query: no attachment, the start of the body.
+	rows, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Scope: viewer, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("no query", rows, map[string]*store.MatchedAttachment{"pdf": nil, "body": nil, "subj": nil},
+		map[string]string{"pdf": "Anbei die Unterlagen.", "body": "Der Wartungsvertrag", "subj": "Hallo"})
+
+	// The snippet step itself sees only the scope's messages: another
+	// user gets nothing for this message's hash.
+	other, err := f.st.CreateUser(f.ctx, "bob", "h", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		scope store.Scope
+		want  bool
+	}{{"owner", viewer, true}, {"other user", storetest.Viewer(t, f.st, other.ID), false}} {
+		got, err := f.st.AttachmentSnippetsOf(f.ctx, c.scope, "Wartungsvertrag", []string{"pdf"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (got[0].MatchedAttachment != nil) != c.want || (got[0].Snippet != "") != c.want {
+			t.Errorf("%s: %+v", c.name, got[0])
+		}
+	}
+}
+
 // Of two writers of the same message (a retried job, reindex beside the
 // web server) only the first stores its texts; a message deleted meanwhile
 // is no error; retention and an account purge delete texts, state and

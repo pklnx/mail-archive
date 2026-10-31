@@ -780,6 +780,15 @@ select,
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+/* The attachment a search matched by, before the snippet from its text. */
+.mail-row__match {
+  color: var(--cds-text-primary);
+}
+.mail-row__match svg {
+  margin-inline-end: 0.125rem;
+  fill: currentColor;
+  vertical-align: -0.0625rem;
+}
 .mail-row__tags {
   display: flex;
   gap: 0.25rem;

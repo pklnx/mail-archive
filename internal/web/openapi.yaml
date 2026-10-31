@@ -3955,6 +3955,20 @@ components:
           description: >-
             In listings only, and only when true: the message is only in the archive, exactly as `gone=1` would list
             it (with `account`, in that account). Not in the message detail.
+        matchedAttachment:
+          type: object
+          required: [part, filename]
+          description: >-
+            In search results only, when the message itself (subject, sender, body) did not match the query and the
+            text of an attachment did: the matching attachment with the lowest part index. `snippet` then comes from
+            the attachment's text.
+          properties:
+            part:
+              type: integer
+              description: The part index, as in `parts` and `/api/messages/{id}/parts/{n}`.
+            filename:
+              type: string
+              description: The attachment's file name; empty if it has none.
     Message:
       allOf:
         - $ref: "#/components/schemas/MessageSummary"

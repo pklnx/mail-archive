@@ -72,6 +72,37 @@ WHERE a.body_text IS NOT NULL
         AND f.account_id = ANY (@accounts::bigint[]))
 LIMIT @row_limit;
 
+-- name: AttachmentSnippets :many
+-- For listed messages that matched by an attachment only: the matching
+-- attachment with the lowest part index, and a snippet of its text marked
+-- like the body snippets of SearchMessages. Only messages found in one of
+-- the scope's accounts. Each hash is looked up on its own through the
+-- primary key, and the snippet is made for one attachment per message.
+SELECT s.sha::text AS sha256, a.part_index, a.filename,
+       ts_headline('german', a.body_text,
+           websearch_to_tsquery('simple', @query::text) ||
+           websearch_to_tsquery('german', @query::text) ||
+           websearch_to_tsquery('english', @query::text),
+           'MaxFragments=1, MaxWords=30, MinWords=12, StartSel=' || chr(57344) || ', StopSel=' || chr(57345))::text AS snippet
+FROM unnest(@shas::bpchar[]) AS s (sha)
+CROSS JOIN LATERAL (
+    SELECT ax.part_index, ax.filename, ax.body_text
+    FROM attachment_texts ax
+    WHERE ax.message_sha256 = s.sha
+      -- Only rows with text, as in AttachmentMatches.
+      AND ax.body_text IS NOT NULL
+      AND ax.search @@ (websearch_to_tsquery('simple', @query::text) ||
+                        websearch_to_tsquery('german', @query::text) ||
+                        websearch_to_tsquery('english', @query::text))
+    ORDER BY ax.part_index
+    LIMIT 1) a
+WHERE EXISTS (
+    SELECT 1 FROM message_locations l
+    JOIN folders f ON f.id = l.folder_id
+    WHERE l.message_sha256 = s.sha
+      AND f.account_id = ANY (@accounts::bigint[]))
+ORDER BY 1;
+
 -- name: CountFailedJobsWithCode :one
 -- Failed jobs of a kind whose last error is code.
 SELECT count(*)::bigint FROM jobs WHERE kind = @kind AND state = 'failed' AND last_error = @code::text;

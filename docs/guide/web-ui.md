@@ -239,9 +239,14 @@ folder limits the search to it.
 Search covers subject, sender and body text, and the text of attachments:
 PDFs, plain text, CSV, TSV, Markdown and HTML. Words are matched in German
 and English forms: `invoices` finds `invoice`, `Rechnungen` finds `Rechnung`.
-Matches are highlighted in the result snippets. Screen readers hear the
-number of results when a search or a further page of the list finishes
-loading.
+Matches are highlighted in the result snippets. When only an attachment
+matches, not the message itself, the snippet comes from the attachment's
+text and starts with its name, for example "In Lease.pdf: … security
+deposit …"; with several matching attachments, the first one is named.
+Screen readers hear the number of results when a search or a further page
+of the list finishes loading.
+
+![A search for a word that is only in an attached PDF](/screenshots/search-attachment.png)
 
 ### Filters
 

@@ -539,6 +539,14 @@ match is per document: all words in the message, or all in one attachment,
 negations included. There are no trigram indexes on attachment text, so it
 matches words, not substrings.
 
+Both listing queries also return `text_match`: the query arm without its
+attachment part, in the SELECT list and not in the filter block. For the
+page's rows where it is false, `AttachmentSnippets` takes the matching
+attachment with the lowest part index (one lookup per hash through
+`attachment_texts_pkey`, again limited to the scope's accounts) and its
+`ts_headline`, which replace the body snippet; the API names that
+attachment as `matchedAttachment`.
+
 The text is extracted by two job kinds (`internal/archive/attachments.go`):
 - **`attachment_text`** (key and `message_sha256` = the message,
   `MaxAttempts` 3, the crash-loop guard). The three insert sites (sync and

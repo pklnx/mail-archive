@@ -29,7 +29,17 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap'
-            OFFSET 0))::boolean AS gone
+            OFFSET 0))::boolean AS gone,
+       -- The message itself (subject, sender, body) matches the query, not
+       -- only one of its attachments: exactly the query arm of the filters
+       -- below without its attachment part. False rows get the snippet of
+       -- their matching attachment (AttachmentSnippets).
+       coalesce(sqlc.narg(query)::text IS NULL
+                OR m.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                                websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                                websearch_to_tsquery('english', sqlc.narg(query)::text))
+                OR m.subject ILIKE sqlc.narg(pattern)::text
+                OR m.from_addr ILIKE sqlc.narg(pattern)::text, false)::boolean AS text_match
 FROM messages m
 WHERE
   -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
@@ -141,6 +151,16 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
+       -- The message itself (subject, sender, body) matches the query, not
+       -- only one of its attachments: exactly the query arm of the filters
+       -- below without its attachment part. False rows get the snippet of
+       -- their matching attachment (AttachmentSnippets).
+       coalesce(sqlc.narg(query)::text IS NULL
+                OR m.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                                websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                                websearch_to_tsquery('english', sqlc.narg(query)::text))
+                OR m.subject ILIKE sqlc.narg(pattern)::text
+                OR m.from_addr ILIKE sqlc.narg(pattern)::text, false)::boolean AS text_match,
        COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE
