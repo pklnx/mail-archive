@@ -238,7 +238,11 @@ combine. `400` for a longer value, a `has` other than `attachment`, a
 The response is `{"messages": [...], "nextCursor": "..." | null}`. Each
 message has `id`, `size`, `subject`, `from`, `sentAt`, `sortAt`,
 `hasAttachment` and, for searches, a `snippet` in which matches are marked
-with U+E000 (start) and U+E001 (end). With `group=1` each row also has
+with U+E000 (start) and U+E001 (end). When the message itself (subject,
+sender, body) does not match and the text of an attachment does, the row
+has `matchedAttachment: {"part": n, "filename": "..."}`, the matching
+attachment with the lowest part index (as in `parts`; `filename` is empty
+if it has none), and the snippet comes from that attachment's text. With `group=1` each row also has
 `thread` and `count`, the number of the conversation's messages that match;
 `thread=` with the same other parameters lists exactly those. The cursor
 works the same in both modes. A row that `gone=1` would list (with

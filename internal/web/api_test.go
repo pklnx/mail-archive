@@ -285,6 +285,53 @@ func TestListAndSearch(t *testing.T) {
 	}
 }
 
+// A row that matched by an attachment only names it as matchedAttachment,
+// with the snippet from its text; other rows have no such key (#390,
+// part 4).
+func TestListMatchedAttachment(t *testing.T) {
+	f := newAPIFixture(t)
+	ctx := context.Background()
+	if ok, err := f.st.SaveAttachmentTexts(ctx, f.ids["rich"], []store.AttachmentText{
+		{Part: 2, Filename: "Vertrag.pdf", Status: "ok", Text: "Wartungsvertrag mit Kündigungsfrist von drei Monaten"},
+	}); !ok || err != nil {
+		t.Fatalf("save texts: %v, %v", ok, err)
+	}
+	for _, group := range []string{"", "&group=1"} {
+		var raw struct {
+			Messages []map[string]json.RawMessage `json:"messages"`
+		}
+		f.getJSON("/api/messages?q=Kündigungsfrist"+group, 200, &raw)
+		if len(raw.Messages) != 1 {
+			t.Fatalf("group %q: %d rows", group, len(raw.Messages))
+		}
+		if got := string(raw.Messages[0]["matchedAttachment"]); got != `{"part":2,"filename":"Vertrag.pdf"}` {
+			t.Errorf("group %q: matchedAttachment = %s", group, got)
+		}
+		var snippet string
+		_ = json.Unmarshal(raw.Messages[0]["snippet"], &snippet)
+		if !strings.Contains(snippet, store.HighlightStart+"Kündigungsfrist"+store.HighlightEnd) {
+			t.Errorf("group %q: snippet %q", group, snippet)
+		}
+		// A body match: no key (a fresh value: Unmarshal would merge maps).
+		raw.Messages = nil
+		f.getJSON("/api/messages?q=Rechnungen"+group, 200, &raw)
+		if len(raw.Messages) == 0 {
+			t.Fatalf("group %q: no body match", group)
+		}
+		for _, m := range raw.Messages {
+			if _, ok := m["matchedAttachment"]; ok {
+				t.Errorf("group %q: body match with matchedAttachment: %s", group, m["matchedAttachment"])
+			}
+		}
+	}
+	// The message detail never has it.
+	var d map[string]json.RawMessage
+	f.getJSON("/api/messages/"+f.ids["rich"], 200, &d)
+	if _, ok := d["matchedAttachment"]; ok {
+		t.Errorf("detail with matchedAttachment")
+	}
+}
+
 // The web UI sends after/before as the instant a local day starts, with the
 // browser's offset (#404). A mail from the first local hours of a day east of
 // UTC is in that day, not in the UTC day before.

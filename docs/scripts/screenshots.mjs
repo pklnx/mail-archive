@@ -193,6 +193,20 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // A word only in an attachment (#390): the row names the PDF before the snippet from its text.
+  const p = await page("light");
+  await p.goto(base + "/");
+  await p.getByRole("searchbox", { name: "Search mail" }).fill("deposit");
+  const list = p.getByRole("list", { name: "Messages" });
+  await list.locator(".mail-row__match").first().waitFor();
+  await list.getByRole("button", { name: /Photos from the weekend and the lease/ }).click();
+  await p.getByRole("main").getByRole("heading", { name: /Photos from the weekend and the lease/ }).waitFor();
+  await bodyShown(p);
+  await shot(p, "search-attachment");
+  await p.context().close();
+}
+
+{
   // The filters over the list (#286): a recipient and the preset Last 30 days.
   const p = await page("light");
   await p.goto(base + "/?q=to%3Ataxadvisor");

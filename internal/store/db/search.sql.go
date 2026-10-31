@@ -519,7 +519,17 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY ($2::bigint[]) AND pa.kind = 'imap'
-            OFFSET 0))::boolean AS gone
+            OFFSET 0))::boolean AS gone,
+       -- The message itself (subject, sender, body) matches the query, not
+       -- only one of its attachments: exactly the query arm of the filters
+       -- below without its attachment part. False rows get the snippet of
+       -- their matching attachment (AttachmentSnippets).
+       coalesce($1::text IS NULL
+                OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
+                                websearch_to_tsquery('german', $1::text) ||
+                                websearch_to_tsquery('english', $1::text))
+                OR m.subject ILIKE $3::text
+                OR m.from_addr ILIKE $3::text, false)::boolean AS text_match
 FROM messages m
 WHERE
   -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
@@ -632,6 +642,7 @@ type SearchMessagesRow struct {
 	HasAttachment bool
 	Snippet       string
 	Gone          bool
+	TextMatch     bool
 }
 
 // Listing and search for the web API. Results are ordered by date (newest
@@ -676,6 +687,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 			&i.HasAttachment,
 			&i.Snippet,
 			&i.Gone,
+			&i.TextMatch,
 		); err != nil {
 			return nil, err
 		}
@@ -716,6 +728,16 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY ($2::bigint[]) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
+       -- The message itself (subject, sender, body) matches the query, not
+       -- only one of its attachments: exactly the query arm of the filters
+       -- below without its attachment part. False rows get the snippet of
+       -- their matching attachment (AttachmentSnippets).
+       coalesce($1::text IS NULL
+                OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
+                                websearch_to_tsquery('german', $1::text) ||
+                                websearch_to_tsquery('english', $1::text))
+                OR m.subject ILIKE $3::text
+                OR m.from_addr ILIKE $3::text, false)::boolean AS text_match,
        COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE
@@ -906,6 +928,7 @@ type SearchThreadsRow struct {
 	HasAttachment bool
 	Snippet       string
 	Gone          bool
+	TextMatch     bool
 	ThreadKey     string
 }
 
@@ -953,6 +976,7 @@ func (q *Queries) SearchThreads(ctx context.Context, arg SearchThreadsParams) ([
 			&i.HasAttachment,
 			&i.Snippet,
 			&i.Gone,
+			&i.TextMatch,
 			&i.ThreadKey,
 		); err != nil {
 			return nil, err

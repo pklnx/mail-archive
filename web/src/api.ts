@@ -271,6 +271,14 @@ export interface MessageSummary {
   count?: number;
   /** Listings only: no longer on any server of the listing's account ("only in archive"), as with `gone=1`. */
   gone?: boolean;
+  /** Searches only: the attachment that matched when the message itself did not; `snippet` then comes from its text. */
+  matchedAttachment?: MatchedAttachment;
+}
+
+/** An attachment by its part index (as in `Part.index`) and file name ("" if it has none). */
+export interface MatchedAttachment {
+  part: number;
+  filename: string;
 }
 
 export interface MessagePage {

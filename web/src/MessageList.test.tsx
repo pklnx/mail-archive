@@ -1,10 +1,11 @@
 // The message list's status for screen readers (#311, part 1): one visually
 // hidden role="status" that stays mounted and reads the state of the last load,
-// and no aria-busy on the list. Also the "Only in archive" tag from the rows' flag (#310).
+// and no aria-busy on the list. Also the "Only in archive" tag from the rows' flag (#310),
+// and the attachment a search matched by (#390, part 4).
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MessagePage, MessageSummary } from "./api";
-import { t } from "./i18n";
+import { applySettings, t } from "./i18n";
 import { MessageList } from "./MessageList";
 import { expectLoaded, expectLoading } from "./test/loading";
 
@@ -148,4 +149,39 @@ it("tags the rows of an expanded conversation that are only in the archive", asy
   expect(await screen.findByText("Subject b")).toBeTruthy();
   expect(tagged("Subject b")).toBe(true);
   expect(tagged("Subject c")).toBe(false);
+});
+
+/** The snippet line of a subject's row. */
+const snippetOf = (subject: string) => screen.getByText(subject).closest("button")!.querySelector(".mail-row__snippet");
+
+it("names the attachment a search matched by before its snippet, in English and German (#390, part 4)", async () => {
+  const rows: MessageSummary[] = [
+    { ...msg("a"), hasAttachment: true, snippet: "\uE000Rechnungsbetrag\uE001 1.234,56 €", matchedAttachment: { part: 3, filename: "Rechnung-2026-10.pdf" } },
+    { ...msg("b"), hasAttachment: true, snippet: "Siehe \uE000Rechnungsbetrag\uE001 im Text" },
+    { ...msg("c"), hasAttachment: true, snippet: "\uE000Rechnungsbetrag\uE001", matchedAttachment: { part: 4, filename: "" } },
+  ];
+  for (const [language, unnamed] of [
+    ["en", "In part 4:"],
+    ["de", "In Teil 4:"],
+  ] as const) {
+    applySettings({ language, locale: language });
+    try {
+      render(<MessageList filter={{ q: "Rechnungsbetrag" }} selected="" open={() => {}} />);
+      await answer({ messages: rows, nextCursor: null });
+      expect(await screen.findByText("Subject a")).toBeTruthy();
+      const a = snippetOf("Subject a")!;
+      expect(a.textContent).toBe("In Rechnung-2026-10.pdf: Rechnungsbetrag 1.234,56 €");
+      expect(a.querySelector("mark")?.textContent).toBe("Rechnungsbetrag");
+      // The paperclip is decoration; the text names the file.
+      expect(a.querySelector(".mail-row__match svg")?.getAttribute("aria-hidden")).toBe("true");
+      // A body match: the snippet alone.
+      expect(snippetOf("Subject b")!.textContent).toBe("Siehe Rechnungsbetrag im Text");
+      expect(snippetOf("Subject b")!.querySelector(".mail-row__match")).toBeNull();
+      // Without a file name: the part, in the user's language.
+      expect(snippetOf("Subject c")!.textContent).toBe(`${unnamed} Rechnungsbetrag`);
+    } finally {
+      cleanup();
+      applySettings({ language: "en", locale: "en" });
+    }
+  }
 });

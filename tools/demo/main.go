@@ -36,9 +36,12 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/attachtext"
+	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/pklnx/mail-archive/internal/jobs"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web"
 )
@@ -240,6 +243,10 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 		return err
 	}
 
+	if err := indexAttachments(ctx, st, blobs, log); err != nil {
+		return fmt.Errorf("attachment text: %w", err)
+	}
+
 	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
 	fills := &archive.FillRunner{Filler: filler}
@@ -265,6 +272,26 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 		publicURL, loginName, loginPassword, loginTOTPSecret)
 	if err := srv.ListenAndServe(ctx, listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// indexAttachments extracts the text of the archived attachments once, in
+// the foreground, as `reindex` does: the screenshots and web/e2e find words
+// of the lease PDF from the start. The demo runs no job pool afterwards.
+func indexAttachments(ctx context.Context, st *store.Store, blobs *blobstore.Store, log *slog.Logger) error {
+	ex := attachtext.New(log)
+	defer func() { _ = ex.Close() }()
+	x := &archive.AttachmentIndexer{Store: st, Blobs: blobs, Extractor: ex, Logger: log}
+	kinds := &jobs.Registry{}
+	if err := x.Register(kinds); err != nil {
+		return err
+	}
+	if err := (&jobs.Pool{Store: st, Kinds: kinds, Workers: 1, Logger: log, UntilIdle: true}).Run(ctx); err != nil {
+		return err
+	}
+	if x.Extracted() == 0 {
+		return errors.New("no attachment text extracted")
 	}
 	return nil
 }
@@ -648,6 +675,16 @@ func neutralized(date time.Time) message {
 		"Rendering check: boxes that stay empty", date, b.String())}
 }
 
+// leasePDF is the lease attached to Sam's mail: a PDF with a text layer.
+// Only it has the word "deposit", so a search for it matches the
+// attachment alone (web/e2e/mail.spec.ts, the search-attachment
+// screenshot).
+var leasePDF = pdftest.Text("Residential Lease Agreement\n\n" +
+	"Landlord: Sam Taylor\nTenant: Alex Morgan\n\n" +
+	"The monthly rent is $1,450, due on the first day of each month.\n" +
+	"The tenant pays a security deposit of $2,900 before moving in;\n" +
+	"it is returned within 30 days after the end of the lease.")
+
 // A 16x16 blue square as an inline image.
 const logoPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGNQTX5NEmIY1TCqYfhqAAB2SXMQ7mVTQgAAAABJRU5ErkJggg=="
 
@@ -685,7 +722,7 @@ Content-Type: application/pdf; name="Lease.pdf"
 Content-Disposition: attachment; filename="Lease.pdf"
 Content-Transfer-Encoding: base64
 
-` + base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\n% demo\n")) + `
+` + base64.StdEncoding.EncodeToString(leasePDF) + `
 --outer
 Content-Type: image/png; name="Weekend.png"
 Content-Disposition: attachment; filename="Weekend.png"

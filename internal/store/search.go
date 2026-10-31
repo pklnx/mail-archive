@@ -70,6 +70,18 @@ type MessageSummary struct {
 	// SearchFilter.Gone with the listing's Scope. Set by SearchMessages and
 	// SearchThreads only.
 	Gone bool
+	// MatchedAttachment is set by SearchMessages and SearchThreads when
+	// only an attachment matched the query, not the message itself
+	// (subject, sender, body): the matching attachment with the lowest part
+	// index. Snippet then comes from its text.
+	MatchedAttachment *MatchedAttachment
+}
+
+// MatchedAttachment is the attachment a search result matched by: its part
+// index (as in Message.Parts) and file name.
+type MatchedAttachment struct {
+	Part     int
+	Filename string
 }
 
 // SearchMessages lists messages newest first, optionally filtered by a
@@ -85,11 +97,18 @@ func (s *Store) SearchMessages(ctx context.Context, f SearchFilter) ([]MessageSu
 		return nil, err
 	}
 	out := make([]MessageSummary, 0, len(rows))
+	var byAttachment []string
 	for _, r := range rows {
 		out = append(out, MessageSummary{
 			SHA256: r.Sha256, Size: r.Size, Subject: deref(r.Subject), From: deref(r.FromAddr),
 			SentAt: r.SentAt, SortAt: derefTime(r.SortAt), Snippet: r.Snippet, HasAttachment: r.HasAttachment, Gone: r.Gone,
 		})
+		if !r.TextMatch {
+			byAttachment = append(byAttachment, r.Sha256)
+		}
+	}
+	if err := s.attachmentSnippets(ctx, p, byAttachment, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -125,14 +144,48 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 		count[c.ThreadKey] = c.Matches
 	}
 	out := make([]MessageSummary, 0, len(rows))
+	var byAttachment []string
 	for _, r := range rows {
 		out = append(out, MessageSummary{
 			SHA256: r.Sha256, Size: r.Size, Subject: deref(r.Subject), From: deref(r.FromAddr),
 			SentAt: r.SentAt, SortAt: derefTime(r.SortAt), Snippet: r.Snippet, HasAttachment: r.HasAttachment, Gone: r.Gone,
 			Thread: r.ThreadKey, Count: max(count[r.ThreadKey], 1),
 		})
+		if !r.TextMatch {
+			byAttachment = append(byAttachment, r.Sha256)
+		}
+	}
+	if err := s.attachmentSnippets(ctx, p, byAttachment, out); err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+// attachmentSnippets sets MatchedAttachment and the snippet of the rows
+// whose hashes are in shas: the rows that matched the query by an
+// attachment only. A row whose attachment is gone meanwhile keeps the start
+// of its body.
+func (s *Store) attachmentSnippets(ctx context.Context, p db.SearchMessagesParams, shas []string, rows []MessageSummary) error {
+	if p.Query == nil || len(shas) == 0 {
+		return nil
+	}
+	found, err := s.q.AttachmentSnippets(ctx, db.AttachmentSnippetsParams{Query: *p.Query, Shas: shas, Accounts: p.Accounts})
+	if err != nil {
+		return fmt.Errorf("attachment snippets: %w", err)
+	}
+	// The query's text hashes lose CHAR(64)'s padding, which only short
+	// test hashes have.
+	byHash := make(map[string]db.AttachmentSnippetsRow, len(found))
+	for _, a := range found {
+		byHash[strings.TrimRight(a.Sha256, " ")] = a
+	}
+	for i := range rows {
+		if a, ok := byHash[strings.TrimRight(rows[i].SHA256, " ")]; ok {
+			rows[i].Snippet = a.Snippet
+			rows[i].MatchedAttachment = &MatchedAttachment{Part: int(a.PartIndex), Filename: a.Filename}
+		}
+	}
+	return nil
 }
 
 // maxEnvelopeMatches is how many messages a to: filter may match by their

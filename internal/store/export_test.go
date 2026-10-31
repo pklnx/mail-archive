@@ -5,6 +5,8 @@ import (
 	"net"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
 // WithDialForTest is an Open option that replaces the dialer of every
@@ -117,4 +119,15 @@ func SetMaxAttachmentMatches(n int) (restore func()) {
 	old := maxAttachmentMatches
 	maxAttachmentMatches = n
 	return func() { maxAttachmentMatches = old }
+}
+
+// AttachmentSnippetsOf runs the attachment snippet step of a listing for
+// rows with the given hashes, as if they had matched by an attachment
+// only, with the scope's accounts.
+func (s *Store) AttachmentSnippetsOf(ctx context.Context, sc Scope, query string, shas []string) ([]MessageSummary, error) {
+	rows := make([]MessageSummary, len(shas))
+	for i, sha := range shas {
+		rows[i].SHA256 = sha
+	}
+	return rows, s.attachmentSnippets(ctx, db.SearchMessagesParams{Query: &query, Accounts: sc.ids()}, shas, rows)
 }

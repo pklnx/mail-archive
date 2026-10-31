@@ -100,13 +100,28 @@ type summaryJSON struct {
 	// listing's account), in listings only; the message detail leaves it
 	// out.
 	Gone bool `json:"gone,omitempty"`
+	// MatchedAttachment is the attachment a search matched by when the
+	// message itself did not match; Snippet then comes from its text. In
+	// listings only.
+	MatchedAttachment *matchedAttachmentJSON `json:"matchedAttachment,omitempty"`
+}
+
+// matchedAttachmentJSON names an attachment by its part index (as in
+// parts and /api/messages/{id}/parts/{n}) and file name.
+type matchedAttachmentJSON struct {
+	Part     int    `json:"part"`
+	Filename string `json:"filename"`
 }
 
 func toSummary(m store.MessageSummary) summaryJSON {
-	return summaryJSON{
+	j := summaryJSON{
 		ID: m.SHA256, Size: m.Size, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt,
 		Snippet: m.Snippet, HasAttachment: m.HasAttachment, Thread: m.Thread, Count: m.Count, Gone: m.Gone,
 	}
+	if a := m.MatchedAttachment; a != nil {
+		j.MatchedAttachment = &matchedAttachmentJSON{Part: a.Part, Filename: a.Filename}
+	}
+	return j
 }
 
 // maxFilterLen is the maximum length in characters of the from, to and
