@@ -213,6 +213,7 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// First the smtp imports, the recurring fills, the journal folder, the smtp fills, the user settings, the sync intervals, the folder delimiters and the attestations, of which there are none.
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}
@@ -256,6 +257,7 @@ func TestAuditMigrationDown(t *testing.T) {
 		t.Fatalf("down with entries: %v", err)
 	}
 	empty := storetest.New(t)
+	downJobsMigration(t, empty)
 	if m, err := empty.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}

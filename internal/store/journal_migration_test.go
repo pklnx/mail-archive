@@ -30,6 +30,7 @@ func TestJournalFolderMigration(t *testing.T) {
 	if err := st.CreateAccount(ctx, imap); err != nil {
 		t.Fatal(err)
 	}
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}
@@ -184,6 +185,7 @@ func TestJournalFolderMigration(t *testing.T) {
 	if _, err := st.SaveFillBatch(ctx, ff, []store.MessageMeta{receivedMeta(10)}, []store.Location{{}}); err != nil {
 		t.Fatal(err)
 	}
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}

@@ -509,7 +509,7 @@ only.
 |---|---|
 | `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. With the body `{"reconcile": true}` the sync also reconciles every folder not reconciled in the last 5 minutes. A sync already waiting is upgraded, not queued twice. `409` for import and removed accounts. |
 | `POST /api/sync` | Queue all enabled IMAP accounts. Answers `202` with `{"queued": n}`. |
-| `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak`, `health` and `goneMessages`, like `./ma status`. |
+| `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak`, `health` and `goneMessages`, like `./ma status`. For admins also `jobs`: the [background job](../guide/operations#background-jobs) queue per kind with work that is not done, `[{"kind":"attachment_text","queued":12,"retrying":0,"running":1,"failed":2,"oldestDueSeconds":180,"oldestNewSeconds":180}]` (`oldestNewSeconds` for jobs of new mail); other users do not get it, since it covers every user's mail. |
 
 ## Health checks
 
@@ -519,4 +519,5 @@ allowed `Host`.
 | Endpoint | Description |
 |---|---|
 | `GET /healthz` | `200 ok` while the server runs. |
+| `GET /healthz/jobs` | `200 {"status":"ok"}`, or `503` with `{"status":"degraded","stale":["attachment_text"]}` (job kinds whose work for new mail has been due for more than 30 minutes; no counts) or `{"status":"unavailable"}`. Backfills and failed jobs do not count. Cached for 15 seconds. See [/healthz/jobs](../guide/operations#healthz-jobs). |
 | `GET /healthz/sync` | `200 {"status":"ok"}`, or `503` with `{"status":"degraded","failing":[…],"stale":[…]}` (account IDs only; a failing or stale recurring fill lists its smtp account) or `{"status":"unavailable"}`. Cached for 15 seconds. See [Monitoring and alerts](../guide/operations#healthz-sync). |

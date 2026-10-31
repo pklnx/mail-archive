@@ -21,7 +21,7 @@
 ## Login
 
 Every API request needs a login or an API key, except the login itself,
-`/healthz` and the API description `/api/openapi.json`. The page code (`/`,
+`/healthz`, `/healthz/jobs` and the API description `/api/openapi.json`. The page code (`/`,
 `/assets/`, the web app manifest and its icons) is public; it contains no
 data. Which route needs what is set in one table (`internal/web/routes.go`);
 a route not listed there, or a new one without an access level, needs a
@@ -362,13 +362,20 @@ port given in the request. Every logged-in user can do this, so the server
 can be used to probe hosts in your network. Only give logins to people you
 trust.
 
-## Sync health and alerts
+## Health endpoints and alerts
 
 `/healthz/sync` needs no login, so that monitoring tools can use it. It names
 no accounts, users or mail, only account IDs. Still, anyone who can reach the
 server with an allowed host name learns how many accounts exist (roughly,
 from the IDs) and which ones fail to sync. The answer is cached for 15
 seconds, so it cannot be used to load the database.
+
+`/healthz/jobs` needs no login either. It gives only a status: `ok`, or
+`degraded` with the names of the job kinds (for example `attachment_text`)
+whose work for new mail has waited more than 30 minutes. It gives no counts
+and names no messages, accounts or users. The answer is cached for 15
+seconds. Counts are shown only to admins (`GET /api/status`) and in
+`./ma status`. Failed jobs record a short error code, never message content.
 
 The alert webhook comes from the environment only, never from the web UI, so
 users cannot make the server send requests to addresses of their choice.

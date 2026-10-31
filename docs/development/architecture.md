@@ -29,6 +29,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. Migrations run under goose's session lock; `migrate` and `migrate down` also hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command, on a connection of its own outside the pool, so two runs wait for each other. goose's lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations. goose runs on a short-lived pool of its own (one extra connection per call), whose teardown frees a lock left on a given-up connection (#269); a second run waits for it without a time limit and prints its holder. `migrate` and `migrate down` open the store with `ForMigrations` (`client_connection_check_interval` 10 s and TCP keepalives), so the server ends a killed command's statement, and frees goose's lock, about 10 s after the process died. Status reads take neither; `serve` takes neither. |
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files. No database. |
 | `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
+| `internal/jobs` | Background jobs on the queue in the `jobs` table: the registry of kinds and the bounded pool that `serve` and `worker` run (see [Background jobs](#background-jobs)). |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
 | `internal/config` | Configuration from environment variables. |
@@ -567,6 +568,86 @@ exactly one entry per event (`TestAudit*`, `TestCLIAudit`).
 Partitions are created ahead by `audit_log_ensure_partitions` (migration,
 `serve` hourly, every command, and on a missing partition). There is no
 default partition: rows in it would block creating that month later.
+
+## Background jobs
+
+Work that runs after the transaction that caused it, in `serve` or in a
+separate `mail-archive worker`, is a row in `jobs` (migration 00032; queries
+in `internal/store/queries/jobs.sql`, the pool in `internal/jobs`). Its own
+implementation, no library; it generalizes the leases of `loss_alerts` and
+`account_sync_health`.
+
+- **States.** `queued` → `running` (a claim) → `done`, back to `queued`
+  (a retry, a release at shutdown, a continuation) or `failed` (attempts
+  used up, or `jobs.Permanent`). `done` rows are removed after 24 hours by
+  each pool, hourly; `failed` ones stay until `jobs retry` or until their
+  message is deleted (`message_sha256` cascades).
+- **Idempotent enqueue.** `(kind, key)` is unique; the key is an identifier
+  (a SHA-256, `v1`), never content. Enqueueing again keeps a queued row and
+  only moves it forward (lower priority, earlier `run_after`; a pending
+  retry keeps its time), queues a done row again with the caller's payload
+  and `attempts = 0`, and leaves running and failed rows alone (failed ones
+  unless `RetryFailed`). `store.EnqueueJobs` runs in a transaction of its
+  own; `enqueueJobs` runs in the caller's, so a job is queued together with
+  what caused it, and storing never waits for it: the key is new, so the
+  insert meets no conflict.
+- **Claim and lease.** `ClaimJobs` takes due rows of the pool's kinds by
+  `priority, run_after, id` with `FOR UPDATE SKIP LOCKED`, sets a random
+  lease token per claim and `lease_until` = now + 60 s on the database's
+  clock, and counts the attempt **before** the handler runs. A heartbeat
+  extends the leases every 20 s in one statement; a job missing from its
+  result lost its lease (it expired and was taken over, or its message was
+  deleted): its handler's context is cancelled and its result dropped. Every
+  finish, retry, release and continuation checks the lease token.
+- **Crash-loop guard.** A process that dies during a handler (an OOM kill)
+  keeps the attempt. Its lease expires, and `ReapExpiredJobs` (before each
+  claim, and when the dispatcher wakes at the earliest foreign
+  `lease_until`) retries it with code `lease expired`; after `MaxAttempts`
+  the job is `failed` and never claimed again.
+- **Retry.** A handler error queues the job again after
+  min(first × 2^(attempts − 1), cap) × [0.5, 1) (equal jitter, so restarted
+  pools do not retry in step); defaults 30 s and 1 h. `last_error` is a code
+  (`internal`, `panic`, `timeout`, `db <SQLSTATE>`, `blob unreadable`,
+  `lease expired`, or a kind's `jobs.Code`), never the error text, which is
+  logged with the job ID, kind, key and attempt.
+- **Priorities.** `store.PriorityNew` (0) for work caused by new mail,
+  `store.PriorityBackfill` (100) for older mail. `/healthz/jobs` degrades
+  only when a `PriorityNew` job has been due for 30 minutes.
+- **Continuation.** A handler that did part of its work returns
+  `jobs.Continue(payload)`: the job is queued again at once with the new
+  `payload` (a cursor, at most 1 KiB) and `attempts = 0`, as a new job.
+- **At least once.** A job can run twice (a lease that expired while its
+  handler still worked, a crash after the work but before the finish).
+  Handlers must be idempotent.
+- **The pool.** One dispatcher and at most `MAIL_ARCHIVE_JOB_WORKERS`
+  handlers (0-8, default 1); it claims only as many jobs as it has free
+  slots. It sleeps until a notification, a free slot, the next due time
+  (`NextJobDue`: the next `run_after`, or the next lease of its kinds that
+  another process holds) or the 5-minute fallback poll. At shutdown it stops
+  claiming, cancels the handlers and waits: a handler that returned the
+  cancellation is released (queued at once, the attempt taken back), other
+  results are recorded, all within 5 s. If the database is gone, the lease
+  expires and the attempt counts.
+- **Wake-up.** `LISTEN mail_archive_jobs` on a connection of its own
+  (`application_name` `mail-archive jobs listener`), reconnected with a
+  backoff of 1-30 s and followed by one pass. Its goroutine only reads
+  notifications and wakes the dispatcher without blocking (a channel with a
+  buffer of one), so PostgreSQL's notification queue cannot fill from this
+  process. Senders of `NOTIFY`: `EnqueueJobs` and `enqueueJobs` (once per
+  kind per transaction; PostgreSQL merges duplicates, so a sync batch wakes
+  the pools once) and `RetryFailedJobs` (`jobs retry`). `NOTIFY` makes the
+  commits of the transactions that send it take turns database-wide; they
+  are short. With a pooler in transaction mode `LISTEN` does not work; the
+  poll covers it.
+
+**Adding a kind:** register a `jobs.Kind` (name `^[a-z][a-z0-9_]{0,39}$`,
+handler, `MaxAttempts`, retry delays) in `jobRegistry`
+(`cmd/mail-archive/jobs.go`), so that `serve` and `worker` run it; enqueue
+with `Kind.NewJob(key, priority)` through `store.EnqueueJobs`, or
+`enqueueJobs` in the transaction that causes the work. Use `message_sha256`
+for a job about one message. Return `jobs.Permanent` for errors a retry
+cannot fix and `jobs.Code` to name an error in `last_error`. Tests register
+their kinds in the test only.
 
 ## Web server
 

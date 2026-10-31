@@ -5,6 +5,7 @@
 #   ./ma sync
 #   ./ma user add NAME --admin        # first login for the web UI
 #   docker compose up -d web          # web UI on http://localhost:8080 (image built by ./ma)
+#   docker compose up -d web worker   # with the optional worker (COMPOSE_PROFILES=worker)
 #
 # Both images are multi-arch (amd64 and arm64, e.g. Apple Silicon).
 
@@ -43,6 +44,7 @@ services:
   # Web server (UI and JSON API, login required). Reachable from this machine
   # only unless WEB_BIND is set; see docs/reference/security.md.
   # Start or update with: ./ma migrate && docker compose up -d web
+  # (docker compose up -d web worker with the worker profile on).
   web:
     build:
       context: .
@@ -103,6 +105,9 @@ services:
       MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
       # How long the files of messages deleted by retention stay (backups).
       MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}
+      # Background jobs (attachment text) the web server runs at a time;
+      # 0 with the worker service below. See docs/guide/operations.md.
+      MAIL_ARCHIVE_JOB_WORKERS: ${WEB_JOB_WORKERS:-1}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
     ports:
@@ -110,6 +115,41 @@ services:
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
       # SMTP for journaling, with MAIL_ARCHIVE_SMTP_LISTEN=:2525.
       - "${SMTP_BIND:-127.0.0.1}:${SMTP_PORT:-2525}:2525"
+
+  # Optional separate process for background jobs (attachment text), with its
+  # own memory limit. Enable with COMPOSE_PROFILES=worker and WEB_JOB_WORKERS=0
+  # in .env; see docs/guide/operations.md, "Background jobs".
+  worker:
+    build:
+      context: .
+      args:
+        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
+    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
+    profiles: ["worker"]
+    restart: unless-stopped
+    command: ["worker"]
+    # Budgets for the smallest target (4 GB, 2 cores): docs/guide/operations.md.
+    mem_limit: 768m
+    cpus: 1.0
+    # A running job is interrupted and released within seconds.
+    stop_grace_period: 20s
+    # No process in the container can gain privileges (setuid binaries).
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    environment:
+      MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
+      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      MAIL_ARCHIVE_JOB_WORKERS: ${WORKER_JOB_WORKERS:-1}
+      # Go's heap limit: mem_limit minus 128 MiB of WebAssembly memory per worker
+      # (outside the Go heap) minus 64 MiB of headroom. See operations.md.
+      GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-576MiB}
+    volumes:
+      - ${ARCHIVE_DIR:-./data}:/data
 
   mail-archive:
     build:
