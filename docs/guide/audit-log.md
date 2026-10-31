@@ -1,8 +1,8 @@
 # Audit log
 
 The archive records who searched, read, exported and changed what: in the
-web UI, with API keys and on the command line. The log cannot be changed or
-shortened by the application. The **Log** page in the web UI shows it, and
+web UI, with API keys and on the command line. The application cannot change
+or shorten the log. The **Log** page in the web UI shows it, and
 `./ma audit` writes it out for a period.
 
 ## Privacy
@@ -70,18 +70,17 @@ Not recorded:
 
 Some reading writes several entries. Opening a message with an HTML body
 writes `message.open` and `message.html`; its inline images are counted on
-`message.html`. The search box searches as you type: a pause of 300 ms in "invoice"
-can write "inv" and "invoice". Each download request is recorded, also a
-repeated or resumed one. The entries record what the browser asked for;
-whether it was shown cannot be known.
+`message.html`. The search box searches as you type: a pause of 300 ms in
+"invoice" can write "inv" and "invoice". Each download request is recorded,
+also a repeated or resumed one. The entries record what the browser asked
+for; whether it was shown cannot be known.
 
 ## Shared accounts
 
 An owner can let another user read an account (see
 [Users](./users#shared-accounts)). The reader's own Log and the admins' view
 have every entry of that reader, as for any user. Entries that read the
-owner's mail also go into the owner's Log, where they are marked as another
-user's read:
+owner's mail also go into the owner's Log, marked as another user's read:
 
 | Reader's request | In the owner's Log |
 |---|---|
@@ -92,15 +91,15 @@ user's read:
 
 The owner sees the time, the reader's name, the actor (`session` or
 `api_key`), the action and the message, never the reader's IP address,
-browser or API key name, and only their own
-accounts in `via_accounts`, never another owner's share with the same
-reader. The entries hold the owners as of the read (`via_owners`), so they
-stay in the owner's Log after an unshare, and after `account move` with the
-owner of their time. A read of mail the reader also has in an own account
-counts only for message reads, not in `n`. So two reads do not reach the
-owner: a further page, or a page over all of the reader's mail, whose
-messages the reader also has in own accounts, and a conversation whose only message in the shared account
-is the one opened (that message has its own `message.open`).
+browser or API key name, and only their own accounts in `via_accounts`,
+never another owner's share with the same reader. The entries hold the
+owners as of the read (`via_owners`), so they stay in the owner's Log after
+an unshare, and after `account move` with the owner of their time. A read of
+mail the reader also has in an own account counts only for message reads,
+not in `n`. So two reads do not reach the owner: a further page, or a page
+over all of the reader's mail, whose messages the reader also has in own
+accounts, and a conversation whose only message in the shared account is
+the one opened (that message has its own `message.open`).
 
 ## The fields
 
@@ -144,9 +143,9 @@ What this does not stop: whoever holds the database password owns the
 tables. That role can drop the trigger, replace its function, grant itself
 the privileges back, detach and drop a month, or drop the table. A
 PostgreSQL superuser can also edit the files on disk. The trigger stops
-mistakes and every code path of the application; it does not stop someone
-with the database password. In Docker Compose the application connects as
-the database superuser.
+mistakes and every code path of the application, not someone with the
+database password. In Docker Compose the application connects as the
+database superuser.
 
 A rollback of the database migration that created the log refuses to run
 while the log has entries.
@@ -164,46 +163,47 @@ day adds about 30 MB a year.
 
 ## The Log page
 
-**Log** in the navigation shows the entries of the last 30 days, newest first,
-as a table.
-Everyone sees their own entries: logins (also failed attempts with their
-name), searches with their text, opened messages and downloads, changes,
-and requests with their API keys. Admins see every user's entries and the
-command line's. In **Who** they can pick several users, the command line
-and API keys; the list then shows the entries of any of them, for example
-alice's and the command line's.
-The **Who** column is for admins; for everyone else, an entry from the
-command line says so under its target. Owners of shared accounts also see
-other users' reads of them; see [Shared accounts](#shared-accounts). Then
-the **Who** column shows for them too, with the reader's name, and the
-entry says what the reader saw: "jo's search showed 2 messages of info",
-"jo's list showed …" for a list without search, "jo's conversation view
-showed …", or "in info" for an opened message or download. Search terms
-show only for a first page that named the account; a read with an API key
-says "with an API key", without the key's name. The new actions read
-*Listed messages* (`message.list`), *Loaded more results* (`message.page`),
-*Showed conversation* (`message.conversation`), *Shared account*
-(`account.share`) and *Ended account share* (`account.unshare`).
+**Log** in the navigation shows the entries of the last 30 days, newest
+first, as a table. Everyone sees their own entries: logins (also failed
+attempts with their name), searches with their text, opened messages and
+downloads, changes, and requests with their API keys. Admins see every
+user's entries and the command line's. In **Who** they can pick several
+users, the command line and API keys; the list then shows the entries of any
+of them, for example alice's and the command line's. The **Who** column is
+for admins; for everyone else, an entry from the command line says so under
+its target.
+
+Owners of shared accounts also see other users' reads of them; see
+[Shared accounts](#shared-accounts). The **Who** column then shows for them
+too, with the reader's name, and the entry says what the reader saw: "jo's
+search showed 2 messages of info", "jo's list showed …" for a list without
+search, "jo's conversation view showed …", or "in info" for an opened
+message or download. Search terms show only for a first page that named the
+account; a read with an API key says "with an API key", without the key's
+name. These actions read *Listed messages* (`message.list`), *Loaded more
+results* (`message.page`), *Showed conversation* (`message.conversation`),
+*Shared account* (`account.share`) and *Ended account share*
+(`account.unshare`).
 
 ![Log page](/screenshots/log.png)
 
 **From** and **To** are a date range, the same as in the search filters:
-pick it in the calendar, or type the dates in your date format, which is
-shown under the fields. The To day is included. An empty From shows the
-last 30 days and empties To. In **Action**, pick one or several groups of
-actions (logins, searches, reading, export and backup, accounts, user
-management, own login settings, API keys, manual syncs, retention and legal
-holds); the list shows the entries of any of them. A field names what is
-picked, with the number of picks and a button that clears them; with nothing
-picked it says "All actions" or "Everyone" and the list is not filtered by it.
-<kbd>Esc</kbd> closes an open list and then leaves the field; <kbd>Delete</kbd>
-or <kbd>Backspace</kbd> on the field clears it.
-The filters are kept in the page address, so a reload, the browser's Back
-button after opening a message from the list, and a bookmark show the same
-entries. A bookmark without a From of its own keeps showing the last 30 days.
-A user that no longer exists is dropped from the address. A message shows its subject only to a user who may read that
-message too (in an own or shared account); otherwise the start of its SHA-256. A click on a subject opens
-the message.
+pick it in the calendar, or type the dates in your date format, shown under
+the fields. The To day is included. An empty From shows the last 30 days and
+empties To. In **Action**, pick one or several groups of actions (logins,
+searches, reading, export and backup, accounts, user management, own login
+settings, API keys, manual syncs, retention and legal holds); the list shows
+the entries of any of them. A field names what is picked, with the number of
+picks and a button that clears them; with nothing picked it says "All
+actions" or "Everyone" and does not filter. <kbd>Esc</kbd> closes an open
+list and then leaves the field; <kbd>Delete</kbd> or <kbd>Backspace</kbd> on
+the field clears it. The filters are kept in the page address, so a reload,
+the browser's Back button after opening a message from the list, and a
+bookmark show the same entries. A bookmark without a From of its own keeps
+showing the last 30 days. A user that no longer exists is dropped from the
+address. A message shows its subject only to a user who may read that
+message too (in an own or shared account); otherwise the start of its
+SHA-256. A click on a subject opens the message.
 
 Two kinds of rows are folded, so that the list reads like what happened:
 
@@ -232,10 +232,10 @@ day). A plain date is a day in UTC, not in your time zone; for another zone
 give RFC 3339 with an offset, such as `2026-10-01T00:00:00+02:00`.
 `--action` takes a group (`login`, `search`, `read`, `export`, `accounts`,
 `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, and is
-repeatable.
-`--user` selects a current user's entries. Without `--out`, the entries go
-to stdout. A file must not exist yet; it is written with mode 0600 and
-appears when it is complete. Each run is recorded as `audit.export`.
+repeatable. `--user` selects a current user's entries. Without `--out`, the
+entries go to stdout. A file must not exist yet; it is written with mode
+0600 and appears when it is complete. Each run is recorded as
+`audit.export`.
 
 CSV has the columns `at`, `actor`, `user_id`, `user_name`, `api_key_name`,
 `action`, `target_type`, `target_id`, `target_name`, `client_ip`,
@@ -246,20 +246,19 @@ unchanged.
 
 ## Behind a reverse proxy
 
-The server records the address it is connected from. Behind a reverse
-proxy (Caddy, nginx, `tailscale serve`) that is the proxy, and with Docker's
-port publishing on `127.0.0.1` it is the gateway of the Compose network.
-List the proxy in `MAIL_ARCHIVE_TRUSTED_PROXIES`: then the client's address
-is taken from the proxy's `X-Forwarded-For` header, and the login limits
-count per client again (IPv6 per `/64`). The same setting decides whether
-the proxy's `X-Forwarded-Proto: https` counts, which makes the session
-cookie `Secure` and sends HSTS (see [Network
-access](../reference/security#network-access)); from loopback it always
-counts. Until the proxy is listed, the server logs a warning once that names
-the address the proxy connects from.
+The server records the address it is connected from. Behind a reverse proxy
+(Caddy, nginx, `tailscale serve`) that is the proxy, and with Docker's port
+publishing on `127.0.0.1` it is the gateway of the Compose network. List the
+proxy in `MAIL_ARCHIVE_TRUSTED_PROXIES`: then the client's address is taken
+from the proxy's `X-Forwarded-For` header, and the login limits count per
+client again (IPv6 per `/64`). The same setting decides whether the proxy's
+`X-Forwarded-Proto: https` counts, which makes the session cookie `Secure`
+and sends HSTS (see [Network access](../reference/security#network-access));
+from loopback it always counts. Until the proxy is listed, the server logs a
+warning once that names the address the proxy connects from.
 
-For Caddy on the same computer in front of Docker Compose, trust the
-gateway of the Compose network. `docker network ls` lists it, usually as
+For Caddy on the same computer in front of Docker Compose, trust the gateway
+of the Compose network. `docker network ls` lists it, usually as
 `<directory>_default`:
 
 ```sh
@@ -268,8 +267,8 @@ docker network inspect mail-archive_default --format '{{(index .IPAM.Config 0).G
 
 Then set, for example, `MAIL_ARCHIVE_TRUSTED_PROXIES=172.18.0.1` in `.env`.
 If the proxy serves HTTPS and a login before that did not count as HTTPS (in
-Docker Compose, for example), you log in once more after setting the
-variable, because the cookie of that login is the wrong one then.
-List only the proxy: every address in the list may name any client. And
-trust it only if all access goes through the proxy; a client that reaches
-the web port directly from a trusted address could choose its own.
+Docker Compose, for example), log in once more after setting the variable,
+because the cookie of that login is the wrong one. List only the proxy:
+every address in the list may name any client. And trust it only if all
+access goes through the proxy; a client that reaches the web port directly
+from a trusted address could choose its own.

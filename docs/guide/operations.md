@@ -65,17 +65,17 @@ the [command reference](../reference/cli#verify) for the findings.
 
 - **`missing` or `corrupt`:** the listed messages are damaged. Restore their
   files from a backup of the data directory; the path is the same there. A
-  sync does not fetch them again, because it only fetches messages newer than
-  the last one it archived. Without a backup, the message's details and
+  sync does not fetch them again, because it only fetches messages newer
+  than the last one it archived. Without a backup, the message's details and
   search text stay, but it cannot be opened or exported.
 - **`orphan` or `stale-temp`:** usually left by an interrupted sync. A later
   sync adopts orphans that are still on the server.
   `./ma verify --fix-orphans` moves the rest to `data/orphans/<time>/`;
   delete that directory once you are sure nothing in it is needed.
 - **`removed`, `unattested`, `attestation`, `attest-file`, `chain`:** an
-  attested message is gone or the chain was changed. See [Tamper
-  evidence](./tamper-evidence#findings). After a restore, `removed` lists
-  the messages the restore lost.
+  attested message is gone or the chain was changed. See
+  [Tamper evidence](./tamper-evidence#findings). After a restore, `removed`
+  lists the messages the restore lost.
 - **`attest-stale`:** the web server has not written an attestation for
   twice `MAIL_ARCHIVE_ATTEST_INTERVAL`; look at its log.
 
@@ -123,9 +123,9 @@ Delete them once imported. `verify` ignores the `export/` directory.
 ## Upgrades
 
 Back up first (see [Backups](#backups)) and read the release notes of every
-version you skip: they list database migrations and manual steps. Also
-check `.env` for a `MAIL_ARCHIVE_IMAGE` line (see the note below the steps).
-Then, in the directory that holds your `mail-archive/` directory:
+version you skip: they list database migrations and manual steps. Also check
+`.env` for a `MAIL_ARCHIVE_IMAGE` line (see below). Then, in the directory
+that holds your `mail-archive/` directory:
 
 ```sh
 curl -fsSL https://github.com/pklnx/mail-archive/releases/latest/download/mail-archive.tar.gz | tar -xz
@@ -141,12 +141,13 @@ restart it too: `docker compose up -d web worker` instead of
 
 `docker compose up -d web`, `docker compose stop` and `docker compose restart`
 give the web server up to 45 seconds to shut down. It ends syncs and fills
-right away and records how far they got, so they resume at the next run. Open
-HTTP requests get 10 seconds and SMTP connections (journaling) 30 seconds; mail
-still in transfer is stored or, if it is cut off, retried by the sending mail
-server. Compose commands that recreate or restart `postgres` together with
-`web` (`docker compose up -d`, `docker compose restart postgres`) restart
-`web` too, so its start-up checks run again; `./ma` starts only `postgres`.
+right away and records how far they got, so they resume at the next run.
+Open HTTP requests get 10 seconds and SMTP connections (journaling) 30
+seconds; mail still in transfer is stored or, if it is cut off, retried by
+the sending mail server. Compose commands that recreate or restart `postgres`
+together with `web` (`docker compose up -d`, `docker compose restart postgres`)
+restart `web` too, so its start-up checks run again; `./ma`
+starts only `postgres`.
 
 The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
 `README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
@@ -156,18 +157,20 @@ The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
 A `MAIL_ARCHIVE_IMAGE` line in the kept `.env` (see [Versions](#versions))
 overrides the new bundle's image: the web server and the CLI (`./ma`) go on
 using the image it names, and `./ma --version` shows that image's version.
-Check it before `./ma migrate`. Keep the line if it names a newer build of
-your own than the new release. Otherwise, if it names an `X.Y` tag of
-`ghcr.io/pklnx/mail-archive`, set it to the new release's `X.Y` tag, for
-example `ghcr.io/pklnx/mail-archive:1.2`, and run `docker compose pull web`
-(it restarts nothing; migrate before starting web): a tag that is already on
-the machine is not pulled again. In any other case, remove the line or set
-it to the new release's exact image, for example
-`ghcr.io/pklnx/mail-archive:X.Y.Z`. If you ran the steps above with the line
-in place, change it as described and repeat the upgrade from `./ma migrate`
-on, with the manual steps from the release notes and the
-[One-time steps](#one-time-steps) in their order, then run
-`docker compose up -d web`.
+Check it before `./ma migrate`:
+
+- Keep the line if it names a newer build of your own than the new release.
+- If it names an `X.Y` tag of `ghcr.io/pklnx/mail-archive`, set it to the
+  new release's `X.Y` tag, for example `ghcr.io/pklnx/mail-archive:1.2`, and
+  run `docker compose pull web` (it restarts nothing; migrate before starting
+  web): a tag that is already on the machine is not pulled again.
+- In any other case, remove the line or set it to the new release's exact
+  image, for example `ghcr.io/pklnx/mail-archive:X.Y.Z`.
+
+If you ran the steps above with the line in place, change it as described
+and repeat the upgrade from `./ma migrate` on, with the manual steps from
+the release notes and the [One-time steps](#one-time-steps) in their order,
+then run `docker compose up -d web`.
 
 With a clone of the repository (see [From source](./getting-started#install)),
 `git pull` replaces the download, and `./ma migrate` rebuilds the image for
@@ -179,12 +182,13 @@ other: the second prints `another migrate is running; waiting for it` and
 starts once the first is done, also after a long index rebuild. Ctrl-C stops
 the wait, at once as a rule; if the database server cannot be reached at that
 moment, the command needs up to 15 seconds to end, and further Ctrl-C does
-nothing meanwhile. The lock covers the whole command: for `migrate`, the index
-rebuild, the migrations, the audit log partitions and the password upgrade;
-for `migrate down`, its index rebuild check, the audit log partitions and the
-rollback. `./ma migrate status` and `./ma backup` do not wait for a running
-migration; a backup taken meanwhile records the last committed migration
-(see [Backups](#backups)).
+nothing meanwhile. The lock covers the whole command: for `migrate`, the
+index rebuild, the migrations, the audit log partitions and the password
+upgrade; for `migrate down`, its index rebuild check, the audit log
+partitions and the rollback. `./ma migrate status` and `./ma backup` do not
+wait for a running migration; a backup taken meanwhile records the last
+committed migration (see [Backups](#backups)).
+
 If a `migrate` is killed (SIGKILL, a crashed container) during a long
 migration statement, the server ends that statement about 10 seconds after
 the process died, or about 2 minutes after its host vanished (over a TCP
@@ -197,9 +201,9 @@ The wait has no time limit; Ctrl-C stops it (same 15 second limit). If no
 `pg_terminate_backend` calls that stop the holder. Statements of the killed
 command outside goose's lock (the index rebuild, the audit log partitions,
 the password upgrade) are not waited for: within those 10 seconds a new
-command can start next to such a statement.
-The web server is not covered: it neither waits for nor blocks a migration,
-so stop it before `./ma migrate` when the release notes say so.
+command can start next to such a statement. The web server is not covered:
+it neither waits for nor blocks a migration, so stop it before `./ma migrate`
+when the release notes say so.
 
 ### Versions
 
@@ -228,34 +232,29 @@ tags:
 | `1` | The newest `1.x.y` release. | Features, and migrations when there are any, so run `./ma migrate` after each update; normally no breaking change. |
 | `latest` | The newest release. | Everything, breaking changes included. |
 
+Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build.
+Pinning an exact version is safer than `latest`, because migrations only run
+with `./ma migrate`. **Do not update images automatically** (Watchtower,
+Renovate, Diun, or a floating tag such as `latest` or a major tag like `1`):
+the web server does not run migrations, so after an automatic update it runs
+against a database that lacks them, and what needs them fails, until
+`./ma migrate` runs. A tool on `latest` also installs breaking changes
+without their upgrade steps. If a tool updates the image anyway, pin an exact
+version or an `X.Y` tag such as `1.4`, which gets patch releases only. The
+images carry a provenance attestation and an SBOM.
+
 Releases before 1.0.0 were named after the year and month, plus a build
 number (`26.10-1` to `26.10-11`). Their tags and images stay. The image tag
 `26.10` stays on `26.10-11` and gets no more updates. Tools that update images
-automatically (Watchtower, Renovate, Diun) may rank `26.10` above `1.0.0`:
-switch them once to an exact version or `1.0` (patch releases, which normally
-have no migration). `1.0` gets nothing new once a newer minor or major release
-is out. Then move the tag to the newest `X.Y` tag (for example `1.1`, or `2.0`
-after the major release's upgrade steps) after reading that release's notes:
-back up, set `MAIL_ARCHIVE_IMAGE=ghcr.io/pklnx/mail-archive:1.1` in `.env`,
-run `docker compose pull web`, run `./ma migrate` as in
-[Upgrades](#upgrades), then `docker compose up -d web`. That setting stays
-in `.env` when you extract a newer bundle: move it to the new release's
-`X.Y` tag as described below the steps in [Upgrades](#upgrades). `1` also
-installs minor releases, which may include a migration; the web server does
-not run it, so until `./ma migrate` runs, the new version runs against a
-database that lacks it, and what needs the migration fails. A tool on
-`latest` installs breaking changes without their upgrade steps.
-
-Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build;
-pinning an exact version is safer than `latest`, because migrations only run
-with `./ma migrate`. Do not update images automatically (Watchtower, a
-floating tag): the web server does not run migrations, so after an automatic
-update it runs against a database that lacks them, and what needs them fails,
-until `./ma migrate` runs. Here a floating tag means `latest` or a major tag
-such as `1`, not an exact version or an `X.Y` tag such as `1.4`, which gets
-patch releases only. If a tool updates the image anyway, pin an exact
-version or an `X.Y` tag, as described above. The images carry a provenance
-attestation and an SBOM.
+automatically may rank `26.10` above `1.0.0`: switch them once to an exact
+version or `1.0`. `1.0` gets nothing new once a newer minor or major release
+is out. Then move the tag to the newest `X.Y` tag (for example `1.1`, or
+`2.0` after the major release's upgrade steps) after reading that release's
+notes: back up, set `MAIL_ARCHIVE_IMAGE=ghcr.io/pklnx/mail-archive:1.1` in
+`.env`, run `docker compose pull web`, run `./ma migrate` as in
+[Upgrades](#upgrades), then `docker compose up -d web`. The setting stays in
+`.env` when you extract a newer bundle: move it to the new release's `X.Y`
+tag as described in [Upgrades](#upgrades).
 
 Pull requests that change the database schema carry the label
 `db-migration`. Back up the database before you upgrade past one of them.
@@ -289,31 +288,31 @@ Pull requests that change the database schema carry the label
 New installations create the database with PostgreSQL's builtin `C.UTF-8`
 locale (`POSTGRES_INITDB_ARGS` in `docker-compose.yml`). How text sorts then
 does not depend on the C library of the `postgres` image, so an image update
-cannot invalidate the indexes. Names in lists that PostgreSQL sorts (accounts,
-users, retention overview) sort by code point: capital letters before lower
-case, umlauts last. The folder tree is sorted in the browser and is not
-affected. Full-text search, trigram matching and case-insensitive matching
-behave as before.
+cannot invalidate the indexes. Names in lists that PostgreSQL sorts
+(accounts, users, retention overview) sort by code point: capital letters
+before lower case, umlauts last. The folder tree is sorted in the browser
+and is not affected. Full-text search, trigram matching and
+case-insensitive matching behave as before.
 
-The setting is read only when a new database is created. An existing database
-keeps its locale and its sort order, and `./ma migrate` keeps watching for the
-Alpine case described in the table above. The first `docker compose up -d`
-after an upgrade recreates the `postgres` container once, because its
-environment changed; the volume and the locale stay. A restore into a new
-volume (after `docker compose down -v`) gets the builtin locale; `pg_restore`
-rebuilds every index, so that is safe.
+The setting is read only when a new database is created. An existing
+database keeps its locale and its sort order, and `./ma migrate` keeps
+watching for the Alpine case described in the table above. The first
+`docker compose up -d` after an upgrade recreates the `postgres` container
+once, because its environment changed; the volume and the locale stay. A
+restore into a new volume (after `docker compose down -v`) gets the builtin
+locale; `pg_restore` rebuilds every index, so that is safe.
 
 ## Background jobs
 
 Some work runs in the background, after the message that caused it is
 stored: the first is extracting the text of attachments for search. Syncs,
-imports and journaling never wait for it. The jobs are kept in the
-database, so a restart loses none: a job that was running is handed back at
-shutdown, and one whose process crashed is retried about a minute later
-(its lease expires), with a growing pause between attempts. After a kind's
-attempts (three for attachment text) the job is given up as **failed**, so a
-document that crashes the process every time cannot keep it busy; the
-message stays archived and searchable by everything else.
+imports and journaling never wait for it. The jobs are kept in the database,
+so a restart loses none: a job that was running is handed back at shutdown,
+and one whose process crashed is retried about a minute later (its lease
+expires), with a growing pause between attempts. After a kind's attempts
+(three for attachment text) the job is given up as **failed**, so a document
+that crashes the process every time cannot keep it busy; the message stays
+archived and searchable by everything else.
 
 **By default the web server runs them**, one at a time
 (`MAIL_ARCHIVE_JOB_WORKERS=1`); nothing needs to be set up. `./ma status`
@@ -338,9 +337,9 @@ Then `docker compose up -d web worker`. The web server logs
 the profile on and `WEB_JOB_WORKERS` left at 1, both run jobs, which is
 correct, but the web server then needs the extraction memory too. With
 `WEB_JOB_WORKERS=0` and no worker running, nothing is extracted, and
-[`/healthz/jobs`](#healthz-jobs) turns `degraded` after 30 minutes. The worker
-can also run outside Compose (`mail-archive worker`); several workers, on
-several hosts, share the queue safely.
+[`/healthz/jobs`](#healthz-jobs) turns `degraded` after 30 minutes. The
+worker can also run outside Compose (`mail-archive worker`); several
+workers, on several hosts, share the queue safely.
 
 ### Hardware and budgets
 
@@ -370,10 +369,9 @@ workers**.
 whatever `MAIL_ARCHIVE_JOB_WORKERS` says; a second worker slot in the same
 process extracts text, CSV and HTML attachments beside it. This keeps two
 documents, possibly of different users, out of the PDF reader at the same
-time (see [Security](../reference/security#the-smtp-server)). For
-more PDF throughput, run a second worker *process*: another worker service
-or `mail-archive worker` with its own memory limit, not
-`WORKER_JOB_WORKERS=2`.
+time (see [Security](../reference/security#the-smtp-server)). For more PDF
+throughput, run a second worker *process*: another worker service or
+`mail-archive worker` with its own memory limit, not `WORKER_JOB_WORKERS=2`.
 
 - **The worker service** has `mem_limit: 768m` and `cpus: 1.0`: PostgreSQL
   and the web server keep the other core. A container's memory limit also
@@ -400,13 +398,14 @@ login, an expired app password) loses mail until someone notices. These
 things make it visible:
 
 - **The web UI** shows a banner above the mail when one of your accounts
-  keeps failing or has not synced for a while; see [Web UI](./web-ui#sync-problems).
+  keeps failing or has not synced for a while; see
+  [Web UI](./web-ui#sync-problems).
 - **An alert** through a webhook: one message when an account's syncs keep
   failing, one when they work again. See [Syncing](./syncing#alerts) for
   what counts. The same goes for the runs of a
   [recurring fill](./journaling#keep-importing-recurring-fill) of an smtp
-  account. Another alert reports mail deleted on the server in bulk;
-  see [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
+  account. Another alert reports mail deleted on the server in bulk; see
+  [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
 - **`/healthz/sync`** for a monitoring tool such as Uptime Kuma.
 - **`/healthz/jobs`** says whether the [background jobs](#background-jobs)
   of new mail get done.
@@ -509,22 +508,22 @@ A `gone` message looks like this:
 Its `id` names the sync run that found the loss. `folders` lists at most 20
 folders, most first; `moreFolders` counts the rest. With ntfy it has the
 priority `high` and the tag `wastebasket`. Sync alerts and `gone` alerts
-never share a message. Several accounts that change at the same time go into one
-message (up to 50 per request). The `id` is also sent as the
+never share a message. Several accounts that change at the same time go into
+one message (up to 50 per request). The `id` is also sent as the
 `X-Mail-Archive-Id` header.
 
 Alerts are delivered **at least once**: if the server stops right after the
-receiver accepted a message, it is sent again with the same `id`. ntfy, Gotify
-and Slack do not drop such repeats; a receiver of your own can use the `id`.
-A receiver that is down is retried after 30 seconds, then with growing
-pauses up to an hour, and given up after 24 hours (logged as
-`notification given up`; a `gone` alert 24 hours after its run). An answer like `400` or `404` usually means a wrong
-URL, token or format: it is logged as an error and retried hourly. Redirects
-are not followed.
+receiver accepted a message, it is sent again with the same `id`. ntfy,
+Gotify and Slack do not drop such repeats; a receiver of your own can use
+the `id`. A receiver that is down is retried after 30 seconds, then with
+growing pauses up to an hour, and given up after 24 hours (logged as
+`notification given up`; a `gone` alert 24 hours after its run). An answer
+like `400` or `404` usually means a wrong URL, token or format: it is logged
+as an error and retried hourly. Redirects are not followed.
 
 The log records each alert (`alert sent`, `recovery sent`, `loss alert sent`)
-with the account and its owner. It never contains the webhook URL, the authorization or the
-message; failed attempts name only the scheme and host.
+with the account and its owner. It never contains the webhook URL, the
+authorization or the message; failed attempts name only the scheme and host.
 
 ### /healthz/sync
 
@@ -537,10 +536,10 @@ message; failed attempts name only the scheme and host.
 | `503` | `{"status":"unavailable"}` | The database cannot be reached. |
 
 Disabled, removed and import accounts are left out, as are fills that were
-stopped; with the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing counts
-as stale, nor does an account not on the schedule, or one that is syncing
-or waiting in the queue, nor a recurring fill during a run or while it
-waits for one. A running sync or fill counts from its start, and one the
+stopped; with the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing
+counts as stale, nor does an account not on the schedule, or one that is
+syncing or waiting in the queue, nor a recurring fill during a run or while
+it waits for one. A running sync or fill counts from its start, and one the
 web server has taken from the queue from then, also while it waits for a
 verify or a deletion to finish: one that hangs, or waits behind a verify
 that hangs, turns stale after the same time. A recurring fill counts as
@@ -551,8 +550,8 @@ row failed.
 
 The request must use an allowed host name (`MAIL_ARCHIVE_ALLOWED_HOSTS`),
 like every request. For Uptime Kuma, add an HTTP monitor for
-`http://localhost:8080/healthz/sync`, or from another machine with a
-host name you allowed. With curl:
+`http://localhost:8080/healthz/sync`, or from another machine with a host
+name you allowed. With curl:
 
 ```sh
 curl -fsS http://localhost:8080/healthz/sync || echo "mail-archive: syncs failing"

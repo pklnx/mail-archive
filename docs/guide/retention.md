@@ -102,13 +102,12 @@ in 2026 counts from 2015. The year ends in the rule's time zone (default
 ![Retention rules in the web UI](/screenshots/retention.png)
 
 Or in the web UI: **Retention → Rules**, a table with **Add rule** above it;
-the form is a page of its own. Each rule has a page too, from the link in its
-row, and **Remove** is in the row's menu (⋯) and in the page's. A rule
+the form is a page of its own. Each rule has a page too, from the link in
+its row, and **Remove** is in the row's menu (⋯) and in the page's. A rule
 covers an account, or one of its folders. Rules under 6 years need a
-confirmation. Because the longest
-period wins, a folder rule cannot shorten an account rule: to keep a
-newsletter folder shorter, give the account no account-wide rule and give
-each folder its own.
+confirmation. Because the longest period wins, a folder rule cannot shorten
+an account rule: to keep a newsletter folder shorter, give the account no
+account-wide rule and give each folder its own.
 
 Rules are added and removed, not changed. Removing a rule keeps its mail for
 ever again, unless another rule covers it.
@@ -185,25 +184,19 @@ Every message is checked again when it is deleted: a rule removed, a hold
 added or a new place since the preview keeps it. An interrupted run resumes.
 A deleted message's rows go with it in the same transaction, the text
 extracted from its attachments and its queued background jobs included.
-See [Deletion](../reference/cli#deletion) for the details.
+The batches, the lock they wait for (up to 10 minutes each), the file grace
+period (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, default 7 days), why a deleted
+message does not come back where it would already be expired, and what
+happens after restoring a dump older than a run are in
+[Deletion](../reference/cli#deletion).
 
-A long first sync of a large mailbox, and a fill, hold a lock that deletion
-waits for; each batch waits up to 10 minutes and the run goes on afterwards.
-Each running sync and fill also keeps one database connection.
+A long first sync of a large mailbox, and a fill, hold the lock that
+deletion waits for. Each running sync and fill also keeps one database
+connection.
 
-**The files stay for a grace period** (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`,
-default 7 days) after their rows are gone. A backup made meanwhile has every
-file its dump needs, and restoring the last dump undoes a wrong deletion.
-Keep the grace longer than the time between your dump and the copy of the
-data directory.
-
-**A deleted message does not come back** where it would already be expired:
-after a renumbered IMAP folder, a copy in another folder, an import or an
-SMTP redelivery. In an account without a rule, or with a longer one, it is
-archived again, as if that place had existed at deletion.
-
-After restoring a dump older than a run, its messages come back as rows
-without files. Run `retention preview` again.
+Keep the grace period longer than the time between your dump and the copy of
+the data directory: a backup made within it has every file its dump needs,
+and restoring the last dump undoes a wrong deletion.
 
 ## Tamper-evident, not tamper-proof
 
