@@ -175,11 +175,11 @@ func (s *Server) shareOnlyVia(r *http.Request, sc, full store.Scope, shas []stri
 // Without a shared account in sc, it is searchEntry: as before shares.
 // With one, every page is logged (#389, revision 2, R1): the first page as
 // message.search (with search parameters) or message.list, further pages
-// as message.page. A named page (account= names the shared account) gets
-// that account with n on its first page and none on further pages
-// (decision 14: the owner has the first page). An unnamed page gets every
-// shared account through which it shows at least one message the viewer
-// sees only there, with that count n (decision 13).
+// as message.page. A named first page (account= names the shared account)
+// always gets that account with n. Every other page, named cursor pages
+// included (decision 17), gets every shared account through which it shows
+// at least one message the viewer sees only there, with that count n
+// (decision 13).
 func (s *Server) listEntry(w http.ResponseWriter, r *http.Request, sc, full store.Scope, shas []string) (*store.AuditEntry, bool) {
 	if !sc.HasShared() {
 		return s.searchEntry(r), true
@@ -200,10 +200,7 @@ func (s *Server) listEntry(w http.ResponseWriter, r *http.Request, sc, full stor
 			e.Detail(k, v)
 		}
 	}
-	if named && page {
-		return e, true
-	}
-	via, err := s.shareOnlyVia(r, sc, full, shas, named)
+	via, err := s.shareOnlyVia(r, sc, full, shas, named && !page)
 	if err != nil {
 		s.failAudit(w, r, err)
 		return nil, false

@@ -177,8 +177,9 @@ admins, one account with one user at a time, by the user's exact name.
 smtp (journal) accounts cannot be shared.
 
 - The shared user sees the account as `owner/name` (for example
-  `anna/info`), with its folders and counts, but not its server, login,
-  sync state or the other users it is shared with.
+  `anna/info`), with its folders, their counts and when each was last
+  synced and reconciled, but not its server, login, sync errors, sync
+  health or the other users it is shared with.
 - A message in several accounts shows the shared user only the locations
   of accounts they may see. A message the owner has only in an account that
   is not shared stays hidden.
@@ -188,8 +189,9 @@ smtp (journal) accounts cannot be shared.
   own share ends, and the old owner keeps no access unless the new owner
   shares it.
 - Every read of shared mail is in the [audit log](./audit-log#shared-accounts),
-  and the owner sees it in their Log, without the reader's IP address or
-  browser.
+  and the owner sees it in their Log with the reader's name and whether a
+  session or an API key read it, without the reader's IP address, browser
+  or key name.
 
 Sharing is done with `PUT` and `DELETE /api/accounts/{name}/shares/{user}`
 (see the [JSON API](../reference/api#shared-accounts)).

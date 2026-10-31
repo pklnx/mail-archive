@@ -8,8 +8,9 @@ import (
 )
 
 // shareView keeps only what the owner may see of another user's read
-// (#389, revision 2 R1/R2): the owner's own accounts, the terms of named
-// lists only, and of unnamed ones only whether they searched.
+// (#389, revision 2 R1/R2, decision 17): the owner's own accounts, the
+// terms of named first pages only, and of every other page only whether it
+// searched.
 func TestShareView(t *testing.T) {
 	const a, c = 3, 7
 	via := `"via_owners":[3,7],"via_accounts":[{"id":1,"owner":3,"key":"a/info","n":2},{"id":2,"owner":7,"key":"c/sales","n":1}]`
@@ -24,6 +25,8 @@ func TestShareView(t *testing.T) {
 			`{"search":false,"via_accounts":[{"id":2,"owner":7,"key":"c/sales","n":1}]}`},
 		{"named search", "message.search", `{"q":"secret","account":"a/info","thread":"t","limit":5,"via_owners":[3],"via_accounts":[{"id":1,"owner":3,"key":"a/info","n":1}]}`, a,
 			`{"account":"a/info","q":"secret","thread":"t","via_accounts":[{"id":1,"owner":3,"key":"a/info","n":1}]}`},
+		{"named cursor page", "message.page", `{"q":"secret","account":"a/info","folder":"INBOX","via_owners":[3],"via_accounts":[{"id":1,"owner":3,"key":"a/info","n":1}]}`, a,
+			`{"search":true,"via_accounts":[{"id":1,"owner":3,"key":"a/info","n":1}]}`},
 		{"open", "message.open", `{"images":true,` + via + `}`, c,
 			`{"via_accounts":[{"id":2,"owner":7,"key":"c/sales","n":1}]}`},
 		{"conversation", "message.conversation", `{"members":4,` + via + `}`, a,

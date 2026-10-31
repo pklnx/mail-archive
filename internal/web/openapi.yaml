@@ -1454,10 +1454,11 @@ paths:
         A user gets their own entries and other users' reads of the
         accounts they shared (`viaShare: true`); admins get every user's,
         with the search text, account names and message hashes. A
-        `viaShare` entry has no client address, user agent or API key name,
-        and its details hold only the user's own accounts in
-        `via_accounts`; a search or list that did not name the account
-        holds `search` (true or false) instead of its parameters. Reading
+        `viaShare` entry keeps its actor but has no client address, user
+        agent or API key name, and its details hold only the user's own
+        accounts in `via_accounts`; a further page, and a search or list
+        that did not name the account, hold `search` (true or false)
+        instead of its parameters. Reading
         the log writes no entry.
       parameters:
         - name: since

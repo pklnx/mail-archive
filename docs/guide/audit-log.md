@@ -85,17 +85,21 @@ user's read:
 | Reader's request | In the owner's Log |
 |---|---|
 | A message opened, its HTML, the `.eml` file or an attachment, when the message is in the shared account | The action and the message, also when the reader has the message too. |
-| The first page of a search or list that names the shared account (`account=owner/name`) | `message.search` with its terms, or `message.list`, and `n`, the messages on the page the reader sees only there. Further pages of it are only in the reader's Log. |
-| Any page of a search or list over all of the reader's mail that shows messages the reader sees only through the share | The action, the account and `n` on that page, and `search: true` or `false`. No terms, folder or thread: they may be about the reader's own mail. |
+| The first page of a search or list that names the shared account (`account=owner/name`) | `message.search` with its terms, or `message.list`, and `n`, the messages on the page the reader sees only there. |
+| A further page of that search or list (`message.page`), or any page of a search or list over all of the reader's mail, that shows messages the reader sees only through the share | The action, the account and `n` on that page, and `search: true` or `false`. No terms, folder or thread: on further pages the owner has them from the first page, and over all mail they may be about the reader's own mail. |
 | A conversation with messages the reader sees only through the share, other than the message opened | `message.conversation` with `n`. Its message is shown only if the owner may read it. |
 
-The owner sees the time, the reader's name, the action and the message,
-never the reader's IP address, browser or API key name, and only their own
+The owner sees the time, the reader's name, the actor (`session` or
+`api_key`), the action and the message, never the reader's IP address,
+browser or API key name, and only their own
 accounts in `via_accounts`, never another owner's share with the same
 reader. The entries hold the owners as of the read (`via_owners`), so they
 stay in the owner's Log after an unshare, and after `account move` with the
 owner of their time. A read of mail the reader also has in an own account
-counts only for message reads, not in `n`.
+counts only for message reads, not in `n`. So two reads do not reach the
+owner: a page of a list or search whose messages the reader also has in
+own accounts, and a conversation whose only message in the shared account
+is the one opened (that message has its own `message.open`).
 
 ## The fields
 

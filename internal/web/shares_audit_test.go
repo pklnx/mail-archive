@@ -72,7 +72,8 @@ func (w *shareWorld) lastEntry(n int, what string) store.AuditRecord {
 // Test 10, extended (#389, revision 2 R1, decision 13): every page of an
 // unnamed search or listing that shows share-only messages is in the
 // owner's Log, with the count per account and without b's terms; named
-// first pages keep their terms; named cursor pages stay with b.
+// first pages keep their terms; named cursor pages reach the owner without
+// them (decision 17).
 func TestSharedReadAudit(t *testing.T) {
 	w := newAuditWorld(t)
 	a, b := w.users["a"], w.creds["b"]
@@ -145,13 +146,32 @@ func TestSharedReadAudit(t *testing.T) {
 		if gd := detailMap(t, got[0].Details); gd["q"] != "secret" || gd["account"] != "a/info" || gd["limit"] != nil {
 			t.Errorf("a's view of the named search: %v", gd)
 		}
-		n = len(auditLog(t, w.st))
-		w.list(b, "account=a/info&q=secret&limit=1&cursor="+url.QueryEscape(next))
-		if e := w.lastEntry(n, "named page 2"); e.Action != "message.page" || len(viaOwners(t, e)) != 0 || details(t, e)["q"] != "secret" {
-			t.Errorf("named page 2: %s %v", e.Action, details(t, e))
+		// Further named pages reach a's Log too, without terms (decision
+		// 17): the page after A1, once from page 1's cursor and once from a
+		// cursor built by hand without a first page.
+		byHand := encodeCursor(parseTime(t, "2026-10-12T10:00:00Z"), w.ids["A1"])
+		for i, cursor := range []string{next, byHand} {
+			n = len(auditLog(t, w.st))
+			if page, _ := w.list(b, "account=a/info&q=secret&limit=1&cursor="+url.QueryEscape(cursor)); !slices.Equal(page, []string{"A2"}) {
+				t.Fatalf("named page 2 (%d): %v", i, page)
+			}
+			e := w.lastEntry(n, "named page 2")
+			if d := details(t, e); e.Action != "message.page" || !slices.Equal(viaOwners(t, e), []int64{a.ID}) ||
+				!slices.Equal(viaKeys(d), []string{"a/info:1"}) || d["q"] != "secret" || d["account"] != "a/info" {
+				t.Errorf("named page 2 (%d): %s %v", i, e.Action, d)
+			}
+			got := w.sharedEntries(w.creds["a"])
+			if len(got) != before+2+i {
+				t.Fatalf("named page 2 (%d) not in a's Log: %+v", i, got)
+			}
+			if gd := detailMap(t, got[0].Details); got[0].Action != "message.page" || gd["search"] != true ||
+				!slices.Equal(viaKeys(gd), []string{"a/info:1"}) || len(gd) != 2 {
+				t.Errorf("a's view of named page 2 (%d): %v", i, gd)
+			}
 		}
-		if got := w.sharedEntries(w.creds["a"]); len(got) != before+1 {
-			t.Errorf("named page 2 is in a's Log: %+v", got[0])
+		if _, body := w.log(w.creds["a"], "action=message.page&limit=500"); !strings.Contains(body, "message.page") ||
+			strings.Contains(body, "secret") || strings.Contains(body, "cursor") || strings.Contains(body, "a/info&") {
+			t.Errorf("a's pages show b's terms or cursor: %s", body)
 		}
 	})
 
@@ -255,8 +275,9 @@ func TestSharedReadAuditOwnersApart(t *testing.T) {
 		if shared[0].Action != "message.list" || !slices.Equal(viaKeys(list), wantList) || list["search"] != false {
 			t.Errorf("%s: list %v", c.owner, list)
 		}
+		// The actor stays (decision 16), the key's name does not.
 		if shared[1].Action != "message.open" || !slices.Equal(viaKeys(open), []string{c.key}) || shared[1].Target.Subject != "Quarterly" ||
-			shared[1].APIKey != "" {
+			shared[1].APIKey != "" || shared[1].Actor != "api_key" {
 			t.Errorf("%s: open %+v %v", c.owner, shared[1], open)
 		}
 		otherOwner := map[string]string{"a": `"c"`, "c": `"a"`}[c.owner]

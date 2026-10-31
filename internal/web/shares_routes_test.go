@@ -36,8 +36,8 @@ JVBERi0xLjQK
 // (#389, revision 1 "route matrix", revision 2 R4): with a in "a/info"
 // shared with b, b reads M (and its reply M2, both only in a/info) with a
 // session and with a read key, and each request writes an entry whose
-// via_owners holds a. The only exception are named cursor pages (decision
-// 14: the owner has the named first page). u, a user without a share, and
+// via_owners holds a, named cursor pages included (decision 17, which
+// replaced decision 14). u, a user without a share, and
 // x, an admin without one, get 404 or empty lists; after the unshare so
 // does b. A new read route fails until it is classified here.
 func TestSharedReadRouteMatrix(t *testing.T) {
@@ -65,7 +65,6 @@ func TestSharedReadRouteMatrix(t *testing.T) {
 	type request struct {
 		name, path string
 		list       bool
-		exception  string // why no via_owners entry is expected
 	}
 	sha := w.ids["M"]
 	variants := map[string][]request{
@@ -74,8 +73,7 @@ func TestSharedReadRouteMatrix(t *testing.T) {
 			{name: "unnamed first page", path: "/api/messages", list: true},
 			{name: "unnamed cursor page", path: "/api/messages?limit=1&cursor=" + url.QueryEscape(unnamedCursor), list: true},
 			{name: "unnamed thread", path: "/api/messages?thread=" + url.QueryEscape(m.Thread), list: true},
-			{name: "named cursor page", path: "/api/messages?account=a/info&limit=1&cursor=" + url.QueryEscape(namedCursor), list: true,
-				exception: "decision 14: the owner sees the named first page only"},
+			{name: "named cursor page", path: "/api/messages?account=a/info&limit=1&cursor=" + url.QueryEscape(namedCursor), list: true},
 		},
 		"GET /api/messages/{sha}":              {{name: "message", path: "/api/messages/" + sha}},
 		"GET /api/messages/{sha}/conversation": {{name: "conversation", path: "/api/messages/" + sha + "/conversation"}},
@@ -130,11 +128,8 @@ func TestSharedReadRouteMatrix(t *testing.T) {
 			readable("shared", c, rq, true)
 			entries := newEntries(t, w.st, n)
 			via := slices.ContainsFunc(entries, func(e store.AuditRecord) bool { return slices.Contains(viaOwners(t, e), a.ID) })
-			switch {
-			case rq.exception == "" && !via:
+			if !via {
 				t.Errorf("%s as %s: no entry with via_owners %d: %+v", rq.name, c.name, a.ID, entries)
-			case rq.exception != "" && (via || len(entries) != 1 || entries[0].Action != "message.page"):
-				t.Errorf("%s as %s (%s): %+v", rq.name, c.name, rq.exception, entries)
 			}
 		}
 	}

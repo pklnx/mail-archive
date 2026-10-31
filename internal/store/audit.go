@@ -575,9 +575,11 @@ var shareListActions = []string{"message.search", "message.list", "message.page"
 // owner viewer may see (#389, revision 2, R1/R2). It is an allowlist:
 //   - via_accounts keeps only the viewer's own accounts; via_owners and
 //     every other key go, so no owner learns of other owners' shares;
-//   - a named list entry (one with "account") keeps its list parameters,
-//     because named searches keep their terms (decision 13);
-//   - an unnamed list entry keeps only "search": whether any search
+//   - a named first page (message.search or message.list with "account")
+//     keeps its list parameters, because named searches keep their terms
+//     (decision 13);
+//   - every other list entry, unnamed pages and named cursor pages
+//     (message.page, decision 17), keeps only "search": whether any search
 //     parameter was set, never the terms, folder or thread;
 //   - other entries (message reads, conversations) keep the accounts only.
 func shareView(action string, details []byte, viewer int64) (json.RawMessage, error) {
@@ -599,7 +601,9 @@ func shareView(action string, details []byte, viewer int64) (json.RawMessage, er
 	}
 	out := map[string]any{DetailViaAccounts: mine}
 	if slices.Contains(shareListActions, action) {
-		if _, named := in["account"]; named {
+		// Named first pages keep their terms (decision 13); further pages,
+		// named ones too, show only whether they searched (decision 17).
+		if _, named := in["account"]; named && action != "message.page" {
 			for _, k := range ShareNamedFields {
 				if v, ok := in[k]; ok {
 					out[k] = v

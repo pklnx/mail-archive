@@ -89,12 +89,16 @@ Admins see only their own mail and what was shared with them.
 
 Only an account's owner shares it, with one user at a time, and only for
 reading: search, read and download. Managing, syncing, retention and removal
-stay with the owner; the shared user gets `404` for the account's management
-routes. smtp (journal) accounts cannot be shared, so envelopes (BCC
+stay with the owner; the shared user gets `404` (`403` for the admin-only purge
+routes) for the account's management routes. smtp (journal) accounts cannot be shared, so envelopes (BCC
 recipients) stay with their owner. An unshare takes effect on the user's next
-request. Every read of shared mail is in the audit log, and the owner sees it
-in their Log without the reader's address or browser; see
-[Audit log](../guide/audit-log#shared-accounts). A legal hold on a shared
+request. Every read of shared mail is in the reader's audit log entries, and
+the owner sees reads of their shared accounts as described in
+[Audit log, Shared accounts](../guide/audit-log#shared-accounts), without the
+reader's address, browser or API key name. Two kinds of read do not reach the
+owner: a page of a list or search over all of the reader's mail whose messages
+the reader also has through own accounts, and a conversation whose only member
+in the shared account is the message that was opened. A legal hold on a shared
 account is never shown to the shared user, admins included.
 
 ## Network access
