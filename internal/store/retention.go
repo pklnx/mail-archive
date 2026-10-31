@@ -382,7 +382,7 @@ func (s *Store) MatchLegalHolds(ctx context.Context) (int64, error) {
 			}
 		}
 		for _, owner := range owners {
-			n, err := s.matchHold(ctx, h.ID, owner, deref(h.Account), f)
+			n, err := s.matchHold(ctx, h.ID, owner, h.AccountID, f)
 			added += n
 			if err != nil {
 				return added, fmt.Errorf("legal hold #%d: %w", h.ID, err)
@@ -395,9 +395,19 @@ func (s *Store) MatchLegalHolds(ctx context.Context) (int64, error) {
 	return added, nil
 }
 
-func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account string, f HoldFilter) (int64, error) {
+// matchHold matches a hold's filter as one owner, over that owner's own
+// accounts only (of account, if set): a hold on a user never covers the
+// accounts other users shared with them (#389).
+func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int64, f HoldFilter) (int64, error) {
+	sc, err := s.OwnerScope(ctx, owner)
+	if err != nil {
+		return 0, err
+	}
+	if account != nil {
+		sc = sc.Only(*account)
+	}
 	sf := SearchFilter{
-		Owner: owner, Account: account, Query: f.Query, From: f.From, To: f.To,
+		Scope: sc, Query: f.Query, From: f.From, To: f.To,
 		Attachment: f.Attachment, HasAttachment: f.HasAttachment, Limit: holdMatchPage,
 	}
 	var added int64

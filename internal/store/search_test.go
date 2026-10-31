@@ -84,7 +84,9 @@ func (f *searchFixture) add(path string, m searchMsg) {
 
 func (f *searchFixture) search(filter store.SearchFilter) []string {
 	f.t.Helper()
-	filter.Owner = f.owner
+	if filter.Scope.Viewer == 0 {
+		filter.Scope = storetest.Viewer(f.t, f.st, f.owner)
+	}
 	if filter.Limit == 0 {
 		filter.Limit = 50
 	}
@@ -156,8 +158,8 @@ func TestSearchFilters(t *testing.T) {
 		{"date range", store.SearchFilter{After: date("2023-06-01"), Before: date("2024-03-10")}, []string{"bescheid", "rabatt"}},
 		{"to and query", store.SearchFilter{To: "finanzamt", Query: "Einspruch"}, []string{"steuer"}},
 		{"to and other query", store.SearchFilter{To: "finanzamt", Query: "Termin"}, []string{}},
-		{"account", store.SearchFilter{HasAttachment: true, Account: "privat"}, []string{"steuer", "bescheid"}},
-		{"folder", store.SearchFilter{HasAttachment: true, Account: "privat", Folder: "Sent"}, []string{"steuer"}},
+		{"account", store.SearchFilter{HasAttachment: true, Scope: f.own("privat")}, []string{"steuer", "bescheid"}},
+		{"folder", store.SearchFilter{HasAttachment: true, Scope: f.own("privat"), Folder: "Sent"}, []string{"steuer"}},
 		{"to and dates", store.SearchFilter{To: "alice", After: date("2023-01-01"), Before: date("2024-01-01")}, []string{"rabatt", "meeting"}},
 		{"from and attachment", store.SearchFilter{From: "finanzamt", Attachment: "bescheid"}, []string{"bescheid"}},
 		// Free text stays on subject, sender and body.
@@ -175,7 +177,7 @@ func TestSearchFilters(t *testing.T) {
 	}
 
 	// The cursor continues a filtered listing.
-	rows, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Owner: f.owner, HasAttachment: true, Limit: 1})
+	rows, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Scope: storetest.Viewer(t, f.st, f.owner), HasAttachment: true, Limit: 1})
 	if err != nil || len(rows) != 1 || !rows[0].HasAttachment {
 		t.Fatalf("first page = %+v, %v", rows, err)
 	}
@@ -183,7 +185,7 @@ func TestSearchFilters(t *testing.T) {
 	if !slices.Equal(next, []string{"bescheid", "meeting"}) {
 		t.Errorf("second page = %v", next)
 	}
-	all, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Owner: f.owner, Limit: 10})
+	all, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Scope: storetest.Viewer(t, f.st, f.owner), Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +219,7 @@ func (e *explainer) QueryRow(context.Context, string, ...any) pgx.Row { return n
 // messages, a quarter of them with attachments. The plans
 // are those of the generated query with the given parameters.
 func TestSearchFilterPlans(t *testing.T) {
-	_, url := storetest.NewWithURL(t)
+	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -251,6 +253,15 @@ INSERT INTO envelopes (location_id, mail_from, rcpt_to, rcpt_text)
 SELECT l.id, 'sender@example.com', ARRAY['bcc' || l.uid || '@example.com', 'kunde' || l.uid || '@example.com'],
        'bcc' || l.uid || E'@example.com\nkunde' || l.uid || '@example.com'
 FROM message_locations l JOIN folders f ON f.id = l.folder_id JOIN accounts a ON a.id = f.account_id WHERE a.kind = 'smtp';
+-- A second user with an empty account of their own, who has the first
+-- user's imap account shared (#389).
+INSERT INTO users (name, password_hash) VALUES ('reader', 'x');
+INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id)
+VALUES ('own', 'h', 993, 'tls', 'u', '\x00', (SELECT id FROM users WHERE name = 'reader'));
+INSERT INTO folders (account_id, name, uidvalidity)
+SELECT id, 'INBOX', 1 FROM accounts WHERE owner_id = (SELECT id FROM users WHERE name = 'reader');
+INSERT INTO account_shares (account_id, user_id)
+SELECT a.id, u.id FROM accounts a, users u WHERE a.name = 'a' AND u.name = 'reader';
 ANALYZE;`
 	if _, err := conn.Exec(ctx, seed); err != nil {
 		t.Fatal(err)
@@ -259,9 +270,24 @@ ANALYZE;`
 	if _, err := conn.Exec(ctx, "VACUUM ANALYZE envelopes"); err != nil {
 		t.Fatal(err)
 	}
-	var owner int64
-	if err := conn.QueryRow(ctx, `SELECT id FROM users`).Scan(&owner); err != nil {
+	var owner, reader int64
+	if err := conn.QueryRow(ctx, `SELECT id FROM users WHERE name = 'plan'`).Scan(&owner); err != nil {
 		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT id FROM users WHERE name = 'reader'`).Scan(&reader); err != nil {
+		t.Fatal(err)
+	}
+	// Every case runs with the owner's scope and with the reader's, as the
+	// web server builds them.
+	scopes := []struct {
+		name string
+		sc   store.Scope
+	}{
+		{"owner", storetest.Viewer(t, st, owner)},
+		{"shared user", storetest.Viewer(t, st, reader)},
+	}
+	if len(scopes[0].sc.Accounts) != 2 || len(scopes[1].sc.Accounts) != 2 || !scopes[1].sc.HasShared() {
+		t.Fatalf("scopes %+v", scopes)
 	}
 	str := func(s string) *string { return &s }
 
@@ -303,41 +329,43 @@ ANALYZE;`
 		}
 		return strings.Join(lines, "\n")
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			c.p.Owner, c.p.RowLimit = owner, 51
-			var rec explainer
-			var err error
-			if c.threads {
-				_, err = db.New(&rec).SearchThreads(ctx, db.SearchThreadsParams(c.p))
-			} else {
-				_, err = db.New(&rec).SearchMessages(ctx, c.p)
-			}
-			if !errors.Is(err, errRecorded) {
-				t.Fatalf("record: %v", err)
-			}
-			plan := explain(t, &rec)
-			if !strings.Contains(plan, c.index) {
-				t.Errorf("plan does not use %s:\n%s", c.index, plan)
-			}
-			if strings.Contains(plan, "Seq Scan on message_locations") {
-				t.Errorf("plan reads every location:\n%s", plan)
-			}
-			for _, index := range c.also {
-				if !strings.Contains(plan, index) {
-					t.Errorf("plan does not use %s:\n%s", index, plan)
+	for _, scope := range scopes {
+		for _, c := range cases {
+			t.Run(scope.name+"/"+c.name, func(t *testing.T) {
+				c.p.Accounts, c.p.EnvelopeAccounts, c.p.RowLimit = store.ScopeIDs(scope.sc), store.ScopeEnvelopeIDs(scope.sc), 51
+				var rec explainer
+				var err error
+				if c.threads {
+					_, err = db.New(&rec).SearchThreads(ctx, db.SearchThreadsParams(c.p))
+				} else {
+					_, err = db.New(&rec).SearchMessages(ctx, c.p)
 				}
-			}
-			if strings.HasPrefix(c.name, "to") && (strings.Contains(plan, "Seq Scan on messages") || strings.Contains(plan, "Seq Scan on envelopes")) {
-				t.Errorf("plan reads every message or envelope:\n%s", plan)
-			}
-		})
+				if !errors.Is(err, errRecorded) {
+					t.Fatalf("record: %v", err)
+				}
+				plan := explain(t, &rec)
+				if !strings.Contains(plan, c.index) {
+					t.Errorf("plan does not use %s:\n%s", c.index, plan)
+				}
+				if strings.Contains(plan, "Seq Scan on message_locations") || strings.Contains(plan, "Seq Scan on messages") {
+					t.Errorf("plan reads every location or message:\n%s", plan)
+				}
+				for _, index := range c.also {
+					if !strings.Contains(plan, index) {
+						t.Errorf("plan does not use %s:\n%s", index, plan)
+					}
+				}
+				if strings.HasPrefix(c.name, "to") && strings.Contains(plan, "Seq Scan on envelopes") {
+					t.Errorf("plan reads every envelope:\n%s", plan)
+				}
+			})
+		}
 	}
 
 	// Finding the envelope matches of a to: filter uses their trigram index.
 	t.Run("envelope matches", func(t *testing.T) {
 		var rec explainer
-		p := db.EnvelopeMatchesParams{Pattern: "%bcc4200@%", Owner: owner, RowLimit: 5001}
+		p := db.EnvelopeMatchesParams{Pattern: "%bcc4200@%", EnvelopeAccounts: store.ScopeEnvelopeIDs(scopes[0].sc), RowLimit: 5001}
 		if _, err := db.New(&rec).EnvelopeMatches(ctx, p); !errors.Is(err, errRecorded) {
 			t.Fatalf("record: %v", err)
 		}
@@ -376,4 +404,10 @@ ANALYZE;`
 			t.Errorf("plan does not seek in the primary key:\n%s", plan)
 		}
 	})
+}
+
+// own is the fixture owner's scope narrowed to their account of this name.
+func (f *searchFixture) own(name string) store.Scope {
+	f.t.Helper()
+	return storetest.OwnAccount(f.t, f.st, f.owner, name)
 }

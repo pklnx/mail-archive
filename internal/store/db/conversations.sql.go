@@ -24,17 +24,16 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      JOIN accounts a ON a.id = f.account_id
-      WHERE l.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[]))
 `
 
 type CountConversationParams struct {
-	Owner  int64
-	Sha256 string
+	Accounts []int64
+	Sha256   string
 }
 
 func (q *Queries) CountConversation(ctx context.Context, arg CountConversationParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countConversation, arg.Owner, arg.Sha256)
+	row := q.db.QueryRow(ctx, countConversation, arg.Accounts, arg.Sha256)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -61,14 +60,13 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      JOIN accounts a ON a.id = f.account_id
-      WHERE l.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[]))
 ORDER BY m.sort_at DESC, m.sha256 DESC
 LIMIT $2
 `
 
 type ListConversationParams struct {
-	Owner    int64
+	Accounts []int64
 	RowLimit int32
 	Sha256   string
 }
@@ -86,10 +84,10 @@ type ListConversationRow struct {
 // hop of direct links that need no common thread ID: the parent (its
 // Message-ID is the message's In-Reply-To) and the replies (their
 // In-Reply-To or References name the message's Message-ID). Only messages
-// found in one of the user's accounts.
+// found in one of the scope's accounts (own or shared).
 // The newest row_limit members, newest first; the caller reverses them.
 func (q *Queries) ListConversation(ctx context.Context, arg ListConversationParams) ([]ListConversationRow, error) {
-	rows, err := q.db.Query(ctx, listConversation, arg.Owner, arg.RowLimit, arg.Sha256)
+	rows, err := q.db.Query(ctx, listConversation, arg.Accounts, arg.RowLimit, arg.Sha256)
 	if err != nil {
 		return nil, err
 	}

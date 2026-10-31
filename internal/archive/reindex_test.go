@@ -93,7 +93,7 @@ func (e *reindexEnv) legacy(sha string) {
 
 func (e *reindexEnv) search(f store.SearchFilter) int {
 	e.t.Helper()
-	f.Owner, f.Limit = e.owner, 10
+	f.Scope, f.Limit = storetest.Viewer(e.t, e.st, e.owner), 10
 	rows, err := e.st.SearchMessages(e.ctx, f)
 	if err != nil {
 		e.t.Fatal(err)

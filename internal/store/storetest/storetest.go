@@ -146,3 +146,20 @@ func WithApplicationName(t *testing.T, dbURL, name string) string {
 	u.RawQuery = q.Encode()
 	return u.String()
 }
+
+// Viewer returns the accounts userID may read (store.ViewerScope), for
+// reads in tests.
+func Viewer(t testing.TB, st *store.Store, userID int64) store.Scope {
+	t.Helper()
+	sc, err := st.ViewerScope(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("viewer scope of user %d: %v", userID, err)
+	}
+	return sc
+}
+
+// OwnAccount is Viewer narrowed to the user's own account of this name.
+func OwnAccount(t testing.TB, st *store.Store, userID int64, name string) store.Scope {
+	t.Helper()
+	return Viewer(t, st, userID).OwnAccount(name)
+}

@@ -96,11 +96,6 @@ WHERE a.kind = 'smtp' AND f.name = @folder AND f.last_synced_at IS NOT NULL;
 -- name: BumpAccountVersion :execrows
 UPDATE accounts SET version = version + 1, updated_at = now() WHERE id = $1;
 
--- name: OwnsSMTPAccount :one
--- Whether the user has an smtp account, removed ones included: only then
--- can a to: filter match envelopes.
-SELECT EXISTS (SELECT 1 FROM accounts WHERE owner_id = @owner::bigint AND kind = 'smtp');
-
 -- name: LockBlobsShared :exec
 -- The blob lock, shared, until the transaction ends: verify, which holds it
 -- exclusive while it moves orphans, waits for the commit.

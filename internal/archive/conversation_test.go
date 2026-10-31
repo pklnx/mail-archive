@@ -12,6 +12,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 func hashOf(raw string) string {
@@ -65,14 +66,14 @@ func TestSyncAndImportLinkConversation(t *testing.T) {
 		t.Fatalf("import: %v %+v", err, res)
 	}
 
-	rows, err := f.store.SearchThreads(f.ctx, store.SearchFilter{Owner: user.ID, Limit: 10})
+	rows, err := f.store.SearchThreads(f.ctx, store.SearchFilter{Scope: storetest.Viewer(t, f.store, user.ID), Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 || rows[0].Count != 3 || rows[0].Thread != "offer@kitchen.example" {
 		t.Fatalf("threads: %+v", rows)
 	}
-	c, err := f.store.GetConversation(f.ctx, user.ID, hashOf(reply))
+	c, err := f.store.GetConversation(f.ctx, storetest.Viewer(t, f.store, user.ID), hashOf(reply))
 	if err != nil {
 		t.Fatal(err)
 	}

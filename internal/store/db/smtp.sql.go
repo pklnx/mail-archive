@@ -418,19 +418,6 @@ func (q *Queries) NextUID(ctx context.Context, id int64) (int64, error) {
 	return last_uid, err
 }
 
-const ownsSMTPAccount = `-- name: OwnsSMTPAccount :one
-SELECT EXISTS (SELECT 1 FROM accounts WHERE owner_id = $1::bigint AND kind = 'smtp')
-`
-
-// Whether the user has an smtp account, removed ones included: only then
-// can a to: filter match envelopes.
-func (q *Queries) OwnsSMTPAccount(ctx context.Context, owner int64) (bool, error) {
-	row := q.db.QueryRow(ctx, ownsSMTPAccount, owner)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const setEnvelopeRecipients = `-- name: SetEnvelopeRecipients :exec
 UPDATE envelopes SET rcpt_to = $1::text[], rcpt_text = $2 WHERE location_id = $3
 `

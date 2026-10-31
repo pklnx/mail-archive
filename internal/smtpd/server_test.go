@@ -184,7 +184,7 @@ func message(subject string) string {
 func (f *fixture) envelopes(subject string) map[string][]string {
 	f.t.Helper()
 	ctx := context.Background()
-	res, err := f.st.SearchMessages(ctx, store.SearchFilter{Owner: f.owner, Query: subject})
+	res, err := f.st.SearchMessages(ctx, store.SearchFilter{Scope: storetest.Viewer(f.t, f.st, f.owner), Query: subject})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func (f *fixture) envelopes(subject string) map[string][]string {
 	}
 	out := map[string][]string{}
 	for _, m := range res {
-		d, err := f.st.GetMessageDetail(ctx, f.owner, m.SHA256)
+		d, err := f.st.GetMessageDetail(ctx, storetest.Viewer(f.t, f.st, f.owner), m.SHA256)
 		if err != nil {
 			f.t.Fatal(err)
 		}
@@ -574,7 +574,7 @@ func TestReceiveRetentionBetweenPutAndCommit(t *testing.T) {
 	if f.srv.Blobs.Exists(blob.SHA256) {
 		t.Fatal("the swept file is there")
 	}
-	if _, err := f.st.GetMessageDetail(ctx, f.owner, blob.SHA256); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.st.GetMessageDetail(ctx, storetest.Viewer(t, f.st, f.owner), blob.SHA256); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("after the 451: %v", err)
 	}
 
@@ -585,7 +585,7 @@ func TestReceiveRetentionBetweenPutAndCommit(t *testing.T) {
 	if got := f.envelopes(subject); len(got) != 1 || !slices.Equal(got["journal"], []string{"alice@example.com"}) {
 		t.Fatalf("after retry %v", got)
 	}
-	d, err := f.st.GetMessageDetail(ctx, f.owner, blob.SHA256)
+	d, err := f.st.GetMessageDetail(ctx, storetest.Viewer(t, f.st, f.owner), blob.SHA256)
 	if err != nil || len(d.Locations) != 1 || d.Locations[0].Account != "journal" || d.Locations[0].Folder != store.SMTPFolder || d.Subject != subject {
 		t.Fatalf("after retry %+v %v", d, err)
 	}

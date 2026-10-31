@@ -417,7 +417,7 @@ func TestDeletionKeepsProtectedSharedMessage(t *testing.T) {
 				user    *store.User
 				account string
 			}{{s.user, "work"}, {bob, "private"}} {
-				d, err := s.st.GetMessageDetail(ctx, o.user.ID, shared)
+				d, err := s.st.GetMessageDetail(ctx, storetest.Viewer(t, s.st, o.user.ID), shared)
 				if err != nil {
 					t.Fatalf("%s: %v", o.user.Name, err)
 				}
@@ -434,7 +434,7 @@ func TestDeletionKeepsProtectedSharedMessage(t *testing.T) {
 				}
 			}
 			// The control is gone, row and file; its removal is done.
-			if _, err := s.st.GetMessageDetail(ctx, s.user.ID, control); !errors.Is(err, store.ErrNotFound) {
+			if _, err := s.st.GetMessageDetail(ctx, storetest.Viewer(t, s.st, s.user.ID), control); !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("control: %v", err)
 			}
 			if s.blobs.Exists(control) {

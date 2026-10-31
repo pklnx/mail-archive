@@ -7,6 +7,7 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
 	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 // delimiters returns the stored delimiter per folder of the account
@@ -20,7 +21,7 @@ func (f *fixture) delimiters(account string) map[string]string {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	list, err := f.store.ListAccountFolders(f.ctx, owner.ID)
+	list, err := f.store.ListAccountFolders(f.ctx, storetest.Viewer(f.t, f.store, owner.ID))
 	if err != nil {
 		f.t.Fatal(err)
 	}
