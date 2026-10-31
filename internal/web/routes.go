@@ -104,6 +104,9 @@ func (s *Server) routes() []route {
 		h("PATCH /api/accounts/{name}/fills/{id}", s.handleChangeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/resume", s.handleResumeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/cancel", s.handleCancelFill, accessSession),
+		// Only the owner shares, with a session (#389).
+		h("PUT /api/accounts/{name}/shares/{user}", s.handleShareAccount, accessSession),
+		h("DELETE /api/accounts/{name}/shares/{user}", s.handleUnshareAccount, accessSession),
 		h("POST /api/sync", s.handleSyncAll, accessSync),
 
 		h("GET /api/messages", s.handleListMessages, accessRead),

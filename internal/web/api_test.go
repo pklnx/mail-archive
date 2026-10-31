@@ -101,6 +101,7 @@ type apiFixture struct {
 	st     *store.Store
 	blobs  *blobstore.Store
 	srv    *httptest.Server
+	server *Server
 	bare   http.Handler // the server's handler without the fixture's session cookie
 	dbURL  string
 	cookie string            // session token; empty means the fixture's own user
@@ -169,6 +170,7 @@ func newAPIFixture(t *testing.T) *apiFixture {
 		}
 	}
 	s := New(st, blobs, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{AllowedHosts: []string{"127.0.0.1"}})
+	f.server = s
 	f.bare = s.Handler()
 	f.srv = httptest.NewServer(loggedIn(t, st, f.bare))
 	t.Cleanup(f.srv.Close)

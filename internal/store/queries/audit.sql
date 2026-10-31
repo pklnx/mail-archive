@@ -88,3 +88,32 @@ WHERE l.user_id = @user_id::bigint
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
 ORDER BY l.at DESC, l.id DESC
 LIMIT @lim;
+
+-- name: ListSharedReadsForOwner :many
+-- A page of other users' reads of the owner's shared accounts in [since,
+-- until), newest first (#389): the entries whose via_owners holds the
+-- owner. details ? 'via_owners' repeats the partial index's predicate:
+-- without it the planner walks every partition through the pkey. No client
+-- address, user agent or API key name: the owner sees time, user, action
+-- and message only.
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.details
+FROM audit_log l
+WHERE l.details ? 'via_owners'
+  AND l.details -> 'via_owners' @> to_jsonb(@owner_id::bigint)
+  AND l.user_id IS DISTINCT FROM @owner_id::bigint
+  AND l.at >= @since AND l.at < @until
+  AND l.action LIKE ANY (@patterns::text[])
+  AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT @lim;
+
+-- name: AuditSubjects :many
+-- The subjects of the given messages that have a location in one of the
+-- accounts: what the Log page shows of a message the viewer may read.
+SELECT m.sha256::text AS sha256, m.subject
+FROM messages m
+WHERE m.sha256 = ANY (@shas::bpchar[])
+  AND EXISTS (SELECT 1 FROM message_locations ml
+              JOIN folders f ON f.id = ml.folder_id
+              WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[]));

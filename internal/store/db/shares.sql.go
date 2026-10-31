@@ -10,6 +10,28 @@ import (
 	"time"
 )
 
+const countAccountShares = `-- name: CountAccountShares :one
+SELECT count(*) FROM account_shares WHERE account_id = $1
+`
+
+func (q *Queries) CountAccountShares(ctx context.Context, accountID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countAccountShares, accountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUserShares = `-- name: CountUserShares :one
+SELECT count(*) FROM account_shares WHERE user_id = $1
+`
+
+func (q *Queries) CountUserShares(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countUserShares, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteAccountShare = `-- name: DeleteAccountShare :execrows
 DELETE FROM account_shares WHERE account_id = $1 AND user_id = $2
 `
@@ -70,6 +92,42 @@ func (q *Queries) ListAccountShares(ctx context.Context, accountID int64) ([]Lis
 	for rows.Next() {
 		var i ListAccountSharesRow
 		if err := rows.Scan(&i.UserID, &i.UserName, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnerShares = `-- name: ListOwnerShares :many
+SELECT s.account_id, u.name AS user_name, s.created_at
+FROM account_shares s
+JOIN accounts a ON a.id = s.account_id
+JOIN users u ON u.id = s.user_id
+WHERE a.owner_id = $1::bigint
+ORDER BY s.account_id, u.name
+`
+
+type ListOwnerSharesRow struct {
+	AccountID int64
+	UserName  string
+	CreatedAt time.Time
+}
+
+// The shares of every account of an owner, by account and user name.
+func (q *Queries) ListOwnerShares(ctx context.Context, ownerID int64) ([]ListOwnerSharesRow, error) {
+	rows, err := q.db.Query(ctx, listOwnerShares, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOwnerSharesRow
+	for rows.Next() {
+		var i ListOwnerSharesRow
+		if err := rows.Scan(&i.AccountID, &i.UserName, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

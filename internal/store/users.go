@@ -253,6 +253,12 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 				return err
 			}
 			e.Detail("api_keys_removed", n)
+			// So do the shares of other users' accounts with them (#389).
+			shares, err := q.CountUserShares(ctx, id)
+			if err != nil {
+				return err
+			}
+			e.Detail("shares_removed", shares)
 		}
 		return one(q.DeleteUser(ctx, id))
 	})

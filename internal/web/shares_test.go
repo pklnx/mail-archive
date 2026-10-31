@@ -12,8 +12,9 @@ import (
 // Shares at the HTTP level (#389, part 1): with the fixture's account
 // "alice" shared with reader through the store, reader reads its mail with a
 // session and with a read key; outsider, who has no share, gets nothing; the
-// next request after the unshare gets nothing either. Addressing by name
-// (account=) and the account list stay own-only in this part.
+// next request after the unshare gets nothing either. A plain name in
+// account= stays the viewer's own (owner/name: TestShareNameCollision),
+// and the shared account is in "shared", not in "accounts".
 func TestSharedAccountReads(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()
@@ -79,7 +80,7 @@ func TestSharedAccountReads(t *testing.T) {
 		if len(d.Locations) != 1 || d.Locations[0].Account != "alice" {
 			t.Errorf("%s: locations of the invoice %+v", c.name, d.Locations)
 		}
-		// account= names own accounts only, and the account list is own.
+		// A plain account= names own accounts only.
 		if got := f.listAs(c, "account=alice", false); len(got) != 0 {
 			t.Errorf("%s: account=alice lists %v", c.name, got)
 		}

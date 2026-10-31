@@ -96,6 +96,9 @@ type accountJSON struct {
 	Fill          *fillJSON          `json:"fill"`
 	Fills         []*fillJSON        `json:"fills"`
 	FirstReceived *firstReceivedJSON `json:"firstReceived"`
+	// SharedWith lists the users the account is shared with (#389), by
+	// name.
+	SharedWith []sharedWithJSON `json:"sharedWith"`
 }
 
 // accountPurgeJSON is the progress of an account's confirmed purge: the
@@ -126,6 +129,9 @@ type smtpServerJSON struct{}
 
 type accountsResponse struct {
 	Accounts []accountJSON `json:"accounts"`
+	// Shared lists the accounts other users shared with the viewer (#389),
+	// by owner and name.
+	Shared []sharedAccountJSON `json:"shared"`
 	// Manage is false when the server has no secret key: accounts can then
 	// be browsed but not added, changed or synced.
 	Manage bool `json:"manage"`
@@ -207,6 +213,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	shares, err := s.store.OwnerShares(ctx, me)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	// By account ID: an account shared with the viewer may have the name of
 	// one of their own.
 	folders := make(map[int64][]folderJSON, len(counts))
@@ -228,7 +239,19 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		folders[a.ID] = list
 	}
-	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
+	// Accounts shared with the viewer: only these fields of them reach the
+	// answer (decision 10).
+	shared := []sharedAccountJSON{}
+	for _, a := range counts {
+		if a.OwnerID == me {
+			continue
+		}
+		shared = append(shared, sharedAccountJSON{
+			Key: a.Owner + "/" + a.Name, Name: a.Name, Owner: a.Owner, Kind: string(a.Kind), Enabled: a.Enabled, Removed: a.Removed,
+			Folders: folders[a.ID],
+		})
+	}
+	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Shared: shared, Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
 	if s.smtpListen != "" {
 		out.SMTP = &smtpServerJSON{}
 	}
@@ -265,6 +288,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			SyncInterval: archive.FormatOwnInterval(a.SyncInterval),
 			Folders:      folders[a.ID], Sync: syncJSON{State: "idle", Health: store.HealthOK},
 			GoneMessages: reconciled[a.ID].Gone, LastReconciledAt: reconciled[a.ID].LastReconciledAt,
+			SharedWith: []sharedWithJSON{},
+		}
+		for _, sh := range shares[a.ID] {
+			aj.SharedWith = append(aj.SharedWith, sharedWithJSON{User: sh.User, Since: sh.Since.UTC()})
 		}
 		if h := health[a.ID]; h != nil {
 			aj.Sync.FailureStreak, aj.Sync.FailingSince = h.FailureStreak, h.FailingSince

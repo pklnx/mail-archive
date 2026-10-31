@@ -367,8 +367,13 @@ func TestShareLifecycle(t *testing.T) {
 	f := newShareFixture(t)
 	f.share(f.infoID, f.bob)
 	f.share(f.infoID, f.uwe)
-	if err := f.st.SetAccountOwner(f.ctx, f.account(f.infoID).Ref(), f.bob.ID); err != nil {
+	move := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.move"}
+	if err := f.st.SetAccountOwner(store.WithAudit(f.ctx, move), f.account(f.infoID).Ref(), f.bob.ID); err != nil {
 		t.Fatal(err)
+	}
+	// bob's own share is dropped, uwe's is kept (decision 5).
+	if move.Details["shares_kept"] != int64(1) {
+		t.Errorf("account.move details %v", move.Details)
 	}
 	shares, err := f.st.AccountShares(f.ctx, f.infoID)
 	if err != nil || len(shares) != 1 || shares[0].User != "uwe" {
@@ -381,8 +386,13 @@ func TestShareLifecycle(t *testing.T) {
 		t.Errorf("uwe after the move: %v", got)
 	}
 
-	if err := f.st.DeleteUser(f.ctx, f.uwe.ID); err != nil {
+	f.share(f.priv, f.uwe)
+	remove := &store.AuditEntry{Actor: store.ActorCLI, Action: "user.remove"}
+	if err := f.st.DeleteUser(store.WithAudit(f.ctx, remove), f.uwe.ID); err != nil {
 		t.Fatal(err)
+	}
+	if remove.Details["shares_removed"] != int64(2) {
+		t.Errorf("user.remove details %v", remove.Details)
 	}
 	if shares, _ := f.st.AccountShares(f.ctx, f.infoID); len(shares) != 0 {
 		t.Errorf("shares after removing uwe %+v", shares)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -90,6 +91,24 @@ func (sc Scope) Only(id int64) Scope {
 // empty if there is none. A shared account of the same name is left out.
 func (sc Scope) OwnAccount(name string) Scope {
 	return sc.filter(func(a ScopeAccount) bool { return a.Own && a.Name == name })
+}
+
+// Key is how the API names the account: owner/name. User and account
+// names cannot hold "/", so the key is unambiguous.
+func (a ScopeAccount) Key() string {
+	return a.Owner + "/" + a.Name
+}
+
+// Named narrows the scope to the account an account= parameter names:
+// "owner/name" is the account of that owner and name in the scope (own or
+// shared), a plain name the viewer's own account (OwnAccount). Empty if
+// there is none.
+func (sc Scope) Named(key string) Scope {
+	owner, name, ok := strings.Cut(key, "/")
+	if !ok {
+		return sc.OwnAccount(key)
+	}
+	return sc.filter(func(a ScopeAccount) bool { return a.Owner == owner && a.Name == name })
 }
 
 // Own narrows the scope to the viewer's own accounts.
@@ -209,8 +228,15 @@ func (s *Store) ShareAccount(ctx context.Context, ref AccountRef, userID int64) 
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // the user is gone
 			return ErrNotFound
 		}
+		if err != nil {
+			return err
+		}
 		created = n == 1
-		return err
+		if !created {
+			// The share exists already: nothing changed, no entry.
+			skipAudit(ctx)
+		}
+		return nil
 	})
 	return created, err
 }
@@ -225,6 +251,20 @@ func (s *Store) UnshareAccount(ctx context.Context, ref AccountRef, userID int64
 		}
 		return one(q.DeleteAccountShare(ctx, db.DeleteAccountShareParams{AccountID: ref.ID, UserID: userID}))
 	})
+}
+
+// OwnerShares lists the shares of every account of an owner, by account ID,
+// each by user name.
+func (s *Store) OwnerShares(ctx context.Context, ownerID int64) (map[int64][]AccountShare, error) {
+	rows, err := s.q.ListOwnerShares(ctx, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64][]AccountShare)
+	for _, r := range rows {
+		out[r.AccountID] = append(out[r.AccountID], AccountShare{User: r.UserName, Since: r.CreatedAt})
+	}
+	return out, nil
 }
 
 // AccountShares lists the users an account is shared with, by name.
