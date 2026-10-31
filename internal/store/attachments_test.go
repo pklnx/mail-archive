@@ -43,6 +43,10 @@ func TestSearchAttachmentText(t *testing.T) {
 	f.texts("pdf", pdfText(1, "Rechnung Nummer 4711 über Wartungsvertrag"), pdfText(2, "Lieferschein Paletten"))
 	f.add("privat/INBOX", searchMsg{sha: "body", subject: "Re: Post", from: "anna@example.com", sent: "2026-01-04T00:00:00Z",
 		body: "Die Rechnung kam an.", data: store.IndexData{ThreadID: "t1"}})
+	// A message whose body says draft and whose PDF has no text layer: an
+	// attachment row without text matches no query, not even a negation.
+	f.add("arbeit/INBOX", withAttachment(searchMsg{sha: "scan", subject: "Scan", from: "x@example.com", sent: "2026-01-01T00:00:00Z", body: "draft"}))
+	f.texts("scan", store.AttachmentText{Part: 1, Filename: "scan.pdf", Status: "no_text"})
 	f.add("arbeit/INBOX", searchMsg{sha: "plain", subject: "Termin", from: "mueller@example.com", sent: "2026-01-02T00:00:00Z", body: "Termin am Montag"})
 
 	// Another user's PDF with the same words is never found.
@@ -94,6 +98,9 @@ func TestSearchAttachmentText(t *testing.T) {
 			if got := f.search(c.f); !slices.Equal(got, c.want) {
 				t.Errorf("walk %v, %s: got %v, want %v", walk, c.name, got, c.want)
 			}
+		}
+		if got := f.search(store.SearchFilter{Query: "-draft"}); slices.Contains(got, "scan") || !slices.Contains(got, "plain") {
+			t.Errorf("walk %v, only a negation: got %v", walk, got)
 		}
 		// Threads count matches in attachments.
 		rows, err := f.st.SearchThreads(f.ctx, store.SearchFilter{Scope: storetest.Viewer(t, f.st, f.owner), Query: "Rechnung", Limit: 10})
@@ -324,5 +331,127 @@ func TestAttachmentTextMigration(t *testing.T) {
 	}
 	if ok, err := st.SaveAttachmentTexts(ctx, fmt.Sprintf("%064d", 0), []store.AttachmentText{pdfText(0, "nach der Migration")}); err != nil || !ok {
 		t.Fatalf("after up: %v, %v", ok, err)
+	}
+}
+
+type attachmentJob struct {
+	State, Message string
+	Priority       int
+}
+
+// attachmentJobs returns the attachment_text jobs by key.
+func attachmentJobs(t *testing.T, conn *pgx.Conn) map[string]attachmentJob {
+	t.Helper()
+	rows, err := conn.Query(context.Background(), `SELECT key, state, priority, coalesce(message_sha256, '') FROM jobs WHERE kind = $1`, store.JobAttachmentText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]attachmentJob{}
+	for rows.Next() {
+		var key string
+		var j attachmentJob
+		if err := rows.Scan(&key, &j.State, &j.Priority, &j.Message); err != nil {
+			t.Fatal(err)
+		}
+		out[key] = j
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func withAttachmentMeta(m store.MessageMeta) store.MessageMeta {
+	m.HasAttachment = true
+	return m
+}
+
+// wantOneNewJob checks that exactly the message sha has an attachment_text
+// job, queued for new mail with its message set, and marks it done, so
+// that a later enqueue would show (it queues a done job again).
+func wantOneNewJob(t *testing.T, conn *pgx.Conn, sha string) {
+	t.Helper()
+	jobs := attachmentJobs(t, conn)
+	if j := jobs[sha]; len(jobs) != 1 || j.State != store.JobQueued || j.Priority != store.PriorityNew || j.Message != sha {
+		t.Fatalf("jobs %+v, want one queued for new mail for %s", jobs, sha)
+	}
+	if _, err := conn.Exec(context.Background(), `UPDATE jobs SET state = 'done', finished_at = now() WHERE key = $1`, sha); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ReceiveMessage queues the attachment text of a new message with
+// attachments in its transaction; a duplicate delivery (the same folder, or
+// another smtp account) and a message without attachments queue nothing.
+func TestReceiveMessageQueuesAttachmentText(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := createSMTPAccount(t, st, &u.ID, "journal", "archive@example.com")
+	b := createSMTPAccount(t, st, &u.ID, "other", "other@example.com")
+	with, without := withAttachmentMeta(receivedMeta(1)), receivedMeta(2)
+	if _, err := st.ReceiveMessage(ctx, a.ID, with, envelope("x@example.com"), present); err != nil {
+		t.Fatal(err)
+	}
+	wantOneNewJob(t, conn, with.SHA256)
+	if _, err := st.ReceiveMessage(ctx, a.ID, without, envelope("x@example.com"), present); err != nil {
+		t.Fatal(err)
+	}
+	for _, dup := range []struct {
+		account int64
+		rcpt    string
+	}{{a.ID, "y@example.com"}, {b.ID, "x@example.com"}} {
+		if _, err := st.ReceiveMessage(ctx, dup.account, with, envelope(dup.rcpt), present); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := attachmentJobs(t, conn)
+	if len(jobs) != 1 || jobs[with.SHA256].State != store.JobDone {
+		t.Errorf("after the duplicates and a message without attachments: %+v", jobs)
+	}
+}
+
+// A fill queues the attachment text of a new message with attachments in
+// the transaction of its batch; a message already there and one without
+// attachments queue nothing.
+func TestFillQueuesAttachmentText(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := createSMTPAccount(t, st, &u.ID, "journal", "archive@example.com")
+	f := newFill(a, "alice@example.com")
+	if err := st.CreateFill(ctx, f, seal); err != nil {
+		t.Fatal(err)
+	}
+	ff, err := st.FillFolder(ctx, f, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	with, without := withAttachmentMeta(receivedMeta(1)), receivedMeta(2)
+	if _, err := st.SaveFillBatch(ctx, ff, []store.MessageMeta{with, without}, make([]store.Location, 2)); err != nil {
+		t.Fatal(err)
+	}
+	wantOneNewJob(t, conn, with.SHA256)
+	// The same message again, from the same and from another folder.
+	sent, err := st.FillFolder(ctx, f, "Sent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []*store.FillFolder{ff, sent} {
+		if _, err := st.SaveFillBatch(ctx, folder, []store.MessageMeta{with}, make([]store.Location, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := attachmentJobs(t, conn)
+	if len(jobs) != 1 || jobs[with.SHA256].State != store.JobDone {
+		t.Errorf("after the duplicates and a message without attachments: %+v", jobs)
 	}
 }

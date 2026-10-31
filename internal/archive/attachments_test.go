@@ -302,9 +302,13 @@ func TestAttachmentTextStatusesAndUnavailable(t *testing.T) {
 	e := newReindexEnv(t)
 	late := e.store(withPDF("spät", "x"))
 	broken := e.store(withPDF("kaputt", "y"))
+	busy := e.store(withPDF("wartet", "z"))
 	fake := &fakeExtractor{fn: func(_ context.Context, subject string) ([]attachtext.Result, error) {
-		if subject == "kaputt" {
+		switch subject {
+		case "kaputt":
 			return nil, fmt.Errorf("pdf: %w", attachtext.ErrUnavailable)
+		case "wartet":
+			return nil, attachtext.ErrBusy
 		}
 		return []attachtext.Result{{Part: 1, Filename: "a.pdf", Status: attachtext.StatusTimeout}, {Part: 2, Filename: "b.txt", Status: attachtext.StatusTimeout}}, nil
 	}}
@@ -317,6 +321,13 @@ func TestAttachmentTextStatusesAndUnavailable(t *testing.T) {
 	}
 	if state, _, code := e.job(broken); state != store.JobFailed || code != archive.CodeExtractorUnavailable {
 		t.Errorf("broken: %s (%s)", state, code)
+	}
+	// Nothing was read while it waited for another PDF: retried, not done.
+	if state, _, code := e.job(busy); state != store.JobQueued || code != archive.CodePDFBusy {
+		t.Errorf("busy: %s (%s)", state, code)
+	}
+	if n := e.count(`SELECT count(*) FROM attachment_index_state WHERE message_sha256 = $1`, busy); n != 0 {
+		t.Error("busy message marked done")
 	}
 	if n, err := e.st.CountFailedJobsWithCode(e.ctx, store.JobAttachmentText, archive.CodeExtractorUnavailable); err != nil || n != 1 {
 		t.Errorf("failed with the code: %d, %v", n, err)

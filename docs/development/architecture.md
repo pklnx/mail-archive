@@ -550,7 +550,7 @@ The text is extracted by two job kinds (`internal/archive/attachments.go`):
   unreadable file is done without text; a message deleted meanwhile is
   done (foreign key error). Extraction results (a damaged PDF, a timeout,
   a password) are statuses, not errors; a PDF module that did not compile
-  in the process fails the job at once with `extractor unavailable`.
+  in the process fails the job at once with `extractor unavailable`. PDFs wait for their turn (one per process) without using up the message's 60 s, and one whose caller's deadline passes while it waits is retried (`pdf busy`), not stored as `timeout`.
 - **`attachment_backfill`** (key `v<AttachmentIndexVersion>`, priority
   `PriorityBackfillCursor` = 101). `serve`, `worker` and `reindex` enqueue it
   at start with an empty payload. Each run walks `ListAttachmentPending`

@@ -27,7 +27,8 @@ func (q *Queries) AttachmentIndexVersion(ctx context.Context, sha256 string) (in
 const attachmentMatches = `-- name: AttachmentMatches :many
 SELECT DISTINCT a.message_sha256::text
 FROM attachment_texts a
-WHERE a.search @@ (websearch_to_tsquery('simple', $1::text) ||
+WHERE a.body_text IS NOT NULL
+  AND a.search @@ (websearch_to_tsquery('simple', $1::text) ||
                    websearch_to_tsquery('german', $1::text) ||
                    websearch_to_tsquery('english', $1::text))
   AND EXISTS (
@@ -47,6 +48,7 @@ type AttachmentMatchesParams struct {
 // Messages with an attachment whose text matches the query, found in one
 // of the scope's accounts, up to row_limit; uses
 // attachment_texts_search_idx.
+// Only rows with text: an empty one would match any negation (-draft).
 func (q *Queries) AttachmentMatches(ctx context.Context, arg AttachmentMatchesParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, attachmentMatches, arg.Query, arg.Accounts, arg.RowLimit)
 	if err != nil {

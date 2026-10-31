@@ -22,6 +22,10 @@ import (
 // restart.
 const CodeExtractorUnavailable = "extractor unavailable"
 
+// CodePDFBusy is the job error of a message whose PDF waited for another
+// one past its deadline; the job is retried.
+const CodePDFBusy = "pdf busy"
+
 // AttachmentExtractor extracts the text of a raw message's attachments
 // (attachtext.Extractor; tests use a fake).
 type AttachmentExtractor interface {
@@ -110,8 +114,12 @@ func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) erro
 	}
 	results, err := x.Extractor.Message(ctx, f)
 	_ = f.Close()
-	if errors.Is(err, attachtext.ErrUnavailable) {
+	switch {
+	case errors.Is(err, attachtext.ErrUnavailable):
 		return jobs.Permanent(jobs.Code(CodeExtractorUnavailable, err))
+	case errors.Is(err, attachtext.ErrBusy):
+		// Nothing was read: try again later.
+		return jobs.Code(CodePDFBusy, err)
 	}
 	if err != nil {
 		return err
@@ -133,7 +141,7 @@ func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) erro
 	if stored {
 		x.extracted.Add(int64(withText))
 	}
-	x.log().Info("attachment text extracted", "sha256", sha, "attachments", len(results), "with_text", withText,
+	x.log().Debug("attachment text extracted", "sha256", sha, "attachments", len(results), "with_text", withText,
 		"stored", stored, "took", time.Since(start).Round(time.Millisecond))
 	if x.afterSave != nil {
 		x.afterSave(sha)

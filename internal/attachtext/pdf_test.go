@@ -387,8 +387,10 @@ func TestPDFTextOutlivesInstance(t *testing.T) {
 // close in its own code.
 func TestPDFKillInterruptsRunningCode(t *testing.T) {
 	e := shared.pdf
-	takePDFSlot()
-	defer pdfSlot.Unlock()
+	if _, err := takePDFSlot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer releasePDFSlot()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.compile(); err != nil {

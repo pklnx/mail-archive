@@ -289,3 +289,51 @@ func TestPDFOneAtATimePerProcess(t *testing.T) {
 		t.Errorf("%d PDFs at once", most)
 	}
 }
+
+// A PDF that waits for another one in the process until its caller's
+// deadline passes was never read: Message returns ErrBusy (to be tried
+// again), not a final StatusTimeout, and the next try reads it (#438
+// review). Waiting does not count against the message's own time.
+func TestMessageWaitForPDFIsNotATimeout(t *testing.T) {
+	other := New(nil)
+	t.Cleanup(func() { _ = other.Close() })
+	var inside testwait.Signal
+	firstIn := inside.C()
+	release := make(chan struct{})
+	setHooks(t, pdfHooks{start: func() {
+		inside.Notify()
+		select {
+		case <-release:
+		case <-time.After(testwait.Limit(t)):
+			t.Error("not released")
+		}
+	}})
+	firstDone := make(chan Result, 1)
+	go func() {
+		res, _ := shared.PDF(context.Background(), pdftest.Text("first"))
+		firstDone <- res
+	}()
+	select {
+	case <-firstIn:
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the first PDF did not start")
+	}
+	// The second message's deadline passes while it waits for its turn.
+	ctx := newDeadlineCtx()
+	onPDFWait = ctx.expire
+	t.Cleanup(func() { onPDFWait = nil })
+	raw := message(attach("application/pdf", "b.pdf", pdftest.Text("second")))
+	res, err := other.Message(ctx, strings.NewReader(raw))
+	if !errors.Is(err, ErrBusy) || res != nil {
+		t.Errorf("got %+v, %v; want ErrBusy and no results", res, err)
+	}
+	close(release)
+	if r := <-firstDone; r.Status != StatusOK {
+		t.Errorf("first: %s", r.Status)
+	}
+	onPDFWait = nil
+	got, err := other.Message(context.Background(), strings.NewReader(raw))
+	if err != nil || len(got) != 1 || got[0].Status != StatusOK || got[0].Text != "second" {
+		t.Errorf("next try: %+v, %v", got, err)
+	}
+}

@@ -211,9 +211,12 @@ func TestFormatJobsStatus(t *testing.T) {
 
 // TestReindexAttachments: reindex extracts the attachment text of every
 // pending message in the foreground, more than one backfill batch, and
-// says how many jobs it left to another process.
+// says how many jobs it left to another process. With
+// MAIL_ARCHIVE_JOB_WORKERS=0 (a web server that runs no jobs) it still
+// runs one.
 func TestReindexAttachments(t *testing.T) {
 	st, conn := jobsEnv(t)
+	t.Setenv(config.EnvJobWorkers, "0")
 	ctx := context.Background()
 	blobs, err := blobstore.New(os.Getenv("MAIL_ARCHIVE_DATA_DIR"))
 	if err != nil {

@@ -1109,8 +1109,8 @@ Then extract the text of PDF and text attachments of all messages that have
 none yet, in the foreground, until none is left (the web server, or the
 worker service, does the same in the background; installations that run
 only sync or import from cron get attachment text only from this command).
-` + config.EnvJobWorkers + ` (default 1) sets how many messages run at a time; PDFs
-are read one at a time. Messages that another process is extracting, or that
+` + config.EnvJobWorkers + ` (default 1; 0 counts as 1) sets how many messages run at
+a time; PDFs are read one at a time. Messages that another process is extracting, or that
 wait for a retry, are left to it; the command says how many. Needed once
 after an upgrade that says so; sync and import index new messages
 themselves. Safe to interrupt and rerun, and to run while the web server,

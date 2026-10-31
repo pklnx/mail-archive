@@ -60,7 +60,9 @@ WHERE m.has_attachment
 -- attachment_texts_search_idx.
 SELECT DISTINCT a.message_sha256::text
 FROM attachment_texts a
-WHERE a.search @@ (websearch_to_tsquery('simple', @query::text) ||
+-- Only rows with text: an empty one would match any negation (-draft).
+WHERE a.body_text IS NOT NULL
+  AND a.search @@ (websearch_to_tsquery('simple', @query::text) ||
                    websearch_to_tsquery('german', @query::text) ||
                    websearch_to_tsquery('english', @query::text))
   AND EXISTS (

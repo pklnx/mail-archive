@@ -154,7 +154,11 @@ filter is matched by search when the hold is added and before every
 deletion, and its matches are only ever added; until then the hold covers
 its whole scope. A search filter also matches the text extracted from
 attachments, once it has been extracted (see
-[Attachments](./web-ui#attachments)). Only admins see holds.
+[Attachments](./web-ui#attachments)). After the upgrade that brings
+attachment search, older messages are extracted in the background newest
+first, so the oldest mail, which retention deletes first, comes last: run
+`./ma reindex` once before you rely on a filter hold over attachment text.
+Only admins see holds.
 
 Holds are released with a note and never deleted. A user named by a hold
 can therefore not be removed (lock them instead), and an account whose owner

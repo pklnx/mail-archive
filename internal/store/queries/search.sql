@@ -47,6 +47,8 @@ WHERE
    OR sqlc.arg(att_walk)::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = m.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
          AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
@@ -157,6 +159,8 @@ WHERE
    OR sqlc.arg(att_walk)::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = m.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
          AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
@@ -231,6 +235,8 @@ WHERE
          OR sqlc.arg(att_walk)::boolean AND EXISTS (
              SELECT 1 FROM attachment_texts ax
              WHERE ax.message_sha256 = n.sha256
+               -- Only rows with text: an empty one would match any negation.
+               AND ax.body_text IS NOT NULL
                AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                                  websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                                  websearch_to_tsquery('english', sqlc.narg(query)::text))
@@ -313,6 +319,8 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
    OR sqlc.arg(att_walk)::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = t.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
          AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('english', sqlc.narg(query)::text))

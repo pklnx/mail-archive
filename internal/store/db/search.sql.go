@@ -31,6 +31,8 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY($1::text[])
    OR $5::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = t.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
          AND ax.search @@ (websearch_to_tsquery('simple', $2::text) ||
                            websearch_to_tsquery('german', $2::text) ||
                            websearch_to_tsquery('english', $2::text))
@@ -535,6 +537,8 @@ WHERE
    OR $5::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = m.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
          AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
                            websearch_to_tsquery('german', $1::text) ||
                            websearch_to_tsquery('english', $1::text))
@@ -730,6 +734,8 @@ WHERE
    OR $5::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = m.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
          AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
                            websearch_to_tsquery('german', $1::text) ||
                            websearch_to_tsquery('english', $1::text))
@@ -804,6 +810,8 @@ WHERE
          OR $5::boolean AND EXISTS (
              SELECT 1 FROM attachment_texts ax
              WHERE ax.message_sha256 = n.sha256
+               -- Only rows with text: an empty one would match any negation.
+               AND ax.body_text IS NOT NULL
                AND ax.search @@ (websearch_to_tsquery('simple', $1::text) ||
                                  websearch_to_tsquery('german', $1::text) ||
                                  websearch_to_tsquery('english', $1::text))

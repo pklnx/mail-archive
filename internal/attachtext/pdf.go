@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/klippa-app/go-pdfium"
 	pdfiumerrors "github.com/klippa-app/go-pdfium/errors"
@@ -85,22 +86,42 @@ var errKilled = errors.New("pdf: instance killed")
 // be compiled in this process. It stays so until the process restarts.
 var ErrUnavailable = errors.New("attachment text: the PDF extractor is unavailable")
 
+// ErrBusy is returned when the caller's deadline passed while a PDF waited
+// for another one to finish: nothing was read, and the work is to be tried
+// again (not a timeout of the document).
+var ErrBusy = errors.New("attachment text: the deadline passed while waiting for another PDF")
+
 // pdfSlot lets one PDF at a time be read in the process (see pdfEngine).
-var pdfSlot sync.Mutex
+var pdfSlot = make(chan struct{}, 1)
 
 // onPDFWait is a test seam: it runs when a PDF has to wait for another one.
 var onPDFWait func()
 
-// takePDFSlot waits until no other PDF is read in the process.
-func takePDFSlot() {
-	if pdfSlot.TryLock() {
-		return
+// takePDFSlot waits until no other PDF is read in the process, or ctx
+// ends: then it returns ErrBusy for a deadline, else ctx's error. It
+// returns how long it waited. releasePDFSlot gives the slot back.
+func takePDFSlot(ctx context.Context) (time.Duration, error) {
+	select {
+	case pdfSlot <- struct{}{}:
+		return 0, nil
+	default:
 	}
 	if onPDFWait != nil {
 		onPDFWait()
 	}
-	pdfSlot.Lock()
+	start := time.Now()
+	select {
+	case pdfSlot <- struct{}{}:
+		return time.Since(start), nil
+	case <-ctx.Done():
+		if isDeadline(ctx.Err()) {
+			return time.Since(start), ErrBusy
+		}
+		return time.Since(start), ctx.Err()
+	}
 }
+
+func releasePDFSlot() { <-pdfSlot }
 
 // compile compiles the module once per process. There is no compilation
 // cache on disk, so no executable code is written to the data directory.
@@ -242,9 +263,15 @@ type pdfText struct {
 //
 // When the module cannot be compiled, it returns ErrUnavailable, and logs
 // the cause once per engine.
-func (e *pdfEngine) extract(ctx context.Context, data []byte, maxText int) (pdfText, error) {
-	takePDFSlot()
-	defer pdfSlot.Unlock()
+//
+// The PDF has min(pdfTimeout, budget) once it is its turn; the time it
+// waited for its turn, which it returns, is not counted.
+func (e *pdfEngine) extract(ctx context.Context, data []byte, maxText int, budget time.Duration) (pdfText, time.Duration, error) {
+	waited, err := takePDFSlot(ctx)
+	if err != nil {
+		return pdfText{}, waited, err
+	}
+	defer releasePDFSlot()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// The one-time compile does not count against the document's time.
@@ -253,30 +280,30 @@ func (e *pdfEngine) extract(ctx context.Context, data []byte, maxText int) (pdfT
 			e.errLogged = true
 			e.logger.Error("attachment text: cannot compile the PDF module; PDFs are not extracted until a restart", "err", err)
 		}
-		return pdfText{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return pdfText{}, waited, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if ctx.Err() != nil && !isDeadline(ctx.Err()) {
-		return pdfText{}, ctx.Err()
+		return pdfText{}, waited, ctx.Err()
 	}
-	ctx, cancel := context.WithTimeout(ctx, pdfTimeout)
+	ctx, cancel := context.WithTimeout(ctx, min(pdfTimeout, budget))
 	defer cancel()
 	var out pdfText
 	reader := &docReader{r: bytes.NewReader(data), start: e.hooks.start}
 	defer reader.drop()
-	err := e.run(ctx, func(inst pdfium.Pdfium) error {
+	err = e.run(ctx, func(inst pdfium.Pdfium) error {
 		var err error
 		out, err = e.read(ctx, inst, reader, int64(len(data)), maxText)
 		return err
 	})
 	switch {
 	case ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return pdfText{}, ctx.Err()
+		return pdfText{}, waited, ctx.Err()
 	case ctx.Err() != nil || errors.Is(err, errKilled):
-		return pdfText{status: StatusTimeout}, nil
+		return pdfText{status: StatusTimeout}, waited, nil
 	case err != nil:
-		return pdfText{status: StatusFailed}, nil
+		return pdfText{status: StatusFailed}, waited, nil
 	}
-	return out, nil
+	return out, waited, nil
 }
 
 // read opens the document and reads its text page by page.
