@@ -11,6 +11,47 @@ import (
 	"time"
 )
 
+const auditSubjects = `-- name: AuditSubjects :many
+SELECT m.sha256::text AS sha256, m.subject
+FROM messages m
+WHERE m.sha256 = ANY ($1::bpchar[])
+  AND EXISTS (SELECT 1 FROM message_locations ml
+              JOIN folders f ON f.id = ml.folder_id
+              WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY ($2::bigint[]))
+`
+
+type AuditSubjectsParams struct {
+	Shas     []string
+	Accounts []int64
+}
+
+type AuditSubjectsRow struct {
+	Sha256  string
+	Subject *string
+}
+
+// The subjects of the given messages that have a location in one of the
+// accounts: what the Log page shows of a message the viewer may read.
+func (q *Queries) AuditSubjects(ctx context.Context, arg AuditSubjectsParams) ([]AuditSubjectsRow, error) {
+	rows, err := q.db.Query(ctx, auditSubjects, arg.Shas, arg.Accounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditSubjectsRow
+	for rows.Next() {
+		var i AuditSubjectsRow
+		if err := rows.Scan(&i.Sha256, &i.Subject); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const auditUserAgentID = `-- name: AuditUserAgentID :one
 WITH ins AS (
     INSERT INTO audit_user_agents (user_agent) VALUES ($1)
@@ -358,6 +399,88 @@ func (q *Queries) ListAuditEntriesForUser(ctx context.Context, arg ListAuditEntr
 			&i.UserAgent,
 			&i.Details,
 			&i.Subject,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSharedReadsForOwner = `-- name: ListSharedReadsForOwner :many
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.details
+FROM audit_log l
+WHERE l.details ? 'via_owners'
+  AND l.details -> 'via_owners' @> to_jsonb($1::bigint)
+  AND l.user_id IS DISTINCT FROM $1::bigint
+  AND l.at >= $2 AND l.at < $3
+  AND l.action LIKE ANY ($4::text[])
+  AND ($5::timestamptz IS NULL OR (l.at, l.id) < ($5, $6::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT $7
+`
+
+type ListSharedReadsForOwnerParams struct {
+	OwnerID  int64
+	Since    time.Time
+	Until    time.Time
+	Patterns []string
+	CursorAt *time.Time
+	CursorID int64
+	Lim      int32
+}
+
+type ListSharedReadsForOwnerRow struct {
+	ID         int64
+	At         time.Time
+	Actor      string
+	UserID     *int64
+	UserName   *string
+	Action     string
+	TargetType *string
+	TargetID   *string
+	TargetName *string
+	Details    []byte
+}
+
+// A page of other users' reads of the owner's shared accounts in [since,
+// until), newest first (#389): the entries whose via_owners holds the
+// owner. details ? 'via_owners' repeats the partial index's predicate:
+// without it the planner walks every partition through the pkey. No client
+// address, user agent or API key name: the owner sees time, user, action
+// and message only.
+func (q *Queries) ListSharedReadsForOwner(ctx context.Context, arg ListSharedReadsForOwnerParams) ([]ListSharedReadsForOwnerRow, error) {
+	rows, err := q.db.Query(ctx, listSharedReadsForOwner,
+		arg.OwnerID,
+		arg.Since,
+		arg.Until,
+		arg.Patterns,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSharedReadsForOwnerRow
+	for rows.Next() {
+		var i ListSharedReadsForOwnerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Actor,
+			&i.UserID,
+			&i.UserName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.TargetName,
+			&i.Details,
 		); err != nil {
 			return nil, err
 		}

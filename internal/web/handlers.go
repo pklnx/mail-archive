@@ -187,10 +187,12 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// account= names one of the viewer's own accounts; an unknown name
-	// lists nothing.
+	// account= names one of the viewer's own accounts by name, or any
+	// account they may read as owner/name (#389); an unknown name lists
+	// nothing.
+	full := sc
 	if name := q.Get("account"); name != "" {
-		sc = sc.OwnAccount(name)
+		sc = sc.Named(name)
 	}
 	f.Scope = sc
 	// Fetch one extra row to know whether another page exists.
@@ -205,15 +207,25 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	if e := s.searchEntry(r); e != nil && !s.audit(w, r, e) {
-		return
-	}
+	// The look-ahead row is cut before the entry is written: a shared
+	// read counts only the rows that are sent.
 	var next *string
 	if len(rows) > want {
 		rows = rows[:want]
 		last := rows[len(rows)-1]
 		c := encodeCursor(last.SortAt, last.SHA256)
 		next = &c
+	}
+	shas := make([]string, 0, len(rows))
+	for _, m := range rows {
+		shas = append(shas, m.SHA256)
+	}
+	e, ok := s.listEntry(w, r, sc, full, shas)
+	if !ok {
+		return
+	}
+	if e != nil && !s.audit(w, r, e) {
+		return
 	}
 	items := make([]summaryJSON, 0, len(rows))
 	for _, m := range rows {
@@ -223,7 +235,10 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 type locationJSON struct {
-	Account      string     `json:"account"`
+	Account string `json:"account"`
+	// Owner of an account shared with the viewer (#389); null for the
+	// viewer's own accounts.
+	Owner        *string    `json:"owner"`
 	Folder       string     `json:"folder"`
 	UID          int64      `json:"uid"`
 	Flags        []string   `json:"flags"`
@@ -250,7 +265,9 @@ type locationJSON struct {
 	// RetainUntil: when the location's retention period ends; null when no
 	// rule covers it (kept for ever).
 	RetainUntil *time.Time `json:"retainUntil"`
-	// OnHold: an active legal hold covers it. Only for admins.
+	// OnHold: an active legal hold covers it. Only for admins, and only on
+	// their own locations: a shared account's holds stay with its owner
+	// (#389, decision 12).
 	OnHold *bool `json:"onHold,omitempty"`
 }
 
@@ -302,7 +319,8 @@ type messageJSON struct {
 	// RetainUntil: the latest end of the retention period over the user's
 	// locations; null when one of them is kept for ever.
 	RetainUntil *time.Time `json:"retainUntil"`
-	// OnHold: one of the locations is on legal hold. Only for admins.
+	// OnHold: one of the user's own locations is on legal hold. Only for
+	// admins; locations in shared accounts do not count (decision 12).
 	OnHold *bool `json:"onHold,omitempty"`
 }
 
@@ -320,7 +338,9 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	if !s.audit(w, r, s.messageEntry(r, "message.open", sha)) {
+	open := s.messageEntry(r, "message.open", sha)
+	viaLocations(open, sc.Viewer, d.Locations)
+	if !s.audit(w, r, open) {
 		return
 	}
 	m, err := s.parseStored(d.StoredPath)
@@ -365,7 +385,12 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		if i := l.Import; i != nil {
 			lj.Import = &locationImportJSON{ID: i.ID, Label: i.Label}
 		}
-		if admin {
+		own := l.OwnerID == sc.Viewer
+		if !own {
+			owner := l.Owner
+			lj.Owner = &owner
+		}
+		if admin && own {
 			held := l.OnHold
 			lj.OnHold = &held
 			*out.OnHold = *out.OnHold || held
@@ -409,10 +434,21 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]conversationEntryJSON, 0, len(c.Messages))
+	members := make([]string, 0, len(c.Messages))
 	for _, m := range c.Messages {
 		items = append(items, conversationEntryJSON{
 			ID: m.SHA256, Subject: m.Subject, From: m.From, SentAt: m.SentAt, SortAt: m.SortAt, Relation: m.Relation,
 		})
+		members = append(members, m.SHA256)
+	}
+	// Over shared accounts the conversation is a read of its own
+	// (message.conversation); over own accounts it stays a page view.
+	e, ok := s.conversationEntry(w, r, sc, sha, members)
+	if !ok {
+		return
+	}
+	if e != nil && !s.audit(w, r, e) {
+		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"messages": items, "total": c.Total, "truncated": c.Truncated})
 }
@@ -469,6 +505,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	images := r.URL.Query().Get("images") == "1"
 	e := s.messageEntry(r, "message.html", sha)
+	viaLocations(e, sc.Viewer, d.Locations)
 	if images {
 		e.Detail("images", true)
 	}
@@ -538,7 +575,9 @@ func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	if !s.audit(w, r, s.messageEntry(r, "message.raw", sha)) {
+	raw := s.messageEntry(r, "message.raw", sha)
+	viaLocations(raw, sc.Viewer, d.Locations)
+	if !s.audit(w, r, raw) {
 		return
 	}
 	h := w.Header()
@@ -590,6 +629,7 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e := s.messageEntry(r, "message.part", sha)
+	viaLocations(e, sc.Viewer, d.Locations)
 	e.Detail("index", p.Index)
 	e.Detail("content_type", p.ContentType)
 	e.Detail("inline", p.Inline)

@@ -1,12 +1,14 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -298,8 +300,8 @@ func nullString(s string) *string {
 // The action groups a filter may name instead of exact actions.
 var auditGroups = map[string][]string{
 	"login":     {"auth.%"},
-	"search":    {"message.search"},
-	"read":      {"message.open", "message.html", "message.raw", "message.part"},
+	"search":    {"message.search", "message.list", "message.page"},
+	"read":      {"message.open", "message.html", "message.raw", "message.part", "message.conversation"},
 	"export":    {"data.%", "audit.export"},
 	"accounts":  {"account.%"},
 	"users":     {"user.%"},
@@ -356,6 +358,10 @@ type AuditRecord struct {
 	// Subject of a target message, set only by ListAudit and only for a
 	// message the viewer has a location of.
 	Subject string
+	// ViaShare: another user's read of the viewer's shared account, in a
+	// non-admin's ListAudit; its details are cut down by shareView, and it
+	// has no client address, user agent or API key name.
+	ViaShare bool
 }
 
 // ExportAudit calls fn for every entry of f, oldest first.
@@ -413,7 +419,10 @@ type AuditPage struct {
 	Limit    int
 }
 
-// ListAudit returns a page of entries, newest first.
+// ListAudit returns a page of entries, newest first. A non-admin's page
+// also holds other users' reads of the viewer's shared accounts (#389),
+// marked ViaShare and cut down by shareView. Subjects come from the
+// viewer's current scope: a message the viewer cannot read shows none.
 func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, error) {
 	patterns, err := AuditActionPatterns(p.Actions)
 	if err != nil {
@@ -451,5 +460,158 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 		}
 		out = append(out, rec)
 	}
+	if !p.All {
+		// The two sets are disjoint (own entries have the viewer as user,
+		// the shared reads never), and both are ordered and cut with the
+		// same cursor: merged and cut to Limit, the page goes on where the
+		// last kept row ends.
+		shared, err := s.q.ListSharedReadsForOwner(ctx, db.ListSharedReadsForOwnerParams{
+			OwnerID: p.Viewer, Since: p.Since, Until: p.Until,
+			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range shared {
+			details, err := shareView(r.Action, r.Details, p.Viewer)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, AuditRecord{
+				ID: r.ID, At: r.At, Actor: r.Actor, UserID: r.UserID, UserName: deref(r.UserName), Action: r.Action,
+				TargetType: deref(r.TargetType), TargetID: deref(r.TargetID), TargetName: deref(r.TargetName),
+				Details: details, ViaShare: true,
+			})
+		}
+		slices.SortFunc(out, func(a, b AuditRecord) int {
+			if c := b.At.Compare(a.At); c != 0 {
+				return c
+			}
+			return cmp.Compare(b.ID, a.ID)
+		})
+		if p.Limit >= 0 && len(out) > p.Limit {
+			out = out[:p.Limit]
+		}
+	}
+	if err := s.auditSubjects(ctx, p.Viewer, out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// auditSubjects fills in the subjects of message entries still without
+// one from the viewer's current scope (own and shared accounts), so an
+// admin still sees no subject of mail they cannot read. A shared read's
+// message.conversation entry whose requested message the viewer cannot
+// read loses its target: only its hash would show.
+func (s *Store) auditSubjects(ctx context.Context, viewer int64, recs []AuditRecord) error {
+	var shas []string
+	for _, r := range recs {
+		if r.TargetType == TargetMessage && r.Subject == "" && r.TargetID != "" {
+			shas = append(shas, r.TargetID)
+		}
+	}
+	if len(shas) == 0 {
+		return nil
+	}
+	sc, err := s.ViewerScope(ctx, viewer)
+	if err != nil {
+		return err
+	}
+	rows, err := s.q.AuditSubjects(ctx, db.AuditSubjectsParams{Shas: shas, Accounts: sc.ids()})
+	if err != nil {
+		return err
+	}
+	visible := make(map[string]string, len(rows))
+	for _, r := range rows {
+		visible[r.Sha256] = deref(r.Subject)
+	}
+	for i := range recs {
+		r := &recs[i]
+		if r.TargetType != TargetMessage || r.Subject != "" {
+			continue
+		}
+		subject, ok := visible[r.TargetID]
+		if !ok && r.ViaShare && r.Action == "message.conversation" {
+			r.TargetType, r.TargetID, r.TargetName = "", "", ""
+			continue
+		}
+		r.Subject = subject
+	}
+	return nil
+}
+
+// ViaAccount is one element of the details' via_accounts of a shared
+// read (#389): an account shared with the reader whose mail the entry is
+// about, with its owner at the time of the read. N, in list, page and
+// conversation entries, counts the rows of that answer the reader sees
+// only through this account.
+type ViaAccount struct {
+	ID    int64  `json:"id"`
+	Owner int64  `json:"owner"`
+	Key   string `json:"key"` // owner/name
+	N     *int   `json:"n,omitempty"`
+}
+
+// Details of shared reads (#389). DetailViaOwners holds the owners' user
+// IDs and makes the entry part of their Log (ListSharedReadsForOwner);
+// DetailViaAccounts holds []ViaAccount.
+const (
+	DetailViaOwners   = "via_owners"
+	DetailViaAccounts = "via_accounts"
+)
+
+// ShareSearchFields are the list parameters that make a list a search; a
+// named entry also keeps ShareNamedFields in an owner's view.
+var (
+	ShareSearchFields = []string{"q", "from", "to", "attachment", "after", "before", "has"}
+	ShareNamedFields  = []string{"q", "account", "folder", "from", "to", "attachment", "after", "before", "has", "gone", "group", "thread"}
+)
+
+// shareListActions are the entries of message lists.
+var shareListActions = []string{"message.search", "message.list", "message.page"}
+
+// shareView cuts the details of another user's read down to what the
+// owner viewer may see (#389, revision 2, R1/R2). It is an allowlist:
+//   - via_accounts keeps only the viewer's own accounts; via_owners and
+//     every other key go, so no owner learns of other owners' shares;
+//   - a named first page (message.search or message.list with "account")
+//     keeps its list parameters, because named searches keep their terms
+//     (decision 13);
+//   - every other list entry, unnamed pages and named cursor pages
+//     (message.page, decision 17), keeps only "search": whether any search
+//     parameter was set, never the terms, folder or thread;
+//   - other entries (message reads, conversations) keep the accounts only.
+func shareView(action string, details []byte, viewer int64) (json.RawMessage, error) {
+	var in map[string]json.RawMessage
+	if err := json.Unmarshal(details, &in); err != nil {
+		return nil, err
+	}
+	var via []ViaAccount
+	if raw, ok := in[DetailViaAccounts]; ok {
+		if err := json.Unmarshal(raw, &via); err != nil {
+			return nil, err
+		}
+	}
+	mine := []ViaAccount{}
+	for _, a := range via {
+		if a.Owner == viewer {
+			mine = append(mine, a)
+		}
+	}
+	out := map[string]any{DetailViaAccounts: mine}
+	if slices.Contains(shareListActions, action) {
+		// Named first pages keep their terms (decision 13); further pages,
+		// named ones too, show only whether they searched (decision 17).
+		if _, named := in["account"]; named && action != "message.page" {
+			for _, k := range ShareNamedFields {
+				if v, ok := in[k]; ok {
+					out[k] = v
+				}
+			}
+		} else {
+			out["search"] = slices.ContainsFunc(ShareSearchFields, func(k string) bool { _, ok := in[k]; return ok })
+		}
+	}
+	return json.Marshal(out)
 }

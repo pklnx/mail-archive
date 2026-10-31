@@ -100,16 +100,16 @@ func auditAccount(e *store.AuditEntry, a *store.Account) {
 // searchFields are the list parameters recorded with a search.
 var searchFields = []string{"q", "account", "folder", "from", "to", "attachment", "after", "before", "has", "gone", "group"}
 
-// searchEntry returns the entry of a message list, or nil for a list that
-// is a page view: plain folder lists, further pages (the first was logged)
-// and expanded conversations (the search was logged).
+// searchEntry returns the entry of a message list over the viewer's own
+// accounts, or nil for a list that is a page view: plain folder lists,
+// further pages (the first was logged) and expanded conversations (the
+// search was logged). Lists that reach shared accounts: listEntry.
 func (s *Server) searchEntry(r *http.Request) *store.AuditEntry {
 	q := r.URL.Query()
 	if q.Get("cursor") != "" || q.Get("thread") != "" {
 		return nil
 	}
-	if !slices.ContainsFunc([]string{"q", "from", "to", "attachment", "after", "before", "has"},
-		func(k string) bool { return q.Get(k) != "" }) {
+	if !isSearch(q.Get) {
 		return nil
 	}
 	e := s.auditEntry(r, "message.search")
@@ -119,6 +119,11 @@ func (s *Server) searchEntry(r *http.Request) *store.AuditEntry {
 		}
 	}
 	return e
+}
+
+// isSearch reports whether a list request sets a search parameter.
+func isSearch(get func(string) string) bool {
+	return slices.ContainsFunc(store.ShareSearchFields, func(k string) bool { return get(k) != "" })
 }
 
 // clientIP is the client's address: the peer, or behind a trusted proxy
@@ -208,6 +213,9 @@ type auditEntryJSON struct {
 	ClientIP  string           `json:"clientIp,omitempty"`
 	UserAgent string           `json:"userAgent,omitempty"`
 	Details   json.RawMessage  `json:"details"`
+	// ViaShare: another user's read of the viewer's shared account, in a
+	// non-admin's page; its details are cut down to what the owner may see.
+	ViaShare bool `json:"viaShare,omitempty"`
 }
 
 type auditPageJSON struct {
@@ -215,8 +223,9 @@ type auditPageJSON struct {
 	NextCursor string           `json:"nextCursor,omitempty"`
 }
 
-// handleAudit lists audit entries, newest first: a user's own, or for
-// admins everyone's. Reading the log writes no entry.
+// handleAudit lists audit entries, newest first: a user's own and other
+// users' reads of their shared accounts, or for admins everyone's. Reading
+// the log writes no entry.
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	sess := currentSession(r)
@@ -300,7 +309,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	for _, rec := range recs {
 		e := auditEntryJSON{
 			ID: rec.ID, At: rec.At.UTC(), Actor: rec.Actor, User: rec.UserName, APIKey: rec.APIKeyName, Action: rec.Action,
-			ClientIP: rec.ClientIP, UserAgent: rec.UserAgent, Details: rec.Details,
+			ClientIP: rec.ClientIP, UserAgent: rec.UserAgent, Details: rec.Details, ViaShare: rec.ViaShare,
 		}
 		if rec.TargetType != "" {
 			e.Target = &auditTargetJSON{Type: rec.TargetType, ID: rec.TargetID, Name: rec.TargetName, Subject: rec.Subject}

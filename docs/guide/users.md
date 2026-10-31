@@ -1,8 +1,8 @@
 # Users
 
 Everyone who uses the web UI has their own login. Each user sees only their
-own accounts and the mail found in them; see
-[Security](../reference/security#login).
+own accounts, the accounts other users [shared](#shared-accounts) with them,
+and the mail found in them; see [Security](../reference/security#login).
 
 ## The first admin
 
@@ -73,7 +73,8 @@ first. Admins can:
 - **Remove:** only for users without accounts. A user who still owns accounts
   (also removed ones) must hand them over first, on the command line:
   `./ma account move NAME --user OLD --to NEW`. Removed from the user's page,
-  the list takes its place.
+  the list takes its place. The shares of other users' accounts with the
+  removed user end; a new user with the same name gets none of them.
 
 A user whose accounts keep failing to sync is marked with the number of
 those accounts, so you can tell them.
@@ -84,7 +85,8 @@ menu, and their own user's page has no actions but **Revoke** for their API
 keys and a link to their profile. They use their profile, or another admin
 does it.
 
-Admins manage logins and never see other users' mail. They do see the
+Admins manage logins and never see other users' mail, unless an owner
+shared an account with them. They do see the
 [audit log](./audit-log) of every user on the **Log** page: searches with
 their text, which messages were opened, account names, IP addresses and
 browsers. Tell your users before they use the archive. Every user sees
@@ -166,6 +168,34 @@ offering it, and signing in with it then says it is not registered. Delete
 it there too (in Firefox: Settings, Privacy & Security, Passkeys; on a Mac:
 the Passwords app).
 
+## Shared accounts
+
+The owner of an account can let another user read it: search, open and
+download its mail. Managing, syncing and removing the account, retention
+and legal holds stay with the owner. Only the owner shares, also among
+admins, one account with one user at a time, by the user's exact name.
+smtp (journal) accounts cannot be shared.
+
+- The shared user sees the account as `owner/name` (for example
+  `anna/info`), with its folders, their counts and when each was last
+  synced and reconciled, but not its server, login, sync errors, sync
+  health or the other users it is shared with.
+- A message in several accounts shows the shared user only the locations
+  of accounts they may see. A message the owner has only in an account that
+  is not shared stays hidden.
+- Ending the share takes effect on the user's next request. A removed
+  account keeps its shares (they can be ended, not added); deleting it
+  completely ends them. `./ma account move` keeps the shares; the new owner's
+  own share ends, and the old owner keeps no access unless the new owner
+  shares it.
+- Every read of shared mail is in the [audit log](./audit-log#shared-accounts),
+  and the owner sees it in their Log with the reader's name and whether a
+  session or an API key read it, without the reader's IP address, browser
+  or key name.
+
+Sharing is done with `PUT` and `DELETE /api/accounts/{name}/shares/{user}`
+(see the [JSON API](../reference/api#shared-accounts)).
+
 ## API keys
 
 Scripts, cron jobs and other tools use an API key instead of your login.
@@ -178,8 +208,9 @@ if you use 2FA, a code, then click **Create API key**. The key is shown
 once: copy it right away. It cannot be shown again; create a new one if it
 is lost.
 
-- **read** lets the key search and read your mail, download messages and
-  attachments, and see your accounts and their status.
+- **read** lets the key search and read your mail, also in the accounts
+  shared with you, download messages and attachments, and see your
+  accounts and their status.
 - **sync** lets it start syncs of your accounts.
 
 A key can do nothing else: no logins, no profile or account changes, no

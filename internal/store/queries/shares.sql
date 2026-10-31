@@ -26,3 +26,18 @@ FROM account_shares s
 JOIN users u ON u.id = s.user_id
 WHERE s.account_id = @account_id
 ORDER BY u.name;
+
+-- name: ListOwnerShares :many
+-- The shares of every account of an owner, by account and user name.
+SELECT s.account_id, u.name AS user_name, s.created_at
+FROM account_shares s
+JOIN accounts a ON a.id = s.account_id
+JOIN users u ON u.id = s.user_id
+WHERE a.owner_id = @owner_id::bigint
+ORDER BY s.account_id, u.name;
+
+-- name: CountUserShares :one
+SELECT count(*) FROM account_shares WHERE user_id = @user_id;
+
+-- name: CountAccountShares :one
+SELECT count(*) FROM account_shares WHERE account_id = @account_id;

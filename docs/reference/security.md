@@ -12,7 +12,7 @@
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
-| API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A key reaches only the read and sync endpoints of its owner. See [Login](#login). |
+| API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A key reaches only the read and sync endpoints of its owner and the accounts shared with them. See [Login](#login). |
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
 | Retention and deletion | Nothing is deleted without a [retention rule](./cli#retention) and a reviewed, confirmed [deletion run](./cli#deletion); rules, legal holds and runs are admin-only and recorded in the audit log. Database triggers refuse to delete a location whose period has not ended or that is on hold, and a message row without its deletion record. A message stays while any location of it, in any user's account, has no rule or an unexpired one, or is on legal hold. |
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
@@ -81,10 +81,25 @@ login.
   client, so all clients share the address limit; the limit per user name
   still applies.
 
-Each user sees only their own accounts and the mail found in them. A message
-that is in two users' accounts is stored once and shown to both, each with
-only their own locations. Other users' accounts and messages answer `404`,
-also when someone guesses a message ID. Admins see only their own mail too.
+Each user sees only their own accounts, the accounts other users shared with
+them, and the mail found in them. A message in several accounts is stored once
+and shown to each user with only the locations of accounts they may see. Other
+accounts and messages answer `404`, also when someone guesses a message ID.
+Admins see only their own mail and what was shared with them.
+
+Only an account's owner shares it, with one user at a time, and only for
+reading: search, read and download. Managing, syncing, retention and removal
+stay with the owner; the shared user gets `404` (`403` for the admin-only purge
+routes) for the account's management routes. smtp (journal) accounts cannot be shared, so envelopes (BCC
+recipients) stay with their owner. An unshare takes effect on the user's next
+request. Every read of shared mail is in the reader's audit log entries, and
+the owner sees reads of their shared accounts as described in
+[Audit log, Shared accounts](../guide/audit-log#shared-accounts), without the
+reader's address, browser or API key name. Two kinds of read do not reach the
+owner: a page of a list or search over all of the reader's mail whose messages
+the reader also has through own accounts, and a conversation whose only member
+in the shared account is the message that was opened. A legal hold on a shared
+account is never shown to the shared user, admins included.
 
 ## Network access
 
@@ -396,7 +411,7 @@ on the public ntfy.sh server, use a protected topic or a long random one.
 
 Identical messages are stored once, even when several users archived them.
 Whether a message is gone from a server is recorded per location, and each
-user only sees their own accounts' locations: in the message view, in
+user only sees the locations of their own and shared accounts: in the message view, in
 **Only in archive** (`gone=1`), in the tag on list rows (`gone` in the
 list JSON), and in the counts on the account page and in
 `GET /api/status`. If Alice deletes a message that Bob also archived, Bob

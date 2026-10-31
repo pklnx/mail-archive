@@ -66,7 +66,7 @@ A key has one or both scopes:
 access to mail. Everything else (logins, the profile, users, adding and
 changing accounts, listing server folders) is for sessions only. A key does
 no more than its owner could in the web UI: an admin's key reaches only the
-admin's own accounts, like a session.
+admin's own accounts and those shared with them, like a session.
 
 | Case | Status |
 |---|---|
@@ -174,7 +174,7 @@ session is created. A logout always works.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details"}], "nextCursor"}`. A user gets their own entries; admins every user's. `subject` is the subject of a target message, only if the viewer has that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339, `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`, or an action such as `message.open`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`), both repeatable, up to 100 `user` values; empty values and repeats are ignored. Several values form a union: an entry matches if its user is one of `user` or its actor is one of `actor`, so `user=alice&actor=cli` lists alice's entries and the command line's. From other users `403`, before any value is checked. Sessions only, not with an API key. Reading the log writes no entry. |
+| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details", "viaShare"}], "nextCursor"}`. A user gets their own entries and other users' reads of the accounts they [shared](#shared-accounts), marked `"viaShare": true`; admins every user's. A `viaShare` entry keeps `actor` (`session` or `api_key`) but has no `clientIp`, `userAgent` or `apiKey`, and its details only `via_accounts` with the viewer's own accounts (`{"id", "owner", "key", "n"}`), plus the terms of a first page that named the account, or `search` (true or false) for further pages and for lists that did not name it; see [Audit log](../guide/audit-log#shared-accounts). `subject` is the subject of a target message, only if the viewer may read that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339, `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`, or an action such as `message.open`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`), both repeatable, up to 100 `user` values; empty values and repeats are ignored. Several values form a union: an entry matches if its user is one of `user` or its actor is one of `actor`, so `user=alice&actor=cli` lists alice's entries and the command line's. From other users `403`, before any value is checked. Sessions only, not with an API key. Reading the log writes no entry. |
 
 Account management and sync need `MAIL_ARCHIVE_SECRET_KEY` on the server;
 without it these endpoints answer `503` and `GET /api/accounts` reports
@@ -204,7 +204,7 @@ See [`retention` and `hold`](./cli#retention) on the command line.
 | Endpoint | Description |
 |---|---|
 | `GET /api/messages` | List or search messages, newest first. |
-| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account without an envelope: a [fill](#fills) copied it from IMAP or [`import --journal`](../guide/importing#into-an-smtp-account) imported it from files, so BCC recipients are unknown. `fill` names that fill and its mailbox, `{"id", "username", "host"}`; `import` names that import of files and its label, `{"id", "label"}`. Both are `null` for other locations, and when unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold`. |
+| `GET /api/messages/{id}` | Headers, plain text, attachment list and every location (account, folder, UID, flags, `superseded`, `goneAt`, `lastSeenAt`). A superseded location is from before the folder's `UIDVALIDITY` changed (the server renumbered it); current locations come first. `goneAt` is when a [reconcile](../guide/syncing#reconcile) found the location missing on the server (`null` while it is there or before the folder was reconciled); `lastSeenAt` is when the server last listed it. Also `thread` (the thread key) and, for a reply, `inReplyTo` (the Message-ID it answers, without angle brackets). A location in an smtp account has an `envelope`: `mailFrom`, `rcptTo` (the original recipients, BCC included), `receivedAt`, `clientIp` and `helo`; other locations have `null`. `filled` is true for a location in an smtp account without an envelope: a [fill](#fills) copied it from IMAP or [`import --journal`](../guide/importing#into-an-smtp-account) imported it from files, so BCC recipients are unknown. `fill` names that fill and its mailbox, `{"id", "username", "host"}`; `import` names that import of files and its label, `{"id", "label"}`. Both are `null` for other locations, and when unknown. `retainUntil` is when the [retention period](./cli#retention) ends, per location and for the message (the latest over the user's locations); `null` when no rule covers a location, so it is kept for ever. Admins also get `onHold` on their own locations and for the message (any own location on hold); locations in [shared accounts](#shared-accounts) never have it. `owner` is the owner's user name for a location in a shared account, `null` for the user's own. |
 | `GET /api/messages/{id}/conversation` | The conversation of the message; see below. `404` like `GET /api/messages/{id}`. |
 | `GET /api/messages/{id}/html[?images=1]` | The HTML body for a sandboxed iframe. Scripts are blocked (`script-src 'none'`); the sandbox allows the same origin, so the web UI can size the frame to the mail, but never scripts. Remote images only with `images=1`. Inline `cid:` images (PNG, JPEG, GIF, WebP; up to 10 MiB per message) are embedded as `data:` URLs; others become `data:,`. Then declarative shadow roots and `srcdoc` frames are neutralized in the bytes as served: attribute names starting with `shadowroot` on `<template>` and `srcdoc` on `<iframe>` get the prefix `data-`; the rename changes no other byte. Requests the frame makes to `/api` (images, links) are refused with `403`; see [Browser requests](#browser-requests). |
 | `GET /api/messages/{id}/raw` | The original `.eml`. |
@@ -217,7 +217,7 @@ Query parameters of `GET /api/messages`:
 | Parameter | Description |
 |---|---|
 | `q` | Full-text query over subject, sender and body; see [Search](../guide/web-ui#search). Prefixes such as `to:` are parsed by the web UI, not here. |
-| `account`, `folder` | Only messages found in this account or folder. |
+| `account`, `folder` | Only messages found in this account or folder. `account` is the name of an own account, or `owner/name` (the `key` in `GET /api/accounts`) for one shared with the user; an unknown account lists nothing. |
 | `from` | Part of the sender's name or address, in any case. |
 | `to` | Part of a name or address in To or Cc, in any case, or of an envelope recipient of the user's smtp accounts (which includes BCC recipients). Bcc headers are not stored. |
 | `attachment` | Part of an attachment's file name, in any case. Implies `has=attachment`. |
@@ -266,14 +266,14 @@ even when they belong to another conversation (a reply with only an
 or `thread`. At most the newest 200 are listed; `total` counts all, and
 `truncated` says that older ones were left out.
 
-Only messages found in the user's own accounts are listed or counted, in
-conversations, grouped rows and `thread=` alike.
+Only messages found in the user's own and shared accounts are listed or
+counted, in conversations, grouped rows and `thread=` alike.
 
 ## Accounts
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), `fills`, their recurring fills and the latest one, and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null`, `[]` and `null`. `purging` is `true` while a removed account is being [deleted completely](../guide/accounts#deleting-a-removed-account-completely), and `purge` then has the progress (`{"id", "expected", "locations", "deleted", "kept"}`; `null` otherwise). |
+| `GET /api/accounts` | All accounts with `kind` (`imap`, `import` for mail imported from files, or `smtp` for mail a mail server delivers over SMTP), server settings (never the password), folders with message counts and the hierarchy `delimiter` (`/` or `.` as the IMAP server reports it, `""` if it has none, `null` until the folder's first sync after the upgrade; always `/` for import and smtp accounts), and the sync state. Import and smtp accounts have an empty `host`, `tls` and `username` and `port` 0; import accounts have `enabled` false. smtp accounts list their `addresses` and `lastReceivedAt`, when they last accepted a message (`null` before the first); other kinds have `[]` and `null`. The response's `smtp` is `{}` when the SMTP server is on and `null` when `MAIL_ARCHIVE_SMTP_LISTEN` is empty. smtp accounts also have `fill`, their latest [fill](#fills) (`null` without one), `fills`, their recurring fills and the latest one, and `firstReceived`, the first message they received that is still stored (`{"at", "subject"}`, `null` without one); other kinds have `null`, `[]` and `null`. `purging` is `true` while a removed account is being [deleted completely](../guide/accounts#deleting-a-removed-account-completely), and `purge` then has the progress (`{"id", "expected", "locations", "deleted", "kept"}`; `null` otherwise). `sharedWith` lists the users an account is [shared](#shared-accounts) with (`[{"user", "since"}]`). The response's `shared` lists the accounts other users shared with the user: `key` (`owner/name`), `name`, `owner`, `kind`, `enabled`, `removed` and `folders` (with counts, `lastSyncedAt` and `lastReconciledAt`), nothing else: no server, login, sync errors or sync health. |
 | `POST /api/accounts` | Add an account. The login is checked first; the first sync starts right away. With `{"kind": "smtp", "name": "journal", "addresses": ["archive@archive.local"]}` (admins only, otherwise `403`) it adds an smtp account: no server fields, no login check; `409` names an address another account receives for. |
 | `PATCH /api/accounts/{name}` | Change some fields, including `name` to rename the account. `addresses` replaces an smtp account's list (admins only; `409` on other kinds). A new connection or password is checked with a login first; if that fails, nothing changes. All fields are saved together or not at all. `409` when the name is taken or when the account was changed since it was loaded (reload and try again). Works while the account is being synced; the change applies from the next sync. |
 | `DELETE /api/accounts/{name}` | Remove the account. Returns `{"result": "removed"}` if archived mail was kept, `{"result": "deleted"}` if the account had none. `409` while the account is being synced or filled. |
@@ -317,6 +317,25 @@ smtp accounts `409`. A value equal to the stored one is accepted and changes
 nothing, so a value stored before `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` was raised
 can be sent back. A change needs no login check and applies at the next
 minute's check of the schedule.
+
+### Shared accounts
+
+An owner can let another user read an account: search, read and download its
+mail. Managing, syncing and removing it stay with the owner; for the shared
+user every `/api/accounts/{name}` route answers `404` (purges `403`, as for
+every non-admin) and `POST /api/sync` queues none of the owner's accounts. A
+`read` key reaches shared accounts like its owner's session; a `sync` key
+none.
+
+| Endpoint | Description |
+|---|---|
+| `PUT /api/accounts/{name}/shares/{user}` | Share an own account with the user. `204`; sharing again changes nothing and writes no entry. `400` for the owner, `404` for an unknown account or user (also another user's account, for admins too), `409` for an smtp account (its envelopes stay with the owner), a removed account, or an account changed meanwhile. Sessions only. Audited as `account.share`. |
+| `DELETE /api/accounts/{name}/shares/{user}` | End the share: the user's next request no longer sees the account. `204`, `404` without such a share. Also for removed accounts. Sessions only. Audited as `account.unshare`. |
+
+Reads of shared mail are recorded with `via_owners` and `via_accounts`, which
+put them into the owner's Log; lists, further pages and conversations that
+reach a shared account are recorded as well (`message.list`, `message.page`,
+`message.conversation`). See [Audit log](../guide/audit-log#shared-accounts).
 
 ### Fills
 
