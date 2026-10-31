@@ -3,12 +3,11 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- v1.2.2 (2026-10-31, main b61f627). **1.3.0 is ready on main bf5b02f**: every issue of the milestone is closed except the release test #458 (maintainer's device checks). The release dry run (run 41249220196) proposes 1.3.0 and is green. Draft highlights for the notes: the coordinator posts them on the release; they must state #401's AND→OR change for `user`+`actor` and the #459 security fix.
+- v1.2.2 (2026-10-31, main b61f627). **1.3.0 is ready on main 7877466** (code as of bf5b02f; later commits are docs only): every issue of the milestone is closed except the release test #458 (maintainer's device checks). The release dry run (run 41249220196) proposes 1.3.0 and is green. Draft highlights for the notes: the coordinator posts them on the release; they must state #401's AND→OR change for `user`+`actor` and the #459 security fix.
 
 ## Open PRs (waiting for the maintainer's OK, all reviewed and green)
 - #462: `.claude/` and `CLAUDE.md` (#460 part 4): autonomy, hosted only, target hardware.
 - #464: docs hosted-only framing (#460 part 3), with a list of policy statements for the maintainer.
-- #460 part 2 (docs/reference, docs/development rewording; `security.md` guarantees shown old vs new): in progress or open.
 - This PR (handover).
 
 ## Open tickets
@@ -16,7 +15,7 @@ Current state only. At session end replace these sections; never append. History
 - 1.4.0: #391 OAuth2 (`ready`, #426–#430).
 - 1.5.0: #392 encryption (#433–#437), #393 auditor (#439–#442), #394 GoBD export CLI (#443, #444), all `ready`.
 - 1.6.0: #395 SMTP AUTH/TLS (#454–#456), #396 start without CLI (#451–#453), #397 operator/quotas/mail alerts (#446–#450), #398 WebKit e2e with #343, all `ready`. #432 (database encryption) is not planned yet.
-- #460 docs rework: part 1 merged (#461), parts 2–4 open. Fable cut docs/guide only 2.5 % without content changes; its PR #461 lists 9 cuts that would need the maintainer's OK.
+- #460 docs rework: parts 1 (#461) and 2 (#466) merged, parts 3 (#464) and 4 (#462) wait for the maintainer. Without content changes the docs shrank only 1–3 %; #461 and #466 list 17 cuts that would need the maintainer's OK.
 - Follow-ups after #462/#464: `docs/development/process.md:6` (maintainer decides UI/wording), `README.md`, `docs/index.md` still say self-hosted.
 
 ## Active decisions
@@ -28,5 +27,5 @@ Current state only. At session end replace these sections; never append. History
 
 ## Maintainer actions
 - #458 device checks, then the OK for the 1.3.0 release and its notes.
-- OK on #462 and #464 (and the #460 part 2 guarantee table); decide on the 9 cuts listed in #461.
+- OK on #462 and #464 (and the #460 part 2 guarantee table); decide on the cuts listed in #461 and #466.
 - Microsoft 365 journaling (no SMTP AUTH) is out of #395; decide whether it becomes a goal.
