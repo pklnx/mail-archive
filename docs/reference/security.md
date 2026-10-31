@@ -407,6 +407,11 @@ What remains:
   Firefox, Safari 16.4 and later); Chromium would send the session cookie
   along, because the navigation began in the mail frame. Opening such an
   address directly (typed, a bookmark, the app's own links) still works.
+- A link or redirect can still open the web UI itself (`/`, for example
+  `/?m=<sha>`), which is not an `/api` route. Opening a message there writes
+  the usual `message.open` and `message.html` entries in your name, as with
+  any website that links to the archive; the sender has to know the stored
+  message's SHA-256.
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests.
