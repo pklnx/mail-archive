@@ -247,6 +247,98 @@ func inlineParts(r io.Reader, want func(Part) bool, maxTotal int64, wrap func(io
 	return out, partErr
 }
 
+// Attachment is one attachment as Attachments passes it on.
+type Attachment struct {
+	Part
+	// Charset is the charset parameter of a text part, "" if it has none.
+	// The body of a text part with a known charset is already UTF-8.
+	Charset string
+	// Data is the decoded body; nil if TooLarge or Err is set.
+	Data []byte
+	// TooLarge is set when the body is larger than the part's limit; at
+	// most the limit plus one byte of it was read.
+	TooLarge bool
+	// Err is set when the body could not be decoded (for example corrupt
+	// base64). Later parts are still passed on.
+	Err error
+}
+
+// Attachments passes the attachments of a message (parts with
+// Part.Attachment set) to fn, one at a time, in walk order. limit returns
+// the largest decoded size to read of a part; a part for which it returns
+// 0 or less is skipped. Indexes and the guards (MaxParts, MaxDepth, decoded
+// bytes) are those of Parse, so an Attachment's Index addresses the same
+// part as in OpenPart. fn returns false to stop the walk. The error is that
+// of reading the message, if any; fn has seen the parts read until then.
+func Attachments(r io.Reader, limit func(Part) int64, fn func(Attachment) bool) error {
+	return attachments(r, limit, fn, maxDecoded, func(b io.Reader) io.Reader { return b })
+}
+
+// attachments is Attachments with the decoded-bytes limit and a wrapper
+// around each wanted body, for tests.
+func attachments(r io.Reader, limit func(Part) int64, fn func(Attachment) bool, maxDec int64, wrap func(io.Reader) io.Reader) error {
+	ent, err := message.Read(r)
+	if ent == nil {
+		return err
+	}
+	var (
+		index   int
+		decoded int64
+	)
+	stop := errors.New("stop")
+	err = ent.Walk(func(path []int, part *message.Entity, _ error) error {
+		if err := guard(path, part, index); err != nil {
+			return err
+		}
+		if part.MultipartReader() != nil {
+			return nil
+		}
+		p := describe(part, index)
+		index++
+		left := maxDec - decoded
+		max := int64(0)
+		if p.Attachment {
+			max = limit(p)
+		}
+		if max <= 0 {
+			n, _ := io.Copy(io.Discard, io.LimitReader(part.Body, left+1))
+			if decoded += n; decoded > maxDec {
+				return errLimit
+			}
+			return nil
+		}
+		a := Attachment{Part: p}
+		if strings.HasPrefix(p.ContentType, "text/") {
+			_, params, _ := part.Header.ContentType()
+			a.Charset = params["charset"]
+		}
+		b, err := io.ReadAll(io.LimitReader(wrap(part.Body), min(max, left)+1))
+		decoded += int64(len(b))
+		switch {
+		case err != nil:
+			a.Err = err
+		case int64(len(b)) > min(max, left):
+			// Larger than its limit, or it crosses the message's
+			// decoded-bytes limit, after which Parse lists no more parts.
+			a.TooLarge = true
+		default:
+			a.Data = b
+			a.Size = int64(len(b))
+		}
+		if !fn(a) {
+			return stop
+		}
+		if decoded > maxDec {
+			return errLimit
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, stop) && !errors.Is(err, errLimit) {
+		return err
+	}
+	return nil
+}
+
 // Indexed is what search stores about a message's body and parts.
 type Indexed struct {
 	// Text is the text body, or the HTML body converted to text, truncated
