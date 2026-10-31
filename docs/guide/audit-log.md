@@ -97,8 +97,8 @@ reader. The entries hold the owners as of the read (`via_owners`), so they
 stay in the owner's Log after an unshare, and after `account move` with the
 owner of their time. A read of mail the reader also has in an own account
 counts only for message reads, not in `n`. So two reads do not reach the
-owner: a page of a list or search whose messages the reader also has in
-own accounts, and a conversation whose only message in the shared account
+owner: a further page, or a page over all of the reader's mail, whose
+messages the reader also has in own accounts, and a conversation whose only message in the shared account
 is the one opened (that message has its own `message.open`).
 
 ## The fields
@@ -173,7 +173,16 @@ and API keys; the list then shows the entries of any of them, for example
 alice's and the command line's.
 The **Who** column is for admins; for everyone else, an entry from the
 command line says so under its target. Owners of shared accounts also see
-other users' reads of them; see [Shared accounts](#shared-accounts).
+other users' reads of them; see [Shared accounts](#shared-accounts). Then
+the **Who** column shows for them too, with the reader's name, and the
+entry says what the reader saw: "jo's search showed 2 messages of info",
+"jo's list showed …" for a list without search, "jo's conversation view
+showed …", or "in info" for an opened message or download. Search terms
+show only for a first page that named the account; a read with an API key
+says "with an API key", without the key's name. The new actions read
+*Listed messages* (`message.list`), *Loaded more results* (`message.page`),
+*Showed conversation* (`message.conversation`), *Shared account*
+(`account.share`) and *Ended account share* (`account.unshare`).
 
 ![Log page](/screenshots/log.png)
 

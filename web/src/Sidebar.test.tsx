@@ -13,14 +13,14 @@ function account(name: string, folders: Folder[]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders, goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
   };
 }
 
 const data = (): AccountsResponse => ({
   accounts: [account("work", [f("INBOX", 5), f("Archive", 2), f("Archive/2024", 3), f("Lists/dev", 4)])],
-  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
+  manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 });
 
 const view = (account = "", folder = ""): ViewState => ({ q: "", account, folder, group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [] });
@@ -279,6 +279,71 @@ const now = () => Number(separator().getAttribute("aria-valuenow"));
 const collapseButton = () => screen.getByRole("button", { name: t.collapseSidebar });
 const expandButton = () => screen.getByRole("button", { name: t.expandSidebar });
 const collapseStored = () => localStorage.setItem(layoutKey, JSON.stringify({ v: 1, width: 14, collapsed: true }));
+
+// Accounts other users shared with the viewer (#389): after the own ones,
+// named "info · anna", selected and kept collapsed by owner/name, also
+// when the viewer has an account of the same name.
+const shared = (owner: string, name: string, folders: Folder[]): AccountsResponse["shared"][number] => ({
+  key: `${owner}/${name}`, name, owner, kind: "imap", enabled: true, removed: false, folders,
+});
+
+describe("Folder tree with shared accounts", () => {
+  const withShared = (): AccountsResponse => ({ ...data(), shared: [shared("anna", "work", [f("INBOX", 7)]), { ...shared("ben", "old", []), removed: true }] });
+
+  it("lists them after the own accounts with their owner, and selects them by owner/name", () => {
+    const select = vi.fn();
+    render(<Harness state={view()} d={withShared()} select={select} />);
+    const accounts = Array.from(document.querySelectorAll(".folder-tree__name--account"), (n) => n.textContent);
+    expect(accounts).toEqual(["work", t.sharedName("work", "anna"), t.sharedName("old", "ben")]);
+    expect(node(`${t.sharedName("old", "ben")} ${t.removed}`)).toBeTruthy();
+    fireEvent.click(node(t.sharedName("work", "anna")));
+    expect(select).toHaveBeenLastCalledWith("anna/work", "");
+    // The shared account's own INBOX, not the own account's.
+    const inbox = within(document.getElementById(node(t.sharedName("work", "anna")).getAttribute("aria-owns")!)!).getByRole("treeitem", { name: "INBOX 7", hidden: true });
+    fireEvent.click(inbox);
+    expect(select).toHaveBeenLastCalledWith("anna/work", "INBOX");
+  });
+
+  it("marks the selected shared account, not the own one of the same name", () => {
+    render(<Harness state={view("anna/work", "INBOX")} d={withShared()} select={() => {}} />);
+    expect(node("INBOX 7").getAttribute("aria-selected")).toBe("true");
+    expect(node("INBOX 5").getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("collapses a shared account under its owner/name", () => {
+    render(<Harness state={view()} d={withShared()} select={() => {}} />);
+    fireEvent.click(caret(t.sharedName("work", "anna")));
+    expect(expanded(t.sharedName("work", "anna"))).toBe("false");
+    expect(expanded(/^work$/)).toBe("true");
+    expect(JSON.parse(localStorage.getItem("mail-archive.sidebar.alice")!).collapsed).toEqual({ "anna/work": [""] });
+  });
+
+  it("collapses all, the shared accounts too, each under its own key", () => {
+    render(<Harness state={view()} d={withShared()} select={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: t.collapseAll }));
+    expect(expanded(t.sharedName("work", "anna"))).toBe("false");
+    expect(expanded(/^work$/)).toBe("false");
+    expect(Object.keys(JSON.parse(localStorage.getItem("mail-archive.sidebar.alice")!).collapsed).sort()).toEqual(["anna/work", "work"]);
+  });
+
+  it("shows only shared accounts, without Add account, to a user who has none of their own", () => {
+    render(<Harness state={view()} d={{ ...withShared(), accounts: [] }} select={() => {}} />);
+    expect(node(t.sharedName("work", "anna"))).toBeTruthy();
+    expect(screen.queryByText(t.noAccounts)).toBeNull();
+  });
+
+  it("names them with their owner in the rail and selects them from it", () => {
+    collapseStored();
+    const select = vi.fn();
+    render(<Panel d={withShared()} select={select} />);
+    const rail = within(expandButton().closest("nav")!);
+    const anna = rail.getByRole("button", { name: t.sharedName("work", "anna") });
+    expect(anna.textContent).toBe("WO");
+    fireEvent.click(anna);
+    expect(select).toHaveBeenCalledWith("anna/work", "");
+    expect(rail.getByRole("button", { name: `${t.sharedName("old", "ben")}, ${t.removed}` }).className).toContain("folder-rail__account--off");
+  });
+});
 
 describe("Folder column width", () => {
   it("has a separator with role, bounds and value", () => {

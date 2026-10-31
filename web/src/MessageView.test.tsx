@@ -17,7 +17,7 @@ const id = "a".repeat(64);
 
 function location(over: Partial<Location> = {}): Location {
   return {
-    account: "personal", folder: "INBOX", uid: 7, flags: [], internalDate: null, superseded: false, goneAt: null,
+    account: "personal", owner: null, folder: "INBOX", uid: 7, flags: [], internalDate: null, superseded: false, goneAt: null,
     lastSeenAt: "2026-10-01T10:00:00Z", envelope: null, filled: false, fill: null, import: null, retainUntil: null, ...over,
   };
 }
@@ -185,6 +185,18 @@ describe("the message header", () => {
       expect(document.activeElement).toBe(button);
     }
     expect(document.body.innerHTML).not.toContain("Show information");
+  });
+
+  it("names a shared account's location with its owner and shows no hold for it (#389)", async () => {
+    // The server leaves onHold out for shared locations and computes the
+    // message's from own ones only (decision 12); the view reads only the
+    // message-level onHold.
+    detail = message({ locations: [location(), location({ account: "work", owner: "anna", retainUntil: "2034-12-31T23:00:00Z" })], retainUntil: "2034-12-31T23:00:00Z" });
+    const article = await show();
+    fireEvent.click(within(article).getByRole("button", { name: t.details }));
+    expect(within(article).getByText("work (anna) / INBOX")).toBeTruthy();
+    expect(within(article).getByText("personal / INBOX")).toBeTruthy();
+    expect(within(article).queryByText(t.onLegalHold)).toBeNull();
   });
 
   it("speaks German, Carbon's texts included", async () => {

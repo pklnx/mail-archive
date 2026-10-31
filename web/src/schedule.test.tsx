@@ -14,14 +14,14 @@ function account(syncInterval: string, sync: Partial<Account["sync"]> = {}, more
   return {
     name: "work", kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval, folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null, ...sync },
     ...more,
   };
 }
 
 const data = (more: Partial<AccountsResponse> = {}): AccountsResponse => ({
-  accounts: [], manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null, ...more,
+  accounts: [], manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null, ...more,
 });
 
 describe("formatEvery", () => {

@@ -10,14 +10,14 @@ function smtpAccount(more: Partial<Account> = {}): Account {
   return {
     name: "journal", kind: "smtp", enabled: true, removed: false, purging: false, purge: null, host: "", port: 0, tls: "tls", username: "",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
     ...more,
   };
 }
 
 const data = (accounts: Account[] = [], smtp: AccountsResponse["smtp"] = {}): AccountsResponse => ({
-  accounts, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp,
+  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp,
 });
 
 let requests: { method: string; url: string; body: unknown }[];
@@ -42,7 +42,7 @@ afterEach(() => {
 function page(admin: boolean, d = data()) {
   const reload = vi.fn();
   window.history.replaceState(null, "", "/?view=accounts");
-  render(<AccountsPage accounts={{ data: d, error: "", reload }} admin={admin} renamed={() => {}} showGone={() => {}} />);
+  render(<AccountsPage accounts={{ data: d, error: "", reload }} admin={admin} renamed={() => {}} showGone={() => {}} showAccount={() => {}} />);
   return reload;
 }
 
@@ -87,7 +87,7 @@ describe("the smtp account's page", () => {
   function detail(admin: boolean, more: Partial<Account> = {}) {
     answer = () => new Response(null, { status: 204 });
     window.history.replaceState(null, "", "/?view=accounts&id=journal");
-    render(<AccountsPage accounts={{ data: data([smtpAccount(more)]), error: "", reload: () => {} }} admin={admin} renamed={() => {}} showGone={() => {}} />);
+    render(<AccountsPage accounts={{ data: data([smtpAccount(more)]), error: "", reload: () => {} }} admin={admin} renamed={() => {}} showGone={() => {}} showAccount={() => {}} />);
   }
 
   it("lets the owner rename but not change addresses", async () => {

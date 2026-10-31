@@ -42,7 +42,7 @@ function account(name: string, more: Partial<Account> = {}): Account {
     name, kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "imap.example.com", port: 993, tls: "tls",
     username: `${name}@example.com`, includedFolders: [], excludedFolders: [], syncInterval: "default",
     folders: [{ name: "INBOX", messages: 4, lastSyncedAt: null, lastReconciledAt: null, delimiter: "/" }],
-    goneMessages: 0, lastReconciledAt: null, addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    goneMessages: 0, lastReconciledAt: null, addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: "6h0m0s", nextAt: null },
     ...more,
   };
@@ -55,7 +55,7 @@ const busy = (a: Account): Account => ({ ...a, sync: { ...a.sync, state: "runnin
 const purge = { id: 1, expected: 10, locations: 2, deleted: 4, kept: 0 };
 
 const data = (accounts: Account[], more: Partial<AccountsResponse> = {}): AccountsResponse => ({
-  accounts, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: {}, ...more,
+  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: {}, ...more,
 });
 
 let requests: { method: string; url: string; body: unknown }[];
@@ -102,12 +102,13 @@ function show(url: string, d: AccountsResponse | null, admin = true, error = "")
   const reload = vi.fn();
   const renamed = vi.fn();
   const showGone = vi.fn();
+  const showAccount = vi.fn();
   const page = (next: AccountsResponse | null, err = "") => (
-    <AccountsPage accounts={{ data: next, error: err, reload }} admin={admin} renamed={renamed} showGone={showGone} />
+    <AccountsPage accounts={{ data: next, error: err, reload }} admin={admin} renamed={renamed} showGone={showGone} showAccount={showAccount} />
   );
   const view = render(page(d, error));
   const rerender = (next: AccountsResponse | null, err = "") => view.rerender(page(next, err));
-  return { reload, renamed, showGone, rerender };
+  return { reload, renamed, showGone, showAccount, rerender };
 }
 
 const h1 = (name: string) => screen.getByRole("heading", { level: 1, name });
@@ -451,7 +452,8 @@ describe("confirmations", () => {
     show("/?view=accounts&id=work", data([account("work")]));
     pick("work", t.remove);
     fireEvent.click(dialog().getByRole("button", { name: t.remove }));
-    expect((await screen.findByRole("alert")).textContent).toBe(t.failed("account is syncing"));
+    // The one alert with text: Carbon's text field (Shared with's user name) has an empty one of its own.
+    await waitFor(() => expect(screen.getAllByRole("alert").map((a) => a.textContent).filter(Boolean)).toEqual([t.failed("account is syncing")]));
     expect(window.location.search).toBe("?view=accounts&id=work");
   });
 });

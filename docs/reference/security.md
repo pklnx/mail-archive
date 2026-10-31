@@ -96,8 +96,8 @@ request. Every read of shared mail is in the reader's audit log entries, and
 the owner sees reads of their shared accounts as described in
 [Audit log, Shared accounts](../guide/audit-log#shared-accounts), without the
 reader's address, browser or API key name. Two kinds of read do not reach the
-owner: a page of a list or search over all of the reader's mail whose messages
-the reader also has through own accounts, and a conversation whose only member
+owner: a page of a list or search over all of the reader's mail, or a further
+page of a named one, whose messages the reader also has through own accounts, and a conversation whose only member
 in the shared account is the message that was opened. A legal hold on a shared
 account is never shown to the shared user, admins included.
 

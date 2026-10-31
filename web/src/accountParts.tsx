@@ -72,7 +72,7 @@ function SourceTag({ text, hint }: { text: string; hint: string }) {
 }
 
 /** Where an account's mail comes from: an IMAP snapshot, SMTP journaling or files. */
-export function TypeTag({ account: a }: { account: Account }) {
+export function TypeTag({ account: a }: { account: Pick<Account, "kind"> }) {
   if (a.kind === "imap") return <SourceTag text={t.sourceSnapshot} hint={t.sourceSnapshotHint} />;
   if (a.kind === "smtp") return <SourceTag text={t.sourceComplete} hint={t.sourceCompleteHint} />;
   return (
@@ -122,7 +122,7 @@ export function receiveStatus(a: Account): string {
   return a.lastReceivedAt ? t.lastReceived(relativeTime(a.lastReceivedAt)) : t.neverReceived;
 }
 
-export function messageCount(a: Account): number {
+export function messageCount(a: Pick<Account, "folders">): number {
   return a.folders.reduce((n, f) => n + f.messages, 0);
 }
 

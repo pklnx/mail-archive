@@ -8,7 +8,7 @@ function account(f: Fill | null, state: "idle" | "queued" | "running" = "idle"):
   return {
     name: "journal", kind: "smtp", enabled: true, removed: false, purging: false, purge: null, host: "", port: 0, tls: "tls", username: "",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: f, fills: f ? [f] : [], firstReceived: null,
+    addresses: ["archive@archive.local"], lastReceivedAt: null, fill: f, fills: f ? [f] : [], firstReceived: null, sharedWith: [],
     sync: { state, lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
   };
 }

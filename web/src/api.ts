@@ -70,6 +70,29 @@ export interface Account {
   fills: Fill[];
   /** smtp accounts: the first message received over SMTP that is still stored. */
   firstReceived: { at: string; subject: string } | null;
+  /** The users who may read the account's mail (#389), by name. */
+  sharedWith: AccountShare[];
+}
+
+/** A user an own account is shared with, and since when. */
+export interface AccountShare {
+  user: string;
+  since: string;
+}
+
+/**
+ * An account another user shared with the viewer (#389): only what reading
+ * its mail needs. Its folders carry their sync times too (decision 15).
+ */
+export interface SharedAccount {
+  /** The account in account=: owner/name. */
+  key: string;
+  name: string;
+  owner: string;
+  kind: Account["kind"];
+  enabled: boolean;
+  removed: boolean;
+  folders: Folder[];
 }
 
 /**
@@ -180,6 +203,8 @@ export interface SyncInfo {
 
 export interface AccountsResponse {
   accounts: Account[];
+  /** The accounts other users shared with the viewer, by owner and name. */
+  shared: SharedAccount[];
   /** False when the server has no secret key: browse only. */
   manage: boolean;
   /** The server's default interval, Go duration like "6h0m0s"; empty if the schedule is off. */
@@ -265,6 +290,8 @@ export interface Part {
 
 export interface Location {
   account: string;
+  /** The owner of an account shared with the viewer (#389); null for own accounts. */
+  owner: string | null;
   folder: string;
   uid: number;
   flags: string[];
@@ -454,6 +481,10 @@ export const accountsApi = {
   purgePreview: (name: string, signal?: AbortSignal) => getJSON<PurgePreview>(`${accountPath(name)}/purge`, signal),
   /** Confirms deleting it completely with the number of messages to delete; the server deletes in the background. */
   purge: async (name: string, count: number) => (await send<{ purge: number }>("POST", `${accountPath(name)}/purge`, { count }))!.purge,
+  /** Lets a user read the account's mail (#389); sharing again changes nothing. */
+  share: (name: string, user: string) => send("PUT", `${accountPath(name)}/shares/${encodeURIComponent(user)}`),
+  /** Ends a share: the user's next request no longer sees the account. */
+  unshare: (name: string, user: string) => send("DELETE", `${accountPath(name)}/shares/${encodeURIComponent(user)}`),
 };
 
 /** The progress of an account's confirmed purge: messages deleted of those confirmed, locations removed, messages kept. */
@@ -732,6 +763,12 @@ export interface AuditEntry {
   clientIp?: string;
   userAgent?: string;
   details: Record<string, unknown>;
+  /**
+   * Another user's read of the viewer's shared account (#389): no IP, user
+   * agent or key name, and details cut down to via_accounts and, for lists,
+   * the named first page's terms or only whether it searched (search).
+   */
+  viaShare?: boolean;
 }
 
 /**

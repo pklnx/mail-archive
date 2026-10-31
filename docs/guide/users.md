@@ -193,6 +193,15 @@ smtp (journal) accounts cannot be shared.
   session or an API key read it, without the reader's IP address, browser
   or key name.
 
+In the web UI the owner shares on the account's page, in its section
+**Shared with**: the user's exact name, then **Share**; **Remove** ends a
+share (see [The account's page](./accounts#the-account-s-page)). The shared
+user finds the account under **Shared with you** on the Accounts page and,
+with its owner's name (`info · anna`), in the folder column, in search and
+in conversations. The owner's Log names the reader in the **Who** column and
+says, for example, "jo's search showed 2 messages of info", without the
+reader's search terms unless the search named the account.
+
 Sharing is done with `PUT` and `DELETE /api/accounts/{name}/shares/{user}`
 (see the [JSON API](../reference/api#shared-accounts)).
 

@@ -1,6 +1,6 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Browser, Locator, Page } from "@playwright/test";
 import type { AccountsResponse } from "../src/api";
-import { imapPort, spareLogin, unique } from "./demo";
+import { imapPort, origin, shareOwner, shareReader, spareLogin, unique } from "./demo";
 import { accountRow, expect, test } from "./fixtures";
 import { menuAtRowEnd, rowsAligned } from "./layout";
 
@@ -368,4 +368,78 @@ test("the cells of a row in both accounts tables share one top alignment", async
   await rowsAligned(main.getByRole("table", { name: "Accounts" }), 2);
   await main.getByRole("button", { name: /^Removed accounts \(\d+\)$/ }).click();
   await rowsAligned(main.getByRole("table", { name: "Removed accounts" }));
+});
+
+/** Logs a user without 2FA in through the API, into the page's context. */
+async function logIn(page: Page, user: { name: string; password: string }) {
+  const res = await page.context().request.post("/api/session", { data: { username: user.name, password: user.password }, headers: { Origin: origin } });
+  expect(res.ok(), await res.text()).toBe(true);
+}
+
+/** A page of its own for a second user, in a context without the admin's session. */
+async function pageOf(browser: Browser, user: { name: string; password: string }) {
+  const ctx = await browser.newContext({ baseURL: origin, storageState: { cookies: [], origins: [] }, locale: "en-US", timezoneId: "Europe/Berlin" });
+  const page = await ctx.newPage();
+  await logIn(page, user);
+  return page;
+}
+
+// Shared accounts (#389, part 3). pat owns team; jo has no account. pat
+// shares team with jo on its page, jo finds its mail in search and the
+// folder tree, pat's Log shows jo's search without its terms, and after
+// pat removes jo the same search finds nothing.
+test.describe("sharing an account", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("the owner shares, the reader finds the mail, the owner's Log shows it, and after Remove the next search is empty", async ({ page, browser }) => {
+    await logIn(page, shareOwner);
+    await page.goto("/?view=accounts&id=team");
+    const main = page.getByRole("main");
+    await expect(main.getByRole("heading", { name: "team", level: 1 })).toBeVisible();
+    const shares = main.getByRole("region", { name: "Shared with" });
+    await expect(shares.getByText("Not shared with anyone.")).toBeVisible();
+    await shares.getByLabel("User name").fill(shareReader.name);
+    await shares.getByRole("button", { name: "Share" }).click();
+    await expect(shares.getByRole("status")).toHaveText(`Shared with ${shareReader.name}.`);
+    await expect(shares.getByRole("button", { name: `Remove ${shareReader.name}` })).toBeVisible();
+
+    // jo: the account is in the folder tree as "team · pat", its mail in search.
+    const jo = await pageOf(browser, shareReader);
+    try {
+      await jo.goto("/?q=moodboard");
+      await expect(jo.getByRole("treeitem", { name: "team · pat" })).toBeVisible();
+      const list = jo.getByRole("list", { name: "Messages" });
+      await expect(list.getByRole("button", { name: /Spring campaign kickoff/ })).toHaveCount(1);
+      // The account's mail without the search, addressed as pat/team.
+      await jo.goto("/");
+      await jo.getByRole("treeitem", { name: "team · pat" }).click();
+      await expect(jo).toHaveURL(/[?&]account=pat%2Fteam(&|$)/);
+      await expect(list.getByRole("button", { name: /Proofs for the flyers/ })).toBeVisible();
+      await list.getByRole("button", { name: /Spring campaign kickoff/ }).click();
+      const article = jo.getByRole("article");
+      await article.getByRole("button", { name: "Details" }).click();
+      await expect(article.getByText("team (pat) / INBOX", { exact: true })).toBeVisible();
+
+      // pat's Log: jo's search over all mail, with the count and without the term.
+      await page.goto("/?view=log&action=search");
+      const log = main.getByRole("table", { name: "Log" });
+      const row = log.getByRole("row").filter({ hasText: "jo's search showed 1 message of team" });
+      await expect(row).toHaveCount(1);
+      await expect(log.getByRole("columnheader", { name: "Who" })).toBeVisible();
+      await expect(row.getByRole("cell", { name: "jo", exact: true })).toBeVisible();
+      await expect(log).not.toContainText("moodboard");
+
+      // pat ends the share; jo's next search finds nothing, and the tree has no account.
+      await page.goto("/?view=accounts&id=team");
+      await shares.getByRole("button", { name: `Remove ${shareReader.name}` }).click();
+      await expect(shares.getByRole("status")).toHaveText(`${shareReader.name} can no longer read this account.`);
+      await expect(shares.getByText("Not shared with anyone.")).toBeVisible();
+      await jo.goto("/?q=moodboard");
+      await expect(list.getByText("No messages match your search.")).toBeVisible();
+      await expect(list.getByRole("button", { name: /Spring campaign kickoff/ })).toHaveCount(0);
+      await expect(jo.getByRole("treeitem", { name: "team · pat" })).toHaveCount(0);
+    } finally {
+      await jo.context().close();
+    }
+  });
 });

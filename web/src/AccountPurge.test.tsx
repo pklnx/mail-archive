@@ -25,7 +25,7 @@ const preview = (p: Partial<PurgePreview> = {}): PurgePreview => ({
 const removed: Account = {
   name: "old", kind: "import", enabled: false, removed: true, purging: false, purge: null, host: "", port: 0, tls: "tls", username: "",
   includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [{ name: "INBOX", messages: 4, lastSyncedAt: null, lastReconciledAt: null, delimiter: "/" }],
-  goneMessages: 0, lastReconciledAt: null, addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+  goneMessages: 0, lastReconciledAt: null, addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
   sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
 };
 
@@ -152,11 +152,11 @@ describe("PurgeDialog", () => {
 });
 
 describe("the removed accounts' table", () => {
-  const list = (accounts: Account[]) => ({ accounts, manage: true, syncInterval: "", syncIntervalMin: "", reconcileInterval: "", alertAfter: 3, smtp: null });
+  const list = (accounts: Account[]) => ({ accounts, shared: [], manage: true, syncInterval: "", syncIntervalMin: "", reconcileInterval: "", alertAfter: 3, smtp: null });
   /** The Accounts page with a removed account; its accordion is open while it is being deleted. */
   function page(account: Account, admin: boolean, onChanged: () => void = () => {}) {
     window.history.replaceState(null, "", "/?view=accounts");
-    const ui = (a: Account) => <AccountsPage accounts={{ data: list([a]), error: "", reload: onChanged }} admin={admin} renamed={() => {}} showGone={() => {}} />;
+    const ui = (a: Account) => <AccountsPage accounts={{ data: list([a]), error: "", reload: onChanged }} admin={admin} renamed={() => {}} showGone={() => {}} showAccount={() => {}} />;
     const view = render(ui(account));
     return (a: Account) => view.rerender(ui(a));
   }
@@ -250,7 +250,7 @@ describe("the removed accounts' table", () => {
   });
 
   it("polls fast while an account is being deleted", () => {
-    const data = { manage: true, syncInterval: "", syncIntervalMin: "", reconcileInterval: "", alertAfter: 3, smtp: null, accounts: [removed] };
+    const data = { manage: true, shared: [], syncInterval: "", syncIntervalMin: "", reconcileInterval: "", alertAfter: 3, smtp: null, accounts: [removed] };
     expect(isActive(data)).toBe(false);
     expect(isActive({ ...data, accounts: [{ ...removed, purging: true }] })).toBe(true);
   });

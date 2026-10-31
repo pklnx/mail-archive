@@ -8,7 +8,7 @@ function account(sync: Pick<SyncInfo, "state" | "lastRun"> & Partial<SyncInfo>, 
   return {
     name: "a", kind, enabled: kind !== "import", removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null, ...sync },
   };
 }
@@ -59,7 +59,7 @@ describe("syncStatus", () => {
     expect(reconcileNote(account(idle, "smtp"))).toBeNull();
   });
   it("polls fast only while a sync is pending", () => {
-    const data = { manage: true, syncInterval: "", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null, accounts: [account({ state: "idle", lastRun: null })] };
+    const data = { manage: true, shared: [], syncInterval: "", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null, accounts: [account({ state: "idle", lastRun: null })] };
     expect(isActive(data)).toBe(false);
     expect(isActive({ ...data, accounts: [account({ state: "queued", lastRun: null })] })).toBe(true);
     expect(isActive(null)).toBe(false);
@@ -102,7 +102,7 @@ describe("bannerState", () => {
   const named = (name: string, sync: Partial<SyncInfo>, over: Partial<Account> = {}) => ({ ...account({ ...idle, ...sync }), name, ...over });
   it("lists own failing and stale accounts", () => {
     const data = {
-      manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: null,
+      manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: null,
       accounts: [
         named("work", { health: "failing", failureStreak: 3 }),
         named("old", { health: "stale" }),

@@ -14,6 +14,10 @@ export const admin = { name: "demo", password: "demo-password", totpSecret: "JBS
 export const twoFactorUser = { name: "kim", password: "kim-password", totpSecret: "KRSXG5BAKRSXG5BAKRSXG5BAKRSXG5BA" };
 /** A locked user. */
 export const lockedUser = { name: "lee", password: "lee-password" };
+/** A user who owns the account team (#389); the demo admin shares personal with them. */
+export const shareOwner = { name: "pat", password: "pat-password" };
+/** A user without accounts, for sharing (#389). */
+export const shareReader = { name: "jo", password: "jo-password" };
 /** A login on the demo IMAP server that is not an account yet. */
 export const spareLogin = { username: "robin@example.net", password: "demo" };
 
