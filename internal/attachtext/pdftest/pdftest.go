@@ -9,8 +9,12 @@ package pdftest
 
 import (
 	"bytes"
-	"crypto/md5" //nolint:gosec // the PDF standard security handler is MD5-based
-	"crypto/rc4" //nolint:gosec // RC4 is what PDF 1.4 encryption uses
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strings"
@@ -348,62 +352,117 @@ func NestedArrays(depth int) []byte {
 	return w.bytes(fmt.Sprintf("/Root %d 0 R", cat))
 }
 
-// padding is the 32-byte password padding of the standard security handler
-// (PDF 1.7, 7.6.3.3, algorithm 2).
-var padding = []byte{
-	0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
-	0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80, 0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A,
-}
-
-func pad(pw string) []byte {
-	b := append([]byte(pw), padding...)
-	return b[:32]
-}
-
-func rc4Crypt(key, data []byte) []byte {
-	c, _ := rc4.NewCipher(key) //nolint:gosec // see the import
-	out := make([]byte, len(data))
-	c.XORKeyStream(out, data)
-	return out
-}
-
 // Encrypted returns a PDF with one page per argument, encrypted with the
-// standard security handler, revision 2 (RC4, 40-bit key). An empty user
-// password opens without a password (owner password only); a non-empty
-// one is needed to open the file.
+// standard security handler, revision 6 (AES-256, ISO 32000-2, 7.6.4.4).
+// An empty user password opens without a password (owner password only);
+// a non-empty one is needed to open the file. Passwords are ASCII here, so
+// SASLprep changes nothing.
 func Encrypted(user, owner string, pages ...string) []byte {
 	if owner == "" {
 		owner = user
 	}
-	// Algorithm 3: the /O entry.
-	oh := md5.Sum(pad(owner)) //nolint:gosec // see the import
-	o := rc4Crypt(oh[:5], pad(user))
+	random := func(n int) []byte {
+		b := make([]byte, n)
+		_, _ = rand.Read(b)
+		return b
+	}
+	fileKey := random(32)
+	// Algorithm 8: /U and /UE.
+	uvs, uks := random(8), random(8)
+	u := append(append(hashR6([]byte(user), uvs, nil), uvs...), uks...)
+	ue := aesNoPad(hashR6([]byte(user), uks, nil), fileKey)
+	// Algorithm 9: /O and /OE, which also hash /U.
+	ovs, oks := random(8), random(8)
+	o := append(append(hashR6([]byte(owner), ovs, u), ovs...), oks...)
+	oe := aesNoPad(hashR6([]byte(owner), oks, u), fileKey)
+	// Algorithm 10: /Perms.
 	perms := int32(-4) // all permissions
-	id := []byte("0123456789abcdef")
-	// Algorithm 2: the file key.
-	h := md5.New() //nolint:gosec // see the import
-	h.Write(pad(user))
-	h.Write(o)
-	h.Write([]byte{byte(perms), byte(perms >> 8), byte(perms >> 16), byte(perms >> 24)}) //nolint:gosec // truncates on purpose
-	h.Write(id)
-	key := h.Sum(nil)[:5]
-	// Algorithm 4: the /U entry.
-	u := rc4Crypt(key, padding)
+	pb := make([]byte, 16)
+	binary.LittleEndian.PutUint32(pb, uint32(perms)) //nolint:gosec // the bit pattern of /P
+	copy(pb[4:], []byte{0xff, 0xff, 0xff, 0xff, 'T', 'a', 'd', 'b'})
+	copy(pb[12:], random(4))
+	block, _ := aes.NewCipher(fileKey)
+	permsEnc := make([]byte, 16)
+	block.Encrypt(permsEnc, pb)
 
-	w := &writer{encrypt: func(n int, data []byte) []byte {
-		// Algorithm 1: the object key.
-		oh := md5.New() //nolint:gosec // see the import
-		oh.Write(key)
-		oh.Write([]byte{byte(n), byte(n >> 8), byte(n >> 16), 0, 0}) //nolint:gosec // truncates on purpose
-		return rc4Crypt(oh.Sum(nil)[:10], data)
+	w := &writer{encrypt: func(_ int, data []byte) []byte {
+		// AESV3: AES-256-CBC with the file key, a random IV in front and
+		// PKCS#7 padding.
+		iv := random(aes.BlockSize)
+		n := aes.BlockSize - len(data)%aes.BlockSize
+		padded := append(append([]byte{}, data...), bytes.Repeat([]byte{byte(n)}, n)...)
+		out := make([]byte, len(padded))
+		cipher.NewCBCEncrypter(block, iv).CryptBlocks(out, padded)
+		return append(iv, out...)
 	}}
 	contents := make([][]byte, len(pages))
 	for i, p := range pages {
 		contents[i] = Content(p)
 	}
 	cat := w.document(contents, "", "")
-	enc := w.add(fmt.Sprintf("<</Filter/Standard/V 1/R 2/Length 40/O<%x>/U<%x>/P %d>>", o, u, perms))
+	enc := w.add(fmt.Sprintf("<</Filter/Standard/V 5/R 6/Length 256/CF<</StdCF<</AuthEvent/DocOpen/CFM/AESV3/Length 32>>>>/StmF/StdCF/StrF/StdCF"+
+		"/O<%x>/U<%x>/OE<%x>/UE<%x>/P %d/Perms<%x>>>", o, u, oe, ue, perms, permsEnc))
+	id := []byte("0123456789abcdef")
 	return w.bytes(fmt.Sprintf("/Root %d 0 R/Encrypt %d 0 R/ID[<%x><%x>]", cat, enc, id, id))
+}
+
+// hashR6 is algorithm 2.B of ISO 32000-2: the hash of a password with a
+// salt and, for the owner password, the /U entry.
+func hashR6(password, salt, udata []byte) []byte {
+	password = password[:min(len(password), 127)]
+	h := sha256.New()
+	h.Write(password)
+	h.Write(salt)
+	h.Write(udata)
+	k := h.Sum(nil)
+	for round := 0; ; round++ {
+		var k1 []byte
+		for range 64 {
+			k1 = append(k1, password...)
+			k1 = append(k1, k...)
+			k1 = append(k1, udata...)
+		}
+		block, _ := aes.NewCipher(k[:16])
+		e := make([]byte, len(k1))
+		cipher.NewCBCEncrypter(block, k[16:32]).CryptBlocks(e, k1)
+		sum := 0
+		for _, c := range e[:16] {
+			sum += int(c)
+		}
+		switch sum % 3 {
+		case 0:
+			s := sha256.Sum256(e)
+			k = s[:]
+		case 1:
+			s := sha512.Sum384(e)
+			k = s[:]
+		default:
+			s := sha512.Sum512(e)
+			k = s[:]
+		}
+		if round >= 63 && int(e[len(e)-1]) <= round-32 {
+			return k[:32]
+		}
+	}
+}
+
+// aesNoPad encrypts data (a multiple of 16 bytes) with AES-256-CBC, an
+// all-zero IV and no padding, as the standard prescribes for /UE and /OE.
+// It chains the blocks itself: with a zero IV the first block is encrypted
+// as it is.
+func aesNoPad(key, data []byte) []byte {
+	block, _ := aes.NewCipher(key)
+	out := make([]byte, len(data))
+	prev := make([]byte, aes.BlockSize)
+	for i := 0; i < len(data); i += aes.BlockSize {
+		x := make([]byte, aes.BlockSize)
+		for j := range x {
+			x[j] = data[i+j] ^ prev[j]
+		}
+		block.Encrypt(out[i:i+aes.BlockSize], x)
+		prev = out[i : i+aes.BlockSize]
+	}
+	return out
 }
 
 // Truncated returns the first half of b.
