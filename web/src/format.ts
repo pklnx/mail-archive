@@ -192,10 +192,20 @@ export function formatCount(n: number): string {
   return n.toLocaleString(locale);
 }
 
-/** The last day of a retention period, from its end (the first instant after it). */
+/**
+ * The last day of a retention period, from its end (the first instant after
+ * it): always 31 December (#406). A period ends at 1 January 00:00 in its
+ * rule's time zone (`retention_end`, migration 00021), which the browser does
+ * not know, so the end's instant in the browser's zone can already be
+ * 1 January. One day after the end is in the next year in UTC for any rule
+ * zone west of UTC and up to +24 h east of it, so the period's last year is
+ * the UTC year of end + 1 day, minus one.
+ */
 export function retentionDay(iso: string): string {
   const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? "" : dateFmt().format(new Date(ms - 1));
+  if (Number.isNaN(ms)) return "";
+  const year = new Date(ms + 86_400_000).getUTCFullYear() - 1;
+  return localDay(`${year}-12-31`);
 }
 
 /** A date for lists: the day only. */

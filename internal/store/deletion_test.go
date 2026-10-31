@@ -160,6 +160,23 @@ func TestDeletionRunLifecycle(t *testing.T) {
 	}
 }
 
+// The run's year is the period's last year also for a rule zone west of
+// UTC: a New York period ends at 1 January 2012 05:00 UTC, its last year is
+// 2011 (#406).
+func TestDeletionRunSummaryRuleZoneWest(t *testing.T) {
+	f := newRetentionFixture(t)
+	inbox := f.folder(f.alice, "work", "INBOX")
+	if _, err := f.st.AddRetentionRule(f.ctx, store.NewRetentionRule{AccountID: inbox.AccountID, Years: 1, TimeZone: "America/New_York"}); err != nil {
+		t.Fatal(err)
+	}
+	f.save(inbox, hashOf('a'), "a", old, old)
+	run := f.propose()
+	groups, err := f.st.DeletionRunSummary(f.ctx, run.ID)
+	if err != nil || len(groups) != 1 || groups[0].Year != 2011 || groups[0].Messages != 1 {
+		t.Fatalf("summary %+v %v", groups, err)
+	}
+}
+
 // Between the preview and the deletion, a hold added or a new location
 // keeps the candidate.
 func TestDeletionRechecks(t *testing.T) {
