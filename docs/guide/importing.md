@@ -3,8 +3,8 @@
 Older mail often no longer lives on an IMAP server: Thunderbird's local
 folders, Apple Mail exports, Google Takeout archives, a Maildir from a
 previous server, or the `.eml` export of another archive such as
-[piler](#from-piler). `import` stores it in the archive like a sync would, with
-the same deduplication.
+[piler](#from-piler). `import` stores it like a sync would, with the same
+deduplication.
 
 ```sh
 ./ma import old-laptop --from /import/thunderbird --format mbox
@@ -16,8 +16,8 @@ the first import and shows up in the web UI like any account, marked
 to add more mail, run `import` again with the same name. They can be renamed,
 handed to another user and removed like other accounts.
 
-The mail of a journaled mailbox from before journaling can go into its
-smtp account instead, next to what arrives over SMTP; see
+The mail of a journaled mailbox from before journaling can go into its smtp
+account instead, next to what arrives over SMTP; see
 [Into an smtp account](#into-an-smtp-account).
 
 Importing runs only on the command line. The web server never reads files
@@ -67,10 +67,10 @@ With `--format eml`, **only files ending in `.eml`** (in any case) are read.
 Other files, hidden files and directories (a leading `.`, which includes the
 `._name.eml` files macOS leaves on other disks) and symbolic links are
 skipped. `.eml` files carry no marks, so their messages are imported unread.
-Within a directory, files are read in byte order of their names, so
-`10.eml` comes before `2.eml`; the order only decides the numbering inside
-the archive. An empty `.eml` file is skipped with a warning and makes the
-import `partial`.
+Within a directory, files are read in byte order of their names, so `10.eml`
+comes before `2.eml`; the order only decides the numbering inside the
+archive. An empty `.eml` file is skipped with a warning and makes the import
+`partial`.
 
 Compressed files (`.gz`, `.zip`) are refused: unpack them first. With
 `--format eml`, a ZIP file inside the directory is skipped, and the import
@@ -84,14 +84,14 @@ many Maildirs store LF only. So that the copies match, `import` stores a
 message whose first line ends in LF with every bare LF turned into CRLF.
 Nothing else changes.
 
-Some copies still do not match the IMAP copy of the same mail, because the
-program that wrote them added headers:
+Some copies still differ from the IMAP copy, because the program that wrote
+them added headers:
 
 - Thunderbird adds `X-Mozilla-Status`, `X-Mozilla-Status2` and
   `X-Mozilla-Keys`.
 - Google Takeout adds `X-Gmail-Labels` and `X-GM-THRID`.
 
-These messages are stored a second time. The archive keeps these headers on
+These messages are stored a second time. The archive keeps the headers on
 purpose: removing them would change the bytes of what you imported.
 
 The piler copy of a mail differs from the IMAP copy as well: piler stores
@@ -159,10 +159,10 @@ owned by the user `alice`:
 The message view shows these messages as "Imported from files: piler". What
 the account already received over SMTP is left out by its Message-ID, also
 when the piler stock was imported into an import account before. This is not
-a guarantee against every second copy: for example, a message without a
-Message-ID is always stored, and so is a mail with the same Message-ID but
-other bytes (delivered while the import runs, or imported earlier by a fill);
-see [Into an smtp account](#into-an-smtp-account). A duplicate beats a gap.
+a guarantee against every second copy: a message without a Message-ID is
+always stored, and so is a mail with the same Message-ID but other bytes
+(delivered while the import runs, or imported earlier by a fill); see
+[Into an smtp account](#into-an-smtp-account). A duplicate beats a gap.
 `.eml` files directly in `--from` need no `--folder` here.
 
 ## Into an smtp account
@@ -192,10 +192,10 @@ IMAP; when it exists only as files (a piler export, an mbox, a Maildir),
   without a Message-ID is always stored: a duplicate beats a gap. There is no
   cut-off; the Message-ID check covers the overlap with journaling.
 - Imported messages have no envelope, so BCC recipients are unknown. The
-  message view's **Origin** section says "Imported from files: LABEL". `--label`
-  sets the label, 1 to 200 characters without control characters; it
-  defaults to the `--from` path. Every run is recorded with its label, and a
-  message keeps the label of the run that added it.
+  message view's **Origin** section says "Imported from files: LABEL".
+  `--label` sets the label, 1 to 200 characters without control characters;
+  it defaults to the `--from` path. Every run is recorded with its label,
+  and a message keeps the label of the run that added it.
 - Read marks and dates come from the source as for import accounts.
 - `--dry-run` checks the account and lists the folders and counts; the
   Message-ID check needs every message read, so it only runs for real.
@@ -226,9 +226,8 @@ ended too, so the next deletion run lists it again.
 Running the same import again adds only what is not in the folder yet, so an
 interrupted import (Ctrl-C, a crash) can simply be run again. Every batch of
 100 messages is saved at once; the rerun reads the source from the start,
-skips what is stored and continues the numbering. Messages that were already
-archived from IMAP get a second location in the import account, not a second
-file.
+skips what is stored and continues the numbering. Messages already archived
+from IMAP get a second location in the import account, not a second file.
 
 Only one import into an account runs at a time. While it runs, the account
 cannot be removed, and the web UI shows it as *Importing…*.

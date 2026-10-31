@@ -20,7 +20,7 @@ For each selected folder:
    committed together with the folder's last UID, so an interrupted sync
    continues where it stopped.
 
-Messages deleted on the server stay in the archive. A
+Messages deleted on the server stay in the archive; a
 [reconcile](#reconcile) finds out which ones those are.
 
 ## Starting a sync
@@ -47,7 +47,7 @@ The web server checks every minute which accounts are due. An enabled
 account is due when its last sync, of any kind, started at least its
 interval ago; one that never synced is due at once.
 
-The default interval is set with `MAIL_ARCHIVE_SYNC_INTERVAL` in `.env`:
+The default interval is `MAIL_ARCHIVE_SYNC_INTERVAL` in `.env`:
 
 ```sh
 MAIL_ARCHIVE_SYNC_INTERVAL=6h    # default
@@ -59,8 +59,8 @@ Apply a change with `docker compose up -d web`.
 
 ### Per account
 
-Each IMAP account can have its own interval, in the web UI under
-**Schedule** → **Edit** on the account's page or with
+Each IMAP account can have its own interval, under **Schedule** → **Edit**
+on the account's page or with
 [`./ma account set-schedule`](../reference/cli#accounts):
 
 - **Default**: `MAIL_ARCHIVE_SYNC_INTERVAL`.
@@ -69,9 +69,9 @@ Each IMAP account can have its own interval, in the web UI under
 - **Not on the schedule** (`manual`): the schedule skips the account.
 
 `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` (default `5m`) is the shortest interval the
-server syncs any account at. Raising it makes accounts with a shorter
-interval sync at the floor; their own value stays stored and applies again
-if the floor is lowered. The web UI then hides the shorter choices. With
+server syncs any account at. Accounts with a shorter interval sync at the
+floor; their own value stays stored and applies again if the floor is
+lowered. The web UI hides the shorter choices. With
 `MAIL_ARCHIVE_SYNC_INTERVAL=0` no account is synced on a schedule, whatever
 its own interval.
 
@@ -91,24 +91,23 @@ interval. `./ma status` shows each account's interval and next sync.
 
 ## Do you need cron?
 
-Usually not. While the `web` container runs, its schedule syncs every
-enabled account. cron is only useful if you do not run the web server.
-
-In that case, schedule the one-shot command, for example every hour:
+Usually not: while the `web` container runs, its schedule syncs every
+enabled account. Without the web server, schedule the one-shot command, for
+example every hour:
 
 ```text
 0 * * * * cd /path/to/mail-archive && docker compose run --rm -T mail-archive sync >> sync.log 2>&1
 ```
 
-This starts in about a second. `./ma sync` works too, but checks first
-whether the image needs rebuilding, which takes a few seconds more on every
-run. The plain `docker compose run` does not rebuild, so after an update run
+This starts in about a second. `./ma sync` works too, but first checks
+whether the image needs rebuilding, which costs a few seconds per run. The
+plain `docker compose run` does not rebuild, so after an update run
 `./ma migrate` once (see [Upgrades](./operations#upgrades)); it rebuilds the
 image that cron and the web server use.
 
 cron runs with a minimal `PATH`. If `docker` is not found, add a line such as
 `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab. `sync` exits
-with a non-zero code if any account failed.
+non-zero if any account failed.
 
 ## Reconcile
 
@@ -129,10 +128,10 @@ reconcile or the deletion of the account.
 
 ### What it costs
 
-After `EXAMINE`, a reconcile sends one command:
-`UID FETCH 1:* (UID FLAGS)`. The server answers with every UID and its
-flags, no message bodies. Nothing is written to the server: no `STORE`, no
-`EXPUNGE`, no read-write `SELECT`.
+After `EXAMINE`, a reconcile sends one command,
+`UID FETCH 1:* (UID FLAGS)`. The server answers with every UID and its flags,
+no bodies. Nothing is written to the server: no `STORE`, no `EXPUNGE`, no
+read-write `SELECT`.
 
 Measured against a local test server:
 
@@ -144,7 +143,7 @@ Measured against a local test server:
 On a real server the transfer adds roughly 40 bytes per message. Only rows
 that change are written to the database.
 
-Folders with more than 2,000,000 messages are not reconciled. The sync of
+Folders with more than 2,000,000 messages are not reconciled; the sync of
 such a folder ends `partial` with an error that says so.
 
 ### When it runs
@@ -173,10 +172,10 @@ reconcile then marks the old locations as gone. The message view shows them
 as *renumbered*, and the messages do not count as gone, because their new
 location is present.
 
-A folder that the account's folder selection includes but the server no
-longer lists has all its messages marked gone, and a warning is logged.
-Folders excluded from the selection are never checked: whether their mail
-is still on the server is unknown, not gone.
+A folder that the selection includes but the server no longer lists has all
+its messages marked gone, and a warning is logged. Folders excluded from the
+selection are never checked: whether their mail is still on the server is
+unknown, not gone.
 
 Removed accounts are never reconciled, and [import accounts](./importing)
 have no server.
@@ -188,14 +187,13 @@ IMAP accounts and all of them are gone. A message moved to another folder on
 the server is not: its new folder has it. A message also found in an import
 account still counts, because the import says nothing about a server.
 
-The navigation entry **Only in archive** lists these messages, and the account
-page shows their number per account (`GONE` in `./ma status`). The folder
-counts in the folder column keep counting gone messages: the archive still has
-them.
+The navigation entry **Only in archive** lists these messages, and the
+account page shows their number per account (`GONE` in `./ma status`). The
+folder counts in the folder column keep counting gone messages: the archive
+still has them.
 
 Each user only sees their own accounts' state. If two users archived the
-same message and only one of them deleted it, only that user sees it as
-gone.
+same message and only one deleted it, only that user sees it as gone.
 
 ### Log
 
@@ -208,21 +206,18 @@ names folders and counts, never subjects or addresses.
 ### Alert for mail deleted on the server
 
 With a [webhook](./operations#webhook-alerts) set up, a run that finds many
-of an account's messages deleted sends one alert. It counts **messages
-that lost their last copy on the server** in that account during the run:
+of an account's messages deleted sends one alert. It counts **messages that
+lost their last copy on the server** in that account during the run:
 
 - A message moved to another folder of the account is not lost, nor is a
-  renamed folder: the messages are still on the server. Neither is a
-  folder the server renumbered.
-- A folder's first reconcile never counts. It finds what was deleted
-  before, for example everything deleted before the upgrade that brought
-  reconcile.
+  renamed or renumbered folder: the messages are still on the server.
+- A folder's first reconcile never counts. It finds what was deleted before,
+  for example everything deleted before the upgrade that brought reconcile.
 - Copies in other accounts, also of other users, do not matter.
 
 The run alerts when it lost **at least 100 messages**, or **at least 10**
-that make up **at least 10 %** of the messages the account had on the
-server before. Losing 3 of 40 drafts does not alert; losing 12 of 20
-messages does.
+that make up **at least 10 %** of the messages the account had on the server
+before. Losing 3 of 40 drafts does not alert; losing 12 of 20 messages does.
 
 Each run alerts at most once per account. Losses spread over several runs,
 each below the threshold, do not add up. A run stopped by a shutdown after
@@ -234,7 +229,7 @@ finds it; the alert says that the messages stay in the archive.
 
 An alert that cannot be delivered is retried like the
 [sync alerts](./operations#webhook-alerts) and dropped 24 hours after the
-run. So setting up a webhook later never sends old losses.
+run, so setting up a webhook later never sends old losses.
 
 ### CONDSTORE
 
@@ -245,27 +240,28 @@ every server.
 ## One sync per account
 
 A PostgreSQL advisory lock guards each account. When the schedule, a button
-and `./ma sync` try to sync the same account at once, only the first one
-runs; the others skip it (`./ma sync` prints `skipped`). The lock belongs to
-a database connection, so a crashed process cannot leave it behind. A sync
-that was interrupted by a crash is shown as failed with the error
-`interrupted` the next time the account is synced.
+and `./ma sync` try to sync the same account at once, only the first runs;
+the others skip it (`./ma sync` prints `skipped`). The lock belongs to a
+database connection, so a crashed process cannot leave it behind. A sync
+interrupted by a crash is shown as failed with the error `interrupted` the
+next time the account is synced.
 
 ## Sync status
 
 The Accounts page shows for each account whether it is syncing and when its
-last sync ended and how; the account's own page shows it under *Last sync*,
-with the number of messages fetched and new so far while it syncs. The page refreshes every 2 seconds while a sync is waiting or
-running, and every 30 seconds otherwise, so syncs from the schedule or the
-command line show up as well. `./ma status` prints the same per account.
+last sync ended and how; the account's page shows it under *Last sync*, with
+the messages fetched and new so far while it syncs. The page refreshes every
+2 seconds while a sync is waiting or running, and every 30 seconds otherwise,
+so syncs from the schedule or the command line show up too. `./ma status`
+prints the same per account.
 
 A sync ends as `ok`, `partial` (some folders failed, or could not be
 reconciled; the others are archived) or `failed` (for example a wrong
 password).
 
-The account's page also shows how many messages are no longer on the
-server (*Only in archive*, a link to them) and when the account was last
-compared with the server, with what the last run found.
+The account's page also shows how many messages are no longer on the server
+(*Only in archive*, a link to them) and when the account was last compared
+with the server, with what the last run found.
 
 ## Alerts
 
@@ -273,19 +269,20 @@ An account counts as **failing** when its last
 `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs (default 3) failed in a row, from
 the schedule, a button or `./ma sync` alike. It counts as **stale** when no
 sync succeeded within two of its sync intervals, at least one interval plus
-an hour (counted from when it was added, if it never did). A sync that is
-running or waiting makes no account stale for a while: a running one
-counts from its start, and one the web server has taken from the queue
-counts from then, also while it waits for a `./ma verify` or a deletion to
-finish with the archive's files (the account shows "Waiting to sync…"). So
-a sync that hangs, or waits for ever behind a verify that hangs, is still
-reported; a normal verify ends well before that. An account that only
-waits in the queue counts from now, because the sync ahead of it is
+an hour (counted from when it was added, if it never did). Accounts the
+schedule does not sync are never stale. Both states show in the web UI and
+in [`/healthz/sync`](./operations#healthz-sync); a failing account also sends
+an alert if a [webhook](./operations#webhook-alerts) is set up.
+
+A sync that is running or waiting makes no account stale for a while: a
+running one counts from its start, and one the web server has taken from the
+queue counts from then, also while it waits for a `./ma verify` or a
+deletion to finish with the archive's files (the account shows "Waiting to
+sync…"). So a sync that hangs, or waits for ever behind a verify that hangs,
+is still reported; a normal verify ends well before that. An account that
+only waits in the queue counts from now, because the sync ahead of it is
 reported. A sync that `./ma sync` started waits for a verify the same way,
-but the web server does not see it while it waits. Accounts the schedule
-does not sync are never stale. Both show in the web UI and in
-[`/healthz/sync`](./operations#healthz-sync); a failing account also sends an
-alert if a [webhook](./operations#webhook-alerts) is set up.
+but the web server does not see it while it waits.
 
 What counts:
 
@@ -297,9 +294,9 @@ What counts:
 - Imports are never counted.
 
 Each failing streak sends **one alert** when it reaches the threshold and
-**one recovery** after the next successful sync, no matter how many syncs
-fail in between. If the account recovers before the alert went out, nothing
-is sent. Stale accounts do not send alerts; `/healthz/sync` reports them.
+**one recovery** after the next successful sync, however many syncs fail in
+between. If the account recovers before the alert went out, nothing is sent.
+Stale accounts do not send alerts; `/healthz/sync` reports them.
 
 Alerts and recoveries end silently when the account is disabled, removed or
 deleted. A disabled account keeps its state: enabled again while still
