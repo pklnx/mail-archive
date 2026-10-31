@@ -296,6 +296,7 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	ctx := context.Background()
 	// First the recurring fills and the journal folder, before the account
 	// exists: the latter's Down writes an audit entry per smtp account.
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}

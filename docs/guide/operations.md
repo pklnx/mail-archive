@@ -135,6 +135,10 @@ docker compose up -d web  # restart the web server with the new image
 ./ma --version            # the version you are running
 ```
 
+With the [worker service](#background-jobs) on (`COMPOSE_PROFILES=worker`),
+restart it too: `docker compose up -d web worker` instead of
+`docker compose up -d web`, here and in the steps below.
+
 `docker compose up -d web`, `docker compose stop` and `docker compose restart`
 give the web server up to 45 seconds to shut down. It ends syncs and fills
 right away and records how far they got, so they resume at the next run. Open
@@ -298,10 +302,88 @@ environment changed; the volume and the locale stay. A restore into a new
 volume (after `docker compose down -v`) gets the builtin locale; `pg_restore`
 rebuilds every index, so that is safe.
 
+## Background jobs
+
+Some work runs in the background, after the message that caused it is
+stored: the first is extracting the text of attachments for search. Syncs,
+imports and journaling never wait for it. The jobs are kept in the
+database, so a restart loses none: a job that was running is handed back at
+shutdown, and one whose process crashed is retried about a minute later
+(its lease expires), with a growing pause between attempts. After a kind's
+attempts (three for attachment text) the job is given up as **failed**, so a
+document that crashes the process every time cannot keep it busy; the
+message stays archived and searchable by everything else.
+
+**By default the web server runs them**, one at a time
+(`MAIL_ARCHIVE_JOB_WORKERS=1`); nothing needs to be set up. `./ma status`
+shows the queue in its last line, for example
+`jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, or
+`jobs: none`. Failed jobs are queued again with
+`./ma jobs retry attachment_text`, for example after an upgrade that fixes
+the cause (written to the [audit log](./audit-log) as `jobs.retry`).
+
+**A separate worker** runs them in a container of its own, with its own
+memory limit, so a large document can never take memory from the web
+server. Hosted instances should use it. In `.env`:
+
+```sh
+COMPOSE_PROFILES=worker   # start the worker service with the others
+WEB_JOB_WORKERS=0         # the web server runs no jobs
+#WORKER_JOB_WORKERS=1     # jobs the worker runs at a time (1-8)
+```
+
+Then `docker compose up -d web worker`. The web server logs
+`jobs off in this process`, the worker `worker on`. Set both variables: with
+the profile on and `WEB_JOB_WORKERS` left at 1, both run jobs, which is
+correct, but the web server then needs the extraction memory too. With
+`WEB_JOB_WORKERS=0` and no worker running, nothing is extracted, and
+[`/healthz/jobs`](#healthz-jobs) turns `degraded` after 30 minutes. The worker
+can also run outside Compose (`mail-archive worker`); several workers, on
+several hosts, share the queue safely.
+
+### Hardware and budgets
+
+The smallest target is a host with **4 GB of RAM and 2 cores** for
+PostgreSQL, the web server and the worker together. The memory is split
+like this:
+
+| Share | Budget | Basis |
+|---|---|---|
+| Kernel, Docker, other processes | 512 MiB | reserved |
+| PostgreSQL (its processes, not the page cache) | 1024 MiB | the defaults of the `postgres:18` image: `shared_buffers` 128 MiB, about 15 connections (web server, worker and CLI) of 10-20 MiB each, `work_mem` 4 MiB per sort, autovacuum; about 550 MiB, with headroom for index maintenance |
+| Web server without jobs | 768 MiB | syncs, fills, SMTP, the web UI |
+| Background jobs (one worker, in the web server or separate) | 768 MiB | the `mem_limit` of the worker service, below |
+| Page cache | 1024 MiB, not reserved | everything not used; search indexes are read from it |
+
+Per job at a time (a worker slot), extracting a document takes up to
+224 MiB: 128 MiB of WebAssembly memory for the PDF reader (outside the Go
+heap), the attachment and its text twice over for the garbage collector
+(52 MiB), and 32 MiB for the reader's instance. The process needs 96 MiB
+when idle, and once after each start 300 MiB while it compiles the PDF
+reader. So the peak with c workers is the larger of 96 + c × 224 and
+96 + 300 + (c − 1) × 224 MiB: 396 MiB with one, 620 MiB with two, 844 MiB
+with three. 768 MiB holds up to **two workers**.
+
+- **The worker service** has `mem_limit: 768m` and `cpus: 1.0`: PostgreSQL
+  and the web server keep the other core. A container's memory limit also
+  counts the page cache of the files it reads, which the kernel reclaims
+  before it would end the process.
+- **`GOMEMLIMIT`** (Go's soft heap limit) is `mem_limit` − c × 128 MiB − 64 MiB:
+  576 MiB for one worker (the default, `WORKER_GOMEMLIMIT`), 448 MiB for two.
+  With two, the compile right after a start goes above it for a moment; the
+  limit is soft, so that only costs some garbage collection then.
+- **More workers** only on hosts with at least 4 cores: each needs a core
+  and 224 MiB more. Raise `mem_limit` and `WORKER_GOMEMLIMIT` with them.
+- **The web server** sets no memory limit by default, as before. Hosts that
+  want one and run the jobs in the web server give it 1536 MiB with
+  `GOMEMLIMIT=1344MiB`.
+- **Waiting time:** with one worker, new mail waits behind at most one
+  running job of older mail, which ends within its time limit.
+
 ## Monitoring and alerts
 
 An account whose syncs fail (a changed password, a provider that blocks the
-login, an expired app password) loses mail until someone notices. Three
+login, an expired app password) loses mail until someone notices. These
 things make it visible:
 
 - **The web UI** shows a banner above the mail when one of your accounts
@@ -313,6 +395,8 @@ things make it visible:
   account. Another alert reports mail deleted on the server in bulk;
   see [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
 - **`/healthz/sync`** for a monitoring tool such as Uptime Kuma.
+- **`/healthz/jobs`** says whether the [background jobs](#background-jobs)
+  of new mail get done.
 
 ### Webhook alerts
 
@@ -464,6 +548,21 @@ curl -fsS http://localhost:8080/healthz/sync || echo "mail-archive: syncs failin
 Do not use `/healthz/sync` as the container's healthcheck: Docker would
 restart the web server whenever an IMAP account fails, which fixes nothing.
 `/healthz` only says whether the server is up and is the right check there.
+
+### /healthz/jobs
+
+`GET /healthz/jobs` needs no login either and gives only a status, no counts:
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | `{"status":"ok"}` | Background work for new mail gets done. |
+| `503` | `{"status":"degraded","stale":["attachment_text"]}` | Work for new mail of these job kinds has been due for more than 30 minutes: no worker runs (`WEB_JOB_WORKERS=0` without the worker service), or it hangs. |
+| `503` | `{"status":"unavailable"}` | The database cannot be reached. |
+
+Backfills of mail archived before (which may take days on a large archive)
+and failed jobs do not make it `degraded`; `./ma status` and, for admins,
+`GET /api/status` show them with counts. The answer is cached for 15
+seconds. `/healthz` stays `ok` while the process runs.
 
 ## Logs
 

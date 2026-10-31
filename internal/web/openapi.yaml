@@ -121,6 +121,32 @@ paths:
               schema:
                 $ref: "#/components/schemas/SyncHealth"
 
+  /healthz/jobs:
+    get:
+      tags: [health]
+      operationId: getJobsHealth
+      summary: Whether background jobs for new mail get done
+      description: |
+        `degraded` with the job kinds (for example `attachment_text`) whose
+        work for new mail has been due for more than 30 minutes: no worker
+        runs, or it hangs. Backfills of older mail and failed jobs do not
+        count. Gives no counts and names no messages, accounts or users;
+        admins see the counts in `GET /api/status`. Cached for 15 seconds.
+      security: []
+      responses:
+        "200":
+          description: Background work for new mail gets done.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobsHealth"
+        "503":
+          description: Work for new mail waits, or the database is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobsHealth"
+
   /api/openapi.json:
     get:
       tags: [health]
@@ -1562,7 +1588,7 @@ paths:
         - session: []
         - apiKey: [read]
       summary: Messages per account and the last sync
-      description: Like `mail-archive status`.
+      description: Like `mail-archive status`. Admins also get the background job queue (`jobs`).
       responses:
         "200":
           description: The status.
@@ -1579,6 +1605,11 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AccountStatus"
+                  jobs:
+                    type: array
+                    description: The background job queue per kind with work that is not done; for admins only, since it covers every user's mail.
+                    items:
+                      $ref: "#/components/schemas/JobStatus"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -3846,6 +3877,47 @@ components:
           items:
             type: integer
             format: int64
+
+    JobsHealth:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        stale:
+          type: array
+          description: Job kinds whose work for new mail has been due for more than 30 minutes.
+          items:
+            type: string
+
+    JobStatus:
+      type: object
+      required: [kind, queued, retrying, running, failed, oldestDueSeconds, oldestNewSeconds]
+      properties:
+        kind:
+          type: string
+        queued:
+          type: integer
+          format: int64
+          description: Queued jobs that do not wait for a retry.
+        retrying:
+          type: integer
+          format: int64
+          description: Queued jobs that wait for a retry after a failed attempt.
+        running:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+          description: Jobs that used their attempts; `mail-archive jobs retry KIND` queues them again.
+        oldestDueSeconds:
+          type: number
+          description: How long the oldest due job has been due; 0 without one.
+        oldestNewSeconds:
+          type: number
+          description: The same for jobs caused by new mail, which make `/healthz/jobs` degraded after 30 minutes.
 
     MessageSummary:
       type: object

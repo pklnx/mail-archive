@@ -790,6 +790,7 @@ func TestPurgeMigration(t *testing.T) {
 	f := newPurgeFixture(t)
 	ctx, st := f.ctx, f.st
 	c := connect(t, f.url)
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}
@@ -816,6 +817,7 @@ func TestPurgeMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.confirm(1)
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}

@@ -40,6 +40,7 @@ func (s *Server) routes() []route {
 			_, _ = w.Write([]byte("ok\n"))
 		}, accessPublic),
 		h("GET /healthz/sync", s.handleSyncHealth, accessPublic),
+		h("GET /healthz/jobs", s.handleJobsHealth, accessPublic),
 		h("GET "+openAPIPath, s.handleOpenAPI, accessPublic),
 
 		h("GET /api/session", s.handleGetSession, accessLogin),

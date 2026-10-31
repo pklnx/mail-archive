@@ -183,6 +183,25 @@ type Folder struct {
 	Delimiter        *string
 }
 
+type Job struct {
+	ID            int64
+	Kind          string
+	Key           string
+	MessageSha256 *string
+	Priority      int16
+	State         string
+	Attempts      int16
+	MaxAttempts   int16
+	RunAfter      time.Time
+	LeaseToken    []byte
+	LeaseUntil    *time.Time
+	Payload       []byte
+	LastError     *string
+	CreatedAt     time.Time
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
+}
+
 type LegalHold struct {
 	ID          int64
 	Name        string

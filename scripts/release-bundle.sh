@@ -36,7 +36,7 @@ mkdir "$dir"
 	echo "# mail-archive $version: https://github.com/pklnx/mail-archive/releases/tag/v$version"
 	echo "# Upgrade: extract a newer release's mail-archive.tar.gz in the directory"
 	echo "# above this one (it keeps .env and data/), then ./ma migrate and"
-	echo "# docker compose up -d web."
+	echo "# docker compose up -d web (web worker with the worker profile on)."
 	echo "#"
 	awk '
 		/^    build:/ { skip = 1; next }
@@ -72,7 +72,10 @@ Upgrade: back up first, then extract the newer mail-archive.tar.gz in the
 directory above this one, so that it replaces these files and keeps .env
 and data/:
   ./ma migrate
-  docker compose up -d web
+  docker compose up -d web          # web worker with COMPOSE_PROFILES=worker
+
+Optional worker service for background jobs (attachment text) with its own
+memory limit: COMPOSE_PROFILES=worker and WEB_JOB_WORKERS=0 in .env.
 EOF
 
 # Numeric owner 0/0, not the build machine's user.

@@ -79,7 +79,17 @@ const (
 	// EnvRetentionFileGrace is how long the files of messages deleted by
 	// retention outlive their rows ("0" removes them at the next sweep).
 	EnvRetentionFileGrace = "MAIL_ARCHIVE_RETENTION_FILE_GRACE"
+	// EnvJobWorkers is how many background jobs (attachment text) a
+	// process runs at a time: `serve` (0 = none, they run in a separate
+	// `worker`) or `worker`.
+	EnvJobWorkers = "MAIL_ARCHIVE_JOB_WORKERS"
 )
+
+// DefaultJobWorkers is used when EnvJobWorkers is not set.
+const DefaultJobWorkers = 1
+
+// MaxJobWorkers is the largest accepted EnvJobWorkers.
+const MaxJobWorkers = 8
 
 // DefaultSMTPMaxSize is used when EnvSMTPMaxSize is not set.
 const DefaultSMTPMaxSize = 50 << 20
@@ -157,6 +167,8 @@ type Config struct {
 	AttestInterval time.Duration
 	// RetentionFileGrace is how long the files of deleted messages stay.
 	RetentionFileGrace time.Duration
+	// JobWorkers is the size of the process's job pool; 0 runs no jobs.
+	JobWorkers int
 }
 
 // AttestDir holds the attestation file, the leaves and the public keys:
@@ -264,6 +276,9 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.JobWorkers, err = parseJobWorkers(os.Getenv(EnvJobWorkers)); err != nil {
+		return nil, err
+	}
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
 		if err != nil {
@@ -351,6 +366,18 @@ func parseInterval(env, v string, def, minimum time.Duration, example string) (t
 			env, minimum, example, v)
 	}
 	return d, nil
+}
+
+func parseJobWorkers(v string) (int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return DefaultJobWorkers, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > MaxJobWorkers {
+		return 0, fmt.Errorf("%s: want a number from 0 to %d, got %q", EnvJobWorkers, MaxJobWorkers, v)
+	}
+	return n, nil
 }
 
 func parseAlertAfter(v string) (int, error) {

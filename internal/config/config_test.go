@@ -112,6 +112,19 @@ func TestParseAlertAfter(t *testing.T) {
 	}
 }
 
+func TestParseJobWorkers(t *testing.T) {
+	for in, want := range map[string]int{"": DefaultJobWorkers, "0": 0, " 2 ": 2, "8": 8} {
+		if got, err := parseJobWorkers(in); err != nil || got != want {
+			t.Errorf("parseJobWorkers(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"9", "-1", "one", "1.5"} {
+		if _, err := parseJobWorkers(in); err == nil || !strings.Contains(err.Error(), EnvJobWorkers) {
+			t.Errorf("parseJobWorkers(%q): %v", in, err)
+		}
+	}
+}
+
 func TestParseWebhook(t *testing.T) {
 	for _, format := range []string{"", "json", "ntfy"} {
 		// Compose passes the default format without a URL.
