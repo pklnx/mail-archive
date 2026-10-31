@@ -134,7 +134,9 @@ as a table.
 Everyone sees their own entries: logins (also failed attempts with their
 name), searches with their text, opened messages and downloads, changes,
 and requests with their API keys. Admins see every user's entries and the
-command line's, and can pick a user, the command line or API keys.
+command line's. In **Who** they can pick several users, the command line
+and API keys; the list then shows the entries of any of them, for example
+alice's and the command line's.
 The **Who** column is for admins; for everyone else, an entry from the
 command line says so under its target.
 
@@ -143,9 +145,16 @@ command line says so under its target.
 **From** and **To** are a date range, the same as in the search filters:
 pick it in the calendar, or type the dates in your date format, which is
 shown under the fields. The To day is included. An empty From shows the
-last 30 days and empties To. Filter further by a group of actions (logins,
-searches, reading, export and backup, accounts, user management, own login
-settings, API keys, manual syncs). A message shows its subject only to a user who has that
+last 30 days and empties To. In **Action**, pick one or several groups of
+actions (logins, searches, reading, export and backup, accounts, user
+management, own login settings, API keys, manual syncs, retention and legal
+holds); the list shows the entries of any of them. A field names what is
+picked, with the number of picks and a button that clears them; with nothing
+picked it says "All actions" or "Everyone" and the list is not filtered by it.
+The filters are kept in the page address, so a reload, the browser's Back
+button after opening a message from the list, and a bookmark show the same
+entries. A bookmark without a From of its own keeps showing the last 30 days.
+A user that no longer exists is dropped from the address. A message shows its subject only to a user who has that
 message too; otherwise the start of its SHA-256. A click on a subject opens
 the message.
 

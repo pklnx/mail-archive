@@ -64,10 +64,11 @@ describe("auditQuery", () => {
   beforeEach(() => vi.stubEnv("TZ", "Europe/Berlin"));
   afterEach(() => vi.unstubAllEnvs());
   it("turns the filter into query parameters", () => {
-    expect(auditQuery({ since: "2026-10-01", until: "", group: "read", who: "" })).toBe("since=2026-09-30T22%3A00%3A00.000Z&action=read");
-    expect(auditQuery({ since: "", until: "2026-10-31", group: "", who: "cli" }, "abc")).toBe("until=2026-10-31T23%3A00%3A00.000Z&actor=cli&cursor=abc");
-    expect(auditQuery({ since: "", until: "", group: "", who: "api_key" })).toBe("actor=api_key");
-    expect(auditQuery({ since: "", until: "", group: "", who: "alice" })).toBe("user=alice");
+    const none = { actions: [], users: [], actors: [] };
+    expect(auditQuery({ ...none, since: "2026-10-01", until: "", actions: ["read"] })).toBe("since=2026-09-30T22%3A00%3A00.000Z&action=read");
+    expect(auditQuery({ ...none, since: "", until: "2026-10-31", actors: ["cli"] }, "abc")).toBe("until=2026-10-31T23%3A00%3A00.000Z&actor=cli&cursor=abc");
+    expect(auditQuery({ ...none, since: "", until: "", actors: ["api_key"] })).toBe("actor=api_key");
+    expect(auditQuery({ ...none, since: "", until: "", users: ["alice"] })).toBe("user=alice");
   });
   it("starts 30 days back", () => {
     expect(defaultFilter(new Date("2026-10-31T12:00:00Z")).since).toBe("2026-10-01");

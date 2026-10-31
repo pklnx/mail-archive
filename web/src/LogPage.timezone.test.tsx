@@ -11,6 +11,8 @@ import { LogPage } from "./LogPage";
 let urls: string[] = [];
 
 beforeAll(() => {
+  // The page keeps its filters in the address, under view=log (#376).
+  window.history.replaceState(null, "", "/?view=log");
   vi.stubEnv("TZ", "Europe/Berlin");
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-30T23:03:00Z"));
@@ -22,6 +24,7 @@ beforeAll(() => {
 });
 afterAll(() => {
   cleanup();
+  window.history.replaceState(null, "", "/");
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();

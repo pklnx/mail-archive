@@ -1,8 +1,14 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 // The UI state lives in the URL query (?q=&account=&folder=&group=&gone=&m=&view=,
-// and the page keys tab=&id=&add=&import= of the settings views), so the back
-// button, reloads and bookmarks work without a router library.
+// the page keys tab=&id=&add=&import= of the settings views, and the Log's
+// filters since=&until=&action=&user=&actor=), so the back button, reloads and
+// bookmarks work without a router library.
+
+/** The action groups of the Log's filter, as the API names them. */
+export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"] as const;
+/** The actors the Log's Who filter offers besides users. */
+export const auditActors = ["cli", "api_key"] as const;
 
 export interface ViewState {
   q: string;
@@ -27,9 +33,23 @@ export interface ViewState {
   add: string;
   /** With view=accounts: the name of the smtp account whose Import from IMAP page is open. */
   import: string;
+  /**
+   * With view=log: From as a local day YYYY-MM-DD; "" for no From (since=),
+   * null without the key: the default, 30 days back, so a bookmark keeps a
+   * moving window (#376).
+   */
+  since: string | null;
+  /** With view=log: To as a local day YYYY-MM-DD, or "". */
+  until: string;
+  /** With view=log: the action groups (repeated action=), any of them; none is all. */
+  action: string[];
+  /** With view=log: the user names (repeated user=); entries of any user or actor match. */
+  user: string[];
+  /** With view=log: the actors cli and api_key (repeated actor=). */
+  actor: string[];
 }
 
-const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "tab", "id", "add", "import"];
+const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "tab", "id", "add", "import", "since", "until", "action", "user", "actor"];
 
 /**
  * The page keys and the views they belong to. Other views drop them, so
@@ -40,9 +60,25 @@ const pageKeys: Partial<Record<keyof ViewState, readonly string[]>> = {
   id: ["accounts", "users", "retention"],
   add: ["accounts", "retention"],
   import: ["accounts"],
+  since: ["log"],
+  until: ["log"],
+  action: ["log"],
+  user: ["log"],
+  actor: ["log"],
 };
 const inView = (k: keyof ViewState, view: string) => pageKeys[k]?.includes(view) ?? true;
 const oneOf = (v: string | null, allowed: readonly string[]) => (v !== null && allowed.includes(v) ? v : "");
+const isDay = (v: string | null): v is string => v !== null && /^\d{4}-\d{2}-\d{2}$/.test(v);
+/** The values of a repeated key, without empty ones and repeats. */
+const allOf = (p: URLSearchParams, k: string) => [...new Set(p.getAll(k).filter((v) => v !== ""))];
+/**
+ * The allowed values of a repeated key, in the order of allowed: a
+ * hand-edited link cannot make the API answer 400.
+ */
+const someOf = (p: URLSearchParams, k: string, allowed: readonly string[]) => {
+  const v = p.getAll(k);
+  return allowed.filter((a) => v.includes(a));
+};
 
 export function parseState(search: string): ViewState {
   const p = new URLSearchParams(search);
@@ -60,6 +96,20 @@ export function parseState(search: string): ViewState {
     id: inView("id", view) ? (p.get("id") ?? (accounts ? p.get("edit") : null) ?? "") : "",
     add: inView("add", view) ? oneOf(p.get("add"), accounts ? ["1"] : ["rule", "hold"]) : "",
     import: accounts ? (p.get("import") ?? "") : "",
+    ...logState(view === "log" ? p : new URLSearchParams()),
+  };
+}
+
+/** The Log's filters; a value that is not a day counts as not given. */
+function logState(p: URLSearchParams): Pick<ViewState, "since" | "until" | "action" | "user" | "actor"> {
+  const since = p.get("since");
+  const until = p.get("until");
+  return {
+    since: since === "" || isDay(since) ? since : null,
+    until: isDay(until) ? until : "",
+    action: someOf(p, "action", auditGroups),
+    user: allOf(p, "user"),
+    actor: someOf(p, "actor", auditActors),
   };
 }
 
@@ -67,7 +117,10 @@ export function formatState(s: ViewState): string {
   const p = new URLSearchParams();
   for (const k of keys) {
     if (!inView(k, s.view)) continue;
-    if (s[k]) p.set(k, s[k]);
+    const v = s[k];
+    if (Array.isArray(v)) for (const x of v) p.append(k, x);
+    // since= without a day is no From; without the key, the default.
+    else if (k === "since" ? v !== null : v) p.set(k, v ?? "");
   }
   const qs = p.toString();
   return qs ? `?${qs}` : "";

@@ -1,5 +1,6 @@
 // The Log page's From/To in a real browser (#377): the search filters'
-// Carbon date range, not the browser's date input. The calendar is
+// Carbon date range, not the browser's date input. Aktion and Wer take
+// several values, kept in the address (#376). The calendar is
 // flatpickr's, appended to the body, so it neither widens nor scrolls the
 // page or its scroll container (.accounts-page). The fixture's guards fail
 // a test on any console error or CSP violation, which covers flatpickr's
@@ -77,6 +78,26 @@ const auditRequest = (page: Page, params: Record<string, string>) =>
     const want = Object.entries(params);
     return want.every(([k, v]) => u.searchParams.get(k) === v) && [...u.searchParams.keys()].every((k) => k in params);
   });
+
+/**
+ * The next /api/audit request with exactly these parameters, repeated ones
+ * in this order.
+ */
+const auditRequestAll = (page: Page, params: Record<string, string[]>) =>
+  page.waitForRequest((r) => {
+    const u = new URL(r.url());
+    if (u.pathname !== "/api/audit") return false;
+    const keys = [...new Set(u.searchParams.keys())];
+    return keys.length === Object.keys(params).length && keys.every((k) => JSON.stringify(u.searchParams.getAll(k)) === JSON.stringify(params[k]));
+  });
+
+/** A filter's field (Carbon's MultiSelect), its menu, the text it shows and its tag's clear button. */
+function choice(main: Locator, label: string) {
+  const field = main.getByRole("combobox", { name: label });
+  // The inner locator of has is relative to the outer one: from the page, not from main.
+  const box = main.locator(".cds--multi-select", { has: main.page().getByRole("combobox", { name: label }) });
+  return { field, box, menu: box.getByRole("listbox"), text: field.locator(".cds--list-box__label"), clear: box.getByRole("button", { name: "Auswahl leeren" }) };
+}
 
 async function open(page: Page) {
   await page.goto("/?view=log");
@@ -259,7 +280,9 @@ test.describe("in German", () => {
       await expect(calendar).toHaveCount(0);
       // The next change is the only request.
       const next = auditRequest(page, { since, action: "read" });
-      await main.getByRole("combobox", { name: "Aktion" }).selectOption("read");
+      const action = choice(main, "Aktion");
+      await action.field.click();
+      await action.menu.getByRole("option", { name: "Lesen" }).click();
       await next;
       expect(seen).toEqual([{ since, action: "read" }]);
       await expect(from).toHaveValue(shown);
@@ -327,23 +350,129 @@ test.describe("in German", () => {
   test("at 1280 px Von and Bis are cells of the filter row, beside Aktion and Wer", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     const { main, from, to } = await open(page);
-    const action = main.getByRole("combobox", { name: "Aktion" });
+    const action = choice(main, "Aktion").box;
+    const who = choice(main, "Wer").box;
     const [f, t, a] = await boxes(from, to, action);
-    // One row, the fields' tops level, each field as wide as the Select.
+    const w = (await who.boundingBox())!;
+    // One row, the fields' tops level, each field as wide and high as the others.
     expect(Math.abs(f.y - a.y), `Von ${JSON.stringify(f)}, Aktion ${JSON.stringify(a)}`).toBeLessThanOrEqual(1);
     expect(Math.abs(t.y - a.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(w.y - a.y), `Wer ${JSON.stringify(w)}`).toBeLessThanOrEqual(1);
     expect(t.x).toBeGreaterThanOrEqual(f.x + f.width);
-    expect(Math.abs(f.width - a.width), `Von ${f.width}, Aktion ${a.width}`).toBeLessThanOrEqual(2);
+    expect(a.x).toBeGreaterThanOrEqual(t.x + t.width);
+    expect(w.x).toBeGreaterThanOrEqual(a.x + a.width);
+    expect(Math.abs(f.width - a.width), `Von ${JSON.stringify(f)}, Aktion ${JSON.stringify(a)}`).toBeLessThanOrEqual(2);
+    expect(Math.abs(w.width - a.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(f.height - a.height), `Von ${f.height}, Aktion ${a.height}`).toBeLessThanOrEqual(1);
   });
 
-  test("at 390 px Von and Bis are stacked full width", async ({ page }) => {
+  test("at 390 px Von, Bis, Aktion and Wer are stacked full width", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     const { main, from, to } = await open(page);
-    const action = main.getByRole("combobox", { name: "Aktion" });
-    const [f, t, a] = await boxes(from, to, action);
+    const action = choice(main, "Aktion");
+    const who = choice(main, "Wer");
+    const [f, t, a] = await boxes(from, to, action.box);
+    const w = (await who.box.boundingBox())!;
     expect(t.y).toBeGreaterThan(f.y + f.height);
-    expect(Math.abs(f.width - a.width), `Von ${f.width}, Aktion ${a.width}`).toBeLessThanOrEqual(2);
-    expect(Math.abs(t.x - f.x)).toBeLessThanOrEqual(1);
+    expect(a.y).toBeGreaterThan(t.y + t.height);
+    expect(w.y).toBeGreaterThan(a.y + a.height);
+    for (const [name, b] of [["Bis", t], ["Aktion", a], ["Wer", w]] as const) {
+      expect(Math.abs(b.width - f.width), `Von ${f.width}, ${name} ${b.width}`).toBeLessThanOrEqual(2);
+      expect(Math.abs(b.x - f.x), name).toBeLessThanOrEqual(1);
+    }
     await noSideScroll(page);
+
+    // Long names: the field stays one line and cuts its text; the open
+    // menu stays within the field's width and on screen, nothing scrolls sideways.
+    await action.field.click();
+    for (const name of ["Aufbewahrung und Legal Holds", "Benutzerverwaltung", "Manuelle Synchronisierungen"]) {
+      await action.menu.getByRole("option", { name }).click();
+      await expect(action.menu.getByRole("option", { name })).toHaveAttribute("aria-selected", "true");
+    }
+    await expect(action.text).toHaveText("Benutzerverwaltung, Manuelle Synchronisierungen, Aufbewahrung und Legal Holds");
+    const cut = await action.text.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth, overflow: getComputedStyle(el).textOverflow }));
+    expect(cut.scroll, "the text is longer than the field").toBeGreaterThan(cut.client);
+    expect(cut.overflow).toBe("ellipsis");
+    expect(Math.abs((await action.box.boundingBox())!.height - a.height), "one line").toBeLessThanOrEqual(1);
+    const menu = (await action.menu.boundingBox())!;
+    const field = (await action.box.boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(field.x - 1);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(field.x + field.width + 1);
+    await action.menu.getByRole("option").last().scrollIntoViewIfNeeded();
+    await expect(action.menu.getByRole("option").last()).toBeInViewport({ ratio: 1 });
+    await noSideScroll(page);
+    await page.keyboard.press("Escape");
+    await expect(action.menu.getByRole("option")).toHaveCount(0);
+  });
+
+  test("Aktion and Wer take several values, kept in the address for a reload and for Back", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // An opened message of today, by the demo admin.
+    const list = await page.request.get("/api/messages?limit=1");
+    expect(list.status()).toBe(200);
+    const [msg] = ((await list.json()) as { messages: { id: string; subject: string }[] }).messages;
+    expect((await page.request.get(`/api/messages/${msg!.id}`)).status()).toBe(200);
+
+    const { main } = await open(page);
+    const since = await startOf(page, await defaultSince(page));
+    const action = choice(main, "Aktion");
+    const who = choice(main, "Wer");
+    await expect(action.text).toHaveText("Alle Aktionen");
+    await expect(who.text).toHaveText("Alle");
+
+    // Two groups, one at a time.
+    await action.field.click();
+    const one = auditRequestAll(page, { since: [since], action: ["read"] });
+    await action.menu.getByRole("option", { name: "Lesen" }).click();
+    await one;
+    const two = auditRequestAll(page, { since: [since], action: ["search", "read"] });
+    await action.menu.getByRole("option", { name: "Suchen" }).click();
+    await two;
+    await page.keyboard.press("Escape");
+    await expect(action.text).toHaveText("Suchen, Lesen");
+    // A user and the command line: entries of either. The actors come first.
+    await who.field.click();
+    await expect(who.menu.getByRole("option").nth(0)).toHaveText("Kommandozeile");
+    await expect(who.menu.getByRole("option").nth(1)).toHaveText("API-Schlüssel");
+    const user = auditRequestAll(page, { since: [since], action: ["search", "read"], user: ["demo"] });
+    await who.menu.getByRole("option", { name: "demo", exact: true }).click();
+    await user;
+    const both = auditRequestAll(page, { since: [since], action: ["search", "read"], user: ["demo"], actor: ["cli"] });
+    await who.menu.getByRole("option", { name: "Kommandozeile" }).click();
+    expect((await (await both).response())?.status()).toBe(200);
+    await page.keyboard.press("Escape");
+    await expect(who.text).toHaveText("Kommandozeile, demo");
+    const address = "?view=log&action=search&action=read&user=demo&actor=cli";
+    expect(new URL(page.url()).search).toBe(address);
+    const link = main.getByRole("table", { name: "Protokoll" }).getByRole("link", { name: msg!.subject }).first();
+    await expect(link).toBeVisible();
+
+    // A reload: the same request, the same fields.
+    const reloaded = auditRequestAll(page, { since: [since], action: ["search", "read"], user: ["demo"], actor: ["cli"] });
+    await page.reload();
+    await reloaded;
+    await expect(action.text).toHaveText("Suchen, Lesen");
+    await expect(who.text).toHaveText("Kommandozeile, demo");
+
+    // A message opened from the Log, then Back.
+    await link.click();
+    await expect(page).toHaveURL(/\?m=[0-9a-f]{64}$/);
+    const back = auditRequestAll(page, { since: [since], action: ["search", "read"], user: ["demo"], actor: ["cli"] });
+    await page.goBack();
+    await back;
+    expect(new URL(page.url()).search).toBe(address);
+    await expect(action.text).toHaveText("Suchen, Lesen");
+    await expect(who.text).toHaveText("Kommandozeile, demo");
+
+    // Emptied with the tags' clear buttons: no parameters.
+    const noWho = auditRequestAll(page, { since: [since], action: ["search", "read"] });
+    await who.clear.click();
+    await noWho;
+    const none = auditRequestAll(page, { since: [since] });
+    await action.clear.click();
+    await none;
+    await expect(action.text).toHaveText("Alle Aktionen");
+    await expect(who.text).toHaveText("Alle");
+    expect(new URL(page.url()).search).toBe("?view=log");
   });
 });

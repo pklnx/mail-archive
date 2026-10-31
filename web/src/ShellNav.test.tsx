@@ -4,7 +4,9 @@ import { applySettings, messagesFor, t } from "./i18n";
 import { ShellNav } from "./ShellNav";
 import type { ViewState } from "./urlState";
 
-const view = (patch: Partial<ViewState> = {}): ViewState => ({ q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", ...patch });
+/** The Log's filters as a section's link leaves them. */
+const noLog = { since: null, until: "", action: [], user: [], actor: [] };
+const view = (patch: Partial<ViewState> = {}): ViewState => ({ q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [], ...patch });
 
 function nav(props: Partial<Parameters<typeof ShellNav>[0]> = {}) {
   const go = vi.fn();
@@ -55,11 +57,19 @@ describe("ShellNav", () => {
     // A plain click stays in the app.
     expect(fireEvent.click(accounts)).toBe(false);
     // It opens the section's list, also from a detail page (id=) of that section.
-    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "", m: "", view: "accounts", tab: "", id: "", add: "", import: "" });
+    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "", m: "", view: "accounts", tab: "", id: "", add: "", import: "", ...noLog });
     expect(onClose).toHaveBeenCalledTimes(1);
     // Ctrl-click is left to the browser (a new tab).
     expect(fireEvent.click(accounts, { ctrlKey: true })).toBe(true);
     expect(go).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the Log without its filters, as its href does (#376)", () => {
+    const { go, nav: el } = nav({ state: view({ view: "log", since: "2026-10-01", action: ["read"], user: ["bob"], actor: ["cli"] }) });
+    const log = within(el).getByRole("link", { name: t.log });
+    expect(log.getAttribute("href")).toBe("?view=log");
+    fireEvent.click(log);
+    expect(go).toHaveBeenCalledWith(expect.objectContaining({ view: "log", ...noLog }));
   });
 
   it("marks the current section", () => {
@@ -74,7 +84,7 @@ describe("ShellNav", () => {
     expect(link.getAttribute("title")).toBe(t.onlyInArchiveHint);
     expect(link.getAttribute("href")).toBe("?gone=1");
     fireEvent.click(link);
-    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "1", m: "", view: "", tab: "", id: "", add: "", import: "" });
+    expect(go).toHaveBeenCalledWith({ account: "", folder: "", gone: "1", m: "", view: "", tab: "", id: "", add: "", import: "", ...noLog });
     cleanup();
     // Still there while it is open, so the current place does not vanish.
     const open = nav({ gone: 0, state: view({ gone: "1" }) }).nav;
