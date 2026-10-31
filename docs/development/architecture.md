@@ -26,6 +26,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/imapsync` | Read-only IMAP client on top of go-imap v2. |
 | `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and published and removed durably (see [Blob durability](#blob-durability)). |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
+| `internal/attachtext` | Text of attachments for search: plain text, CSV, TSV, Markdown, HTML, and PDFs through PDFium compiled to WebAssembly in wazero (no file system, network or environment; one PDF at a time per process; a new instance per document). No database. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. Migrations run under goose's session lock; `migrate` and `migrate down` also hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command, on a connection of its own outside the pool, so two runs wait for each other. goose's lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations. goose runs on a short-lived pool of its own (one extra connection per call), whose teardown frees a lock left on a given-up connection (#269); a second run waits for it without a time limit and prints its holder. `migrate` and `migrate down` open the store with `ForMigrations` (`client_connection_check_interval` 10 s and TCP keepalives), so the server ends a killed command's statement, and frees goose's lock, about 10 s after the process died. Status reads take neither; `serve` takes neither. |
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files. No database. |
 | `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
@@ -57,6 +58,9 @@ internal/web (JSON API, UI from web/) ──────────────
 | `loss_alerts` | Alert about messages an account lost on the server in one sync run, with its delivery state. |
 | `audit_log` | Event of the [audit log](../guide/audit-log): time, actor, user ID and name, action, target, client IP, user agent, details (JSONB). Partitioned by month; append-only by trigger. No foreign keys to users or accounts, so entries outlive them. |
 | `audit_user_agents` | Distinct user agent string, referenced from `audit_log`. |
+| `attachment_texts` | Extracted text of one attachment of a message (`message_sha256`, `part_index` as in the parts API): file name, status (`ok`, `truncated`, `no_text`, `encrypted`, `too_large`, `failed`, `timeout`), the text for `ok` and `truncated`, and a generated `tsvector` with a GIN index. Deleted with its message. |
+| `attachment_index_state` | Extraction state of a message with attachments: `version`; the message is done at `store.AttachmentIndexVersion`, also without text (no readable attachment, an unreadable file). Deleted with its message. |
+| `jobs` | Background job (see [Background jobs](#background-jobs)). |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -521,6 +525,49 @@ index on `(sort_at, sha256) WHERE has_attachment` serves `has:attachment`
 without a query. The web UI parses prefixes such as `to:` from the search
 field (`web/src/searchSyntax.ts`); the server only sees API parameters.
 
+**Attachment text** is in `attachment_texts`, with its own `tsvector` (the
+same three configurations) and GIN index, not in `messages.search`: adding
+it there would rewrite every message row and share PostgreSQL's 1 MB limit
+of one `tsvector` with the body. A query first runs `AttachmentMatches`:
+the messages of the viewer's scope with an attachment whose text matches,
+up to 5,000 (`maxAttachmentMatches`). The query arm of the filter (all four
+copies in `queries/search.sql`) then also matches `m.sha256 = ANY
+(att_shas)`, which keeps a BitmapOr through `messages_pkey`; with more
+matches, `att_walk` checks each walked message's attachments through
+`attachment_texts_pkey` instead, as `to_walk` does for envelopes. So a
+match is per document: all words in the message, or all in one attachment,
+negations included. There are no trigram indexes on attachment text, so it
+matches words, not substrings.
+
+The text is extracted by two job kinds (`internal/archive/attachments.go`):
+- **`attachment_text`** (key and `message_sha256` = the message,
+  `MaxAttempts` 3, the crash-loop guard). The three insert sites (sync and
+  import, fills, SMTP) enqueue it with `PriorityNew` in the transaction that
+  inserts a new row with `has_attachment`. The handler skips a message that
+  is done, reads its file, runs `attachtext.Extractor.Message` and writes
+  the state and the texts in one transaction with a conditional
+  `MarkAttachmentsIndexed`: the second of two writers changes nothing. An
+  unreadable file is done without text; a message deleted meanwhile is
+  done (foreign key error). Extraction results (a damaged PDF, a timeout,
+  a password) are statuses, not errors; a PDF module that did not compile
+  in the process fails the job at once with `extractor unavailable`.
+- **`attachment_backfill`** (key `v<AttachmentIndexVersion>`, priority
+  `PriorityBackfillCursor` = 101). `serve`, `worker` and `reindex` enqueue it
+  at start with an empty payload. Each run walks `ListAttachmentPending`
+  (`messages_attachment_sort_idx`, newest first by `(sort_at, sha256)`, the
+  state's primary key; messages with a queued, running or failed job are
+  skipped) from the cursor in its payload, enqueues up to 1,000 children
+  with `PriorityBackfill` (100) in that order, and returns `jobs.Continue`
+  with the last one as the cursor. Its priority after its children makes
+  it run again only when its batch has been claimed, so the queue holds
+  about one batch; new mail goes first. A walk that finds less than a batch
+  ends it.
+
+Neither ever writes a `messages` row. `reindex` enqueues the backfill and
+runs a pool of the two kinds with `UntilIdle` until none is due. Raising
+`AttachmentIndexVersion` extracts everything again: the backfill gets a new
+key, and its enqueues then need `RetryFailed`.
+
 ## Conversations
 
 `thread_id` is the first `References` ID, else `In-Reply-To`, else the own
@@ -635,7 +682,9 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
   buffer of one), so PostgreSQL's notification queue cannot fill from this
   process. Senders of `NOTIFY`: `EnqueueJobs` and `enqueueJobs` (once per
   kind per transaction; PostgreSQL merges duplicates, so a sync batch wakes
-  the pools once) and `RetryFailedJobs` (`jobs retry`). `NOTIFY` makes the
+  the pools once: sync, fill and SMTP batches, the attachment backfill's
+batches, `reindex` and the start of `serve` and `worker`) and
+`RetryFailedJobs` (`jobs retry`). `NOTIFY` makes the
   commits of the transactions that send it take turns database-wide; they
   are short. With a pooler in transaction mode `LISTEN` does not work; the
   poll covers it.

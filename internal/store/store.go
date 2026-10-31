@@ -683,6 +683,9 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
 			res.New += int(n)
+			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
+				return err
+			}
 
 			l := locs[i]
 			flags := l.Flags

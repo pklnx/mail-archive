@@ -53,6 +53,11 @@ type Pool struct {
 	Kinds   *Registry
 	Workers int
 	Logger  *slog.Logger
+	// UntilIdle makes Run return once none of its jobs runs and no job of
+	// its kinds is due, for a command that works off the queue in the
+	// foreground (reindex). Jobs that other pools hold, or that wait for a
+	// retry, are left to them.
+	UntilIdle bool
 
 	// Test seams; nil means the real thing.
 	heartbeat <-chan time.Time
@@ -175,14 +180,17 @@ func (r *run) dispatch(ctx context.Context) {
 		if r.p.onPass != nil {
 			r.p.onPass(free)
 		}
+		idle := r.p.UntilIdle && !progress && r.count() == 0
 		var dueC <-chan time.Time
-		if free > 0 {
+		if free > 0 || idle {
 			wait, ok, err := r.p.Store.NextJobDue(ctx, r.kinds, r.ownLeases())
 			switch {
 			case err != nil:
 				if ctx.Err() == nil {
 					r.p.log().Warn("jobs: cannot read the next due time", "err", err)
 				}
+			case idle && (!ok || wait > 0):
+				return
 			case ok:
 				if wait <= 0 && !progress {
 					wait = minPass

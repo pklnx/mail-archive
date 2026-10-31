@@ -340,6 +340,9 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 			return fmt.Errorf("insert message %s: %w", meta.SHA256, err)
 		}
 		res.NewMessage = n == 1
+		if err := enqueueAttachmentText(ctx, q, &meta, n); err != nil {
+			return err
+		}
 		uid, err := q.NextUID(ctx, folder.ID)
 		if err != nil {
 			return err

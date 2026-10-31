@@ -83,6 +83,20 @@ type ApiKey struct {
 	RevokedBy  *int64
 }
 
+type AttachmentIndexState struct {
+	MessageSha256 string
+	Version       int16
+}
+
+type AttachmentText struct {
+	MessageSha256 string
+	PartIndex     int32
+	Filename      string
+	Status        string
+	BodyText      *string
+	Search        interface{}
+}
+
 type Attestation struct {
 	Seq            int64
 	CreatedAt      time.Time

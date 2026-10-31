@@ -5,7 +5,7 @@
 | Asset | Protection |
 |---|---|
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
-| Archived mail | Plain `.eml` files and PostgreSQL rows, **not encrypted**. Use an encrypted disk. |
+| Archived mail | Plain `.eml` files and PostgreSQL rows, including the text extracted from attachments for search, **not encrypted**. Use an encrypted disk. |
 | Exports and backups | `export` and `backup` write unencrypted files with mode 0600 in directories with mode 0700. `BACKUP-NOTE.txt` names the secret key but never contains it, and `pg_dump` gets the database password in its environment, not on the command line. |
 | Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
@@ -237,7 +237,27 @@ With `MAIL_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
 - **The MIME parser sees mail nobody filtered.** Display and search read at
   most 1000 parts, 20 levels of nesting, 1 MiB of top-level header and 256
   MiB of decoded content per message; a message beyond that is stored whole,
-  but shown and indexed only up to the limit.
+  but shown and indexed only up to the limit. For search, the web server (or
+  a separate worker process, if configured) and `./ma reindex` also extract
+  the text of PDF, plain-text, CSV, TSV, Markdown and HTML attachments: in
+  the background, one document at a time per worker (one by default), never
+  while a message is being received. PDFs are read by PDFium compiled to
+  WebAssembly, which runs inside the process in wazero without a file
+  system, network, environment variables or output; every PDF gets a new
+  instance that is discarded afterwards. A process reads only one PDF at a
+  time, also with several workers: the PDF reader keeps the documents it
+  reads in a table of the whole process, so a PDF exploiting a bug in it
+  could otherwise reach another document read at the same time, possibly
+  another user's. Limits: PDFs up to 25 MiB and other text attachments up
+  to 4 MiB; 500 pages and 15 seconds per PDF; 20 attachments and 60 seconds
+  per message; 256 KiB of text per attachment and 1 MiB per message; 96 MiB
+  of WebAssembly memory per document, reserved in advance and returned
+  after each document. A hostile PDF can therefore use at most one core for
+  15 seconds and about 96 MiB of memory plus its own size. A PDF beyond a
+  limit, a damaged one, or one that needs a password to open is not
+  searchable by its content. A message whose extraction failed or ended the
+  process three times is skipped. Extracted text, like all message content,
+  is never logged.
 - **Envelopes reveal BCC recipients.** They are visible only to the owner of
   the smtp account, in the message view and to the `to:` filter. Another user
   who has the same message from IMAP sees neither the envelope nor a match

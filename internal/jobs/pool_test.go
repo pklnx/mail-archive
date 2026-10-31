@@ -1025,3 +1025,47 @@ func TestPoolHeartbeatPerClaim(t *testing.T) {
 		t.Errorf("%d claims cancelled, want 1 (the new one finished)", c)
 	}
 }
+
+// With UntilIdle, Run returns once its jobs ran and none of its kinds is
+// due, also with a job that waits for later and one another pool holds,
+// and also after a job continued.
+func TestPoolUntilIdle(t *testing.T) {
+	h := newHarness(t, 2)
+	var ran sync.Map
+	h.register(Kind{Name: "test", Handler: func(_ context.Context, j Job) error {
+		if j.Key == "c" && string(j.Payload) == "{}" {
+			return Continue(json.RawMessage(`{"n":1}`))
+		}
+		ran.Store(j.Key, true)
+		return nil
+	}})
+	h.enqueue(newJob("test", "a", store.PriorityNew), newJob("test", "b", store.PriorityBackfill), newJob("test", "c", store.PriorityBackfill),
+		store.NewJob{Kind: "test", Key: "later", MaxAttempts: 3, RunAfter: time.Now().Add(time.Hour)},
+		newJob("test", "held", store.PriorityNew))
+	h.exec(`UPDATE jobs SET state = 'running', lease_token = '\x01', lease_until = now() + interval '1 hour' WHERE key = 'held'`)
+	h.pool.UntilIdle = true
+	done := make(chan error, 1)
+	go func() { done <- h.pool.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("Run did not return when idle")
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		if r := h.row("test", k); r.State != store.JobDone {
+			t.Errorf("job %s: %s", k, r.State)
+		}
+	}
+	if _, ok := ran.Load("later"); ok {
+		t.Error("ran a job that was not due")
+	}
+	if r := h.row("test", "later"); r.State != store.JobQueued {
+		t.Errorf("later: %s", r.State)
+	}
+	if r := h.row("test", "held"); r.State != store.JobRunning {
+		t.Errorf("held: %s", r.State)
+	}
+}
