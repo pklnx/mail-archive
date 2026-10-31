@@ -27,5 +27,5 @@ Current state only. At session end replace these sections; never append. History
 
 ## Maintainer actions
 - #458 device checks, then the OK for the 1.3.0 release and its notes.
-- OK on #462 and #464 (and the #460 part 2 guarantee table); decide on the cuts listed in #461 and #466.
+- OK on #462 and #464; decide on the cuts listed in #461 and #466.
 - Microsoft 365 journaling (no SMTP AUTH) is out of #395; decide whether it becomes a goal.
