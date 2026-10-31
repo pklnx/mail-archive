@@ -183,7 +183,9 @@ every push to `main`. `web-e2e` is a required check.
 One spec also runs in Playwright's WebKit until
 [#398](https://github.com/pklnx/mail-archive/issues/398) runs the suite there:
 `web/e2e/frame-links.spec.ts`, which checks that no link in an HTML mail leads
-into the app (#459). `E2E_BROWSER` picks the engine (`chromium` by default, or
+into the app and that a link redirecting back to the archive is refused
+(#459; its server listens on 127.0.0.2:18182, so it needs Linux's loopback
+range). `E2E_BROWSER` picks the engine (`chromium` by default, or
 `webkit`; anything else is an error), and `pnpm e2e:webkit` in `web/` runs the
 `webkit` project, which runs only that spec and records traces without
 screenshots. WebKit has to be installed first (`pnpm exec playwright install

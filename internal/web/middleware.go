@@ -133,6 +133,15 @@ var navigable = regexp.MustCompile(`^/api/(messages/[0-9a-f]{64}/(html|raw|parts
 // navigationDests are the Sec-Fetch-Dest values of a navigation.
 var navigationDests = map[string]bool{"document": true, "iframe": true, "frame": true, "embed": true, "object": true}
 
+// navigationSiteAllowed reports whether a navigation with this
+// Sec-Fetch-Site may open a navigable route: same-origin (the app, the mail
+// frame's own links), none (typed, bookmarks) or no header (browsers without
+// Fetch Metadata). cross-site and same-site are refused; an unknown value as
+// well.
+func navigationSiteAllowed(site string) bool {
+	return site == "" || site == "same-origin" || site == "none"
+}
+
 // fetchMetadataAllowed is the Fetch Metadata guard for /api. The HTML mail
 // frame runs with the app's origin (it is sandboxed without scripts), so an
 // image or a link in a mail is a same-origin request that carries the
@@ -143,6 +152,12 @@ var navigationDests = map[string]bool{"document": true, "iframe": true, "frame":
 //   - a prefetch (Sec-Purpose),
 //   - a navigation (Sec-Fetch-Mode navigate, or a Sec-Fetch-Dest of a
 //     document or frame) other than a GET or HEAD of a navigable route, or
+//     one that the browser marks as coming from another site
+//     (Sec-Fetch-Site cross-site or same-site): an external link in a mail
+//     that redirects back to the archive. The navigation begins in the mail
+//     frame, which has the app's origin, so Chromium sends the SameSite=Strict
+//     cookie along (#459). Typed addresses, bookmarks (none) and the app's
+//     own links (same-origin) still open these routes, or
 //   - any other destination than "empty" (a fetch): an image, style, font,
 //     script, media and so on. The app sends none of these to /api.
 //
@@ -160,7 +175,8 @@ func fetchMetadataAllowed(r *http.Request) bool {
 	dest := r.Header.Get("Sec-Fetch-Dest")
 	if r.Header.Get("Sec-Fetch-Mode") == "navigate" || navigationDests[dest] {
 		// The path as sent: an escaped character in it is not the route shape.
-		return (r.Method == http.MethodGet || r.Method == http.MethodHead) && navigable.MatchString(r.URL.EscapedPath())
+		return (r.Method == http.MethodGet || r.Method == http.MethodHead) && navigable.MatchString(r.URL.EscapedPath()) &&
+			navigationSiteAllowed(r.Header.Get("Sec-Fetch-Site"))
 	}
 	return dest == "" || dest == "empty"
 }

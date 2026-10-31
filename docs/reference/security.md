@@ -327,7 +327,7 @@ With the same origin, requests the mail itself makes to the server carry
 the session cookie: an image on the app's own address (after **Load remote
 images**, `https:` matches it) or a link to it. Nobody can read the
 answers, but they would leave audit entries in your name, and some open
-IMAP connections. Two layers stop them:
+IMAP connections. These layers stop them:
 
 - The server refuses `/api` requests by their
   [Fetch Metadata](https://developer.mozilla.org/en-US/docs/Glossary/Fetch_metadata_request_header)
@@ -335,8 +335,10 @@ IMAP connections. Two layers stop them:
   a fetch of the app (an image, style, font, prefetch and so on), and every
   navigation (a link, a frame) except to the routes a browser opens:
   `GET /api/messages/{id}/html`, `…/raw`, `…/parts/{n}` and
-  `/api/openapi.json`. Requests without these headers (scripts, API
-  clients) are not affected.
+  `/api/openapi.json`. A navigation to these routes is refused too when the
+  browser marks it as coming from another site (`Sec-Fetch-Site`
+  `cross-site` or `same-site`). Requests without these headers (scripts,
+  API clients) are not affected.
 - The server takes every link into the app out of the HTML before it serves
   it. Every `href` and `xlink:href` attribute, on every element, keeps its
   value only if the markup spells out, without character references, an
@@ -357,9 +359,9 @@ IMAP connections. Two layers stop them:
   clickable, SVG `<use>` and SVG images given by `href` show nothing;
   external links work as before.
 - In Chromium the web UI also cancels clicks, middle clicks and drags of such
-  links, and keeps the frame `inert` until this is on the mail's document,
-  also inside open shadow roots, and of `javascript:`, `data:` and
-  `vbscript:` links. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
+  links (also inside open shadow roots) and of `javascript:`, `data:` and
+  `vbscript:` links, and keeps the frame `inert` until this is on the mail's
+  document. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
   points to: links through `<use>` do not work at all. The frame takes no
   clicks and no focus (it is `inert`) until this blocker is on the mail's
   document. The web UI installs it as soon as that document exists, before
@@ -390,18 +392,21 @@ inlined), and changes no other byte. It does not depend on where the tag
 is, so the same text in a comment, a style or an attribute value gets the
 prefix too. The link rewrite runs in the same pass and the same way. Other
 ways to nest a document (a frame or object with a `src` or `data` URL,
-`embed`, a `<meta>` refresh) load nothing under the CSP. This was measured in Chromium only.
+`embed`, a `<meta>` refresh) load nothing under the CSP. This was measured
+in Chromium and WebKit.
 
 What remains:
 
 - The context menu's "Open link in new tab" cannot be intercepted, but it
   only offers links the server kept, none of which points into the app. An
   external page can still send the browser on to the archive, as any
-  website can. When that page is on another site, the session cookie
-  (`SameSite=Strict`) is not sent with such a request. When it is on the
-  same site, for example a redirect on `www.example.com` while the archive
-  is `archive.example.com`, the cookie is sent, as for any link between the
-  two today; run the archive under a domain of its own to avoid this.
+  website can. The server refuses navigations to the routes above that the
+  browser marks as coming from another site (`Sec-Fetch-Site` `cross-site`
+  or `same-site`), so a link in a mail that redirects back to the archive
+  cannot open them, in every browser with Fetch Metadata (Chromium,
+  Firefox, Safari 16.4 and later); Chromium would send the session cookie
+  along, because the navigation began in the mail frame. Opening such an
+  address directly (typed, a bookmark, the app's own links) still works.
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests.
@@ -413,7 +418,8 @@ Fetch Metadata guard (Safari 16.4 and later) and the server's link rewrite;
 in Chromium also the web UI's blocker and `inert` gate. In WebKit, a link
 that would open in the frame itself leaves the frame on the mail instead of
 showing an error page. Measured in Playwright's Chromium and Linux WebKit
-(Playwright 1.64.1: Chromium 153, WebKit 27.2). In both, `inert` on the
+(Playwright 1.64.1, as CI runs them: Chromium headless shell 156, WebKit
+27.2). In both, `inert` on the
 frame stops clicks into it, a `<meta>` refresh does not navigate the
 sandboxed frame, and the frame's own `load` and the web UI's
 `ResizeObserver` still size it. In WebKit, the web UI's `click`,

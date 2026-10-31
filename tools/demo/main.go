@@ -629,7 +629,8 @@ func offsite(day func(days, hours int) time.Time) []message {
 // (to /api/openapi.json?link=<name>, relative, or absolute to webURL, the
 // web UI's address) or to a javascript: or data: URL, in every syntax and
 // element the server's link rewrite covers, and a meta refresh. The server
-// renames the attributes, so no box is a link in any engine.
+// renames the attributes, so no box is a link in any engine. A second
+// external link is the spec's redirect check.
 func neutralized(date time.Time, webURL string) message {
 	const box = "display:inline-block;vertical-align:top;width:120px;height:40px;margin:4px;border:1px dashed #888"
 	link := func(name string) string {
@@ -718,7 +719,11 @@ func neutralized(date time.Time, webURL string) message {
 	svg("animate", `<a><animate attributeName="href" values="`+api("animate")+`"/>`+rect+`</a>`)
 	linkBox("mathml", `<math style="display:block;width:100%;height:100%"><mi href="`+api("mathml")+`">mathml</mi></math>`)
 	b.WriteString(`<meta http-equiv="refresh" content="0;url=` + api("refresh") + `">`)
-	b.WriteString(`</div><p><a href="https://links.example/kaleidoscope">The check online</a></p></body></html>`)
+	// An external link to another site, where web/e2e/frame-links.spec.ts
+	// runs a server (web/e2e/demo.ts, redirectOrigin) that redirects back to
+	// the archive: the server refuses that navigation as cross-site.
+	b.WriteString(`</div><p><a href="https://links.example/kaleidoscope">The check online</a></p>` +
+		`<p><a href="http://127.0.0.2:18182/back">The redirect check</a></p></body></html>`)
 	return message{"work", "INBOX", htmlReply("kaleidoscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
 		"Rendering check: boxes that stay empty", date, b.String())}
 }

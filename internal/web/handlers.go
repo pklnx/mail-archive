@@ -570,8 +570,10 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 // rewrite after it could change how the scanned bytes tokenize. Inlining
 // replaces a cid: URL together with the bytes after it up to a quote, white
 // space, ")", "<" or ">", "=" and "/" included, so before the rename it
-// could turn an attribute value into attribute names. The preamble holds no
-// candidate. The rename changes no other byte: the output is the inlined
+// could turn an attribute value into attribute names. The preamble's tags
+// (<base target>, <style>) are candidates of any tag, but hold no attribute
+// the rename touches, so they come out as they are. The rename changes no
+// other byte: the output is the inlined
 // mail with the preamble and the prefixes inserted.
 func servedMailHTML(html string, parts []mime.Part, open func() (io.ReadCloser, error), hosts appHosts) (string, inlineResult, error) {
 	inl, err := inlineImages(html, parts, open)

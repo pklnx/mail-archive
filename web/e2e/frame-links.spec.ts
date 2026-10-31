@@ -1,3 +1,6 @@
+import { createServer } from "node:http";
+import type { Page } from "@playwright/test";
+import { origin, redirectOrigin } from "./demo";
 import { expect, test } from "./fixtures";
 import { frameOf, mailReady } from "./mailFrame";
 
@@ -154,4 +157,45 @@ test("no link in the mail leads into the app, whatever the engine", async ({ pag
   expect(linkRequests).toEqual([]);
   expect(pages).toHaveLength(1);
   expect(await frameState()).toEqual({ same: true, url: true, loads: 0 });
+});
+
+/** Opens the demo's rendering check (tools/demo, neutralized). */
+async function openCheck(page: Page) {
+  await page.goto("/?q=kaleidoscope");
+  const list = page.getByRole("list", { name: "Messages" });
+  await expect(list.getByRole("button")).toHaveCount(1);
+  await list.getByRole("button").click();
+  await mailReady(page, /kaleidoscope rendering check/);
+}
+
+test("an external link in the mail that redirects back to the archive is refused", async ({ page, context, guards }) => {
+  // A link to another site that redirects to a route a browser opens. The
+  // navigation began in the mail frame, which has the app's origin, so
+  // Chromium sends the session cookie along; the browser marks the request
+  // cross-site, and the server refuses it (#459). A real server: a redirect
+  // that Playwright fulfils itself does not count for Sec-Fetch-Site.
+  const back = `${origin}/api/openapi.json?link=back`;
+  const external = createServer((_, res) => res.writeHead(302, { location: back }).end());
+  const { hostname, port } = new URL(redirectOrigin);
+  await new Promise<void>((resolve, reject) => external.once("error", reject).listen(Number(port), hostname, resolve));
+  try {
+    // Past the guards' block of other hosts: this one is ours.
+    await context.route(`${redirectOrigin}/**`, (route) => route.continue());
+    guards.allowHTTPError("/api/openapi.json", 403);
+    await openCheck(page);
+    const at = await frameOf(page).evaluate((f: HTMLIFrameElement, href) => {
+      const a = f.contentDocument!.querySelector(`a[href="${href}"]`)!;
+      a.scrollIntoView({ block: "center" });
+      const r = a.getBoundingClientRect();
+      const box = f.getBoundingClientRect();
+      return { x: box.left + f.clientLeft + r.left + r.width / 2, y: box.top + f.clientTop + r.top + r.height / 2 };
+    }, `${redirectOrigin}/back`);
+    const request = context.waitForEvent("request", (r) => r.url() === back);
+    await page.mouse.click(at.x, at.y);
+    const r = await request;
+    expect((await r.allHeaders())["sec-fetch-site"]).toBe("cross-site");
+    expect((await r.response())!.status()).toBe(403);
+  } finally {
+    await new Promise((resolve) => external.close(resolve));
+  }
 });
