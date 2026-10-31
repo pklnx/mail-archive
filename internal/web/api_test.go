@@ -283,6 +283,34 @@ func TestListAndSearch(t *testing.T) {
 	}
 }
 
+// The web UI sends after/before as the instant a local day starts, with the
+// browser's offset (#404). A mail from the first local hours of a day east of
+// UTC is in that day, not in the UTC day before.
+func TestSearchLocalDayBounds(t *testing.T) {
+	f := newAPIFixture(t)
+	f.addMessage("alice", "INBOX", "late", crlf(`Message-ID: <late@x>
+From: Carol <carol@example.com>
+Subject: Shortly after midnight in Berlin
+Date: Tue, 6 Oct 2026 22:30:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+Gute Nacht.
+`), 10)
+	for _, c := range []struct {
+		query string
+		want  []string
+	}{
+		{"after=2026-10-07T00:00:00%2B02:00&before=2026-10-08T00:00:00%2B02:00", []string{"newsletter", "late"}},
+		{"after=2026-10-07&before=2026-10-08", []string{"newsletter"}}, // UTC day
+		{"before=2026-10-07T00:00:00%2B02:00&after=2026-10-06T00:00:00%2B02:00", []string{"meeting"}},
+		{"before=2026-10-07&after=2026-10-06", []string{"late", "meeting"}},
+	} {
+		if got := f.list(c.query); !equal(got, c.want) {
+			t.Errorf("list(%q) = %v, want %v", c.query, got, c.want)
+		}
+	}
+}
+
 func TestPagination(t *testing.T) {
 	f := newAPIFixture(t)
 	var all []string
@@ -311,6 +339,8 @@ func TestBadRequests(t *testing.T) {
 		"/api/messages?after=yesterday":                                 400,
 		"/api/messages?after=2026-10-08&before=2026-10-07":              400,
 		"/api/messages?after=2026-10-07&before=2026-10-07":              200, // empty range
+		"/api/messages?after=2026-10-07T00:00:00%2B02:00":               200, // offset, '+' encoded
+		"/api/messages?after=2026-10-07T00:00:00+02:00":                 400, // a raw '+' is a space
 		"/api/messages?has=pdf":                                         400,
 		"/api/messages?to=" + strings.Repeat("a", 201):                  400,
 		"/api/messages?from=" + strings.Repeat("a", 201):                400,

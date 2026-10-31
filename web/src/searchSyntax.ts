@@ -134,8 +134,10 @@ export function setToken(q: string, key: TokenKey, value: string): string {
 }
 
 /**
- * The start of a day in the browser's time zone, as RFC 3339 with offset,
- * so that a date in the search means the user's day, not UTC's.
+ * The first instant of the local day in the browser's time zone, as RFC 3339
+ * with offset, so that a date in the search means the user's day, not UTC's.
+ * On a day whose midnight is skipped (a DST change at 00:00) that is the
+ * local time the day starts at, e.g. `01:00` in America/Santiago.
  */
 export function localMidnight(date: string): string {
   const [y, m, d] = ymd(date);
@@ -144,7 +146,8 @@ export function localMidnight(date: string): string {
   const sign = offset < 0 ? "-" : "+";
   const abs = Math.abs(offset);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date}T00:00:00${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+  const time = `${pad(local.getHours())}:${pad(local.getMinutes())}:00`;
+  return `${date}T${time}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }
 
 /** The API filter for the search field: free text plus the prefixes. */

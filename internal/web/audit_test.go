@@ -76,6 +76,8 @@ func TestAuditReads(t *testing.T) {
 		{"/api/messages?q=Rechnung&account=alice&limit=5", "message.search", "", map[string]any{"q": "Rechnung", "account": "alice"}},
 		{"/api/messages?from=bob&group=1", "message.search", "", map[string]any{"from": "bob", "group": "1"}},
 		{"/api/messages?after=2026-01-01", "message.search", "", map[string]any{"after": "2026-01-01"}},
+		{"/api/messages?after=2026-01-01T00:00:00%2B01:00&before=2026-01-02T00:00:00%2B01:00", "message.search", "",
+			map[string]any{"after": "2026-01-01T00:00:00+01:00", "before": "2026-01-02T00:00:00+01:00"}}, // as sent
 		{"/api/messages/" + inv, "message.open", inv, map[string]any{}},
 		{"/api/messages/" + rich + "/html", "message.html", rich, map[string]any{"inline_images": float64(1)}},
 		{"/api/messages/" + rich + "/html?images=1", "message.html", rich, map[string]any{"images": true, "inline_images": float64(1)}},
