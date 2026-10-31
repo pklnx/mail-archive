@@ -153,7 +153,7 @@ func TestSaveJournalImportBatch(t *testing.T) {
 	if err := conn.QueryRow(ctx, "SELECT last_uid FROM folders WHERE id = $1", folderID).Scan(&lastUID); err != nil || lastUID != 4 {
 		t.Errorf("last UID %d, %v", lastUID, err)
 	}
-	d, err := st.GetMessageDetail(ctx, u.ID, receivedMeta(3).SHA256)
+	d, err := st.GetMessageDetail(ctx, storetest.Viewer(t, st, u.ID), receivedMeta(3).SHA256)
 	if err != nil || len(d.Locations) != 1 {
 		t.Fatalf("detail %+v, %v", d, err)
 	}
@@ -161,7 +161,7 @@ func TestSaveJournalImportBatch(t *testing.T) {
 		l.Envelope != nil || l.InternalDate == nil || !l.InternalDate.Equal(date) {
 		t.Errorf("location %+v", l)
 	}
-	if d, err := st.GetMessageDetail(ctx, u.ID, receivedMeta(9).SHA256); err != nil || d.Locations[0].Import != nil {
+	if d, err := st.GetMessageDetail(ctx, storetest.Viewer(t, st, u.ID), receivedMeta(9).SHA256); err != nil || d.Locations[0].Import != nil {
 		t.Errorf("delivered location %+v, %v", d, err)
 	}
 
@@ -221,6 +221,9 @@ func TestSMTPImportsMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 		return n
+	}
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
+		t.Fatalf("down the account shares: %q, %v", m, err)
 	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
 		t.Fatalf("down the account purges: %q, %v", m, err)

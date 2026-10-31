@@ -20,12 +20,14 @@ const (
 )
 
 // SearchFilter selects messages for a listing. Empty fields are ignored,
-// except Owner: only messages found in that user's accounts are listed.
+// except Scope: only messages found in its accounts are listed, and an
+// empty Scope lists nothing. To list one account, narrow the scope to it
+// (Scope.Only, Scope.OwnAccount); Folder is a folder name within the
+// scope's accounts.
 type SearchFilter struct {
-	Owner   int64
-	Query   string
-	Account string
-	Folder  string
+	Scope  Scope
+	Query  string
+	Folder string
 	// From, To and Attachment match a substring of the sender, of a To or
 	// Cc recipient, or of an attachment file name, in any case.
 	From       string
@@ -39,8 +41,8 @@ type SearchFilter struct {
 	Thread string
 	After  *time.Time
 	Before *time.Time
-	// Gone lists only messages no longer on any server: the owner's IMAP
-	// locations (of Account, if set) exist and are all gone.
+	// Gone lists only messages no longer on any server: the IMAP locations
+	// in the scope's accounts exist and are all gone.
 	Gone bool
 	// Cursor continues a previous page (the last row's SortAt and SHA256).
 	CursorAt  *time.Time
@@ -65,8 +67,8 @@ type MessageSummary struct {
 	Thread string
 	Count  int64
 	// Gone: the row is only in the archive, by exactly the predicate of
-	// SearchFilter.Gone with the listing's Account. Set by SearchMessages
-	// and SearchThreads only.
+	// SearchFilter.Gone with the listing's Scope. Set by SearchMessages and
+	// SearchThreads only.
 	Gone bool
 }
 
@@ -109,9 +111,10 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 		keys = append(keys, r.ThreadKey)
 	}
 	counts, err := s.q.CountThreadMatches(ctx, db.CountThreadMatchesParams{
-		ThreadKeys: keys, Query: p.Query, Pattern: p.Pattern, Owner: p.Owner, Account: p.Account, Folder: p.Folder,
-		FromPattern: p.FromPattern, ToPattern: p.ToPattern, ToShas: p.ToShas, ToWalk: p.ToWalk, AttachmentPattern: p.AttachmentPattern,
-		HasAttachment: p.HasAttachment, Thread: p.Thread, After: p.After, Before: p.Before,
+		ThreadKeys: keys, Query: p.Query, Pattern: p.Pattern, Accounts: p.Accounts, Folder: p.Folder,
+		FromPattern: p.FromPattern, ToPattern: p.ToPattern, ToShas: p.ToShas, ToWalk: p.ToWalk, EnvelopeAccounts: p.EnvelopeAccounts,
+		AttachmentPattern: p.AttachmentPattern,
+		HasAttachment:     p.HasAttachment, Thread: p.Thread, After: p.After, Before: p.Before,
 	})
 	if err != nil {
 		return nil, err
@@ -144,13 +147,13 @@ func (s *Store) searchParams(ctx context.Context, f SearchFilter) (db.SearchMess
 		return p, nil
 	}
 	p.ToShas = []string{}
-	// Without an smtp account the user has no envelopes; looking would
-	// only scan other users' matches.
-	if owns, err := s.q.OwnsSMTPAccount(ctx, f.Owner); err != nil || !owns {
-		return p, err
+	// Without an own smtp account in the scope the viewer has no
+	// envelopes; looking would only scan other users' matches.
+	if len(p.EnvelopeAccounts) == 0 {
+		return p, nil
 	}
 	shas, err := s.q.EnvelopeMatches(ctx, db.EnvelopeMatchesParams{
-		Pattern: *p.ToPattern, Owner: f.Owner, RowLimit: int32(maxEnvelopeMatches) + 1, //nolint:gosec // small
+		Pattern: *p.ToPattern, EnvelopeAccounts: p.EnvelopeAccounts, RowLimit: int32(maxEnvelopeMatches) + 1, //nolint:gosec // small
 	})
 	if err != nil {
 		return p, err
@@ -165,7 +168,7 @@ func (s *Store) searchParams(ctx context.Context, f SearchFilter) (db.SearchMess
 
 func searchParams(f SearchFilter) db.SearchMessagesParams {
 	p := db.SearchMessagesParams{
-		Owner: f.Owner, Account: nonEmpty(f.Account), Folder: nonEmpty(f.Folder),
+		Accounts: f.Scope.ids(), EnvelopeAccounts: f.Scope.envelopeIDs(), Folder: nonEmpty(f.Folder),
 		FromPattern: likePattern(f.From), ToPattern: likePattern(f.To), AttachmentPattern: likePattern(f.Attachment),
 		HasAttachment: f.HasAttachment || strings.TrimSpace(f.Attachment) != "",
 		Thread:        nonEmpty(f.Thread), After: f.After, Before: f.Before, Gone: f.Gone, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
@@ -182,7 +185,12 @@ func searchParams(f SearchFilter) db.SearchMessagesParams {
 
 // MessageLocation is one place where a message was found.
 type MessageLocation struct {
-	Account      string
+	AccountID int64
+	Account   string
+	// OwnerID and Owner are the account's owner (ID and user name); not
+	// the viewer for an account shared with them.
+	OwnerID      int64
+	Owner        string
 	Folder       string
 	UID          int64
 	Flags        []string
@@ -194,7 +202,8 @@ type MessageLocation struct {
 	GoneAt *time.Time
 	// LastSeenAt is when the server last listed the location.
 	LastSeenAt time.Time
-	// Envelope is the SMTP envelope of a location in an smtp account.
+	// Envelope is the SMTP envelope of a location in one of the viewer's
+	// own smtp accounts.
 	Envelope *Envelope
 	// Filled: a location in an smtp account that a fill copied from IMAP
 	// or an import of files added, not received over SMTP; it has no
@@ -242,17 +251,17 @@ type MessageDetail struct {
 	RetainUntil *time.Time
 }
 
-// GetMessageDetail returns metadata and the user's own locations of one
-// message. Messages not found in any of the user's accounts are ErrNotFound.
-func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string) (*MessageDetail, error) {
-	r, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Owner: owner})
+// GetMessageDetail returns metadata and the locations of one message in
+// the scope's accounts. Messages found in none of them are ErrNotFound.
+func (s *Store) GetMessageDetail(ctx context.Context, sc Scope, sha256 string) (*MessageDetail, error) {
+	r, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Accounts: sc.ids()})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	locs, err := s.q.ListLocations(ctx, db.ListLocationsParams{Sha256: sha256, Owner: owner})
+	locs, err := s.q.ListLocations(ctx, db.ListLocationsParams{Sha256: sha256, Accounts: sc.ids(), EnvelopeAccounts: sc.envelopeIDs()})
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +274,7 @@ func (s *Store) GetMessageDetail(ctx context.Context, owner int64, sha256 string
 	}
 	for _, l := range locs {
 		loc := MessageLocation{
-			Account: l.Account, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
+			AccountID: l.AccountID, Account: l.Account, OwnerID: l.OwnerID, Owner: l.Owner, Folder: l.Folder, UID: l.Uid, Flags: l.Flags, InternalDate: l.InternalDate, Superseded: l.Superseded,
 			GoneAt: l.GoneAt, LastSeenAt: l.LastSeenAt, OnHold: l.OnHold, Filled: l.Filled,
 		}
 		if l.FillID != nil {
@@ -321,19 +330,20 @@ type Conversation struct {
 const MaxConversation = 200
 
 // GetConversation returns the messages of a message's thread and its
-// direct parent and replies that the user may see. Like GetMessageDetail,
-// a message the user may not see is ErrNotFound.
-func (s *Store) GetConversation(ctx context.Context, owner int64, sha256 string) (*Conversation, error) {
-	if _, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Owner: owner}); errors.Is(err, pgx.ErrNoRows) {
+// direct parent and replies found in the scope's accounts. Like
+// GetMessageDetail, a message outside the scope is ErrNotFound.
+func (s *Store) GetConversation(ctx context.Context, sc Scope, sha256 string) (*Conversation, error) {
+	ids := sc.ids()
+	if _, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Accounts: ids}); errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, err
 	}
-	rows, err := s.q.ListConversation(ctx, db.ListConversationParams{Owner: owner, Sha256: sha256, RowLimit: MaxConversation})
+	rows, err := s.q.ListConversation(ctx, db.ListConversationParams{Accounts: ids, Sha256: sha256, RowLimit: MaxConversation})
 	if err != nil {
 		return nil, err
 	}
-	total, err := s.q.CountConversation(ctx, db.CountConversationParams{Owner: owner, Sha256: sha256})
+	total, err := s.q.CountConversation(ctx, db.CountConversationParams{Accounts: ids, Sha256: sha256})
 	if err != nil {
 		return nil, err
 	}
@@ -362,23 +372,29 @@ type FolderCount struct {
 
 // AccountFolders is an account with its folders, for navigation.
 type AccountFolders struct {
-	Name    string
+	ID   int64
+	Name string
+	// OwnerID and Owner are the account's owner (ID and user name).
+	OwnerID int64
+	Owner   string
 	Kind    AccountKind
 	Enabled bool
 	Removed bool
 	Folders []FolderCount
 }
 
-// ListAccountFolders returns a user's accounts with their folders and counts.
-func (s *Store) ListAccountFolders(ctx context.Context, owner int64) ([]AccountFolders, error) {
-	rows, err := s.q.ListFolderCounts(ctx, owner)
+// ListAccountFolders returns the scope's accounts with their folders and
+// counts, ordered by owner name, account name and ID.
+func (s *Store) ListAccountFolders(ctx context.Context, sc Scope) ([]AccountFolders, error) {
+	rows, err := s.q.ListFolderCounts(ctx, sc.ids())
 	if err != nil {
 		return nil, err
 	}
 	var out []AccountFolders
 	for _, r := range rows {
-		if len(out) == 0 || out[len(out)-1].Name != r.Account {
-			out = append(out, AccountFolders{Name: r.Account, Kind: AccountKind(r.Kind), Enabled: r.Enabled, Removed: r.Removed, Folders: []FolderCount{}})
+		// By ID: two owners may each have an account of this name.
+		if len(out) == 0 || out[len(out)-1].ID != r.ID {
+			out = append(out, AccountFolders{ID: r.ID, Name: r.Account, OwnerID: r.OwnerID, Owner: r.Owner, Kind: AccountKind(r.Kind), Enabled: r.Enabled, Removed: r.Removed, Folders: []FolderCount{}})
 		}
 		if r.Folder != nil {
 			a := &out[len(out)-1]

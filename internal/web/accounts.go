@@ -156,7 +156,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	counts, err := s.store.ListAccountFolders(ctx, userID(r))
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	counts, err := s.store.ListAccountFolders(ctx, sc)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -203,7 +207,9 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	folders := make(map[string][]folderJSON, len(counts))
+	// By account ID: an account shared with the viewer may have the name of
+	// one of their own.
+	folders := make(map[int64][]folderJSON, len(counts))
 	for _, a := range counts {
 		list := make([]folderJSON, 0, len(a.Folders))
 		for _, f := range a.Folders {
@@ -220,7 +226,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 				Delimiter: delim,
 			})
 		}
-		folders[a.Name] = list
+		folders[a.ID] = list
 	}
 	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
 	if s.smtpListen != "" {
@@ -257,7 +263,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			Host:    a.Host, Port: a.Port, TLS: string(a.TLSMode), Username: a.Username,
 			IncludedFolders: a.IncludedFolders, ExcludedFolders: a.ExcludedFolders,
 			SyncInterval: archive.FormatOwnInterval(a.SyncInterval),
-			Folders:      folders[a.Name], Sync: syncJSON{State: "idle", Health: store.HealthOK},
+			Folders:      folders[a.ID], Sync: syncJSON{State: "idle", Health: store.HealthOK},
 			GoneMessages: reconciled[a.ID].Gone, LastReconciledAt: reconciled[a.ID].LastReconciledAt,
 		}
 		if h := health[a.ID]; h != nil {

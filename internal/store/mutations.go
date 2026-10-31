@@ -177,7 +177,7 @@ func nonNil(l []string) []string {
 // SetAccountOwner hands an account to another user, checked against ref
 // like UpdateAccount. It fails with ErrConflict if that user already has an
 // account with the same name. Removed accounts can be moved too, so their
-// archived mail moves along.
+// archived mail moves along. Shares stay, except one with the new owner.
 func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		r, err := q.LockAccount(ctx, ref.ID)
@@ -206,6 +206,12 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return fmt.Errorf("account name: %w", ErrConflict)
 		}
+		if err != nil {
+			return err
+		}
+		// The new owner sees the account as their own; other shares stay,
+		// and the old owner keeps no access unless shared (#389).
+		_, err = q.DeleteAccountShare(ctx, db.DeleteAccountShareParams{AccountID: ref.ID, UserID: owner})
 		return err
 	})
 }

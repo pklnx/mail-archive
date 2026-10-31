@@ -13,6 +13,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 // journalRaw is a message as the source holds it, LF only, with an
@@ -87,7 +88,7 @@ func (e *archiveEnv) importJournal(acc *store.Account, imp *store.SMTPImport, pa
 // an envelope, and the label of its import.
 func (e *archiveEnv) origin(acc *store.Account, sha string) []string {
 	e.t.Helper()
-	d, err := e.st.GetMessageDetail(e.ctx, *acc.OwnerID, sha)
+	d, err := e.st.GetMessageDetail(e.ctx, storetest.Viewer(e.t, e.st, *acc.OwnerID), sha)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}

@@ -86,7 +86,7 @@ func TestDeleteOrRemoveAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list, err := st.ListAccountFolders(ctx, owner.ID)
+	list, err := st.ListAccountFolders(ctx, storetest.Viewer(t, st, owner.ID))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -87,7 +87,7 @@ func (f *reconcileFixture) reconcile(fo *store.Folder, listed map[uint32]string)
 // locations returns "folder/uid:flags[:gone]" of the owner's locations of a message.
 func (f *reconcileFixture) locations(owner *store.User, hash string) []string {
 	f.t.Helper()
-	d, err := f.st.GetMessageDetail(f.ctx, owner.ID, hash)
+	d, err := f.st.GetMessageDetail(f.ctx, storetest.Viewer(f.t, f.st, owner.ID), hash)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -105,7 +105,11 @@ func (f *reconcileFixture) locations(owner *store.User, hash string) []string {
 
 func (f *reconcileFixture) gone(owner *store.User, account string) []string {
 	f.t.Helper()
-	rows, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Owner: owner.ID, Account: account, Gone: true, Limit: 50})
+	sc := storetest.Viewer(f.t, f.st, owner.ID)
+	if account != "" {
+		sc = sc.OwnAccount(account)
+	}
+	rows, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Scope: sc, Gone: true, Limit: 50})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -182,7 +186,7 @@ func TestReconcileLastUIDAndSuperseded(t *testing.T) {
 	if got := f.gone(f.alice, ""); !slices.Equal(got, []string{"b"}) {
 		t.Errorf("gone = %v", got)
 	}
-	d, err := f.st.GetMessageDetail(f.ctx, f.alice.ID, hashOf('a'))
+	d, err := f.st.GetMessageDetail(f.ctx, storetest.Viewer(t, f.st, f.alice.ID), hashOf('a'))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +287,7 @@ func TestGoneIsPerUser(t *testing.T) {
 	if got := f.gone(f.bob, ""); len(got) != 0 {
 		t.Errorf("bob gone = %v", got)
 	}
-	d, err := f.st.GetMessageDetail(f.ctx, f.bob.ID, hashOf('a'))
+	d, err := f.st.GetMessageDetail(f.ctx, storetest.Viewer(t, f.st, f.bob.ID), hashOf('a'))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,8 +374,12 @@ func TestGoneFlagMatchesFilter(t *testing.T) {
 	flagged := map[listing][]string{}
 	for _, threads := range []bool{false, true} {
 		for _, l := range listings {
-			filter := store.SearchFilter{Owner: f.alice.ID, Account: l.account, Folder: l.folder, Limit: 50}
-			gone, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Owner: f.alice.ID, Account: l.account, Gone: true, Limit: 50})
+			sc := storetest.Viewer(t, f.st, f.alice.ID)
+			if l.account != "" {
+				sc = sc.OwnAccount(l.account)
+			}
+			filter := store.SearchFilter{Scope: sc, Folder: l.folder, Limit: 50}
+			gone, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Scope: sc, Gone: true, Limit: 50})
 			if err != nil {
 				t.Fatal(err)
 			}

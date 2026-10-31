@@ -14,6 +14,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 // reconcileFixture has alice's account "mail" with INBOX (m1..m3) and
@@ -68,7 +69,7 @@ func (f *reconcileFixture) reconcile() archive.AccountResult {
 // archive.
 func (f *reconcileFixture) gone() []string {
 	f.t.Helper()
-	rows, err := f.store.SearchMessages(f.ctx, store.SearchFilter{Owner: f.owner.ID, Gone: true, Limit: 50})
+	rows, err := f.store.SearchMessages(f.ctx, store.SearchFilter{Scope: storetest.Viewer(f.t, f.store, f.owner.ID), Gone: true, Limit: 50})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func (f *reconcileFixture) gone() []string {
 
 func (f *reconcileFixture) flags(id string) []string {
 	f.t.Helper()
-	d, err := f.store.GetMessageDetail(f.ctx, f.owner.ID, hashOf(string(rawMessage(id, id))))
+	d, err := f.store.GetMessageDetail(f.ctx, storetest.Viewer(f.t, f.store, f.owner.ID), hashOf(string(rawMessage(id, id))))
 	if err != nil {
 		f.t.Fatal(err)
 	}
