@@ -211,8 +211,17 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		}
 		// The new owner sees the account as their own; other shares stay,
 		// and the old owner keeps no access unless shared (#389).
-		_, err = q.DeleteAccountShare(ctx, db.DeleteAccountShareParams{AccountID: ref.ID, UserID: owner})
-		return err
+		if _, err = q.DeleteAccountShare(ctx, db.DeleteAccountShareParams{AccountID: ref.ID, UserID: owner}); err != nil {
+			return err
+		}
+		if e := auditFrom(ctx); e != nil {
+			n, err := q.CountAccountShares(ctx, ref.ID)
+			if err != nil {
+				return err
+			}
+			e.Detail("shares_kept", n)
+		}
+		return nil
 	})
 }
 

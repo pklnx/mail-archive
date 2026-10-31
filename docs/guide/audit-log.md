@@ -16,6 +16,10 @@ opened messages, downloads, the IP address and the browser of each request.
   message the admin has too.
 - **Tell your users** before they use the archive. In a company, a works
   council may have a say in such recording.
+- **Owners see the reads of their shared accounts**: who opened, downloaded
+  or listed their mail and when, never the reader's IP address, browser or
+  API key, nor the terms of searches that did not name the account. See
+  [Shared accounts](#shared-accounts).
 - The log is personal data itself. Nothing in the archive deletes its rows;
   how long it is kept is part of the retention rules, not of the log.
 
@@ -33,15 +37,17 @@ Each event writes exactly one entry.
 | `message.html` | Its HTML body was loaded; `images: true` with remote images. `inline_images` counts the embedded images (`cid:` references) shown, `inline_omitted` those shown empty (unknown, not an image type that is shown, past the 10 MiB limit, or unreadable). |
 | `message.raw` | The `.eml` file was downloaded. |
 | `message.part` | An attachment was loaded; `index`, `content_type` and `inline`. In older entries also an inline image of an HTML message. |
+| `message.list`, `message.page`, `message.conversation` | Only for users with [shared accounts](#shared-accounts), when the request reaches one: a list without search parameters (folder or all mail, also an expanded conversation with `thread`), a further page of any list (`cursor`), and a message's conversation (`members`, the number of messages shown). |
 | `sync.start` | A sync was started by hand, for one account (`reconcile`) or all (`accounts`, the number queued). |
-| `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. |
+| `account.share`, `account.unshare` | The owner shared an account with a user, or ended the share; `user` and `user_id`. Sharing an account again records nothing. |
+| `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. `account.move` counts the shares that stay (`shares_kept`); the new owner's own share ends. |
 | `account.purge`, `account.purge_batch`, `account.purge_finish`, `account.purge_cancel` | A removed account [deleted completely](./accounts#deleting-a-removed-account-completely): confirmed (`purge_id`, `owner`, `kind`, `locations`, `messages`, `deleted`, `kept`), each batch (`locations`, `deleted`, `kept`), its end with the totals, and a cancellation with its `note`. The deleted messages themselves are recorded per message in the deletion records. Purges resumed by the web server are written with actor `cli` and `by: web server`. |
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login: password, 2FA and passkeys. |
 | `profile.change` | A user changed their own web UI settings. `fields` names them (`language`, `locale`), each with its old and new value (`from`, `to`). Saving an unchanged value records nothing. |
 | `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. Group `retention`. |
 | `retention.preview`, `retention.confirm`, `retention.cancel`, `retention.batch`, `retention.finish`, `retention.sweep` | A [deletion run](../reference/cli#deletion): proposed (candidates, bytes), confirmed, cancelled, each batch (`deleted`, `kept`), its end with the totals, and removed files. The deleted messages themselves are recorded per message in the deletion records, not here. Runs resumed by the web server are written with actor `cli` and `by: web server`. |
-| `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`). |
+| `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`); `user.remove` also counts the shares of other users' accounts with the user (`shares_removed`). |
 | `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. `data.import` has `format`, `source` and `folders`; with [`--journal`](./importing#into-an-smtp-account) also `into: "JOURNAL"`, `label` and `import`, the ID of the run the imported locations name. |
 | `data.fill`, `data.fill_change`, `data.fill_resume`, `data.fill_cancel`, `data.fill_done` | A [fill](./journaling#bring-in-the-mail-from-before-journaling) of an smtp account from IMAP: started (`fill`, `host`, `username`, `folders`, and `before`, or for a [recurring fill](./journaling#keep-importing-recurring-fill) `keep_running` and `interval`; `prefix` for fills from before fills wrote into `JOURNAL`), changed (`fill_change`: switched to recurring with `keep_running` and `interval` as `{"from", "to"}`, or a new `interval`), resumed, cancelled or stopped, and the end of a one-time fill with `status` and the counts. The runs of a recurring fill are not logged, like scheduled syncs. A fill the web server ran ends without a user, with `"by": "web server"`. The password is never recorded. The Log page lists them under the Export filter, with the other `data.*` actions. |
 | `audit.export` | `./ma audit` itself. |
@@ -50,10 +56,11 @@ Not recorded:
 
 - automatic syncs, on schedule or with `sync` on the command line (the sync
   history has them);
-- page views: the account list, the status, a folder listed without a
-  search, further pages of a list (the first page was recorded),
-  expanding a conversation (the search was recorded), the conversation of a
-  message;
+- page views over the user's own accounts: the account list, the status, a
+  folder listed without a search, further pages of a list (the first page
+  was recorded), expanding a conversation (the search was recorded), the
+  conversation of a message. Over shared accounts these are recorded (see
+  above);
 - reading the log;
 - requests with an API key that the web UI would not record either, such as
   `GET /api/status`; the key's last use is in the profile instead;
@@ -66,6 +73,29 @@ writes `message.open` and `message.html`; its inline images are counted on
 can write "inv" and "invoice". Each download request is recorded, also a
 repeated or resumed one. The entries record what the browser asked for;
 whether it was shown cannot be known.
+
+## Shared accounts
+
+An owner can let another user read an account (see
+[Users](./users#shared-accounts)). The reader's own Log and the admins' view
+have every entry of that reader, as for any user. Entries that read the
+owner's mail also go into the owner's Log, where they are marked as another
+user's read:
+
+| Reader's request | In the owner's Log |
+|---|---|
+| A message opened, its HTML, the `.eml` file or an attachment, when the message is in the shared account | The action and the message, also when the reader has the message too. |
+| The first page of a search or list that names the shared account (`account=owner/name`) | `message.search` with its terms, or `message.list`, and `n`, the messages on the page the reader sees only there. Further pages of it are only in the reader's Log. |
+| Any page of a search or list over all of the reader's mail that shows messages the reader sees only through the share | The action, the account and `n` on that page, and `search: true` or `false`. No terms, folder or thread: they may be about the reader's own mail. |
+| A conversation with messages the reader sees only through the share, other than the message opened | `message.conversation` with `n`. Its message is shown only if the owner may read it. |
+
+The owner sees the time, the reader's name, the action and the message,
+never the reader's IP address, browser or API key name, and only their own
+accounts in `via_accounts`, never another owner's share with the same
+reader. The entries hold the owners as of the read (`via_owners`), so they
+stay in the owner's Log after an unshare, and after `account move` with the
+owner of their time. A read of mail the reader also has in an own account
+counts only for message reads, not in `n`.
 
 ## The fields
 
@@ -138,7 +168,8 @@ command line's. In **Who** they can pick several users, the command line
 and API keys; the list then shows the entries of any of them, for example
 alice's and the command line's.
 The **Who** column is for admins; for everyone else, an entry from the
-command line says so under its target.
+command line says so under its target. Owners of shared accounts also see
+other users' reads of them; see [Shared accounts](#shared-accounts).
 
 ![Log page](/screenshots/log.png)
 
@@ -156,8 +187,8 @@ or <kbd>Backspace</kbd> on the field clears it.
 The filters are kept in the page address, so a reload, the browser's Back
 button after opening a message from the list, and a bookmark show the same
 entries. A bookmark without a From of its own keeps showing the last 30 days.
-A user that no longer exists is dropped from the address. A message shows its subject only to a user who has that
-message too; otherwise the start of its SHA-256. A click on a subject opens
+A user that no longer exists is dropped from the address. A message shows its subject only to a user who may read that
+message too (in an own or shared account); otherwise the start of its SHA-256. A click on a subject opens
 the message.
 
 Two kinds of rows are folded, so that the list reads like what happened:

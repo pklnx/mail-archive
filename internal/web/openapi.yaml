@@ -8,8 +8,10 @@ info:
   summary: A read-only, deduplicated archive of IMAP mailboxes.
   description: |
     The web UI is a client of this API; scripts can use it too. Every user
-    only sees their own accounts and the messages found in them; other
-    users' accounts and messages answer `404`.
+    only sees their own accounts, the accounts other users shared with them,
+    and the messages found in them; other users' accounts and messages
+    answer `404`. A shared account is only read: searched, opened and
+    downloaded. Managing, syncing and removing it stay with its owner.
 
     Requests authenticate with the session cookie of the web UI or with an
     API key: `Authorization: Bearer ma_…`. A key is created in the profile
@@ -1449,9 +1451,14 @@ paths:
       operationId: listAuditEntries
       summary: The audit log, newest first
       description: |
-        A user gets their own entries; admins get every user's, with the
-        search text, account names and message hashes. Reading the log
-        writes no entry.
+        A user gets their own entries and other users' reads of the
+        accounts they shared (`viaShare: true`); admins get every user's,
+        with the search text, account names and message hashes. A
+        `viaShare` entry has no client address, user agent or API key name,
+        and its details hold only the user's own accounts in
+        `via_accounts`; a search or list that did not name the account
+        holds `search` (true or false) instead of its parameters. Reading
+        the log writes no entry.
       parameters:
         - name: since
           in: query
@@ -1585,8 +1592,12 @@ paths:
       security:
         - session: []
         - apiKey: [read]
-      summary: The own accounts
-      description: Server settings (never the password), folders and the sync state.
+      summary: The own accounts and those shared with the user
+      description: |
+        Server settings (never the password), folders and the sync state of
+        the own accounts, with the users each is shared with. `shared` lists
+        the accounts other users shared with the user, with their folders
+        only. An API key gets what its owner's session gets.
       responses:
         "200":
           description: The accounts.
@@ -1746,6 +1757,73 @@ paths:
                 $ref: "#/components/schemas/Error"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
+
+  /api/accounts/{name}/shares/{user}:
+    parameters:
+      - $ref: "#/components/parameters/accountName"
+      - name: user
+        in: path
+        required: true
+        description: The user name of the user to share with.
+        schema:
+          type: string
+    put:
+      tags: [accounts]
+      operationId: shareAccount
+      summary: Share an own account with a user
+      description: |
+        The user may then search, read and download the account's mail;
+        managing, syncing and removing it stay with the owner. Only the
+        owner shares, also among admins. Sharing again changes nothing.
+        Written to the audit log as `account.share`.
+      responses:
+        "204":
+          description: The account is shared with the user.
+        "400":
+          description: The user is the account's owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No own account of this name, or no such user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: An smtp account (its envelopes stay with the owner), a removed account, or the account changed meanwhile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [accounts]
+      operationId: unshareAccount
+      summary: End a share
+      description: |
+        The user's next request no longer sees the account; their earlier
+        reads stay in the owner's Log. Also for removed accounts. Written to
+        the audit log as `account.unshare`.
+      responses:
+        "204":
+          description: The share ended.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No own account of this name, no such user, or no such share.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The account changed meanwhile; try again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/accounts/{name}/purge:
     parameters:
@@ -2238,7 +2316,10 @@ paths:
             type: string
         - name: account
           in: query
-          description: Only messages found in this account.
+          description: |
+            Only messages found in this account: a name for one of the own
+            accounts, `owner/name` for an account shared with the user (the
+            `key` in `GET /api/accounts`). An unknown account lists nothing.
           schema:
             type: string
         - name: folder
@@ -2729,7 +2810,7 @@ components:
               type: string
             subject:
               type: string
-              description: The subject of a message, only if the viewer has the message too.
+              description: The subject of a message, only if the viewer may read the message too.
         clientIp:
           type: string
         userAgent:
@@ -2737,6 +2818,9 @@ components:
         details:
           type: object
           description: The search parameters, the login method and reason, and the other values named in the docs.
+        viaShare:
+          type: boolean
+          description: Another user's read of an account the viewer shared; only in a non-admin's page.
 
     Retry:
       type: object
@@ -3033,12 +3117,17 @@ components:
         for its turn. Null without `syncEvery` or when disabled.
     Accounts:
       type: object
-      required: [accounts, manage, syncInterval, syncIntervalMin, reconcileInterval, alertAfter, smtp]
+      required: [accounts, shared, manage, syncInterval, syncIntervalMin, reconcileInterval, alertAfter, smtp]
       properties:
         accounts:
           type: array
           items:
             $ref: "#/components/schemas/Account"
+        shared:
+          type: array
+          description: The accounts other users shared with the user, by owner and name.
+          items:
+            $ref: "#/components/schemas/SharedAccount"
         manage:
           type: boolean
           description: False without `MAIL_ARCHIVE_SECRET_KEY`; accounts can then only be browsed.
@@ -3073,7 +3162,7 @@ components:
             it is on.
     Account:
       type: object
-      required: [name, kind, enabled, removed, purging, purge, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived]
+      required: [name, kind, enabled, removed, purging, purge, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived, sharedWith]
       properties:
         name:
           type: string
@@ -3154,6 +3243,44 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/FirstReceived"
+        sharedWith:
+          type: array
+          description: The users the account is shared with, by name.
+          items:
+            $ref: "#/components/schemas/AccountShare"
+    AccountShare:
+      type: object
+      required: [user, since]
+      properties:
+        user:
+          type: string
+        since:
+          type: string
+          format: date-time
+    SharedAccount:
+      type: object
+      required: [key, name, owner, kind, enabled, removed, folders]
+      description: An account another user shared with the user; only what reading its mail needs.
+      properties:
+        key:
+          type: string
+          description: "`owner/name`, for `account=` in `GET /api/messages`."
+          examples: [anna/info]
+        name:
+          type: string
+        owner:
+          type: string
+          description: The owner's user name.
+        kind:
+          $ref: "#/components/schemas/AccountKind"
+        enabled:
+          type: boolean
+        removed:
+          type: boolean
+        folders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Folder"
     AccountPurge:
       type: object
       required: [id, expected, locations, deleted, kept]
@@ -3794,7 +3921,9 @@ components:
                 locations; null when one of them has no rule (kept for ever).
             onHold:
               type: boolean
-              description: One of the locations is on legal hold. Only for admins.
+              description: |
+                One of the user's own locations is on legal hold. Only for
+                admins; locations in shared accounts do not count.
     Part:
       type: object
       required: [index, contentType, size, attachment, inline]
@@ -3816,10 +3945,13 @@ components:
           type: boolean
     Location:
       type: object
-      required: [account, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, filled, fill, import, retainUntil]
+      required: [account, owner, folder, uid, flags, internalDate, superseded, goneAt, lastSeenAt, envelope, filled, fill, import, retainUntil]
       properties:
         account:
           type: string
+        owner:
+          type: [string, "null"]
+          description: The owner's user name for an account shared with the user; null for the own accounts.
         folder:
           type: string
         uid:
@@ -3872,7 +4004,9 @@ components:
           description: When the retention period ends; null without a rule (kept for ever).
         onHold:
           type: boolean
-          description: An active legal hold covers it. Only for admins.
+          description: |
+            An active legal hold covers it. Only for admins, and only on their
+            own locations: holds on a shared account stay with its owner.
     LocationFill:
       type: object
       required: [id, username, host]

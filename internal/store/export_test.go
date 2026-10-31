@@ -107,3 +107,6 @@ func (queryStartTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQuery
 // read queries, for plan tests.
 func ScopeIDs(sc Scope) []int64         { return sc.ids() }
 func ScopeEnvelopeIDs(sc Scope) []int64 { return sc.envelopeIDs() }
+
+// ShareView is shareView: what an owner sees of another user's read.
+var ShareView = shareView
