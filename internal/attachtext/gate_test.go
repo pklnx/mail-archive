@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -316,8 +316,9 @@ func measurePhase(t *testing.T, phase string) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sum := sha256.Sum256([]byte(res.Text))
-			_ = enc.Encode(corpusEntry{Path: p, Status: res.Status, Sum: fmt.Sprintf("%x", sum[:8]), Peak: e.pdf.peak.Load(), Ms: float64(time.Since(start).Microseconds()) / 1000})
+			h := fnv.New64a() // compares texts between runs; no security role
+			_, _ = h.Write([]byte(res.Text))
+			_ = enc.Encode(corpusEntry{Path: p, Status: res.Status, Sum: fmt.Sprintf("%x", h.Sum64()), Peak: e.pdf.peak.Load(), Ms: float64(time.Since(start).Microseconds()) / 1000})
 		}
 		report(t, map[string]any{"ok": true})
 	case "timing":

@@ -1,7 +1,9 @@
 // Package pdftest builds small PDFs in Go: valid ones with a text layer and
-// hostile ones (broken structure, decompression bombs, many pages,
-// passwords). It is not a test package, so the tests of other packages and
-// the demo can use it; nothing in the server imports it.
+// hostile ones (broken structure, decompression bombs, many pages). It is
+// not a test package, so the tests of other packages and the demo can use
+// it; nothing in the server imports it. Password-protected PDFs are
+// committed files in ../testdata, so that no password hashing or
+// encryption code is in the repository.
 //
 // The text uses the standard font Helvetica with WinAnsiEncoding, so it
 // needs no embedded font; characters outside Windows-1252 become '?'.
@@ -9,12 +11,6 @@ package pdftest
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/sha512"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"strings"
@@ -26,8 +22,6 @@ import (
 // cross-reference table and trailer.
 type writer struct {
 	objs [][]byte // objs[i] is object i+1, without "n 0 obj"/"endobj"
-	// encrypt, if set, encrypts strings and streams of object n.
-	encrypt func(n int, data []byte) []byte
 }
 
 // add appends an object and returns its number.
@@ -41,11 +35,8 @@ func (w *writer) reserve() int { return w.add("") }
 
 func (w *writer) set(n int, body string) { w.objs[n-1] = []byte(body) }
 
-// stream returns a stream object body; filter is "" or a /Filter value.
-func (w *writer) streamObj(n int, dict string, data []byte) string {
-	if w.encrypt != nil {
-		data = w.encrypt(n, data)
-	}
+// streamObj returns a stream object body; dict holds its other entries.
+func (w *writer) streamObj(dict string, data []byte) string {
 	return fmt.Sprintf("<<%s/Length %d>>\nstream\n%s\nendstream", dict, len(data), data)
 }
 
@@ -114,7 +105,7 @@ func (w *writer) document(contents [][]byte, filter string, extraRes string) (ca
 	kids := make([]string, 0, len(contents))
 	for _, c := range contents {
 		cn := w.reserve()
-		w.set(cn, w.streamObj(cn, filter, c))
+		w.set(cn, w.streamObj(filter, c))
 		p := w.add(fmt.Sprintf("<</Type/Page/Parent %d 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 %d 0 R>>%s>>/Contents %d 0 R>>",
 			pagesObj, fontObj, extraRes, cn))
 		kids = append(kids, fmt.Sprintf("%d 0 R", p))
@@ -147,7 +138,7 @@ func Pages(n int, text func(i int) string) []byte {
 		cn, ok := shared[t]
 		if !ok {
 			cn = w.reserve()
-			w.set(cn, w.streamObj(cn, "", Content(t)))
+			w.set(cn, w.streamObj("", Content(t)))
 			shared[t] = cn
 		}
 		p := w.add(fmt.Sprintf("<</Type/Page/Parent %d 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 %d 0 R>>>>/Contents %d 0 R>>",
@@ -295,7 +286,7 @@ func Large(size int, text string) []byte {
 	build := func(pixels int) []byte {
 		w := &writer{}
 		img := w.reserve()
-		w.set(img, w.streamObj(img, fmt.Sprintf("/Type/XObject/Subtype/Image/Width %d/Height 1/ColorSpace/DeviceGray/BitsPerComponent 8", pixels),
+		w.set(img, w.streamObj(fmt.Sprintf("/Type/XObject/Subtype/Image/Width %d/Height 1/ColorSpace/DeviceGray/BitsPerComponent 8", pixels),
 			bytes.Repeat([]byte{0x80}, pixels)))
 		content := append(Content(text), []byte("q 100 0 0 10 40 100 cm /Im1 Do Q\n")...)
 		cat := w.document([][]byte{content}, "", fmt.Sprintf("/XObject<</Im1 %d 0 R>>", img))
@@ -343,126 +334,13 @@ func NestedArrays(depth int) []byte {
 	fontObj := w.add(font)
 	pagesObj := w.reserve()
 	cn := w.reserve()
-	w.set(cn, w.streamObj(cn, "", Content("nested")))
+	w.set(cn, w.streamObj("", Content("nested")))
 	nested := strings.Repeat("[", depth) + strings.Repeat("]", depth)
 	p := w.add(fmt.Sprintf("<</Type/Page/Parent %d 0 R/MediaBox[0 0 595 842]/Deep %s/Resources<</Font<</F1 %d 0 R>>>>/Contents %d 0 R>>",
 		pagesObj, nested, fontObj, cn))
 	w.set(pagesObj, fmt.Sprintf("<</Type/Pages/Kids[%d 0 R]/Count 1>>", p))
 	cat := w.add(fmt.Sprintf("<</Type/Catalog/Pages %d 0 R>>", pagesObj))
 	return w.bytes(fmt.Sprintf("/Root %d 0 R", cat))
-}
-
-// Encrypted returns a PDF with one page per argument, encrypted with the
-// standard security handler, revision 6 (AES-256, ISO 32000-2, 7.6.4.4).
-// An empty user password opens without a password (owner password only);
-// a non-empty one is needed to open the file. Passwords are ASCII here, so
-// SASLprep changes nothing.
-func Encrypted(user, owner string, pages ...string) []byte {
-	if owner == "" {
-		owner = user
-	}
-	random := func(n int) []byte {
-		b := make([]byte, n)
-		_, _ = rand.Read(b)
-		return b
-	}
-	fileKey := random(32)
-	// Algorithm 8: /U and /UE.
-	uvs, uks := random(8), random(8)
-	u := append(append(hashR6([]byte(user), uvs, nil), uvs...), uks...)
-	ue := aesNoPad(hashR6([]byte(user), uks, nil), fileKey)
-	// Algorithm 9: /O and /OE, which also hash /U.
-	ovs, oks := random(8), random(8)
-	o := append(append(hashR6([]byte(owner), ovs, u), ovs...), oks...)
-	oe := aesNoPad(hashR6([]byte(owner), oks, u), fileKey)
-	// Algorithm 10: /Perms.
-	perms := int32(-4) // all permissions
-	pb := make([]byte, 16)
-	binary.LittleEndian.PutUint32(pb, uint32(perms)) //nolint:gosec // the bit pattern of /P
-	copy(pb[4:], []byte{0xff, 0xff, 0xff, 0xff, 'T', 'a', 'd', 'b'})
-	copy(pb[12:], random(4))
-	block, _ := aes.NewCipher(fileKey)
-	permsEnc := make([]byte, 16)
-	block.Encrypt(permsEnc, pb)
-
-	w := &writer{encrypt: func(_ int, data []byte) []byte {
-		// AESV3: AES-256-CBC with the file key, a random IV in front and
-		// PKCS#7 padding.
-		iv := random(aes.BlockSize)
-		n := aes.BlockSize - len(data)%aes.BlockSize
-		padded := append(append([]byte{}, data...), bytes.Repeat([]byte{byte(n)}, n)...)
-		out := make([]byte, len(padded))
-		cipher.NewCBCEncrypter(block, iv).CryptBlocks(out, padded)
-		return append(iv, out...)
-	}}
-	contents := make([][]byte, len(pages))
-	for i, p := range pages {
-		contents[i] = Content(p)
-	}
-	cat := w.document(contents, "", "")
-	enc := w.add(fmt.Sprintf("<</Filter/Standard/V 5/R 6/Length 256/CF<</StdCF<</AuthEvent/DocOpen/CFM/AESV3/Length 32>>>>/StmF/StdCF/StrF/StdCF"+
-		"/O<%x>/U<%x>/OE<%x>/UE<%x>/P %d/Perms<%x>>>", o, u, oe, ue, perms, permsEnc))
-	id := []byte("0123456789abcdef")
-	return w.bytes(fmt.Sprintf("/Root %d 0 R/Encrypt %d 0 R/ID[<%x><%x>]", cat, enc, id, id))
-}
-
-// hashR6 is algorithm 2.B of ISO 32000-2: the hash of a password with a
-// salt and, for the owner password, the /U entry.
-func hashR6(password, salt, udata []byte) []byte {
-	password = password[:min(len(password), 127)]
-	h := sha256.New()
-	h.Write(password)
-	h.Write(salt)
-	h.Write(udata)
-	k := h.Sum(nil)
-	for round := 0; ; round++ {
-		var k1 []byte
-		for range 64 {
-			k1 = append(k1, password...)
-			k1 = append(k1, k...)
-			k1 = append(k1, udata...)
-		}
-		block, _ := aes.NewCipher(k[:16])
-		e := make([]byte, len(k1))
-		cipher.NewCBCEncrypter(block, k[16:32]).CryptBlocks(e, k1)
-		sum := 0
-		for _, c := range e[:16] {
-			sum += int(c)
-		}
-		switch sum % 3 {
-		case 0:
-			s := sha256.Sum256(e)
-			k = s[:]
-		case 1:
-			s := sha512.Sum384(e)
-			k = s[:]
-		default:
-			s := sha512.Sum512(e)
-			k = s[:]
-		}
-		if round >= 63 && int(e[len(e)-1]) <= round-32 {
-			return k[:32]
-		}
-	}
-}
-
-// aesNoPad encrypts data (a multiple of 16 bytes) with AES-256-CBC, an
-// all-zero IV and no padding, as the standard prescribes for /UE and /OE.
-// It chains the blocks itself: with a zero IV the first block is encrypted
-// as it is.
-func aesNoPad(key, data []byte) []byte {
-	block, _ := aes.NewCipher(key)
-	out := make([]byte, len(data))
-	prev := make([]byte, aes.BlockSize)
-	for i := 0; i < len(data); i += aes.BlockSize {
-		x := make([]byte, aes.BlockSize)
-		for j := range x {
-			x[j] = data[i+j] ^ prev[j]
-		}
-		block.Encrypt(out[i:i+aes.BlockSize], x)
-		prev = out[i : i+aes.BlockSize]
-	}
-	return out
 }
 
 // Truncated returns the first half of b.

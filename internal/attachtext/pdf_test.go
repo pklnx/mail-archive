@@ -83,6 +83,15 @@ func (c *deadlineCtx) Err() error {
 	}
 }
 
+func readFixture(t testing.TB, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestPDFText(t *testing.T) {
 	res := extractPDF(t, pdftest.Text("Rechnung Müller", "Seite zwei"))
 	if res.Status != StatusOK || res.Text != "Rechnung Müller\nSeite zwei" {
@@ -184,11 +193,12 @@ func TestPDFTextLimit(t *testing.T) {
 }
 
 func TestPDFPasswords(t *testing.T) {
-	res := extractPDF(t, pdftest.Encrypted("user-secret", "owner-secret", "hidden words"))
+	// Fixtures with AES-256 (R6) encryption, see testdata/README.md.
+	res := extractPDF(t, readFixture(t, "testdata/encrypted-user.pdf"))
 	if res.Status != StatusEncrypted || res.Text != "" {
 		t.Errorf("user password: %+v", res)
 	}
-	res = extractPDF(t, pdftest.Encrypted("", "owner-secret", "open words"))
+	res = extractPDF(t, readFixture(t, "testdata/encrypted-owner.pdf"))
 	if res.Status != StatusOK || res.Text != "open words" {
 		t.Errorf("owner password only: %+v", res)
 	}

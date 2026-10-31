@@ -21,7 +21,7 @@ func FuzzExtract(f *testing.F) {
 	for _, seed := range [][]byte{
 		nil, []byte("%PDF-"), valid, real, pdftest.Truncated(valid), pdftest.Truncated(real),
 		pdftest.XrefPastEnd(), pdftest.CyclicPages(), pdftest.NestedArrays(1000),
-		pdftest.Encrypted("user", "owner", "x"), pdftest.Encrypted("", "owner", "x"),
+		readFixture(f, "testdata/encrypted-user.pdf"), readFixture(f, "testdata/encrypted-owner.pdf"),
 		pdftest.Pages(50, func(int) string { return "p" }), pdftest.Bomb(4 << 20),
 	} {
 		f.Add(seed)
