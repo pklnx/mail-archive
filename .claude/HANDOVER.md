@@ -9,7 +9,7 @@ Current state only. At session end replace these sections; never append. History
 - #400's PR (Log multi-select UI, part 2 of #376) is being implemented. Dependabot waits 14 days before it opens a PR for a new version (`cooldown` in `.github/dependabot.yml`); security updates are exempt.
 
 ## Open tickets
-- Milestone 1.3.0 (open on GitHub, see Milestones): #376 (part 1 #399 merged via #401; part 2 #400 in progress, `ready`), #389 shared mailboxes, #390 attachment search, #404 search `after:`/`before:` count UTC days, #406 `retentionDay` test fails in Asia/Tokyo. #402 is done (#405). The 1.3.0 release notes must state #401's AND→OR change for `user`+`actor` together.
+- Milestone 1.3.0 (open on GitHub, see Milestones): #376 (part 1 #399 merged via #401; part 2 #400 in progress, `ready` via #376), #389 shared mailboxes, #390 attachment search, #404 search `after:`/`before:` count UTC days, #406 `retentionDay` test fails in Asia/Tokyo. #402 is done (#405). The 1.3.0 release notes must state #401's AND→OR change for `user`+`actor` together.
 - Later milestones: 1.4.0 #391 OAuth2; 1.5.0 #392 encryption at rest, #393 auditor access, #394 GoBD export; 1.6.0 #395 SMTP auth/TLS, #396 start without CLI, #397 operator/quotas, #398 WebKit e2e with #343.
 - Initial JS on main is about 569 900 of 579 000.
 
