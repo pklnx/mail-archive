@@ -151,6 +151,8 @@ management, own login settings, API keys, manual syncs, retention and legal
 holds); the list shows the entries of any of them. A field names what is
 picked, with the number of picks and a button that clears them; with nothing
 picked it says "All actions" or "Everyone" and the list is not filtered by it.
+<kbd>Esc</kbd> closes an open list and then leaves the field; <kbd>Delete</kbd>
+or <kbd>Backspace</kbd> on the field clears it.
 The filters are kept in the page address, so a reload, the browser's Back
 button after opening a message from the list, and a bookmark show the same
 entries. A bookmark without a From of its own keeps showing the last 30 days.

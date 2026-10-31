@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useMemo, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   Button,
   Link,
@@ -67,26 +67,45 @@ function ChoiceFilter({
   chosen: Choice[];
   onChange: (chosen: Choice[]) => void;
 }) {
+  // Escape on the closed field leaves it and keeps the choice, as everywhere
+  // else in the app (#311, #411). Carbon's MultiSelect clears the selection on
+  // Escape with the menu closed (as on Delete/Backspace), and App.tsx's global
+  // listener leaves the trigger alone: it is a role="combobox" button, which
+  // ownedByWidget (dialogs.ts) counts as a widget, and it blurs only inputs.
+  // The capture phase runs before Carbon's handler on the button. With the
+  // menu open, Escape is Carbon's and only closes it; Delete, Backspace and
+  // the clear button still clear the choice.
+  const leaveOnEscape = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || !(e.target instanceof HTMLElement)) return;
+    const trigger = e.target.closest<HTMLElement>('[role="combobox"]');
+    if (!trigger || trigger.getAttribute("aria-expanded") === "true") return;
+    e.stopPropagation();
+    e.preventDefault();
+    trigger.blur();
+  };
   return (
-    <MultiSelect<Choice>
-      id={id}
-      titleText={label}
-      label={chosen.length ? chosen.map((c) => c.text).join(", ") : allText}
-      items={items}
-      itemToString={choiceText}
-      selectedItems={chosen}
-      sortItems={keepOrder}
-      selectionFeedback="fixed"
-      translateWithId={translateWithId}
-      clearSelectionDescription={t.carbon.selection.description}
-      clearSelectionText={t.carbon.selection.clear}
-      clearAnnouncement={t.carbon.selection.cleared}
-      onChange={({ selectedItems }) => {
-        const picked = selectedItems ?? [];
-        // In the list's order, so the address does not follow the order of the clicks.
-        onChange(items.filter((i) => picked.some((p) => p.kind === i.kind && p.id === i.id)));
-      }}
-    />
+    // display: contents keeps the field the grid cell of .log-filters.
+    <div style={{ display: "contents" }} onKeyDownCapture={leaveOnEscape}>
+      <MultiSelect<Choice>
+        id={id}
+        titleText={label}
+        label={chosen.length ? chosen.map((c) => c.text).join(", ") : allText}
+        items={items}
+        itemToString={choiceText}
+        selectedItems={chosen}
+        sortItems={keepOrder}
+        selectionFeedback="fixed"
+        translateWithId={translateWithId}
+        clearSelectionDescription={t.carbon.selection.description}
+        clearSelectionText={t.carbon.selection.clear}
+        clearAnnouncement={t.carbon.selection.cleared}
+        onChange={({ selectedItems }) => {
+          const picked = selectedItems ?? [];
+          // In the list's order, so the address does not follow the order of the clicks.
+          onChange(items.filter((i) => picked.some((p) => p.kind === i.kind && p.id === i.id)));
+        }}
+      />
+    </div>
   );
 }
 
