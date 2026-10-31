@@ -997,6 +997,13 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 			// before anything archives, so new messages are numbered past
 			// them.
 			archive.CatchUpAtStart(cmd.Context(), a.store, a.cfg.AttestDir(), log)
+			// Background jobs, beside the notifier and the schedule; stopped
+			// before the store closes, releasing running jobs.
+			stopJobs, err := startJobs(cmd.Context(), a, log)
+			if err != nil {
+				return err
+			}
+			defer stopJobs()
 			var afterSync func()
 			if n := newNotifier(a, log); n != nil {
 				ctx, cancel := context.WithCancel(cmd.Context())
@@ -1142,7 +1149,11 @@ the schedule, "off" when the schedule is off. NEXT SYNC is when the
 schedule syncs it next ("due" when that has passed). HEALTH is "ok",
 "failing" or "stale", as in /healthz/sync; this command cannot see the web
 server's queue, so an account waiting there may show "stale" here while the
-web UI shows it as queued.`,
+web UI shows it as queued.
+
+The last line counts the background jobs per kind (such as attachment
+text): queued (with how long the oldest has been due), retrying, running
+and failed; "jobs retry KIND" queues failed ones again.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -1220,6 +1231,10 @@ web UI shows it as queued.`,
 			}
 			fmt.Println(line)
 			if line, err = retentionStatus(cmd, a); err != nil {
+				return err
+			}
+			fmt.Println(line)
+			if line, err = jobsStatus(cmd.Context(), a); err != nil {
 				return err
 			}
 			fmt.Println(line)

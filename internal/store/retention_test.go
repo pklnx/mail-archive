@@ -364,6 +364,7 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 func TestRetentionMigrationDown(t *testing.T) {
 	f := newRetentionFixture(t)
 	f.hold(store.NewLegalHold{OwnerID: &f.alice.ID})
+	downJobsMigration(t, f.st)
 	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}

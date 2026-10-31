@@ -222,6 +222,7 @@ func TestSMTPImportsMigration(t *testing.T) {
 		}
 		return n
 	}
+	downJobsMigration(t, st)
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
 		t.Fatalf("down the account shares: %q, %v", m, err)
 	}

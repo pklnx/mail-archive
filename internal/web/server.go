@@ -58,6 +58,8 @@ type Server struct {
 	// alertAfter failed syncs in a row make an account failing.
 	alertAfter  int
 	healthCache syncHealthCache
+	// jobsHealthCache holds the answer of /healthz/jobs.
+	jobsHealthCache jobsHealthCache
 	// trustedProxies may name the client in X-Forwarded-For.
 	trustedProxies []netip.Prefix
 	// retention executes confirmed deletion runs; nil leaves them to the

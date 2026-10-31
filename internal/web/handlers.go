@@ -69,7 +69,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		a.SyncEvery, a.NextAt = s.scheduleFields(archive.ScheduledStats(st))
 		accounts = append(accounts, a)
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"uniqueMessages": unique, "accounts": accounts})
+	out := map[string]any{"uniqueMessages": unique, "accounts": accounts}
+	// The queue covers every user's mail: admins only.
+	if sess := currentSession(r); sess != nil && sess.IsAdmin {
+		jobStats, err := s.store.JobStats(r.Context())
+		if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		out["jobs"] = toStatusJobs(jobStats)
+	}
+	s.writeJSON(w, http.StatusOK, out)
 }
 
 type summaryJSON struct {

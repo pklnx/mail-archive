@@ -42,10 +42,11 @@ cleanup() {
 		docker compose logs postgres >&2 || true
 		docker logs "$imap" >&2 || true
 		docker compose logs web >&2 || true
+		docker compose --profile worker logs worker >&2 || true
 	fi
 	docker rm -f "$imap" >/dev/null 2>&1 || true
 	in_data 'rm -rf /data/* /data/.[!.]*' >/dev/null 2>&1 || true
-	docker compose --progress quiet down -v >/dev/null 2>&1 || true
+	docker compose --progress quiet --profile worker down -v >/dev/null 2>&1 || true
 	rm -f .env
 	rm -rf "$work"
 	exit "$status"
@@ -70,7 +71,7 @@ MAIL_ARCHIVE_PUBLIC_URL=http://localhost
 ENV
 
 # Remove what an interrupted previous run left behind.
-docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+docker compose --profile worker down -v --remove-orphans >/dev/null 2>&1 || true
 docker rm -f "$imap" >/dev/null 2>&1 || true
 
 expect() { # expect <file> <extended regex>
@@ -123,6 +124,31 @@ docker compose --progress quiet stop web
 # serve ended on SIGTERM by itself; 137 would mean Docker killed it.
 docker inspect -f '{{.State.ExitCode}}' "$web_id" > "$work/out"
 expect "$work/out" '^0$'
+# By default the web server runs the background jobs itself.
+docker compose --progress quiet logs web > "$work/out" 2>&1
+expect "$work/out" 'msg="jobs on" workers=1'
+
+echo "== worker service"
+# The optional worker for background jobs, under its profile: its limits, its
+# start, and a stop on SIGTERM that hands running jobs back by itself.
+docker compose --progress quiet --profile worker up -d --wait worker
+worker_id=$(docker compose --profile worker ps -q worker)
+docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.Config.StopTimeout}} {{.HostConfig.SecurityOpt}}' "$worker_id" > "$work/out"
+expect "$work/out" '^805306368 1000000000 20 \[no-new-privileges:true\]$'
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$worker_id" > "$work/out"
+expect "$work/out" '^GOMEMLIMIT=576MiB$'
+expect "$work/out" '^MAIL_ARCHIVE_JOB_WORKERS=1$'
+docker compose --progress quiet --profile worker logs worker > "$work/out" 2>&1
+expect "$work/out" 'msg="worker on" workers=1'
+docker compose --progress quiet --profile worker stop worker
+docker inspect -f '{{.State.ExitCode}}' "$worker_id" > "$work/out"
+expect "$work/out" '^0$'
+# Off unless the profile is on: a plain `up` does not start it.
+docker compose --progress quiet config --services > "$work/out"
+if grep -qx worker "$work/out"; then
+	echo "the worker service is on without its profile" >&2
+	exit 1
+fi
 
 docker run -d --rm --name "$imap" --network "${COMPOSE_PROJECT_NAME}_default" \
 	-v "$work/imap-testserver:/imap-testserver:ro" \

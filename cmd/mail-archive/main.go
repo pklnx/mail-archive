@@ -46,6 +46,8 @@ func main() {
 		newAuditCmd(),
 		newNotifyCmd(),
 		newServeCmd(),
+		newWorkerCmd(),
+		newJobsCmd(),
 	)
 	if err := root.ExecuteContext(ctx); err != nil {
 		var exitErr *exitError
