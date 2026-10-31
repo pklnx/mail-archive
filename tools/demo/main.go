@@ -143,7 +143,15 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 		return err
 	}
 
-	imapAddr, err := startIMAP(imapListen, now)
+	// Passkeys need a host name: the demo is meant for localhost. The mail
+	// with the link cases (neutralized) links to this address too.
+	_, webPort, err := net.SplitHostPort(listen)
+	if err != nil {
+		return err
+	}
+	publicURL := "http://localhost:" + webPort
+
+	imapAddr, err := startIMAP(imapListen, now, publicURL)
 	if err != nil {
 		return err
 	}
@@ -255,12 +263,6 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	// purges confirmed in the UI.
 	retention := &archive.Retention{Store: st, Blobs: blobs, Grace: 7 * 24 * time.Hour, Logger: log}
 	go retention.Run(ctx)
-	// Passkeys need a host name: the demo is meant for localhost.
-	_, webPort, err := net.SplitHostPort(listen)
-	if err != nil {
-		return err
-	}
-	publicURL := "http://localhost:" + webPort
 	srv := web.New(st, blobs, log, web.Options{
 		Syncer: syncer, Runner: runner, Fills: fills, Sealer: sealer, SecretKey: key, PublicURL: publicURL,
 		// The demo stores its journal messages directly; the UI shows the
@@ -492,7 +494,7 @@ type message struct {
 }
 
 // startIMAP serves the demo users on addr.
-func startIMAP(addr string, now time.Time) (string, error) {
+func startIMAP(addr string, now time.Time, webURL string) (string, error) {
 	mem := imapmemserver.New()
 	byAccount := map[string]*imapmemserver.User{}
 	for _, u := range users {
@@ -505,7 +507,7 @@ func startIMAP(addr string, now time.Time) (string, error) {
 		mem.AddUser(user)
 		byAccount[u.account] = user
 	}
-	for _, m := range messages(now) {
+	for _, m := range messages(now, webURL) {
 		if _, err := byAccount[m.account].Append(m.mailbox, bytes.NewReader([]byte(m.raw)), &imap.AppendOptions{Time: now}); err != nil {
 			return "", fmt.Errorf("append to %s/%s: %w", m.account, m.mailbox, err)
 		}
@@ -621,7 +623,14 @@ func offsite(day func(days, hours int) time.Time) []message {
 // Only this mail has the word "kaleidoscope". It sits between the
 // newsletters of weeks 27 and 26, below the rows of the list screenshots.
 // Nothing in it violates the frame's CSP.
-func neutralized(date time.Time) message {
+//
+// A further row holds the link cases of web/e2e/frame-links.spec.ts (#459):
+// fixed-size boxes marked data-link-case, each filled by a link into the app
+// (to /api/openapi.json?link=<name>, relative, or absolute to webURL, the
+// web UI's address) or to a javascript: or data: URL, in every syntax and
+// element the server's link rewrite covers, and a meta refresh. The server
+// renames the attributes, so no box is a link in any engine.
+func neutralized(date time.Time, webURL string) message {
 	const box = "display:inline-block;vertical-align:top;width:120px;height:40px;margin:4px;border:1px dashed #888"
 	link := func(name string) string {
 		return `<a href="/api/openapi.json?case=` + name + `" target="_blank" style="display:block;height:100%;background:#fde68a">` + name + `</a>`
@@ -670,6 +679,45 @@ func neutralized(date time.Time) message {
 	b.WriteString(frame("srcdoc-cid", `<iframe cid:q= srcdoc=`+strings.ReplaceAll(esc(frameDoc("srcdoc-cid")), " ", "&#32;"), ""))
 	b.WriteString(frame("srcdoc-shadow", `<iframe srcdoc="`+esc(`<body style="margin:0"><div style="position:fixed;inset:0">`+
 		`<template shadowrootmode="closed">`+link("srcdoc-shadow")+`</template></div></body>`)+`"`, ""))
+	b.WriteString(`</div><p>Links into the archive:</p><div>`)
+	hostPort := strings.TrimPrefix(webURL, "http://")
+	api := func(name string) string { return "/api/openapi.json?link=" + name }
+	fill := `style="display:block;height:100%;background:#fde68a"`
+	linkBox := func(name, content string) {
+		b.WriteString(`<div data-link-case="` + name + `" style="` + box + `">` + content + `</div>`)
+	}
+	a := func(name, href string) {
+		linkBox(name, `<a href="`+href+`" `+fill+`>`+name+`</a>`)
+	}
+	a("root", api("root"))
+	linkBox("self", `<a href="`+api("self")+`" target="_self" `+fill+`>self</a>`)
+	a("relative", "api/openapi.json?link=relative")
+	a("scheme-relative", "//"+hostPort+api("scheme-relative"))
+	a("absolute", webURL+api("absolute"))
+	a("uppercase", strings.ToUpper(webURL)+api("uppercase"))
+	a("ip", "http://127.0.0.1:"+hostPort[strings.LastIndexByte(hostPort, ':')+1:]+api("ip"))
+	a("entity", "http&#58;//"+hostPort+api("entity"))
+	a("slash", "http:"+api("slash"))
+	a("backslash", `/\`+hostPort+api("backslash"))
+	a("fragment", "#top")
+	a("empty", "")
+	linkBox("bare", `<a href `+fill+`>bare</a>`)
+	a("javascript", "javascript:void(0)")
+	a("data", "data:text/html,link=data")
+	// A transparent GIF as the image map's picture.
+	linkBox("area", `<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" usemap="#link-map" width="120" height="40" alt="">`+
+		`<map name="link-map"><area href="`+api("area")+`" shape="rect" coords="0,0,120,40" alt="area"></map>`)
+	svg := func(name, content string) {
+		linkBox(name, `<svg width="120" height="40" xmlns:xlink="http://www.w3.org/1999/xlink">`+content+`</svg>`)
+	}
+	rect := `<rect width="120" height="40" fill="#fde68a"/>`
+	svg("svg", `<a href="`+api("svg")+`">`+rect+`</a>`)
+	svg("svg-xlink", `<a xlink:href="`+api("svg-xlink")+`">`+rect+`</a>`)
+	svg("use", `<defs><g id="link-use">`+rect+`</g></defs><a href="`+api("use")+`"><use href="#link-use"/></a>`)
+	svg("set", `<a><set attributeName="href" to="`+api("set")+`"/>`+rect+`</a>`)
+	svg("animate", `<a><animate attributeName="href" values="`+api("animate")+`"/>`+rect+`</a>`)
+	linkBox("mathml", `<math style="display:block;width:100%;height:100%"><mi href="`+api("mathml")+`">mathml</mi></math>`)
+	b.WriteString(`<meta http-equiv="refresh" content="0;url=` + api("refresh") + `">`)
 	b.WriteString(`</div><p><a href="https://links.example/kaleidoscope">The check online</a></p></body></html>`)
 	return message{"work", "INBOX", htmlReply("kaleidoscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
 		"Rendering check: boxes that stay empty", date, b.String())}
@@ -688,7 +736,9 @@ var leasePDF = pdftest.Text("Residential Lease Agreement\n\n" +
 // A 16x16 blue square as an inline image.
 const logoPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGNQTX5NEmIY1TCqYfhqAAB2SXMQ7mVTQgAAAABJRU5ErkJggg=="
 
-func messages(now time.Time) []message {
+// messages are the demo's IMAP mail. webURL is the web UI's address, which
+// the rendering check links to (neutralized).
+func messages(now time.Time, webURL string) []message {
 	ago := func(days, hours int) time.Time {
 		return now.AddDate(0, 0, -days).Add(-time.Duration(hours) * time.Hour)
 	}
@@ -791,7 +841,7 @@ Content-Transfer-Encoding: base64
 			"Thanks for signing up. Your mailbox is ready.")},
 	}
 	msgs = append(msgs, offsite(ago)...)
-	msgs = append(msgs, neutralized(ago(19, 12)))
+	msgs = append(msgs, neutralized(ago(19, 12), webURL))
 	for i := range 25 {
 		msgs = append(msgs, message{"work", "INBOX", plain("Newsletter <news@shop.example>", "alex.morgan@work.example",
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})

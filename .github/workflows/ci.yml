@@ -21,8 +21,8 @@ concurrency:
 # rate limit does not fail a job (option (b) of #216, as in paperless-go; no
 # secrets, the same for fork and Dependabot pull requests). dockerd gets the
 # mirror from scripts/ci-docker-mirror.sh, the docker job's buildx builder from
-# buildkitd-config-inline, and the PostgreSQL services of test and web-e2e
-# name the mirror directly. The script also drops the runner's Docker Hub login
+# buildkitd-config-inline, and the PostgreSQL services of test, web-e2e and
+# web-e2e-webkit name the mirror directly. The script also drops the runner's Docker Hub login
 # for the job's later steps, because dockerd would send it to the mirror, which
 # refuses it: pulls are anonymous. Users' builds (the Dockerfile,
 # docker-compose.yml, ./ma, release.yml) do not use the mirror.
@@ -392,6 +392,71 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-e2e-test-results
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  web-e2e-webkit:
+    # The mail frame's link spec (web/e2e/frame-links.spec.ts) in Playwright's
+    # WebKit (#459): WebKit does not run the listeners the web UI adds to the
+    # sandboxed mail frame, so this shows that the server's link rewrite holds
+    # there. One spec until #398 runs the suite in WebKit. Not a required
+    # check; a red result still blocks merging. The same `if:` as web-e2e.
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
+    runs-on: ubuntu-latest
+    # `playwright install --with-deps webkit` always runs apt: 8-13 min when
+    # the mirror is slow (scripts/ci-playwright-chromium.sh:5-8), then the
+    # build and one spec.
+    timeout-minutes: 30
+    env:
+      # Second guard against the telemetry postinstall of the Carbon packages;
+      # web/pnpm-workspace.yaml blocks their install scripts.
+      IBM_TELEMETRY_DISABLED: "true"
+    services:
+      postgres:
+        # On mirror.gcr.io without a fallback and with the default glibc
+        # locale, as in the test job (see there).
+        image: mirror.gcr.io/library/postgres:18
+        env:
+          POSTGRES_USER: mailarchive
+          POSTGRES_PASSWORD: mailarchive
+          POSTGRES_DB: mailarchive
+        ports: ["127.0.0.1::5432"]
+        options: >-
+          --health-cmd "pg_isready -U mailarchive"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
+      - run: npm install -g corepack@0.36.0 && corepack enable
+      - run: pnpm install --frozen-lockfile
+      # WebKit of the pinned Playwright and its system libraries, which the
+      # runner image does not have.
+      - run: pnpm exec playwright install --with-deps webkit
+      # As in web-e2e: the config builds the UI and the demo, starts it and
+      # stops it at the end. E2E_BROWSER=webkit runs only the WebKit project.
+      - run: pnpm e2e:webkit
+        env:
+          DEMO_DATABASE_URL: postgres://mailarchive:mailarchive@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/mailarchive?sslmode=disable
+      # As in web-e2e: traces (without screenshots) and the guards' frame
+      # diagnostics, kept for a week. The data is made up.
+      - name: Upload e2e failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-e2e-webkit-test-results
           path: web/test-results/
           retention-days: 7
           if-no-files-found: ignore

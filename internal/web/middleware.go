@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/pklnx/mail-archive/internal/config"
@@ -28,13 +29,27 @@ import (
 //     so a mail's images and links would otherwise reach the API with the
 //     session cookie.
 
+// hostName returns the host name of a Host header value: without port,
+// lowercase, without brackets.
+func hostName(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		hostport = h
+	}
+	return strings.Trim(strings.ToLower(hostport), "[]")
+}
+
+// mailHosts are the host names under which the app runs, for the link
+// rewrite of the HTML mail frame (#459): the allowed hosts (which include
+// the public URL's host) and the request's own. The Host check accepts only
+// allowed hosts, so the request's host is one of them already; it is added
+// so the rewrite does not depend on that.
+func (s *Server) mailHosts(r *http.Request) appHosts {
+	return newAppHosts(append(slices.Clone(s.allowedHosts), hostName(r.Host))...)
+}
+
 // hostAllowed reports whether the request's Host (without port) is allowed.
 func (s *Server) hostAllowed(r *http.Request) bool {
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.Trim(strings.ToLower(host), "[]")
+	host := hostName(r.Host)
 	for _, h := range s.allowedHosts {
 		if host == h {
 			return true

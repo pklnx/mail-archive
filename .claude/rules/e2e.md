@@ -8,3 +8,4 @@ paths:
 - The demo uses fixed ports 18181/18143 (`web/e2e/demo.ts:5-6`). Parallel agents change them only in their own worktree and never commit that. On port contention, wait; never kill.
 - The suite needs `DEMO_DATABASE_URL`.
 - Traces record no DOM snapshots and retries stay 0 (`web/playwright.config.ts:15-17,29-33`).
+- `E2E_BROWSER` (`chromium` default, `webkit`) picks the project; the `webkit` project runs only `frame-links.spec.ts` until #398, with traces without screenshots (#459).
