@@ -1,9 +1,10 @@
 # Audit log
 
 The archive records who searched, read, exported and changed what: in the
-web UI, with API keys and on the command line. The application cannot change
-or shorten the log. The **Log** page in the web UI shows it, and
-`./ma audit` writes it out for a period.
+web UI, with API keys and on the command line, where the operator works. The
+application cannot change or shorten the log. The **Log** page in the web UI
+shows it, and the operator writes it out for a period with `./ma audit` when
+an admin asks for it.
 
 ## Privacy
 
@@ -22,6 +23,10 @@ opened messages, downloads, the IP address and the browser of each request.
   [Shared accounts](#shared-accounts).
 - The log is personal data itself. Nothing in the archive deletes its rows;
   how long it is kept is part of the retention rules, not of the log.
+- **The operator's commands are in it too.** Everything the operator runs on
+  the command line that changes or exports something (imports, exports,
+  backups, user and account changes) is an entry without a user; see
+  [The fields](#the-fields). Admins see these entries on the **Log** page.
 
 ## What is recorded
 
@@ -114,11 +119,11 @@ the one opened (that message has its own `message.open`).
 | User agent | The browser's identification, up to 256 bytes, stored once per distinct value. |
 | Details | The search parameters, the login method and reason, and the other values named above. |
 
-Command line entries have no user, IP or user agent. Their details hold
-`os_user`, the operating system user (`65532` in the Docker image), and
-`operator` from `MAIL_ARCHIVE_OPERATOR`, which `./ma` sets to the user on
-the host. Neither is verified: whoever runs a command holds the database
-password.
+Command line entries are the operator's: they have no user, IP or user
+agent. Their details hold `os_user`, the operating system user (`65532` in
+the Docker image), and `operator` from `MAIL_ARCHIVE_OPERATOR`, which `./ma`
+sets to the user on the host. Neither is verified: whoever runs a command
+holds the database password.
 
 ## Nothing happens without an entry
 
@@ -140,12 +145,13 @@ also in replication mode. The application's role has also given up these
 privileges, which matters when it is not a superuser.
 
 What this does not stop: whoever holds the database password owns the
-tables. That role can drop the trigger, replace its function, grant itself
-the privileges back, detach and drop a month, or drop the table. A
-PostgreSQL superuser can also edit the files on disk. The trigger stops
-mistakes and every code path of the application, not someone with the
-database password. In Docker Compose the application connects as the
-database superuser.
+tables. In a hosted instance that is the operator. That role can drop the
+trigger, replace its function, grant itself the privileges back, detach and
+drop a month, or drop the table. A PostgreSQL superuser can also edit the
+files on disk. The trigger stops mistakes and every code path of the
+application, not someone with the database password. In Docker Compose the
+application connects as the database superuser. An export of the log kept
+outside the instance (below) is the record the operator cannot change.
 
 A rollback of the database migration that created the log refuses to run
 while the log has entries.
@@ -222,6 +228,9 @@ browser's time zone; the API and `./ma audit` read a plain date as a UTC day.
 
 ## Writing it out
 
+The operator exports the log on the command line when an admin asks, for
+example once a year for the GoBD records, and hands the file over:
+
 ```sh
 ./ma audit --since 2026-01-01 --format csv --out /data/audit-2026.csv
 ./ma audit --since 2026-10-01 --until 2026-10-31 --user alice --action read --format jsonl
@@ -246,16 +255,17 @@ unchanged.
 
 ## Behind a reverse proxy
 
-The server records the address it is connected from. Behind a reverse proxy
-(Caddy, nginx, `tailscale serve`) that is the proxy, and with Docker's port
-publishing on `127.0.0.1` it is the gateway of the Compose network. List the
-proxy in `MAIL_ARCHIVE_TRUSTED_PROXIES`: then the client's address is taken
-from the proxy's `X-Forwarded-For` header, and the login limits count per
-client again (IPv6 per `/64`). The same setting decides whether the proxy's
-`X-Forwarded-Proto: https` counts, which makes the session cookie `Secure`
-and sends HSTS (see [Network access](../reference/security#network-access));
-from loopback it always counts. Until the proxy is listed, the server logs a
-warning once that names the address the proxy connects from.
+For the operator. The server records the address it is connected from. Behind a
+reverse proxy (Caddy, nginx, `tailscale serve`) that is the proxy, and with
+Docker's port publishing on `127.0.0.1` it is the gateway of the Compose
+network. List the proxy in `MAIL_ARCHIVE_TRUSTED_PROXIES`: then the client's
+address is taken from the proxy's `X-Forwarded-For` header, and the login
+limits count per client again (IPv6 per `/64`). The same setting decides
+whether the proxy's `X-Forwarded-Proto: https` counts, which makes the session
+cookie `Secure` and sends HSTS (see [Network
+access](../reference/security#network-access)); from loopback it always counts.
+Until the proxy is listed, the server logs a warning once that names the
+address the proxy connects from.
 
 For Caddy on the same computer in front of Docker Compose, trust the gateway
 of the Compose network. `docker network ls` lists it, usually as

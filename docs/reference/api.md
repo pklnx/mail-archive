@@ -1,7 +1,9 @@
 # JSON API
 
-The web UI is a client of this API; scripts can use it too. All responses
-are JSON unless noted. Errors look like `{"error": "message"}`.
+The web UI is a client of this API; your own scripts can use it too, with an
+[API key](#api-keys). All responses are JSON unless noted. Errors look like
+`{"error": "message"}`. The examples use `http://localhost:8080`; put your
+instance's address there.
 
 The [OpenAPI description](./openapi) lists every endpoint with its
 parameters and answers. A running server serves it as `/api/openapi.json`,

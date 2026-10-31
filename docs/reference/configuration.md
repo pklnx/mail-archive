@@ -1,7 +1,13 @@
 # Configuration
 
-All settings are environment variables. With Docker Compose they come from
-`.env`; see `.env.example`.
+This page is for the operator. All settings are environment variables; with
+Docker Compose they come from the instance's `.env` (see `.env.example`), which
+only the operator edits. Customer admins change nothing here. The settings they
+feel are named on the guide pages: the default sync interval
+(`MAIL_ARCHIVE_SYNC_INTERVAL`), the 2FA requirement
+(`MAIL_ARCHIVE_REQUIRE_2FA`), the instance's address for passkeys
+(`MAIL_ARCHIVE_PUBLIC_URL`) and the SMTP server for
+[journaling](../guide/journaling); an admin asks the operator to change them.
 
 ## mail-archive
 

@@ -3,7 +3,7 @@
 mail-archive can sign, every day, which messages the archive holds. If a
 message disappears afterwards, `verify` names it, with the day it was
 attested. This page explains what that proves, what it does not, and what
-you have to do for it to be worth anything.
+you and your operator have to do for it to be worth anything.
 
 ## Tamper-evident, not tamper-proof
 
@@ -11,12 +11,14 @@ The attestations do not stop anyone with access to PostgreSQL or the data
 directory from deleting mail. They make a removal visible afterwards.
 
 Someone who can change the database, the files **and** has the private key
-can also rewrite the chain on the host. The key lies in the data directory,
-so every backup and every copy of it contains the key. The evidence
-therefore never rests on the key staying secret, but on copies kept
-somewhere the archive host cannot write: the public key and the attestation
-file. Without those copies, the attestations only catch mistakes and
-careless tampering.
+can also rewrite the chain on the host. In a hosted instance that is the
+operator, and anyone who takes over the host. The key lies in the data
+directory, so every backup and every copy of it contains the key. The
+evidence therefore never rests on the key staying secret, but on copies
+kept somewhere the archive host cannot write: the public key and the
+attestation file, in your hands. Without those copies, the attestations
+only catch mistakes and careless tampering; with them, they also show a
+removal by the operator.
 
 ## What it proves, and what not
 
@@ -44,22 +46,28 @@ and signed with an Ed25519 key. From that:
 
 ## What you do
 
-1. **Create the key once** and copy the public key off the host, for
-   example into a password manager, on a printout, or to your auditor:
+Attestations are switched on per instance, by the operator, when you ask
+for them. The steps name who does each.
+
+1. **The operator creates the key once** and hands you the public key; keep
+   it off the instance, for example in a password manager, on a printout,
+   or with your auditor:
    ```sh
    ./ma attest keygen
    ./ma attest public-key
    ```
    The web server writes an attestation every
    `MAIL_ARCHIVE_ATTEST_INTERVAL` (default 24h), the first one at its next
-   start. `./ma status` shows the newest one.
+   start. `./ma status` shows the newest one to the operator.
 
-2. **Copy the attestation file off the host, regularly**, to a place the
-   archive host cannot write: another machine that pulls it, WORM storage,
-   or an e-mail to an external mailbox. Keep dated copies rather than one
-   that is overwritten: a host under someone else's control could otherwise
-   hand over a shortened file. A daily pull from another machine, as root
-   there because the files belong to the container user:
+2. **Keep copies of the attestation file off the host, regularly**, in a
+   place the archive host cannot write: with you, with your auditor, on
+   WORM storage, or in an external mailbox the operator mails it to. Agree
+   with the operator how often you get a copy, and keep dated copies rather
+   than one that is overwritten: a host under someone else's control could
+   otherwise hand over a shortened file. The operator's side of it, a daily
+   pull from another machine, as root there because the files belong to the
+   container user:
    ```sh
    #!/bin/sh
    # /usr/local/bin/pull-attestations, run daily by cron on another machine
@@ -77,14 +85,16 @@ and signed with an Ed25519 key. From that:
    `--link-dest` makes unchanged files hard links, so each day costs only
    the new leaves file.
 
-3. **Check against the copy**, from the archive host:
+3. **Check against the copy.** The operator checks the database against
+   the copy you hold, from the archive host:
    ```sh
    ./ma attest check --file /offhost/latest/attestations.jsonl --public-key /offhost/signing.pub
    ```
-   `--public-key` trusts only the keys you give, not the ones on the host.
-   The copy must be a prefix of the database chain: attestations that the
-   copy has and the database lacks are findings. Without a database, for
-   example on the machine with the copy:
+   `--public-key` trusts only the keys given, not the ones on the host. The
+   copy must be a prefix of the database chain: attestations that the copy
+   has and the database lacks are findings. You, or your auditor, check a
+   copy without the operator, on any machine with the `mail-archive` binary
+   and without a database:
    ```sh
    mail-archive attest check --offline --file /srv/mail-archive-attest/latest/attestations.jsonl \
      --public-key /safe/signing.pub
@@ -93,13 +103,16 @@ and signed with an Ed25519 key. From that:
    against its signed digest, and that each total follows from the previous
    one, so a message removed without a record shows up there too.
 
-4. **Run `verify` weekly**, as in the [backup
+4. **The operator runs `verify` weekly**, as in the [backup
    example](./operations#backups). It checks the attestations first and
    reports `attest-stale` when the newest one is older than twice the
-   interval, so a job that stopped is noticed.
+   interval, so a job that stopped is noticed. Ask for the result when you
+   need it for your records.
 
-5. **Limit who has access** to PostgreSQL and the data directory, and keep
-   backups where the archive host cannot change them.
+5. **Access to PostgreSQL and the data directory** is the operator's and
+   limited to them; backups are kept where the archive host cannot change
+   them. Your copies of the public key and the attestation file are what
+   limits the operator.
 
 ## Findings
 
@@ -117,21 +130,22 @@ attestation copies the entries), deletions not yet signed, a key change
 
 ## GoBD
 
-For archives kept under the German GoBD, the chain supports the
-unalterability requirement as evidence: it documents when a message was in
-the archive and makes a later removal visible. It is not a certification and
-does not replace the procedure documentation (Verfahrensdokumentation),
-which should describe the key, the off-host copies and who checks them.
+For archives kept under the German GoBD, the chain supports the unalterability
+requirement as evidence: it documents when a message was in the archive and
+makes a later removal visible. It is not a certification and does not replace
+the procedure documentation (Verfahrensdokumentation), which should describe
+the key, the off-host copies, who holds them and who checks them; see the
+[template](./retention#procedure-documentation-verfahrensdokumentation).
 
 ## Restore from a backup
 
-A backup is the dump first, then the data directory, so after a restore the
-attestation file in the data directory can be ahead of the database. The web
-server at its start, `./ma attest` and `./ma backup` (with a key) then import
-the missing attestations into the database. They check them first (chain,
-trusted key, leaves file), move the message numbering past them, and give
-new numbers to messages archived after the restore inside an imported range.
-Run `./ma attest` right after `./ma migrate`, before anything archives.
+For the operator. A backup is the dump first, then the data directory, so after
+a restore the attestation file in the data directory can be ahead of the
+database. The web server at its start, `./ma attest` and `./ma backup` (with a
+key) then import the missing attestations into the database. They check them
+first (chain, trusted key, leaves file), move the message numbering past them,
+and give new numbers to messages archived after the restore inside an imported
+range. Run `./ma attest` right after `./ma migrate`, before anything archives.
 
 `./ma verify` then lists every attested message the restore lost as
 `removed`. Those still on a server come back with the next sync. The others
@@ -146,7 +160,7 @@ and `attest` and the web server log it; `verify` shows what differs.
 
 ## Key loss and rotation
 
-If the key is lost, or may be known to others:
+For the operator. If the key is lost, or may be known to others:
 
 ```sh
 ./ma attest keygen --rotate
@@ -154,8 +168,8 @@ If the key is lost, or may be known to others:
 
 The current public key moves to `attest/retired-keys.pem`, where it stays
 trusted for older attestations, and a new key signs the next one. `verify`
-notes the change. Copy the new `signing.pub` off the host as well. When you
-check with `--public-key`, pass the old and the new public key.
+notes the change. Hand the new `signing.pub` to the customer as well. A check
+with `--public-key` then takes the old and the new public key.
 
 If the key file is gone while attestations exist, the web server logs an
 error and writes none until you run `attest keygen --rotate`; it still

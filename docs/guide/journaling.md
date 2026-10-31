@@ -5,10 +5,16 @@ that moment. A message that arrives and is deleted between two syncs never
 reaches the archive, and whoever controls the mailbox decides what the
 archive sees.
 
-An **smtp account** is **complete**: your mail server sends the archive a copy
-of every message as it passes through, over SMTP. This is how
+An **smtp account** is **complete**: your own mail server sends the archive a
+copy of every message as it passes through, over SMTP. This is how
 [piler](https://www.mailpiler.org) works, and it needs control over the mail
 server. Hosted mailboxes (GMX, mail.de, Gmail) cannot do it.
+
+Journaling has two sides. The operator turns the archive's SMTP server on and
+allows your mail server's address ([Set up the archive](#set-up-the-archive));
+you, or whoever runs your mail server, create the smtp account in the web UI
+and configure Postfix ([Set up Postfix](#set-up-postfix)). Agree the archive's
+SMTP address and port with your operator first.
 
 ```text
  internet ──► Postfix ──► mailboxes (IMAP)
@@ -30,7 +36,8 @@ message.
 
 ## Set up the archive
 
-1. Turn the SMTP server on in `.env` and restart the web server:
+1. **The operator** turns the SMTP server on in the instance's `.env` and
+   restarts the web server:
 
    ```sh
    MAIL_ARCHIVE_SMTP_LISTEN=:2525
@@ -46,9 +53,9 @@ message.
    size limit. Compose publishes the port on `127.0.0.1:2525`; `SMTP_BIND` and
    `SMTP_PORT` change that. See [Configuration](../reference/configuration#smtp).
 
-2. Create the account and the address it receives for. In the web UI, as an
-   admin: **Accounts → Add account → SMTP journaling**, with a name and the
-   address. On the command line:
+2. **A customer admin** creates the account and the address it receives
+   for. In the web UI: **Accounts → Add account → SMTP journaling**, with a
+   name and the address. Or the operator, on the command line:
 
    ```sh
    ./ma account add-smtp journal --address archive@archive.local
@@ -67,31 +74,39 @@ message.
    The address is only a name for the archive: `archive.local` needs no DNS
    and no MX record, because Postfix delivers to it with a transport (below).
    An address carries no `+`; the part after `+` is reserved for the original
-   recipient. `account smtp-addresses journal --add ADDRESS` adds more.
+   recipient. More addresses: **Edit** under *Connection*, or the operator
+   with `account smtp-addresses journal --add ADDRESS`.
 
 ### Who may connect
 
 The archive accepts connections only from `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`
-and answers everyone else with `554`. With Docker Compose, a Postfix **on the
-host** reaches the published port from the gateway of the Compose network, an
-address like `172.18.0.1`, not from `127.0.0.1` or its own address. Find it
-with:
+and answers everyone else with `554`. Your mail server connects from its own
+address: tell the operator exactly that one, and tell them when it changes.
+
+For the operator: a Postfix **on the archive's host** reaches the published
+port from the gateway of the Compose network, an address like `172.18.0.1`,
+not from `127.0.0.1` or its own address. Find it with:
 
 ```sh
 docker network inspect "$(basename "$PWD")_default" --format '{{(index .IPAM.Config 0).Gateway}}'
 ```
 
 and allow it, or allow `172.16.0.0/12`, Docker's default range. A Postfix on
-another machine connects from its own address; allow exactly that one.
+another machine, the usual case, connects from its own address; allow exactly
+that one, and publish the port for it with `SMTP_BIND` and the host's
+firewall, not for the internet at large.
 
 STARTTLS is on when `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY`
-name a certificate and key. There is no SMTP login: keep the port off the
-internet. The allowlist is the only gate.
+name a certificate and key; turn it on when the copies cross a network the
+customer does not control. There is no SMTP login: the allowlist is the only
+gate.
 
 ## Set up Postfix
 
-Postfix delivers the copies over a transport, so the archive's domain needs
-no DNS:
+This part is yours, on your mail server. Postfix delivers the copies over a
+transport, so the archive's domain needs no DNS. `[127.0.0.1]:2525` is the
+address when Postfix runs on the archive's host; otherwise put the address
+and port your operator gave you:
 
 ```text
 # /etc/postfix/transport
@@ -197,7 +212,7 @@ transport map.
 
 ## Monitoring
 
-The archive cannot tell a broken setup from a quiet mailbox, so watch the
+The archive cannot tell a broken setup from a quiet mailbox, so watch your
 mail server. Two checks cover both kinds of failure:
 
 - **The queue.** Copies for the archive that wait in the queue mean `4xx`
@@ -215,8 +230,10 @@ mail server. Two checks cover both kinds of failure:
   grep 'to=<archive' /var/log/mail.log | grep 'status=bounced'
   ```
 
-On the archive's side, `./ma status` shows for each smtp account when it last
-received a message, and the web server logs every refusal at error level.
+On the archive's side, the Accounts page shows for each smtp account when it
+last received a message (the operator sees the same in `./ma status`), and
+the web server logs every refusal at error level, in the log the operator
+reads.
 
 ## Bring in the mail from before journaling
 
@@ -235,7 +252,7 @@ over SMTP, as a check that journaling works.
 
 ![The import form of the smtp account "journal": IMAP server, login and cut-off](/screenshots/fill-form.png)
 
-On the command line:
+Or the operator, on the command line:
 
 ```sh
 ./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk
@@ -291,12 +308,14 @@ earlier one (`2026-06-01` for midnight UTC, or RFC 3339 with an offset).
 another, all into `JOURNAL`; the origin section tells which mailbox a message
 came from.
 
-**Interrupted or failed.** Ctrl-C stops the fill; `./ma account fill journal
---resume` continues it where it stopped (the password is asked again), and so
-does a fill whose folders partly failed. `--cancel` stops a fill that another
+**Interrupted or failed.** In the web UI, **Resume import** on the account's
+page continues a failed, partly failed or cancelled fill (see below). On the
+command line, Ctrl-C stops the fill; `./ma account fill journal --resume`
+continues it where it stopped (the password is asked again), and so does a
+fill whose folders partly failed. `--cancel` stops a fill that another
 process runs. `./ma account fill journal` lists the fills with their counts:
 scanned, imported, after the cut-off, journaled, already there and deleted by
-retention.
+retention; the account's page shows the same.
 
 **From the web server.** A fill started in the web UI (or the
 [API](../reference/api#fills)) runs in the web server's background, one at a
@@ -311,9 +330,10 @@ picks it up within a minute.
 
 **From files (piler, mbox, Maildir).** Mail that is no longer in an IMAP
 mailbox, such as a [piler](./importing#piler-into-a-journaled-mailbox)
-export, goes into the same account with `import --journal`, with the rules of
-a fill: what the account received over SMTP is left out by its Message-ID,
-and the origin section says "Imported from files: LABEL". See
+export, goes into the same account with `import --journal`, which the
+operator runs with the files you hand over, with the rules of a fill: what
+the account received over SMTP is left out by its Message-ID, and the origin
+section says "Imported from files: LABEL". See
 [Into an smtp account](./importing#into-an-smtp-account).
 
 ```sh
@@ -332,7 +352,7 @@ provider that the user later moves into the journaled mailbox, mail sent
 from another account and filed there, or copies lost during an outage. A
 one-time fill has run by then. A **recurring fill** goes on: tick **Keep
 importing new mail** in the import form (unticked by default) and choose how
-often, or on the command line:
+often, or the operator on the command line:
 
 ```sh
 ./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk \
@@ -386,15 +406,15 @@ long as the fill keeps running, like the password of an IMAP account, and
 deleted when the fill is stopped.
 
 **Interval.** By default the fill runs as often as accounts are synced
-(`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless set); it can have its own,
-from 5 minutes to 30 days, but not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`.
-The next run is due that long after the last one started. With the schedule
-off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are no scheduled runs, and no fill
-is stale; a fill just started, switched on, resumed or interrupted still
-finishes its current run. Change it on the account's page, or with
-`./ma account fill journal --interval 24h`. The fills of all accounts share
-one queue in the web server, one at a time; a long one-time fill delays the
-recurring runs behind it.
+(`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless the operator set it); it can have
+its own, from 5 minutes to 30 days, but not below
+`MAIL_ARCHIVE_SYNC_INTERVAL_MIN`. The next run is due that long after the last
+one started. With the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are
+no scheduled runs, and no fill is stale; a fill just started, switched on,
+resumed or interrupted still finishes its current run. Change it on the
+account's page, or with `./ma account fill journal --interval 24h`. The fills
+of all accounts share one queue in the web server, one at a time; a long
+one-time fill delays the recurring runs behind it.
 
 **Counts.** The account's page shows how often the fill runs, when next, how
 the last run ended and its counts: imported and *waiting* (younger than two
@@ -413,12 +433,12 @@ mailbox. Fills of a disabled account do not run, not even a run that was
 about to start, and count as healthy; they run again once the account is
 enabled.
 
-**Stop and resume.** **Stop importing** on the account's page, or
-`./ma account fill journal --cancel`, stops the fill (after its current batch
-if it runs) and deletes its password. What it imported stays. **Resume
-import**, or `--resume`, asks for the password and makes it keep running
-again. A new password for a fill that fails at login works the same way:
-stop it, then resume it with the new password. With several fills, the
+**Stop and resume.** **Stop importing** on the account's page, or the
+operator's `./ma account fill journal --cancel`, stops the fill (after its
+current batch if it runs) and deletes its password. What it imported stays.
+**Resume import**, or `--resume`, asks for the password and makes it keep
+running again. A new password for a fill that fails at login works the same
+way: stop it, then resume it with the new password. With several fills, the
 command line takes `--fill ID`; `./ma account fill journal` lists them.
 
 **Turning a one-time fill into a recurring one.** An ended one-time fill has
@@ -430,9 +450,10 @@ downloading it again. A fill from before `JOURNAL` first copies the messages
 of its own folders into `JOURNAL`, as locations, without storing any message
 file again. Its old folders stay.
 
-**Moving the account** to another user (`./ma account move`) keeps the fill
-running: it goes on importing the same mailbox, now into the new owner's
-account. The command warns about it; stop the fill if that is not wanted.
+**Moving the account** to another user (the operator's `./ma account move`)
+keeps the fill running: it goes on importing the same mailbox, now into the new
+owner's account. The command warns about it; stop the fill if that is not
+wanted.
 
 **Retention.** A journal copy that retention deleted no longer counts as
 journaled. If the fill sees the mailbox copy of such a message again (after a

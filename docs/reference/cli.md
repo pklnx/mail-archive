@@ -1,5 +1,11 @@
 # Command line
 
+The command line is the operator's tool. It runs on the instance's host,
+which customers do not reach; a customer admin asks the operator for anything
+on this page, and does the rest in the web UI. Commands that change
+something, and `import`, `export`, `backup` and `audit`, leave an entry in
+the customer's [audit log](../guide/audit-log#the-fields).
+
 With Docker Compose, run every command through the wrapper, for example
 `./ma status`. The binary itself is called `mail-archive`. Every command has
 `--help`.

@@ -14,8 +14,9 @@ with your tax adviser or data protection officer, not an answer.
 
 ## In short
 
-- **No rule, no deletion.** Installing mail-archive or adding a user deletes
-  nothing. Only an admin adds rules, for an account or one of its folders.
+- **No rule, no deletion.** A new instance or a new user deletes nothing.
+  Only an admin adds rules, for an account or one of its folders; the
+  operator adds none on their own.
 - **The longest period wins.** A message is deleted only when **every** place
   it was found, in every user's accounts, has a rule whose period has ended.
   One unruled copy keeps it. To drop the copies of a removed account
@@ -93,18 +94,22 @@ in 2026 counts from 2015. The year ends in the rule's time zone (default
 
 ## Rules
 
+Admins add rules in the web UI: **Retention → Rules**, a table with **Add
+rule** above it; the form is a page of its own. Each rule has a page too,
+from the link in its row, and **Remove** is in the row's menu (⋯) and in
+the page's.
+
+![Retention rules in the web UI](/screenshots/retention.png)
+
+Or the operator, on the command line:
+
 ```sh
 ./ma retention rule add --account work --years 8 --note "§147 AO, invoices by mail"
 ./ma retention rule add --account work --folder Newsletter --years 1 --force
 ./ma retention rule list
 ```
 
-![Retention rules in the web UI](/screenshots/retention.png)
-
-Or in the web UI: **Retention → Rules**, a table with **Add rule** above it;
-the form is a page of its own. Each rule has a page too, from the link in
-its row, and **Remove** is in the row's menu (⋯) and in the page's. A rule
-covers an account, or one of its folders. Rules under 6 years need a
+A rule covers an account, or one of its folders. Rules under 6 years need a
 confirmation. Because the longest period wins, a folder rule cannot shorten
 an account rule: to keep a newsletter folder shorter, give the account no
 account-wide rule and give each folder its own.
@@ -137,15 +142,15 @@ them all.
 ## Legal holds
 
 A hold stops the deletion of the mail it covers, whatever the rules say:
-during a tax audit, a lawsuit or an investigation.
+during a tax audit, a lawsuit or an investigation. Admins add one under
+**Retention → Legal holds** → **Add hold**, with the filter in the search
+syntax. Or the operator, on the command line:
 
 ```sh
 ./ma hold add "Tax audit 2026" --reason "Betriebsprüfung, letter of 2026-09-01" --account work --until 2024-01-01
 ./ma hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon
 ```
-
-Or **Retention → Legal holds** → **Add hold**, with the filter in the search
-syntax. The table lists the active holds; the filter button (funnel icon) in
+The table lists the active holds; the filter button (funnel icon) in
 its toolbar shows released holds too (**Show released holds**). Each hold
 has its page with the reason, and **Release** is in its menu (⋯). Every
 condition must match: a user, an account, a period, a search filter. A
@@ -155,9 +160,9 @@ its whole scope. A search filter also matches the text extracted from
 attachments, once it has been extracted (see
 [Attachments](./web-ui#attachments)). After the upgrade that brings
 attachment search, older messages are extracted in the background newest
-first, so the oldest mail, which retention deletes first, comes last: run
-`./ma reindex` once before you rely on a filter hold over attachment text.
-Only admins see holds.
+first, so the oldest mail, which retention deletes first, comes last: ask
+the operator to run `./ma reindex` once before you rely on a filter hold
+over attachment text. Only admins see holds.
 
 Holds are released with a note and never deleted. A user named by a hold
 can therefore not be removed (lock them instead), and an account whose owner
@@ -165,18 +170,21 @@ is on hold cannot move to another user.
 
 ## Deletion runs
 
+An admin starts a run under **Retention → Deletion runs** → **New deletion
+run**, which opens the run's page. It shows the counts by owner, account,
+folder and year, and the hashes, not subjects (admins do not read other
+users' mail there). **Delete N messages** asks for the number of messages,
+typed in, in a dialog; **Cancel run** is in the page's menu (⋯). The web
+server then deletes in the background; the page shows the progress.
+
+The operator's commands, which also list every candidate with its subject
+(`show`), for a review on paper:
+
 ```sh
 ./ma retention preview         # what may go now, by account, folder and year
 ./ma retention show 3          # every message with date, sender, subject and places
 ./ma retention confirm 3       # type the number of messages, then it deletes
 ```
-
-Or **Retention → Deletion runs** → **New deletion run**, which opens the
-run's page. It shows the counts by owner, account, folder and year, and the
-hashes, not subjects (admins do not read other users' mail there).
-**Delete N messages** asks for the number of messages, typed in, in a
-dialog; **Cancel run** is in the page's menu (⋯). The web server then deletes
-in the background; the page shows the progress.
 
 ![A deletion run's page with the Delete dialog](/screenshots/retention-run.png)
 
@@ -196,29 +204,33 @@ without the lock, the run stops and resumes with `confirm` again or when the
 web server starts. Each running sync and fill also keeps one database
 connection.
 
-Keep the grace period longer than the time between your dump and the copy of
-the data directory: a backup made within it has every file its dump needs,
-and restoring the last dump undoes a wrong deletion.
+The operator keeps the grace period longer than the time between the dump
+and the copy of the data directory: a backup made within it has every file
+its dump needs, and restoring the last dump undoes a wrong deletion. A wrong
+deletion is undone by the operator from the last backup; ask at once.
 
 ## Tamper-evident, not tamper-proof
 
 The database refuses to delete a place whose period has not ended or that is
 on hold, and a message row without its deletion record. The deletion records
 are append-only, and the next attestation signs them. Someone with owner
-rights on PostgreSQL can still remove all of this; the off-host copy of the
-attestations then shows it. See [Tamper evidence](./tamper-evidence).
+rights on PostgreSQL, in a hosted instance the operator, can still remove all
+of this; your off-host copy of the attestations then shows it. See
+[Tamper evidence](./tamper-evidence).
 
 ## Procedure documentation (Verfahrensdokumentation)
 
 GoBD expects you to document how mail is captured, stored, protected and
-deleted. mail-archive cannot write it, but this template covers its part.
-Copy it, fill in the brackets and add what is yours.
+deleted. mail-archive cannot write it, but this template covers its part,
+with the operator's role filled in as it is in a hosted instance. Copy it,
+fill in the brackets and add what is yours.
 
 ```md
 # Procedure documentation: e-mail archive
 
 ## 1. Purpose and scope
-- Archive: mail-archive [version], operated by [name, role].
+- Archive: mail-archive [version], a hosted instance run by [operator] under
+  [contract], administered by [name, role].
 - Covered mailboxes: [accounts, users], business purpose: [..].
 - Not covered: [private mailboxes, ..].
 
@@ -232,17 +244,18 @@ Copy it, fill in the brackets and add what is yours.
 ## 3. Storage and integrity
 - Each message is stored unchanged as an .eml file named by its SHA-256, plus
   its metadata in PostgreSQL.
-- `verify` checks every file weekly ([cron line]); findings go to [person].
+- The operator runs `verify` weekly; findings go to [person].
 - Signed attestations every [24h]; copies of attestations.jsonl and
-  signing.pub are kept at [off-host place], checked with `attest check`
-  [how often] by [person].
+  signing.pub are handed over [how often] and kept at [off-host place],
+  checked with `attest check` [how often] by [person].
 
 ## 4. Access
 - Users see only the mail of their own accounts. Admins manage users,
   accounts, rules and holds; they read no other user's mail in the web UI.
 - Administrative access to the server, PostgreSQL and the data directory:
-  [persons]. Every search, read, export and change is in the audit log,
-  exported [how often] to [place].
+  the operator [persons]; nobody on our side. Every search, read, export and
+  change is in the audit log, the operator's commands included; the operator
+  exports it [how often] to [place].
 
 ## 5. Retention and deletion
 - Rules: [account/folder → years, legal basis], added on [date] by [person].
@@ -252,9 +265,9 @@ Copy it, fill in the brackets and add what is yours.
   released with a note.
 
 ## 6. Backup and recovery
-- Nightly backup (dump, then data directory) to [place], kept [how long];
-  restore tested on [date].
-- The secret key is kept at [place].
+- The operator takes a nightly backup (dump, then data directory) to
+  [place], kept [how long]; restore tested on [date].
+- The secret key is held by the operator at [place].
 
 ## 7. Changes
 - [date]: [what changed, who].

@@ -35,8 +35,10 @@ Messages deleted on the server stay in the archive; a
 | `./ma sync --account NAME` | Only that account, also when it is disabled. |
 | `./ma sync --reconcile` | Syncs and reconciles every selected folder now (combines with `--account`). |
 
-[Import accounts](./importing) are never synced, not even by name: run
-`import` again to add mail to them.
+The `./ma sync` rows are the operator's; in a hosted instance the web
+server runs all the time, so its schedule and the buttons are what you use.
+[Import accounts](./importing) are never synced, not even by name: the
+operator runs `import` again to add mail to them.
 
 The web server works through its queue one account at a time, so a large
 first sync does not open many connections at once.
@@ -47,7 +49,8 @@ The web server checks every minute which accounts are due. An enabled
 account is due when its last sync, of any kind, started at least its
 interval ago; one that never synced is due at once.
 
-The default interval is `MAIL_ARCHIVE_SYNC_INTERVAL` in `.env`:
+The default interval is set by the operator, `MAIL_ARCHIVE_SYNC_INTERVAL`
+in the instance's `.env`:
 
 ```sh
 MAIL_ARCHIVE_SYNC_INTERVAL=6h    # default
@@ -55,25 +58,27 @@ MAIL_ARCHIVE_SYNC_INTERVAL=30m   # at least 5m
 MAIL_ARCHIVE_SYNC_INTERVAL=0     # off for every account: sync only by hand
 ```
 
-Apply a change with `docker compose up -d web`.
+The operator applies a change with `docker compose up -d web`. To sync one
+account more or less often, give it its own interval (below); that needs no
+operator.
 
 ### Per account
 
 Each IMAP account can have its own interval, under **Schedule** → **Edit**
-on the account's page or with
-[`./ma account set-schedule`](../reference/cli#accounts):
+on the account's page (or, by the operator, with
+[`./ma account set-schedule`](../reference/cli#accounts)):
 
 - **Default**: `MAIL_ARCHIVE_SYNC_INTERVAL`.
 - **Every 15 minutes** to **every day**, or on the command line any whole
   number of minutes from `5m` to `720h`.
 - **Not on the schedule** (`manual`): the schedule skips the account.
 
-`MAIL_ARCHIVE_SYNC_INTERVAL_MIN` (default `5m`) is the shortest interval the
-server syncs any account at. Accounts with a shorter interval sync at the
-floor; their own value stays stored and applies again if the floor is
-lowered. The web UI hides the shorter choices. With
-`MAIL_ARCHIVE_SYNC_INTERVAL=0` no account is synced on a schedule, whatever
-its own interval.
+`MAIL_ARCHIVE_SYNC_INTERVAL_MIN` (default `5m`, set by the operator) is the
+shortest interval the server syncs any account at. Accounts with a shorter
+interval sync at the floor; their own value stays stored and applies again if
+the floor is lowered. The web UI hides the shorter choices. With
+`MAIL_ARCHIVE_SYNC_INTERVAL=0` no account is synced on a schedule, whatever its
+own interval.
 
 **Not on the schedule** is not the same as **Disable**:
 
@@ -87,13 +92,15 @@ its own interval.
 
 A short interval reaches `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed syncs
 sooner, and an account with a wrong password tries to log in at every
-interval. `./ma status` shows each account's interval and next sync.
+interval. The account's page shows its interval and next sync; the operator
+sees the same in `./ma status`.
 
 ## Do you need cron?
 
-Usually not: while the `web` container runs, its schedule syncs every
-enabled account. Without the web server, schedule the one-shot command, for
-example every hour:
+No. In a hosted instance the `web` container runs all the time, and its
+schedule syncs every enabled account. The rest of this section is for the
+operator: an instance without the web server (none is offered today) would
+schedule the one-shot command instead, for example every hour:
 
 ```text
 0 * * * * cd /path/to/mail-archive && docker compose run --rm -T mail-archive sync >> sync.log 2>&1
@@ -149,9 +156,9 @@ such a folder ends `partial` with an error that says so.
 ### When it runs
 
 A folder is reconciled when its last reconcile is older than
-`MAIL_ARCHIVE_RECONCILE_INTERVAL` (default `24h`), by the web server's
-schedule and by `./ma sync` alike. So a daily cron job reconciles daily, and
-a folder whose reconcile failed is retried with the next sync.
+`MAIL_ARCHIVE_RECONCILE_INTERVAL` (default `24h`, set by the operator), by the
+web server's schedule and by `./ma sync` alike. So a daily cron job reconciles
+daily, and a folder whose reconcile failed is retried with the next sync.
 
 ```sh
 MAIL_ARCHIVE_RECONCILE_INTERVAL=24h   # default
@@ -205,9 +212,10 @@ names folders and counts, never subjects or addresses.
 
 ### Alert for mail deleted on the server
 
-With a [webhook](./operations#webhook-alerts) set up, a run that finds many
-of an account's messages deleted sends one alert. It counts **messages that
-lost their last copy on the server** in that account during the run:
+With a [webhook](./operations#webhook-alerts) set up by the operator, a run
+that finds many of an account's messages deleted sends one alert. It counts
+**messages that lost their last copy on the server** in that account during the
+run:
 
 - A message moved to another folder of the account is not lost, nor is a
   renamed or renumbered folder: the messages are still on the server.
@@ -271,8 +279,10 @@ the schedule, a button or `./ma sync` alike. It counts as **stale** when no
 sync succeeded within two of its sync intervals, at least one interval plus
 an hour (counted from when it was added, if it never did). Accounts the
 schedule does not sync are never stale. Both states show in the web UI and
-in [`/healthz/sync`](./operations#healthz-sync); a failing account also sends
-an alert if a [webhook](./operations#webhook-alerts) is set up.
+in [`/healthz/sync`](./operations#healthz-sync), which the operator
+monitors; a failing account also sends an alert if the operator set up a
+[webhook](./operations#webhook-alerts). `MAIL_ARCHIVE_ALERT_AFTER_FAILURES`
+is the operator's setting.
 
 A sync that is running or waiting makes no account stale for a while: a
 running one counts from its start, and one the web server has taken from the
