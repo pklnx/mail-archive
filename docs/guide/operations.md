@@ -160,7 +160,7 @@ using the image it names, and `./ma --version` shows that image's version.
 Check it before `./ma migrate`:
 
 - Keep the line if it names a newer build of your own than the new release.
-- If it names an `X.Y` tag of `ghcr.io/pklnx/mail-archive`, set it to the
+- Otherwise, if it names an `X.Y` tag of `ghcr.io/pklnx/mail-archive`, set it to the
   new release's `X.Y` tag, for example `ghcr.io/pklnx/mail-archive:1.2`, and
   run `docker compose pull web` (it restarts nothing; migrate before starting
   web): a tag that is already on the machine is not pulled again.
@@ -247,7 +247,8 @@ Releases before 1.0.0 were named after the year and month, plus a build
 number (`26.10-1` to `26.10-11`). Their tags and images stay. The image tag
 `26.10` stays on `26.10-11` and gets no more updates. Tools that update images
 automatically may rank `26.10` above `1.0.0`: switch them once to an exact
-version or `1.0`. `1.0` gets nothing new once a newer minor or major release
+version or `1.0` (patch releases, which normally have no migration). `1.0`
+gets nothing new once a newer minor or major release
 is out. Then move the tag to the newest `X.Y` tag (for example `1.1`, or
 `2.0` after the major release's upgrade steps) after reading that release's
 notes: back up, set `MAIL_ARCHIVE_IMAGE=ghcr.io/pklnx/mail-archive:1.1` in

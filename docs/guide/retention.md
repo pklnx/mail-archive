@@ -191,7 +191,9 @@ happens after restoring a dump older than a run are in
 [Deletion](../reference/cli#deletion).
 
 A long first sync of a large mailbox, and a fill, hold the lock that
-deletion waits for. Each running sync and fill also keeps one database
+deletion waits for; a batch waits up to 10 minutes, and when the wait ends
+without the lock, the run stops and resumes with `confirm` again or when the
+web server starts. Each running sync and fill also keeps one database
 connection.
 
 Keep the grace period longer than the time between your dump and the copy of

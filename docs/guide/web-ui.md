@@ -136,7 +136,7 @@ Disabled accounts never appear in it.
 Admins see only their own accounts by name. For other users' accounts they
 get a count ("2 accounts of other users keep failing") and **Show users**,
 where each user with failing accounts is marked; only the owner, or
-`./ma status`, shows which accounts they are. See
+`./ma status` on the command line, shows which accounts they are. See
 [Syncing](./syncing#alerts) for what counts as failing.
 
 ## Only in archive
