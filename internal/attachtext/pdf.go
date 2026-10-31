@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/klippa-app/go-pdfium"
 	pdfiumerrors "github.com/klippa-app/go-pdfium/errors"
@@ -34,13 +36,29 @@ import (
 // through Kill, which interrupts running WebAssembly code
 // (WithCloseOnContextDone): go-pdfium runs every call under the worker's
 // own context, so the context of a call interrupts nothing.
+//
+// A Kill that lands while the module grows its memory is a data race inside
+// wazero (ensureResourcesClosed against MemoryInstance.Grow): harmless, as
+// the instance is thrown away, but reported by -race. The tests therefore
+// kill on the file callback (hooks.start), or hold the grow until the kill
+// has returned (TestPDFKillInterruptsRunningCode).
+//
+// Only one PDF is read at a time in the whole process (pdfSlot), whatever
+// the number of Extractors and job workers (maintainer decision 12 in
+// #390): go-pdfium keeps the readers of open documents in a process-wide
+// table keyed by an index that the WebAssembly code reads from its own
+// memory, so a PDF exploiting a PDFium memory bug could otherwise read
+// another document that is open at the same time.
 type pdfEngine struct {
-	mu     sync.Mutex // one document at a time
-	pool   pdfium.Pool
-	err    error // the compile error, kept: compiling again would fail again
-	alloc  *mmapAllocator
-	logger *slog.Logger
-	hooks  pdfHooks
+	mu   sync.Mutex // the fields below
+	pool pdfium.Pool
+	// err is the compile error, kept for the process: compiling again
+	// would fail again. It is logged once.
+	err       error
+	errLogged bool
+	alloc     *mmapAllocator
+	logger    *slog.Logger
+	hooks     pdfHooks
 	// limit overrides pdfMemoryLimit and memDoc opens documents with
 	// FPDF_LoadMemDocument64; both only for the measurements.
 	limit  uint64
@@ -58,15 +76,66 @@ type pdfHooks struct {
 	load func()
 	// killed runs after Kill has returned.
 	killed func()
+	// limit receives the time the document gets.
+	limit func(time.Duration)
+	// compile runs before the module is compiled; an error fails it.
+	compile func() error
 }
 
 var errKilled = errors.New("pdf: instance killed")
+
+// ErrUnavailable is returned for a PDF when the WebAssembly module could not
+// be compiled in this process. It stays so until the process restarts.
+var ErrUnavailable = errors.New("attachment text: the PDF extractor is unavailable")
+
+// ErrBusy is returned when the caller's deadline passed while a PDF waited
+// for another one to finish: nothing was read, and the work is to be tried
+// again (not a timeout of the document).
+var ErrBusy = errors.New("attachment text: the deadline passed while waiting for another PDF")
+
+// pdfSlot lets one PDF at a time be read in the process (see pdfEngine).
+var pdfSlot = make(chan struct{}, 1)
+
+// onPDFWait is a test seam: it runs when a PDF has to wait for another one.
+var onPDFWait func()
+
+// takePDFSlot waits until no other PDF is read in the process, or ctx
+// ends: then it returns ErrBusy for a deadline, else ctx's error. It
+// returns how long it waited. releasePDFSlot gives the slot back.
+func takePDFSlot(ctx context.Context) (time.Duration, error) {
+	select {
+	case pdfSlot <- struct{}{}:
+		return 0, nil
+	default:
+	}
+	start := now()
+	if onPDFWait != nil {
+		onPDFWait()
+	}
+	select {
+	case pdfSlot <- struct{}{}:
+		return now().Sub(start), nil
+	case <-ctx.Done():
+		if isDeadline(ctx.Err()) {
+			return now().Sub(start), ErrBusy
+		}
+		return now().Sub(start), ctx.Err()
+	}
+}
+
+func releasePDFSlot() { <-pdfSlot }
 
 // compile compiles the module once per process. There is no compilation
 // cache on disk, so no executable code is written to the data directory.
 func (e *pdfEngine) compile() error {
 	if e.pool != nil || e.err != nil {
 		return e.err
+	}
+	if e.hooks.compile != nil {
+		if err := e.hooks.compile(); err != nil {
+			e.err = fmt.Errorf("pdf: compile: %w", err)
+			return e.err
+		}
 	}
 	// A custom RuntimeConfig must keep CoreFeaturesV2 together with
 	// exception handling: the bundled module lowers setjmp/longjmp to
@@ -82,7 +151,7 @@ func (e *pdfEngine) compile() error {
 		Context: ctx,
 		MinIdle: 0,
 		MaxIdle: 1,
-		// Unbounded: e.mu already runs one document at a time, and a
+		// Unbounded: pdfSlot already runs one document at a time, and a
 		// creation that panics (a failed mmap) never returns its count.
 		MaxTotal:      -1,
 		FSConfig:      wazero.NewFSConfig(),
@@ -96,6 +165,11 @@ func (e *pdfEngine) compile() error {
 		return e.err
 	}
 	e.pool = pool
+	// The compile leaves about 250 MiB of garbage in the Go heap, which an
+	// idle worker would otherwise keep for minutes: give it back once, so
+	// that the process returns to its idle budget (96 MiB, see
+	// docs/guide/operations.md, "Hardware and budgets").
+	debug.FreeOSMemory()
 	return nil
 }
 
@@ -188,36 +262,54 @@ type pdfText struct {
 // extract returns the text of a PDF of at most maxText bytes from at most
 // maxPages pages. It returns an error only when ctx was cancelled (not
 // when its deadline passed: that is StatusTimeout).
-func (e *pdfEngine) extract(ctx context.Context, data []byte, maxText int) (pdfText, error) {
+//
+// When the module cannot be compiled, it returns ErrUnavailable, and logs
+// the cause once per engine.
+//
+// The PDF has min(pdfTimeout, budget) once it is its turn; the time it
+// waited for its turn, which it returns, is not counted.
+func (e *pdfEngine) extract(ctx context.Context, data []byte, maxText int, budget time.Duration) (pdfText, time.Duration, error) {
+	waited, err := takePDFSlot(ctx)
+	if err != nil {
+		return pdfText{}, waited, err
+	}
+	defer releasePDFSlot()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// The one-time compile does not count against the document's time.
 	if err := e.compile(); err != nil {
-		e.logger.Warn("attachment text: cannot compile the PDF module", "err", err)
-		return pdfText{status: StatusFailed}, nil
+		if !e.errLogged {
+			e.errLogged = true
+			e.logger.Error("attachment text: cannot compile the PDF module; PDFs are not extracted until a restart", "err", err)
+		}
+		return pdfText{}, waited, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if ctx.Err() != nil && !isDeadline(ctx.Err()) {
-		return pdfText{}, ctx.Err()
+		return pdfText{}, waited, ctx.Err()
 	}
-	ctx, cancel := context.WithTimeout(ctx, pdfTimeout)
+	limit := min(pdfTimeout, budget)
+	if e.hooks.limit != nil {
+		e.hooks.limit(limit)
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	var out pdfText
 	reader := &docReader{r: bytes.NewReader(data), start: e.hooks.start}
 	defer reader.drop()
-	err := e.run(ctx, func(inst pdfium.Pdfium) error {
+	err = e.run(ctx, func(inst pdfium.Pdfium) error {
 		var err error
 		out, err = e.read(ctx, inst, reader, int64(len(data)), maxText)
 		return err
 	})
 	switch {
 	case ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return pdfText{}, ctx.Err()
+		return pdfText{}, waited, ctx.Err()
 	case ctx.Err() != nil || errors.Is(err, errKilled):
-		return pdfText{status: StatusTimeout}, nil
+		return pdfText{status: StatusTimeout}, waited, nil
 	case err != nil:
-		return pdfText{status: StatusFailed}, nil
+		return pdfText{status: StatusFailed}, waited, nil
 	}
-	return out, nil
+	return out, waited, nil
 }
 
 // read opens the document and reads its text page by page.

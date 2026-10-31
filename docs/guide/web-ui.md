@@ -236,8 +236,9 @@ folder limits the search to it.
 | `invoice -newsletter` | `invoice` but not `newsletter`. |
 | `utilities.example` | Part of a subject or sender, also inside words. |
 
-Search covers subject, sender and body text. Words are matched in German and
-English forms: `invoices` finds `invoice`, `Rechnungen` finds `Rechnung`.
+Search covers subject, sender and body text, and the text of attachments:
+PDFs, plain text, CSV, TSV, Markdown and HTML. Words are matched in German
+and English forms: `invoices` finds `invoice`, `Rechnungen` finds `Rechnung`.
 Matches are highlighted in the result snippets. Screen readers hear the
 number of results when a search or a further page of the list finishes
 loading.
@@ -263,7 +264,32 @@ an invalid date or a URL.
 
 Recipients and attachment names are found only with `to:` and `attachment:`,
 not by plain words: otherwise your own address would match nearly every
-message you received. The contents of attachments are not searched.
+message you received.
+
+#### Attachments
+
+The text of attachments is extracted in the background shortly after a
+message is stored, newest first; after an upgrade, older messages follow
+one at a time (see [One-time steps](./operations#one-time-steps)). Until
+then a message is found only by its own text. Some limits:
+
+- **Words, not parts of words.** Attachment text is matched by words, in
+  German and English forms, not by substrings inside words.
+- **Each document on its own.** All words of a search must be in the message
+  itself (subject, sender, body) or all in one attachment. `invoice Miller`
+  with Miller only as the sender and invoice only in the PDF finds nothing;
+  `from:miller invoice` does. Exclusions work per document too:
+  `invoice -draft` finds a message whose body contains "draft" if one of its
+  PDFs contains "invoice" and not "draft".
+- **Scans and protected files.** Scanned PDFs without a text layer have no
+  text to find, and neither have PDFs that need a password to open.
+- **Size.** PDFs up to 25 MiB with up to 500 pages, other text attachments up
+  to 4 MiB, the first 256 KiB of text per attachment and 1 MiB per message,
+  20 attachments per message. A PDF that takes longer than 15 seconds to
+  read, and the attachments still left when a message has taken 60 seconds,
+  are not searchable by their content.
+- **Not searched:** Office files (Word, Excel, OpenDocument), calendar files
+  and attached emails.
 
 The filter button right of the search field opens the filters over the
 list; they are closed at first on every screen, and the button is marked

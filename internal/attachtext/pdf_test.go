@@ -9,12 +9,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/klippa-app/go-pdfium"
 	"github.com/klippa-app/go-pdfium/requests"
+	"github.com/tetratelabs/wazero/sys"
 
 	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
 	"github.com/pklnx/mail-archive/internal/testwait"
@@ -372,5 +374,89 @@ func TestPDFTextOutlivesInstance(t *testing.T) {
 	runtime.GC()
 	if c := strings.Clone(res.Text); c != "kept after unmap" {
 		t.Errorf("text %q", c)
+	}
+}
+
+// A kill interrupts WebAssembly code that runs outside go-pdfium's
+// callbacks (#423): the call that runs when the kill lands ends with a
+// sys.ExitError, which only WithCloseOnContextDone(true) gives. The kill is
+// sent while the module grows its memory (inflating a Flate bomb while it
+// loads a page), the only point inside pure WebAssembly code that a test
+// can observe; the grow waits until Kill has returned, so that it does not
+// race wazero's close (see pdfEngine), and the module then notices the
+// close in its own code.
+func TestPDFKillInterruptsRunningCode(t *testing.T) {
+	e := shared.pdf
+	if _, err := takePDFSlot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer releasePDFSlot()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.compile(); err != nil {
+		t.Fatal(err)
+	}
+	data := pdftest.Bomb(1 << 30)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var (
+		armed  atomic.Bool
+		killed testwait.Signal
+		kills  atomic.Int32
+	)
+	e.hooks = pdfHooks{killed: func() { kills.Add(1); killed.Notify() }}
+	alloc := e.alloc
+	alloc.hooks = allocHooks{grow: func() {
+		if !armed.CompareAndSwap(true, false) {
+			return
+		}
+		wait := killed.C()
+		cancel()
+		select {
+		case <-wait:
+		case <-time.After(testwait.Limit(t)):
+			t.Error("Kill did not return")
+		}
+	}}
+	t.Cleanup(func() { alloc.hooks = allocHooks{}; e.hooks = pdfHooks{} })
+	var pageErr error
+	err := e.run(ctx, func(inst pdfium.Pdfium) error {
+		doc, err := inst.FPDF_LoadCustomDocument(&requests.FPDF_LoadCustomDocument{Reader: bytes.NewReader(data), Size: int64(len(data))})
+		if err != nil {
+			return err
+		}
+		armed.Store(true)
+		page, err := inst.FPDF_LoadPage(&requests.FPDF_LoadPage{Document: doc.Document, Index: 0})
+		if err == nil {
+			_, err = inst.FPDFText_LoadPage(&requests.FPDFText_LoadPage{Page: requests.Page{ByReference: &page.Page}})
+		}
+		pageErr = err
+		return err
+	})
+	if !errors.Is(err, errKilled) || kills.Load() != 1 {
+		t.Fatalf("run: %v, %d kills", err, kills.Load())
+	}
+	if armed.Load() {
+		t.Fatal("the page was loaded without growing the memory")
+	}
+	var exit *sys.ExitError
+	if !errors.As(pageErr, &exit) {
+		t.Fatalf("the running call ended with %v (%T), want a sys.ExitError", pageErr, pageErr)
+	}
+}
+
+// The garbage of the one-time compile (about 250 MiB) is collected and
+// given back to the system right after it, not left for the next GC and
+// the scavenger (#416's gate: idle RSS after the compile).
+func TestPDFCompileGarbageReturned(t *testing.T) {
+	e := New(nil)
+	t.Cleanup(func() { _ = e.Close() })
+	if res, err := e.PDF(context.Background(), pdftest.Text("a")); err != nil || res.Status != StatusOK {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if held := ms.HeapSys - ms.HeapReleased; held > 128<<20 {
+		t.Errorf("the Go heap holds %d MiB after the compile", held>>20)
 	}
 }

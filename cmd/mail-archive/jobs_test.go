@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/jobs"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -104,7 +107,7 @@ func TestStartJobs(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	cfg := &config.Config{JobWorkers: 0}
-	stop, err := startJobs(context.Background(), &app{cfg: cfg, store: st}, log)
+	stop, err := startJobs(context.Background(), &app{cfg: cfg, store: st}, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +125,7 @@ func TestStartJobs(t *testing.T) {
 	logs.Reset()
 	cfg.JobWorkers = 1
 	woken := started.C()
-	stop, err = startJobs(context.Background(), &app{cfg: cfg, store: st}, log)
+	stop, err = startJobs(context.Background(), &app{cfg: cfg, store: st}, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +136,7 @@ func TestStartJobs(t *testing.T) {
 		t.Fatal("the job did not start")
 	}
 	stop()
-	if !strings.Contains(logs.String(), `msg="jobs on" workers=1 kinds=test`) {
+	if !strings.Contains(logs.String(), `msg="jobs on" workers=1 kinds=test,attachment_text,attachment_backfill`) {
 		t.Errorf("log with 1 worker: %s", logs.String())
 	}
 	if state, attempts, leased := jobState(t, conn, "a"); state != store.JobQueued || attempts != 0 || leased {
@@ -203,5 +206,64 @@ func TestFormatJobsStatus(t *testing.T) {
 	}
 	if got := formatJobsStatus(nil); got != "jobs: none" {
 		t.Errorf("empty: %q", got)
+	}
+}
+
+// TestReindexAttachments: reindex extracts the attachment text of every
+// pending message in the foreground, more than one backfill batch, and
+// says how many jobs it left to another process. With
+// MAIL_ARCHIVE_JOB_WORKERS=0 (a web server that runs no jobs) it still
+// runs one.
+func TestReindexAttachments(t *testing.T) {
+	st, conn := jobsEnv(t)
+	t.Setenv(config.EnvJobWorkers, "0")
+	ctx := context.Background()
+	blobs, err := blobstore.New(os.Getenv("MAIL_ARCHIVE_DATA_DIR"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "Subject: alt\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nbody\r\n" +
+		"--b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"liste.csv\"\r\n\r\nArtikel;Preis\r\n--b--\r\n"
+	blob, _, err := blobs.Put(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const total = 2500
+	if _, err := conn.Exec(ctx, `INSERT INTO messages (sha256, size, stored_path, sent_at, has_attachment, index_version)
+		SELECT lpad(to_hex(i), 64, '0'), 100, $1, timestamptz '2020-01-01' - i * interval '1 minute', true, $2
+		FROM generate_series(1, $3::int + 1) i`, blobstore.RelPath(blob.SHA256), store.IndexVersion, total); err != nil {
+		t.Fatal(err)
+	}
+	// The last message is being extracted by another process.
+	held := fmt.Sprintf("%064x", total+1)
+	if _, err := st.EnqueueJobs(ctx, []store.NewJob{{Kind: store.JobAttachmentText, Key: held, MessageSHA256: held, MaxAttempts: 3}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE jobs SET state = 'running', lease_token = '\x01', lease_until = now() + interval '1 hour' WHERE key = $1`, held); err != nil {
+		t.Fatal(err)
+	}
+	var runErr error
+	out := captureStdout(t, func() { runErr = runCmd(t, newReindexCmd(), "") })
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	want := fmt.Sprintf("updated 0 message(s), extracted text of %d attachment(s)\n1 attachment job(s) are held by another process or wait for a retry; they finish there\n", total)
+	if out != want {
+		t.Errorf("output %q, want %q", out, want)
+	}
+	var done int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM attachment_index_state`).Scan(&done); err != nil || done != total {
+		t.Errorf("%d done, %v", done, err)
+	}
+}
+
+func TestExtractorStatus(t *testing.T) {
+	if got := extractorStatus(0); got != "" {
+		t.Errorf("none: %q", got)
+	}
+	got := extractorStatus(3)
+	if !strings.Contains(got, "PDF extractor unavailable for 3 message(s)") || !strings.Contains(got, "jobs retry attachment_text") || !strings.HasPrefix(got, "\n") {
+		t.Errorf("got %q", got)
 	}
 }

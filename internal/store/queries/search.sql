@@ -38,7 +38,21 @@ WHERE
                     websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                     websearch_to_tsquery('english', sqlc.narg(query)::text))
    OR m.subject ILIKE sqlc.narg(pattern)::text
-   OR m.from_addr ILIKE sqlc.narg(pattern)::text)
+   OR m.from_addr ILIKE sqlc.narg(pattern)::text
+   -- A match in the text of one attachment, found first by
+   -- AttachmentMatches; with too many of them, att_walk checks the
+   -- attachments of each message instead. All words must be in the
+   -- message or all in one attachment.
+   OR m.sha256 = ANY (sqlc.narg(att_shas)::bpchar[])
+   OR sqlc.arg(att_walk)::boolean AND EXISTS (
+       SELECT 1 FROM attachment_texts ax
+       WHERE ax.message_sha256 = m.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
+         AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                           websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                           websearch_to_tsquery('english', sqlc.narg(query)::text))
+       OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   AND EXISTS (
        SELECT 1 FROM message_locations l
@@ -136,7 +150,21 @@ WHERE
                     websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                     websearch_to_tsquery('english', sqlc.narg(query)::text))
    OR m.subject ILIKE sqlc.narg(pattern)::text
-   OR m.from_addr ILIKE sqlc.narg(pattern)::text)
+   OR m.from_addr ILIKE sqlc.narg(pattern)::text
+   -- A match in the text of one attachment, found first by
+   -- AttachmentMatches; with too many of them, att_walk checks the
+   -- attachments of each message instead. All words must be in the
+   -- message or all in one attachment.
+   OR m.sha256 = ANY (sqlc.narg(att_shas)::bpchar[])
+   OR sqlc.arg(att_walk)::boolean AND EXISTS (
+       SELECT 1 FROM attachment_texts ax
+       WHERE ax.message_sha256 = m.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
+         AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                           websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                           websearch_to_tsquery('english', sqlc.narg(query)::text))
+       OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   AND EXISTS (
        SELECT 1 FROM message_locations l
@@ -198,7 +226,21 @@ WHERE
                           websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                           websearch_to_tsquery('english', sqlc.narg(query)::text))
          OR n.subject ILIKE sqlc.narg(pattern)::text
-         OR n.from_addr ILIKE sqlc.narg(pattern)::text)
+         OR n.from_addr ILIKE sqlc.narg(pattern)::text
+         -- A match in the text of one attachment, found first by
+         -- AttachmentMatches; with too many of them, att_walk checks the
+         -- attachments of each message instead. All words must be in the
+         -- message or all in one attachment.
+         OR n.sha256 = ANY (sqlc.narg(att_shas)::bpchar[])
+         OR sqlc.arg(att_walk)::boolean AND EXISTS (
+             SELECT 1 FROM attachment_texts ax
+             WHERE ax.message_sha256 = n.sha256
+               -- Only rows with text: an empty one would match any negation.
+               AND ax.body_text IS NOT NULL
+               AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                                 websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                                 websearch_to_tsquery('english', sqlc.narg(query)::text))
+             OFFSET 0))
         -- Only messages found in one of the scope's accounts (own or shared).
         AND EXISTS (
              SELECT 1 FROM message_locations l
@@ -268,7 +310,21 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
                     websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                     websearch_to_tsquery('english', sqlc.narg(query)::text))
    OR t.subject ILIKE sqlc.narg(pattern)::text
-   OR t.from_addr ILIKE sqlc.narg(pattern)::text)
+   OR t.from_addr ILIKE sqlc.narg(pattern)::text
+   -- A match in the text of one attachment, found first by
+   -- AttachmentMatches; with too many of them, att_walk checks the
+   -- attachments of each message instead. All words must be in the
+   -- message or all in one attachment.
+   OR t.sha256 = ANY (sqlc.narg(att_shas)::bpchar[])
+   OR sqlc.arg(att_walk)::boolean AND EXISTS (
+       SELECT 1 FROM attachment_texts ax
+       WHERE ax.message_sha256 = t.sha256
+         -- Only rows with text: an empty one would match any negation.
+         AND ax.body_text IS NOT NULL
+         AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
+                           websearch_to_tsquery('german', sqlc.narg(query)::text) ||
+                           websearch_to_tsquery('english', sqlc.narg(query)::text))
+       OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   AND EXISTS (
        SELECT 1 FROM message_locations l

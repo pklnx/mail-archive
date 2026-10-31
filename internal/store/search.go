@@ -113,6 +113,7 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 	counts, err := s.q.CountThreadMatches(ctx, db.CountThreadMatchesParams{
 		ThreadKeys: keys, Query: p.Query, Pattern: p.Pattern, Accounts: p.Accounts, Folder: p.Folder,
 		FromPattern: p.FromPattern, ToPattern: p.ToPattern, ToShas: p.ToShas, ToWalk: p.ToWalk, EnvelopeAccounts: p.EnvelopeAccounts,
+		AttShas: p.AttShas, AttWalk: p.AttWalk,
 		AttachmentPattern: p.AttachmentPattern,
 		HasAttachment:     p.HasAttachment, Thread: p.Thread, After: p.After, Before: p.Before,
 	})
@@ -143,6 +144,9 @@ var maxEnvelopeMatches = 5000
 // recipients of a to: filter are resolved first (see EnvelopeMatches).
 func (s *Store) searchParams(ctx context.Context, f SearchFilter) (db.SearchMessagesParams, error) {
 	p := searchParams(f)
+	if err := s.attachmentMatches(ctx, &p); err != nil {
+		return p, err
+	}
 	if p.ToPattern == nil {
 		return p, nil
 	}

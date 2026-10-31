@@ -36,9 +36,8 @@ const (
 	MaxAttachments = 20
 	// maxPages is how many pages of a PDF are read.
 	maxPages = 500
-	// pdfTimeout bounds one PDF, messageTimeout one message.
-	pdfTimeout     = 15 * time.Second
-	messageTimeout = 60 * time.Second
+	// pdfTimeout bounds one PDF.
+	pdfTimeout = 15 * time.Second
 	// pdfMemoryLimit bounds the WebAssembly linear memory of one PDF,
 	// reserved with mmap and returned after each document. The plan
 	// allows at most 128 MiB; the gate in #390 set it to the smallest of
@@ -46,6 +45,14 @@ const (
 	// the corpus (49.9 MiB) and gives every corpus PDF the same text as
 	// 256 MiB (TestGateMeasurements).
 	pdfMemoryLimit = 96 << 20
+)
+
+// messageTimeout bounds the work on one message: the time of its
+// attachments, without the time a PDF waits for its turn. A variable for
+// tests, as is now, the clock that measures it.
+var (
+	messageTimeout = 60 * time.Second
+	now            = time.Now
 )
 
 // Status says how the extraction of one attachment ended.
@@ -120,7 +127,8 @@ func isPDF(data []byte) bool {
 }
 
 // Extractor extracts attachment text. It is safe for concurrent use; PDFs
-// are read one at a time per Extractor. The zero value is not usable; use
+// are read one at a time in the whole process, also across Extractors (see
+// pdfEngine); text, CSV and HTML attachments are read alongside. The zero value is not usable; use
 // New.
 type Extractor struct {
 	pdf *pdfEngine
@@ -152,16 +160,20 @@ func (e *Extractor) Close() error {
 
 // Message extracts the text of the attachments of a raw message, at most
 // MaxAttachments of them, within messageTimeout and MaxMessageText.
-// Attachments of other types get no Result. The error is ctx's when ctx
-// was cancelled (not when a deadline passed): the results are incomplete
-// then and must not be stored.
+// Attachments of other types get no Result. Attachments that the deadline
+// (messageTimeout, or ctx's) never reached get StatusTimeout. The time a PDF
+// waits for another one in the process (one at a time) does not count
+// against messageTimeout. The error is ctx's when ctx was cancelled (not
+// when a deadline passed): the results are incomplete then and must not be
+// stored. It wraps ErrUnavailable when the message has a PDF and the PDF
+// module cannot be compiled, and is ErrBusy when ctx's deadline passed
+// while a PDF waited for its turn: the message is to be tried again.
 func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, messageTimeout)
-	defer cancel()
 	var (
-		out   []Result
-		left  = MaxMessageText
-		ctxEr error
+		out    []Result
+		left   = MaxMessageText
+		budget = messageTimeout // work time left for the message
+		ctxEr  error
 	)
 	limit := func(p mime.Part) int64 {
 		switch candidate(p) {
@@ -173,11 +185,20 @@ func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) 
 		return 0
 	}
 	_ = mime.Attachments(r, limit, func(a mime.Attachment) bool {
-		if ctx.Err() != nil {
-			ctxEr = ctx.Err()
+		if err := ctx.Err(); err != nil && !isDeadline(err) {
+			ctxEr = err
 			return false
 		}
-		res, err := e.attachment(ctx, a, min(MaxText, left))
+		var res Result
+		var err error
+		if ctx.Err() != nil || budget <= 0 {
+			res = unreached(a)
+		} else {
+			start := now()
+			var waited time.Duration
+			res, waited, err = e.attachment(ctx, a, min(MaxText, left), budget)
+			budget -= now().Sub(start) - waited
+		}
 		if err != nil {
 			ctxEr = err
 			return false
@@ -197,18 +218,35 @@ func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) 
 
 func isDeadline(err error) bool { return errors.Is(err, context.DeadlineExceeded) }
 
-// attachment extracts one attachment. A Result without Status means it
+// unreached is the Result of an attachment that the message's deadline did
+// not leave time for: StatusTimeout, so that the row records it, unless
+// its size or decoding already decide.
+func unreached(a mime.Attachment) Result {
+	res := Result{Part: a.Index, Filename: a.Filename, Status: StatusTimeout}
+	switch {
+	case a.TooLarge:
+		res.Status = StatusTooLarge
+	case a.Err != nil:
+		res.Status = StatusFailed
+	case candidate(a.Part) == kindPDF && !isPDF(a.Data) && !pdfTypes[a.ContentType]:
+		return Result{} // a file named .pdf that is not one
+	}
+	return res
+}
+
+// attachment extracts one attachment within budget, and returns how long
+// it waited for its turn to read a PDF. A Result without Status means it
 // is not one of the types read.
-func (e *Extractor) attachment(ctx context.Context, a mime.Attachment, maxText int) (Result, error) {
+func (e *Extractor) attachment(ctx context.Context, a mime.Attachment, maxText int, budget time.Duration) (Result, time.Duration, error) {
 	res := Result{Part: a.Index, Filename: a.Filename}
 	k := candidate(a.Part)
 	switch {
 	case a.TooLarge:
 		res.Status = StatusTooLarge
-		return res, nil
+		return res, 0, nil
 	case a.Err != nil:
 		res.Status = StatusFailed
-		return res, nil //nolint:nilerr // an undecodable part is a status, not an error
+		return res, 0, nil //nolint:nilerr // an undecodable part is a status, not an error
 	}
 	switch k {
 	case kindText, kindHTML:
@@ -216,23 +254,25 @@ func (e *Extractor) attachment(ctx context.Context, a mime.Attachment, maxText i
 	case kindPDF:
 		if !isPDF(a.Data) {
 			if !pdfTypes[a.ContentType] {
-				return Result{}, nil // a file named .pdf that is not one
+				return Result{}, 0, nil // a file named .pdf that is not one
 			}
 			res.Status = StatusFailed
-			return res, nil
+			return res, 0, nil
 		}
-		t, err := e.pdf.extract(ctx, a.Data, maxText)
+		t, waited, err := e.pdf.extract(ctx, a.Data, maxText, budget)
 		if err != nil {
-			return Result{}, err
+			return Result{}, waited, err
 		}
 		res.Text, res.Status = t.text, t.status
+		return res, waited, nil
 	}
-	return res, nil
+	return res, 0, nil
 }
 
 // PDF extracts the text of one PDF, at most MaxText bytes, within the PDF
 // limits; data larger than MaxPDFSize is StatusTooLarge. The error is ctx's
-// when ctx was cancelled.
+// when ctx was cancelled, ErrBusy when its deadline passed while the PDF
+// waited for another one.
 func (e *Extractor) PDF(ctx context.Context, data []byte) (Result, error) {
 	if len(data) > MaxPDFSize {
 		return Result{Status: StatusTooLarge}, nil
@@ -240,7 +280,7 @@ func (e *Extractor) PDF(ctx context.Context, data []byte) (Result, error) {
 	if !isPDF(data) {
 		return Result{Status: StatusFailed}, nil
 	}
-	t, err := e.pdf.extract(ctx, data, MaxText)
+	t, _, err := e.pdf.extract(ctx, data, MaxText, pdfTimeout)
 	if err != nil {
 		return Result{}, err
 	}

@@ -281,6 +281,7 @@ Pull requests that change the database schema carry the label
 | A version with `postgres:18-alpine` in `docker-compose.yml` (26.10-6 and earlier) | `./ma migrate` rebuilds the database indexes once, before it applies the migrations; stop the web server first (`docker compose stop web`) and pause cron jobs that run `./ma`, then `./ma migrate` and `docker compose up -d web`. It prints `rebuilding all database indexes once` and takes about 15 seconds per 30,000 messages. This index rebuild is not `./ma reindex`, which extracts message text for search. Until it has run, the other `./ma` commands that use the database (except `./ma migrate status`) and the web server refuse to start with `the database needs a one-time index rebuild`. That includes `./ma backup`, so back up with the old bundle before you extract the new one. Installations that already ran the `REINDEX` by hand get one more rebuild; it is harmless. The bundle now uses the Debian-based `postgres:18` image, whose full-text search is more than twice as fast for less frequent words. It reads the existing volume as is, but sorts text differently: both images say `en_US.utf8`, yet the Alpine image (musl) sorts by code point and the Debian image (glibc) by language rules. Indexes on text columns built by the old image are in the wrong order for the new one, so lookups can miss rows and unique checks can miss duplicates until they are rebuilt. PostgreSQL does not warn about it, because the Alpine image records no collation version; `./ma migrate` recognizes such a database by exactly that (no recorded collation version, while the server reports one) and records the rebuild in the database setting `mail_archive.collation_reindexed`. If the collation version changes later (a newer glibc in a later `postgres:18` image), `./ma migrate` rebuilds again. If the rebuild stops with a duplicate key error, something wrote to the database before it ran: the message names the index and the key; restore the backup from before the upgrade (see [Restore](#restore)). Nothing is migrated then. If the database user is no superuser (the bundle's `mailarchive` is one), the rebuild works but recording it fails; the message then gives the `ALTER DATABASE ... SET mail_archive.collation_reindexed = '...'` command to run as a superuser, and the other commands refuse until it has run. For reference, the rebuild by hand, as a superuser: `docker compose exec -T postgres psql -U mailarchive -d mailarchive -c "REINDEX DATABASE mailarchive"` (without the `ALTER DATABASE` from the message, `./ma migrate` does not know it ran and rebuilds once more). `ALTER DATABASE ... REFRESH COLLATION VERSION` is not needed and fails with `invalid collation version change`; only a restore from a dump into a new volume starts a database that no longer depends on the C library, because a new volume gets the builtin locale (see [Database locale](#database-locale)). |
 | A version that believes `X-Forwarded-Proto` from any client (26.10-11 and earlier) | Behind a proxy that does not connect from loopback, set `MAIL_ARCHIVE_TRUSTED_PROXIES` to its address before or right after the update. With Docker Compose and Caddy or `tailscale serve` on the host, that is the gateway of the Compose network (see [Behind a reverse proxy](./audit-log#behind-a-reverse-proxy)). Otherwise the session cookie is no longer `__Host-` and `Secure`, and HSTS is not sent; logging in keeps working, and the server logs a warning once that names the proxy's address. Sessions: when a request counts as HTTPS, only the `__Host-` cookie logs in; over plain HTTP (which includes a proxy that does not count) only the plain one. With the variable set at the update, existing `__Host-` sessions keep working. Without it, requests count as plain HTTP, so users log in once more and get the plain cookie; once the variable is set, requests are secure again, that plain cookie is ignored, and users log in once more. The login limits, the invalid-key limit and the passkey-start limit now count IPv6 clients per `/64`. |
 | A version without passkeys | Nothing to run. To use passkeys, set `MAIL_ARCHIVE_PUBLIC_URL` to the address you open in the browser (Compose defaults to `http://localhost:WEB_PORT`). Passkeys are bound to its host name: after changing it, remove the passkeys (`./ma user remove-passkeys NAME`) and register them again. |
+| A version without attachment search | Nothing to run. The migration only adds two empty tables and is quick; it neither reads nor rewrites the message rows, so deliveries and syncs go on (they wait at most a moment while it adds its foreign keys). Afterwards the web server, or the worker service if you run it, extracts the text of PDF and text attachments of older messages in the background, one message at a time and newest first, and logs at start how many are pending; new mail becomes searchable shortly after it is stored. About 17 ms per message with a typical PDF invoice (26 ms on average over a test corpus of 1,412 varied PDFs), and about 52 MB of database space per 10,000 PDFs with 3.5 KB of text each. `./ma reindex` does the same at once in the foreground; it can run while the web server and syncs run, and can be interrupted and run again. Installations without the web server, which run only `./ma sync` or `./ma import` from cron, get attachment text only from `./ma reindex` or from the worker service: run it after those commands, for example in the same cron job. While it extracts, the process needs up to 224 MiB more memory per worker (see [Hardware and budgets](#hardware-and-budgets)), and the first PDF after a start takes about 3 seconds once (see [Security](../reference/security#the-smtp-server)). Message rows are not rewritten, so no `VACUUM` is needed. With [legal holds](./retention#legal-holds) that use a search filter, run `./ma reindex` before relying on them over attachment text: the background extraction goes newest first, so the oldest mail, which retention deletes first, is extracted last. |
 | A version without shared accounts | Nothing to run. The migration adds an empty table and an index on the audit log. Building the index reads every partition of the audit log and holds back audit log writes until it is done, and with them the web server's reads and logins: about 0.1 seconds for 1,000,000 entries (253 MB) on PostgreSQL 18 with the log in memory, longer when it has to be read from disk. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). |
 
 ### Database locale
@@ -356,13 +357,23 @@ like this:
 | Page cache | 1024 MiB, not reserved | everything not used; search indexes are read from it |
 
 Per job at a time (a worker slot), extracting a document takes up to
-224 MiB: 128 MiB of WebAssembly memory for the PDF reader (outside the Go
-heap), the attachment and its text twice over for the garbage collector
-(52 MiB), and 32 MiB for the reader's instance. The process needs 96 MiB
-when idle, and once after each start 300 MiB while it compiles the PDF
-reader. So the peak with c workers is the larger of 96 + c × 224 and
-96 + 300 + (c − 1) × 224 MiB: 396 MiB with one, 620 MiB with two, 844 MiB
-with three. 768 MiB holds up to **two workers**.
+224 MiB: up to 96 MiB of WebAssembly memory for the PDF reader (outside the
+Go heap; the budget keeps the 128 MiB the design allows), the attachment and
+its text twice over for the garbage collector (52 MiB), and 32 MiB for the
+reader's instance. The process needs 96 MiB when idle, and once after each
+start 300 MiB while it compiles the PDF reader. So the peak with c workers
+is the larger of 96 + c × 224 and 96 + 300 + (c − 1) × 224 MiB: 396 MiB with
+one, 620 MiB with two, 844 MiB with three. 768 MiB holds up to **two
+workers**.
+
+**One PDF at a time per process.** A process reads only one PDF at a time,
+whatever `MAIL_ARCHIVE_JOB_WORKERS` says; a second worker slot in the same
+process extracts text, CSV and HTML attachments beside it. This keeps two
+documents, possibly of different users, out of the PDF reader at the same
+time (see [Security](../reference/security#the-smtp-server)). For
+more PDF throughput, run a second worker *process*: another worker service
+or `mail-archive worker` with its own memory limit, not
+`WORKER_JOB_WORKERS=2`.
 
 - **The worker service** has `mem_limit: 768m` and `cpus: 1.0`: PostgreSQL
   and the web server keep the other core. A container's memory limit also
@@ -373,7 +384,9 @@ with three. 768 MiB holds up to **two workers**.
   With two, the compile right after a start goes above it for a moment; the
   limit is soft, so that only costs some garbage collection then.
 - **More workers** only on hosts with at least 4 cores: each needs a core
-  and 224 MiB more. Raise `mem_limit` and `WORKER_GOMEMLIMIT` with them.
+  and 224 MiB more. Raise `mem_limit` and `WORKER_GOMEMLIMIT` with them. For
+  PDFs, a second worker process helps; a second slot in one process does
+  not.
 - **The web server** sets no memory limit by default, as before. Hosts that
   want one and run the jobs in the web server give it 1536 MiB with
   `GOMEMLIMIT=1344MiB`.

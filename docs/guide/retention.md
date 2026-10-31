@@ -152,7 +152,13 @@ has its page with the reason, and **Release** is in its menu (⋯). Every
 condition must match: a user, an account, a period, a search filter. A
 filter is matched by search when the hold is added and before every
 deletion, and its matches are only ever added; until then the hold covers
-its whole scope. Only admins see holds.
+its whole scope. A search filter also matches the text extracted from
+attachments, once it has been extracted (see
+[Attachments](./web-ui#attachments)). After the upgrade that brings
+attachment search, older messages are extracted in the background newest
+first, so the oldest mail, which retention deletes first, comes last: run
+`./ma reindex` once before you rely on a filter hold over attachment text.
+Only admins see holds.
 
 Holds are released with a note and never deleted. A user named by a hold
 can therefore not be removed (lock them instead), and an account whose owner
@@ -177,6 +183,8 @@ in the background; the page shows the progress.
 
 Every message is checked again when it is deleted: a rule removed, a hold
 added or a new place since the preview keeps it. An interrupted run resumes.
+A deleted message's rows go with it in the same transaction, the text
+extracted from its attachments and its queued background jobs included.
 See [Deletion](../reference/cli#deletion) for the details.
 
 A long first sync of a large mailbox, and a fill, hold a lock that deletion
