@@ -19,9 +19,9 @@ Every change starts as a GitHub issue:
 
 ## 2. Plan
 
-The coordinator labels an issue **`plan`** when it picks it next from the backlog
-(the maintainer may also do so) to ask for an implementation plan from a Claude session. The plan is posted as a `## Plan` comment on the issue, and the label
-changes to **`review`**. A plan covers:
+The coordinator (or the maintainer) labels an issue **`plan`** when it picks
+it next from the backlog. A Claude session writes the plan as a `## Plan`
+comment on the issue, and the label changes to **`review`**. A plan covers:
 
 - the approach and the files or components it touches,
 - API, database or behavior changes (a schema change means `db-migration`),
@@ -31,10 +31,11 @@ changes to **`review`**. A plan covers:
 
 ## 3. Review and approval
 
-An independent plan-reviewer agent (never the planner) reviews the plan and
-the maintainer may read it too; both can ask questions or for changes in the
-issue, and the plan is updated in place. When the plan is good, the reviewer or the maintainer replaces
-`review` with **`ready`**. Only `ready` issues are implemented.
+An independent plan-reviewer agent (never the planner) reviews the plan; the
+maintainer may read it too. Both ask questions or for changes in the issue,
+and the plan is updated in place. When it is good, the reviewer or the
+maintainer replaces `review` with **`ready`**. Only `ready` issues are
+implemented.
 
 A plan with several parts gets one sub-issue per part, titled
 `<what> (#N, part K)`, created by the planner or the coordinator when the plan
@@ -49,20 +50,18 @@ that come up during the work are noted in the issue before the pull request.
 
 Each issue (or part of a plan) gets its own branch and pull request. The
 description says `Closes #N` (and "Part K of #N" for a part), so merging closes
-the issue. Labels follow the [label table](./#pull-requests-and-labels). After
-an approving review and green required checks, the coordinator merges with
-squash; there is no auto-merge. The `audit` and `docs-audit` checks
-(`pnpm audit`) are not required: a red audit does not block a merge. The
-coordinator reads its log; a registry error needs nothing, a real advisory gets
-a Dependabot pull request or a follow-up issue.
+the issue. Labels follow the [label table](#labels). After an approving
+review and green required checks, the coordinator merges with squash; there
+is no auto-merge. The `audit` and `docs-audit` checks are not required; what
+a red one means is in [Dependencies](./#dependencies).
 
 Every pull request with app code gets a session review. Risky pull requests
 (deletes, schema changes, rewriting user data, changes to the serving layer:
 static file serving, response headers, CSP, routing) also get a second, independent
-session review: a separate reviewer agent that does not see the first review
-beforehand. The coordinator adds the label **`second-review`** to each of them,
-including every pull request that changes `internal/store/migrations`; the
-label is a marker and triggers nothing. Pull requests without app code (docs,
+session review by a separate reviewer agent that does not see the first review
+beforehand. The coordinator labels each of them **`second-review`**, every
+pull request that changes `internal/store/migrations` included; the label is
+a marker and triggers nothing. Pull requests without app code (docs,
 CI, test-only) need one session review and green required checks.
 
 Pull requests that can weaken the secret scan are merged only after the
@@ -111,16 +110,20 @@ needed and not read at start.
 
 ## Labels
 
+Labels are defined in `.github/labels.json` and synced to GitHub when that
+file changes on `main`.
+
 | Label | Set by | Meaning |
 |---|---|---|
 | `plan` | coordinator or maintainer | Please write an implementation plan (Claude session). |
 | `review` | planner | The plan is posted and waits for review. |
 | `ready` | plan reviewer or maintainer | The plan is approved; the issue may be implemented. |
 | `second-review` | coordinator or maintainer | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
-| `db-migration` | automatically | Schema change; makes at least a minor release (see Releases). |
+| `db-migration` | automatically | Schema change; back up before upgrading. Makes at least a minor release (see Releases). |
 | `breaking` | by hand | Manual upgrade steps; makes a major release (see Releases). |
 | `feature`, `bug`, `docs`, `chore` | template or by hand | Kind of change; `feature` makes at least a minor release. |
 | `security` | by hand | Security hardening (never an undisclosed vulnerability). Kind label; does not change the version (a patch release unless other labels raise it). |
+| `dependencies` | Dependabot | Dependency update. |
 | `followup` | coordinator | Non-blocking finding from a review, CI or the day's work; its body names the source. |
 | `device-checks` | coordinator | The open round of manual device checks (one at a time; see Pull request). |
 

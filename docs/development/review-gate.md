@@ -41,8 +41,8 @@ anyway. It runs only what CI does not check elsewhere.
   `Down` section is for. goose runs each migration in a transaction unless
   the file says `-- +goose NO TRANSACTION`; the gate tells squawk which case
   applies. squawk counts lines from 0; the gate reports file lines from 1.
-- **migration-changed**: a migration that has been released is never edited;
-  add a new one (see [Database migrations](./#database-migrations)).
+- **migration-changed**: a released migration is never edited; add a new one
+  (see [Database migrations](./#database-migrations)).
 - **actionlint** runs without shellcheck and pyflakes, so the result does not
   depend on what is installed on the machine.
 - **zizmor** runs on the same changed workflows, offline (it calls no GitHub
@@ -62,16 +62,16 @@ anyway. It runs only what CI does not check elsewhere.
 - **oxlint** runs the type-aware rules on the TypeScript 7 compiler
   (oxlint-tsgolint; typescript-eslint does not support TypeScript 7) with
   `web/tsconfig.json`, only the three named rules, all others off. They need
-  the UI's dependencies, so the check is skipped, with the reason "web deps
-  not installed", when `web/node_modules` is missing (`pnpm install` in
-  `web/`); CI installs them in the gate job only when the pull request changes
-  a file that triggers the check, and there a missing `web/node_modules` is an
+  the UI's dependencies: without `web/node_modules` (`pnpm install` in
+  `web/`) the check is skipped with the reason "web deps not installed". CI
+  installs them in the gate job only when the pull request changes a file
+  that triggers the check, and there a missing `web/node_modules` is an
   error (`REVIEW_GATE_REQUIRE_WEB=1`). `web/src` is clean on `main` since #327
   (it had 12 hits before: ten async event handlers, a dropped promise in a
   test and the logout call), so the check lints all of the tracked `web/src`
   TypeScript files at the head and reports every finding: a change that makes
   a function return a promise is reported at its callers, also on lines and in
-  files the branch does not touch. It runs not only for `web/src` changes but also for
+  files the branch does not touch. It also runs for
   the gate's oxlint config and lockfile, `web/package.json`,
   `web/pnpm-lock.yaml` and `web/tsconfig*.json`: a bump of oxlint,
   oxlint-tsgolint, TypeScript or `@types/react` can add findings without
@@ -167,8 +167,7 @@ no new action, and the install takes about a second, so it has no cache. Pushes
 to `main` run only the self-test; they also save the caches that pull
 requests read (a Go cache keyed on the `Makefile`, an npm cache keyed on the
 gate's lockfile). When a pull request changes a file that triggers the
-oxlint check (`web/src` TypeScript, the web dependency files and tsconfigs,
-the gate's oxlint config and lockfile; the same list as in the gate), the job
+oxlint check (the same list as in the gate), the job
 also runs `pnpm install --frozen-lockfile` in `web/` (with corepack from the
 npm cache, as in the `web` job; the pnpm store is not cached, as there), for
 the type-aware rules. `review-gate` is **not a required check** (maintainer
