@@ -104,6 +104,13 @@ messages and the last activity show under the name.
 
 ![The Accounts page: the accounts as a table, with each account's actions in its row menu](/screenshots/accounts.png)
 
+Accounts other users [shared](./users#shared-accounts) with you follow in
+the table **Shared with you**: the name, the owner, the type, the messages
+and the owner's last sync. They have no menu, because only the owner
+manages them; the name opens the account's mail in the mail view.
+
+![Pat's Accounts page: the own account team, and personal, shared by demo, under Shared with you](/screenshots/accounts-shared.png)
+
 ### The account's page
 
 The account's name in the table (or **Edit** in its menu) opens its page;
@@ -125,7 +132,14 @@ have typed or chosen in the others, so you can change the schedule and the
 folders and save them one after the other. Without
 `MAIL_ARCHIVE_SECRET_KEY` the page only shows the account.
 
-![The page of the account personal: the tiles, then Connection, Schedule and Folders, with Folders open for editing](/screenshots/account-detail.png)
+The last section, **Shared with** (not for smtp accounts), lists the users
+who may read the account's mail, each with the day it was shared and
+**Remove**. To share, type the user's exact name and press **Share**; an
+unknown name says so. A removed account keeps its list, so its shares can
+still be ended, but it cannot be shared again. See
+[Shared accounts](./users#shared-accounts) for what a shared user can do.
+
+![The page of the account personal: the tiles, then Connection, Schedule, Folders open for editing, and Shared with, with pat](/screenshots/account-detail.png)
 
 ## Choosing folders
 

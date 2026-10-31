@@ -90,6 +90,35 @@ describe("entry texts", () => {
     ).toBe("language: auto → de, locale: auto → de-AT");
     expect(entryDetail(entry("auth.login_failed", "00:00", { details: { method: "password", reason: "wrong_password" } }))).toBe("password, wrong_password");
   });
+  it("words other users' reads of a shared account without the terms of unnamed lists (#389, R6)", () => {
+    const via = [{ id: 3, owner: 2, key: "alice/work", n: 2 }];
+    const shared = (action: string, details: Record<string, unknown>) => entryDetail(entry(action, "00:00", { user: "pat", viaShare: true, details }));
+    // Unnamed lists and every further page: the count, never the terms, even if they came.
+    expect(shared("message.search", { search: true, q: "secret", via_accounts: via })).toBe("pat's search showed 2 messages of work");
+    expect(shared("message.list", { search: false, folder: "Board", via_accounts: via })).toBe("pat's list showed 2 messages of work");
+    expect(shared("message.page", { search: true, q: "secret", account: "alice/work", via_accounts: via })).toBe("pat's search showed 2 messages of work");
+    expect(shared("message.page", { search: false, via_accounts: [{ ...via[0], n: 1 }] })).toBe("pat's list showed 1 message of work");
+    // A named first page keeps its terms (decision 13).
+    expect(shared("message.search", { q: "secret", account: "alice/work", via_accounts: [{ ...via[0], n: 0 }] })).toBe(
+      "“secret” account:alice/work; pat's search showed 0 messages of work",
+    );
+    expect(shared("message.conversation", { via_accounts: [{ ...via[0], n: 1 }] })).toBe("pat's conversation view showed 1 message of work");
+    expect(shared("message.open", { via_accounts: [{ id: 3, owner: 2, key: "alice/work" }] })).toBe("in work");
+    const de = messagesFor("de");
+    expect(de.logShared("pat", "search", 2, "work")).toBe("Suche von pat zeigte 2 Nachrichten aus work");
+    expect(de.logShared("pat", "list", 1, "work")).toBe("Liste von pat zeigte 1 Nachricht aus work");
+  });
+  it("words the share entries and the lists of the reader's own Log (#389)", () => {
+    expect(entryDetail(entry("account.share", "00:00", { details: { user: "pat", user_id: 4 } }))).toBe(t.logShareWith("pat"));
+    expect(entryDetail(entry("message.list", "00:00", { details: { account: "anna/work", folder: "INBOX", via_owners: [2] } }))).toBe("account:anna/work folder:INBOX");
+    const de = messagesFor("de");
+    for (const a of ["message.list", "message.page", "message.conversation", "account.share", "account.unshare"]) {
+      expect(t.auditAction(a)).not.toBe(a);
+      expect(de.auditAction(a)).not.toBe(a);
+    }
+    expect(t.auditAction("account.share")).toBe("Shared account");
+    expect(de.auditAction("account.unshare")).toBe("Freigabe beendet");
+  });
   it("words every action and falls back to the name", () => {
     expect(t.auditAction("message.open")).not.toBe("message.open");
     expect(t.auditAction("data.fill_change")).toBe("Changed import from IMAP");

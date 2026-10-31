@@ -11,7 +11,7 @@ import { minWidth, step, type SidebarLayout } from "./sidebarLayout";
 import { decimal } from "./format";
 import type { AccountsState } from "./useAccounts";
 import type { ViewState } from "./urlState";
-import type { Account } from "./api";
+import { accountLabel, mailAccounts, type MailAccount } from "./mailAccounts";
 import { buildFolderTree, subtreeMessages, type FolderNode } from "./folderTree";
 import type { CollapsedState } from "./sidebarState";
 
@@ -63,6 +63,8 @@ function Label({ name, count, title, countTitle }: { name: string; count?: numbe
 
 export function FolderTree({ state, accounts, select, show, collapsed, onCollapse, collapseRef, controls, onClose }: Props) {
   const { data, error } = accounts;
+  // Own accounts, then those shared with the user (#389).
+  const list = data ? mailAccounts(data) : [];
   const mail = state.view === "" && state.gone !== "1";
   const ids = nodeIds(useId());
 
@@ -75,19 +77,19 @@ export function FolderTree({ state, accounts, select, show, collapsed, onCollaps
     if (!state.account || !state.folder || !data) return;
     const selection = `${state.account}\0${state.folder}`;
     if (revealed.current === selection) return;
-    if (!data.accounts.some((a) => a.name === state.account && a.folders.some((f) => f.name === state.folder))) return;
+    if (!mailAccounts(data).some((a) => a.key === state.account && a.folders.some((f) => f.name === state.folder))) return;
     revealed.current = selection;
     reveal(state.account, state.folder);
   }, [state.account, state.folder, data, reveal]);
 
-  const selectedAccount = mail ? data?.accounts.find((a) => a.name === state.account) : undefined;
+  const selectedAccount = mail ? list.find((a) => a.key === state.account) : undefined;
   const selected = !selectedAccount
     ? ""
     : state.folder
-      ? ids.folder(selectedAccount.name, state.folder)
+      ? ids.folder(selectedAccount.key, state.folder)
       : selectedAccount.folders.length
-        ? ids.all(selectedAccount.name)
-        : ids.account(selectedAccount.name);
+        ? ids.all(selectedAccount.key)
+        : ids.account(selectedAccount.key);
 
   return (
     <nav aria-label={t.accountsAndFolders} className="folder-tree">
@@ -118,7 +120,7 @@ export function FolderTree({ state, accounts, select, show, collapsed, onCollaps
           </IconButton>
         )}
       </div>
-      {data && data.accounts.some((a) => a.folders.length > 0) && (
+      {list.some((a) => a.folders.length > 0) && (
         <div className="folder-tree__actions">
           <Button kind="ghost" size="sm" disabled={!collapsed.canCollapse} onClick={collapsed.collapseAll}>
             {t.collapseAll}
@@ -130,7 +132,7 @@ export function FolderTree({ state, accounts, select, show, collapsed, onCollaps
       )}
       {!data && !error && <SkeletonText className="folder-tree__skeleton" paragraph lineCount={5} />}
       {error && !data && <p className="folder-tree__note app-text-error">{t.loadAccountsFailed(error)}</p>}
-      {data && data.accounts.length === 0 && (
+      {data && list.length === 0 && (
         <div className="folder-tree__note">
           <p className="app-text-secondary">{t.noAccounts}</p>
           {/* The mail view's only primary; other views have their own. */}
@@ -139,13 +141,13 @@ export function FolderTree({ state, accounts, select, show, collapsed, onCollaps
           </Button>
         </div>
       )}
-      {data && data.accounts.length > 0 && (
+      {list.length > 0 && (
         // Controlled: the selection follows the URL, and the expanded nodes
         // follow sidebarState (saved per user).
         <FeatureFlags enableTreeviewControllable>
           <TreeView className="folder-tree__tree" label={t.accountsAndFolders} hideLabel size="xs" selected={selected ? [selected] : []} active={selected}>
-            {data.accounts.map((a) => (
-              <AccountNode key={a.name} a={a} ids={ids} state={state} mail={mail} select={select} collapsed={collapsed} />
+            {list.map((a) => (
+              <AccountNode key={a.key} a={a} ids={ids} state={state} mail={mail} select={select} collapsed={collapsed} />
             ))}
           </TreeView>
         </FeatureFlags>
@@ -163,10 +165,10 @@ type Ids = ReturnType<typeof nodeIds>;
  */
 const isEnter = (e: SyntheticEvent) => e.type === "keydown" && (e as KeyboardEvent).key === "Enter";
 
-function AccountNode({ a, ids, state, mail, select, collapsed }: { a: Account; ids: Ids; state: ViewState; mail: boolean; select: Props["select"]; collapsed: CollapsedState }) {
-  const open = !collapsed.isCollapsed(a.name, "");
-  const id = ids.account(a.name);
-  const selectedHere = mail && state.account === a.name;
+function AccountNode({ a, ids, state, mail, select, collapsed }: { a: MailAccount; ids: Ids; state: ViewState; mail: boolean; select: Props["select"]; collapsed: CollapsedState }) {
+  const open = !collapsed.isCollapsed(a.key, "");
+  const id = ids.account(a.key);
+  const selectedHere = mail && state.account === a.key;
   const nodes = a.folders.length ? buildFolderTree(a.folders, a.kind) : [];
   return (
     <TreeNode
@@ -175,36 +177,40 @@ function AccountNode({ a, ids, state, mail, select, collapsed }: { a: Account; i
       className={selectedHere && !open && a.folders.length ? "folder-tree__node--within" : undefined}
       label={<AccountLabel a={a} />}
       isExpanded={open}
-      onToggle={() => collapsed.toggle(a.name, "")}
-      onSelect={() => select(a.name, "")}
+      onToggle={() => collapsed.toggle(a.key, "")}
+      onSelect={() => select(a.key, "")}
     >
       {nodes.length > 0 && [
         <TreeNode
           key="\0all"
-          id={ids.all(a.name)}
-          aria-labelledby={`${ids.all(a.name)}__label`}
+          id={ids.all(a.key)}
+          aria-labelledby={`${ids.all(a.key)}__label`}
           label={<Label name={t.allFolders} />}
           isExpanded
-          onSelect={() => select(a.name, "")}
+          onSelect={() => select(a.key, "")}
         />,
-        ...nodes.map((n) => <FolderItem key={n.path} node={n} account={a.name} ids={ids} selected={selectedHere ? state.folder : null} select={select} collapsed={collapsed} />),
+        ...nodes.map((n) => <FolderItem key={n.path} node={n} account={a.key} ids={ids} selected={selectedHere ? state.folder : null} select={select} collapsed={collapsed} />),
       ]}
     </TreeNode>
   );
 }
 
-/** The account's name with its state: syncing or importing, removed, imported, receiving, disabled, failing. */
-function AccountLabel({ a }: { a: Account }) {
+/**
+ * The account's name with its state: syncing or importing, removed,
+ * imported, receiving, disabled, failing. A shared account is named with
+ * its owner, "info · anna" (#389).
+ */
+function AccountLabel({ a }: { a: MailAccount }) {
   const states: { text: string; title?: string }[] = [];
-  if (a.sync.state !== "idle") states.push({ text: a.kind !== "imap" ? t.importing : t.syncing });
+  if (a.syncState !== "idle") states.push({ text: a.kind !== "imap" ? t.importing : t.syncing });
   if (a.removed) states.push({ text: t.removed });
   else if (a.kind === "import") states.push({ text: t.imported });
   else if (!a.enabled) states.push({ text: t.disabled });
   else if (a.kind === "smtp") states.push({ text: t.receiving, title: t.sourceCompleteHint });
-  const failing = a.sync.health === "failing";
+  const failing = a.health === "failing";
   return (
     <span className="folder-tree__label">
-      <span className="folder-tree__name folder-tree__name--account">{a.name}</span>
+      <span className="folder-tree__name folder-tree__name--account">{accountLabel(a)}</span>
       {states.map((s) => (
         <Fragment key={s.text}>
           {" "}
@@ -416,9 +422,9 @@ function SidebarRail({ state, accounts, select, controls, expandRef, onExpand }:
       </IconButton>
       {/* Only the accounts scroll, so the expand button stays reachable with many of them. */}
       <ul className="folder-rail__accounts">
-        {accounts.data?.accounts.map((a) => (
-          <li key={a.name}>
-            <RailAccount a={a} selected={mail && state.account === a.name} select={select} />
+        {(accounts.data ? mailAccounts(accounts.data) : []).map((a) => (
+          <li key={a.key}>
+            <RailAccount a={a} selected={mail && state.account === a.key} select={select} />
           </li>
         ))}
       </ul>
@@ -427,29 +433,29 @@ function SidebarRail({ state, accounts, select, controls, expandRef, onExpand }:
 }
 
 /** The state texts of an account for the rail, in reading order. */
-export function railState(a: Account): string[] {
+export function railState(a: MailAccount): string[] {
   const out: string[] = [];
-  if (a.sync.state !== "idle") out.push(a.kind !== "imap" ? t.importing : t.syncing);
+  if (a.syncState !== "idle") out.push(a.kind !== "imap" ? t.importing : t.syncing);
   if (a.removed) out.push(t.removed);
   else if (!a.enabled) out.push(t.disabled);
-  if (a.sync.health === "failing") out.push(t.railFailing);
-  else if (a.sync.health === "stale") out.push(t.railStale);
+  if (a.health === "failing") out.push(t.railFailing);
+  else if (a.health === "stale") out.push(t.railStale);
   return out;
 }
 
-function RailAccount({ a, selected, select }: { a: Account; selected: boolean; select: (account: string, folder: string) => void }) {
-  const label = [a.name, ...railState(a)].join(", ");
+function RailAccount({ a, selected, select }: { a: MailAccount; selected: boolean; select: (account: string, folder: string) => void }) {
+  const label = [accountLabel(a), ...railState(a)].join(", ");
   const off = a.removed || !a.enabled;
   const cls = ["folder-rail__account", selected ? "folder-rail__account--selected" : "", off ? "folder-rail__account--off" : ""].filter(Boolean).join(" ");
   return (
-    <button type="button" className={cls} aria-label={label} title={label} aria-current={selected ? "true" : undefined} onClick={() => select(a.name, "")}>
+    <button type="button" className={cls} aria-label={label} title={label} aria-current={selected ? "true" : undefined} onClick={() => select(a.key, "")}>
       <span aria-hidden>{railLabel(a.name)}</span>
-      {a.sync.state !== "idle" && (
+      {a.syncState !== "idle" && (
         <span aria-hidden className="folder-rail__busy">
           ↻
         </span>
       )}
-      {a.sync.health !== "ok" && <span aria-hidden className={`folder-rail__dot folder-rail__dot--${a.sync.health}`} />}
+      {a.health !== "ok" && <span aria-hidden className={`folder-rail__dot folder-rail__dot--${a.health}`} />}
     </button>
   );
 }

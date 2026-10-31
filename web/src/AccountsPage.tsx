@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import {
   Accordion,
   AccordionItem,
@@ -15,15 +15,16 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  Tag,
 } from "@carbon/react";
 import { Add } from "@carbon/icons-react";
-import { accountsApi, type Account, type AccountsResponse } from "./api";
+import { accountsApi, type Account, type AccountsResponse, type SharedAccount } from "./api";
 import { AccountDetail } from "./AccountDetail";
 import { PurgeDialog, PurgeProgress } from "./AccountPurge";
 import { isPlainClick } from "./clicks";
 import { DangerModal } from "./DangerModal";
 import { FillForm } from "./FillPanel";
-import { formatCount, formatEvery, formatInterval } from "./format";
+import { formatCount, formatEvery, formatInterval, relativeTime } from "./format";
 import { t } from "./i18n";
 import { ViewFallback } from "./lazyView";
 import { ErrorText, isBusy, lastActivity, messageCount, NewAccount, StateTags, syncableCount, TypeTag, usePurgeCancelled } from "./accountParts";
@@ -41,6 +42,8 @@ interface Props {
   renamed: (from: string, to: string) => void;
   /** Lists an account's messages that are no longer on its server. */
   showGone: (account: string) => void;
+  /** Lists an account's mail in the mail view, by its account= key (owner/name for a shared one). */
+  showAccount: (account: string) => void;
 }
 
 /** A confirmation the page asks for in a danger Modal. */
@@ -65,7 +68,7 @@ const hrefOf = (patch: Partial<ViewState> = {}) => formatState({ ...parseState("
  * is in the URL, so Back and reload work; a page for an account that does
  * not exist (any more) returns to the list.
  */
-export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
+export function AccountsPage({ accounts, admin, renamed, showGone, showAccount }: Props) {
   const { data, error, reload } = accounts;
   const [state, update] = useViewState();
   const page = pageOf(state);
@@ -201,6 +204,7 @@ export function AccountsPage({ accounts, admin, renamed, showGone }: Props) {
         }}
         openImport={(name) => go({ import: name })}
         add={() => go({ add: "1" })}
+        showAccount={showAccount}
         run={run}
         ask={ask}
         toggle={toggle}
@@ -361,6 +365,7 @@ interface ListProps {
   openSetup: (name: string) => void;
   openImport: (name: string) => void;
   add: () => void;
+  showAccount: (account: string) => void;
   run: (action: () => Promise<unknown>) => Promise<boolean>;
   ask: (kind: "remove" | "disable", account: Account) => void;
   toggle: (account: Account) => void;
@@ -430,7 +435,77 @@ function AccountList(p: ListProps) {
           </Accordion>
         </div>
       )}
+      {data && data.shared.length > 0 && <SharedTable accounts={data.shared} show={p.showAccount} />}
     </>
+  );
+}
+
+/** The newest sync of a shared account's folders, the owner's sync times (decision 15); null before any. */
+function lastSynced(a: SharedAccount): string | null {
+  let last: string | null = null;
+  for (const f of a.folders) if (f.lastSyncedAt && (!last || f.lastSyncedAt > last)) last = f.lastSyncedAt;
+  return last;
+}
+
+/**
+ * The accounts other users shared with the viewer (#389): name, owner, type,
+ * messages, the last sync and the removed tag, and no menu, because only
+ * the owner manages them. The name opens the account's mail
+ * (?account=owner/name).
+ */
+function SharedTable({ accounts, show }: { accounts: SharedAccount[]; show: (key: string) => void }) {
+  const s = settingsText();
+  const id = useId();
+  return (
+    <section className="page__section" aria-labelledby={id}>
+      <h2 id={id} className="type-heading-03 app-page-title">
+        {t.sharedWithYou}
+      </h2>
+      <p className="app-text-secondary">{t.sharedWithYouNote}</p>
+      <TableContainer className="accounts-table app-table">
+        <Table aria-label={t.sharedWithYou} size="lg">
+          <TableHead>
+            <TableRow>
+              <TableHeader>{t.accountSection}</TableHeader>
+              <TableHeader>{t.colOwner}</TableHeader>
+              <TableHeader className="app-wide-only">{s.colType}</TableHeader>
+              <TableHeader className="app-wide-only">{t.messages}</TableHeader>
+              <TableHeader className="app-wide-only">{s.colLastActivity}</TableHeader>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {accounts.map((a) => {
+              const count = messageCount(a);
+              const synced = a.kind === "imap" ? lastSynced(a) : null;
+              return (
+                <TableRow key={a.key}>
+                  <TableHeader scope="row">
+                    <AppLink href={formatState({ ...parseState(""), account: a.key })} go={() => show(a.key)} className="accounts-table__name">
+                      {a.name}
+                    </AppLink>
+                    {a.removed && (
+                      <>
+                        {" "}
+                        <Tag size="sm" type="gray">
+                          {t.removed}
+                        </Tag>
+                      </>
+                    )}
+                    <span className="accounts-table__more app-narrow-only app-text-secondary app-text-small">{t.messageCount(count, formatCount(count))}</span>
+                  </TableHeader>
+                  <TableCell>{a.owner}</TableCell>
+                  <TableCell className="app-wide-only">
+                    <TypeTag account={a} />
+                  </TableCell>
+                  <TableCell className="app-wide-only app-tabular">{formatCount(count)}</TableCell>
+                  <TableCell className="app-wide-only">{synced ? t.sharedLastSync(relativeTime(synced)) : ""}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </section>
   );
 }
 

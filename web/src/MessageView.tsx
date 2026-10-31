@@ -161,7 +161,7 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
       <dt>{t.foundIn}</dt>
       <dd className="message__tags">
         {msg.locations.map((l) => (
-          <LocationTag key={`${l.account}/${l.folder}/${l.uid}/${l.superseded}`} l={l} />
+          <LocationTag key={`${l.owner ?? ""}/${l.account}/${l.folder}/${l.uid}/${l.superseded}`} l={l} />
         ))}
       </dd>
       {msg.locations.length > 0 && (

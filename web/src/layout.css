@@ -1804,6 +1804,35 @@ select,
   flex: 1;
 }
 
+/* An account's shares (#389): a row per user with Remove, then the share field. */
+.account-shares {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.account-shares__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+}
+.account-shares__form {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-inline-size: 28rem;
+}
+.account-shares__form > .cds--form-item {
+  flex: 1;
+}
+/* The button lines up with the field, under its label. */
+.account-shares__form > .cds--btn {
+  margin-block-start: 1.5rem;
+}
+
 /* The complete deletion. */
 .purge {
   display: flex;

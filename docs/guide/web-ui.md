@@ -33,7 +33,9 @@ labels when you point at it or move the focus into it.
   account, *failing*, *removed*, *disabled* or *imported*, and *syncing*
   while an IMAP account syncs (*importing* while mail is imported into
   another account). **All folders** under an account lists all of
-  its mail. Once a [reconcile](./syncing#reconcile) found messages deleted
+  its mail. Accounts other users [shared](./users#shared-accounts) with you
+  come after your own, named with their owner, for example `info · anna`;
+  they never show a sync state, which is the owner's business. Once a [reconcile](./syncing#reconcile) found messages deleted
   on all your servers, **Only in archive** in the navigation lists them,
   with their number. In every list such a message carries the tag *Only in
   archive*, also inside a conversation.
@@ -201,7 +203,9 @@ clickable and open in a new tab.
 
 <!-- screenshot: a plain-text reply with an indented quote, a folded older quote and a signature -->
 
-**Found in** (under **Details**) lists every folder that holds the message. For a copy an smtp
+**Found in** (under **Details**) lists every folder that holds the message,
+in your accounts and in accounts shared with you; a shared account's folder
+names its owner, for example `info (anna) / INBOX`. For a copy an smtp
 account received, an **Envelope** section shows the sender and recipients the
 mail server delivered it to, BCC included; for a copy it imported from IMAP
 ([fill](./journaling#bring-in-the-mail-from-before-journaling)), an **Origin**

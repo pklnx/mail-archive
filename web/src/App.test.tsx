@@ -15,14 +15,14 @@ function account(name: string, folders: Folder[]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders, goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
   };
 }
 
 const accounts: AccountsResponse = {
   accounts: [account("work", [f("INBOX", 5), f("Sent", 2)])],
-  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
+  manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 };
 
 const user = (admin = false): User => ({ name: "alice", admin, mustChangePassword: false, twoFactorEnabled: false, twoFactorRequired: false, language: "auto", locale: "auto" });
@@ -409,6 +409,21 @@ describe("desktop navigation (lg and up)", () => {
     key(search, "g");
     key(search, "a");
     expect(window.location.search).toBe("?account=work");
+  });
+});
+
+describe("a shared account in the mail view (#389)", () => {
+  afterEach(() => {
+    accounts.shared = [];
+  });
+  it("lists it by owner/name and names it with its owner in the search field", async () => {
+    screenWidth(true);
+    accounts.shared = [{ key: "anna/work", name: "work", owner: "anna", kind: "imap", enabled: true, removed: false, folders: [f("INBOX", 3)] }];
+    window.history.replaceState(null, "", "/?account=anna%2Fwork");
+    await renderApp();
+    expect(await screen.findByPlaceholderText(t.searchIn(t.sharedName("work", "anna")))).toBeTruthy();
+    const fetches = vi.mocked(globalThis.fetch).mock.calls.map(([p]) => String(p));
+    expect(fetches.some((p) => p.startsWith("/api/messages?") && new URLSearchParams(p.split("?")[1]).get("account") === "anna/work")).toBe(true);
   });
 });
 
