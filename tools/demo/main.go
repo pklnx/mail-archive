@@ -60,6 +60,13 @@ const (
 	twoFactorSecret   = "KRSXG5BAKRSXG5BAKRSXG5BAKRSXG5BA" //nolint:gosec // public demo login
 	lockedName        = "lee"
 	lockedPassword    = "lee-password" //nolint:gosec // public demo login
+	// Shared accounts (#389): pat owns the account team, and the demo admin
+	// shares personal with pat; jo is a reader without accounts, for the
+	// end-to-end test of sharing.
+	ownerName      = "pat"
+	ownerPassword  = "pat-password" //nolint:gosec // public demo login
+	readerName     = "jo"
+	readerPassword = "jo-password" //nolint:gosec // public demo login
 )
 
 func main() {
@@ -144,7 +151,7 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	syncer := &archive.Syncer{Store: st, Blobs: blobs, Sealer: sealer, Logger: log, ReconcileInterval: 24 * time.Hour}
 	var reconcile []*store.Account
 	for _, u := range users {
-		if u.spare {
+		if u.spare || u.owner != "" {
 			continue
 		}
 		a := &store.Account{
@@ -229,6 +236,9 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	if err := e2eUsers(ctx, st, sealer, key); err != nil {
 		return err
 	}
+	if err := shareUsers(ctx, st, sealer, syncer, admin, host, portNum); err != nil {
+		return err
+	}
 
 	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
@@ -292,6 +302,49 @@ func e2eUsers(ctx context.Context, st *store.Store, sealer *crypto.Sealer, key [
 		return err
 	}
 	return st.SetUserLocked(ctx, lee.ID, true)
+}
+
+// shareUsers creates pat with the account team and jo without accounts,
+// and shares the admin's personal with pat (#389): the docs screenshots
+// show it on personal's page and on pat's Accounts page.
+func shareUsers(ctx context.Context, st *store.Store, sealer *crypto.Sealer, syncer *archive.Syncer, admin *store.User, host string, port int) error {
+	hasher := auth.NewHasher(auth.DefaultParams)
+	hash, err := hasher.Hash(ctx, ownerPassword)
+	if err != nil {
+		return err
+	}
+	pat, err := st.CreateUser(ctx, ownerName, hash, false)
+	if err != nil {
+		return err
+	}
+	if hash, err = hasher.Hash(ctx, readerPassword); err != nil {
+		return err
+	}
+	if _, err := st.CreateUser(ctx, readerName, hash, false); err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u.owner != ownerName {
+			continue
+		}
+		a := &store.Account{
+			Name: u.account, Host: host, Port: port, TLSMode: store.TLSModeNone,
+			Username: u.login, Enabled: true, OwnerID: &pat.ID,
+		}
+		seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, u.password) }
+		if err := st.CreateAccountSealed(ctx, a, seal); err != nil {
+			return err
+		}
+		if res := syncer.SyncAccount(ctx, a); res.Err != nil {
+			return fmt.Errorf("sync %s: %w", u.account, res.Err)
+		}
+	}
+	personal, err := st.GetOwnedAccount(ctx, admin.ID, "personal")
+	if err != nil {
+		return err
+	}
+	_, err = st.ShareAccount(ctx, personal.Ref(), pat.ID)
+	return err
 }
 
 // journal creates an smtp account with copies the mail server delivered,
@@ -373,6 +426,8 @@ type demoUser struct {
 	// spare is a login on the IMAP server that is not an account; the
 	// end-to-end tests add it through the UI.
 	spare bool
+	// owner is the user who owns the account; empty for the demo admin.
+	owner string
 }
 
 var users = []demoUser{
@@ -391,6 +446,11 @@ var users = []demoUser{
 		account: "old-provider", login: "alex@oldmail.example", password: "demo",
 		mailboxes: []string{"INBOX"},
 		removed:   true,
+	},
+	{
+		account: "team", login: "pat@team.example", password: "demo",
+		mailboxes: []string{"INBOX"},
+		owner:     ownerName,
 	},
 	{
 		account: "spare", login: "robin@example.net", password: "demo",
@@ -685,6 +745,11 @@ Content-Transfer-Encoding: base64
 			"Your invoice of $4.51 for server web-1 is available.")},
 		{"work", "Sent", plain("Alex Morgan <alex.morgan@work.example>", "Team <team@work.example>", "Holiday photos", ago(5, 0),
 			"Here are the photos from Italy!")},
+		// pat's account; only the kickoff mail has the word "moodboard" (web/e2e/accounts.spec.ts).
+		{"team", "INBOX", plain("Mia Park <mia@team.example>", "Pat Kim <pat@team.example>", "Spring campaign kickoff", ago(2, 3),
+			"Hi Pat,\n\nthe kickoff is on Monday. I attached the moodboard to the shared drive.\n\nMia")},
+		{"team", "INBOX", plain("Print Studio <hello@print.example>", "Pat Kim <pat@team.example>", "Proofs for the flyers", ago(4, 1),
+			"Hello Pat,\n\nthe proofs for the flyers are ready for your review.\n\nPrint Studio")},
 		{"old-provider", "INBOX", plain("Welcome Team <welcome@oldmail.example>", "alex@oldmail.example", "Welcome to Oldmail", ago(900, 0),
 			"Thanks for signing up. Your mailbox is ready.")},
 	}

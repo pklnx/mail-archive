@@ -24,11 +24,11 @@ const accounts: AccountsResponse = {
       name: "work", kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
       includedFolders: [], excludedFolders: [], syncInterval: "default", goneMessages: 0, lastReconciledAt: null,
       folders: [{ name: "INBOX", delimiter: "/", messages: 5, lastSyncedAt: null, lastReconciledAt: null }],
-      addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+      addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
       sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
     },
   ],
-  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
+  manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 };
 const user: User = { name: "alice", admin: false, mustChangePassword: false, twoFactorEnabled: false, twoFactorRequired: false, language: "auto", locale: "auto" };
 

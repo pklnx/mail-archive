@@ -4,8 +4,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountsResponse } from "./api";
 import { ancestorPaths, buildFolderTree, nodePaths, parentPaths } from "./folderTree";
+import { mailAccounts } from "./mailAccounts";
 
-/** Collapsed node paths per account name; "" is the account itself. */
+/** Collapsed node paths per account key (the name, owner/name for a shared one); "" is the account itself. */
 export type Collapsed = Record<string, string[]>;
 
 const key = (user: string) => `mail-archive.sidebar.${user}`;
@@ -54,7 +55,7 @@ export function toggle(c: Collapsed, account: string, path: string): Collapsed {
 /** Expands the account and the nodes above a folder. An empty folder changes nothing. */
 export function reveal(c: Collapsed, data: AccountsResponse, account: string, folder: string): Collapsed {
   if (!folder || !c[account]) return c;
-  const a = data.accounts.find((x) => x.name === account);
+  const a = mailAccounts(data).find((x) => x.key === account);
   if (!a) return c;
   const open = new Set(["", ...ancestorPaths(a.folders, folder)]);
   const paths = c[account].filter((p) => !open.has(p));
@@ -74,7 +75,7 @@ export function prune(c: Collapsed, data: AccountsResponse): Collapsed {
   const out: Collapsed = {};
   let changed = false;
   for (const [account, paths] of Object.entries(c)) {
-    const a = data.accounts.find((x) => x.name === account);
+    const a = mailAccounts(data).find((x) => x.key === account);
     const known = new Set(a ? ["", ...nodePaths(buildFolderTree(a.folders))] : []);
     const kept = paths.filter((p) => known.has(p));
     if (kept.length !== paths.length) changed = true;
@@ -86,8 +87,8 @@ export function prune(c: Collapsed, data: AccountsResponse): Collapsed {
 /** Every account with folders and every folder node with children. */
 export function collapseAll(data: AccountsResponse): Collapsed {
   const out: Collapsed = {};
-  for (const a of data.accounts) {
-    if (a.folders.length) out[a.name] = ["", ...parentPaths(buildFolderTree(a.folders))];
+  for (const a of mailAccounts(data)) {
+    if (a.folders.length) out[a.key] = ["", ...parentPaths(buildFolderTree(a.folders))];
   }
   return out;
 }

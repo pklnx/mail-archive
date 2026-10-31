@@ -20,6 +20,7 @@ import { useCollapsed } from "./sidebarState";
 import { railWidth, useSidebarCap, useSidebarLayout } from "./sidebarLayout";
 import { useViewState } from "./urlState";
 import { t } from "./i18n";
+import { labelOfKey } from "./mailAccounts";
 import { LazyView, lazyNamed } from "./lazyView";
 import type { User } from "./api";
 
@@ -163,13 +164,15 @@ export function App({ user, logout, logoutError }: Props) {
     } else if (!p.nextNeedsMore) setAdvance(false);
   }, [advance, nav, state.m, go]);
 
+  // The selected account as the user reads it: "info · anna" for a shared one (#389).
+  const accountName = state.account ? labelOfKey(accounts.data, state.account) : "";
   // The list's title on phones: where the user is.
   const place =
     state.gone === "1"
       ? { title: t.onlyInArchive, sub: "" }
       : state.folder
-        ? { title: state.folder, sub: state.account }
-        : { title: state.account || t.allMail, sub: "" };
+        ? { title: state.folder, sub: accountName }
+        : { title: accountName || t.allMail, sub: "" };
   const setGroup = (on: boolean) => update({ group: on ? "1" : "" }, { replace: true });
   const show = (view: string) => {
     update({ view, m: "" });
@@ -480,6 +483,7 @@ export function App({ user, logout, logoutError }: Props) {
                 if (state.account === from) update({ account: to }, { replace: true });
               }}
               showGone={(account) => update({ account, folder: "", gone: "1", m: "", view: "" })}
+              showAccount={(account) => update({ account, folder: "", gone: "", m: "", view: "" })}
             />
           </LazyView>
         </main>
@@ -549,7 +553,7 @@ export function App({ user, logout, logoutError }: Props) {
                 labelText={t.searchMail}
                 closeButtonLabelText={t.carbon.clearSearch}
                 placeholder={
-                  state.gone === "1" ? t.searchIn(t.onlyInArchive) : state.account ? t.searchIn(state.folder || state.account) : t.searchAll
+                  state.gone === "1" ? t.searchIn(t.onlyInArchive) : state.account ? t.searchIn(state.folder || accountName) : t.searchAll
                 }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}

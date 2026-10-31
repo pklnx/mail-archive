@@ -8,13 +8,13 @@ function account(name: string, folders: string[]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: folders.map(f), goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: 0, failingSince: null, health: "ok", syncEvery: null, nextAt: null },
   };
 }
 
 const data = (...accounts: Account[]): AccountsResponse => ({
-  accounts, manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
+  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: null,
 });
 
 afterEach(() => {

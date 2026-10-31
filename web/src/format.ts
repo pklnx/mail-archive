@@ -30,12 +30,14 @@ const relFmt = cached("relative", (l) => new Intl.RelativeTimeFormat(l, { numeri
  */
 export function locationLabel(l: {
   account: string;
+  /** The owner of a shared account (#389): "info (anna) / INBOX". */
+  owner?: string | null;
   folder: string;
   superseded: boolean;
   goneAt?: string | null;
   lastSeenAt?: string;
 }): string {
-  const where = `${l.account} / ${l.folder}`;
+  const where = `${l.owner ? t.sharedLocation(l.account, l.owner) : l.account} / ${l.folder}`;
   if (l.superseded) return `${where} (${t.renumbered})`;
   if (l.goneAt) return `${where} (${t.goneFromServer(l.lastSeenAt ? dateFmt().format(new Date(l.lastSeenAt)) : "")})`;
   return where;

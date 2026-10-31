@@ -80,6 +80,9 @@ describe("originText", () => {
 describe("locationLabel", () => {
   it("marks locations from before a renumbering", () => {
     expect(locationLabel({ account: "work", folder: "INBOX", superseded: false })).toBe("work / INBOX");
+    // A shared account's (#389), with its owner.
+    expect(locationLabel({ account: "work", owner: "anna", folder: "INBOX", superseded: false })).toBe("work (anna) / INBOX");
+    expect(locationLabel({ account: "work", owner: null, folder: "INBOX", superseded: false })).toBe("work / INBOX");
     expect(locationLabel({ account: "work", folder: "INBOX", superseded: true })).toBe(`work / INBOX (${t.renumbered})`);
   });
   it("marks locations no longer on the server, with the last time seen", () => {

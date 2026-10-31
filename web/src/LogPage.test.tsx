@@ -209,6 +209,28 @@ describe("LogPage", () => {
     expect(within(rows[1]!).queryByText(t.logCLI)).toBeNull();
   });
 
+  it("shows a non-admin the Who column for other users' reads of a shared account, without their client (#389)", async () => {
+    const shared = [
+      entry("message.page", "00:20", {
+        user: "pat", viaShare: true, actor: "api_key",
+        details: { search: true, via_accounts: [{ id: 3, owner: 2, key: "alice/work", n: 2 }] },
+      }),
+      ...page1,
+    ];
+    vi.mocked(globalThis.fetch).mockImplementation(async () => new Response(JSON.stringify({ entries: shared }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    render(<LogPage admin={false} open={() => {}} />);
+    await screen.findByText("Invoice 42");
+    const rows = screen.getAllByRole("row");
+    expect(within(rows[0]!).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([t.logTime, t.logAction, t.logWho, t.logTarget, t.logClient]);
+    const pat = within(rows[1]!);
+    expect(pat.getAllByRole("cell")[2]!.textContent).toBe("pat");
+    expect(pat.getByText(t.logShared("pat", "search", 2, "work"))).toBeTruthy();
+    // The actor, not the key's name (decision 16).
+    expect(pat.getByText(t.logSharedViaKey)).toBeTruthy();
+    expect(pat.getAllByRole("cell")[4]!.textContent).toBe("");
+    expect(screen.getByText(t.logOwnNote)).toBeTruthy();
+  });
+
   it("shows the table skeleton without the Who column to a non-admin", () => {
     vi.mocked(globalThis.fetch).mockImplementation(() => new Promise<Response>(() => {}));
     render(<LogPage admin={false} open={() => {}} />);

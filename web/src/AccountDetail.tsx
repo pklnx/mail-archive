@@ -1,9 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Button, InlineLoading, MenuItem, MenuItemDivider } from "@carbon/react";
-import { accountsApi, type Account, type AccountsResponse } from "./api";
+import { Button, InlineLoading, MenuItem, MenuItemDivider, TextInput } from "@carbon/react";
+import { accountsApi, ApiError, type Account, type AccountsResponse } from "./api";
 import { PurgeDialog, PurgeProgress } from "./AccountPurge";
 import { FillSection } from "./FillPanel";
-import { formatCount, relativeTime } from "./format";
+import { day, formatCount, relativeTime } from "./format";
 import { t } from "./i18n";
 import {
   AccountForm,
@@ -329,7 +329,119 @@ export function AccountDetail(p: AccountDetailProps) {
           )}
         />
       )}
+      {/* smtp accounts cannot be shared (decision 2); a removed one only lists its shares, to end them. */}
+      {a.kind !== "smtp" && (!a.removed || a.sharedWith.length > 0) && <SharesSection account={a} reload={reload} />}
     </>
+  );
+}
+
+/** What the server's answer to a share means for the owner. */
+function shareError(err: unknown, user: string): string {
+  if (err instanceof ApiError && err.status === 404) return t.shareNoUser(user);
+  if (err instanceof ApiError && err.status === 400) return t.shareSelf;
+  return t.failed(err instanceof Error ? err.message : String(err));
+}
+
+/**
+ * Who may read the account's mail (#389): a row per user with Remove, and
+ * a field for the exact user name to share with (decision 9). Only the
+ * owner gets here, since the page is the owner's. A removed account keeps
+ * its shares and can end them, but share with no one new (decision 6).
+ * After Remove the focus goes to the field, or to the heading on a
+ * removed account.
+ */
+function SharesSection({ account: a, reload }: { account: Account; reload: () => void }) {
+  const id = useId();
+  const [user, setUser] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState("");
+  const heading = useRef<HTMLHeadingElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  const act = async (action: () => Promise<unknown>, ok: string, onError: (err: unknown) => string) => {
+    setBusy(true);
+    setError("");
+    setDone("");
+    try {
+      await action();
+      setDone(ok);
+      return true;
+    } catch (err) {
+      setError(onError(err));
+      return false;
+    } finally {
+      setBusy(false);
+      reload();
+    }
+  };
+  const share = async () => {
+    const name = user.trim();
+    if (!name) return;
+    if (await act(() => accountsApi.share(a.name, name), t.shareDone(name), (err) => shareError(err, name))) setUser("");
+  };
+  const unshare = async (name: string) => {
+    await act(() => accountsApi.unshare(a.name, name), t.unshareDone(name), (err) => t.failed(err instanceof Error ? err.message : String(err)));
+    (field.current ?? heading.current)?.focus();
+  };
+  return (
+    <section className="page__section" aria-labelledby={id}>
+      <h2 id={id} ref={heading} tabIndex={-1} className="type-heading-03 app-page-title">
+        {t.sharesTitle}
+      </h2>
+      <p className="app-text-secondary">{a.removed ? t.sharesRemovedNote : t.sharesNote}</p>
+      {a.sharedWith.length === 0 ? (
+        <p>{t.sharesNone}</p>
+      ) : (
+        <ul className="account-shares">
+          {a.sharedWith.map((sh) => (
+            <li key={sh.user} className="account-shares__row">
+              <span>
+                {sh.user} <span className="app-text-secondary">{t.sharesSince(day(sh.since))}</span>
+              </span>
+              <Button kind="ghost" size="sm" disabled={busy} aria-label={t.unshareLabel(sh.user)} onClick={() => void unshare(sh.user)}>
+                {t.remove}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!a.removed && (
+        <form
+          className="account-shares__form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void share();
+          }}
+        >
+          <TextInput
+            ref={field}
+            id={`${id}-user`}
+            labelText={t.userName}
+            value={user}
+            autoComplete="off"
+            invalid={error !== ""}
+            invalidText={error}
+            onChange={(e) => {
+              setUser(e.target.value);
+              setError("");
+            }}
+          />
+          <Button type="submit" kind="tertiary" size="md" disabled={busy || user.trim() === ""}>
+            {t.shareButton}
+          </Button>
+        </form>
+      )}
+      {a.removed && error && (
+        <p role="alert" className="app-text-error">
+          {error}
+        </p>
+      )}
+      {done && (
+        <p role="status" className="app-text-secondary">
+          {done}
+        </p>
+      )}
+    </section>
   );
 }
 

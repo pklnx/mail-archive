@@ -9,13 +9,13 @@ function acc(name: string, health: Account["sync"]["health"]): Account {
   return {
     name, kind: "imap", enabled: true, removed: false, purging: false, purge: null, host: "h", port: 993, tls: "tls", username: "u",
     includedFolders: [], excludedFolders: [], syncInterval: "default", folders: [], goneMessages: 0, lastReconciledAt: null,
-    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null,
+    addresses: [], lastReceivedAt: null, fill: null, fills: [], firstReceived: null, sharedWith: [],
     sync: { state: "idle", lastRun: null, failureStreak: health === "failing" ? 3 : 0, failingSince: null, health, syncEvery: null, nextAt: null },
   };
 }
 
 const data = (accounts: Account[], otherFailing?: number): AccountsResponse => ({
-  manage: true, syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: null, accounts, otherFailing,
+  manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: null, accounts, otherFailing,
 });
 
 const noop = () => {};

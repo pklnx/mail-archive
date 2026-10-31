@@ -117,16 +117,55 @@ export function targetLabel(e: AuditEntry): string {
   return e.target.type === "message" ? `${e.target.id.slice(0, 12)}…` : e.target.id;
 }
 
+/** The list entries: a search, a list without search parameters, a further page (#389). */
+const listActions = ["message.search", "message.list", "message.page"];
+
+/** A list's parameters: the search text quoted, then the others as key:value. */
+function listParams(d: Record<string, unknown>): string {
+  const q = typeof d.q === "string" ? d.q : "";
+  const rest = Object.entries(d)
+    .filter(([k, v]) => k !== "q" && typeof v === "string" && v !== "")
+    .map(([k, v]) => `${k}:${String(v)}`);
+  return [q ? `“${q}”` : "", ...rest].filter(Boolean).join(" ");
+}
+
+/** The viewer's accounts an entry of a shared read is about, by name ("demo/info" is the viewer's "info"), with n. */
+function viaAccounts(d: Record<string, unknown>): { name: string; n: number }[] {
+  const list = Array.isArray(d.via_accounts) ? (d.via_accounts as unknown[]) : [];
+  return list.flatMap((v) => {
+    if (!v || typeof v !== "object") return [];
+    const { key, n } = v as { key?: unknown; n?: unknown };
+    if (typeof key !== "string") return [];
+    return [{ name: key.slice(key.indexOf("/") + 1), n: typeof n === "number" ? n : 0 }];
+  });
+}
+
+/**
+ * The detail of another user's read of the viewer's shared account (#389,
+ * revision 2, R6): "pat's search showed 2 messages of info", from search
+ * and via_accounts. Search terms only on a named first page, the one entry
+ * that keeps them (decision 13); never on other lists, also if they came.
+ */
+function sharedDetail(e: AuditEntry): string {
+  const d = e.details;
+  const user = e.user ?? "";
+  const via = viaAccounts(d);
+  if (listActions.includes(e.action)) {
+    const named = e.action !== "message.page" && typeof d.account === "string";
+    // A first page is a search or a list by its action; a further page says so in search.
+    const kind = e.action === "message.search" || (e.action === "message.page" && d.search === true) ? "search" : "list";
+    return [named ? listParams(d) : "", ...via.map((a) => t.logShared(user, kind, a.n, a.name))].filter(Boolean).join("; ");
+  }
+  if (e.action === "message.conversation") return via.map((a) => t.logShared(user, "conversation", a.n, a.name)).join("; ");
+  return via.map((a) => t.logSharedIn(a.name)).join("; ");
+}
+
 /** The detail worth a glance: the search text, a login's method and reason, changed settings. */
 export function entryDetail(e: AuditEntry): string {
   const d = e.details;
-  if (e.action === "message.search") {
-    const q = typeof d.q === "string" ? d.q : "";
-    const rest = Object.entries(d)
-      .filter(([k, v]) => k !== "q" && typeof v === "string" && v !== "")
-      .map(([k, v]) => `${k}:${String(v)}`);
-    return [q ? `“${q}”` : "", ...rest].filter(Boolean).join(" ");
-  }
+  if (e.viaShare) return sharedDetail(e);
+  if (listActions.includes(e.action)) return listParams(d);
+  if ((e.action === "account.share" || e.action === "account.unshare") && typeof d.user === "string") return t.logShareWith(d.user);
   if (e.action.startsWith("auth.")) return [d.method, d.reason].filter((v) => typeof v === "string").join(", ");
   if (e.action === "profile.change" && Array.isArray(d.fields)) {
     return d.fields
@@ -223,6 +262,9 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
     ...names.map((n): Choice => ({ kind: "user", id: n, text: n })),
   ];
   const chosenWho = whoItems.filter((i) => (i.kind === "actor" ? filter.actors : filter.users).includes(i.id));
+  // Who: admins see everyone's entries; other users when the page has
+  // other users' reads of their shared accounts (#389).
+  const who = admin || entries.some((e) => e.viaShare);
 
   return (
     <div className="accounts-page">
@@ -276,8 +318,8 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
                 <TableRow>
                   <TableHeader>{t.logTime}</TableHeader>
                   <TableHeader>{t.logAction}</TableHeader>
-                  {/* Only admins see other users' entries; for the others the column would be empty (#310). */}
-                  {admin && <TableHeader>{t.logWho}</TableHeader>}
+                  {/* Without other users' entries the column would be empty (#310). */}
+                  {who && <TableHeader>{t.logWho}</TableHeader>}
                   <TableHeader>{t.logTarget}</TableHeader>
                   <TableHeader>{t.logClient}</TableHeader>
                 </TableRow>
@@ -291,6 +333,7 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
                       <EntryRow
                         entry={row.entry}
                         admin={admin}
+                        who={who}
                         open={open}
                         fold={
                           row.folded.length > 0 && (
@@ -308,7 +351,7 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
                         }
                       />
                       {isOpen &&
-                        row.folded.map((e) => <EntryRow key={e.id} id={`${folded}-${e.id}`} entry={e} admin={admin} open={open} nested />)}
+                        row.folded.map((e) => <EntryRow key={e.id} id={`${folded}-${e.id}`} entry={e} admin={admin} who={who} open={open} nested />)}
                     </Fragment>
                   );
                 })}
@@ -341,6 +384,7 @@ function EntryRow({
   id,
   entry: e,
   admin,
+  who: showWho,
   open,
   fold,
   nested = false,
@@ -348,6 +392,8 @@ function EntryRow({
   id?: string;
   entry: AuditEntry;
   admin: boolean;
+  /** The Who column is shown. */
+  who: boolean;
   open: (sha: string) => void;
   fold?: ReactNode;
   nested?: boolean;
@@ -355,7 +401,9 @@ function EntryRow({
   const target = targetLabel(e);
   const cli = e.actor === "cli";
   // Without the Who column (not an admin) the command line goes into the detail line.
-  const detail = [entryDetail(e), e.apiKey ? t.logViaKey(e.apiKey) : "", !admin && cli ? t.logCLI : ""].filter(Boolean);
+  // A shared read keeps the actor, not the key's name (decision 16).
+  const key = e.apiKey ? t.logViaKey(e.apiKey) : e.viaShare && e.actor === "api_key" ? t.logSharedViaKey : "";
+  const detail = [entryDetail(e), key, !admin && cli ? t.logCLI : ""].filter(Boolean);
   const failed = e.action === "auth.login_failed";
   const who = [e.user ?? "", cli ? t.logCLI : ""].filter(Boolean).join(" · ");
   const sha = e.target?.type === "message" && e.target.subject ? e.target.id : "";
@@ -368,7 +416,7 @@ function EntryRow({
           {fold}
         </span>
       </TableCell>
-      {admin && <TableCell>{who}</TableCell>}
+      {showWho && <TableCell>{who}</TableCell>}
       <TableCell className="log-table__target">
         {target &&
           (sha ? (

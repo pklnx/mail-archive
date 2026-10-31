@@ -78,9 +78,22 @@ async function loginOnce() {
   return session;
 }
 
+// pat from tools/demo: owns the account team and has the admin's personal
+// shared with them (#389). No 2FA, so a plain login.
+const shareOwner = { username: "pat", password: "pat-password" };
+async function loginAs(user) {
+  const ctx = await browser.newContext(contextOptions);
+  const res = await ctx.request.post(base + "/api/session", { data: user, headers: { Origin: base } });
+  if (!res.ok()) throw new Error(`login of ${user.username} failed: ${res.status()}`);
+  const state = await ctx.storageState();
+  await ctx.close();
+  return state;
+}
+
 // phone: a touch screen, so the UI shows its touch sizes (pointer: coarse).
-async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = false } = {}) {
-  const storageState = loggedIn ? await loginOnce() : undefined;
+// as: another user's login instead of the demo admin's.
+async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = false, as } = {}) {
+  const storageState = as ? await loginAs(as) : loggedIn ? await loginOnce() : undefined;
   const ctx = await browser.newContext({
     ...contextOptions,
     colorScheme,
@@ -283,6 +296,18 @@ for (const scheme of ["light", "dark"]) {
   await folders.getByRole("checkbox").first().waitFor();
   await folders.getByRole("button", { name: "Save folder selection" }).waitFor();
   await shot(p, "account-detail");
+  await p.context().close();
+}
+
+{
+  // pat's Accounts page: the own account team, and under it the account the
+  // demo admin shared with pat (#389).
+  const p = await page("light", desktop, { as: shareOwner });
+  await p.goto(base + "/?view=accounts");
+  const main = p.getByRole("main");
+  await main.getByRole("table", { name: "Shared with you" }).getByRole("link", { name: "personal" }).waitFor();
+  await main.getByRole("cell", { name: /^Last sync/ }).first().waitFor();
+  await shot(p, "accounts-shared");
   await p.context().close();
 }
 
