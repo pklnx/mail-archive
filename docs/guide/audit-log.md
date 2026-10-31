@@ -161,7 +161,8 @@ Two kinds of rows are folded, so that the list reads like what happened:
 page groups them. Reading the log writes no entry.
 
 The same entries come from `GET /api/audit` (see the
-[JSON API](../reference/api#audit-log)).
+[JSON API](../reference/api#audit-log)). The page counts its days in the
+browser's time zone; the API and `./ma audit` read a plain date as a UTC day.
 
 ## Writing it out
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, accountsApi, auditQuery, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
 
 describe("folderQuestion", () => {
   it("returns the folders the server asks about", () => {
@@ -201,5 +201,25 @@ describe("write responses", () => {
   it("still throws on a non-empty body that is not JSON", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>", { status: 202 }));
     await expect(accountsApi.sync("demo")).rejects.toBeInstanceOf(SyntaxError);
+  });
+});
+
+// The Log's From/To are local days; the request carries the instants of
+// local midnight, since inclusive, until the start of the day after To (#402).
+describe("auditQuery", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const filter = { since: "", until: "", group: "", who: "" };
+
+  it.each([
+    { tz: "Europe/Berlin", since: "2026-10-25", until: "2026-10-25", want: { since: "2026-10-24T22:00:00.000Z", until: "2026-10-25T23:00:00.000Z" }, day: "25 h" },
+    { tz: "Europe/Berlin", since: "2026-03-29", until: "2026-03-29", want: { since: "2026-03-28T23:00:00.000Z", until: "2026-03-29T22:00:00.000Z" }, day: "23 h" },
+    { tz: "Europe/Berlin", since: "", until: "2026-12-31", want: { until: "2026-12-31T23:00:00.000Z" }, day: "year end" },
+    { tz: "America/Los_Angeles", since: "2026-10-20", until: "", want: { since: "2026-10-20T07:00:00.000Z" }, day: "west of UTC" },
+    { tz: "America/Santiago", since: "2026-09-06", until: "", want: { since: "2026-09-06T04:00:00.000Z" }, day: "no midnight" },
+    { tz: "Europe/Berlin", since: "", until: "", want: {}, day: "no days" },
+  ])("$tz $since – $until ($day)", ({ tz, since, until, want }) => {
+    vi.stubEnv("TZ", tz);
+    const p = new URLSearchParams(auditQuery({ ...filter, since, until }));
+    expect(Object.fromEntries(p)).toEqual(want);
   });
 });
