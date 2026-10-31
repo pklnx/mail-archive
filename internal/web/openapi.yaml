@@ -1477,15 +1477,30 @@ paths:
           explode: true
         - name: user
           in: query
-          description: Admins only; a current user's name.
+          description: |
+            Admins only; a current user's name. Repeatable, up to 100 names;
+            empty values and repeats are ignored. Several `user` and `actor`
+            values form a union: an entry matches if its user is one of
+            `user` or its actor is one of `actor`. None of either means all.
           schema:
-            type: string
+            type: array
+            maxItems: 100
+            items:
+              type: string
+          style: form
+          explode: true
         - name: actor
           in: query
-          description: Admins only.
+          description: |
+            Admins only. Repeatable; combines with `user` as a union (see
+            `user`).
           schema:
-            type: string
-            enum: [session, api_key, cli]
+            type: array
+            items:
+              type: string
+              enum: [session, api_key, cli]
+          style: form
+          explode: true
         - name: cursor
           in: query
           description: "`nextCursor` of the previous page."
@@ -1519,13 +1534,13 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: "`user` or `actor` from a user who is not an admin."
+          description: "`user` or `actor` from a user who is not an admin, checked before the values themselves."
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "404":
-          description: "`user` names no user."
+          description: "A `user` value names no user."
           content:
             application/json:
               schema:

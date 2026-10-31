@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,5 +127,107 @@ func TestAuditPage(t *testing.T) {
 	}
 	for _, q := range []string{"since=yesterday", "until=2020-13-01", "since=2026-02-01&until=2026-01-01", "action=everything", "actor=root", "cursor=%21", "limit=501"} {
 		f.expect("GET", "/api/audit?"+q, nil, 400)
+	}
+}
+
+// user and actor repeat; an entry matches if its user is one of user or its
+// actor is one of actor. The checks run in the order 403, cap, actor, user
+// lookups, so a non-admin learns nothing about names.
+func TestAuditPageWho(t *testing.T) {
+	f := newAuthFixture(t)
+	ctx := context.Background()
+	f.addUser("admin", keyPassword, true)
+	alice := f.addUser("alice", keyPassword, false)
+	bob := f.addUser("bob", keyPassword, false)
+	keyID := int64(1)
+	for _, e := range []store.AuditEntry{
+		{Actor: store.ActorSession, Action: "message.open", UserID: &alice.ID, UserName: "alice"},
+		{Actor: store.ActorSession, Action: "message.open", UserID: &bob.ID, UserName: "bob"},
+		{Actor: store.ActorAPIKey, Action: "message.search", UserID: &bob.ID, UserName: "bob", APIKeyID: &keyID, APIKeyName: "script"},
+		{Actor: store.ActorCLI, Action: "data.backup"},
+	} {
+		if err := f.st.Audit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := f.as()
+	a.loginOK("alice", keyPassword)
+	f.loginOK("admin", keyPassword)
+
+	// Sorted user/actor/action of each row of an admin's query.
+	who := func(q string) string {
+		t.Helper()
+		var out []string
+		for _, e := range auditEntries(t, f.expect("GET", "/api/audit?"+q, nil, 200)) {
+			u, _ := e["user"].(string)
+			out = append(out, u+"/"+e["actor"].(string)+"/"+e["action"].(string))
+		}
+		slices.Sort(out)
+		return strings.Join(out, " ")
+	}
+	const (
+		aliceRows = "alice/session/auth.login alice/session/message.open"
+		bobRows   = "bob/api_key/message.search bob/session/message.open"
+		cliRow    = "/cli/data.backup"
+	)
+	for q, want := range map[string]string{
+		"user=alice":                           aliceRows,
+		"actor=cli":                            cliRow,
+		"user=alice&user=bob":                  aliceRows + " " + bobRows,
+		"user=alice&user=ALICE&user=":          aliceRows,
+		"user=alice&actor=cli":                 cliRow + " " + aliceRows,
+		"user=bob&actor=api_key":               bobRows,
+		"actor=cli&actor=api_key&actor=cli":    cliRow + " bob/api_key/message.search",
+		"user=alice&actor=api_key&action=read": "alice/session/message.open",
+		"user=&actor=":                         cliRow + " admin/session/auth.login " + aliceRows + " " + bobRows,
+	} {
+		if got := who(q); got != want {
+			t.Errorf("%s:\n got  %s\n want %s", q, got, want)
+		}
+	}
+
+	// Pages of 1 under a multi-value filter return every match once.
+	var ids []float64
+	cursor := ""
+	for range 10 {
+		out := f.expect("GET", "/api/audit?user=alice&user=bob&actor=cli&limit=1&cursor="+url.QueryEscape(cursor), nil, 200)
+		for _, e := range auditEntries(t, out) {
+			ids = append(ids, e["id"].(float64))
+		}
+		next, _ := out["nextCursor"].(string)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if len(ids) != 5 {
+		t.Fatalf("paged ids %v", ids)
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i] >= ids[i-1] {
+			t.Fatalf("not newest first or repeated: %v", ids)
+		}
+	}
+
+	names := func(n int) string {
+		vs := url.Values{}
+		for i := range n {
+			vs.Add("user", fmt.Sprintf("nobody%d", i))
+		}
+		return vs.Encode()
+	}
+	// Admins: an unknown name among known ones, the cap before any lookup,
+	// the actor check before any lookup.
+	f.expect("GET", "/api/audit?user=alice&user=nobody", nil, 404)
+	f.expect("GET", "/api/audit?"+names(100), nil, 404)
+	f.expect("GET", "/api/audit?"+names(101), nil, 400)
+	f.expect("GET", "/api/audit?actor=cli&actor=root", nil, 400)
+	f.expect("GET", "/api/audit?actor=root&user=nobody", nil, 400)
+	// Non-admins get 403 before anything else; empty values are ignored.
+	for _, q := range []string{"user=nobody", "user=alice&user=bob", "actor=root", names(101)} {
+		a.expect("GET", "/api/audit?"+q, nil, 403)
+	}
+	if rows := auditEntries(t, a.expect("GET", "/api/audit?user=&actor=", nil, 200)); len(rows) != 2 {
+		t.Fatalf("alice with empty values: %v", rows)
 	}
 }

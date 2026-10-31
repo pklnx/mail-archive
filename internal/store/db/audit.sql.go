@@ -187,8 +187,8 @@ LEFT JOIN LATERAL (
                   WHERE ml.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
 ) s ON true
 WHERE l.at >= $2 AND l.at < $3
-  AND ($4::bigint IS NULL OR l.user_id = $4)
-  AND ($5::text IS NULL OR l.actor = $5)
+  AND ((coalesce(cardinality($4::bigint[]), 0) = 0 AND coalesce(cardinality($5::text[]), 0) = 0)
+       OR l.user_id = ANY ($4::bigint[]) OR l.actor = ANY ($5::text[]))
   AND l.action LIKE ANY ($6::text[])
   AND ($7::timestamptz IS NULL OR (l.at, l.id) < ($7, $8::bigint))
 ORDER BY l.at DESC, l.id DESC
@@ -199,8 +199,8 @@ type ListAuditEntriesParams struct {
 	Viewer   int64
 	Since    time.Time
 	Until    time.Time
-	UserID   *int64
-	Actor    *string
+	UserIds  []int64
+	Actors   []string
 	Patterns []string
 	CursorAt *time.Time
 	CursorID int64
@@ -225,15 +225,17 @@ type ListAuditEntriesRow struct {
 }
 
 // A page of every user's entries in [since, until), newest first, for
-// admins; optionally one user's or one actor's. subject is the message's
-// subject only if the viewer has a location of it.
+// admins; optionally narrowed to the entries whose user is one of user_ids
+// or whose actor is one of actors (a union; both empty means all). coalesce
+// because pgx sends a nil slice as NULL. subject is the message's subject
+// only if the viewer has a location of it.
 func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]ListAuditEntriesRow, error) {
 	rows, err := q.db.Query(ctx, listAuditEntries,
 		arg.Viewer,
 		arg.Since,
 		arg.Until,
-		arg.UserID,
-		arg.Actor,
+		arg.UserIds,
+		arg.Actors,
 		arg.Patterns,
 		arg.CursorAt,
 		arg.CursorID,

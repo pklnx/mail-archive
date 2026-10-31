@@ -186,6 +186,7 @@ const (
 	auditPageDefault = 100
 	auditPageMax     = 500
 	auditDefaultDays = 30
+	auditUsersMax    = 100 // distinct user values in one request
 )
 
 type auditTargetJSON struct {
@@ -242,25 +243,34 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	userName, actor := q.Get("user"), q.Get("actor")
-	if !sess.IsAdmin && (userName != "" || actor != "") {
+	// Each user and actor may repeat; an entry matches if its user is one
+	// of them or its actor is (a union). The checks run in a fixed order so
+	// that a non-admin cannot tell existing names from unknown ones.
+	userNames, actors := auditValues(q["user"], auth.NormalizeUserName), auditValues(q["actor"], nil)
+	if !sess.IsAdmin && (len(userNames) > 0 || len(actors) > 0) {
 		s.fail(w, r, http.StatusForbidden, "only admins can see other users' entries", nil)
 		return
 	}
-	switch actor {
-	case "", store.ActorSession, store.ActorAPIKey, store.ActorCLI:
-		p.Actor = actor
-	default:
-		s.fail(w, r, http.StatusBadRequest, "actor must be session, api_key or cli", nil)
+	if len(userNames) > auditUsersMax {
+		s.fail(w, r, http.StatusBadRequest, fmt.Sprintf("at most %d user values", auditUsersMax), nil)
 		return
 	}
-	if userName != "" {
-		u, err := s.store.GetUserByName(r.Context(), auth.NormalizeUserName(userName))
+	for _, actor := range actors {
+		switch actor {
+		case store.ActorSession, store.ActorAPIKey, store.ActorCLI:
+		default:
+			s.fail(w, r, http.StatusBadRequest, "actor must be session, api_key or cli", nil)
+			return
+		}
+	}
+	p.Actors = actors
+	for _, name := range userNames {
+		u, err := s.store.GetUserByName(r.Context(), name)
 		if err != nil {
 			s.failStore(w, r, err)
 			return
 		}
-		p.UserID = &u.ID
+		p.UserIDs = append(p.UserIDs, u.ID)
 	}
 	if c := q.Get("cursor"); c != "" {
 		at, id, err := decodeAuditCursor(c)
@@ -298,6 +308,26 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		out.Entries = append(out.Entries, e)
 	}
 	s.writeJSON(w, http.StatusOK, out)
+}
+
+// auditValues returns the non-empty values of a repeatable parameter in
+// order, each once, after norm if given.
+func auditValues(vs []string, norm func(string) string) []string {
+	var out []string
+	seen := make(map[string]bool, len(vs))
+	for _, v := range vs {
+		if v == "" {
+			continue
+		}
+		if norm != nil {
+			v = norm(v)
+		}
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // parseAuditBound reads YYYY-MM-DD (midnight UTC) or RFC 3339. A plain date

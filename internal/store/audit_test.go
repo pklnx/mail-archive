@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -529,6 +530,87 @@ func TestExportAudit(t *testing.T) {
 	}
 	if p, _ := store.AuditActionPatterns([]string{"user.2fa_reset"}); p[0] != `user.2fa\_reset` {
 		t.Errorf("underscore not escaped: %v", p)
+	}
+}
+
+// Admins narrow the Log page to several users and actors: an entry matches
+// if its user is one of them or its actor is (a union), and the actions
+// still apply to every match.
+func TestListAuditWho(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	users := map[string]int64{}
+	for _, name := range []string{"admin", "alice", "bob", "carol"} {
+		u, err := st.CreateUser(ctx, name, "h", name == "admin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		users[name] = u.ID
+	}
+	for _, e := range []struct{ user, actor, action string }{
+		{"alice", store.ActorSession, "message.open"},
+		{"alice", store.ActorSession, "auth.login"},
+		{"bob", store.ActorSession, "message.open"},
+		{"bob", store.ActorAPIKey, "message.search"},
+		{"carol", store.ActorSession, "message.open"},
+		{"", store.ActorCLI, "data.backup"},
+	} {
+		entry := store.AuditEntry{Actor: e.actor, Action: e.action}
+		if e.user != "" {
+			entry.SetUser(users[e.user], e.user)
+		}
+		if e.actor == store.ActorAPIKey {
+			keyID := int64(1) // no foreign key: entries outlive their keys
+			entry.APIKeyID, entry.APIKeyName = &keyID, "script"
+		}
+		if err := st.Audit(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func(p store.AuditPage) string {
+		t.Helper()
+		p.Viewer, p.All, p.Since, p.Until, p.Limit = users["admin"], true, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 100
+		recs, err := st.ListAudit(ctx, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range recs {
+			out = append(out, r.UserName+"/"+r.Actor+"/"+r.Action)
+		}
+		slices.Sort(out)
+		return strings.Join(out, " ")
+	}
+	id := func(names ...string) []int64 {
+		var out []int64
+		for _, n := range names {
+			out = append(out, users[n])
+		}
+		return out
+	}
+	all := "/cli/data.backup alice/session/auth.login alice/session/message.open bob/api_key/message.search bob/session/message.open carol/session/message.open"
+	for _, c := range []struct {
+		name string
+		p    store.AuditPage
+		want string
+	}{
+		{"nil means all", store.AuditPage{}, all},
+		{"empty means all", store.AuditPage{UserIDs: []int64{}, Actors: []string{}}, all},
+		{"one user", store.AuditPage{UserIDs: id("alice")}, "alice/session/auth.login alice/session/message.open"},
+		{"two users", store.AuditPage{UserIDs: id("alice", "bob")},
+			"alice/session/auth.login alice/session/message.open bob/api_key/message.search bob/session/message.open"},
+		{"cli without a user", store.AuditPage{Actors: []string{store.ActorCLI}}, "/cli/data.backup"},
+		{"two actors", store.AuditPage{Actors: []string{store.ActorCLI, store.ActorAPIKey}}, "/cli/data.backup bob/api_key/message.search"},
+		{"user or actor", store.AuditPage{UserIDs: id("alice"), Actors: []string{store.ActorCLI}},
+			"/cli/data.backup alice/session/auth.login alice/session/message.open"},
+		{"overlap once", store.AuditPage{UserIDs: id("bob"), Actors: []string{store.ActorAPIKey}},
+			"bob/api_key/message.search bob/session/message.open"},
+		{"with actions", store.AuditPage{UserIDs: id("alice"), Actors: []string{store.ActorAPIKey}, Actions: []string{"read", "search"}},
+			"alice/session/message.open bob/api_key/message.search"},
+	} {
+		if got := list(c.p); got != c.want {
+			t.Errorf("%s:\n got  %s\n want %s", c.name, got, c.want)
+		}
 	}
 }
 
