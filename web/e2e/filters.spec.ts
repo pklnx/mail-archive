@@ -115,11 +115,29 @@ for (const size of [
       // The 3rd to the 10th of the month shown (today's), the end inclusive.
       const days = calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)");
       await days.nth(2).click();
+      const ranged = page.waitForResponse((r) => {
+        const u = new URL(r.url());
+        return u.pathname === "/api/messages" && u.searchParams.has("after") && u.searchParams.has("before");
+      });
       await days.nth(9).click();
       await expect(calendar).toHaveCount(0);
       await expect(form).toBeVisible();
       const month = (await dayFromToday(page, 0)).slice(0, 7);
       await expect(page).toHaveURL(new RegExp(`[?&]q=after%3A${month}-03(%20|\\+)before%3A${month}-11(&|$)`));
+      // The API gets the local midnights with the page's offset of each day (#404).
+      const response = await ranged;
+      expect(response.status()).toBe(200);
+      const sent = new URL(response.url()).searchParams;
+      const midnight = (day: string) =>
+        page.evaluate((day) => {
+          const [y = 0, m = 1, d = 1] = day.split("-").map(Number);
+          const offset = -new Date(y, m - 1, d).getTimezoneOffset();
+          const abs = Math.abs(offset);
+          const pad = (n: number) => String(n).padStart(2, "0");
+          return `${day}T00:00:00${offset < 0 ? "-" : "+"}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+        }, day);
+      expect(sent.get("after")).toBe(await midnight(`${month}-03`));
+      expect(sent.get("before")).toBe(await midnight(`${month}-11`));
       await expect(form.getByRole("radio", { name: "Custom" })).toBeChecked();
       const tags = page.getByRole("list", { name: "Active filters" });
       await expect(tags.getByText(/^Date: .+ – .+$/)).toBeVisible();

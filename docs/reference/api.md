@@ -222,7 +222,7 @@ Query parameters of `GET /api/messages`:
 | `to` | Part of a name or address in To or Cc, in any case, or of an envelope recipient of the user's smtp accounts (which includes BCC recipients). Bcc headers are not stored. |
 | `attachment` | Part of an attachment's file name, in any case. Implies `has=attachment`. |
 | `has` | Only `attachment`: messages with at least one attachment. |
-| `after`, `before` | Date range. `after` is inclusive, `before` exclusive. `YYYY-MM-DD` means midnight UTC; RFC 3339 with an offset (`2024-01-01T00:00:00+01:00`) sets another midnight. |
+| `after`, `before` | Date range. `after` is inclusive, `before` exclusive. `YYYY-MM-DD` means midnight UTC; RFC 3339 with an offset (`2024-01-01T00:00:00%2B01:00`, the `+` encoded as `%2B`, since a raw `+` in a query string is a space) sets another start. The web UI sends the first instant of the local day this way. |
 | `group` | `1`: one row per conversation, the newest message of it that matches all other parameters. `0` or empty: one row per message. |
 | `thread` | Only the messages of this conversation: a `thread` value from a grouped row or a message. At most 2000 bytes. |
 | `gone` | `1` or `true`: only messages no longer on any server. They have locations in the user's IMAP accounts (with `account`, in that account), and all of those are gone. Messages only in import accounts are never listed. |

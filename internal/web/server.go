@@ -316,7 +316,9 @@ func decodeCursor(c string) (time.Time, string, error) {
 	return at, sha, err
 }
 
-// parseDate accepts YYYY-MM-DD (UTC midnight) or RFC 3339.
+// parseDate accepts YYYY-MM-DD (UTC midnight) or RFC 3339. The web UI sends
+// the first instant of the user's local day with its offset, such as
+// 2026-10-07T00:00:00+02:00 (the + encoded as %2B in the query).
 func parseDate(v string) (*time.Time, error) {
 	if v == "" {
 		return nil, nil
