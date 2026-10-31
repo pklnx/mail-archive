@@ -8,7 +8,7 @@ v2. Node.js 26 no longer ships corepack; install it once with
 `npm install -g corepack`.
 
 `make web`, `make web-e2e` and `make docs` use a pnpm that is already on
-`PATH`; only when there is none do they run `corepack enable`. To use your own
+`PATH` and run `corepack enable` only when there is none. To use your own
 pnpm (for example in a sandbox where corepack must not be enabled), put a
 wrapper on `PATH`, or skip the step with `make PNPM_SETUP=true web`. pnpm
 switches to the version pinned in `packageManager` by itself.
@@ -283,33 +283,18 @@ make sqlc-check    # what CI runs: vet queries and fail on stale code
 
 ## Pull requests and labels
 
-Changes start as an issue with an approved plan; see
-[Issues, plans and releases](./process).
+Changes start as an issue with an approved plan; the flow, the reviews and
+the labels are in [Issues, plans and releases](./process).
 
-`main` is protected: changes go through pull requests, which can only be
-squash-merged when the required CI checks pass: `test`, `lint`, `vulncheck`,
-`docker`, `compose`, `web`, `web-e2e` and `secret-scan`. The `audit` and
-`docs-audit` checks are not required (see [Dependencies](#dependencies)), nor
-are `review-gate` (see [Review gate](./review-gate)) and `web-e2e-webkit` (see
-[End-to-end tests](#end-to-end-tests)). A
-pull request is merged (squash) after an approving review and green required
-checks; auto-merge is not used. Agent rules are
-in `CLAUDE.md` at the repository root.
-
-| Label | Meaning |
-|---|---|
-| `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). `feature` makes at least a minor release. |
-| `security` | Security hardening (never an undisclosed vulnerability; set by hand). Kind label; does not change the version (a patch release unless other labels raise it). |
-| `dependencies` | Dependency update (set by Dependabot). |
-| `db-migration` | Changes the database schema (set automatically). Back up before upgrading. Makes at least a minor release. |
-| `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
-| `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
-| `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
-| `followup` | Non-blocking finding from a review, CI or the day's work; its body names the source. |
-| `device-checks` | The open round of manual device checks, one at a time; see [Issues, plans and releases](./process). |
-
-Labels are defined in `.github/labels.json` and synced to GitHub when that
-file changes on `main`.
+`main` is protected: changes go through pull requests, squash-merged after
+an approving review and green required checks (`test`, `lint`, `vulncheck`,
+`docker`, `compose`, `web`, `web-e2e` and `secret-scan`); auto-merge is not
+used. Not required are `audit` and `docs-audit` (see
+[Dependencies](#dependencies)), `review-gate` (see
+[Review gate](./review-gate)) and `web-e2e-webkit` (see
+[End-to-end tests](#end-to-end-tests)). Agent rules are in `CLAUDE.md` at
+the repository root. The labels and who sets them:
+[Labels](./process#labels).
 
 ## CI
 
