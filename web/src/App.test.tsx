@@ -1160,9 +1160,10 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
     expect(shortcutsDialog()).toBeNull();
   });
   it("leaves a select on Escape, as a text field (#311)", async () => {
-    window.history.replaceState(null, "", "/?view=log");
+    // The Log's filters are MultiSelects now (#376); the rule form's account is a select.
+    window.history.replaceState(null, "", "/?view=retention&add=rule");
     render(<App user={user(true)} logout={() => {}} logoutError="" />);
-    const select = await screen.findByLabelText(t.logAction);
+    const select = await screen.findByLabelText(t.ruleAccount);
     expect(select.tagName).toBe("SELECT");
     select.focus();
     // A key of the select stays its own.
@@ -1171,7 +1172,21 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
     expect(document.activeElement).toBe(select);
     key(select, "Escape");
     expect(document.activeElement).not.toBe(select);
+    expect(window.location.search).toBe("?view=retention&add=rule");
+  });
+  it("leaves the keys to the Log's filters (#376)", async () => {
+    window.history.replaceState(null, "", "/?view=log");
+    render(<App user={user(true)} logout={() => {}} logoutError="" />);
+    const action = await screen.findByRole("combobox", { name: new RegExp(`^${t.logAction}`) });
+    act(() => action.focus());
+    fireEvent.click(action);
+    expect(screen.getByRole("option", { name: t.logGroup("read") })).toBeTruthy();
+    for (const k of ["?", "g", "a"]) key(action, k);
+    expect(shortcutsDialog()).toBeNull();
     expect(window.location.search).toBe("?view=log");
+    // Outside a widget the shortcuts still work on this page.
+    key(document.body, "?");
+    expect(shortcutsDialog()).not.toBeNull();
   });
 });
 

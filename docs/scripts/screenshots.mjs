@@ -354,9 +354,11 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
-  // The log: the demo's own login and the messages opened above.
+  // The log: the demo's own login and the messages opened above, with two
+  // action groups picked (#376).
   const p = await page("light");
-  await p.goto(base + "/?view=log");
+  await p.goto(base + "/?view=log&action=login&action=read");
+  await p.getByRole("main").getByRole("combobox", { name: "Action" }).getByText("Logins, Reading").waitFor();
   await p.getByRole("main").getByText("Opened message").first().waitFor();
   await shot(p, "log");
   await p.context().close();

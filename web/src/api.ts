@@ -736,14 +736,16 @@ export interface AuditEntry {
 
 /**
  * The filters of the Log page. since and until are inclusive local days
- * "YYYY-MM-DD" (or ""); who is "" (all), "cli", "api_key" or a user name
- * (admins only).
+ * "YYYY-MM-DD" (or ""). actions are action groups, any of them; users (names)
+ * and actors ("cli", "api_key") are for admins only, and an entry of any of
+ * them matches (#376). An empty list is no filter.
  */
 export interface AuditFilter {
   since: string;
   until: string;
-  group: string;
-  who: string;
+  actions: string[];
+  users: string[];
+  actors: string[];
 }
 
 /**
@@ -768,9 +770,9 @@ export function auditQuery(f: AuditFilter, cursor = ""): string {
   const p = new URLSearchParams();
   if (f.since) p.set("since", localDayStart(f.since, 0));
   if (f.until) p.set("until", localDayStart(f.until, 1));
-  if (f.group) p.set("action", f.group);
-  if (f.who === "cli" || f.who === "api_key") p.set("actor", f.who);
-  else if (f.who) p.set("user", f.who);
+  for (const a of f.actions) p.append("action", a);
+  for (const u of f.users) p.append("user", u);
+  for (const a of f.actors) p.append("actor", a);
   if (cursor) p.set("cursor", cursor);
   return p.toString();
 }

@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { formatState, parseState, useViewState, type ViewState } from "./urlState";
 
-const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "" };
+const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [] };
 
 describe("url state", () => {
   it("round-trips and omits empty fields", () => {
@@ -78,6 +78,42 @@ describe("the page keys", () => {
       const back = parseState(formatState({ ...parseState(formatState(leaving)), view: parseState(url).view }));
       expect(back, url).toEqual({ ...empty, view: parseState(url).view });
     }
+  });
+});
+
+// The Log's filters (#376): repeated keys, only under view=log.
+describe("the Log's filters", () => {
+  const log = { ...empty, view: "log" };
+  it("round-trip with repeated keys", () => {
+    const s = { ...log, since: "2026-10-01", until: "2026-10-20", action: ["read", "export"], user: ["alice", "a&b c"], actor: ["cli", "api_key"] };
+    const qs = formatState(s);
+    expect(qs).toBe("?view=log&since=2026-10-01&until=2026-10-20&action=read&action=export&user=alice&user=a%26b+c&actor=cli&actor=api_key");
+    expect(parseState(qs)).toEqual(s);
+    expect(formatState(log)).toBe("?view=log");
+  });
+  it("tell the default From (no key) from no From (since=)", () => {
+    expect(parseState("?view=log").since).toBeNull();
+    expect(parseState("?view=log&since=").since).toBe("");
+    expect(formatState({ ...log, since: "" })).toBe("?view=log&since=");
+    expect(formatState({ ...log, since: null })).toBe("?view=log");
+  });
+  it("drop unknown groups and actors, empty values, repeats and what is not a day", () => {
+    const s = parseState("?view=log&action=nope&action=export&action=read&action=read&actor=session&actor=api_key&actor=cli&user=&user=bob&user=bob&user=cli&since=yesterday&until=soon");
+    // Groups and actors in the list's order; users as given.
+    expect(s).toEqual({ ...log, action: ["read", "export"], actor: ["cli", "api_key"], user: ["bob", "cli"] });
+    expect(parseState("?view=log&until=2026-10-20").until).toBe("2026-10-20");
+  });
+  it("mean nothing outside the Log", () => {
+    expect(parseState("?since=2026-10-01&until=2026-10-20&action=read&user=bob&actor=cli")).toEqual(empty);
+    expect(parseState("?view=users&action=read&user=bob")).toEqual({ ...empty, view: "users" });
+    expect(formatState({ ...empty, since: "2026-10-01", until: "2026-10-20", action: ["read"], user: ["bob"], actor: ["cli"] })).toBe("");
+  });
+  it("stay behind when another view opens (its own history entry keeps them for Back)", () => {
+    window.history.replaceState(null, "", "/?view=log&action=read&user=bob");
+    const { result } = renderHook(() => useViewState());
+    act(() => result.current[1]({ view: "", m: "abc" }));
+    expect(window.location.search).toBe("?m=abc");
+    window.history.replaceState(null, "", "/");
   });
 });
 
