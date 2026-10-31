@@ -475,4 +475,46 @@ test.describe("in German", () => {
     await expect(who.text).toHaveText("Alle");
     expect(new URL(page.url()).search).toBe("?view=log");
   });
+
+  test("Escape on the closed Aktion leaves it and keeps the choice; Delete clears it (#411)", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const { main } = await open(page);
+    const since = await startOf(page, await defaultSince(page));
+    const action = choice(main, "Aktion");
+    await expect(action.text).toHaveText("Alle Aktionen");
+    let requests = 0;
+    page.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/audit") requests++;
+    });
+
+    await action.field.click();
+    const one = auditRequestAll(page, { since: [since], action: ["read"] });
+    await action.menu.getByRole("option", { name: "Lesen" }).click();
+    await one;
+    const two = auditRequestAll(page, { since: [since], action: ["search", "read"] });
+    await action.menu.getByRole("option", { name: "Suchen" }).click();
+    await two;
+    const settled = requests;
+    const address = "?view=log&action=search&action=read";
+    expect(new URL(page.url()).search).toBe(address);
+
+    // The first Escape closes the menu, the focus stays on the field.
+    await page.keyboard.press("Escape");
+    await expect(action.menu.getByRole("option")).toHaveCount(0);
+    await expect(action.field).toBeFocused();
+    // The second leaves the field: the choice and the address stay.
+    await page.keyboard.press("Escape");
+    await expect(action.field).not.toBeFocused();
+    await expect(action.text).toHaveText("Suchen, Lesen");
+    expect(new URL(page.url()).search).toBe(address);
+
+    // Delete on the field clears it; one request since the choice, so the Escapes sent none.
+    await action.field.focus();
+    const none = auditRequestAll(page, { since: [since] });
+    await page.keyboard.press("Delete");
+    await none;
+    expect(requests).toBe(settled + 1);
+    await expect(action.text).toHaveText("Alle Aktionen");
+    expect(new URL(page.url()).search).toBe("?view=log");
+  });
 });
