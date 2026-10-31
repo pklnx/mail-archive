@@ -154,6 +154,118 @@ test.describe("in German", () => {
     });
   }
 
+  // Von and Bis show exactly the dates that are sent (#385). The fixture's
+  // guards fail a test on an uncaught error (flatpickr's TypeError on main).
+  test.describe("fields and query agree", () => {
+    test.use({ viewport: { width: 1280, height: 800 } });
+
+    /** Every /api/audit request from now on, as its query parameters. */
+    function auditRequests(page: Page) {
+      const seen: Record<string, string>[] = [];
+      page.on("request", (r) => {
+        const u = new URL(r.url());
+        if (u.pathname === "/api/audit") seen.push(Object.fromEntries(u.searchParams));
+      });
+      return seen;
+    }
+
+    /** A range typed and committed with Enter: 01.01.2020 – 20.01.2020. */
+    async function typedRange(page: Page, from: Locator, to: Locator) {
+      await from.fill("01.01.2020");
+      const start = auditRequest(page, { since: "2020-01-01" });
+      await from.press("Enter");
+      await start;
+      await to.fill("20.01.2020");
+      const range = auditRequest(page, { since: "2020-01-01", until: "2020-01-20" });
+      await to.press("Enter");
+      await range;
+    }
+
+    test("the default Von emptied, then Enter: no dates, focus stays in Von", async ({ page }) => {
+      const { from, to } = await open(page);
+      await from.fill("");
+      const cleared = auditRequest(page, {});
+      await from.press("Enter");
+      await cleared;
+      await expect(from).toHaveValue("");
+      await expect(to).toHaveValue("");
+      await expect(from).toBeFocused();
+    });
+
+    test("Von clicked, then a click outside: nothing sent, Von keeps the default day", async ({ page }) => {
+      const { main, from, to, calendar } = await open(page);
+      const shown = await from.inputValue();
+      const since = await defaultSince(page);
+      const seen = auditRequests(page);
+      await from.click();
+      await expect(calendar).toBeVisible();
+      await main.getByRole("heading", { name: "Protokoll", level: 1 }).click();
+      await expect(calendar).toHaveCount(0);
+      // The next change is the only request.
+      const next = auditRequest(page, { since, action: "read" });
+      await main.getByRole("combobox", { name: "Aktion" }).selectOption("read");
+      await next;
+      expect(seen).toEqual([{ since, action: "read" }]);
+      await expect(from).toHaveValue(shown);
+      await expect(to).toHaveValue("");
+    });
+
+    test("a picked range, Bis emptied, then a click outside: an open end", async ({ page }) => {
+      const { main, from, to, calendar } = await open(page);
+      const since = await defaultSince(page);
+      // With the default Von, a click on today ends the range there (the
+      // calendar opens at Von's month, up to two months back).
+      const todayCell = calendar.locator(".flatpickr-day.today:not(.prevMonthDay):not(.nextMonthDay)");
+      await from.click();
+      await expect(calendar).toBeVisible();
+      for (let i = 0; i < 2 && (await todayCell.count()) === 0; i++) await calendar.getByLabel("Nächster Monat").click();
+      const picked = auditRequest(page, { since, until: await today(page) });
+      await todayCell.click();
+      await picked;
+      await to.fill("");
+      const ended = auditRequest(page, { since });
+      await main.getByRole("heading", { name: "Protokoll", level: 1 }).click();
+      await ended;
+      await expect(from).toHaveValue(since.split("-").reverse().join("."));
+      await expect(to).toHaveValue("");
+    });
+
+    test("after a typed Bis, a new start picked in the calendar keeps that Bis", async ({ page }) => {
+      const { from, to, calendar } = await open(page);
+      await typedRange(page, from, to);
+      await to.fill("25.01.2020");
+      const typed = auditRequest(page, { since: "2020-01-01", until: "2020-01-25" });
+      await to.press("Enter");
+      await typed;
+      await from.click();
+      const picked = auditRequest(page, { since: "2020-01-05", until: "2020-01-25" });
+      await calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)", { hasText: /^5$/ }).click();
+      await picked;
+      await expect(from).toHaveValue("05.01.2020");
+      await expect(to).toHaveValue("25.01.2020");
+    });
+
+    test("Von emptied and left, then a day clicked: the fields show what is sent", async ({ page }) => {
+      const { main, from, to, calendar } = await open(page);
+      await typedRange(page, from, to);
+      await from.fill("");
+      const cleared = auditRequest(page, {});
+      await main.getByRole("heading", { name: "Protokoll", level: 1 }).click();
+      await cleared;
+      await from.click();
+      const sent = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/audit");
+      await calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)", { hasText: /^15$/ }).click();
+      const p = new URL((await sent).url()).searchParams;
+      // The range plugin forgets the old end 10 ms after a clear (its own
+      // timer); a person is slower, a test need not be: either way the fields
+      // show exactly the sent range, starting at the clicked day.
+      expect(p.get("since")).toMatch(/-15$/);
+      const german = (day: string | null) => (day ? day.split("-").reverse().join(".") : "");
+      await expect(from).toHaveValue(german(p.get("since")));
+      await expect(to).toHaveValue(german(p.get("until")));
+    });
+  });
+
   test("at 1280 px Von and Bis are cells of the filter row, beside Aktion and Wer", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     const { main, from, to } = await open(page);
