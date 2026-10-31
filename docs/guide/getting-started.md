@@ -14,9 +14,10 @@ your instance, which only the operator can reach. When a page shows one,
 the operator runs it; ask your operator. Everything else happens in the
 web UI.
 
-The operator has no login in your instance. What the operator does on the
-command line is recorded in your [audit log](./audit-log#the-fields) as
-command-line entries. What the operator can reach on the host, and what
+The operator has no login in your instance. What the operator changes or
+exports on the command line is recorded in your
+[audit log](./audit-log#the-fields) as command-line entries (which commands:
+see the [command line](../reference/cli) reference). What the operator can reach on the host, and what
 protects your mail there, is in [Security](../reference/security).
 
 ## Your instance

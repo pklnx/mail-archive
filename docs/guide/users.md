@@ -95,8 +95,10 @@ Admins manage logins and never see other users' mail, unless an owner
 shared an account with them. They do see the [audit log](./audit-log) of
 every user on the **Log** page: searches with their text, which messages
 were opened, account names, IP addresses and browsers. Tell your users
-before they use the archive. Every user sees their own entries there too,
-and the operator's command-line entries show up there as well.
+before they use the archive. Every user sees their own entries there too;
+the operator's command-line entries are visible to admins, and to another
+user only when an entry concerns them (see
+[The Log page](./audit-log#the-log-page)).
 
 ## Your profile
 

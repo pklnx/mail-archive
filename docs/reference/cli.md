@@ -2,9 +2,13 @@
 
 The command line is the operator's tool. It runs on the instance's host,
 which customers do not reach; a customer admin asks the operator for anything
-on this page, and does the rest in the web UI. Commands that change
-something, and `import`, `export`, `backup` and `audit`, leave an entry in
-the customer's [audit log](../guide/audit-log#the-fields).
+on this page, and does the rest in the web UI. The commands that change
+users or accounts (`user …`, `account …`, including fills and purges),
+retention rules, holds and deletion runs, `jobs retry`, and `import`,
+`export`, `backup` and `audit` leave an entry in the customer's
+[audit log](../guide/audit-log#the-fields); `migrate`, `reindex`,
+`attest` and `attest keygen`, `sync`, `verify`, `status`, `notify test` and
+the list commands do not.
 
 With Docker Compose, run every command through the wrapper, for example
 `./ma status`. The binary itself is called `mail-archive`. Every command has
