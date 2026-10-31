@@ -694,10 +694,20 @@ const en = {
     /** The (hidden) scroll buttons of a TabList. */
     scrollLeft: "Scroll left",
     scrollRight: "Scroll right",
+    /** A MultiSelect's hidden texts for screen readers (the Log's filters, #376); passed as props. */
+    selection: {
+      description: "Total items selected:",
+      clear: "To clear the selection, press Delete or Backspace",
+      cleared: "All items have been cleared",
+    },
     /** Message ids for translateWithId (below), added by each part that uses such a component. */
     ids: {
       "increment.number": "Increment number",
       "decrement.number": "Decrement number",
+      "clear.all": "Clear selected items",
+      "clear.selection": "Clear selected item",
+      "open.menu": "Open menu",
+      "close.menu": "Close menu",
     } as Record<string, string>,
   },
 };
@@ -1384,9 +1394,18 @@ const de: Messages = {
     status: { error: "Fehler", warning: "Warnung", info: "Information", success: "Erledigt" },
     scrollLeft: "Nach links blättern",
     scrollRight: "Nach rechts blättern",
+    selection: {
+      description: "Ausgewählte Einträge insgesamt:",
+      clear: "Entf oder Rücktaste leert die Auswahl",
+      cleared: "Die Auswahl wurde geleert",
+    },
     ids: {
       "increment.number": "Zahl erhöhen",
       "decrement.number": "Zahl verringern",
+      "clear.all": "Auswahl leeren",
+      "clear.selection": "Auswahl leeren",
+      "open.menu": "Menü öffnen",
+      "close.menu": "Menü schließen",
     },
   },
 };

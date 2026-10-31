@@ -2130,6 +2130,13 @@ select,
   flex: 1 1 auto;
   min-inline-size: 0;
 }
+/* Aktion and Wer (MultiSelect, #376): Carbon's label is an inline-block on
+   the wrapper's 20 px line, 2 px lower than the date fields' labels; as a
+   block it lines up, and so do the fields. The field fills its cell, its
+   text stays on one line and ends in "…" (Carbon's .cds--list-box__label). */
+.log-filters .cds--list-box__wrapper > .cds--label {
+  display: block;
+}
 .log-table__time {
   white-space: nowrap;
 }

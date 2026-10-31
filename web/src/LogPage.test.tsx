@@ -34,6 +34,8 @@ const page2 = [entry("message.download", "00:00", { user: "bob", target: { type:
 let urls: string[];
 
 beforeEach(() => {
+  // The page keeps its filters in the address, under view=log (#376).
+  window.history.replaceState(null, "", "/?view=log");
   urls = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
     const u = String(url);
@@ -47,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState(null, "", "/");
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -54,9 +57,38 @@ afterEach(() => {
   document.querySelectorAll(".flatpickr-calendar").forEach((c) => c.remove());
 });
 
+/** Unmounts the page and starts again from a fresh address, as a new page load does. */
+function restart() {
+  cleanup();
+  urls = [];
+  window.history.replaceState(null, "", "/?view=log");
+}
+
 const audit = () => urls.filter((u) => u.startsWith("/api/audit"));
 /** The request URL of a filter. */
-const query = (f: Partial<ReturnType<typeof defaultFilter>>) => `/api/audit?${auditQuery({ since: "", until: "", group: "", who: "", ...f }, "")}`;
+const query = (f: Partial<ReturnType<typeof defaultFilter>>, cursor = "") =>
+  `/api/audit?${auditQuery({ since: "", until: "", actions: [], users: [], actors: [], ...f }, cursor)}`;
+
+/** A filter's field (Carbon's MultiSelect), by its label; with a choice the label also names the count. */
+const filterField = (label: string) => screen.getByRole("combobox", { name: new RegExp(`^${label}`) });
+/** The text in a filter's field: the chosen names, or the text for all. */
+const fieldText = (label: string) => filterField(label).querySelector(".cds--list-box__label")?.textContent;
+/**
+ * Toggles options of a filter as a user clicks them, one after the other,
+ * each once the field shows the last one (Carbon reports a choice after a
+ * timeout), then closes the menu.
+ */
+async function choose(label: string, ...texts: string[]) {
+  const field = filterField(label);
+  if (field.getAttribute("aria-expanded") !== "true") fireEvent.click(field);
+  for (const text of texts) {
+    const was = screen.getByRole("option", { name: text }).getAttribute("aria-selected");
+    fireEvent.click(screen.getByRole("option", { name: text }));
+    await waitFor(() => expect(screen.getByRole("option", { name: text }).getAttribute("aria-selected"), text).not.toBe(was));
+  }
+  fireEvent.click(filterField(label));
+  expect(screen.queryByRole("listbox", { name: new RegExp(`^${label}`) })?.querySelector("[role=option]") ?? null).toBeNull();
+}
 /** The local days a request covers: since's day, and the day before until (#402: instants of local midnight, until exclusive). */
 const daysOf = (url: string) => {
   const p = new URL(url, "http://x").searchParams;
@@ -113,27 +145,29 @@ describe("LogPage", () => {
     await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01" })));
     act(() => fpOf(t.logFrom).setDate([new Date(2026, 9, 1), new Date(2026, 9, 31)], true));
     await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31" })));
-    fireEvent.change(screen.getByLabelText(t.logAction), { target: { value: "read" } });
-    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", group: "read" })));
+    await choose(t.logAction, t.logGroup("read"));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", actions: ["read"] })));
 
-    const who = screen.getByLabelText(t.logWho) as HTMLSelectElement;
-    await waitFor(() => expect([...who.options].map((o) => o.value)).toEqual(["", "cli", "api_key", "alice", "bob"]));
-    fireEvent.change(who, { target: { value: "bob" } });
-    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", group: "read", who: "bob" })));
-    fireEvent.change(who, { target: { value: "cli" } });
-    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", group: "read", who: "cli" })));
-    fireEvent.change(who, { target: { value: "api_key" } });
-    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", group: "read", who: "api_key" })));
-    fireEvent.change(screen.getByLabelText(t.logAction), { target: { value: "" } });
-    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", who: "api_key" })));
+    fireEvent.click(filterField(t.logWho));
+    await waitFor(() => expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual([t.logCommandLine, t.logApiKeys, "alice", "bob"]));
+    await choose(t.logWho, "bob");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", actions: ["read"], users: ["bob"] })));
+    await choose(t.logWho, "bob", t.logCommandLine);
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", actions: ["read"], actors: ["cli"] })));
+    await choose(t.logWho, t.logCommandLine, t.logApiKeys);
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", actions: ["read"], actors: ["api_key"] })));
+    await choose(t.logAction, t.logGroup("read"));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-31", actors: ["api_key"] })));
   });
 
   it("offers every action group, and the Who filter only to admins", async () => {
     render(<LogPage admin={false} open={() => {}} />);
     await screen.findByText("Invoice 42");
-    const groups = [...(screen.getByLabelText(t.logAction) as HTMLSelectElement).options].map((o) => o.value);
-    expect(groups).toEqual(["", "login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"]);
-    expect(screen.queryByLabelText(t.logWho)).toBeNull();
+    expect(fieldText(t.logAction)).toBe(t.logAllActions);
+    fireEvent.click(filterField(t.logAction));
+    const groups = screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"));
+    expect(groups).toEqual(["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"].map((g) => t.logGroup(g)));
+    expect(screen.queryByRole("combobox", { name: new RegExp(`^${t.logWho}`) })).toBeNull();
     expect(urls).not.toContain("/api/users");
   });
 
@@ -217,6 +251,242 @@ describe("LogPage", () => {
     expect(audit().at(-1)).toBe(`/api/audit?${auditQuery(defaultFilter(), "next")}`);
     expect(screen.getByText("bbbbbbbbbbbb…")).toBeTruthy();
     expect(screen.queryByRole("button", { name: t.logMore })).toBeNull();
+  });
+});
+
+// Several action groups and Who values, kept in the address (#376). The mock
+// filters as the server does: any of the groups, and an entry of any of the
+// users or actors; three entries a page.
+describe("LogPage filters", () => {
+  const people = [
+    entry("message.open", "00:05", { target: { type: "account", id: "1", name: "alice reads" } }),
+    entry("auth.login", "00:04", { user: "bob", target: { type: "account", id: "2", name: "bob logs in" } }),
+    entry("account.add", "00:03", { actor: "cli", user: undefined, target: { type: "account", id: "3", name: "cli adds" } }),
+    entry("message.search", "00:02", { user: "carol", actor: "api_key", apiKey: "k", target: { type: "account", id: "4", name: "carol's key searches" } }),
+  ];
+  const groupOf: Record<string, string> = { "message.open": "read", "auth.login": "login", "account.add": "accounts", "message.search": "search" };
+  const names = people.map((e) => e.target!.name!);
+  let userList: () => Promise<Response>;
+  const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
+
+  beforeEach(() => {
+    userList = async () => json({ users: [{ name: "alice" }, { name: "bob" }, { name: "carol" }, { name: "cli" }] });
+    vi.mocked(globalThis.fetch).mockImplementation(async (url) => {
+      const u = new URL(String(url), "http://x");
+      urls.push(String(url));
+      if (u.pathname === "/api/users") return userList();
+      const p = u.searchParams;
+      const [actions, users, actors] = [p.getAll("action"), p.getAll("user"), p.getAll("actor")];
+      if (users.includes("gone")) return json({ error: "unknown user" }, 404);
+      const match = people.filter(
+        (e) =>
+          (actions.length === 0 || actions.includes(groupOf[e.action]!)) &&
+          ((users.length === 0 && actors.length === 0) || users.includes(e.user ?? "") || actors.includes(e.actor)),
+      );
+      const start = p.get("cursor") === "next" ? 3 : 0;
+      return json({ entries: match.slice(start, start + 3), nextCursor: start + 3 < match.length ? "next" : undefined });
+    });
+  });
+
+  /** The targets in the table, in its order. */
+  const shownRows = () => names.filter((n) => screen.queryByText(n)).sort((a, b) => names.indexOf(a) - names.indexOf(b));
+  const since = () => defaultFilter().since;
+
+  it("filters by several groups and several Who values together, and the table shows what matches", async () => {
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names.slice(0, 3)));
+    expect([fieldText(t.logAction), fieldText(t.logWho)]).toEqual([t.logAllActions, t.logEveryone]);
+
+    // One group, then two: any of them.
+    await choose(t.logAction, t.logGroup("read"));
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads"]));
+    expect(audit().at(-1)).toBe(query({ since: since(), actions: ["read"] }));
+    await choose(t.logAction, t.logGroup("accounts"));
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads", "cli adds"]));
+    expect(audit().at(-1)).toBe(query({ since: since(), actions: ["read", "accounts"] }));
+    // The field names the choice in the list's order, with Carbon's count tag.
+    expect(fieldText(t.logAction)).toBe(`${t.logGroup("read")}, ${t.logGroup("accounts")}`);
+    expect(screen.getByRole("combobox", { name: new RegExp(`^${t.logAction}`) }).closest(".cds--multi-select")!.querySelector(".cds--tag__label")?.textContent).toBe("2");
+
+    // One user: within the groups, only theirs.
+    await choose(t.logWho, "alice");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), actions: ["read", "accounts"], users: ["alice"] })));
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads"]));
+    // A user and the command line: entries of either (union).
+    await choose(t.logWho, t.logCommandLine);
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), actions: ["read", "accounts"], users: ["alice"], actors: ["cli"] })));
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads", "cli adds"]));
+    expect(fieldText(t.logWho)).toBe(`${t.logCommandLine}, alice`);
+    // Several users and both actors, all groups.
+    await choose(t.logWho, t.logApiKeys, "bob");
+    await choose(t.logAction, t.logGroup("read"), t.logGroup("accounts"));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), users: ["alice", "bob"], actors: ["cli", "api_key"] })));
+    await waitFor(() => expect(shownRows()).toEqual(names.slice(0, 3)));
+    expect(fieldText(t.logAction)).toBe(t.logAllActions);
+
+    // The tag's clear button empties the choice: no parameter at all.
+    fireEvent.click(within(filterField(t.logWho).closest(".cds--multi-select")!).getByRole("button", { name: t.carbon.ids["clear.all"] }));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since() })));
+    expect(fieldText(t.logWho)).toBe(t.logEveryone);
+    expect(window.location.search).toBe("?view=log");
+  });
+
+  it("loads more with the cursor and every value of the filter", async () => {
+    window.history.replaceState(null, "", "/?view=log&action=read&action=login&action=accounts&action=search&user=alice&user=bob&actor=cli&actor=api_key");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names.slice(0, 3)));
+    fireEvent.click(screen.getByRole("button", { name: t.logMore }));
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    const f = { since: since(), actions: ["login", "search", "read", "accounts"], users: ["alice", "bob"], actors: ["cli", "api_key"] };
+    expect(audit()).toEqual([query(f), query(f, "next")]);
+    expect(screen.queryByRole("button", { name: t.logMore })).toBeNull();
+  });
+
+  it("sends a user named cli as a user, and the command line as the actor", async () => {
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    await choose(t.logWho, "cli");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), users: ["cli"] })));
+    expect(window.location.search).toBe("?view=log&user=cli");
+    await choose(t.logWho, "cli", t.logCommandLine);
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), actors: ["cli"] })));
+    expect(window.location.search).toBe("?view=log&actor=cli");
+  });
+
+  it("keeps the filters in the address as a replace, and reads them back on a reload and on Back", async () => {
+    const push = vi.spyOn(window.history, "pushState");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    await choose(t.logAction, t.logGroup("read"), t.logGroup("export"));
+    await choose(t.logWho, "bob", t.logCommandLine);
+    await waitFor(() => expect(window.location.search).toBe("?view=log&action=read&action=export&user=bob&actor=cli"));
+    act(() => fpOf(t.logFrom).setDate([new Date(2025, 0, 1), new Date(2025, 0, 20)], true));
+    await waitFor(() => expect(window.location.search).toBe("?view=log&since=2025-01-01&until=2025-01-20&action=read&action=export&user=bob&actor=cli"));
+    expect(push).not.toHaveBeenCalled();
+
+    // A reload: the same request, the fields show the choice.
+    const address = window.location.search;
+    restart();
+    window.history.replaceState(null, "", `/${address}`);
+    render(<LogPage admin open={() => {}} />);
+    const f = { since: "2025-01-01", until: "2025-01-20", actions: ["read", "export"], users: ["bob"], actors: ["cli"] };
+    await waitFor(() => expect(audit()).toEqual([query(f)]));
+    expect(fieldText(t.logAction)).toBe(`${t.logGroup("read")}, ${t.logGroup("export")}`);
+    await waitFor(() => expect(fieldText(t.logWho)).toBe(`${t.logCommandLine}, bob`));
+    expect([field(t.logFrom).value, field(t.logTo).value]).toEqual(["01/01/2025", "01/20/2025"]);
+
+    // Back to an entry with another filter (a message opened from the Log pushed one).
+    window.history.pushState(null, "", "/?m=abc");
+    window.history.pushState(null, "", "/?view=log&action=login");
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), actions: ["login"] })));
+    await waitFor(() => expect(shownRows()).toEqual(["bob logs in"]));
+    expect([fieldText(t.logAction), fieldText(t.logWho)]).toEqual([t.logGroup("login"), t.logEveryone]);
+  });
+
+  it("writes since only when it is not the default, and since= for no From", async () => {
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    expect(window.location.search).toBe("?view=log");
+    // Not the default (30 days back from today).
+    act(() => fpOf(t.logFrom).setDate([new Date(2025, 0, 1)], true));
+    await waitFor(() => expect(window.location.search).toBe("?view=log&since=2025-01-01"));
+    act(() => fpOf(t.logFrom).clear());
+    await waitFor(() => expect(window.location.search).toBe("?view=log&since="));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({})));
+    // The default day picked again: not written, the window moves on.
+    const [y, m, d] = since().split("-").map(Number);
+    act(() => fpOf(t.logFrom).setDate([new Date(y!, m! - 1, d!)], true));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since() })));
+    expect(window.location.search).toBe("?view=log");
+
+    // since= on load: no From.
+    restart();
+    window.history.replaceState(null, "", "/?view=log&since=");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(audit()).toEqual([query({})]));
+    expect(field(t.logFrom).value).toBe("");
+  });
+
+  it("sends one request per change, and none when the page renders again unchanged", async () => {
+    const { rerender } = render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    expect(audit()).toHaveLength(1);
+    rerender(<LogPage admin open={() => {}} />);
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(audit()).toHaveLength(1);
+    await choose(t.logAction, t.logGroup("read"));
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads"]));
+    rerender(<LogPage admin open={() => {}} />);
+    expect(audit()).toEqual([query({ since: since() }), query({ since: since(), actions: ["read"] })]);
+  });
+
+  it("drops users that are gone and unknown actors once the user list is there, with one request", async () => {
+    let release!: () => void;
+    const listed = new Promise<void>((r) => {
+      release = r;
+    });
+    const answer = userList;
+    userList = async () => {
+      await listed;
+      return answer();
+    };
+    const replace = vi.spyOn(window.history, "replaceState");
+    window.history.replaceState(null, "", "/?view=log&user=alice&user=removed&actor=session&actor=cli");
+    replace.mockClear();
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(urls).toEqual(["/api/users"]));
+    // The request waits for the list.
+    expectLoading();
+    await act(async () => release());
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads", "cli adds"]));
+    expect(audit()).toEqual([query({ since: since(), users: ["alice"], actors: ["cli"] })]);
+    expect(window.location.search).toBe("?view=log&user=alice&actor=cli");
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(fieldText(t.logWho)).toBe(`${t.logCommandLine}, alice`);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the address as it is when the user list fails, and shows the error of the request", async () => {
+    userList = async () => json({ error: "boom" }, 500);
+    window.history.replaceState(null, "", "/?view=log&user=gone&user=bob");
+    render(<LogPage admin open={() => {}} />);
+    await screen.findByRole("alert");
+    expect(audit()).toEqual([query({ since: since(), users: ["gone", "bob"] })]);
+    expect(window.location.search).toBe("?view=log&user=gone&user=bob");
+    // The chosen names stay in the field.
+    expect(fieldText(t.logWho)).toBe("gone, bob");
+  });
+
+  it("ignores user and actor in the address for non-admins", async () => {
+    window.history.replaceState(null, "", "/?view=log&action=read&user=bob&actor=cli");
+    render(<LogPage admin={false} open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads"]));
+    expect(urls).toEqual([query({ since: since(), actions: ["read"] })]);
+    expect(screen.queryByRole("combobox", { name: new RegExp(`^${t.logWho}`) })).toBeNull();
+  });
+
+  it("names the choice and Carbon's controls in German", async () => {
+    applySettings({ language: "de", locale: "de" });
+    const de = messagesFor("de");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    expect([fieldText(de.logAction), fieldText(de.logWho)]).toEqual(["Alle Aktionen", "Alle"]);
+    await choose(de.logAction, de.logGroup("read"), de.logGroup("login"));
+    await choose(de.logWho, de.logCommandLine);
+    await waitFor(() => expect(fieldText(de.logAction)).toBe("Anmeldungen, Lesen"));
+    expect(fieldText(de.logWho)).toBe("Kommandozeile");
+    fireEvent.click(filterField(de.logAction));
+    const html = document.body.innerHTML;
+    for (const e of [/Total items/, /Clear selected/, /clear selection/i, /Open menu/, /Close menu/, /have been cleared/]) expect(html, String(e)).not.toMatch(e);
+    expect(html).toContain(de.carbon.selection.description);
+    expect(screen.getAllByRole("button", { name: "Auswahl leeren" })).toHaveLength(2);
+    expect(screen.getByTitle("Menü schließen")).toBeTruthy();
+    expect(screen.getAllByTitle("Menü öffnen")).toHaveLength(1);
   });
 });
 
@@ -310,15 +580,13 @@ describe("LogPage date range", () => {
       // One day picked twice: since = until.
       act(() => fp().setDate([new Date(2026, 9, 3), new Date(2026, 9, 3)], true));
       await waitFor(() => expect(audit().at(-1), tz).toBe(query({ since: "2026-10-03", until: "2026-10-03" })));
-      cleanup();
-      urls = [];
+      restart();
       // Only a start picked so far: since only.
       const open = await german();
       act(() => open.fp().setDate([new Date(2026, 9, 7)], true));
       await waitFor(() => expect(audit().at(-1), tz).toBe(query({ since: "2026-10-07" })));
       await waitFor(() => expect([open.from().value, open.to().value], tz).toEqual(["07.10.2026", ""]));
-      cleanup();
-      urls = [];
+      restart();
     }
   });
 
@@ -367,8 +635,7 @@ describe("LogPage date range", () => {
         type(to(), "05.10.2026", commit);
         await waitFor(() => expect(audit().at(-1), commit).toBe(query({ since: "2026-09-28", until: "2026-10-05" })));
         await waitFor(() => expect([from().value, to().value], commit).toEqual(["28.09.2026", "05.10.2026"]));
-        cleanup();
-        urls = [];
+        restart();
       }
     });
 
@@ -380,8 +647,8 @@ describe("LogPage date range", () => {
       type(to(), "05.10.2026", "enter");
       await waitFor(() => expect([from().value, to().value]).toEqual(["", ""]));
       // The next change is the only new request.
-      fireEvent.change(screen.getByLabelText(de.logAction), { target: { value: "read" } });
-      await waitFor(() => expect(audit().at(-1)).toBe(query({ group: "read" })));
+      await choose(de.logAction, de.logGroup("read"));
+      await waitFor(() => expect(audit().at(-1)).toBe(query({ actions: ["read"] })));
       expect(audit()).toHaveLength(count + 1);
     });
   });
@@ -406,12 +673,12 @@ describe("LogPage date range", () => {
         act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 20)], true));
         await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-20" })));
       }
-      const action = () => screen.getByLabelText(de.logAction);
+      const action = () => filterField(de.logAction);
       const picker = { from, to, other: action };
       const count = audit().length;
       run(picker, c.steps);
       // The next change is sent after every request of the steps.
-      fireEvent.change(action(), { target: { value: "read" } });
+      await choose(de.logAction, de.logGroup("read"));
       await waitFor(() => expect(audit().at(-1)).toContain("action=read"));
       expect(audit().slice(count, -1), "requests").toHaveLength(c.edits);
       const applied = rangeOf(audit().at(-1)!);
@@ -448,7 +715,7 @@ describe("LogPage date range", () => {
     type(from(), "32.13.2026", "enter");
     type(to(), "abc", "enter");
     // A later change shows the dates the typing left behind.
-    fireEvent.change(screen.getByLabelText(messagesFor("de").logAction), { target: { value: "read" } });
+    await choose(messagesFor("de").logAction, messagesFor("de").logGroup("read"));
     await waitFor(() => expect(audit().at(-1)).toContain("action=read"));
     for (const u of audit().slice(before)) {
       const p = new URL(u, "http://x").searchParams;
@@ -471,8 +738,8 @@ describe("LogPage date range", () => {
     const count = audit().length;
     act(() => fp().setDate([new Date(2026, 9, 1), new Date(2026, 9, 10)], true));
     // The next change is the only new request.
-    fireEvent.change(screen.getByLabelText(de.logAction), { target: { value: "read" } });
-    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-10", group: "read" })));
+    await choose(de.logAction, de.logGroup("read"));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: "2026-10-01", until: "2026-10-10", actions: ["read"] })));
     expect(audit()).toHaveLength(count + 1);
   });
 

@@ -208,7 +208,7 @@ describe("write responses", () => {
 // local midnight, since inclusive, until the start of the day after To (#402).
 describe("auditQuery", () => {
   afterEach(() => vi.unstubAllEnvs());
-  const filter = { since: "", until: "", group: "", who: "" };
+  const filter = { since: "", until: "", actions: [], users: [], actors: [] };
 
   it.each([
     { tz: "Europe/Berlin", since: "2026-10-25", until: "2026-10-25", want: { since: "2026-10-24T22:00:00.000Z", until: "2026-10-25T23:00:00.000Z" }, day: "25 h" },
@@ -221,5 +221,19 @@ describe("auditQuery", () => {
     vi.stubEnv("TZ", tz);
     const p = new URLSearchParams(auditQuery({ ...filter, since, until }));
     expect(Object.fromEntries(p)).toEqual(want);
+  });
+
+  // Several values: one parameter each, as the API repeats them (#376).
+  it("sends one parameter per action group, user and actor, and none for empty lists", () => {
+    expect(auditQuery(filter)).toBe("");
+    expect(auditQuery({ ...filter, actions: ["read"] })).toBe("action=read");
+    const p = new URLSearchParams(
+      auditQuery({ ...filter, actions: ["read", "export"], users: ["alice", "cli", "a&b c"], actors: ["cli", "api_key"] }, "next"),
+    );
+    expect(p.getAll("action")).toEqual(["read", "export"]);
+    // A user named cli stays a user.
+    expect(p.getAll("user")).toEqual(["alice", "cli", "a&b c"]);
+    expect(p.getAll("actor")).toEqual(["cli", "api_key"]);
+    expect(p.get("cursor")).toBe("next");
   });
 });
