@@ -76,6 +76,8 @@ type pdfHooks struct {
 	load func()
 	// killed runs after Kill has returned.
 	killed func()
+	// limit receives the time the document gets.
+	limit func(time.Duration)
 	// compile runs before the module is compiled; an error fails it.
 	compile func() error
 }
@@ -106,18 +108,18 @@ func takePDFSlot(ctx context.Context) (time.Duration, error) {
 		return 0, nil
 	default:
 	}
+	start := now()
 	if onPDFWait != nil {
 		onPDFWait()
 	}
-	start := time.Now()
 	select {
 	case pdfSlot <- struct{}{}:
-		return time.Since(start), nil
+		return now().Sub(start), nil
 	case <-ctx.Done():
 		if isDeadline(ctx.Err()) {
-			return time.Since(start), ErrBusy
+			return now().Sub(start), ErrBusy
 		}
-		return time.Since(start), ctx.Err()
+		return now().Sub(start), ctx.Err()
 	}
 }
 
@@ -285,7 +287,11 @@ func (e *pdfEngine) extract(ctx context.Context, data []byte, maxText int, budge
 	if ctx.Err() != nil && !isDeadline(ctx.Err()) {
 		return pdfText{}, waited, ctx.Err()
 	}
-	ctx, cancel := context.WithTimeout(ctx, min(pdfTimeout, budget))
+	limit := min(pdfTimeout, budget)
+	if e.hooks.limit != nil {
+		e.hooks.limit(limit)
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	var out pdfText
 	reader := &docReader{r: bytes.NewReader(data), start: e.hooks.start}

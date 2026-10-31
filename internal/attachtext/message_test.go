@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,5 +336,118 @@ func TestMessageWaitForPDFIsNotATimeout(t *testing.T) {
 	got, err := other.Message(context.Background(), strings.NewReader(raw))
 	if err != nil || len(got) != 1 || got[0].Status != StatusOK || got[0].Text != "second" {
 		t.Errorf("next try: %+v, %v", got, err)
+	}
+}
+
+// fakeClock replaces the clock of the message budget: time passes only
+// when a test advances it.
+type fakeClock struct{ ns atomic.Int64 }
+
+func useFakeClock(t *testing.T, budget time.Duration) *fakeClock {
+	t.Helper()
+	c := &fakeClock{}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	oldNow, oldBudget := now, messageTimeout
+	now = func() time.Time { return base.Add(time.Duration(c.ns.Load())) }
+	messageTimeout = budget
+	t.Cleanup(func() { now, messageTimeout = oldNow, oldBudget })
+	return c
+}
+
+func (c *fakeClock) advance(d time.Duration) { c.ns.Add(int64(d)) }
+
+func results(got []Result) string {
+	var lines []string
+	for _, r := range got {
+		lines = append(lines, fmt.Sprintf("%s %s", r.Filename, r.Status))
+	}
+	return strings.Join(lines, ",")
+}
+
+// The message's work time is a budget: each PDF gets at most what is left
+// of it (and at most pdfTimeout), and once it is used up the remaining
+// attachments get timeout rows, or too_large and failed where size and
+// decoding decide.
+func TestMessageBudget(t *testing.T) {
+	clock := useFakeClock(t, 20*time.Second)
+	var mu sync.Mutex
+	var limits []time.Duration
+	pdfs := 0
+	setHooks(t, pdfHooks{
+		limit: func(d time.Duration) {
+			mu.Lock()
+			limits = append(limits, d)
+			mu.Unlock()
+		},
+		// The first PDF takes 12 s of the budget, the second the 8 s left.
+		start: func() {
+			pdfs++
+			if pdfs == 1 {
+				clock.advance(12 * time.Second)
+			} else {
+				clock.advance(8 * time.Second)
+			}
+		},
+	})
+	raw := message(
+		attach("application/pdf", "first.pdf", pdftest.Text("first")),
+		attach("application/pdf", "second.pdf", pdftest.Text("second")),
+		attach("text/plain", "later.txt", []byte("later")),
+		attach("text/plain", "big.txt", []byte(strings.Repeat("x", MaxTextSize+1))),
+		part{header: "Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"corrupt.pdf\"\r\nContent-Transfer-Encoding: base64", body: []byte("%%%% not base64 !!!!"), raw: true},
+	)
+	got := extractMessage(t, raw)
+	if want := "first.pdf ok,second.pdf ok,later.txt timeout,big.txt too_large,corrupt.pdf failed"; results(got) != want {
+		t.Errorf("got  %s\nwant %s", results(got), want)
+	}
+	if len(limits) != 2 || limits[0] != pdfTimeout || limits[1] != 8*time.Second {
+		t.Errorf("PDF limits %v, want [%v 8s]", limits, pdfTimeout)
+	}
+}
+
+// Waiting for another PDF does not count against the budget: a PDF that
+// waits longer than the whole budget is still read, and the attachments
+// after it too.
+func TestMessageBudgetExcludesTheWait(t *testing.T) {
+	clock := useFakeClock(t, 10*time.Second)
+	other := New(nil)
+	t.Cleanup(func() { _ = other.Close() })
+	var inside testwait.Signal
+	firstIn := inside.C()
+	release := make(chan struct{})
+	setHooks(t, pdfHooks{start: func() {
+		inside.Notify()
+		select {
+		case <-release:
+		case <-time.After(testwait.Limit(t)):
+			t.Error("not released")
+		}
+	}})
+	firstDone := make(chan Result, 1)
+	go func() {
+		res, _ := shared.PDF(context.Background(), pdftest.Text("first"))
+		firstDone <- res
+	}()
+	select {
+	case <-firstIn:
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the first PDF did not start")
+	}
+	// The second message waits a minute for its turn, then the first ends.
+	onPDFWait = func() {
+		clock.advance(time.Minute)
+		close(release)
+	}
+	t.Cleanup(func() { onPDFWait = nil })
+	raw := message(
+		attach("application/pdf", "b.pdf", pdftest.Text("second")),
+		attach("text/plain", "after.txt", []byte("after")),
+	)
+	got, err := other.Message(context.Background(), strings.NewReader(raw))
+	if err != nil || results(got) != "b.pdf ok,after.txt ok" {
+		t.Errorf("got %s, %v", results(got), err)
+	}
+	if r := <-firstDone; r.Status != StatusOK {
+		t.Errorf("first: %s", r.Status)
 	}
 }

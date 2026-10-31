@@ -36,9 +36,8 @@ const (
 	MaxAttachments = 20
 	// maxPages is how many pages of a PDF are read.
 	maxPages = 500
-	// pdfTimeout bounds one PDF, messageTimeout one message.
-	pdfTimeout     = 15 * time.Second
-	messageTimeout = 60 * time.Second
+	// pdfTimeout bounds one PDF.
+	pdfTimeout = 15 * time.Second
 	// pdfMemoryLimit bounds the WebAssembly linear memory of one PDF,
 	// reserved with mmap and returned after each document. The plan
 	// allows at most 128 MiB; the gate in #390 set it to the smallest of
@@ -46,6 +45,14 @@ const (
 	// the corpus (49.9 MiB) and gives every corpus PDF the same text as
 	// 256 MiB (TestGateMeasurements).
 	pdfMemoryLimit = 96 << 20
+)
+
+// messageTimeout bounds the work on one message: the time of its
+// attachments, without the time a PDF waits for its turn. A variable for
+// tests, as is now, the clock that measures it.
+var (
+	messageTimeout = 60 * time.Second
+	now            = time.Now
 )
 
 // Status says how the extraction of one attachment ended.
@@ -187,10 +194,10 @@ func (e *Extractor) Message(ctx context.Context, r io.Reader) ([]Result, error) 
 		if ctx.Err() != nil || budget <= 0 {
 			res = unreached(a)
 		} else {
-			start := time.Now()
+			start := now()
 			var waited time.Duration
 			res, waited, err = e.attachment(ctx, a, min(MaxText, left), budget)
-			budget -= time.Since(start) - waited
+			budget -= now().Sub(start) - waited
 		}
 		if err != nil {
 			ctxEr = err
