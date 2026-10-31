@@ -50,7 +50,11 @@ type accountEnvelope struct {
 // envelopesOf returns the envelopes of a message's locations in the
 // owner's accounts.
 func envelopesOf(st *store.Store, owner int64, sha256 string) ([]accountEnvelope, error) {
-	d, err := st.GetMessageDetail(context.Background(), owner, sha256)
+	sc, err := st.ViewerScope(context.Background(), owner)
+	if err != nil {
+		return nil, err
+	}
+	d, err := st.GetMessageDetail(context.Background(), sc, sha256)
 	if err != nil {
 		return nil, err
 	}
@@ -292,6 +296,9 @@ func TestSMTPMigrationDownRefused(t *testing.T) {
 	ctx := context.Background()
 	// First the recurring fills and the journal folder, before the account
 	// exists: the latter's Down writes an audit entry per smtp account.
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
+		t.Fatalf("down the account shares: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
 		t.Fatalf("down the account purges: %q, %v", m, err)
 	}
@@ -395,14 +402,14 @@ func TestSearchEnvelopeRecipients(t *testing.T) {
 			// Only the owner of the smtp account sees the BCC recipient.
 			{bob.ID, "hidden-bcc", 0},
 		} {
-			got, err := st.SearchMessages(ctx, store.SearchFilter{Owner: c.owner, To: c.to, Limit: 50})
+			got, err := st.SearchMessages(ctx, store.SearchFilter{Scope: storetest.Viewer(t, st, c.owner), To: c.to, Limit: 50})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(got) != c.want {
 				t.Errorf("few=%v owner %d to:%s: %d results, want %d", few, c.owner, c.to, len(got), c.want)
 			}
-			threads, err := st.SearchThreads(ctx, store.SearchFilter{Owner: c.owner, To: c.to, Limit: 50})
+			threads, err := st.SearchThreads(ctx, store.SearchFilter{Scope: storetest.Viewer(t, st, c.owner), To: c.to, Limit: 50})
 			if err != nil {
 				t.Fatal(err)
 			}

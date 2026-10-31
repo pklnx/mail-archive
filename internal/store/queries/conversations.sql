@@ -2,7 +2,7 @@
 -- hop of direct links that need no common thread ID: the parent (its
 -- Message-ID is the message's In-Reply-To) and the replies (their
 -- In-Reply-To or References name the message's Message-ID). Only messages
--- found in one of the user's accounts.
+-- found in one of the scope's accounts (own or shared).
 
 -- name: ListConversation :many
 -- The newest row_limit members, newest first; the caller reverses them.
@@ -25,8 +25,7 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      JOIN accounts a ON a.id = f.account_id
-      WHERE l.message_sha256 = m.sha256 AND a.owner_id = @owner::bigint)
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[]))
 ORDER BY m.sort_at DESC, m.sha256 DESC
 LIMIT @row_limit;
 
@@ -44,5 +43,4 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      JOIN accounts a ON a.id = f.account_id
-      WHERE l.message_sha256 = m.sha256 AND a.owner_id = @owner::bigint);
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[]));

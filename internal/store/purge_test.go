@@ -790,6 +790,9 @@ func TestPurgeMigration(t *testing.T) {
 	f := newPurgeFixture(t)
 	ctx, st := f.ctx, f.st
 	c := connect(t, f.url)
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
+		t.Fatalf("down the account shares: %q, %v", m, err)
+	}
 	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
 		t.Fatalf("down: %q %v", m, err)
 	}
@@ -813,6 +816,9 @@ func TestPurgeMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.confirm(1)
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
+		t.Fatalf("down the account shares: %q, %v", m, err)
+	}
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "purged accounts are recorded") {
 		t.Errorf("down with a purge: %v", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 var fillCutoff = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -520,7 +521,7 @@ func (c *cleanupFixture) fileBytes(sha string) []byte {
 func (c *cleanupFixture) assertLocations(sha string, want map[*store.User]string) {
 	c.t.Helper()
 	for u, account := range want {
-		d, err := c.store.GetMessageDetail(c.ctx, u.ID, sha)
+		d, err := c.store.GetMessageDetail(c.ctx, storetest.Viewer(c.t, c.store, u.ID), sha)
 		if err != nil {
 			c.t.Errorf("%s: %v", u.Name, err)
 			continue
@@ -616,7 +617,7 @@ func TestFillAgainstSweep(t *testing.T) {
 		t.Error("the target's file is gone or changed")
 	}
 	c.assertLocations(target, map[*store.User]string{c.bob: "journal"})
-	if _, err := c.store.GetMessageDetail(c.ctx, c.alice.ID, target); !errors.Is(err, store.ErrNotFound) {
+	if _, err := c.store.GetMessageDetail(c.ctx, storetest.Viewer(t, c.store, c.alice.ID), target); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("alice's deleted location: %v", err)
 	}
 	if rows, err := c.store.DueBlobRemovals(c.ctx, time.Time{}, "", 10); err != nil || len(rows) != 0 {

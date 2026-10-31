@@ -83,7 +83,7 @@ func (f *retentionFixture) rule(fo *store.Folder, folder string, years int) int6
 
 func (f *retentionFixture) detail(owner *store.User, hash string) *store.MessageDetail {
 	f.t.Helper()
-	d, err := f.st.GetMessageDetail(f.ctx, owner.ID, hash)
+	d, err := f.st.GetMessageDetail(f.ctx, storetest.Viewer(f.t, f.st, owner.ID), hash)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -364,6 +364,9 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 func TestRetentionMigrationDown(t *testing.T) {
 	f := newRetentionFixture(t)
 	f.hold(store.NewLegalHold{OwnerID: &f.alice.ID})
+	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00031_account_shares") {
+		t.Fatalf("down the account shares: %q, %v", m, err)
+	}
 	if m, err := f.st.MigrateDown(f.ctx); err != nil || !strings.Contains(m, "00030_account_purges") {
 		t.Fatalf("down the account purges: %q, %v", m, err)
 	}

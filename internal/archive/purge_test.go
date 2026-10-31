@@ -170,7 +170,7 @@ func TestExecutePurge(t *testing.T) {
 	if again := s.save(t, "m1", s.bobInbox); again != s.m1 {
 		t.Fatal("other hash")
 	}
-	if d, err := s.st.GetMessageDetail(ctx, s.bob.ID, s.m1); err != nil || len(d.Locations) != 1 {
+	if d, err := s.st.GetMessageDetail(ctx, storetest.Viewer(t, s.st, s.bob.ID), s.m1); err != nil || len(d.Locations) != 1 {
 		t.Fatalf("re-archived: %+v %v", d, err)
 	}
 	if n, err := SweepBlobs(ctx, s.st, s.blobs, SweepOptions{}); err != nil || n != 0 || !s.blobs.Exists(s.m1) {

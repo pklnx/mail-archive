@@ -66,7 +66,7 @@ func TestCountsAfterUIDValidityChange(t *testing.T) {
 	}
 	save(bobInbox, 7, 1, sha('a'))
 
-	folders, err := st.ListAccountFolders(ctx, alice.ID)
+	folders, err := st.ListAccountFolders(ctx, storetest.Viewer(t, st, alice.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestCountsAfterUIDValidityChange(t *testing.T) {
 	}
 
 	// b only has its old location: it still counts, marked superseded.
-	d, err := st.GetMessageDetail(ctx, alice.ID, sha('b'))
+	d, err := st.GetMessageDetail(ctx, storetest.Viewer(t, st, alice.ID), sha('b'))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestCountsAfterUIDValidityChange(t *testing.T) {
 		t.Fatalf("locations of b: %+v", d.Locations)
 	}
 	// a: the current location first, then the two old ones.
-	d, err = st.GetMessageDetail(ctx, alice.ID, sha('a'))
+	d, err = st.GetMessageDetail(ctx, storetest.Viewer(t, st, alice.ID), sha('a'))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +98,14 @@ func TestCountsAfterUIDValidityChange(t *testing.T) {
 		t.Fatalf("locations of a: %+v", d.Locations)
 	}
 	// Owner scoping is unchanged.
-	d, err = st.GetMessageDetail(ctx, bob.ID, sha('a'))
+	d, err = st.GetMessageDetail(ctx, storetest.Viewer(t, st, bob.ID), sha('a'))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(d.Locations) != 1 || d.Locations[0].Superseded {
 		t.Fatalf("Bob's locations of a: %+v", d.Locations)
 	}
-	if _, err := st.GetMessageDetail(ctx, bob.ID, sha('b')); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetMessageDetail(ctx, storetest.Viewer(t, st, bob.ID), sha('b')); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Bob sees b: %v", err)
 	}
 }

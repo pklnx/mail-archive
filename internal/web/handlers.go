@@ -110,7 +110,7 @@ const (
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.SearchFilter{
-		Owner: userID(r), Query: q.Get("q"), Account: q.Get("account"), Folder: q.Get("folder"),
+		Query: q.Get("q"), Folder: q.Get("folder"),
 		From: q.Get("from"), To: q.Get("to"), Attachment: q.Get("attachment"), Thread: q.Get("thread"),
 	}
 	if len(f.Thread) > maxThreadLen {
@@ -173,6 +173,16 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		f.CursorAt, f.CursorSHA = &at, sha
 	}
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	// account= names one of the viewer's own accounts; an unknown name
+	// lists nothing.
+	if name := q.Get("account"); name != "" {
+		sc = sc.OwnAccount(name)
+	}
+	f.Scope = sc
 	// Fetch one extra row to know whether another page exists.
 	want := f.Limit
 	f.Limit++
@@ -291,7 +301,11 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.store.GetMessageDetail(r.Context(), sc, sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -375,7 +389,11 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, err := s.store.GetConversation(r.Context(), userID(r), sha)
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.store.GetConversation(r.Context(), sc, sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -417,7 +435,11 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.store.GetMessageDetail(r.Context(), sc, sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -491,7 +513,11 @@ func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.store.GetMessageDetail(r.Context(), sc, sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -529,7 +555,11 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, "invalid part index", nil)
 		return
 	}
-	d, err := s.store.GetMessageDetail(r.Context(), userID(r), sha)
+	sc, ok := s.viewerScope(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.store.GetMessageDetail(r.Context(), sc, sha)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -597,4 +627,16 @@ func (s *Server) messageEntry(r *http.Request, action, sha string) *store.AuditE
 	e := s.auditEntry(r, action)
 	e.SetTarget(store.TargetMessage, sha, "")
 	return e
+}
+
+// viewerScope returns the accounts the request's user may read: their own
+// and those shared with them (#389). On an error it answers and returns
+// false.
+func (s *Server) viewerScope(w http.ResponseWriter, r *http.Request) (store.Scope, bool) {
+	sc, err := s.store.ViewerScope(r.Context(), userID(r))
+	if err != nil {
+		s.failStore(w, r, err)
+		return store.Scope{}, false
+	}
+	return sc, true
 }

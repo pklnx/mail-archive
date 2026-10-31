@@ -218,7 +218,7 @@ func TestSyncMergesAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folders, err := f.store.ListAccountFolders(f.ctx, owner.ID)
+	folders, err := f.store.ListAccountFolders(f.ctx, storetest.Viewer(t, f.store, owner.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestSyncMergesAndDeduplicates(t *testing.T) {
 		t.Fatalf("folder counts after rescan: %v", counts)
 	}
 	a2 := sha256.Sum256(rawMessage("a2", "Archived"))
-	d, err := f.store.GetMessageDetail(f.ctx, owner.ID, hex.EncodeToString(a2[:]))
+	d, err := f.store.GetMessageDetail(f.ctx, storetest.Viewer(t, f.store, owner.ID), hex.EncodeToString(a2[:]))
 	if err != nil {
 		t.Fatal(err)
 	}

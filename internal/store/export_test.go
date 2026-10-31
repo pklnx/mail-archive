@@ -102,3 +102,8 @@ func (f queryStartTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pg
 }
 
 func (queryStartTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// ScopeIDs and ScopeEnvelopeIDs are the array parameters a scope gives the
+// read queries, for plan tests.
+func ScopeIDs(sc Scope) []int64         { return sc.ids() }
+func ScopeEnvelopeIDs(sc Scope) []int64 { return sc.envelopeIDs() }

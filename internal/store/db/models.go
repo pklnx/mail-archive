@@ -48,6 +48,12 @@ type AccountPurge struct {
 	Note           *string
 }
 
+type AccountShare struct {
+	AccountID int64
+	UserID    int64
+	CreatedAt time.Time
+}
+
 type AccountSyncHealth struct {
 	AccountID          int64
 	FailureStreak      int32

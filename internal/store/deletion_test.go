@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 // old is a date whose 1-year period has long ended.
@@ -133,7 +134,7 @@ func TestDeletionRunLifecycle(t *testing.T) {
 	if err != nil || done.State != store.RunDone || done.Deleted != 1 || done.FinishedAt == nil {
 		t.Fatalf("done %+v %v", done, err)
 	}
-	if _, err := f.st.GetMessageDetail(f.ctx, f.alice.ID, hashOf('b')); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.st.GetMessageDetail(f.ctx, storetest.Viewer(t, f.st, f.alice.ID), hashOf('b')); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("b still there: %v", err)
 	}
 	// The tombstone and the attestation's deletion record match; the file
@@ -202,7 +203,7 @@ func TestDeletionRechecks(t *testing.T) {
 		t.Fatalf("batch: %d %d %v", deleted, kept, err)
 	}
 	for h, want := range map[string]bool{hashOf('a'): false, hashOf('b'): false, hashOf('c'): true} {
-		_, err := f.st.GetMessageDetail(f.ctx, f.alice.ID, h)
+		_, err := f.st.GetMessageDetail(f.ctx, storetest.Viewer(t, f.st, f.alice.ID), h)
 		if gone := errors.Is(err, store.ErrNotFound); gone != want {
 			t.Errorf("%c gone %v, want %v", h[0], gone, want)
 		}

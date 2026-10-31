@@ -120,14 +120,16 @@ func hasFolder(cmd *cobra.Command, a *app, acc *store.Account, folder string) (b
 	if acc.OwnerID == nil {
 		return true, nil
 	}
-	accounts, err := a.store.ListAccountFolders(cmd.Context(), *acc.OwnerID)
+	// The owner's own accounts only: a shared account may have the name.
+	sc, err := a.store.OwnerScope(cmd.Context(), *acc.OwnerID)
+	if err != nil {
+		return false, err
+	}
+	accounts, err := a.store.ListAccountFolders(cmd.Context(), sc.Only(acc.ID))
 	if err != nil {
 		return false, err
 	}
 	for _, af := range accounts {
-		if af.Name != acc.Name {
-			continue
-		}
 		for _, f := range af.Folders {
 			if f.Name == folder {
 				return true, nil

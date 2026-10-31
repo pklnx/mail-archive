@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +53,7 @@ func conversationFixture(t *testing.T) *searchFixture {
 
 func (f *searchFixture) conversation(sha string) (*store.Conversation, []string) {
 	f.t.Helper()
-	c, err := f.st.GetConversation(f.ctx, f.owner, sha)
+	c, err := f.st.GetConversation(f.ctx, storetest.Viewer(f.t, f.st, f.owner), sha)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestConversation(t *testing.T) {
 			t.Errorf("conversation(%s) = %v (total %d, truncated %v), want %v", sha, got, c.Total, c.Truncated, want)
 		}
 	}
-	if _, err := f.st.GetConversation(f.ctx, f.owner, strings.Repeat("0", 64)); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.st.GetConversation(f.ctx, storetest.Viewer(t, f.st, f.owner), strings.Repeat("0", 64)); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("unknown message: %v", err)
 	}
 }
@@ -113,7 +114,10 @@ func TestSearchThreads(t *testing.T) {
 	f := conversationFixture(t)
 	threads := func(filter store.SearchFilter) []string {
 		t.Helper()
-		filter.Owner, filter.Limit = f.owner, 50
+		if filter.Scope.Viewer == 0 {
+			filter.Scope = storetest.Viewer(t, f.st, f.owner)
+		}
+		filter.Limit = 50
 		rows, err := f.st.SearchThreads(f.ctx, filter)
 		if err != nil {
 			t.Fatal(err)
@@ -130,7 +134,7 @@ func TestSearchThreads(t *testing.T) {
 		want   []string
 	}{
 		{"all", store.SearchFilter{}, []string{"other:1", "self:1", "d:1", "dup:4"}},
-		{"account and folder", store.SearchFilter{Account: "privat", Folder: "INBOX"}, []string{"other:1", "self:1", "d:1", "c:2"}},
+		{"account and folder", store.SearchFilter{Scope: f.own("privat"), Folder: "INBOX"}, []string{"other:1", "self:1", "d:1", "c:2"}},
 		{"query", store.SearchFilter{Query: "Angebot", Before: date("2024-01-03")}, []string{"b:2"}},
 		{"from", store.SearchFilter{From: "studio"}, []string{"dup:3"}},
 		{"thread", store.SearchFilter{Thread: "a@x"}, []string{"dup:4"}},
@@ -152,12 +156,14 @@ func TestSearchThreadsParity(t *testing.T) {
 	f.add("privat/INBOX", searchMsg{sha: "att", id: "att@x", subject: "Re: Angebot Küche", from: "Studio <info@kueche.example>", sent: "2024-01-07T10:00:00Z",
 		data: store.IndexData{InReplyTo: "c@x", ReferenceIDs: []string{"a@x", "c@x"}, ThreadID: "a@x", To: "alice@example.com", HasAttachment: true, AttachmentNames: []string{"plan.pdf"}}})
 	filters := []store.SearchFilter{
-		{}, {Query: "Angebot"}, {Query: "kueche"}, {Account: "privat"}, {Account: "privat", Folder: "Sent"},
+		{}, {Query: "Angebot"}, {Query: "kueche"}, {Scope: f.own("privat")}, {Scope: f.own("privat"), Folder: "Sent"},
 		{From: "studio"}, {To: "alice"}, {Attachment: "plan"}, {HasAttachment: true},
 		{After: date("2024-01-02"), Before: date("2024-01-05")}, {Thread: "a@x"},
 	}
 	for _, filter := range filters {
-		filter.Owner = f.owner
+		if filter.Scope.Viewer == 0 {
+			filter.Scope = storetest.Viewer(t, f.st, f.owner)
+		}
 		filter.Limit = 100
 		plain, err := f.st.SearchMessages(f.ctx, filter)
 		if err != nil {
@@ -195,12 +201,12 @@ func TestSearchThreadsPaging(t *testing.T) {
 		f.add("privat/INBOX", searchMsg{sha: fmt.Sprintf("m%02d", i), id: fmt.Sprintf("m%02d@x", i), subject: "s",
 			sent: start.Add(time.Duration(i) * time.Hour).Format(time.RFC3339), data: thread(th, th)})
 	}
-	all, err := f.st.SearchThreads(f.ctx, store.SearchFilter{Owner: f.owner, Limit: 100})
+	all, err := f.st.SearchThreads(f.ctx, store.SearchFilter{Scope: storetest.Viewer(t, f.st, f.owner), Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var paged []store.MessageSummary
-	filter := store.SearchFilter{Owner: f.owner, Limit: 7}
+	filter := store.SearchFilter{Scope: storetest.Viewer(t, f.st, f.owner), Limit: 7}
 	for range 20 {
 		page, err := f.st.SearchThreads(f.ctx, filter)
 		if err != nil {
@@ -251,12 +257,46 @@ func TestSearchFilterCopies(t *testing.T) {
 			t.Errorf("copy %d differs from the first:\n%s\n---\n%s", i+2, c, copies[0])
 		}
 	}
+
+	// The gone flag of each row (SearchMessages, SearchThreads) has the
+	// gone filter's account scope: the same predicates on the gone (g) and
+	// present (p) locations, so a row is flagged exactly when the filter
+	// would list it (#389).
+	scopeLines := func(block string) []string {
+		var out []string
+		for _, l := range strings.Split(block, "\n") {
+			l = strings.TrimRight(strings.TrimSpace(l), ")")
+			if !strings.HasPrefix(l, "JOIN ") && (strings.Contains(l, "account_id") || strings.Contains(l, ".kind") || strings.Contains(l, ".owner_id")) {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	_, filter, _ := strings.Cut(copies[0], "AND (NOT sqlc.arg(gone)::boolean")
+	want := scopeLines(filter)
+	if len(want) != 2 {
+		t.Fatalf("gone filter scope %q, want two predicates", want)
+	}
+	flags := 0
+	for _, part := range strings.Split(string(src), "(EXISTS (\n")[1:] {
+		flag, _, ok := strings.Cut(part, "AS gone")
+		if !ok {
+			continue
+		}
+		flags++
+		if got := scopeLines(flag); !slices.Equal(got, want) {
+			t.Errorf("gone flag %d scope %q, gone filter %q", flags, got, want)
+		}
+	}
+	if flags != 2 {
+		t.Fatalf("found %d gone flags, want 2 (SearchMessages, SearchThreads)", flags)
+	}
 }
 
 // The grouped listing and the conversation use the thread index on 10,000
 // messages in threads of 5.
 func TestConversationPlans(t *testing.T) {
-	_, url := storetest.NewWithURL(t)
+	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -278,15 +318,36 @@ SELECT encode(sha256(i::text::bytea), 'hex'), 1000, 'x', 'Betreff ' || (i / 5), 
 FROM generate_series(0, 9999) i;
 INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid)
 SELECT encode(sha256(i::text::bytea), 'hex'), (SELECT id FROM folders), 1, i FROM generate_series(0, 9999) i;
+-- A second user with an empty account of their own, who has the first
+-- user's account shared (#389).
+INSERT INTO users (name, password_hash) VALUES ('reader', 'x');
+INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id)
+VALUES ('own', 'h', 993, 'tls', 'u', '\x00', (SELECT id FROM users WHERE name = 'reader'));
+INSERT INTO folders (account_id, name, uidvalidity) SELECT id, 'INBOX', 1 FROM accounts WHERE name = 'own';
+INSERT INTO account_shares (account_id, user_id)
+SELECT a.id, u.id FROM accounts a, users u WHERE a.name = 'a' AND u.name = 'reader';
 ANALYZE;`
 	if _, err := conn.Exec(ctx, seed); err != nil {
 		t.Fatal(err)
 	}
-	var owner int64
-	if err := conn.QueryRow(ctx, `SELECT id FROM users`).Scan(&owner); err != nil {
+	var owner, reader int64
+	if err := conn.QueryRow(ctx, `SELECT id FROM users WHERE name = 'plan'`).Scan(&owner); err != nil {
 		t.Fatal(err)
 	}
+	if err := conn.QueryRow(ctx, `SELECT id FROM users WHERE name = 'reader'`).Scan(&reader); err != nil {
+		t.Fatal(err)
+	}
+	// Every case runs with the owner's scope and with the reader's.
+	scopes := map[string]store.Scope{"owner": storetest.Viewer(t, st, owner), "shared user": storetest.Viewer(t, st, reader)}
+	if len(scopes["owner"].Accounts) != 1 || len(scopes["shared user"].Accounts) != 2 || !scopes["shared user"].HasShared() {
+		t.Fatalf("scopes %+v", scopes)
+	}
 	sha := fmt.Sprintf("%x", sha256.Sum256([]byte("4242")))
+	// A page of a listing: the hashes ListShareOnlyLocations gets.
+	var page []string
+	for i := range 200 {
+		page = append(page, fmt.Sprintf("%x", sha256.Sum256([]byte(strconv.Itoa(4000+i)))))
+	}
 	explain := func(t *testing.T, record func(q *db.Queries) error) string {
 		t.Helper()
 		var rec explainer
@@ -303,21 +364,45 @@ ANALYZE;`
 		}
 		return strings.Join(lines, "\n")
 	}
-	cases := map[string]func(q *db.Queries) error{
-		"grouped list": func(q *db.Queries) error {
-			_, err := q.SearchThreads(ctx, db.SearchThreadsParams{Owner: owner, RowLimit: 51})
-			return err
-		},
-		"conversation": func(q *db.Queries) error {
-			_, err := q.ListConversation(ctx, db.ListConversationParams{Owner: owner, Sha256: sha, RowLimit: store.MaxConversation})
-			return err
-		},
+	for scopeName, sc := range scopes {
+		ids := store.ScopeIDs(sc)
+		cases := map[string]func(q *db.Queries) error{
+			"grouped list": func(q *db.Queries) error {
+				_, err := q.SearchThreads(ctx, db.SearchThreadsParams{Accounts: ids, EnvelopeAccounts: store.ScopeEnvelopeIDs(sc), RowLimit: 51})
+				return err
+			},
+			"conversation": func(q *db.Queries) error {
+				_, err := q.ListConversation(ctx, db.ListConversationParams{Accounts: ids, Sha256: sha, RowLimit: store.MaxConversation})
+				return err
+			},
+		}
+		for name, record := range cases {
+			t.Run(scopeName+"/"+name, func(t *testing.T) {
+				plan := explain(t, record)
+				if !strings.Contains(plan, "messages_thread_idx") {
+					t.Errorf("plan does not use messages_thread_idx:\n%s", plan)
+				}
+				if strings.Contains(plan, "Seq Scan on messages") || strings.Contains(plan, "Seq Scan on message_locations") {
+					t.Errorf("plan reads every message or location:\n%s", plan)
+				}
+			})
+		}
 	}
-	for name, record := range cases {
-		t.Run(name, func(t *testing.T) {
-			if plan := explain(t, record); !strings.Contains(plan, "messages_thread_idx") || strings.Contains(plan, "Seq Scan on messages") {
-				t.Errorf("plan does not use messages_thread_idx:\n%s", plan)
-			}
+	// Which rows of a page the reader sees only through the share: driven
+	// by the page's hashes, not by the shared account's locations.
+	t.Run("shared user/share-only locations", func(t *testing.T) {
+		sc := scopes["shared user"]
+		plan := explain(t, func(q *db.Queries) error {
+			_, err := q.ListShareOnlyLocations(ctx, db.ListShareOnlyLocationsParams{
+				Shas: page, SharedAccounts: store.ScopeIDs(sc.Shared()), OwnAccounts: store.ScopeIDs(sc.Own()),
+			})
+			return err
 		})
-	}
+		if !strings.Contains(plan, "message_locations_sha_idx") {
+			t.Errorf("plan does not use message_locations_sha_idx:\n%s", plan)
+		}
+		if strings.Contains(plan, "Seq Scan on messages") || strings.Contains(plan, "Seq Scan on message_locations") {
+			t.Errorf("plan reads every message or location:\n%s", plan)
+		}
+	})
 }

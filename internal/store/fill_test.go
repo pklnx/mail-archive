@@ -115,7 +115,7 @@ func TestFills(t *testing.T) {
 		t.Errorf("first received from a fill: %+v, %v", first, err)
 	}
 	// The location names the fill.
-	d, err := st.GetMessageDetail(ctx, u.ID, meta.SHA256)
+	d, err := st.GetMessageDetail(ctx, storetest.Viewer(t, st, u.ID), meta.SHA256)
 	if err != nil || len(d.Locations) != 1 {
 		t.Fatalf("detail %+v, %v", d, err)
 	}
@@ -340,7 +340,7 @@ func TestReceiveAfterFill(t *testing.T) {
 	if err != nil || len(envs) != 1 || !slices.Equal(envs[0].RcptTo, []string{"bob@example.com", "carol@example.com"}) {
 		t.Fatalf("envelopes %+v, %v", envs, err)
 	}
-	d, err := st.GetMessageDetail(ctx, u.ID, meta.SHA256)
+	d, err := st.GetMessageDetail(ctx, storetest.Viewer(t, st, u.ID), meta.SHA256)
 	if err != nil || len(d.Locations) != 2 {
 		t.Fatalf("locations %+v, %v", d, err)
 	}
