@@ -425,6 +425,50 @@ describe("LogPage filters", () => {
     expect(audit()).toEqual([query({ since: since() }), query({ since: since(), actions: ["read"] })]);
   });
 
+  it("Escape leaves Aktion and keeps the choice; Delete and Backspace clear it (#411)", async () => {
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    await choose(t.logAction, t.logGroup("login"), t.logGroup("search"));
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), actions: ["login", "search"] })));
+    const address = "?view=log&action=login&action=search";
+    expect(window.location.search).toBe(address);
+    const text = `${t.logGroup("login")}, ${t.logGroup("search")}`;
+    expect(fieldText(t.logAction)).toBe(text);
+    const settled = audit().length;
+
+    // The menu open: Escape only closes it, the focus stays on the field.
+    const action = filterField(t.logAction);
+    act(() => action.focus());
+    fireEvent.keyDown(action, { key: "ArrowDown", keyCode: 40 });
+    await waitFor(() => expect(action.getAttribute("aria-expanded")).toBe("true"));
+    fireEvent.keyDown(action, { key: "Escape", keyCode: 27 });
+    await waitFor(() => expect(action.getAttribute("aria-expanded")).toBe("false"));
+    expect(document.activeElement).toBe(action);
+
+    // The menu closed: Escape leaves the field and keeps the choice.
+    fireEvent.keyDown(action, { key: "Escape", keyCode: 27 });
+    expect(document.activeElement).not.toBe(action);
+    expect(fieldText(t.logAction)).toBe(text);
+    expect(window.location.search).toBe(address);
+
+    // Delete on the field clears it: exactly one request since the choice, so the Escapes sent none.
+    act(() => action.focus());
+    fireEvent.keyDown(action, { key: "Delete", keyCode: 46 });
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since() })));
+    expect(audit()).toHaveLength(settled + 1);
+    expect(fieldText(t.logAction)).toBe(t.logAllActions);
+    expect(window.location.search).toBe("?view=log");
+
+    // Backspace on Wer clears it as well.
+    await choose(t.logWho, "bob");
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since(), users: ["bob"] })));
+    const who = filterField(t.logWho);
+    act(() => who.focus());
+    fireEvent.keyDown(who, { key: "Backspace", keyCode: 8 });
+    await waitFor(() => expect(audit().at(-1)).toBe(query({ since: since() })));
+    expect(fieldText(t.logWho)).toBe(t.logEveryone);
+  });
+
   it("drops users that are gone and unknown actors once the user list is there, with one request", async () => {
     let release!: () => void;
     const listed = new Promise<void>((r) => {
