@@ -4,8 +4,6 @@ Roles: maintainer (human), coordinator (Claude: orders the backlog, plans, deleg
 
 Language: German with the maintainer; English on GitHub and in code. Every GitHub text ends with `— Claude, <role>`; no model names on GitHub.
 
-Product: hosted only. The operator (the maintainer) runs the service; customers do not self-host. Bundle and Compose are operator tooling. Plans and docs address the operator and customer admins and users.
-
 ## Coordinator autonomy
 The coordinator decides alone and reports afterwards: UI wording, technical trade-offs, small product details inside an approved goal, tightening security. It asks the maintainer (AskUserQuestion, recommendation first, questions bundled) about new goals and milestone scope, releases, and anything that widens access or weakens security or privacy, including `security.md` guarantees. It reports only at milestones and blockers, works toward the goal instead of asking for confirmation, and records its decisions for later review ("Coordinator decisions" in plans, PR and issue comments). Agents stop and report only for real product questions; technical choices they make and document.
 

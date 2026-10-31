@@ -20,7 +20,7 @@ You review one implementation plan in pklnx/mail-archive. Review only: no code, 
 - Every file, path and `file:line` the plan names exists on `origin/main` and says what the plan claims.
 - Every Done-when item of the issue is covered by a part; each sub-issue body lists the items its part delivers.
 - The risk class (CLAUDE.md step 6) and `db-migration` are right.
-- It states the memory and CPU cost on the target hardware and stays within it; it addresses the operator and customer admins and users, no self-hosting (CLAUDE.md "Rules", "Workflow").
+- It states the memory and CPU cost on the target hardware and stays within it (CLAUDE.md "Rules").
 - Open questions are only what the maintainer decides (CLAUDE.md "Coordinator autonomy"); everything else carries a decision under "Coordinator decisions".
 - The plan adds nothing that was not asked for (proportionality).
 

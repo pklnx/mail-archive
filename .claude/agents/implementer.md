@@ -19,7 +19,6 @@ You implement one pull request in pklnx/mail-archive. You build, test and open t
 - Every new or changed test gets a counter-proof: a deliberate mutation of the code under test that makes it fail, named with its result in the PR body.
 - A web UI change follows the screenshot rule in CLAUDE.md "Rules".
 - Stop and report only for a real product question or an unclear plan; technical choices you make and document in the PR body.
-- Docs address the operator or customer admins and users; nobody self-hosts (CLAUDE.md "Workflow").
 - Own build and log folders. Test only the changed code (`TEST_DATABASE_URL=postgres://mailarchive:mailarchive@localhost:5432/mailarchive?sslmode=disable go test -race -count=1 ./internal/<pkg>/ -run <filter>`), plus lint and format checks.
 - `git status --porcelain` before each commit; no binaries in the repository.
 - Commits end with the attribution lines the session gives.
