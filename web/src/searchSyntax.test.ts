@@ -104,6 +104,20 @@ describe("localMidnight", () => {
     vi.stubEnv("TZ", "UTC");
     expect(localMidnight("2024-01-01")).toBe("2024-01-01T00:00:00+00:00");
   });
+
+  // Regression (#404): where midnight is skipped, T00:00 with the day's offset
+  // is an hour before the day starts.
+  it.each([
+    ["America/Santiago", "2026-09-06", "2026-09-06T01:00:00-03:00"],
+    ["Asia/Beirut", "2026-03-29", "2026-03-29T01:00:00+03:00"],
+    ["Europe/Berlin", "2026-03-29", "2026-03-29T00:00:00+01:00"],
+    ["Europe/Berlin", "2026-10-25", "2026-10-25T00:00:00+02:00"],
+  ])("starts the day at its first instant in %s on %s", (tz, date, want) => {
+    vi.stubEnv("TZ", tz);
+    expect(localMidnight(date)).toBe(want);
+    const [y = 0, m = 1, d = 1] = date.split("-").map(Number);
+    expect(new Date(want).getTime()).toBe(new Date(y, m - 1, d).getTime());
+  });
 });
 
 describe("searchFilter", () => {

@@ -3,16 +3,14 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- v1.2.1 (2026-10-30, main ee304bb): the five bugs the maintainer found in v1.2.0 (#375, #377-#380). All four image tags carry one digest, checked in the registry.
+- v1.2.2 (2026-10-31, main b61f627): #385 (date range fields always show the applied range; shared `DateRange`, so search filters and Log). All four image tags carry one digest (sha256:e273e825…), checked in the registry. Milestone 1.2.2 is closed.
 
 ## Open PRs
-- None. Dependabot waits 14 days before it opens a PR for a new version (`cooldown` in `.github/dependabot.yml`); security updates are exempt.
+- #400's PR (Log multi-select UI, part 2 of #376) is being implemented. Dependabot waits 14 days before it opens a PR for a new version (`cooldown` in `.github/dependabot.yml`); security updates are exempt.
 
 ## Open tickets
-- No ticket is `ready`. Next in the backlog:
-  - #376: multi-select for Aktion/Wer on the Log. It is a feature, so it goes into 1.3.0, by maintainer decision. It builds on the shared `DateRange` from #377.
-  - #385: date range fields and the applied filter can disagree after a field is emptied, and Enter in an emptied field throws. The bug is in the shared component, so the fix changes the search filters too. One more case (Tab with the calendar open) is in the #386 body.
-  - #343: WebKit e2e guards, parked until a WebKit project is added. It also carries #312 items 5 and 6.
+- Milestone 1.3.0 (open on GitHub, see Milestones): #376 (part 1 #399 merged via #401; part 2 #400 in progress, `ready` via #376), #389 shared mailboxes, #390 attachment search, #404 search `after:`/`before:` count UTC days, #406 `retentionDay` test fails in Asia/Tokyo. #402 is done (#405). The 1.3.0 release notes must state #401's AND→OR change for `user`+`actor` together.
+- Later milestones: 1.4.0 #391 OAuth2; 1.5.0 #392 encryption at rest, #393 auditor access, #394 GoBD export; 1.6.0 #395 SMTP auth/TLS, #396 start without CLI, #397 operator/quotas, #398 WebKit e2e with #343.
 - Initial JS on main is about 569 900 of 579 000.
 
 ## Active decisions

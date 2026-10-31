@@ -181,8 +181,10 @@ browser's time zone; the API and `./ma audit` read a plain date as a UTC day.
 ```
 
 `--since` is required, `--until` is exclusive (a plain date includes that
-day). `--action` takes a group (`login`, `search`, `read`, `export`,
-`accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, and is
+day). A plain date is a day in UTC, not in your time zone; for another zone
+give RFC 3339 with an offset, such as `2026-10-01T00:00:00+02:00`.
+`--action` takes a group (`login`, `search`, `read`, `export`, `accounts`,
+`users`, `profile`, `api_keys`, `sync`, `retention`) or an action, and is
 repeatable.
 `--user` selects a current user's entries. Without `--out`, the entries go
 to stdout. A file must not exist yet; it is written with mode 0600 and
