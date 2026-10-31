@@ -180,6 +180,22 @@ starts would leave it pending for ever. The filter fails closed: a failed
 detection, an empty diff or any other changed file runs the suite, and so does
 every push to `main`. `web-e2e` is a required check.
 
+One spec also runs in Playwright's WebKit until
+[#398](https://github.com/pklnx/mail-archive/issues/398) runs the suite there:
+`web/e2e/frame-links.spec.ts`, which checks that no link in an HTML mail leads
+into the app and that a link redirecting back to the archive is refused
+(#459; its server listens on 127.0.0.2:18182, so it needs Linux's loopback
+range). `E2E_BROWSER` picks the engine (`chromium` by default, or
+`webkit`; anything else is an error), and `pnpm e2e:webkit` in `web/` runs the
+`webkit` project, which runs only that spec and records traces without
+screenshots. WebKit has to be installed first (`pnpm exec playwright install
+webkit`, plus its system libraries: `--with-deps`). CI runs it in the
+`web-e2e-webkit` job, with the same skip rule as `web-e2e`. That job always
+installs WebKit's libraries with apt, which took 8 to 13 minutes in this
+repository when the mirror was slow (`scripts/ci-playwright-chromium.sh`), so
+its timeout is 30 minutes. It is not a required check, but a red result
+blocks merging.
+
 ## Documentation
 
 This site is built with [VitePress](https://vitepress.dev/) from `docs/` and
@@ -274,7 +290,8 @@ Changes start as an issue with an approved plan; see
 squash-merged when the required CI checks pass: `test`, `lint`, `vulncheck`,
 `docker`, `compose`, `web`, `web-e2e` and `secret-scan`. The `audit` and
 `docs-audit` checks are not required (see [Dependencies](#dependencies)), nor
-is `review-gate` (see [Review gate](./review-gate)). A
+are `review-gate` (see [Review gate](./review-gate)) and `web-e2e-webkit` (see
+[End-to-end tests](#end-to-end-tests)). A
 pull request is merged (squash) after an approving review and green required
 checks; auto-merge is not used. Agent rules are
 in `CLAUDE.md` at the repository root.
@@ -305,8 +322,8 @@ file changes on `main`.
   cache), with Docker Hub as the fallback, so a Docker Hub error or rate limit
   does not fail a job. These pulls are anonymous: dockerd would send the
   runner's Docker Hub login to the mirror, which refuses it. The PostgreSQL
-  services of the `test` and `web-e2e` jobs are named on the mirror directly
-  and have no fallback. Users' builds (the Dockerfile, `docker-compose.yml`,
+  services of the `test`, `web-e2e` and `web-e2e-webkit` jobs are named on the
+  mirror directly and have no fallback. Users' builds (the Dockerfile, `docker-compose.yml`,
   `./ma`, the release workflow) do not use the mirror; see the comments in
   `.github/workflows/ci.yml`.
 - The `docker` job keeps its layer cache in the GitHub Actions cache. Only

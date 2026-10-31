@@ -7,6 +7,13 @@ export const imapPort = 18143;
 // localhost, not 127.0.0.1: the server checks the Host header against its
 // public URL, and passkeys need a host name.
 export const origin = `http://localhost:${port}`;
+/**
+ * Another site for the redirect check in frame-links.spec.ts: the demo's
+ * rendering check links to it (tools/demo, neutralized), and the spec runs a
+ * server there. 127.0.0.2 is on the loopback interface on Linux, and not one
+ * of the demo's hosts (127.0.0.1 is), so the link stays a link.
+ */
+export const redirectOrigin = "http://127.0.0.2:18182";
 
 /** The demo admin. Admins need 2FA; globalSetup logs it in once. */
 export const admin = { name: "demo", password: "demo-password", totpSecret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" };

@@ -105,6 +105,22 @@ func TestFetchMetadataGuard(t *testing.T) {
 		{"GET", "/icon.svg", sub("image"), 204},
 		{"GET", "/apikeys", sub("image"), 204},
 	}
+	// A navigation to a route a browser opens counts only from the app's own
+	// origin, typed or bookmarked (none), or without the header: a link in a
+	// mail to another site that redirects back is cross-site (#459).
+	for _, p := range []string{msg + "/html", msg + "/html?images=1", msg + "/raw", msg + "/parts/1", "/api/openapi.json"} {
+		for _, d := range []string{"document", "iframe", "empty"} {
+			for site, want := range map[string]int{"cross-site": 403, "same-site": 403, "CROSS-SITE": 403, "bogus": 403, "same-origin": 204, "none": 204, "": 204} {
+				h := headers{"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": d}
+				if site != "" {
+					h["Sec-Fetch-Site"] = site
+				}
+				cases = append(cases, c{"GET", p, h, want})
+			}
+		}
+		// A fetch from another site is not a navigation; CORS keeps its answer from the page.
+		cases = append(cases, c{"GET", p, headers{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"}, 204})
+	}
 	for _, d := range []string{"image", "style", "font", "script", "audio", "video", "track", "object", "embed", "manifest", "worker", "sharedworker", "serviceworker", "report", "xslt", "audioworklet", "paintworklet", "frame"} {
 		for _, p := range []string{msg + "/raw", "/api/messages?q=x", "/api/status"} {
 			want := 403
@@ -204,5 +220,58 @@ func TestFetchMetadataGuardWithSession(t *testing.T) {
 	}
 	if got := newEntries(t, f.st, n); len(got) != 6 {
 		t.Errorf("allowed requests: %d audit entries, want 6 (html twice, raw twice, part twice)", len(got))
+	}
+}
+
+// A navigation to a route a browser opens that the browser marks as coming
+// from another site is refused through the real route table, before
+// anything is logged (#459): an external link in a mail that redirects back
+// to the archive. Chromium sends the session cookie with it, because the
+// navigation began in the mail frame, which has the app's origin. The same
+// routes still open from the app (same-origin), typed or bookmarked (none)
+// and without the header.
+func TestFetchMetadataGuardCrossSiteNavigation(t *testing.T) {
+	f := newAPIFixture(t)
+	msg := "/api/messages/" + f.ids["rich"]
+	do := func(path, site, dest string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", f.srv.URL+path, nil)
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", dest)
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+		resp, err := http.DefaultClient.Do(req) // f.srv adds the session cookie
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	routes := []string{msg + "/html", msg + "/raw", msg + "/parts/1", openAPIPath}
+	n := len(auditLog(t, f.st))
+	for _, p := range routes {
+		for _, site := range []string{"cross-site", "same-site"} {
+			for _, dest := range []string{"document", "iframe", "empty"} {
+				if got := do(p, site, dest); got != http.StatusForbidden {
+					t.Errorf("%s navigation (%s) to %s: %d", site, dest, p, got)
+				}
+			}
+		}
+	}
+	if got := newEntries(t, f.st, n); len(got) != 0 {
+		t.Errorf("refused navigations wrote audit entries: %+v", got)
+	}
+	for _, p := range routes {
+		for _, site := range []string{"same-origin", "none", ""} {
+			if got := do(p, site, "document"); got != http.StatusOK {
+				t.Errorf("%q navigation to %s: %d", site, p, got)
+			}
+		}
+	}
+	// html, raw and the part, three times each.
+	if got := newEntries(t, f.st, n); len(got) != 9 {
+		t.Errorf("allowed navigations: %d audit entries, want 9", len(got))
 	}
 }
