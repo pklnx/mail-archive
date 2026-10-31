@@ -149,9 +149,13 @@ func writeCandidatesCSV(out io.Writer, candidates []store.DeletionCandidate) err
 }
 
 // retentionEndDay is the last day of a period from its end (the first
-// instant after it), in UTC.
+// instant after it): always 31 December (#406). A period ends at 1 January
+// 00:00 in its rule's time zone (retention_end, migration 00021), which the
+// end's instant does not carry. One day after the end is in the next year in
+// UTC for any rule zone west of UTC and up to +24 h east of it, so the
+// period's last year is the UTC year of end + 1 day, minus one.
 func retentionEndDay(t time.Time) string {
-	return t.Add(-time.Microsecond).UTC().Format(time.DateOnly)
+	return fmt.Sprintf("%04d-12-31", t.Add(24*time.Hour).UTC().Year()-1)
 }
 
 func dateOrDash(t *time.Time) string {

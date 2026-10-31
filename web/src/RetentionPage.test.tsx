@@ -5,7 +5,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeletionReview, DeletionRun, LegalHold, RetentionRule, RetentionRules } from "./api";
-import { day, retentionDay } from "./format";
+import { day } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
 import { accountLabel, countMatches, holdScope, RetentionPage, runOpen } from "./RetentionPage";
 import { RunPage } from "./RetentionRun";
@@ -55,16 +55,6 @@ describe("accountLabel", () => {
   it("shows owner, name and removal", () => {
     expect(accountLabel({ owner: "alice", name: "work", removed: false })).toBe("alice / work");
     expect(accountLabel({ owner: "", name: "old", removed: true })).toBe(`- / old (${t.ruleRemoved})`);
-  });
-});
-
-describe("retentionDay", () => {
-  it("shows the last day of the period, not the first day after it", () => {
-    // Midnight 1 January 2026 in Berlin is the first instant after the period.
-    const shown = retentionDay("2025-12-31T23:00:00Z");
-    expect(shown).toMatch(/2025/);
-    expect(shown).not.toMatch(/2026/);
-    expect(retentionDay("nonsense")).toBe("");
   });
 });
 

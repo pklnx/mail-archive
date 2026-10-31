@@ -181,3 +181,23 @@ func TestDeletionCommands(t *testing.T) {
 		}
 	}
 }
+
+// Every period ends at 1 January 2026 in its rule's zone; its last day is
+// 31 December 2025 whatever the zone, not 1 January west of UTC (#406).
+func TestRetentionEndDay(t *testing.T) {
+	for _, c := range []struct{ zone, end string }{
+		{"Europe/Berlin", "2025-12-31T23:00:00Z"},
+		{"America/New_York", "2026-01-01T05:00:00Z"},
+		{"Pacific/Pago_Pago", "2026-01-01T11:00:00Z"},
+		{"Asia/Tokyo", "2025-12-31T15:00:00Z"},
+		{"Pacific/Kiritimati", "2025-12-31T10:00:00Z"},
+	} {
+		end, err := time.Parse(time.RFC3339, c.end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := retentionEndDay(end); got != "2025-12-31" {
+			t.Errorf("%s (%s): %s", c.zone, c.end, got)
+		}
+	}
+}

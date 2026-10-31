@@ -109,9 +109,11 @@ WHERE run_id = @run_id AND message_sha256 = ANY (@shas::bpchar[]) AND state = 'p
 -- name: DeletionRunSummary :many
 -- The pending candidates of a run by owner, account, folder and the year
 -- their retention period ended in, for the review. A message found in two
--- folders counts in both.
+-- folders counts in both. A period ends at 1 January in its rule's zone,
+-- which the candidate does not carry; one day after the end is in the next
+-- year in UTC for any rule zone west of UTC and up to +24 h east (#406).
 SELECT coalesce(u.name, '')::text AS owner, a.name AS account, f.name AS folder,
-       extract(year FROM (c.retain_until - interval '1 microsecond') AT TIME ZONE 'UTC')::int AS year,
+       (extract(year FROM (c.retain_until + interval '1 day') AT TIME ZONE 'UTC') - 1)::int AS year,
        count(DISTINCT c.message_sha256)::bigint AS messages
 FROM deletion_candidates c
 JOIN message_locations l ON l.message_sha256 = c.message_sha256
