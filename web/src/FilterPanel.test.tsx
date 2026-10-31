@@ -69,7 +69,7 @@ const since = () => screen.getByLabelText(ft.since) as HTMLInputElement;
 const until = () => screen.getByLabelText(ft.until) as HTMLInputElement;
 const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
 /** The flatpickr instance on the Since field (Carbon's range picker has one for both fields). */
-const fp = () => (document.getElementById("f-after") as unknown as { _flatpickr: { setDate: (d: Date[], change: boolean) => void; clear: () => void; isOpen: boolean; open: () => void; calendarContainer: HTMLElement } })._flatpickr;
+const fp = () => (document.getElementById("f-after") as unknown as { _flatpickr: { setDate: (d: Date[], change: boolean) => void; clear: () => void; isOpen: boolean; open: () => void; jumpToDate: (d: Date, triggerChange: boolean) => void; calendarContainer: HTMLElement } })._flatpickr;
 
 describe("FilterPanel fields", () => {
   it("switches yes/no filters in place: the attachment in the text, the grouping through setGroup", () => {
@@ -382,7 +382,10 @@ describe("FilterPanel in German", () => {
     expect(calendar.getAttribute("aria-label")).toBe(dt.calendar);
     expect(calendar.querySelector(`[aria-label="${dt.nextMonth}"]`)).not.toBeNull();
     expect(calendar.querySelector(`[aria-label="${dt.previousMonth}"]`)).not.toBeNull();
-    // flatpickr's German month names.
+    // flatpickr's German month names. The calendar opens on the current month, and
+    // flatpickr reads "now" once at import, so jump to a fixed month first;
+    // triggerChange lets Carbon's month plugin redraw the month name.
+    act(() => fp().jumpToDate(new Date(2026, 9, 1), true));
     expect(calendar.textContent).toContain("Oktober");
     const html = document.body.innerHTML;
     for (const s of ["Any time", "Last 7 days", "Custom", "Since", "Until", "Format: mm", "Next month", "Previous month", "calendar-container"]) expect(html, s).not.toContain(s);

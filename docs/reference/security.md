@@ -327,7 +327,7 @@ With the same origin, requests the mail itself makes to the server carry
 the session cookie: an image on the app's own address (after **Load remote
 images**, `https:` matches it) or a link to it. Nobody can read the
 answers, but they would leave audit entries in your name, and some open
-IMAP connections. Two layers stop them:
+IMAP connections. These layers stop them:
 
 - The server refuses `/api` requests by their
   [Fetch Metadata](https://developer.mozilla.org/en-US/docs/Glossary/Fetch_metadata_request_header)
@@ -335,12 +335,33 @@ IMAP connections. Two layers stop them:
   a fetch of the app (an image, style, font, prefetch and so on), and every
   navigation (a link, a frame) except to the routes a browser opens:
   `GET /api/messages/{id}/html`, `…/raw`, `…/parts/{n}` and
-  `/api/openapi.json`. Requests without these headers (scripts, API
-  clients) are not affected.
-- The web UI cancels clicks, middle clicks and drags of links in the mail
-  that point into the app, also inside open shadow roots, and of
-  `javascript:`, `data:` and `vbscript:` links. It cancels every click,
-  middle click and drag through an SVG `<use>` element, whatever the link
+  `/api/openapi.json`. A navigation to these routes is refused too when the
+  browser marks it as coming from another site (`Sec-Fetch-Site`
+  `cross-site` or `same-site`). Requests without these headers (scripts,
+  API clients) are not affected.
+- The server takes every link into the app out of the HTML before it serves
+  it. Every `href` and `xlink:href` attribute, on every element, keeps its
+  value only if the markup spells out, without character references, an
+  `http:` or `https:` URL (or one starting with `//`) to a plain host name
+  that is not one of the server's own (`MAIL_ARCHIVE_ALLOWED_HOSTS`, the host
+  of `MAIL_ARCHIVE_PUBLIC_URL`, the request's `Host`; any port, either
+  scheme), or a `mailto:` or `tel:` URL. Every other one gets `data-` in
+  front of its name, so the element is no longer a link: relative links,
+  in-page anchors, links to the archive's own address, IP-address forms
+  other than a plain IPv4 address, internationalized host names,
+  `javascript:`, `data:`, `vbscript:` and every other scheme. `ping`
+  attributes and `<meta http-equiv>` get the prefix too. `attributeName`
+  gets it as well, so SVG animations cannot set a link (they do not animate
+  in mail). This needs nothing to run in the browser, so it holds in every
+  engine. Only the HTML sent to the browser for display is changed: the
+  stored message file, `…/raw`, `…/parts/{n}` and exports stay byte for byte
+  as archived. What you see: links into the archive's own address are not
+  clickable, SVG `<use>` and SVG images given by `href` show nothing;
+  external links work as before.
+- In Chromium the web UI also cancels clicks, middle clicks and drags of such
+  links (also inside open shadow roots) and of `javascript:`, `data:` and
+  `vbscript:` links, and keeps the frame `inert` until this is on the mail's
+  document. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
   points to: links through `<use>` do not work at all. The frame takes no
   clicks and no focus (it is `inert`) until this blocker is on the mail's
   document. The web UI installs it as soon as that document exists, before
@@ -352,12 +373,15 @@ IMAP connections. Two layers stop them:
   shows an empty page. Whenever the frame leaves the mail's document, it is
   `inert` again until the blocker is on the next mail document, the error
   page or the empty page included. So Back (or Forward) to the mail is
-  guarded like its first load, also while a remote image holds it.
+  guarded like its first load, also while a remote image holds it. WebKit
+  (Safari) does not run listeners that the web UI adds to the sandboxed
+  frame's document (#459): there, this layer does nothing, and the server's
+  rewrite is what holds.
 
-The second layer has to see the links. A mail can hide them in three ways:
-behind SVG `<use>`, which shows a copy of the link in a tree the web UI
-cannot see into (cancelled as above), in a declarative shadow root and in a
-`srcdoc` frame. Before it serves the HTML, the server neutralizes the last
+The server's rewrite and the web UI's layer have to see the links. A mail
+can hide them in three ways: behind SVG `<use>`, which shows a copy of the
+link in a tree the web UI cannot see into (cancelled as above), in a
+declarative shadow root and in a `srcdoc` frame. Before it serves the HTML, the server neutralizes the last
 two: declarative shadow roots (attributes whose names start with
 `shadowroot` on `<template>`, such as `shadowrootmode="closed"`) and
 `srcdoc` frames (attributes whose names start with `srcdoc` on `<iframe>`).
@@ -366,29 +390,49 @@ unrendered `<template>` and the frame an empty page; their content is not
 shown. The rename runs last, on the bytes as served (after the images are
 inlined), and changes no other byte. It does not depend on where the tag
 is, so the same text in a comment, a style or an attribute value gets the
-prefix too. Other ways to nest a document (a frame
-or object with a `src` or `data` URL, `embed`, a `<meta>` refresh) load nothing
-under the CSP. This was measured in Chromium only.
+prefix too. The link rewrite runs in the same pass and the same way. Other
+ways to nest a document (a frame or object with a `src` or `data` URL,
+`embed`, a `<meta>` refresh) load nothing under the CSP. This was measured
+in Chromium and WebKit.
 
 What remains:
 
-- The context menu's "Open link in new tab" cannot be intercepted. On the
-  four routes above it can open or download a message, a part or an
-  `.eml` whose id (SHA-256) the mail's author already knows. That writes an
-  audit entry in your name and saves a file to your device. It reveals no
-  more to the author than clicking an external link in the mail would
-  (opening `/html?images=1` of the author's own mail loads its remote
-  images).
+- The context menu's "Open link in new tab" cannot be intercepted, but it
+  only offers links the server kept, none of which points into the app. An
+  external page can still send the browser on to the archive, as any
+  website can. The server refuses navigations to the routes above that the
+  browser marks as coming from another site (`Sec-Fetch-Site` `cross-site`
+  or `same-site`), so a link in a mail that redirects back to the archive
+  cannot open them, in every browser with Fetch Metadata (Chromium,
+  Firefox, Safari 16.4 and later); Chromium would send the session cookie
+  along, because the navigation began in the mail frame. Opening such an
+  address directly (typed, a bookmark, the app's own links) still works.
+- A link or redirect can still open the web UI itself (`/`, for example
+  `/?m=<sha>`), which is not an `/api` route. Opening a message there writes
+  the usual `message.open` and `message.html` entries in your name, as with
+  any website that links to the archive; the sender has to know the stored
+  message's SHA-256.
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
-  **Load remote images**, an image in the mail can make such requests, and
-  so can a link the web UI cannot cancel (the context menu).
+  **Load remote images**, an image in the mail can make such requests.
 - The accepted cost above: if a browser bug ever ran script in the frame,
   it would run with the app's origin.
 
-The frame's behaviour above (the CSP refusing external pages in the frame,
-the frame going `inert` when it leaves the mail) was measured in Chromium
-only.
+What holds per engine: in Chromium and WebKit, the sandbox, the CSP, the
+Fetch Metadata guard (Safari 16.4 and later) and the server's link rewrite;
+in Chromium also the web UI's blocker and `inert` gate. In WebKit, a link
+that would open in the frame itself leaves the frame on the mail instead of
+showing an error page. Measured in Playwright's Chromium and Linux WebKit
+(Playwright 1.64.1, as CI runs them: Chromium headless shell 156, WebKit
+27.2). In both, `inert` on the
+frame stops clicks into it, a `<meta>` refresh does not navigate the
+sandboxed frame, and the frame's own `load` and the web UI's
+`ResizeObserver` still size it. In WebKit, the web UI's `click`,
+`auxclick` and `dragstart` listeners on the mail's document do not run, a
+MathML `href` is a link, and an SVG link without `target` opens in a new
+tab; in Chromium, MathML `href` is not a link and an SVG link without
+`target` opens in the frame itself. Safari on macOS and iOS uses the same
+engine but was not tested.
 
 ### Login checks
 

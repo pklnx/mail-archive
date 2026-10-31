@@ -1,12 +1,17 @@
 package web
 
 import (
+	"fmt"
 	"io"
+	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unsafe"
 
 	"golang.org/x/net/html"
+	"golang.org/x/net/idna"
 
 	"github.com/pklnx/mail-archive/internal/mime"
 )
@@ -16,14 +21,39 @@ type neutralizeCase struct {
 	name, in, want string
 }
 
+// testHosts are the app's host names in the tests: the defaults and a public
+// URL's host.
+var testHosts = []string{"localhost", "127.0.0.1", "::1", "archive.example"}
+
+var testAppHosts = newAppHosts(testHosts...)
+
+// linkCases are cases for href values: <a href="value"> in double quotes,
+// renamed or kept.
+func linkCases(kept bool, values ...string) []neutralizeCase {
+	cs := make([]neutralizeCase, 0, len(values))
+	for _, v := range values {
+		in := `<a href="` + v + `">x</a>`
+		want := `<a data-href="` + v + `">x</a>`
+		if kept {
+			want = in
+		}
+		name := v
+		if len(name) > 40 {
+			name = name[:40] + "..."
+		}
+		cs = append(cs, neutralizeCase{name, in, want})
+	}
+	return cs
+}
+
 // neutralizeCases holds one table per rule, plus the inputs that must come
 // back unchanged. They also seed FuzzNeutralizeHTML.
 var neutralizeCases = map[string][]neutralizeCase{
 	"shadowroot": {
 		{"open", `<div><template shadowrootmode="open"><a href="/api/x">x</a></template></div>`,
-			`<div><template data-shadowrootmode="open"><a href="/api/x">x</a></template></div>`},
+			`<div><template data-shadowrootmode="open"><a data-href="/api/x">x</a></template></div>`},
 		{"closed", `<div><template shadowrootmode=closed><a href="/api/x">x</a></template></div>`,
-			`<div><template data-shadowrootmode=closed><a href="/api/x">x</a></template></div>`},
+			`<div><template data-shadowrootmode=closed><a data-href="/api/x">x</a></template></div>`},
 		{"legacy", `<div><template shadowroot="closed">x</template></div>`,
 			`<div><template data-shadowroot="closed">x</template></div>`},
 		{"uppercase", `<div><TEMPLATE ShadowRootMode=Closed>x</TEMPLATE></div>`,
@@ -55,7 +85,7 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"cut off in the name", `<p><template shadowrootmode`, `<p><template data-shadowrootmode`},
 		{"cut off in the value", `<p><template shadowrootmode="clo`, `<p><template data-shadowrootmode="clo`},
 		{"noscript context", `<body><noscript><div><template shadowrootmode=closed><a href=/api/x>x</a></template></div></noscript>`,
-			`<body><noscript><div><template data-shadowrootmode=closed><a href=/api/x>x</a></template></div></noscript>`},
+			`<body><noscript><div><template data-shadowrootmode=closed><a data-href=/api/x>x</a></template></div></noscript>`},
 		{"math title context", `<math><mtext><style></style></mtext><title><div><template shadowrootmode=closed>x</template></div></title></math>`,
 			`<math><mtext><style></style></mtext><title><div><template data-shadowrootmode=closed>x</template></div></title></math>`},
 		{"svg breakout", `<svg><p><template shadowrootmode=closed>x</template></svg>`,
@@ -88,8 +118,103 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"both rules", `<template shadowrootmode=closed><iframe srcdoc=x></iframe></template>`,
 			`<template data-shadowrootmode=closed><iframe data-srcdoc=x></iframe></template>`},
 	},
+	// Links into the app, or not to an http(s), mailto: or tel: URL: the
+	// oracle sees each of them (TestLinkSurvivorsOracle).
+	"link renamed": linkCases(false,
+		// Relative forms.
+		"/api/x", "api/x", "../x", "?q", "#top", "", "  ", "\t",
+		// Slash and scheme tricks.
+		"//localhost/api", "/\\localhost/api", "\\\\localhost/api", "http:/api", "http:api", "https:\\\\localhost/",
+		// The app's own address.
+		"http://localhost:18181/api", "HTTP://LOCALHOST/", "http://localhost./", "https://archive.example/x", "//Archive.Example.:8443/",
+		"http://127.0.0.1/", "http://127.0.0.1./api", "http://links.example@localhost/", "http://%6c%6fcalhost/",
+		"http://loc\nalhost/", "\x01http://localhost/", "http://localhost\\@links.example/",
+		"http://127.1/", "http://2130706433/", "http://0x7f.1/", "http://0177.0.0.1/", "http://[::1]/",
+		"http://\uff4c\uff4f\uff43\uff41\uff4c\uff48\uff4f\uff53\uff54/", "http://loc&shy;alhost/", "http://loc\u00adalhost/",
+		// Other schemes.
+		"javascript:alert(1)", "JaVaScRiPt:x", "java&#x0A;script:x", "data:text/html,x", "vbscript:x", "blob:http://localhost/u",
+		"file:///etc/passwd", "about:blank", "ftp://links.example/", "sms:+49", " mailto", "mailto",
+	),
+	// External links the literal-only grammar renames all the same: a
+	// visible cost, no safety need.
+	"link renamed, literal only": linkCases(false,
+		"///links.example/", "http://user@links.example/", "http&#58;//links.example/", "ht&#x09;tp://links.example/",
+		"http://links.\texample/", "http://127.0.0.01/", "http://1.2.3.256/",
+		"https://links.example:8a/", "https://links.example ", "https://links.example\\", "https://links.example;x",
+		// The window: the host does not end within linkWindow bytes.
+		"https://"+strings.Repeat("a", linkWindow)+".example/",
+		strings.Repeat(" ", linkWindow)+"https://links.example/",
+	),
+	"link kept": linkCases(true,
+		"https://links.example/x", "HTTPS://Links.Example:8443/p?a=1&amp;b=2#f", "//links.example/x", "http://203.0.113.5/",
+		"http://links.example?q", "http://links.example#f", "https://xn--bcher-kva.example/", "https://a_b-c.example/",
+		"https://links.example", "https://links.example:/", "mailto:a@b", "MAILTO:a@b?subject=x", "tel:+49 30 1", " \x01https://links.example/", "https://links.example/&#58;\t@localhost",
+		"https://"+strings.Repeat("a", linkWindow-len("https://.example/")-1)+".example/",
+		// Found by the fuzzer: a "%" that starts no escape, after the host.
+		"//A#0000%0", "https://links.example/%zz?%", "//A/\x10", "//A/&#11;A", "https://links.example/a b",
+	),
+	"links": {
+		{"unquoted", `<a href=/api/x>x</a>`, `<a data-href=/api/x>x</a>`},
+		{"unquoted kept", `<a href=https://links.example>x</a>`, `<a href=https://links.example>x</a>`},
+		{"unquoted, white space after", "<a href=https://links.example\fx>", "<a href=https://links.example\fx>"},
+		{"single-quoted", `<a href='/api/x'>x</a>`, `<a data-href='/api/x'>x</a>`},
+		{"single-quoted kept", `<a href='https://links.example'>x</a>`, `<a href='https://links.example'>x</a>`},
+		{"single quote in a double-quoted value", `<a href="https://links.example'">x</a>`, `<a data-href="https://links.example'">x</a>`},
+		{"spaces around the equals sign", `<a href = "/x" HREF  =  'https://links.example/'>`, `<a data-href = "/x" HREF  =  'https://links.example/'>`},
+		{"valueless", `<a href>x</a>`, `<a data-href>x</a>`},
+		{"empty unquoted", `<a href=>x</a>`, `<a data-href=>x</a>`},
+		{"valueless before another attribute", `<a href title="https://links.example/">`, `<a data-href title="https://links.example/">`},
+		{"uppercase", `<A HREF="/api/x">`, `<A data-HREF="/api/x">`},
+		{"area", `<map><area href=/api/x shape=rect coords=0,0,9,9></map>`, `<map><area data-href=/api/x shape=rect coords=0,0,9,9></map>`},
+		{"svg a", `<svg><a href="/api/x"><rect/></a></svg>`, `<svg><a data-href="/api/x"><rect/></a></svg>`},
+		{"svg a xlink", `<svg><a xlink:href="/api/x"><rect/></a></svg>`, `<svg><a data-xlink:href="/api/x"><rect/></a></svg>`},
+		{"svg a xlink uppercase", `<svg><a XLINK:HREF="/api/x"><rect/></a></svg>`, `<svg><a data-XLINK:HREF="/api/x"><rect/></a></svg>`},
+		{"svg a xlink kept", `<svg><a xlink:href="https://links.example/"><rect/></a></svg>`, `<svg><a xlink:href="https://links.example/"><rect/></a></svg>`},
+		{"use", `<svg><use href="#d"/><use xlink:href="#d"/></svg>`, `<svg><use data-href="#d"/><use data-xlink:href="#d"/></svg>`},
+		{"image", `<svg><image href="data:image/png;base64,AAAA"/></svg>`, `<svg><image data-href="data:image/png;base64,AAAA"/></svg>`},
+		{"mathml", `<math><mi href="/api/x">x</mi></math>`, `<math><mi data-href="/api/x">x</mi></math>`},
+		{"link and base", `<link rel=stylesheet href=/api/x><base href="/api/">`, `<link rel=stylesheet data-href=/api/x><base data-href="/api/">`},
+		{"any element", `<div href=/x><custom-el href=/x><p:q href=/x>`, `<div data-href=/x><custom-el data-href=/x><p:q data-href=/x>`},
+		{"ping", `<a href="https://links.example/" ping="https://links.example/p">x</a>`, `<a href="https://links.example/" data-ping="https://links.example/p">x</a>`},
+		{"ping uppercase, valueless", `<a PING>`, `<a data-PING>`},
+		{"meta refresh", `<META HTTP-EQUIV=Refresh content="0;url=/api/x">`, `<META data-HTTP-EQUIV=Refresh content="0;url=/api/x">`},
+		{"http-equiv elsewhere", `<p http-equiv=x>`, `<p data-http-equiv=x>`},
+		{"set", `<svg><a><set attributeName=href to=/x /><rect/></a></svg>`, `<svg><a><set data-attributeName=href to=/x /><rect/></a></svg>`},
+		{"animate", `<svg><a><animate attributeName="xlink:href" values="/x"/></a></svg>`, `<svg><a><animate data-attributeName="xlink:href" values="/x"/></a></svg>`},
+		{"attributename uppercase", `<svg><set ATTRIBUTENAME="href" to="/x"/></svg>`, `<svg><set data-ATTRIBUTENAME="href" to="/x"/></svg>`},
+		{"attributename in a template", `<template><svg><set attributename=href to=/x /></svg></template>`, `<template><svg><set data-attributename=href to=/x /></svg></template>`},
+		{"attributename in foreign content", `<math><mtext><svg><animate attributeName=href values=/x /></svg></mtext></math>`, `<math><mtext><svg><animate data-attributeName=href values=/x /></svg></mtext></math>`},
+		{"in style", `<style><a href=/x></style>`, `<style><a data-href=/x></style>`},
+		{"in textarea", `<textarea><a href=/x></textarea>`, `<textarea><a data-href=/x></textarea>`},
+		{"in title", `<title><a href=/x></title>`, `<title><a data-href=/x></title>`},
+		{"in noscript", `<noscript><a href=/x></noscript>`, `<noscript><a data-href=/x></noscript>`},
+		{"in a comment", `<!-- <a href=/x> -->`, `<!-- <a data-href=/x> -->`},
+		{"in an attribute value", `<p title="<a href=/x>">`, `<p title="<a data-href=/x>">`},
+		{"attribute in an attribute value", `<p title="x href=/x">`, `<p title="x href=/x">`},
+		{"attributename in style", `<style><set attributeName=href></style>`, `<style><set data-attributeName=href></style>`},
+		{"attributename in a value", `<p title="<set attributeName=href to=/x>">`, `<p title="<set data-attributeName=href to=/x>">`},
+		{"slash separator", `<a/href=/x>`, `<a/data-href=/x>`},
+		{"no space after a quoted value", `<a x="y"href=/x>`, `<a x="y"data-href=/x>`},
+		// Before cid: inlining, href is in the value of cid:q; servedMailHTML
+		// renames after inlining (TestServedMailHTMLLinksAfterInlining).
+		{"before cid: inlining", `<a cid:q= href=/api>`, `<a cid:q= href=/api>`},
+		{"duplicates", `<a href=/api href=https://links.example>`, `<a data-href=/api href=https://links.example>`},
+		{"duplicates reversed", `<a href=https://links.example href=/api>`, `<a href=https://links.example data-href=/api>`},
+		{"cut off in the value", `<a href=/x`, `<a data-href=/x`},
+		{"cut off after the name", `<a href`, `<a data-href`},
+		{"white space around equals", "<a href" + strings.Repeat(" ", 1000) + "=" + strings.Repeat("\n", 1000) + "https://links.example/>",
+			"<a href" + strings.Repeat(" ", 1000) + "=" + strings.Repeat("\n", 1000) + "https://links.example/>"},
+	},
 	"unchanged": {
 		{"empty", ``, ``},
+		{"already renamed", `<a data-href=/x data-ping=/x><set data-attributename=href><meta data-http-equiv=refresh>`,
+			`<a data-href=/x data-ping=/x><set data-attributename=href><meta data-http-equiv=refresh>`},
+		{"longer and shorter names", `<a hrefx=/x xhref=/x hre=/x pings=/x attributenames=href http-equivx=refresh xlink:hrefs=/x>`,
+			`<a hrefx=/x xhref=/x hre=/x pings=/x attributenames=href http-equivx=refresh xlink:hrefs=/x>`},
+		{"names in text", `a href=/x ping attributeName=href http-equiv=refresh`, `a href=/x ping attributeName=href http-equiv=refresh`},
+		{"not a tag", `< a href=/x><1 href=/x><!x href=/x></a href=/x>`, `< a href=/x><1 href=/x><!x href=/x></a href=/x>`},
+		{"after the tag ends", `<a>href=/x</a>`, `<a>href=/x</a>`},
+		{"non-ASCII case folding", "<a \u0127ref=/x>", "<a \u0127ref=/x>"},
 		{"neither tag", `<p>Hello <b>world</b></p>`, `<p>Hello <b>world</b></p>`},
 		{"already prefixed", `<template data-shadowrootmode=closed><iframe data-srcdoc=x>`,
 			`<template data-shadowrootmode=closed><iframe data-srcdoc=x>`},
@@ -116,14 +241,14 @@ func TestNeutralizeHTML(t *testing.T) {
 	for rule, cases := range neutralizeCases {
 		for _, c := range cases {
 			t.Run(rule+"/"+c.name, func(t *testing.T) {
-				got := neutralizeHTML(c.in)
+				got := neutralizeHTML(c.in, testAppHosts)
 				if got != c.want {
 					t.Errorf("neutralizeHTML(%q)\n got %q\nwant %q", c.in, got, c.want)
 				}
 				if s := neutralizeSurvivors(got); len(s) > 0 {
 					t.Errorf("oracle: %q keeps %v", got, s)
 				}
-				if again := neutralizeHTML(got); again != got {
+				if again := neutralizeHTML(got, testAppHosts); again != got {
 					t.Errorf("not idempotent: %q -> %q", got, again)
 				}
 				// Unchanged input comes back without a copy.
@@ -151,10 +276,55 @@ func TestNeutralizeSurvivorsOracle(t *testing.T) {
 	}
 }
 
+// The link oracle is not vacuous: it finds the link, or the attribute, in
+// each input before the rewrite.
+func TestLinkSurvivorsOracle(t *testing.T) {
+	for _, c := range neutralizeCases["link renamed"] {
+		if len(neutralizeSurvivors(c.in)) == 0 {
+			t.Errorf("oracle finds nothing in %q", c.in)
+		}
+	}
+	for _, in := range []string{
+		`<svg><a xlink:href="/api/x"><rect/></a></svg>`,
+		`<math><mi href="/api/x">x</mi></math>`,
+		`<template><a href="//localhost/">x</a></template>`,
+		`<svg><use href="#d"/></svg>`,
+		`<a href=x ping=https://links.example/>`,
+		`<svg><set attributeName=href to=/x /></svg>`,
+		`<META HTTP-EQUIV=Refresh content="0;url=/api/x">`,
+		`<a href=http://LOCALHOST.:1/>`,
+	} {
+		if len(neutralizeSurvivors(in)) == 0 {
+			t.Errorf("oracle finds nothing in %q", in)
+		}
+	}
+	// And it passes what neutralizeHTML keeps.
+	for _, c := range neutralizeCases["link kept"] {
+		if s := neutralizeSurvivors(c.in); len(s) > 0 {
+			t.Errorf("oracle reports %v in %q", s, c.in)
+		}
+	}
+}
+
+// After inlining, a cid: reference whose match runs over "=" leaves href an
+// attribute name: servedMailHTML renames it, because neutralizeHTML runs
+// last (#266, #459).
+func TestServedMailHTMLLinksAfterInlining(t *testing.T) {
+	parts, open := servedCIDParts(t)
+	served, _, err := servedMailHTML(`<a cid:q= href=/api/x>x</a>`, parts, open, testAppHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := htmlPreamble + `<a data:, data-href=/api/x>x</a>`; served != want {
+		t.Errorf("served %q, want %q", served, want)
+	}
+}
+
 // neutralizeSurvivors parses doc as x/net/html does with scripting off (as in
 // the sandboxed frame), walks every element including template contents and
 // returns each HTML-namespace element of a rule that keeps an attribute with
-// the rule's prefix.
+// the rule's prefix, and each element of any namespace that keeps a link
+// attribute linkSurvives reports.
 func neutralizeSurvivors(doc string) []string {
 	root, err := html.ParseWithOptions(strings.NewReader(doc), html.ParseOptionEnableScripting(false))
 	if err != nil {
@@ -175,6 +345,15 @@ func neutralizeSurvivors(doc string) []string {
 				}
 			}
 		}
+		if n.Type == html.ElementNode {
+			for _, a := range n.Attr {
+				// The parser adjusts SVG's attributeName and puts xlink:href
+				// in the xlink namespace with the key "href".
+				if linkSurvives(strings.ToLower(a.Key), a.Val) {
+					out = append(out, n.Data+" "+a.Namespace+" "+a.Key+"="+a.Val)
+				}
+			}
+		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			walk(c)
 		}
@@ -183,8 +362,135 @@ func neutralizeSurvivors(doc string) []string {
 	return out
 }
 
+// escapeStrayPercent replaces each "%" not followed by two hex digits with
+// "%25", and percent-encodes controls, spaces and DEL.
+func escapeStrayPercent(v string) string {
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '%' && (i+2 >= len(v) || !isHex(v[i+1]) || !isHex(v[i+2])) {
+			b.WriteString("%25")
+			continue
+		}
+		if v[i] <= ' ' || v[i] == 0x7f {
+			fmt.Fprintf(&b, "%%%02X", v[i])
+			continue
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+// oracleBase is the URL of the mail frame's document in the oracle.
+var oracleBase, _ = url.Parse("http://localhost:18181/api/messages/" + strings.Repeat("ab", 32) + "/html")
+
+// linkSurvives reports whether an attribute with this (lowercase) key and
+// decoded value is one neutralizeHTML must not leave: any ping,
+// attributename or http-equiv, and an href or xlink:href that is not an
+// http(s) link to a host outside testHosts, a mailto: or a tel: link. It
+// works independently of linkKept, on the parsed value, with net/url, IDNA
+// mapping and the WHATWG IPv4 parser; where it reads a value differently
+// from the browser, it errs towards reporting it.
+func linkSurvives(key, val string) bool {
+	switch key {
+	case "ping", "attributename", "http-equiv":
+		return true
+	case "href", "xlink:href":
+	default:
+		return false
+	}
+	// The URL parser strips leading and trailing C0 controls and spaces, and
+	// removes every tab and newline.
+	v := strings.TrimFunc(val, func(r rune) bool { return r <= ' ' })
+	v = strings.NewReplacer("\t", "", "\n", "", "\r", "").Replace(v)
+	low := strings.ToLower(v)
+	if strings.HasPrefix(low, "mailto:") || strings.HasPrefix(low, "tel:") {
+		return false
+	}
+	// Special schemes read "\" as "/". The URL parser leaves a "%" that
+	// starts no escape as it is and percent-encodes controls and spaces;
+	// net/url would refuse them.
+	v = strings.ReplaceAll(v, "\\", "/")
+	v = escapeStrayPercent(v)
+	ref, err := url.Parse(v)
+	if err != nil {
+		return true
+	}
+	u := oracleBase.ResolveReference(ref)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return true
+	}
+	host := u.Hostname()
+	if host == "" {
+		return true
+	}
+	for _, r := range host {
+		if r > 0x7f {
+			a, err := idna.Lookup.ToASCII(host)
+			if err != nil {
+				return true
+			}
+			host = a
+			break
+		}
+	}
+	host = strings.TrimRight(strings.ToLower(host), ".")
+	if ip, ok := whatwgIPv4(host); ok {
+		host = ip
+	}
+	return slices.Contains(testHosts, host)
+}
+
+// whatwgIPv4 parses host as the WHATWG URL standard's IPv4 parser does when
+// the host ends in a number (decimal, octal with a leading 0, hex with 0x;
+// fewer than four parts fill the last one), and returns the dotted quad.
+func whatwgIPv4(host string) (string, bool) {
+	parts := strings.Split(host, ".")
+	if len(parts) > 1 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 || len(parts) > 4 {
+		return "", false
+	}
+	nums := make([]uint64, len(parts))
+	for k, p := range parts {
+		base := 10
+		switch {
+		case strings.HasPrefix(p, "0x"):
+			p, base = p[2:], 16
+			if p == "" {
+				p = "0"
+			}
+		case len(p) > 1 && p[0] == '0':
+			p, base = p[1:], 8
+		}
+		n, err := strconv.ParseUint(p, base, 64)
+		if err != nil {
+			return "", false
+		}
+		nums[k] = n
+	}
+	var ip uint64
+	for k, n := range nums[:len(nums)-1] {
+		if n > 255 {
+			return "", false
+		}
+		ip |= n << (8 * (3 - k))
+	}
+	lastN := nums[len(nums)-1]
+	if lastN >= 1<<(8*(5-len(nums))) {
+		return "", false
+	}
+	ip |= lastN
+	return fmt.Sprintf("%d.%d.%d.%d", ip>>24, ip>>16&255, ip>>8&255, ip&255), true
+}
+
 // neutralizeInsertions checks that out is in with neutralizePrefix inserted
-// only directly before a rule prefix (ASCII case-insensitive), and returns
+// only directly before a rule prefix or a whole name of linkNames (ASCII
+// case-insensitive), and returns
 // the insertion points as offsets in in. ok is false otherwise.
 func neutralizeInsertions(in, out string) (at []int, ok bool) {
 	i, j := 0, 0
@@ -200,6 +506,10 @@ func neutralizeInsertions(in, out string) (at []int, ok bool) {
 		matches := false
 		for _, ru := range neutralizeRules {
 			matches = matches || hasPrefixASCIIFold(in[i:], ru.prefix)
+		}
+		for _, n := range linkNames {
+			e := i + len(n.name)
+			matches = matches || (hasPrefixASCIIFold(in[i:], n.name) && (e == len(in) || isAttrNameEnd(in[e])))
 		}
 		if !matches {
 			return nil, false
@@ -239,21 +549,21 @@ func FuzzNeutralizeHTML(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, in string) {
-		out := neutralizeHTML(in)
+		out := neutralizeHTML(in, testAppHosts)
 		// 1. Alignment: only insertions of the prefix, each directly before
 		// a rule prefix. This holds for any bytes.
 		if _, ok := neutralizeInsertions(in, out); !ok {
 			t.Fatalf("not an insertion of %q before a rule prefix:\n in %q\nout %q", neutralizePrefix, in, out)
 		}
 		// 4. Idempotent.
-		if again := neutralizeHTML(out); again != out {
+		if again := neutralizeHTML(out, testAppHosts); again != out {
 			t.Fatalf("not idempotent:\n in %q\nout %q\n2nd %q", in, out, again)
 		}
 
 		// The x/net/html checks run on what the handler can see: valid
 		// UTF-8 without NUL.
 		in = cleanLikeMIME(in)
-		out = neutralizeHTML(in)
+		out = neutralizeHTML(in, testAppHosts)
 		at, ok := neutralizeInsertions(in, out)
 		if !ok {
 			t.Fatalf("not an insertion:\n in %q\nout %q", in, out)
@@ -290,7 +600,8 @@ func FuzzNeutralizeHTML(f *testing.F) {
 
 // neutralizeCandidateKeeps tokenizes every candidate in out on its own with
 // x/net/html's Tokenizer and reports the first one that keeps an attribute
-// with its rule's prefix: its offset and the attribute.
+// with its rule's prefix, or (any tag) a link attribute linkSurvives
+// reports: its offset and the attribute.
 func neutralizeCandidateKeeps(out string) (at int, key string, keeps bool) {
 	for p := strings.IndexByte(out, '<'); p >= 0; {
 		for _, ru := range neutralizeRules {
@@ -305,6 +616,16 @@ func neutralizeCandidateKeeps(out string) (at int, key string, keeps bool) {
 			for _, a := range z.Token().Attr {
 				if strings.HasPrefix(a.Key, ru.prefix) {
 					return p, a.Key, true
+				}
+			}
+		}
+		if p+1 < len(out) && isASCIIAlpha(out[p+1]) {
+			z := html.NewTokenizer(strings.NewReader(out[p:]))
+			if tt := z.Next(); tt == html.StartTagToken || tt == html.SelfClosingTagToken {
+				for _, a := range z.Token().Attr {
+					if linkSurvives(a.Key, a.Val) {
+						return p, a.Key + "=" + a.Val, true
+					}
 				}
 			}
 		}
@@ -337,7 +658,8 @@ func servedCIDParts(t testing.TB) ([]mime.Part, func() (io.ReadCloser, error)) {
 
 // FuzzServedMailHTML checks what the handler serves (servedMailHTML: inline
 // images, preamble, rename), not neutralizeHTML alone: no rewrite after the
-// rename may bring a declarative shadow root or a srcdoc frame back.
+// rename may bring a declarative shadow root, a srcdoc frame or a link into
+// the app back.
 func FuzzServedMailHTML(f *testing.F) {
 	for _, cases := range neutralizeCases {
 		for _, c := range cases {
@@ -351,13 +673,16 @@ func FuzzServedMailHTML(f *testing.F) {
 		`<iframe cid:b@x= srcdoc=x></iframe>`,
 		`<template x=cid:c@x shadowrootmode=closed><img src="cid:c@x">`,
 		`<template cid:a@x=/shadowrootmode=closed>`,
+		`<a cid:q= href=/api/x>x</a>`,
+		`<a cid:a@x=/href=/api/x>x</a>`,
+		`<svg><set cid:q= attributeName=href to=/x /></svg>`,
 	} {
 		f.Add(s)
 	}
 	parts, open := servedCIDParts(f)
 	f.Fuzz(func(t *testing.T, in string) {
 		in = cleanLikeMIME(in)
-		served, inl, err := servedMailHTML(in, parts, open)
+		served, inl, err := servedMailHTML(in, parts, open, testAppHosts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -366,7 +691,7 @@ func FuzzServedMailHTML(f *testing.F) {
 		if _, ok := neutralizeInsertions(withPreamble(inl.HTML), served); !ok {
 			t.Fatalf("not an insertion:\n in %q\nserved %q", in, served)
 		}
-		if again := neutralizeHTML(served); again != served {
+		if again := neutralizeHTML(served, testAppHosts); again != served {
 			t.Fatalf("served bytes not final:\n in %q\nserved %q", in, served)
 		}
 		if p, key, keeps := neutralizeCandidateKeeps(served); keeps {
@@ -392,16 +717,21 @@ func benchInputs() map[string]string {
 		// both rules are active at once, in different states, and two
 		// names per unit get the prefix.
 		"adversarial": fill(`<template a="<iframe b='<template shadowroot=x <iframe srcdoc=y `),
+		// Links (#459): every name is an href whose value is read, kept and
+		// renamed ones, candidates in values, and long white space runs
+		// around "=" that the lookahead crosses.
+		"links": fill(`<p><a href="https://links.example/item?id=1">a</a> <a title="<b href='/x' " href=/api/x>b</a>` +
+			`<a href` + strings.Repeat(" ", 200) + "=" + strings.Repeat("\n", 200) + `"https://` + strings.Repeat("a", 300) + `"></p>`),
 	}
 }
 
 func BenchmarkNeutralizeHTML(b *testing.B) {
-	for _, name := range []string{"plain", "adversarial"} {
+	for _, name := range []string{"plain", "adversarial", "links"} {
 		in := benchInputs()[name]
 		b.Run(name, func(b *testing.B) {
 			b.SetBytes(int64(len(in)))
 			for b.Loop() {
-				neutralizeHTML(in)
+				neutralizeHTML(in, testAppHosts)
 			}
 		})
 	}

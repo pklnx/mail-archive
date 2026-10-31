@@ -8,7 +8,7 @@ v2. Node.js 26 no longer ships corepack; install it once with
 `npm install -g corepack`.
 
 `make web`, `make web-e2e` and `make docs` use a pnpm that is already on
-`PATH`; only when there is none do they run `corepack enable`. To use your own
+`PATH` and run `corepack enable` only when there is none. To use your own
 pnpm (for example in a sandbox where corepack must not be enabled), put a
 wrapper on `PATH`, or skip the step with `make PNPM_SETUP=true web`. pnpm
 switches to the version pinned in `packageManager` by itself.
@@ -180,6 +180,22 @@ starts would leave it pending for ever. The filter fails closed: a failed
 detection, an empty diff or any other changed file runs the suite, and so does
 every push to `main`. `web-e2e` is a required check.
 
+One spec also runs in Playwright's WebKit until
+[#398](https://github.com/pklnx/mail-archive/issues/398) runs the suite there:
+`web/e2e/frame-links.spec.ts`, which checks that no link in an HTML mail leads
+into the app and that a link redirecting back to the archive is refused
+(#459; its server listens on 127.0.0.2:18182, so it needs Linux's loopback
+range). `E2E_BROWSER` picks the engine (`chromium` by default, or
+`webkit`; anything else is an error), and `pnpm e2e:webkit` in `web/` runs the
+`webkit` project, which runs only that spec and records traces without
+screenshots. WebKit has to be installed first (`pnpm exec playwright install
+webkit`, plus its system libraries: `--with-deps`). CI runs it in the
+`web-e2e-webkit` job, with the same skip rule as `web-e2e`. That job always
+installs WebKit's libraries with apt, which took 8 to 13 minutes in this
+repository when the mirror was slow (`scripts/ci-playwright-chromium.sh`), so
+its timeout is 30 minutes. It is not a required check, but a red result
+blocks merging.
+
 ## Documentation
 
 This site is built with [VitePress](https://vitepress.dev/) from `docs/` and
@@ -267,32 +283,18 @@ make sqlc-check    # what CI runs: vet queries and fail on stale code
 
 ## Pull requests and labels
 
-Changes start as an issue with an approved plan; see
-[Issues, plans and releases](./process).
+Changes start as an issue with an approved plan; the flow, the reviews and
+the labels are in [Issues, plans and releases](./process).
 
-`main` is protected: changes go through pull requests, which can only be
-squash-merged when the required CI checks pass: `test`, `lint`, `vulncheck`,
-`docker`, `compose`, `web`, `web-e2e` and `secret-scan`. The `audit` and
-`docs-audit` checks are not required (see [Dependencies](#dependencies)), nor
-is `review-gate` (see [Review gate](./review-gate)). A
-pull request is merged (squash) after an approving review and green required
-checks; auto-merge is not used. Agent rules are
-in `CLAUDE.md` at the repository root.
-
-| Label | Meaning |
-|---|---|
-| `feature`, `bug`, `chore`, `docs` | Kind of change (set by hand). `feature` makes at least a minor release. |
-| `security` | Security hardening (never an undisclosed vulnerability; set by hand). Kind label; does not change the version (a patch release unless other labels raise it). |
-| `dependencies` | Dependency update (set by Dependabot). |
-| `db-migration` | Changes the database schema (set automatically). Back up before upgrading. Makes at least a minor release. |
-| `breaking` | Needs manual steps when upgrading (set by hand). Makes a major release. |
-| `plan`, `review`, `ready` | Planning state of an issue; see [Issues, plans and releases](./process). |
-| `second-review` | Risky pull request: needs a second, independent session review (a marker; it triggers nothing). |
-| `followup` | Non-blocking finding from a review, CI or the day's work; its body names the source. |
-| `device-checks` | The open round of manual device checks, one at a time; see [Issues, plans and releases](./process). |
-
-Labels are defined in `.github/labels.json` and synced to GitHub when that
-file changes on `main`.
+`main` is protected: changes go through pull requests, squash-merged after
+an approving review and green required checks (`test`, `lint`, `vulncheck`,
+`docker`, `compose`, `web`, `web-e2e` and `secret-scan`); auto-merge is not
+used. Not required are `audit` and `docs-audit` (see
+[Dependencies](#dependencies)), `review-gate` (see
+[Review gate](./review-gate)) and `web-e2e-webkit` (see
+[End-to-end tests](#end-to-end-tests)). Agent rules are in `CLAUDE.md` at
+the repository root. The labels and who sets them:
+[Labels](./process#labels).
 
 ## CI
 
@@ -305,8 +307,8 @@ file changes on `main`.
   cache), with Docker Hub as the fallback, so a Docker Hub error or rate limit
   does not fail a job. These pulls are anonymous: dockerd would send the
   runner's Docker Hub login to the mirror, which refuses it. The PostgreSQL
-  services of the `test` and `web-e2e` jobs are named on the mirror directly
-  and have no fallback. Users' builds (the Dockerfile, `docker-compose.yml`,
+  services of the `test`, `web-e2e` and `web-e2e-webkit` jobs are named on the
+  mirror directly and have no fallback. Users' builds (the Dockerfile, `docker-compose.yml`,
   `./ma`, the release workflow) do not use the mirror; see the comments in
   `.github/workflows/ci.yml`.
 - The `docker` job keeps its layer cache in the GitHub Actions cache. Only

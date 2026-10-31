@@ -3,6 +3,13 @@
 // scripts: nothing runs in it, so all of this is on the parent's side. The
 // parent reads only the frame document's geometry and adds event listeners
 // and observers to it; it never reads the mail's content or writes into it.
+// No link in the served mail points into the app: the server renames them
+// (neutralizeHTML, #459), which holds in every engine. The link blocker and
+// the inert gate here are an extra layer where the engine runs them
+// (Chromium): WebKit does not run listeners the parent adds to the sandboxed
+// document, so in WebKit the blocker, the pagehide gate and the document's
+// load, error, toggle and loadingdone refits do nothing; the frame's own
+// load and the ResizeObserver still fit it.
 //
 // Measuring: the frame is set to height 0 and the document's scroll height
 // read. At any other height, content sized relative to the frame (100vh,
@@ -150,7 +157,9 @@ export function linkURL(link: Element): URL | null {
  * a link to the tab bar opens it): it cancels links into
  * the app itself. The frame shares the app's origin, so such a link would
  * reach the API with the session cookie (the server's Fetch Metadata guard
- * refuses most of them; this is the second layer). A mail has no reason to
+ * refuses most of them, and the server renames such links before it serves
+ * the mail, #459; this is an extra layer, which WebKit does not run). A mail
+ * has no reason to
  * link into the archive. javascript:, data: and vbscript: links are
  * cancelled too: the sandbox runs no script, but a new tab would have the
  * app's origin (or, for data:, content the mail chose). Other links are
@@ -192,7 +201,8 @@ export interface FrameFit {
  * root in quirks mode). After LOOP_LIMIT height-changing fits in a row on
  * content resizes alone (a CSS animation, say), it stops observing them and
  * keeps its height. It also installs the same-origin link blocker (click,
- * auxclick, dragstart).
+ * auxclick, dragstart). WebKit does not run these listeners on the
+ * sandboxed document (#459); there the server's link rewrite is what holds.
  *
  * The blocker comes first (#209): the frame is inert unless its current
  * document is a mail document with the blocker on it, so it takes no click
