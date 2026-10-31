@@ -16,7 +16,7 @@ import { DateRange } from "./DateRange";
 import { auditApi, usersApi, type AuditEntry, type AuditFilter, type ManagedUser } from "./api";
 import { foldEntries, shortUserAgent } from "./auditLog";
 import { isPlainClick } from "./clicks";
-import { timestamp } from "./format";
+import { dayOfDate, shiftDay, timestamp } from "./format";
 import { t } from "./i18n";
 import { TableSkeleton } from "./tableSkeleton";
 import { formatState, parseState } from "./urlState";
@@ -24,11 +24,9 @@ import { formatState, parseState } from "./urlState";
 /** The action groups of the filter, as the API names them. */
 export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"];
 
-const isoDay = (d: Date) => d.toISOString().slice(0, 10);
-
-/** The default period: the last 30 days. */
+/** The default period: the last 30 local days. */
 export function defaultFilter(now = new Date()): AuditFilter {
-  return { since: isoDay(new Date(now.getTime() - 30 * 86_400_000)), until: "", group: "", who: "" };
+  return { since: shiftDay(dayOfDate(now), -30), until: "", group: "", who: "" };
 }
 
 /** The target of an entry in words: the subject of a visible message, otherwise a name or the start of the hash. */
@@ -127,7 +125,7 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
         </header>
 
         <div className="log-filters">
-          {/* The search filters' range picker (#377); the server takes a plain until as inclusive. */}
+          {/* The search filters' range picker (#377); inclusive local days, sent as instants (auditQuery, #402). */}
           <DateRange
             ids={{ start: `${id}-from`, end: `${id}-to` }}
             labels={{ start: t.logFrom, end: t.logTo }}

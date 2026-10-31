@@ -143,9 +143,9 @@ command line says so under its target.
 **From** and **To** are a date range, the same as in the search filters:
 pick it in the calendar, or type the dates in your date format, which is
 shown under the fields. The To day is included. An empty From shows the
-last 30 days. Filter further by a group of actions (logins, searches,
-reading, export and backup, accounts, user management, own login settings,
-API keys, manual syncs). A message shows its subject only to a user who has that
+last 30 days and empties To. Filter further by a group of actions (logins,
+searches, reading, export and backup, accounts, user management, own login
+settings, API keys, manual syncs). A message shows its subject only to a user who has that
 message too; otherwise the start of its SHA-256. A click on a subject opens
 the message.
 
@@ -161,7 +161,8 @@ Two kinds of rows are folded, so that the list reads like what happened:
 page groups them. Reading the log writes no entry.
 
 The same entries come from `GET /api/audit` (see the
-[JSON API](../reference/api#audit-log)).
+[JSON API](../reference/api#audit-log)). The page counts its days in the
+browser's time zone; the API and `./ma audit` read a plain date as a UTC day.
 
 ## Writing it out
 

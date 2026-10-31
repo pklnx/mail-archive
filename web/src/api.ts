@@ -734,7 +734,11 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
-/** The filters of the Log page. who is "" (all), "cli", "api_key" or a user name (admins only). */
+/**
+ * The filters of the Log page. since and until are inclusive local days
+ * "YYYY-MM-DD" (or ""); who is "" (all), "cli", "api_key" or a user name
+ * (admins only).
+ */
 export interface AuditFilter {
   since: string;
   until: string;
@@ -742,11 +746,28 @@ export interface AuditFilter {
   who: string;
 }
 
-/** The query string of GET /api/audit for a filter and a page cursor. */
+/**
+ * The first instant of the local day ymd plus n days, as RFC 3339 (#402).
+ * new Date(y, m, d) is local midnight, also on 23 h and 25 h days, and the
+ * day's first instant where midnight does not exist; it rolls over month and
+ * year ends. A value that is not a day is passed on for the server to refuse.
+ */
+function localDayStart(ymd: string, n: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return ymd;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + n).toISOString();
+}
+
+/**
+ * The query string of GET /api/audit for a filter and a page cursor. The
+ * server reads a plain date as a UTC day, so the local days go as instants
+ * (#402): since is the start of the From day, until the start of the day
+ * after To (the server's until is exclusive).
+ */
 export function auditQuery(f: AuditFilter, cursor = ""): string {
   const p = new URLSearchParams();
-  if (f.since) p.set("since", f.since);
-  if (f.until) p.set("until", f.until);
+  if (f.since) p.set("since", localDayStart(f.since, 0));
+  if (f.until) p.set("until", localDayStart(f.until, 1));
   if (f.group) p.set("action", f.group);
   if (f.who === "cli" || f.who === "api_key") p.set("actor", f.who);
   else if (f.who) p.set("user", f.who);
