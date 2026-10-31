@@ -182,7 +182,7 @@ const extendJobLeases = `-- name: ExtendJobLeases :many
 UPDATE jobs j SET lease_until = now() + make_interval(secs => $1::float8)
 WHERE j.state = 'running'
   AND (j.id, j.lease_token) IN (SELECT unnest($2::bigint[]), unnest($3::bytea[]))
-RETURNING j.id
+RETURNING j.id, j.lease_token
 `
 
 type ExtendJobLeasesParams struct {
@@ -191,22 +191,27 @@ type ExtendJobLeasesParams struct {
 	Leases       [][]byte
 }
 
+type ExtendJobLeasesRow struct {
+	ID         int64
+	LeaseToken []byte
+}
+
 // The heartbeat: extends the leases a pool still holds. A job missing
 // from the result lost its lease (it expired and was taken over, or its
 // message was deleted).
-func (q *Queries) ExtendJobLeases(ctx context.Context, arg ExtendJobLeasesParams) ([]int64, error) {
+func (q *Queries) ExtendJobLeases(ctx context.Context, arg ExtendJobLeasesParams) ([]ExtendJobLeasesRow, error) {
 	rows, err := q.db.Query(ctx, extendJobLeases, arg.LeaseSeconds, arg.Ids, arg.Leases)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []int64
+	var items []ExtendJobLeasesRow
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var i ExtendJobLeasesRow
+		if err := rows.Scan(&i.ID, &i.LeaseToken); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -329,8 +334,9 @@ WITH c AS (
                                             $2::float8) * (0.5 + random() * 0.5)) AS retry_at
     FROM jobs x
     WHERE x.state = 'running' AND x.lease_until < now() AND x.kind = $3
+      AND NOT (x.lease_token = ANY ($4::bytea[]))
     ORDER BY x.lease_until
-    LIMIT $4
+    LIMIT $5
     FOR UPDATE OF x SKIP LOCKED
 )
 UPDATE jobs j
@@ -347,6 +353,7 @@ type ReapExpiredJobsParams struct {
 	FirstSeconds float64
 	CapSeconds   float64
 	Kind         string
+	Own          [][]byte
 	MaxRows      int32
 }
 
@@ -361,12 +368,14 @@ type ReapExpiredJobsRow struct {
 // Running jobs of the kind whose lease expired (their process died or
 // hangs) are retried as after an error, with code 'lease expired': the
 // attempt the dead process made counts. Rows a heartbeat holds are
-// skipped.
+// skipped, and so are the leases of the calling pool (own): only its
+// heartbeat decides about the jobs it runs.
 func (q *Queries) ReapExpiredJobs(ctx context.Context, arg ReapExpiredJobsParams) ([]ReapExpiredJobsRow, error) {
 	rows, err := q.db.Query(ctx, reapExpiredJobs,
 		arg.FirstSeconds,
 		arg.CapSeconds,
 		arg.Kind,
+		arg.Own,
 		arg.MaxRows,
 	)
 	if err != nil {
@@ -431,10 +440,10 @@ func (q *Queries) RetryFailedJobs(ctx context.Context, kind string) (int64, erro
 
 const retryJob = `-- name: RetryJob :one
 WITH c AS (
-    SELECT j.id, ($2::boolean OR j.attempts >= j.max_attempts) AS give_up,
-        now() + make_interval(secs => LEAST($3::float8 * power(2::float8, GREATEST(j.attempts - 1, 0)::float8),
-                                            $4::float8) * (0.5 + random() * 0.5)) AS retry_at
-    FROM jobs j WHERE j.id = $5 AND j.lease_token = $6
+    SELECT j.id, ($3::boolean OR j.attempts >= j.max_attempts) AS give_up,
+        now() + make_interval(secs => LEAST($4::float8 * power(2::float8, GREATEST(j.attempts - 1, 0)::float8),
+                                            $5::float8) * (0.5 + random() * 0.5)) AS retry_at
+    FROM jobs j WHERE j.id = $6 AND j.lease_token = $2
 )
 UPDATE jobs j
 SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
@@ -442,17 +451,17 @@ SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
     run_after = CASE WHEN c.give_up THEN j.run_after ELSE c.retry_at END,
     last_error = $1::text, lease_token = NULL, lease_until = NULL
 FROM c
-WHERE j.id = c.id
+WHERE j.id = c.id AND j.lease_token = $2
 RETURNING j.state, j.run_after
 `
 
 type RetryJobParams struct {
 	Code         string
+	Lease        []byte
 	Permanent    bool
 	FirstSeconds float64
 	CapSeconds   float64
 	ID           int64
-	Lease        []byte
 }
 
 type RetryJobRow struct {
@@ -465,14 +474,16 @@ type RetryJobRow struct {
 // equal jitter, so that restarted pools do not retry in step:
 // min(first * 2^(attempts-1), cap) * [0.5, 1). ReapExpiredJobs uses the
 // same expression.
+// The token again: a waiting UPDATE re-checks only its own WHERE against
+// a row another pool took over meanwhile, not the CTE.
 func (q *Queries) RetryJob(ctx context.Context, arg RetryJobParams) (RetryJobRow, error) {
 	row := q.db.QueryRow(ctx, retryJob,
 		arg.Code,
+		arg.Lease,
 		arg.Permanent,
 		arg.FirstSeconds,
 		arg.CapSeconds,
 		arg.ID,
-		arg.Lease,
 	)
 	var i RetryJobRow
 	err := row.Scan(&i.State, &i.RunAfter)

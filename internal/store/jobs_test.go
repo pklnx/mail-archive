@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -342,11 +343,11 @@ func TestJobLeaseExpiry(t *testing.T) {
 		if len(c) != 1 || c[0].Attempt != attempt {
 			t.Fatalf("claim %d: %+v", attempt, c)
 		}
-		if reaped, err := f.st.ReapExpiredJobs(f.ctx, "test", testBackoff, 100); err != nil || len(reaped) != 0 {
+		if reaped, err := f.st.ReapExpiredJobs(f.ctx, "test", testBackoff, nil, 100); err != nil || len(reaped) != 0 {
 			t.Fatalf("reaped a live lease: %+v %v", reaped, err)
 		}
 		f.expireLease(c[0].ID)
-		reaped, err := f.st.ReapExpiredJobs(f.ctx, "test", testBackoff, 100)
+		reaped, err := f.st.ReapExpiredJobs(f.ctx, "test", testBackoff, nil, 100)
 		if err != nil || len(reaped) != 1 {
 			t.Fatalf("reap %d: %+v %v", attempt, reaped, err)
 		}
@@ -468,7 +469,7 @@ func TestExtendJobLeases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !held[c[0].ID] || held[c[1].ID] {
+	if !bytes.Equal(held[c[0].ID], c[0].Lease) || held[c[1].ID] != nil {
 		t.Errorf("held %v", held)
 	}
 	if r := f.job("test", c[0].Key); r.LeaseUntil == nil || time.Until(*r.LeaseUntil) < 30*time.Second {
@@ -629,4 +630,67 @@ func TestJobsMigration(t *testing.T) {
 		t.Fatalf("an insert failed during the migration: %v", err)
 	}
 	f.enqueue(testJob("after", 0))
+}
+
+// TestJobCompletionKeepsTakenOverLease: a pool whose lease another pool
+// took over while its finish, retry, release or continue waited for the
+// row lock records nothing; the new holder's lease stays.
+func TestJobCompletionKeepsTakenOverLease(t *testing.T) {
+	f := newJobsFixture(t)
+	other := connect(t, f.url)
+	for name, op := range map[string]func(c store.ClaimedJob) error{
+		"retry": func(c store.ClaimedJob) error {
+			_, _, err := f.st.RetryJob(f.ctx, c.ID, c.Lease, "internal", false, testBackoff)
+			return err
+		},
+		"finish":  func(c store.ClaimedJob) error { return f.st.FinishJob(f.ctx, c.ID, c.Lease) },
+		"release": func(c store.ClaimedJob) error { return f.st.ReleaseJob(f.ctx, c.ID, c.Lease) },
+		"continue": func(c store.ClaimedJob) error {
+			return f.st.ContinueJob(f.ctx, c.ID, c.Lease, json.RawMessage(`{"c":1}`))
+		},
+	} {
+		f.enqueue(testJob(name, store.PriorityNew))
+		c := f.claim(1)[0]
+		// The other pool takes the job over: the lease expired, it reaped
+		// and claimed it. Its transaction commits only after ours waits.
+		tx, err := other.Begin(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(f.ctx, `UPDATE jobs SET lease_token = '\x0b0b', attempts = attempts + 1, lease_until = now() + interval '1 minute' WHERE id = $1`, c.ID); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- op(c) }()
+		waitForLockWait(t, f.conn, done)
+		if err := tx.Commit(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("%s with the old lease: %v, want not found", name, err)
+		}
+		var state string
+		var lease []byte
+		if err := f.conn.QueryRow(f.ctx, `SELECT state, lease_token FROM jobs WHERE id = $1`, c.ID).Scan(&state, &lease); err != nil {
+			t.Fatal(err)
+		}
+		if state != store.JobRunning || !bytes.Equal(lease, []byte{0x0b, 0x0b}) {
+			t.Errorf("%s with the old lease changed the row: %s %x", name, state, lease)
+		}
+	}
+}
+
+// TestReapSkipsOwnLeases: a pool does not reap the expired leases it holds
+// itself; another pool does.
+func TestReapSkipsOwnLeases(t *testing.T) {
+	f := newJobsFixture(t)
+	f.enqueue(testJob("a", store.PriorityNew))
+	c := f.claim(1)[0]
+	f.expireLease(c.ID)
+	if reaped, err := f.st.ReapExpiredJobs(f.ctx, "test", testBackoff, [][]byte{[]byte("x"), c.Lease}, 100); err != nil || len(reaped) != 0 {
+		t.Fatalf("own lease reaped: %+v %v", reaped, err)
+	}
+	if reaped, err := f.st.ReapExpiredJobs(f.ctx, "test", testBackoff, [][]byte{[]byte("x")}, 100); err != nil || len(reaped) != 1 {
+		t.Fatalf("foreign lease not reaped: %+v %v", reaped, err)
+	}
 }

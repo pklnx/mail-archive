@@ -67,8 +67,14 @@ type Pool struct {
 	onNotify    func(kind string)
 	onListen    func()
 	onWait      func(due time.Duration, ok bool)
+	onPass      func(free int)
 	onHeartbeat func()
 	onLost      func(id int64)
+	// afterComplete runs after a job's result is recorded, before its
+	// slot is free.
+	afterComplete func(id int64)
+	// onFree runs once its slot is free.
+	onFree func(id int64)
 }
 
 // Run claims and runs jobs until ctx ends. Then it stops claiming, cancels
@@ -79,7 +85,7 @@ func (p *Pool) Run(ctx context.Context) error {
 	if p.Workers < 1 || p.Workers > MaxWorkers {
 		return fmt.Errorf("job workers must be 1 to %d, got %d", MaxWorkers, p.Workers)
 	}
-	r := &run{p: p, kinds: p.Kinds.Names(), running: map[int64]*task{}, wake: make(chan struct{}, 1)}
+	r := &run{p: p, kinds: p.Kinds.Names(), running: map[*task]struct{}{}, wake: make(chan struct{}, 1)}
 
 	listenCtx, stopListen := context.WithCancel(ctx)
 	listenDone := make(chan struct{})
@@ -121,10 +127,14 @@ type task struct {
 }
 
 type run struct {
-	p        *Pool
-	kinds    []string
-	mu       sync.Mutex
-	running  map[int64]*task
+	p     *Pool
+	kinds []string
+	mu    sync.Mutex
+	// running holds every claimed job until its result is recorded; it is
+	// keyed by the claim, not the job ID: the same job can be claimed
+	// again (after Continue, or a re-enqueue of a done row) while the
+	// goroutine of the previous claim still finishes.
+	running  map[*task]struct{}
 	handlers sync.WaitGroup
 	// wake has a buffer of one and is sent to without blocking.
 	wake chan struct{}
@@ -161,6 +171,9 @@ func (r *run) dispatch(ctx context.Context) {
 			claimed := r.claim(ctx, free)
 			progress = progress || claimed > 0
 			free -= claimed
+		}
+		if r.p.onPass != nil {
+			r.p.onPass(free)
 		}
 		var dueC <-chan time.Time
 		if free > 0 {
@@ -201,7 +214,7 @@ func (r *run) ownLeases() [][]byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([][]byte, 0, len(r.running))
-	for _, t := range r.running {
+	for t := range r.running {
 		out = append(out, t.job.Lease)
 	}
 	return out
@@ -222,7 +235,7 @@ func (r *run) reap(ctx context.Context) bool {
 	found := false
 	for _, name := range r.kinds {
 		k, _ := r.p.Kinds.Kind(name)
-		reaped, err := r.p.Store.ReapExpiredJobs(ctx, name, k.backoff(), reapLimit)
+		reaped, err := r.p.Store.ReapExpiredJobs(ctx, name, k.backoff(), r.ownLeases(), reapLimit)
 		if err != nil {
 			if ctx.Err() == nil {
 				r.p.log().Warn("jobs: cannot retry expired leases", "kind", name, "err", err)
@@ -262,7 +275,7 @@ func (r *run) start(ctx context.Context, j store.ClaimedJob) {
 	hctx, cancel := context.WithCancel(ctx)
 	t := &task{job: j, cancel: cancel}
 	r.mu.Lock()
-	r.running[j.ID] = t
+	r.running[t] = struct{}{}
 	r.mu.Unlock()
 	r.handlers.Add(1)
 	go func() {
@@ -273,9 +286,15 @@ func (r *run) start(ctx context.Context, j store.ClaimedJob) {
 		})
 		r.complete(ctx, t, k, err)
 		cancel()
+		if r.p.afterComplete != nil {
+			r.p.afterComplete(j.ID)
+		}
 		r.mu.Lock()
-		delete(r.running, j.ID)
+		delete(r.running, t)
 		r.mu.Unlock()
+		if r.p.onFree != nil {
+			r.p.onFree(j.ID)
+		}
 		r.signal()
 	}()
 }
@@ -351,11 +370,13 @@ func (r *run) heartbeat(ctx context.Context) {
 		case <-tick:
 		}
 		r.mu.Lock()
+		var tasks []*task
 		ids := make([]int64, 0, len(r.running))
 		leases := make([][]byte, 0, len(r.running))
-		for id, t := range r.running {
+		for t := range r.running {
 			if !t.completing && !t.lost {
-				ids, leases = append(ids, id), append(leases, t.job.Lease)
+				tasks = append(tasks, t)
+				ids, leases = append(ids, t.job.ID), append(leases, t.job.Lease)
 			}
 		}
 		r.mu.Unlock()
@@ -366,9 +387,9 @@ func (r *run) heartbeat(ctx context.Context) {
 			}
 		} else {
 			r.mu.Lock()
-			for i, id := range ids {
-				t := r.running[id]
-				if held[id] || t == nil || t.completing || t.lost || !bytes.Equal(t.job.Lease, leases[i]) {
+			for _, t := range tasks {
+				id := t.job.ID
+				if bytes.Equal(held[id], t.job.Lease) || t.completing || t.lost {
 					continue
 				}
 				t.lost = true

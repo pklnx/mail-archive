@@ -183,10 +183,10 @@ func (s *Store) ClaimJobs(ctx context.Context, kinds []string, lease []byte, lea
 }
 
 // ExtendJobLeases extends the leases of the jobs (ids[i] with leases[i])
-// by leaseFor and returns the IDs whose lease is still held. A job
-// missing from the result lost its lease.
-func (s *Store) ExtendJobLeases(ctx context.Context, ids []int64, leases [][]byte, leaseFor time.Duration) (map[int64]bool, error) {
-	held := make(map[int64]bool, len(ids))
+// by leaseFor and returns, per job ID, the lease that is still held. A job
+// whose lease is missing from the result lost it.
+func (s *Store) ExtendJobLeases(ctx context.Context, ids []int64, leases [][]byte, leaseFor time.Duration) (map[int64][]byte, error) {
+	held := make(map[int64][]byte, len(ids))
 	if len(ids) == 0 {
 		return held, nil
 	}
@@ -194,8 +194,8 @@ func (s *Store) ExtendJobLeases(ctx context.Context, ids []int64, leases [][]byt
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range rows {
-		held[id] = true
+	for _, r := range rows {
+		held[r.ID] = r.LeaseToken
 	}
 	return held, nil
 }
@@ -238,10 +238,14 @@ type ReapedJob struct {
 
 // ReapExpiredJobs retries up to limit running jobs of kind whose lease
 // expired, as after an error with code "lease expired": the attempt of
-// the process that held it counts.
-func (s *Store) ReapExpiredJobs(ctx context.Context, kind string, b JobBackoff, limit int) ([]ReapedJob, error) {
+// the process that held it counts. Leases in own (the caller's) are left
+// alone: the caller's heartbeat decides about them.
+func (s *Store) ReapExpiredJobs(ctx context.Context, kind string, b JobBackoff, own [][]byte, limit int) ([]ReapedJob, error) {
+	if own == nil {
+		own = [][]byte{}
+	}
 	rows, err := s.q.ReapExpiredJobs(ctx, db.ReapExpiredJobsParams{
-		Kind: kind, FirstSeconds: b.First.Seconds(), CapSeconds: b.Cap.Seconds(), MaxRows: clampInt32(limit),
+		Kind: kind, FirstSeconds: b.First.Seconds(), CapSeconds: b.Cap.Seconds(), Own: own, MaxRows: clampInt32(limit),
 	})
 	if err != nil {
 		return nil, err

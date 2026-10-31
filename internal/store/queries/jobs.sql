@@ -54,7 +54,7 @@ RETURNING j.id, j.kind, j.key, j.message_sha256, j.priority, j.run_after, j.payl
 UPDATE jobs j SET lease_until = now() + make_interval(secs => @lease_seconds::float8)
 WHERE j.state = 'running'
   AND (j.id, j.lease_token) IN (SELECT unnest(@ids::bigint[]), unnest(@leases::bytea[]))
-RETURNING j.id;
+RETURNING j.id, j.lease_token;
 
 -- name: FinishJob :execrows
 UPDATE jobs
@@ -79,20 +79,24 @@ SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
     run_after = CASE WHEN c.give_up THEN j.run_after ELSE c.retry_at END,
     last_error = sqlc.arg(code)::text, lease_token = NULL, lease_until = NULL
 FROM c
-WHERE j.id = c.id
+-- The token again: a waiting UPDATE re-checks only its own WHERE against
+-- a row another pool took over meanwhile, not the CTE.
+WHERE j.id = c.id AND j.lease_token = sqlc.arg(lease)
 RETURNING j.state, j.run_after;
 
 -- name: ReapExpiredJobs :many
 -- Running jobs of the kind whose lease expired (their process died or
 -- hangs) are retried as after an error, with code 'lease expired': the
 -- attempt the dead process made counts. Rows a heartbeat holds are
--- skipped.
+-- skipped, and so are the leases of the calling pool (own): only its
+-- heartbeat decides about the jobs it runs.
 WITH c AS (
     SELECT x.id, x.attempts >= x.max_attempts AS give_up,
         now() + make_interval(secs => LEAST(sqlc.arg(first_seconds)::float8 * power(2::float8, GREATEST(x.attempts - 1, 0)::float8),
                                             sqlc.arg(cap_seconds)::float8) * (0.5 + random() * 0.5)) AS retry_at
     FROM jobs x
     WHERE x.state = 'running' AND x.lease_until < now() AND x.kind = sqlc.arg(kind)
+      AND NOT (x.lease_token = ANY (sqlc.arg(own)::bytea[]))
     ORDER BY x.lease_until
     LIMIT sqlc.arg(max_rows)
     FOR UPDATE OF x SKIP LOCKED

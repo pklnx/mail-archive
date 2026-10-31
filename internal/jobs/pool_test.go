@@ -789,7 +789,7 @@ func TestPoolCrashLoop(t *testing.T) {
 			t.Fatalf("after crash %d: %+v", crash, r)
 		}
 		h.expireLease(r.ID)
-		reaped, err := h.st.ReapExpiredJobs(context.Background(), "crash", store.JobBackoff{First: 30 * time.Second, Cap: time.Hour}, 10)
+		reaped, err := h.st.ReapExpiredJobs(context.Background(), "crash", store.JobBackoff{First: 30 * time.Second, Cap: time.Hour}, nil, 10)
 		if err != nil || len(reaped) != 1 {
 			t.Fatalf("reap %d: %+v %v", crash, reaped, err)
 		}
@@ -819,4 +819,162 @@ func TestPoolRefusesBadWorkers(t *testing.T) {
 			t.Errorf("Workers %d accepted", n)
 		}
 	}
+}
+
+// passes counts the dispatcher's passes; each reports its free slots
+// after claiming.
+type passes struct {
+	n   atomic.Int32
+	sig testwait.Signal
+}
+
+func (h *harness) countPasses() *passes {
+	p := &passes{}
+	h.pool.onPass = func(int) { p.n.Add(1); p.sig.Notify() }
+	return p
+}
+
+// poll fires the poll and waits for the pass it caused.
+func (p *passes) poll(h *harness) {
+	h.t.Helper()
+	n := p.n.Load()
+	h.fire(h.poll, "poll")
+	testwait.Until(h.t, &p.sig, "the pass after the poll", func() bool { return p.n.Load() > n })
+}
+
+// peakCounter tracks how many handlers run at once.
+type peakCounter struct{ current, peak atomic.Int32 }
+
+func (c *peakCounter) enter() {
+	n := c.current.Add(1)
+	for {
+		p := c.peak.Load()
+		if n <= p || c.peak.CompareAndSwap(p, n) {
+			return
+		}
+	}
+}
+
+func (c *peakCounter) leave() { c.current.Add(-1) }
+
+func (h *harness) leaseLeft(id int64) time.Duration {
+	h.t.Helper()
+	var s float64
+	if err := h.conn.QueryRow(context.Background(), `SELECT EXTRACT(EPOCH FROM lease_until - now())::float8 FROM jobs WHERE id = $1`, id).Scan(&s); err != nil {
+		h.t.Fatal(err)
+	}
+	return time.Duration(s * float64(time.Second))
+}
+
+// TestPoolDoesNotReapItsOwnJob: when the lease of a job this pool still
+// runs has expired (heartbeats failed during a database outage), the pool
+// does not reap and run it a second time; its heartbeat extends the
+// lease again.
+func TestPoolDoesNotReapItsOwnJob(t *testing.T) {
+	h := newHarness(t, 2)
+	ps := h.countPasses()
+	var rec recorder
+	var pc peakCounter
+	release := make(chan struct{})
+	h.register(Kind{Name: "test", RetryFirst: time.Millisecond, RetryCap: time.Millisecond, Handler: func(_ context.Context, j Job) error {
+		pc.enter()
+		defer pc.leave()
+		rec.add(j)
+		<-release // ignores its context, like a handler in a long call
+		return nil
+	}})
+	h.enqueue(newJob("test", "a", store.PriorityNew))
+	h.start()
+	rec.waitFor(t, 1, "the job")
+	id := h.row("test", "a").ID
+	h.expireLease(id)
+	ps.poll(h)
+	h.makeDue(id) // makes a wrongly reaped job due at once; nothing while it runs
+	ps.poll(h)
+	if n := rec.count(); n != 1 {
+		t.Fatalf("the job ran %d times", n)
+	}
+	if r := h.row("test", "a"); r.State != store.JobRunning || r.Attempts != 1 || r.LastError != "" {
+		t.Fatalf("reaped by its own pool: %+v", r)
+	}
+	h.beat()
+	if left := h.leaseLeft(id); left < 30*time.Second {
+		t.Errorf("own lease not extended: %v left", left)
+	}
+	h.mu.Lock()
+	lost := len(h.lost)
+	h.mu.Unlock()
+	if lost != 0 {
+		t.Errorf("%d leases lost", lost)
+	}
+	close(release)
+	h.stateUntil("test", "a", store.JobDone)
+	if p := pc.peak.Load(); p != 1 {
+		t.Errorf("peak %d", p)
+	}
+}
+
+// TestPoolSameJobClaimedAgainWhileFinishing: a job continued (or enqueued
+// again) is claimed again while the goroutine of its previous claim still
+// finishes. That goroutine's end frees only its own slot: the new claim
+// keeps its heartbeat and its slot, and the pool stays within Workers.
+func TestPoolSameJobClaimedAgainWhileFinishing(t *testing.T) {
+	h := newHarness(t, 2)
+	ps := h.countPasses()
+	var rec recorder
+	var pc peakCounter
+	release := make(chan struct{})
+	h.register(Kind{Name: "test", Handler: func(ctx context.Context, j Job) error {
+		rec.add(j)
+		if j.Key == "a" && string(j.Payload) == "{}" {
+			return Continue(json.RawMessage(`{"c": 1}`))
+		}
+		pc.enter()
+		defer pc.leave()
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}})
+	held, hold := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h.pool.afterComplete = func(int64) {
+		once.Do(func() {
+			close(held)
+			<-hold
+		})
+	}
+	var freed atomic.Int32
+	var freedSig testwait.Signal
+	h.pool.onFree = func(int64) { freed.Add(1); freedSig.Notify() }
+	h.enqueue(newJob("test", "a", store.PriorityNew))
+	h.start()
+	<-held // the first claim is recorded (continued); its goroutine waits
+	ps.poll(h)
+	if jobs := rec.waitFor(t, 2, "the second claim"); jobs[1].ID != jobs[0].ID {
+		t.Fatalf("claims %+v", jobs)
+	}
+	close(hold)
+	testwait.Until(t, &freedSig, "the first claim's slot to be free", func() bool { return freed.Load() == 1 })
+	// The new claim must still hold its slot: a pass claims one more job,
+	// not two.
+	h.enqueue(newJob("test", "b", store.PriorityNew), newJob("test", "c", store.PriorityNew))
+	ps.poll(h)
+	rec.waitFor(t, 3, "a second job")
+	ps.poll(h)
+	if n := rec.count(); n != 3 {
+		t.Errorf("%d handler calls, want 3 (Workers=2)", n)
+	}
+	if p := pc.peak.Load(); p > 2 {
+		t.Errorf("peak %d with Workers=2", p)
+	}
+	id := h.row("test", "a").ID
+	h.exec(`UPDATE jobs SET lease_until = now() + interval '5 seconds' WHERE id = $1`, id)
+	h.beat()
+	if left := h.leaseLeft(id); left < 30*time.Second {
+		t.Errorf("the new claim lost its heartbeat: %v left", left)
+	}
+	close(release)
+	h.stateUntil("test", "a", store.JobDone)
 }
