@@ -155,7 +155,12 @@ headers what a request is for. Requests to `/api` answer `403`
 - a navigation (`Sec-Fetch-Mode: navigate`, or `Sec-Fetch-Dest` `document`,
   `iframe`, `frame`, `embed` or `object`), except a `GET` or `HEAD` of
   `/api/messages/{id}/html`, `/api/messages/{id}/raw`,
-  `/api/messages/{id}/parts/{n}` and `/api/openapi.json`, or
+  `/api/messages/{id}/parts/{n}` and `/api/openapi.json` whose
+  `Sec-Fetch-Site` is absent, `same-origin` or `none` (the app's own links,
+  a typed address, a bookmark). A navigation from another site
+  (`Sec-Fetch-Site` `cross-site` or `same-site`) gets `403` even for these
+  routes, so a link elsewhere that redirects back to the archive cannot open
+  them; or
 - for anything but a fetch (`Sec-Fetch-Dest` other than `empty`: an image,
   a style sheet, a font and so on).
 

@@ -121,7 +121,9 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
   // effect: attachFrameFit makes the frame inert before its first paint. It
   // is inert whenever the frame is not on a guarded mail document: until the
   // link blocker is on the mail's document (#209), and again from the moment
-  // the frame leaves it until the blocker is on the next one (#265).
+  // the frame leaves it until the blocker is on the next one (#265). The
+  // server's link rewrite holds in every engine; the blocker is an extra
+  // layer, which WebKit does not run (#459).
   const fitted = useRef("");
   useLayoutEffect(() => {
     const box = body.current;
@@ -373,8 +375,10 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
               same origin would undo the sandbox. No script runs in the mail:
               the sandbox, and the server's CSP (script-src 'none', no forms,
               no remote content) as a second layer. Its requests to the API
-              are refused by the server (Fetch Metadata) and its links into
-              the app by frameFit.ts. The same sandbox as the server's CSP. */}
+              are refused by the server (Fetch Metadata), and the server
+              renames its links into the app (#459); frameFit.ts cancels them
+              too where the engine runs its listeners (not WebKit). The same
+              sandbox as the server's CSP. */}
           <iframe
             // A new element per mode: changing src would add a browser history
             // entry, so Back would toggle images instead of leaving the message.

@@ -541,7 +541,7 @@ func TestMessageHTMLNeutralized(t *testing.T) {
 		t.Fatalf("status %d: %s", resp.StatusCode, body)
 	}
 	want := `<!DOCTYPE html>` + htmlPreamble + "\n" + `<html><body><div id="host"><template data-shadowrootmode="closed">` +
-		`<img src="` + dataURL("image/png", png) + `"><a href="/api/openapi.json" target="_blank">in a closed root</a></template></div>` +
+		`<img src="` + dataURL("image/png", png) + `"><a data-href="/api/openapi.json" target="_blank">in a closed root</a></template></div>` +
 		`<iframe data-SrcDoc="&lt;a href=/api/openapi.json target=_blank&gt;in a srcdoc frame&lt;/a&gt;"></iframe></body></html>`
 	if string(body) != want {
 		t.Errorf("body\n got %q\nwant %q", body, want)
@@ -572,7 +572,7 @@ func TestMessageHTMLNeutralizedAfterInlining(t *testing.T) {
 		inlinePart{"image/png", "a@x=", png}, inlinePart{"image/gif", "b@x=", gif}), 10)
 
 	body, _ := f.htmlBody("after-inlining")
-	want := `<div><template data:, data-shadowrootmode=closed><a href="/api/openapi.json">u</a></template></div>` +
+	want := `<div><template data:, data-shadowrootmode=closed><a data-href="/api/openapi.json">u</a></template></div>` +
 		`<iframe data:, data-srcdoc=&lt;a&#32;href=/api/openapi.json&#32;target=_blank&gt;v&lt;/a&gt;></iframe>` +
 		`<div><template ` + dataURL("image/png", png) + ` data-shadowrootmode=closed>w</template></div>` +
 		`<iframe ` + dataURL("image/gif", gif) + ` data-srcdoc=&lt;p&gt;y&lt;/p&gt;></iframe>`
@@ -582,6 +582,111 @@ func TestMessageHTMLNeutralizedAfterInlining(t *testing.T) {
 	// The parse oracle on what the handler serves.
 	if s := neutralizeSurvivors(htmlPreamble + body); len(s) > 0 {
 		t.Errorf("served body keeps %v", s)
+	}
+}
+
+// linkServer is the fixture's server through the real route table, with
+// archive.example as a further allowed host (a public URL's host, as from
+// MAIL_ARCHIVE_PUBLIC_URL) next to 127.0.0.1.
+func (f *apiFixture) linkServer() *httptest.Server {
+	f.t.Helper()
+	f.server.allowedHosts = append(f.server.allowedHosts, "archive.example")
+	return f.srv
+}
+
+// rawGet sends a GET with this Host header and the Fetch Metadata of a frame
+// navigation, as the browser does for the mail frame, and returns the
+// response with its body.
+func rawGet(t *testing.T, srv *httptest.Server, host, path string) (*http.Response, string) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", srv.URL+path, nil)
+	req.Host = host
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Dest", "iframe")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return resp, string(body)
+}
+
+// linkMail is an HTML mail with links into the app (relative, by the
+// request's host and port, by an allowed host) and an external one, for
+// TestMessageHTMLLinks and TestMessageHTMLRewriteLeavesStoredBytes.
+func linkMail(port string) string {
+	return `<p><a href="/api/openapi.json?link=root">a</a> <a href="api/x">b</a> ` +
+		`<a href="http://127.0.0.1:` + port + `/api/openapi.json?link=port">c</a> ` +
+		`<a href="https://archive.example/api/openapi.json?link=public">d</a> ` +
+		`<a href="https://links.example/">e</a></p>`
+}
+
+// The served HTML has no link into the app (#459): relative links, links
+// to the request's own host and port and links to an allowed host are
+// renamed; the external link is kept. The same for either Host the server
+// accepts.
+func TestMessageHTMLLinks(t *testing.T) {
+	f := newAPIFixture(t)
+	srv := f.linkServer()
+	u, _ := url.Parse(srv.URL)
+	f.addMessage("alice", "INBOX", "links", "Message-ID: <links@x>\r\nFrom: a@example.com\r\nSubject: links\r\n"+
+		"Date: Fri, 9 Oct 2026 10:00:00 +0000\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"+linkMail(u.Port())+"\r\n", 10)
+	want := htmlPreamble + `<p><a data-href="/api/openapi.json?link=root">a</a> <a data-href="api/x">b</a> ` +
+		`<a data-href="http://127.0.0.1:` + u.Port() + `/api/openapi.json?link=port">c</a> ` +
+		`<a data-href="https://archive.example/api/openapi.json?link=public">d</a> ` +
+		`<a href="https://links.example/">e</a></p>`
+	for _, host := range []string{u.Host, "archive.example"} {
+		resp, body := rawGet(t, srv, host, "/api/messages/"+f.ids["links"]+"/html")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("Host %s: status %d: %s", host, resp.StatusCode, body)
+		}
+		if body = strings.TrimSuffix(body, "\r\n"); body != want {
+			t.Errorf("Host %s: body\n got %q\nwant %q", host, body, want)
+		}
+	}
+	// Another host is refused before anything is served.
+	if resp, _ := rawGet(t, srv, "evil.example", "/api/messages/"+f.ids["links"]+"/html"); resp.StatusCode == http.StatusOK {
+		t.Errorf("Host evil.example: status %d", resp.StatusCode)
+	}
+}
+
+// Only the rendering changes (#459): /raw, the stored blob and a part keep
+// the archived bytes, links and all, while /html is rewritten.
+func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
+	f := newAPIFixture(t)
+	srv := f.linkServer()
+	u, _ := url.Parse(srv.URL)
+	mail := linkMail(u.Port())
+	attachment := `<html><body>` + mail + `</body></html>`
+	raw := "Message-ID: <links-stored@x>\r\nFrom: a@example.com\r\nSubject: links\r\n" +
+		"Date: Fri, 9 Oct 2026 10:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + mail + "\r\n" +
+		"--b\r\nContent-Type: text/html; charset=utf-8\r\nContent-Disposition: attachment; filename=\"links.html\"\r\n\r\n" +
+		attachment + "\r\n--b--\r\n"
+	f.addMessage("alice", "INBOX", "stored", raw, 10)
+	sha := f.ids["stored"]
+
+	resp, body := rawGet(t, srv, u.Host, "/api/messages/"+sha+"/html")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) {
+		t.Fatalf("html: %d %q", resp.StatusCode, body)
+	}
+	if resp, body = rawGet(t, srv, u.Host, "/api/messages/"+sha+"/raw"); resp.StatusCode != http.StatusOK || body != raw {
+		t.Errorf("raw: %d %q", resp.StatusCode, body)
+	}
+	// The stored path is the blob store's for the hash (archive.BuildMeta).
+	rc, err := f.blobs.Open(blobstore.RelPath(sha))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if string(stored) != raw {
+		t.Errorf("stored blob %q", stored)
+	}
+	if resp, body = rawGet(t, srv, u.Host, "/api/messages/"+sha+"/parts/1"); resp.StatusCode != http.StatusOK || body != attachment {
+		t.Errorf("part 1: %d %q", resp.StatusCode, body)
 	}
 }
 

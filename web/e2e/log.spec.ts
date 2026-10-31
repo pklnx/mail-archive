@@ -334,6 +334,9 @@ test.describe("in German", () => {
       await main.getByRole("heading", { name: "Protokoll", level: 1 }).click();
       await cleared;
       await from.click();
+      // The calendar opens on the current month, whose 15th can be in the future,
+      // and a start after now is refused (400). The 15th of last month never is.
+      await calendar.getByLabel("Vorheriger Monat").click();
       const sent = page.waitForRequest((r) => new URL(r.url()).pathname === "/api/audit");
       await calendar.locator(".flatpickr-day:not(.prevMonthDay):not(.nextMonthDay)", { hasText: /^15$/ }).click();
       const p = await daysOf(page, new URL((await sent).url()).searchParams);

@@ -31,17 +31,16 @@ and signed with an Ed25519 key. From that:
   afterwards shows up as `unattested`. Deletions recorded by the archive
   itself are signed with their hash, reason and time and are not findings.
   The reason is `retention` for a [deletion run](./retention) and
-  `account_purge` for a message deleted with its [removed
-  account](./accounts#deleting-a-removed-account-completely).
+  `account_purge` for a message deleted with its
+  [removed account](./accounts#deleting-a-removed-account-completely).
 - **Not proven:** that every message reached the archive. IMAP accounts are
-  snapshots, see [what each source
-  guarantees](./accounts). Messages archived and removed between two
-  attestations leave no trace. Locations, folders and flags are not covered,
-  only message content.
+  snapshots, see [what each source guarantees](./accounts). Messages
+  archived and removed between two attestations leave no trace. Locations,
+  folders and flags are not covered, only message content.
 - A database user can delete a message and insert a matching deletion record
-  before the next attestation; the job then signs it as a deletion. It is not
-  hidden: the deletion is in the signed chain with its hash, reason and time,
-  and can be checked against the retention policy.
+  before the next attestation; the job then signs it as a deletion. It is
+  not hidden: the deletion is in the signed chain with its hash, reason and
+  time, and can be checked against the retention policy.
 
 ## What you do
 
@@ -104,14 +103,13 @@ and signed with an Ed25519 key. From that:
 
 ## Findings
 
-| Finding | Meaning |
-|---|---|
-| `removed` | An attested message is gone and no deletion was recorded. Listed with its hash and the attestation that covered it. |
-| `unattested` | A row inside an attested range that the attestation does not list: inserted afterwards. |
-| `attestation` | An attestation no longer matches the database: another message at the same number, changed deletion records, or, without its leaves file, only the counts. |
-| `attest-file` | The attestation file differs from the database, a line does not parse, or a leaves file is missing or does not match its signed digest. |
-| `chain` | A broken chain, a bad hash or signature, or a key that is not trusted. |
-| `attest-stale` | A key exists and the newest attestation is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. |
+`verify` reports `removed` (an attested message is gone and no deletion was
+recorded), `unattested` (a row inserted into an attested range afterwards),
+`attestation` (an attestation no longer matches the database), `attest-file`
+(the file or a leaves file differs from the database or does not parse),
+`chain` (a broken chain, bad signature or untrusted key) and `attest-stale`
+(the newest attestation is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`).
+The [command reference](../reference/cli#verify) describes each finding.
 
 Notes, which are no findings: the file lags behind the database (the next
 attestation copies the entries), deletions not yet signed, a key change
@@ -128,24 +126,23 @@ which should describe the key, the off-host copies and who checks them.
 ## Restore from a backup
 
 A backup is the dump first, then the data directory, so after a restore the
-attestation file in the data directory can be ahead of the database. The
-web server at its start, `./ma attest` and `./ma backup` (with a key) then
-import the missing
-attestations into the database. They check them first (chain, trusted key,
-leaves file), move the message numbering past them, and give new numbers to
-messages archived after the restore inside an imported range. Run
-`./ma attest` right after `./ma migrate`, before anything archives.
+attestation file in the data directory can be ahead of the database. The web
+server at its start, `./ma attest` and `./ma backup` (with a key) then import
+the missing attestations into the database. They check them first (chain,
+trusted key, leaves file), move the message numbering past them, and give
+new numbers to messages archived after the restore inside an imported range.
+Run `./ma attest` right after `./ma migrate`, before anything archives.
 
 `./ma verify` then lists every attested message the restore lost as
-`removed`. Those still on a server come back with the next sync. The
-others are in the data directory as orphans: `./ma verify --fix-orphans`
-moves them to `data/orphans/<time>/`; copy that directory into `./import`
-and bring them back with `./ma import NAME --from /import/<time> --format eml --folder restored`.
+`removed`. Those still on a server come back with the next sync. The others
+are in the data directory as orphans: `./ma verify --fix-orphans` moves them
+to `data/orphans/<time>/`; copy that directory into `./import` and bring
+them back with
+`./ma import NAME --from /import/<time> --format eml --folder restored`.
 Either way they turn into `re-archived` notes.
 
-If the file and the database disagree in any other way, nothing is
-written, and `attest` and the web server log it; `verify` shows what
-differs.
+If the file and the database disagree in any other way, nothing is written,
+and `attest` and the web server log it; `verify` shows what differs.
 
 ## Key loss and rotation
 

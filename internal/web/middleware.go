@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/pklnx/mail-archive/internal/config"
@@ -28,13 +29,27 @@ import (
 //     so a mail's images and links would otherwise reach the API with the
 //     session cookie.
 
+// hostName returns the host name of a Host header value: without port,
+// lowercase, without brackets.
+func hostName(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		hostport = h
+	}
+	return strings.Trim(strings.ToLower(hostport), "[]")
+}
+
+// mailHosts are the host names under which the app runs, for the link
+// rewrite of the HTML mail frame (#459): the allowed hosts (which include
+// the public URL's host) and the request's own. The Host check accepts only
+// allowed hosts, so the request's host is one of them already; it is added
+// so the rewrite does not depend on that.
+func (s *Server) mailHosts(r *http.Request) appHosts {
+	return newAppHosts(append(slices.Clone(s.allowedHosts), hostName(r.Host))...)
+}
+
 // hostAllowed reports whether the request's Host (without port) is allowed.
 func (s *Server) hostAllowed(r *http.Request) bool {
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.Trim(strings.ToLower(host), "[]")
+	host := hostName(r.Host)
 	for _, h := range s.allowedHosts {
 		if host == h {
 			return true
@@ -118,6 +133,15 @@ var navigable = regexp.MustCompile(`^/api/(messages/[0-9a-f]{64}/(html|raw|parts
 // navigationDests are the Sec-Fetch-Dest values of a navigation.
 var navigationDests = map[string]bool{"document": true, "iframe": true, "frame": true, "embed": true, "object": true}
 
+// navigationSiteAllowed reports whether a navigation with this
+// Sec-Fetch-Site may open a navigable route: same-origin (the app, the mail
+// frame's own links), none (typed, bookmarks) or no header (browsers without
+// Fetch Metadata). cross-site and same-site are refused; an unknown value as
+// well.
+func navigationSiteAllowed(site string) bool {
+	return site == "" || site == "same-origin" || site == "none"
+}
+
 // fetchMetadataAllowed is the Fetch Metadata guard for /api. The HTML mail
 // frame runs with the app's origin (it is sandboxed without scripts), so an
 // image or a link in a mail is a same-origin request that carries the
@@ -128,6 +152,12 @@ var navigationDests = map[string]bool{"document": true, "iframe": true, "frame":
 //   - a prefetch (Sec-Purpose),
 //   - a navigation (Sec-Fetch-Mode navigate, or a Sec-Fetch-Dest of a
 //     document or frame) other than a GET or HEAD of a navigable route, or
+//     one that the browser marks as coming from another site
+//     (Sec-Fetch-Site cross-site or same-site): an external link in a mail
+//     that redirects back to the archive. The navigation begins in the mail
+//     frame, which has the app's origin, so Chromium sends the SameSite=Strict
+//     cookie along (#459). Typed addresses, bookmarks (none) and the app's
+//     own links (same-origin) still open these routes, or
 //   - any other destination than "empty" (a fetch): an image, style, font,
 //     script, media and so on. The app sends none of these to /api.
 //
@@ -145,7 +175,8 @@ func fetchMetadataAllowed(r *http.Request) bool {
 	dest := r.Header.Get("Sec-Fetch-Dest")
 	if r.Header.Get("Sec-Fetch-Mode") == "navigate" || navigationDests[dest] {
 		// The path as sent: an escaped character in it is not the route shape.
-		return (r.Method == http.MethodGet || r.Method == http.MethodHead) && navigable.MatchString(r.URL.EscapedPath())
+		return (r.Method == http.MethodGet || r.Method == http.MethodHead) && navigable.MatchString(r.URL.EscapedPath()) &&
+			navigationSiteAllowed(r.Header.Get("Sec-Fetch-Site"))
 	}
 	return dest == "" || dest == "empty"
 }

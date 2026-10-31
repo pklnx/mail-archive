@@ -485,12 +485,17 @@ const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sand
 // with the app's origin, but no script runs in it (no allow-scripts, and
 // script-src 'none' as a second layer). Its same-origin requests (images
 // after "Load remote images", links) carry the session cookie; the Fetch
-// Metadata guard in protect refuses them, and the app blocks clicks on
-// same-origin links in the frame.
+// Metadata guard in protect refuses them. No link into the app reaches the
+// browser: servedMailHTML renames every href that is not an external
+// http(s), mailto: or tel: link (#459), which holds in every engine. The
+// app's link blocker in the frame is an extra layer where the engine runs it
+// (Chromium; WebKit does not run listeners the app adds to the sandboxed
+// document).
 //
 // The served bytes are built by servedMailHTML: it also neutralizes
 // declarative shadow roots and srcdoc frames (#209), which the app's link
-// blocker cannot see into.
+// blocker cannot see into. Only the served rendering changes: the stored
+// message, /raw, /parts/{n} and exports keep the archived bytes.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -514,7 +519,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusNotFound, "message has no HTML body", nil)
 		return
 	}
-	body, inl, err := servedMailHTML(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) })
+	body, inl, err := servedMailHTML(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) }, s.mailHosts(r))
 	if err != nil {
 		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
 	}
@@ -556,18 +561,23 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 // preamble, then neutralizeHTML. That renames the attributes that make a
 // nested document the app's link blocker cannot reach (#209): declarative
 // shadow roots (shadowroot... on <template>) and srcdoc frames (srcdoc... on
-// <iframe>) get the prefix "data-", so their content is not shown.
+// <iframe>) get the prefix "data-", so their content is not shown. It also
+// renames every href and xlink:href that is not an external link (not to
+// one of hosts, the app's own host names), and every ping, attributeName and
+// http-equiv (#459), so no link in the served HTML points into the app.
 //
 // neutralizeHTML runs last, on exactly the bytes that are served: any
 // rewrite after it could change how the scanned bytes tokenize. Inlining
 // replaces a cid: URL together with the bytes after it up to a quote, white
 // space, ")", "<" or ">", "=" and "/" included, so before the rename it
-// could turn an attribute value into attribute names. The preamble holds no
-// candidate. The rename changes no other byte: the output is the inlined
+// could turn an attribute value into attribute names. The preamble's tags
+// (<base target>, <style>) are candidates of any tag, but hold no attribute
+// the rename touches, so they come out as they are. The rename changes no
+// other byte: the output is the inlined
 // mail with the preamble and the prefixes inserted.
-func servedMailHTML(html string, parts []mime.Part, open func() (io.ReadCloser, error)) (string, inlineResult, error) {
+func servedMailHTML(html string, parts []mime.Part, open func() (io.ReadCloser, error), hosts appHosts) (string, inlineResult, error) {
 	inl, err := inlineImages(html, parts, open)
-	return neutralizeHTML(withPreamble(inl.HTML)), inl, err
+	return neutralizeHTML(withPreamble(inl.HTML), hosts), inl, err
 }
 
 func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {

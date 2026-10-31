@@ -2,8 +2,8 @@
 
 An IMAP account is a **snapshot**: a sync archives what is in the mailbox at
 that moment. A message that arrives and is deleted between two syncs never
-reaches the archive, and whoever controls the mailbox decides what the archive
-sees.
+reaches the archive, and whoever controls the mailbox decides what the
+archive sees.
 
 An **smtp account** is **complete**: your mail server sends the archive a copy
 of every message as it passes through, over SMTP. This is how
@@ -16,11 +16,11 @@ server. Hosted mailboxes (GMX, mail.de, Gmail) cannot do it.
                 └── copy of every message ──► mail-archive :2525 ──► smtp account
 ```
 
-The archive stores each copy with its **envelope**: the sender, the recipients
-the server delivered to (BCC recipients included), the time, the client
-address and its HELO name. The message view shows it, and the `to:` filter
-finds envelope recipients, so a search for a BCC recipient finds the message.
-Only the owner of the smtp account sees its envelopes.
+The archive stores each copy with its **envelope**: the sender, the
+recipients the server delivered to (BCC recipients included), the time, the
+client address and its HELO name. The message view shows it, and the `to:`
+filter finds envelope recipients, so a search for a BCC recipient finds the
+message. Only the owner of the smtp account sees its envelopes.
 
 ![A message received over SMTP: the envelope lists counsel@lawfirm.example, a BCC recipient the headers do not show](/screenshots/envelope.png)
 
@@ -46,20 +46,19 @@ message.
    size limit. Compose publishes the port on `127.0.0.1:2525`; `SMTP_BIND` and
    `SMTP_PORT` change that. See [Configuration](../reference/configuration#smtp).
 
-2. Create the account and the address it receives for. In the web UI, as
-   an admin: **Accounts → Add account → SMTP journaling**, with a name
-   and the address. On the command line:
+2. Create the account and the address it receives for. In the web UI, as an
+   admin: **Accounts → Add account → SMTP journaling**, with a name and the
+   address. On the command line:
 
    ```sh
    ./ma account add-smtp journal --address archive@archive.local
    ```
 
-   After creating the account, the web UI shows the Postfix lines below,
-   filled in with its address; the account's page shows them again under
-   **Mail server setup** (also **Mail server setup** in its row's menu on the
-   Accounts page). It only routes a domain that looks like it belongs to
-   the archive alone (`archive.local`, or a name ending in `.local`,
-   `.internal`, `.test` or `.invalid`): for an address like
+   The web UI then shows the Postfix lines below, filled in with the
+   address; the account's page repeats them under **Mail server setup**
+   (also in its row menu on the Accounts page). It only routes a domain that
+   looks like the archive's alone (`archive.local`, or a name ending in
+   `.local`, `.internal`, `.test` or `.invalid`). For an address like
    `journal@example.com` it warns and uses `archive@archive.local`, because a
    transport for `example.com` would send all of that domain's mail to the
    archive. **Edit** under *Connection* on the account's page changes the
@@ -82,8 +81,8 @@ with:
 docker network inspect "$(basename "$PWD")_default" --format '{{(index .IPAM.Config 0).Gateway}}'
 ```
 
-and allow it, or allow `172.16.0.0/12`, Docker's default range. A Postfix
-on another machine connects from its own address; allow exactly that one.
+and allow it, or allow `172.16.0.0/12`, Docker's default range. A Postfix on
+another machine connects from its own address; allow exactly that one.
 
 STARTTLS is on when `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY`
 name a certificate and key. There is no SMTP login: keep the port off the
@@ -91,8 +90,8 @@ internet. The allowlist is the only gate.
 
 ## Set up Postfix
 
-Postfix delivers the copies to the archive over a transport, so the archive's
-domain needs no DNS:
+Postfix delivers the copies over a transport, so the archive's domain needs
+no DNS:
 
 ```text
 # /etc/postfix/transport
@@ -104,7 +103,7 @@ postmap /etc/postfix/transport
 postconf -e 'transport_maps = hash:/etc/postfix/transport'
 ```
 
-Then pick one of the two ways to copy every message.
+Then pick one of two ways to copy every message.
 
 ### Variant A: always_bcc
 
@@ -138,8 +137,9 @@ postconf -e 'recipient_bcc_maps = regexp:/etc/postfix/archive_bcc'
 postfix reload
 ```
 
-Postfix sends one copy with one recipient per original recipient. Sent mail is
-covered too: its recipients are envelope recipients when it enters Postfix.
+Postfix sends one copy with one recipient per original recipient. Sent mail
+is covered too: its recipients are envelope recipients when it enters
+Postfix.
 
 - **No `sender_bcc_maps`** with the same expression: it would add a second
   copy whose address encodes the *sender*, and the archive would store the
@@ -152,10 +152,10 @@ covered too: its recipients are envelope recipients when it enters Postfix.
   twice and the archive gets two copies with different bytes, stored as two
   messages.
 
-A copy for many recipients may arrive in several transactions: Postfix sends at
-most `smtp_destination_recipient_limit` (50) recipients at a time, and retries
-only the recipients that failed. The archive merges them into one stored
-message with all recipients.
+A copy for many recipients may arrive in several transactions: Postfix sends
+at most `smtp_destination_recipient_limit` (50) recipients at a time, and
+retries only the recipients that failed. The archive merges them into one
+stored message with all recipients.
 
 ## When a copy is refused
 
@@ -181,7 +181,7 @@ So:
   `maximal_queue_lifetime`, 5 days by default. Then Postfix drops them:
   **disabling an account for longer loses mail.**
 - A message is acknowledged only after it is stored for every account it is
-  addressed to. A message that was acknowledged is in the archive.
+  addressed to. An acknowledged message is in the archive.
 
 Postfix opens up to `smtp_destination_concurrency_limit` (20) connections to
 one destination; the archive takes 10 and answers more with `421`. Set a
@@ -197,8 +197,8 @@ transport map.
 
 ## Monitoring
 
-The archive cannot tell a broken setup from a quiet mailbox, so watch the mail
-server. Two checks cover both kinds of failure:
+The archive cannot tell a broken setup from a quiet mailbox, so watch the
+mail server. Two checks cover both kinds of failure:
 
 - **The queue.** Copies for the archive that wait in the queue mean `4xx`
   answers, an archive that is down or a disabled account:
@@ -224,13 +224,14 @@ Journaling covers mail from the moment it is switched on. What the mailbox
 already holds comes into the same account with a one-time **fill** from IMAP.
 A fill can also [keep importing](#keep-importing-recurring-fill) what shows
 up in the mailbox later.
+
 In the web UI, **Import existing mail from IMAP** is in the smtp account's
 row menu on the Accounts page and under *Imports from IMAP* on the account's
 page (also offered right after creating the account). It opens the import
-form as a page of its own. The form takes the IMAP
-server and login, checks the login and lists the folders: trash and spam
-folders start unticked. The cut-off is optional. The form shows the first
-message the account received over SMTP, as a check that journaling works.
+form as a page of its own. The form takes the IMAP server and login, checks
+the login and lists the folders; trash and spam folders start unticked. The
+cut-off is optional. The form shows the first message the account received
+over SMTP, as a check that journaling works.
 
 ![The import form of the smtp account "journal": IMAP server, login and cut-off](/screenshots/fill-form.png)
 
@@ -242,8 +243,8 @@ On the command line:
 
 The password is asked for (or read with `--password-stdin`) and kept,
 encrypted, only while the fill runs. The command prints the first message the
-account received over SMTP and then the progress per folder. It is not a sync:
-nothing is fetched again afterwards, unless the fill
+account received over SMTP and then the progress per folder. It is not a
+sync: nothing is fetched again afterwards, unless the fill
 [keeps running](#keep-importing-recurring-fill), and the account stays
 *complete (SMTP)*.
 
@@ -261,8 +262,8 @@ Fills started before this layout wrote into folders of their own,
 `PREFIX/<IMAP folder>` (such as `alice@example.com/INBOX`). Those folders
 stay, and such a fill, resumed, finishes there. `--prefix` (`folderPrefix` in
 the API) is no longer accepted. An old fill with the prefix `JOURNAL` has
-folders such as `JOURNAL/INBOX`, which the folder column shows below the journal
-folder; that is only how they are displayed.
+folders such as `JOURNAL/INBOX`, which the folder column shows below the
+journal folder; that is only how they are displayed.
 
 **Which messages.** The journal copy and the mailbox copy of a message differ
 in their `Received:` lines, so the archive cannot match them by content. The
@@ -300,12 +301,13 @@ retention.
 **From the web server.** A fill started in the web UI (or the
 [API](../reference/api#fills)) runs in the web server's background, one at a
 time and apart from the scheduled syncs. The account's page shows its
-progress per folder under *Imports from IMAP*, with **Cancel import**; after a failed, partly failed or cancelled fill
-it shows the error and **Resume import**, which asks for the password again.
-The folder column marks the account as importing meanwhile. A fill the web server
-was running when it stopped keeps its encrypted password and continues at the
-next start. So does a fill whose command-line process died without Ctrl-C:
-the web server picks it up within a minute.
+progress per folder under *Imports from IMAP*, with **Cancel import**; after
+a failed, partly failed or cancelled fill it shows the error and **Resume
+import**, which asks for the password again. The folder column marks the
+account as importing meanwhile. A fill the web server was running when it
+stopped keeps its encrypted password and continues at the next start. So
+does a fill whose command-line process died without Ctrl-C: the web server
+picks it up within a minute.
 
 **From files (piler, mbox, Maildir).** Mail that is no longer in an IMAP
 mailbox, such as a [piler](./importing#piler-into-a-journaled-mailbox)
@@ -349,35 +351,35 @@ once it is two hours old (a duplicate beats a gap). A date more than a day in
 the future, from a server with a wrong clock, counts as old.
 
 **After a restart.** The web server starts no run of a recurring fill in the
-first 70 minutes after it started. While it was down, Postfix kept the journal
-copies queued and retries them at least every 4000 seconds; they must arrive
-before the fill sees the mailbox copies. The account's page shows such a run
-as waiting. Re-enabling a disabled smtp account starts no such hold: the
-copies Postfix kept queued while the account answered `451` arrive within
-about an hour, but a recurring fill that is overdue runs within a minute and
+first 70 minutes after it started: while it was down, Postfix kept the
+journal copies queued and retries them at least every 4000 seconds, and they
+must arrive before the fill sees the mailbox copies. The account's page shows
+such a run as waiting. Re-enabling a disabled smtp account starts no such
+hold: the copies Postfix kept queued while the account answered `451` arrive
+within about an hour, but an overdue recurring fill runs within a minute and
 may import their mailbox copies first. To avoid that, stop the fill before
 you enable the account and resume it an hour later.
 
 **Incremental.** Each run continues every IMAP folder after the last UID the
 previous run decided, like a sync. It stops at the first message that is
-still waiting, so that one and everything after it are looked at again by the
-next run: journaled ones cost only their header, imported ones are
+still waiting, so that one and everything after it are looked at again by
+the next run: journaled ones cost only their header, imported ones are
 recognised without downloading them. When a folder's `UIDVALIDITY` changes,
 it is scanned again from the start.
 
 **Moves and deletions are ignored.** A message moved from `INBOX` to
 `Clients/Miller` keeps its Message-ID, INTERNALDATE and size; the fill knows
 it imported it and does not download it again, and `JOURNAL` holds it once.
-A message deleted in the mailbox stays in the archive. Nothing is marked
+A message deleted in the mailbox stays in the archive; nothing is marked
 *only in archive*, and no loss alert is sent. A folder deleted in the mailbox
 is simply not visited; a renamed one is scanned like a new folder, without
 downloading what the fill imported before.
 
 **New folders** are picked up, subject to the fill's include and exclude
 lists. A trash or spam folder that appears later is skipped, because nobody
-confirmed it: the account's page lists it as such, and the command line shows it as
-*not confirmed*. It is filled only if it was confirmed when the fill started
-or was switched on, or if the fill's include list names it.
+confirmed it: the account's page lists it as such, and the command line shows
+it as *not confirmed*. It is filled only if it was confirmed when the fill
+started or was switched on, or if the fill's include list names it.
 
 **Password.** It is kept, encrypted with `MAIL_ARCHIVE_SECRET_KEY`, for as
 long as the fill keeps running, like the password of an IMAP account, and
@@ -390,15 +392,15 @@ The next run is due that long after the last one started. With the schedule
 off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are no scheduled runs, and no fill
 is stale; a fill just started, switched on, resumed or interrupted still
 finishes its current run. Change it on the account's page, or with
-`./ma account fill journal --interval 24h`. Runs of the fills of all accounts
-share one queue in the web server, one at a time; a long one-time fill delays
-the recurring runs behind it.
+`./ma account fill journal --interval 24h`. The fills of all accounts share
+one queue in the web server, one at a time; a long one-time fill delays the
+recurring runs behind it.
 
-**Counts.** The account's page shows how often the fill runs, when next, how the last
-run ended and its counts: imported and *waiting* (younger than two hours).
-The counts are those of the last run, not of all runs. Runs are not written
-to the [audit log](./audit-log), like scheduled syncs; starting, changing,
-stopping and resuming a fill are.
+**Counts.** The account's page shows how often the fill runs, when next, how
+the last run ended and its counts: imported and *waiting* (younger than two
+hours). The counts are those of the last run, not of all runs. Runs are not
+written to the [audit log](./audit-log), like scheduled syncs; starting,
+changing, stopping and resuming a fill are.
 
 **Health and alerts.** A recurring fill that keeps failing, for example
 because the mailbox's password changed, is noticed like a sync: after
@@ -407,8 +409,9 @@ after two intervals without a successful run *stale*. The banner names the
 account with the mailbox, such as "journal (alice@example.com)",
 [`/healthz/sync`](./operations#healthz-sync) lists the smtp account's ID, and
 the [webhook alert](./operations#webhook-alerts) names the fill and its
-mailbox. Fills of a disabled account do not run, not even a run that was about to
-start, and count as healthy; they run again once the account is enabled.
+mailbox. Fills of a disabled account do not run, not even a run that was
+about to start, and count as healthy; they run again once the account is
+enabled.
 
 **Stop and resume.** **Stop importing** on the account's page, or
 `./ma account fill journal --cancel`, stops the fill (after its current batch
