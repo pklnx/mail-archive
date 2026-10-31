@@ -26,7 +26,7 @@ Commands per operation: `.claude/github-operations.md`, read before the first Gi
 - Tests never touch real user data, credentials or the network. Secrets only in the secret store, never in chat or files.
 - Every behaviour change has tests; a bug fix has a regression test that fails without the fix. Tests wait for signals, never for time.
 - Locally run only the tests of what changed; CI runs everything.
-- Plans state the memory and CPU cost on the target hardware of a hosted instance, 4 GB RAM and 2 cores, and stay within it.
+- Plans state the memory and CPU cost on the target hardware, 4 GB RAM and 2 cores, and stay within it.
 - A PR that changes the web UI updates the affected docs screenshots (`make docs-screenshots`) and docs text in the same PR.
 - Agents never watch CI: push, open the PR, report; the coordinator waits for checks (GitHub operations).
 - ≤3 tickets in parallel, ≤2 PRs in CI at a time.
