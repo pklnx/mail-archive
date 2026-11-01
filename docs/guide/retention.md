@@ -221,8 +221,8 @@ of this; your off-host copy of the attestations then shows it. See
 
 GoBD expects you to document how mail is captured, stored, protected and
 deleted. mail-archive cannot write it, but this template covers its part.
-Copy it, fill in the brackets (the operator is pklnx in the hosted instance)
-and add what is yours.
+Copy it and fill in the brackets; in the hosted instance the operator is the
+party that runs it under your contract. Add what is yours.
 
 ```md
 # Procedure documentation: e-mail archive

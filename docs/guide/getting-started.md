@@ -1,9 +1,9 @@
 # Getting started
 
-mail-archive is offered as a hosted service. The operator (pklnx) runs the
-instance and is its admin: the operator installs, upgrades and configures
-it, creates the users and sets up accounts, retention rules, legal holds and
-exports on request. Customers and their people are users of that instance.
+mail-archive is offered as a hosted service. The operator (the provider of
+the hosted service) runs the instance and is its admin: the operator
+installs, upgrades and configures it, creates the users and sets up
+accounts, retention rules, legal holds and exports on request. Customers and their people are users of that instance.
 This guide speaks to both:
 
 | Who | Does |

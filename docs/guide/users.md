@@ -95,6 +95,11 @@ before they use the archive. Every user sees their own entries there too;
 the command-line entries are visible to admins, and to another user only
 when an entry concerns them (see [The Log page](./audit-log#the-log-page)).
 
+The web UI shows the operator no other user's mail either, but the operator
+runs the server and the database and can technically read the stored mail
+(see [What is protected how](../reference/security#what-is-protected-how));
+this is covered by your contract.
+
 ## Your profile
 
 The person icon in the header, then **Profile**, or **Profile** in the
