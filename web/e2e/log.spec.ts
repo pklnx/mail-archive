@@ -269,6 +269,19 @@ test.describe("in German", () => {
       await expect(from).toBeFocused();
     });
 
+    test("a typed future Von alone shows no entries, not an error (#468)", async ({ page }) => {
+      const { main, from, to } = await open(page);
+      await expect(to).toHaveValue("");
+      await from.fill("01.01.2099");
+      const future = auditRequest(page, { since: "2098-12-31T23:00:00.000Z" });
+      await from.press("Enter");
+      expect((await (await future).response())?.status()).toBe(200);
+      await expect(main.getByText("Keine Einträge in diesem Zeitraum.")).toBeVisible();
+      // The Log's error is an alert with text in main; the app shell keeps an empty one.
+      await expect(main.getByRole("alert").filter({ hasText: /\S/ })).toHaveCount(0);
+      await expect(from).toHaveValue("01.01.2099");
+    });
+
     test("Von clicked, then a click outside: nothing sent, Von keeps the default day", async ({ page }) => {
       const { main, from, to, calendar } = await open(page);
       const shown = await from.inputValue();
