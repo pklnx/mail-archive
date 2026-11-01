@@ -590,8 +590,8 @@ select,
 }
 
 /* The filter form in the filter button's popover (#286): one column, at
-   most the viewport wide; Carbon's horizontal radio group does not wrap, so
-   it is vertical below 42rem (FilterPanel.tsx). */
+   most the viewport wide. The date presets are a horizontal radio group from
+   42rem up and vertical below (FilterPanel.tsx). */
 .filter-popover__content {
   max-inline-size: calc(100vw - 1rem);
 }
@@ -606,6 +606,16 @@ select,
 }
 .search-filters .cds--form-item.cds--checkbox-wrapper {
   margin: 0;
+}
+/* No preset label breaks inside itself (#487): Carbon's horizontal group is
+   a flex row without wrapping whose items shrink, so a full row broke the
+   multi-word labels. Whole options now move to the next row instead. */
+.search-filters .cds--radio-button-group:not(.cds--radio-button-group--vertical) {
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+}
+.search-filters .cds--radio-button__label-text {
+  white-space: nowrap;
 }
 .search-filters .cds--date-picker--range {
   display: grid;
