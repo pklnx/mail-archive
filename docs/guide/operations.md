@@ -239,9 +239,11 @@ Pull requests that change the database schema carry the label
 
 ### One-time steps
 
-Upgrading from a version before 1.0.0 needs the notes of the release you come
-from and of every release up to 1.0.0, which list their one-time steps; they
-are on the [releases page](https://github.com/pklnx/mail-archive/releases).
+Upgrading from a version before 1.0.0: the
+[release notes](https://github.com/pklnx/mail-archive/releases) of the
+releases after yours up to 1.0.0 name their breaking changes and database
+migrations; the one-time steps of those versions are in the
+[docs of version 1.0.0](https://github.com/pklnx/mail-archive/blob/v1.0.0/docs/guide/operations.md#one-time-steps).
 
 | When upgrading from | Run |
 |---|---|
