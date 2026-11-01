@@ -360,8 +360,7 @@ IMAP connections. These layers stop them:
   external links work as before.
 - In Chromium the web UI also cancels clicks, middle clicks and drags of such
   links (also inside open shadow roots) and of `javascript:`, `data:` and
-  `vbscript:` links, and keeps the frame `inert` until this is on the mail's
-  document. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
+  `vbscript:` links. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
   points to: links through `<use>` do not work at all. The frame takes no
   clicks and no focus (it is `inert`) until this blocker is on the mail's
   document. The web UI installs it as soon as that document exists, before

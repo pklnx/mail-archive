@@ -224,57 +224,11 @@ maintenance; see `.github/release.yml`). A pull request without a kind label
 lands under "Maintenance", so a risky pull request needs a kind label in
 addition to `second-review`.
 
-If the job `release` fails in or after "Build and push" (in "Create the
-release"), the image tag `X.Y.Z` may already point to the new build, but
-there is no release. `floating-tags` did not run, so `X.Y`, `X` and `latest`
-still point to the previous release. To finish the release:
-
-1. Fix the cause.
-2. Delete the draft release `vX.Y.Z` if the Releases page shows one (the
-   check "Tag and release do not exist yet" stops at it).
-3. If the tag `vX.Y.Z` exists without a release, delete the tag too (it
-   points to this run's commit). Do not follow the run's advice to set the
-   `version` input: that ships the next version and leaves the stray tag.
-4. Use **Re-run failed jobs** on the same run. It uses the same commit and
-   inputs, overwrites `X.Y.Z` with a build of the same commit, creates the
-   release and then runs `floating-tags`, which moves the floating tags to
-   the new digest. It computes the same version only while the labels of the
-   pull requests in the range are unchanged (they are read from the API
-   again): compare the version in the re-run's summary with the first
-   attempt.
-
-To abandon such a release instead, delete the new package version that
-carries `X.Y.Z` (package settings on GitHub, "Manage versions"); no floating
-tag has to move back.
-
-If the job `floating-tags` fails (a registry error, a digest mismatch), the
-release is published and `X.Y`, `X` and `latest` may point to the new build,
-to the previous one or (after a partial move) some to each. Fix the cause
-and use **Re-run failed jobs**: it runs only `floating-tags`, with the
-version and digest of the successful `release` job, and moving the tags
-again is harmless. Do not use **Re-run all jobs**: the "Version" step stops
-it with "nothing merged since X.Y.Z; there is nothing to release" (the
-range from the new tag to the same commit is empty), so nothing is built
-twice. By hand instead, after a `docker login ghcr.io` with a token that has
-`write:packages`, for each of `X.Y`, `X` and `latest`:
-
-```sh
-docker buildx imagetools create -t ghcr.io/pklnx/mail-archive:1.2 ghcr.io/pklnx/mail-archive:1.2.3
-```
-
-To abandon a published release, point the tags `X.Y`, `X` and `latest` back
-to the previous release by hand (the same command), delete the release and
-its tag, and delete the new package version:
-
-```sh
-docker buildx imagetools create -t ghcr.io/pklnx/mail-archive:latest ghcr.io/pklnx/mail-archive:26.10-11
-```
-
-For 1.0.0, move `latest` back to `26.10-11`, then delete the package version
-that carries `1.0.0`; that removes `1.0.0`, `1.0` and `1`, which did not exist
-before. For a later release, also move `X` and `X.Y` back to the previous
-release if it has them (abandoning `1.3.0` after `1.2.4`: `latest` and `1` to
-`1.2.4`; `1.3` goes with the package version).
+If the job `release` or the job `floating-tags` fails, or a release has to
+be abandoned, follow the runbook comment at the top of
+`.github/workflows/release.yml` (it covers the stray tag `vX.Y.Z` and image
+tag `X.Y.Z` of a failed `release`, **Re-run failed jobs** for both jobs,
+and moving the floating tags by hand with `docker buildx imagetools create`).
 
 The workflow writes an upgrade paragraph into every release's notes
 (`scripts/release-notes.sh`). It links the
