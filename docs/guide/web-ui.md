@@ -230,10 +230,12 @@ Search covers subject, sender and body text, and the text of attachments:
 PDFs, plain text, CSV, TSV, Markdown and HTML. Words are matched in German
 and English forms: `invoices` finds `invoice`, `Rechnungen` finds
 `Rechnung`. Matches are highlighted in the result snippets. When only an
-attachment matches, the snippet comes from its text and starts with its
-name ("In Lease.pdf: … security deposit …"); with several matching
-attachments, the first is named. Screen readers hear the number of results
-when a search or a further page finishes loading.
+attachment matches, its name is on a line of its own ("In Lease.pdf:") and
+the snippet below it comes from its text ("… security deposit …"); a long
+name is shortened to that one line and keeps its extension ("In Residential
+Lease Agreement….pdf:"), so the snippet keeps its two lines. With several
+matching attachments, the first is named. Screen readers hear the number of
+results when a search or a further page finishes loading.
 
 ![A search for a word that is only in an attached PDF](/screenshots/search-attachment.png)
 

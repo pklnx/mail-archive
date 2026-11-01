@@ -1,5 +1,6 @@
 import { devices, type Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
+import { sideScroll, sideScrolls } from "./layout";
 import { mailReady, openLong } from "./mailFrame";
 
 // A phone with a touch screen: one column at a time; the side navigation
@@ -241,4 +242,70 @@ test("phone: a swipe on the Folders scrim does not scroll the message behind it;
   // The same swipe without the scrim scrolls the page: the check above is not vacuous.
   await swipeUp(page, x, y);
   expect(await scrollY(page)).toBeGreaterThan(before);
+});
+
+test("phone: a long attachment name takes one line and keeps the matched term visible (#479)", async ({ page }) => {
+  // The iPhone width of the finding.
+  await page.setViewportSize({ width: 393, height: 852 });
+  // The demo's answer, with a long name for the matching attachment (Lease.pdf).
+  const long = "Residential Lease Agreement for Unit 4B signed by both parties final version 2026 including all annexes.pdf";
+  let replaced = 0;
+  await page.route(
+    (url) => url.pathname === "/api/messages" && url.searchParams.get("q") === "deposit",
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { messages: { matchedAttachment?: { filename: string } }[] };
+      for (const m of body.messages)
+        if (m.matchedAttachment) {
+          m.matchedAttachment.filename = long;
+          replaced++;
+        }
+      await route.fulfill({ response, json: body });
+    },
+  );
+  await page.goto("/?q=deposit");
+  const list = page.getByRole("list", { name: "Messages" });
+  const hit = list.getByRole("button", { name: /Photos from the weekend and the lease/ });
+  const match = hit.locator(".mail-row__match-line");
+  const name = match.locator(".mail-row__match-name");
+  const ext = match.locator(".mail-row__match-ext");
+  const snippet = hit.locator(".mail-row__snippet");
+  const mark = snippet.locator("mark");
+  await expect(match).toHaveText(`In ${long}:`);
+  expect(replaced).toBe(1);
+  await expect(ext).toHaveText(".pdf");
+  await expect(mark).toHaveText(["deposit"]);
+
+  // One line: the box is as high as one line of its text.
+  await expect
+    .poll(() => match.evaluate((e) => Math.abs(e.getBoundingClientRect().height - parseFloat(getComputedStyle(e).lineHeight))))
+    .toBeLessThanOrEqual(1);
+  // The stem is cut with "…"; the extension stays inside the line.
+  await expect.poll(() => name.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
+  const box = async (l: typeof match) => (await l.boundingBox())!;
+  const [m, x] = [await box(match), await box(ext)];
+  expect(x.x).toBeGreaterThanOrEqual(m.x);
+  expect(x.x + x.width).toBeLessThanOrEqual(m.x + m.width + 0.5);
+  expect(x.y).toBeGreaterThanOrEqual(m.y - 0.5);
+  expect(x.y + x.height).toBeLessThanOrEqual(m.y + m.height + 0.5);
+
+  // The marked term is inside the snippet's two clamped lines, not cut off below.
+  await expect(mark).toBeInViewport();
+  const [s, k] = [await box(snippet), await box(mark)];
+  expect(k.y).toBeGreaterThanOrEqual(s.y - 0.5);
+  expect(k.y + k.height).toBeLessThanOrEqual(s.y + s.height + 0.5);
+  expect(k.x + k.width).toBeLessThanOrEqual(s.x + s.width + 0.5);
+
+  // Nothing scrolls sideways.
+  expect(await sideScrolls(page)).toBe(false);
+  const scroll = await sideScroll(list);
+  expect(scroll.scrollWidth).toBeLessThanOrEqual(scroll.clientWidth);
+
+  // Chromium's own accessible name of the row reads the full name unbroken
+  // (the stem and the extension are flex items) and apart from the snippet.
+  const cdp = await page.context().newCDPSession(page);
+  const { nodes } = (await cdp.send("Accessibility.getFullAXTree")) as { nodes: { role?: { value: string }; name?: { value: string } }[] };
+  const rowName = nodes.find((n) => n.role?.value === "button" && n.name?.value.includes("Photos from the weekend"))?.name?.value ?? "";
+  expect(rowName).toContain(`In ${long}: `);
+  await cdp.detach();
 });

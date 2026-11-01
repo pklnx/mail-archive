@@ -20,7 +20,8 @@ const en = {
   earlierNotShown: (n: number) => (n === 1 ? "1 earlier message not shown" : `${n} earlier messages not shown`),
   loadConversationFailed: (err: string) => `Could not load the conversation: ${err}`,
   inConversation: (n: number) => `${n} messages in this conversation`,
-  inAttachment: (name: string) => `In ${name}:`,
+  /** Before and after an attachment's name: "In Lease.pdf:" (#479: the name is its own element). */
+  inAttachment: ["In ", ":"] as [string, string],
   showConversation: (n: number) => (n === 1 ? "Show 1 earlier message" : `Show ${n} earlier messages`),
   conversationCount: (n: number) => `Conversation (${n})`,
   hideConversation: "Hide the messages",
@@ -763,7 +764,7 @@ const de: Messages = {
   earlierNotShown: (n) => (n === 1 ? "1 ältere Nachricht nicht angezeigt" : `${n} ältere Nachrichten nicht angezeigt`),
   loadConversationFailed: (err) => `Konversation konnte nicht geladen werden: ${err}`,
   inConversation: (n) => `${n} Nachrichten in dieser Konversation`,
-  inAttachment: (name) => `In ${name}:`,
+  inAttachment: ["In ", ":"],
   showConversation: (n) => (n === 1 ? "1 ältere Nachricht anzeigen" : `${n} ältere Nachrichten anzeigen`),
   conversationCount: (n) => `Konversation (${n})`,
   hideConversation: "Nachrichten ausblenden",

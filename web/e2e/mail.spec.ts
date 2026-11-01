@@ -66,11 +66,13 @@ test("a word only in a PDF finds the message, and the row names the attachment (
   // "deposit" is only in the text of Lease.pdf, not in the message itself.
   await page.getByRole("searchbox", { name: "Search mail" }).fill("deposit");
   await expect(page).toHaveURL(/[?&]q=deposit/);
-  // The file name, then the snippet from the PDF with the match marked:
-  // only a search result has it, the full list shows the start of the body.
+  // The file name on its own line (#479), then the snippet from the PDF with
+  // the match marked: only a search result has it, the full list shows the
+  // start of the body.
   const hit = list.getByRole("button", { name: /Photos from the weekend and the lease/ });
+  await expect(hit.locator(".mail-row__match-line")).toHaveText("In Lease.pdf:");
   const snippet = hit.locator(".mail-row__snippet");
-  await expect(snippet).toContainText(/^In Lease\.pdf: [\s\S]*security deposit/);
+  await expect(snippet).toContainText(/security deposit/);
   await expect(snippet.locator("mark")).toHaveText(["deposit"]);
   // Only the one message has the word.
   await expect(list.getByRole("button")).toHaveCount(1);
