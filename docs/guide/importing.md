@@ -22,9 +22,8 @@ account instead, next to what arrives over SMTP; see
 [Into an smtp account](#into-an-smtp-account).
 
 The web server never reads files from the disk, and the web UI has no
-upload: agree with your operator how to hand the files over (they are your
-mail, so use an encrypted path), which account and folder they go into, and
-whether a dry run comes first. The import is recorded in your
+upload: agree with your operator how to hand the files over and which
+account and folder they go into. The import is recorded in the
 [audit log](./audit-log) as `data.import`.
 
 ## Where the files go
@@ -41,7 +40,7 @@ chmod -R a+rX import
 ```
 
 Nothing is ever written into the source. Once the import is done, delete
-`./import`: the customer's files have no business staying on the host.
+`./import`.
 
 ## Sources
 

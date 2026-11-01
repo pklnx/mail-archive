@@ -10,11 +10,11 @@ copy of every message as it passes through, over SMTP. This is how
 [piler](https://www.mailpiler.org) works, and it needs control over the mail
 server. Hosted mailboxes (GMX, mail.de, Gmail) cannot do it.
 
-Journaling has two sides. The operator turns the archive's SMTP server on and
-allows your mail server's address ([Set up the archive](#set-up-the-archive));
-you, or whoever runs your mail server, create the smtp account in the web UI
-and configure Postfix ([Set up Postfix](#set-up-postfix)). Agree the archive's
-SMTP address and port with your operator first.
+Journaling has two sides. The operator turns the archive's SMTP server on,
+allows your mail server's address and creates the smtp account
+([Set up the archive](#set-up-the-archive)); you, or whoever runs your mail
+server, configure Postfix ([Set up Postfix](#set-up-postfix)). Agree the
+archive's SMTP address and port with your operator first.
 
 ```text
  internet ──► Postfix ──► mailboxes (IMAP)
@@ -53,9 +53,9 @@ message.
    size limit. Compose publishes the port on `127.0.0.1:2525`; `SMTP_BIND` and
    `SMTP_PORT` change that. See [Configuration](../reference/configuration#smtp).
 
-2. **A customer admin** creates the account and the address it receives
-   for. In the web UI: **Accounts → Add account → SMTP journaling**, with a
-   name and the address. Or the operator, on the command line:
+2. **The operator**, as an admin, creates the account and the address it
+   receives for. In the web UI: **Accounts → Add account → SMTP
+   journaling**, with a name and the address. On the command line:
 
    ```sh
    ./ma account add-smtp journal --address archive@archive.local
@@ -74,8 +74,8 @@ message.
    The address is only a name for the archive: `archive.local` needs no DNS
    and no MX record, because Postfix delivers to it with a transport (below).
    An address carries no `+`; the part after `+` is reserved for the original
-   recipient. More addresses: **Edit** under *Connection*, or the operator
-   with `account smtp-addresses journal --add ADDRESS`.
+   recipient. More addresses: **Edit** under *Connection*, or
+   `account smtp-addresses journal --add ADDRESS`.
 
 ### Who may connect
 
@@ -92,14 +92,12 @@ docker network inspect "$(basename "$PWD")_default" --format '{{(index .IPAM.Con
 ```
 
 and allow it, or allow `172.16.0.0/12`, Docker's default range. A Postfix on
-another machine, the usual case, connects from its own address; allow exactly
-that one, and publish the port for it with `SMTP_BIND` and the host's
-firewall, not for the internet at large.
+another machine connects from its own address; allow exactly that one
+(`SMTP_BIND` publishes the port for it).
 
 STARTTLS is on when `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY`
-name a certificate and key; turn it on when the copies cross a network the
-customer does not control. There is no SMTP login: the allowlist is the only
-gate.
+name a certificate and key. There is no SMTP login: keep the port off the
+internet. The allowlist is the only gate.
 
 ## Set up Postfix
 
@@ -252,7 +250,7 @@ over SMTP, as a check that journaling works.
 
 ![The import form of the smtp account "journal": IMAP server, login and cut-off](/screenshots/fill-form.png)
 
-Or the operator, on the command line:
+On the command line:
 
 ```sh
 ./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk
@@ -331,7 +329,7 @@ picks it up within a minute.
 **From files (piler, mbox, Maildir).** Mail that is no longer in an IMAP
 mailbox, such as a [piler](./importing#piler-into-a-journaled-mailbox)
 export, goes into the same account with `import --journal`, which the
-operator runs with the files you hand over, with the rules of a fill: what
+operator runs with the files handed over, with the rules of a fill: what
 the account received over SMTP is left out by its Message-ID, and the origin
 section says "Imported from files: LABEL". See
 [Into an smtp account](./importing#into-an-smtp-account).
@@ -352,7 +350,7 @@ provider that the user later moves into the journaled mailbox, mail sent
 from another account and filed there, or copies lost during an outage. A
 one-time fill has run by then. A **recurring fill** goes on: tick **Keep
 importing new mail** in the import form (unticked by default) and choose how
-often, or the operator on the command line:
+often, or on the command line:
 
 ```sh
 ./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk \
@@ -406,8 +404,8 @@ long as the fill keeps running, like the password of an IMAP account, and
 deleted when the fill is stopped.
 
 **Interval.** By default the fill runs as often as accounts are synced
-(`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless the operator set it); it can have
-its own, from 5 minutes to 30 days, but not below
+(`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless set); it can have its own,
+from 5 minutes to 30 days, but not below
 `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`. The next run is due that long after the last
 one started. With the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are
 no scheduled runs, and no fill is stale; a fill just started, switched on,
@@ -433,9 +431,9 @@ mailbox. Fills of a disabled account do not run, not even a run that was
 about to start, and count as healthy; they run again once the account is
 enabled.
 
-**Stop and resume.** **Stop importing** on the account's page, or the
-operator's `./ma account fill journal --cancel`, stops the fill (after its
-current batch if it runs) and deletes its password. What it imported stays.
+**Stop and resume.** **Stop importing** on the account's page, or
+`./ma account fill journal --cancel`, stops the fill (after its current batch
+if it runs) and deletes its password. What it imported stays.
 **Resume import**, or `--resume`, asks for the password and makes it keep
 running again. A new password for a fill that fails at login works the same
 way: stop it, then resume it with the new password. With several fills, the
@@ -450,10 +448,9 @@ downloading it again. A fill from before `JOURNAL` first copies the messages
 of its own folders into `JOURNAL`, as locations, without storing any message
 file again. Its old folders stay.
 
-**Moving the account** to another user (the operator's `./ma account move`)
-keeps the fill running: it goes on importing the same mailbox, now into the new
-owner's account. The command warns about it; stop the fill if that is not
-wanted.
+**Moving the account** to another user (`./ma account move`) keeps the fill
+running: it goes on importing the same mailbox, now into the new owner's
+account. The command warns about it; stop the fill if that is not wanted.
 
 **Retention.** A journal copy that retention deleted no longer counts as
 journaled. If the fill sees the mailbox copy of such a message again (after a

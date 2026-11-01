@@ -3,8 +3,7 @@
 The archive records who searched, read, exported and changed what: in the
 web UI, with API keys and on the command line, where the operator works. The
 application cannot change or shorten the log. The **Log** page in the web UI
-shows it, and the operator writes it out for a period with `./ma audit` when
-an admin asks for it.
+shows it, and the operator writes it out for a period with `./ma audit`.
 
 ## Privacy
 
@@ -23,10 +22,12 @@ opened messages, downloads, the IP address and the browser of each request.
   [Shared accounts](#shared-accounts).
 - The log is personal data itself. Nothing in the archive deletes its rows;
   how long it is kept is part of the retention rules, not of the log.
-- **The operator's commands are in it too.** Everything the operator runs on
-  the command line that changes or exports something (imports, exports,
-  backups, user and account changes) is an entry without a user; see
-  [The fields](#the-fields). Admins see these entries on the **Log** page.
+- **The operator's commands are in it too.** What the operator runs on the
+  command line that changes or exports something (imports, exports, backups,
+  user and account changes; see the [command line](../reference/cli)) is an
+  entry without a user; see [The fields](#the-fields). Admins see these
+  entries on the **Log** page; another user only when an entry concerns
+  them.
 
 ## What is recorded
 
@@ -145,13 +146,12 @@ also in replication mode. The application's role has also given up these
 privileges, which matters when it is not a superuser.
 
 What this does not stop: whoever holds the database password owns the
-tables. In a hosted instance that is the operator. That role can drop the
+tables. In the hosted instance that is the operator. That role can drop the
 trigger, replace its function, grant itself the privileges back, detach and
 drop a month, or drop the table. A PostgreSQL superuser can also edit the
 files on disk. The trigger stops mistakes and every code path of the
 application, not someone with the database password. In Docker Compose the
-application connects as the database superuser. An export of the log kept
-outside the instance (below) is the record the operator cannot change.
+application connects as the database superuser.
 
 A rollback of the database migration that created the log refuses to run
 while the log has entries.
@@ -228,8 +228,8 @@ browser's time zone; the API and `./ma audit` read a plain date as a UTC day.
 
 ## Writing it out
 
-The operator exports the log on the command line when an admin asks, for
-example once a year for the GoBD records, and hands the file over:
+The operator exports the log on the command line, for example once a year
+for the GoBD records:
 
 ```sh
 ./ma audit --since 2026-01-01 --format csv --out /data/audit-2026.csv

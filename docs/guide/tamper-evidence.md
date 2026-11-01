@@ -11,14 +11,14 @@ The attestations do not stop anyone with access to PostgreSQL or the data
 directory from deleting mail. They make a removal visible afterwards.
 
 Someone who can change the database, the files **and** has the private key
-can also rewrite the chain on the host. In a hosted instance that is the
+can also rewrite the chain on the host. In the hosted instance that is the
 operator, and anyone who takes over the host. The key lies in the data
 directory, so every backup and every copy of it contains the key. The
 evidence therefore never rests on the key staying secret, but on copies
 kept somewhere the archive host cannot write: the public key and the
-attestation file, in your hands. Without those copies, the attestations
-only catch mistakes and careless tampering; with them, they also show a
-removal by the operator.
+attestation file. Without those copies, the attestations only catch
+mistakes and careless tampering. A user or auditor who holds such copies
+can check them without the host; see step 3.
 
 ## What it proves, and what not
 
@@ -46,28 +46,26 @@ and signed with an Ed25519 key. From that:
 
 ## What you do
 
-Attestations are switched on per instance, by the operator, when you ask
-for them. The steps name who does each.
+The steps are the operator's; the public key and the copies of the
+attestation file can be given to users or their auditors, who can check them
+without the host (step 3).
 
-1. **The operator creates the key once** and hands you the public key; keep
-   it off the instance, for example in a password manager, on a printout,
-   or with your auditor:
+1. **Create the key once** and copy the public key off the host, for
+   example into a password manager, on a printout, or to the auditor:
    ```sh
    ./ma attest keygen
    ./ma attest public-key
    ```
    The web server writes an attestation every
    `MAIL_ARCHIVE_ATTEST_INTERVAL` (default 24h), the first one at its next
-   start. `./ma status` shows the newest one to the operator.
+   start. `./ma status` shows the newest one.
 
-2. **Keep copies of the attestation file off the host, regularly**, in a
-   place the archive host cannot write: with you, with your auditor, on
-   WORM storage, or in an external mailbox the operator mails it to. Agree
-   with the operator how often you get a copy, and keep dated copies rather
-   than one that is overwritten: a host under someone else's control could
-   otherwise hand over a shortened file. The operator's side of it, a daily
-   pull from another machine, as root there because the files belong to the
-   container user:
+2. **Copy the attestation file off the host, regularly**, to a place the
+   archive host cannot write: another machine that pulls it, WORM storage,
+   or an e-mail to an external mailbox. Keep dated copies rather than one
+   that is overwritten: a host under someone else's control could otherwise
+   hand over a shortened file. A daily pull from another machine, as root
+   there because the files belong to the container user:
    ```sh
    #!/bin/sh
    # /usr/local/bin/pull-attestations, run daily by cron on another machine
@@ -85,16 +83,15 @@ for them. The steps name who does each.
    `--link-dest` makes unchanged files hard links, so each day costs only
    the new leaves file.
 
-3. **Check against the copy.** The operator checks the database against
-   the copy you hold, from the archive host:
+3. **Check against the copy**, from the archive host:
    ```sh
    ./ma attest check --file /offhost/latest/attestations.jsonl --public-key /offhost/signing.pub
    ```
    `--public-key` trusts only the keys given, not the ones on the host. The
    copy must be a prefix of the database chain: attestations that the copy
-   has and the database lacks are findings. You, or your auditor, check a
-   copy without the operator, on any machine with the `mail-archive` binary
-   and without a database:
+   has and the database lacks are findings. Without a database, for example
+   on the machine with the copy, or an auditor's, with the `mail-archive`
+   binary:
    ```sh
    mail-archive attest check --offline --file /srv/mail-archive-attest/latest/attestations.jsonl \
      --public-key /safe/signing.pub
@@ -103,16 +100,13 @@ for them. The steps name who does each.
    against its signed digest, and that each total follows from the previous
    one, so a message removed without a record shows up there too.
 
-4. **The operator runs `verify` weekly**, as in the [backup
+4. **Run `verify` weekly**, as in the [backup
    example](./operations#backups). It checks the attestations first and
    reports `attest-stale` when the newest one is older than twice the
-   interval, so a job that stopped is noticed. Ask for the result when you
-   need it for your records.
+   interval, so a job that stopped is noticed.
 
-5. **Access to PostgreSQL and the data directory** is the operator's and
-   limited to them; backups are kept where the archive host cannot change
-   them. Your copies of the public key and the attestation file are what
-   limits the operator.
+5. **Limit who has access** to PostgreSQL and the data directory, and keep
+   backups where the archive host cannot change them.
 
 ## Findings
 
@@ -168,7 +162,7 @@ For the operator. If the key is lost, or may be known to others:
 
 The current public key moves to `attest/retired-keys.pem`, where it stays
 trusted for older attestations, and a new key signs the next one. `verify`
-notes the change. Hand the new `signing.pub` to the customer as well. A check
+notes the change. Copy the new `signing.pub` off the host as well. A check
 with `--public-key` then takes the old and the new public key.
 
 If the key file is gone while attestations exist, the web server logs an

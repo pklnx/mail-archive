@@ -15,8 +15,8 @@ with your tax adviser or data protection officer, not an answer.
 ## In short
 
 - **No rule, no deletion.** A new instance or a new user deletes nothing.
-  Only an admin adds rules, for an account or one of its folders; the
-  operator adds none on their own.
+  Only an admin (the operator) adds rules, for an account or one of its
+  folders.
 - **The longest period wins.** A message is deleted only when **every** place
   it was found, in every user's accounts, has a rule whose period has ended.
   One unruled copy keeps it. To drop the copies of a removed account
@@ -206,31 +206,29 @@ connection.
 
 The operator keeps the grace period longer than the time between the dump
 and the copy of the data directory: a backup made within it has every file
-its dump needs, and restoring the last dump undoes a wrong deletion. A wrong
-deletion is undone by the operator from the last backup; ask at once.
+its dump needs, and restoring the last dump undoes a wrong deletion.
 
 ## Tamper-evident, not tamper-proof
 
 The database refuses to delete a place whose period has not ended or that is
 on hold, and a message row without its deletion record. The deletion records
 are append-only, and the next attestation signs them. Someone with owner
-rights on PostgreSQL, in a hosted instance the operator, can still remove all
+rights on PostgreSQL, in the hosted instance the operator, can still remove all
 of this; your off-host copy of the attestations then shows it. See
 [Tamper evidence](./tamper-evidence).
 
 ## Procedure documentation (Verfahrensdokumentation)
 
 GoBD expects you to document how mail is captured, stored, protected and
-deleted. mail-archive cannot write it, but this template covers its part,
-with the operator's role filled in as it is in a hosted instance. Copy it,
-fill in the brackets and add what is yours.
+deleted. mail-archive cannot write it, but this template covers its part.
+Copy it, fill in the brackets (the operator is pklnx in the hosted instance)
+and add what is yours.
 
 ```md
 # Procedure documentation: e-mail archive
 
 ## 1. Purpose and scope
-- Archive: mail-archive [version], a hosted instance run by [operator] under
-  [contract], administered by [name, role].
+- Archive: mail-archive [version], operated by [name, role].
 - Covered mailboxes: [accounts, users], business purpose: [..].
 - Not covered: [private mailboxes, ..].
 
@@ -244,18 +242,17 @@ fill in the brackets and add what is yours.
 ## 3. Storage and integrity
 - Each message is stored unchanged as an .eml file named by its SHA-256, plus
   its metadata in PostgreSQL.
-- The operator runs `verify` weekly; findings go to [person].
+- `verify` checks every file weekly ([cron line]); findings go to [person].
 - Signed attestations every [24h]; copies of attestations.jsonl and
-  signing.pub are handed over [how often] and kept at [off-host place],
-  checked with `attest check` [how often] by [person].
+  signing.pub are kept at [off-host place], checked with `attest check`
+  [how often] by [person].
 
 ## 4. Access
 - Users see only the mail of their own accounts. Admins manage users,
   accounts, rules and holds; they read no other user's mail in the web UI.
 - Administrative access to the server, PostgreSQL and the data directory:
-  the operator [persons]; nobody on our side. Every search, read, export and
-  change is in the audit log, the operator's commands included; the operator
-  exports it [how often] to [place].
+  [persons]. Every search, read, export and change is in the audit log,
+  exported [how often] to [place].
 
 ## 5. Retention and deletion
 - Rules: [account/folder → years, legal basis], added on [date] by [person].
@@ -265,9 +262,9 @@ fill in the brackets and add what is yours.
   released with a note.
 
 ## 6. Backup and recovery
-- The operator takes a nightly backup (dump, then data directory) to
-  [place], kept [how long]; restore tested on [date].
-- The secret key is held by the operator at [place].
+- Nightly backup (dump, then data directory) to [place], kept [how long];
+  restore tested on [date].
+- The secret key is kept at [place].
 
 ## 7. Changes
 - [date]: [what changed, who].

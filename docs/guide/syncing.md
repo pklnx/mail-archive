@@ -97,10 +97,9 @@ sees the same in `./ma status`.
 
 ## Do you need cron?
 
-No. In a hosted instance the `web` container runs all the time, and its
-schedule syncs every enabled account. The rest of this section is for the
-operator: an instance without the web server (none is offered today) would
-schedule the one-shot command instead, for example every hour:
+No: the `web` container runs all the time, and its schedule syncs every
+enabled account. The rest of this section is for the operator. Without the
+web server, schedule the one-shot command instead, for example every hour:
 
 ```text
 0 * * * * cd /path/to/mail-archive && docker compose run --rm -T mail-archive sync >> sync.log 2>&1

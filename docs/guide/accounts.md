@@ -17,8 +17,8 @@ Two other kinds of account have no server and are never synced:
   server, so nothing deleted between two syncs is missed, whereas an IMAP
   account is a *snapshot* of the mailbox at each sync; see [Journaling with
   Postfix](./journaling). It can be enabled, disabled, renamed, moved and
-  removed. Admins add it (Add account → **SMTP journaling**, or the operator
-  with `./ma account add-smtp`) and alone change its addresses, because an
+  removed. Admins add it (Add account → **SMTP journaling**, or
+  `./ma account add-smtp`) and alone change its addresses, because an
   address decides who receives the copies. The operator opens the archive's
   SMTP port for your mail server first. The owner brings in the mail from
   before journaling with **Import existing mail from IMAP**; see

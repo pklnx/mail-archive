@@ -1,11 +1,11 @@
 # Command line
 
 The command line is the operator's tool. It runs on the instance's host,
-which customers do not reach; a customer admin asks the operator for anything
-on this page, and does the rest in the web UI. The commands that change
+which users do not reach; users ask the operator for anything on this page
+and do the rest in the web UI. The commands that change
 users or accounts (`user …`, `account …`, including fills and purges),
 retention rules, holds and deletion runs, `jobs retry`, and `import`,
-`export`, `backup` and `audit` leave an entry in the customer's
+`export`, `backup` and `audit` leave an entry in the
 [audit log](../guide/audit-log#the-fields); `migrate`, `reindex`,
 `attest` and `attest keygen`, `sync`, `verify`, `status`, `notify test` and
 the list commands do not.

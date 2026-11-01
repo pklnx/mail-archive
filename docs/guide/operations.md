@@ -1,11 +1,11 @@
 # Backups and upgrades
 
-This page is for the operator, who runs the instance and its host. Customer
-admins and users do not run any of these commands; their operator does. What
-they see of it: an [export](#exporting-mail) they asked for, the
-[banner](./web-ui#sync-problems) in the web UI when an account keeps failing,
-and the [one-time steps](#one-time-steps) an upgrade may bring (for example a
-new login requirement).
+This page is for the operator, who runs the instance and its host. Users do
+not run any of these commands. What they see of it: an
+[export](#exporting-mail) they asked for, the [banner](./web-ui#sync-problems)
+in the web UI when an account keeps failing, and the
+[one-time steps](#one-time-steps) an upgrade may bring (for example a new
+login requirement).
 
 ## Backups
 
@@ -109,10 +109,9 @@ are the only copy, so look at them before `--fix-orphans` moves them aside.
 
 ## Exporting mail
 
-Exports run only on the command line, by the operator, at a customer admin's
-request: for a user who leaves, for a move to another system, or for an
-auditor. The web UI has no export. `export` writes archived mail in a format
-mail clients import:
+Exports run only on the command line, so the operator runs them, for example
+at a user's request. The web UI has no export. `export` writes archived mail
+in a format mail clients import:
 
 ```sh
 ./ma export --user anna --format mbox --out /data/export/anna
@@ -120,8 +119,7 @@ mail clients import:
 
 With Docker Compose the output directory must be under `/data`; the example
 writes to `./data/export/anna` on the host. On Linux the files belong to
-UID 65532: `sudo chown -R "$USER" data/export/anna` makes them the operator's
-to hand over.
+UID 65532: `sudo chown -R "$USER" data/export/anna` makes them yours.
 
 | Format | Result | Import |
 |---|---|---|
@@ -129,10 +127,8 @@ to hand over.
 | `maildir` | One Maildir per folder with read, answered and flagged marks | Mail servers (Dovecot) and clients such as mutt or NeoMutt. |
 
 Exports are **not encrypted**; the files are readable only by their owner.
-Hand them over on an encrypted path agreed with the customer, and delete
-them from the host once handed over. `verify` ignores the `export/`
-directory. Every export is in the customer's [audit log](./audit-log) as
-`data.export`.
+Delete them once imported. `verify` ignores the `export/` directory. Every
+export is in the [audit log](./audit-log) as `data.export`.
 
 ## Upgrades
 
@@ -339,7 +335,7 @@ the cause (written to the [audit log](./audit-log) as `jobs.retry`).
 
 **A separate worker** runs them in a container of its own, with its own
 memory limit, so a large document can never take memory from the web
-server. Every instance should run it. In `.env`:
+server. Hosted instances should use it. In `.env`:
 
 ```sh
 COMPOSE_PROFILES=worker   # start the worker service with the others
@@ -412,9 +408,9 @@ An account whose syncs fail (a changed password, a provider that blocks the
 login, an expired app password) loses mail until someone notices. These
 things make it visible:
 
-- **The web UI** shows the customer's users a banner above the mail when one
-  of their accounts keeps failing or has not synced for a while; see
-  [Web UI](./web-ui#sync-problems). This needs nothing from the operator.
+- **The web UI** shows users a banner above the mail when one of their
+  accounts keeps failing or has not synced for a while; see
+  [Web UI](./web-ui#sync-problems).
 - **An alert** through a webhook, set up by the operator: one message when an
   account's syncs keep failing, one when they work again. See
   [Syncing](./syncing#alerts) for what counts. The same goes for the runs of a
@@ -447,8 +443,8 @@ MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
 ```
 
 Anyone who knows a topic on the public ntfy.sh server can read it, and the
-alerts name the customer's accounts and their owners. Use a long random
-topic, or better a protected topic with an access token:
+alerts name the accounts and their owners. Use a long random topic, or
+better a protected topic with an access token:
 
 ```sh
 MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...

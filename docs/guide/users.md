@@ -2,12 +2,14 @@
 
 Everyone who uses the web UI has their own login. Each user sees only their
 own accounts, the accounts other users [shared](#shared-accounts) with them,
-and the mail found in them; see [Security](../reference/security#login).
+and the mail found in them; see [Security](../reference/security#login). In
+the hosted instance the admin is the operator: the operator creates your
+login and manages users; you manage your own profile, accounts and shares.
 
 ## The first admin
 
-The operator creates the first admin on the command line when the instance
-is set up, and hands you the name and a password:
+The operator creates the first user, an admin, on the command line when the
+instance is set up:
 
 ```sh
 ./ma user add patrick --admin
@@ -15,22 +17,17 @@ is set up, and hands you the name and a password:
 
 Administrators must set up two-factor authentication (TOTP) at their first
 web login, after choosing their own password. Admins cannot turn it off.
-Another admin, or the operator with `./ma user reset-2fa NAME`, can reset
+Another admin, or `./ma user reset-2fa NAME` on the command line, can reset
 it; the admin then sets it up again at the next login.
 
 This first user also gets all accounts that were added before any user
 existed.
 
-The operator has no login in your instance and manages no users in it. The
-operator steps in on the command line only when no admin can: when the last
-admin is locked out, has lost 2FA or must be unlocked; see the
-[command line](../reference/cli#users).
-
 ## Adding users
 
-Admins open **Users** in the navigation and click **Add user**. In the
-dialog they enter a name (lowercase letters, digits, `.`, `-`, `_`) and
-choose whether the new user is an admin.
+Admins (the operator) open **Users** in the navigation and click **Add
+user**. In the dialog they enter a name (lowercase letters, digits, `.`,
+`-`, `_`) and choose whether the new user is an admin.
 
 ![Users page](/screenshots/users.png)
 
@@ -38,9 +35,8 @@ The server generates a password such as `k7mq2-x9tbr-4hdne-p3wza` and shows
 it **once**. Hand it over safely. At the first login the user must choose
 their own password before they can do anything else.
 
-The operator can do the same on the command line: `./ma user add NAME` asks
-for a password instead, and `./ma user reset-password NAME` generates one
-like the web UI does.
+On the command line, `./ma user add NAME` asks for a password instead, and
+`./ma user reset-password NAME` generates one like the web UI does.
 
 ## Managing users
 
@@ -77,9 +73,9 @@ first. Admins can:
   their API keys stop working until they are unlocked.
 - **Make admin / Remove admin.**
 - **Remove:** only for users without accounts. A user who still owns accounts
-  (also removed ones) must hand them over first; the operator does that on the
-  command line: `./ma account move NAME --user OLD --to NEW`. Removed from the
-  user's page, the list takes its place. The shares of other users' accounts
+  (also removed ones) must hand them over first, on the command line:
+  `./ma account move NAME --user OLD --to NEW`. Removed from the user's page,
+  the list takes its place. The shares of other users' accounts
   with the removed user end; a new user with the same name gets none of them.
 
 A user whose accounts keep failing to sync is marked with the number of
@@ -96,9 +92,8 @@ shared an account with them. They do see the [audit log](./audit-log) of
 every user on the **Log** page: searches with their text, which messages
 were opened, account names, IP addresses and browsers. Tell your users
 before they use the archive. Every user sees their own entries there too;
-the operator's command-line entries are visible to admins, and to another
-user only when an entry concerns them (see
-[The Log page](./audit-log#the-log-page)).
+the command-line entries are visible to admins, and to another user only
+when an entry concerns them (see [The Log page](./audit-log#the-log-page)).
 
 ## Your profile
 
@@ -145,8 +140,8 @@ From then on, the login asks for a code after the password. A code works
 only once and only for about 30 seconds before or after its time.
 
 Users who are not admins can turn 2FA off in their profile with their
-password and a code, unless your instance requires it for everyone: an admin
-asks the operator to set `MAIL_ARCHIVE_REQUIRE_2FA=true` (see
+password and a code, unless the operator requires it for everyone
+(`MAIL_ARCHIVE_REQUIRE_2FA=true`, see
 [Configuration](../reference/configuration)).
 
 If you lose both the app and the recovery codes, an admin resets your 2FA.
@@ -154,7 +149,7 @@ If you lose both the app and the recovery codes, an admin resets your 2FA.
 ## Passkeys
 
 A passkey signs you in with Face ID, Touch ID, Windows Hello or a security
-key, without password and code. It works only at your instance's address,
+key, without password and code. It works only at the instance's address,
 which the operator sets as `MAIL_ARCHIVE_PUBLIC_URL` (see
 [Configuration](../reference/configuration)), over HTTPS or on `localhost`.
 
@@ -248,6 +243,5 @@ Admins see the number of keys per user on the users page and can list and
 revoke any user's keys on the user's page. A password reset by an admin
 revokes the user's keys unless the admin unticks the box. Locking a user
 suspends their keys until the user is unlocked; removing a user deletes
-them. The operator can list a user's keys with `./ma user api-keys NAME`
-and revoke them with `./ma user revoke-api-keys NAME`, for example when no
-admin can log in.
+them. On the command line, `./ma user api-keys NAME` lists and
+`./ma user revoke-api-keys NAME` revokes a user's keys.

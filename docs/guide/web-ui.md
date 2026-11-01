@@ -1,7 +1,7 @@
 # Web UI and search
 
-Your operator gives you the address of your instance. Log in with your
-user.
+Your operator gives you the address of the instance and your login. Log in
+with your user.
 
 The header holds the logo and app name (a link to all mail), the menu button
 on smaller screens (see [Layout](#layout)) and, on the right, the person
