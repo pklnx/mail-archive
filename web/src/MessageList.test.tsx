@@ -6,7 +6,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MessagePage, MessageSummary } from "./api";
 import { applySettings, t } from "./i18n";
-import { MessageList } from "./MessageList";
+import { MessageList, splitExtension } from "./MessageList";
 import { expectLoaded, expectLoading } from "./test/loading";
 
 const msg = (id: string): MessageSummary => ({
@@ -153,8 +153,10 @@ it("tags the rows of an expanded conversation that are only in the archive", asy
 
 /** The snippet line of a subject's row. */
 const snippetOf = (subject: string) => screen.getByText(subject).closest("button")!.querySelector(".mail-row__snippet");
+/** The "In <attachment>:" line of a subject's row. */
+const matchOf = (subject: string) => screen.getByText(subject).closest("button")!.querySelector(".mail-row__match");
 
-it("names the attachment a search matched by before its snippet, in English and German (#390, part 4)", async () => {
+it("names the attachment a search matched by on its own line above its snippet, in English and German (#390, part 4; #479)", async () => {
   const rows: MessageSummary[] = [
     { ...msg("a"), hasAttachment: true, snippet: "\uE000Rechnungsbetrag\uE001 1.234,56 €", matchedAttachment: { part: 3, filename: "Rechnung-2026-10.pdf" } },
     { ...msg("b"), hasAttachment: true, snippet: "Siehe \uE000Rechnungsbetrag\uE001 im Text" },
@@ -169,19 +171,48 @@ it("names the attachment a search matched by before its snippet, in English and 
       render(<MessageList filter={{ q: "Rechnungsbetrag" }} selected="" open={() => {}} />);
       await answer({ messages: rows, nextCursor: null });
       expect(await screen.findByText("Subject a")).toBeTruthy();
+      // The name is a sibling before the snippet, not inside its two clamped lines (#479).
+      const match = matchOf("Subject a")!;
+      // Screen readers get the text in one piece; the cut line is hidden from them.
+      expect(match.querySelector(".cds--visually-hidden")?.textContent).toBe("In Rechnung-2026-10.pdf:");
+      const line = match.querySelector(".mail-row__match-line")!;
+      expect(line.getAttribute("aria-hidden")).toBe("true");
+      expect(line.textContent).toBe("In Rechnung-2026-10.pdf:");
+      expect(match.querySelector(".mail-row__match-name")?.textContent).toBe("Rechnung-2026-10");
+      expect(match.querySelector(".mail-row__match-ext")?.textContent).toBe(".pdf");
       const a = snippetOf("Subject a")!;
-      expect(a.textContent).toBe("In Rechnung-2026-10.pdf: Rechnungsbetrag 1.234,56 €");
+      expect(a.textContent).toBe("Rechnungsbetrag 1.234,56 €");
+      expect(a.querySelector(".mail-row__match")).toBeNull();
       expect(a.querySelector("mark")?.textContent).toBe("Rechnungsbetrag");
-      // The paperclip is decoration; the text names the file.
-      expect(a.querySelector(".mail-row__match svg")?.getAttribute("aria-hidden")).toBe("true");
+      // The row's name reads the full file name and keeps it apart from the snippet.
+      expect(screen.getByRole("button", { name: /In Rechnung-2026-10\.pdf: Rechnungsbetrag/ })).toBeTruthy();
+      // The paperclip is decoration, in the hidden line; the text names the file.
+      expect(line.querySelector("svg")).toBeTruthy();
       // A body match: the snippet alone.
       expect(snippetOf("Subject b")!.textContent).toBe("Siehe Rechnungsbetrag im Text");
-      expect(snippetOf("Subject b")!.querySelector(".mail-row__match")).toBeNull();
-      // Without a file name: the part, in the user's language.
-      expect(snippetOf("Subject c")!.textContent).toBe(`${unnamed} Rechnungsbetrag`);
+      expect(matchOf("Subject b")).toBeNull();
+      // Without a file name: the part, in the user's language, and no extension.
+      expect(matchOf("Subject c")!.querySelector(".cds--visually-hidden")?.textContent).toBe(unnamed);
+      expect(matchOf("Subject c")!.querySelector(".mail-row__match-line")?.textContent).toBe(unnamed);
+      expect(matchOf("Subject c")!.querySelector(".mail-row__match-ext")).toBeNull();
+      expect(snippetOf("Subject c")!.textContent).toBe("Rechnungsbetrag");
     } finally {
       cleanup();
       applySettings({ language: "en", locale: "en" });
     }
   }
+});
+
+it.each([
+  ["Rechnung-2026-10.pdf", "Rechnung-2026-10", ".pdf"],
+  ["a.tar.gz", "a.tar", ".gz"],
+  [".bashrc", ".bashrc", ""],
+  ["name.", "name.", ""],
+  ["README", "README", ""],
+  ["Report v1.2 final", "Report v1.2 final", ""],
+  ["photo.JPEG", "photo", ".JPEG"],
+  ["archive.toolongextension", "archive.toolongextension", ""],
+  ["Teil 4", "Teil 4", ""],
+])("splitExtension(%j) is [%j, %j] (#479)", (name, stem, ext) => {
+  expect(splitExtension(name)).toEqual([stem, ext]);
 });
