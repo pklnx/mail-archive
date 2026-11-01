@@ -97,8 +97,7 @@ when an entry concerns them (see [The Log page](./audit-log#the-log-page)).
 
 The web UI shows the operator no other user's mail either, but the operator
 runs the server and the database and can technically read the stored mail
-(see [What is protected how](../reference/security#what-is-protected-how));
-this is covered by your contract.
+(see [What is protected how](../reference/security#what-is-protected-how)).
 
 ## Your profile
 
