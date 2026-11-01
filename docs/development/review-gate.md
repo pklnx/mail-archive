@@ -145,10 +145,10 @@ releases that are at least 14 days old; security updates are exempt.
 |---|---|---|---|---|---|
 | golangci-lint | v2.14.0 (the same as the `lint` job) | 2026-09-24 | `Makefile` (`GOLANGCI_LINT_VERSION`) | `go install` from the Go module proxy, built with the project's toolchain into `bin/golangci-lint-<version>/` and verified through the Go checksum database | GPL-3.0 (a development tool, not shipped) |
 | actionlint | v1.7.12 | 2026-03-30 | `Makefile` (`ACTIONLINT_VERSION`) | the same, into `bin/actionlint-<version>/` | MIT |
-| squawk-cli | 2.70.0 (2.69.0 is from 2026-10-14) | 2026-10-15 | `tools/review-gate/package-lock.json` | `npm ci --ignore-scripts` into `tools/review-gate/node_modules/`; the platform binary is an optional dependency with an integrity hash, without a download at install time | Apache-2.0 OR MIT |
-| oxlint | 1.88.0 (1.89.0 is from 2026-10-19, younger than 14 days on 2026-10-28) | 2026-10-13 | `tools/review-gate/package-lock.json` | the same `npm ci --ignore-scripts`; the platform binary is an optional dependency with an integrity hash, no install script | MIT |
-| oxlint-tsgolint | 7.0.2004 (7.0.2005 is from 2026-10-22; oxlint 1.88.0 needs `>=7.0.2003`) | 2026-10-10 | `tools/review-gate/package-lock.json` | the same; the engine for the type-aware rules, platform binary as an optional dependency, no install script | MIT |
-| zizmor | 1.31.0 (1.31.1 is from 2026-10-15 as well, younger than 14 days on 2026-10-28; 1.30.1 is from 2026-09-09) | 2026-10-15 | `tools/review-gate/requirements.txt` | PyPI wheels only, every wheel hash-pinned: `pip install --require-hashes --only-binary=:all: --no-deps` into the venv `bin/zizmor-venv/`, with the system `python3` (`make review-gate-tools`) | MIT |
+| squawk-cli | 2.70.0 | 2026-10-15 | `tools/review-gate/package-lock.json` | `npm ci --ignore-scripts` into `tools/review-gate/node_modules/`; the platform binary is an optional dependency with an integrity hash, without a download at install time | Apache-2.0 OR MIT |
+| oxlint | 1.88.0 | 2026-10-13 | `tools/review-gate/package-lock.json` | the same `npm ci --ignore-scripts`; the platform binary is an optional dependency with an integrity hash, no install script | MIT |
+| oxlint-tsgolint | 7.0.2004 (oxlint 1.88.0 needs `>=7.0.2003`) | 2026-10-10 | `tools/review-gate/package-lock.json` | the same; the engine for the type-aware rules, platform binary as an optional dependency, no install script | MIT |
+| zizmor | 1.31.0 | 2026-10-15 | `tools/review-gate/requirements.txt` | PyPI wheels only, every wheel hash-pinned: `pip install --require-hashes --only-binary=:all: --no-deps` into the venv `bin/zizmor-venv/`, with the system `python3` (`make review-gate-tools`) | MIT |
 
 All six run offline. The gate sends nothing anywhere; the installs use
 the Go module proxy, the npm registry (squawk, oxlint, oxlint-tsgolint) and PyPI (zizmor only; the maintainer
@@ -191,42 +191,11 @@ decision, 2026-10-28; to be revisited after about ten pull requests).
 
 ## Self-test
 
-`scripts/review-gate-test.sh` builds temp git repos with a base and a head
-commit from `scripts/testdata/review-gate/` and runs the gate with the real
-tools, offline. Each check fires on a planted violation and stays quiet on
-its counter-case:
-
-- `noctx`: a new `http.Get` is reported on its line, the one already in the
-  base is not, a test file is not, and two calls on one line give two
-  findings.
-- `squawk`: a volatile default and a dropped column are reported with their
-  file lines; a stable `now()` default and the `Down` section are not;
-  `-- +goose NO TRANSACTION` switches off the in-transaction rules.
-- `migration-changed`: an edited, a deleted and a renamed migration.
-- `actionlint`: template injection and an undefined `matrix` property in a
-  new workflow; a clean workflow change next to a broken workflow that was
-  already in the base gives no finding.
-- `zizmor`: an action by tag, a `pull_request_target` trigger and a missing
-  `permissions:` block each give a finding on their line (`unpinned-uses`,
-  `dangerous-triggers`, `excessive-permissions`); the same action pinned to a
-  SHA does not; zizmor also finds the template injection of the actionlint
-  fixture; all of the repository's own workflows, and `labeler.yml` alone, give
-  no finding.
-- `oxlint`: a dropped promise, a promise as a condition, an `async` callback
-  where a void return is expected and a hook called inside an `if` are
-  reported with their file lines; the awaited, `void`ed and `.catch`ed forms
-  and a hook at the top level of a component are not. The base is clean, like
-  `main`. One changed line that makes a function `async` reports its caller in
-  the same file, on a line the branch does not touch, and making `load` in
-  `lib.ts` `async` reports its caller in the untouched `use.ts`. A change of
-  only `web/package.json`, `web/pnpm-lock.yaml`, `web/tsconfig.json`, a new
-  `web/tsconfig.app.json`, or the gate's `oxlintrc.json` or
-  `package-lock.json` runs the check (with `REVIEW_GATE_REQUIRE_WEB=1` and no
-  `web/node_modules` it is an error, as for a TypeScript change); a change to
-  another file in `web/` does not. Without `web/node_modules` the check is
-  skipped with its reason, and an error with `REVIEW_GATE_REQUIRE_WEB=1`.
-- Errors: a dirty tree, a crashing or garbage-printing stub for each tool
-  (for zizmor also garbage under a findings exit code; for oxlint also exit 1
-  without diagnostics, noise on stderr and a crashing type engine), a stub
-  with valid output but a failing exit code, and a missing tool (exit 2, also
-  with findings of the other checks; no error when its check is skipped).
+`scripts/review-gate-test.sh` (`make review-gate-test`) builds temp git repos
+with a base and a head commit from `scripts/testdata/review-gate/` and runs
+the gate with the real tools, offline. Each check fires on a planted
+violation and stays quiet on its counter-case, and every error path (a dirty
+tree, a crashing, garbage-printing or missing tool, a failing exit code with
+valid output) ends in exit 2 and never in a pass. The cases are the script's
+`check` lines, commented in place; a new check or a new tool gets its cases
+there.

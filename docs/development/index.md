@@ -59,63 +59,10 @@ for dates and numbers is one more entry in `formatChoices`
 pnpm refuses packages released less than a day ago (supply-chain protection).
 Keep it that way instead of adding exceptions.
 
-The UI moves to the Carbon Design System (`@carbon/react`, #168). Carbon's
-packages and IBM Plex run a telemetry script after install that reports to
-IBM; `web/pnpm-workspace.yaml` blocks the install scripts of all of them, and
-the install fails when a new dependency brings a script that is not listed
-there. Set `IBM_TELEMETRY_DISABLED=true` as well (the `Makefile`, CI and the
-`Dockerfile` do). The fonts are bundled (`web/src/fonts.css`): Carbon's CSS
-loads them from IBM's CDN, so the build uses a copy without those rules
-(`web/build/stripRemoteFonts.ts` writes `web/src/vendor/carbon.css` when
-Vite starts), and `pnpm build` fails if the result refers to another host
-(`web/scripts/check-dist.mjs`). Carbon's built-in English texts get German
-ones from the `carbon` section of `i18n.ts`.
-
-The mail view is the initial bundle; the other views load on demand (#288).
-`App.tsx` loads Accounts, Users, Retention, Log, Profile and the keyboard
-shortcuts overview with `lazyNamed()` from `web/src/lazyView.tsx`, each in a
-`LazyView` (a skeleton while the chunk loads, and a notice with a Retry button
-that reloads the page when the chunk does not load, e.g. after an upgrade);
-the forced password and 2FA screens in `Auth.tsx` take their forms from the
-Profile chunk. Every loading state is a Carbon skeleton in `Loading` from
-`lazyView.tsx` (tables: `TableSkeleton` from `tableSkeleton.tsx`), whose
-status says "Loading…" to screen readers only: one status at a time per
-screen, so a second part that loads at the same time passes
-`announce={false}`. Visible "Loading…" text is not allowed;
-`web/src/loadingGuard.test.ts` enforces it. The app's own motion is written
-only inside `@media (prefers-reduced-motion: no-preference)` in `layout.css`,
-with Carbon's motion tokens as `--app-duration-*` / `--app-easing-*`
-(`web/src/motion.test.ts`). `check-dist` also checks the initial JS: the
-entry script of `index.html` and every chunk it imports statically
-(`web/scripts/initialBundle.mjs`). It prints that size, raw and gzip, on every
-build (`check-dist: initial JS … bytes`), and fails when it is over 579 000
-bytes (the #282 number), when a lazy chunk is missing or in the initial
-bundle, or when the computed chunks differ from the `modulepreload` links. A
-new view gets `lazyNamed()` and an entry in `web/scripts/lazyChunks.mjs`,
-which the check and the e2e suite (`web/e2e/lazy.spec.ts`) share; the budget
-is raised only in a PR that says why.
-
-The colours come from the pklnx design system
-([pklnx/design-system](https://github.com/pklnx/design-system), #211):
-Carbon v11 unchanged, with Purple instead of Blue as the interactive colour
-(buttons, links, focus in light mode, interactive borders).
-`web/src/index.css` imports its generated theme,
-`@pklnx/design-system/theme/pklnx-carbon.css`, right after Carbon's CSS and
-in the same `carbon` layer. Its rules use the theme classes `theme.ts` sets
-on `<html>` (`cds--white`, `cds--g100`) with the same specificity as
-Carbon's, so they replace Carbon's token values; light and dark mode need
-nothing else, and the file has no URLs, so `check-dist` is unaffected. No
-colour value is copied into this repository. The package is a tarball
-attached to the design system's GitHub release, so `web/package.json` names
-the release asset's URL and `web/pnpm-lock.yaml` pins its integrity; it
-needs no registry account, has no install script, and pnpm's one-day
-release age does not apply to it. Rules of the design system:
-
-- At most one `kind="primary"` button per view (a tab panel and a modal
-  each count as one view; Carbon's `Button` is primary without a `kind`).
-  The others are `secondary`, `tertiary` or `ghost`.
-- Do not use `support-caution-undefined`: it is Purple in Carbon and would
-  look like the interactive colour.
+The rules for UI pull requests (Carbon's install scripts and telemetry, the
+bundled fonts, lazy views and the initial-bundle budget, the pklnx design
+system and its theme) are in
+[`.claude/rules/web-ui.md`](https://github.com/pklnx/mail-archive/blob/main/.claude/rules/web-ui.md).
 
 The logo (the mark per theme in the header, the empty reader and the login
 pages; the tile as favicon and app icon) and the docs logos are copied
