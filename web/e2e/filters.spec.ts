@@ -8,6 +8,7 @@ import { isChunkOf } from "../scripts/lazyChunks.mjs";
 import { expect, test } from "./fixtures";
 import { focusOnBody, useClickModel } from "./clickModel";
 import { clickIntoFrame, openLong } from "./mailFrame";
+import { sideScrolls } from "./layout";
 
 const fileOf = (path: string) => path.split("/").pop() ?? "";
 
@@ -294,3 +295,62 @@ test.describe("desktop 1280×800, the accessibility tree", () => {
     await cdp.detach();
   });
 });
+
+// No preset label breaks inside itself (#487), in English and German, from
+// the widest desktop to the narrowest phone. 672 px is 42rem, the narrowest
+// width with the horizontal group; the popover is 36rem wide at every
+// horizontal width, so the row has the same room there as at 1280.
+const presetLabels = {
+  "en-US": { messages: "Messages", filters: "Filters", date: "Date", labels: ["Any time", "Last 7 days", "Last 30 days", "This year", "Custom"] },
+  "de-DE": { messages: "Nachrichten", filters: "Filter", date: "Zeitraum", labels: ["Beliebig", "Letzte 7 Tage", "Letzte 30 Tage", "Dieses Jahr", "Benutzerdefiniert"] },
+} as const;
+
+for (const [locale, text] of Object.entries(presetLabels)) {
+  test.describe(`preset labels, ${locale}`, () => {
+    test.use({ locale });
+
+    for (const size of [
+      { name: "desktop 1280×800", viewport: { width: 1280, height: 800 }, horizontal: true },
+      { name: "42rem 672×800", viewport: { width: 672, height: 800 }, horizontal: true },
+      { name: "phone 390×780", viewport: { width: 390, height: 780 }, horizontal: false },
+      { name: "phone 320×640", viewport: { width: 320, height: 640 }, horizontal: false },
+    ]) {
+      test.describe(size.name, () => {
+        test.use({ viewport: size.viewport });
+
+        test("every label stays on one line inside the popover", async ({ page }) => {
+          await page.goto("/");
+          await expect(page.getByRole("list", { name: text.messages }).getByRole("button").first()).toBeVisible();
+          await page.getByRole("button", { name: text.filters, exact: true }).click();
+          const form = page.getByRole("group", { name: text.filters, exact: true });
+          const group = form.getByRole("group", { name: text.date, exact: true });
+          await expect(group.getByRole("radio")).toHaveCount(5);
+          const labels = group.locator(".cds--radio-button__label-text");
+          await expect(labels).toHaveText([...text.labels]);
+
+          const box = (await form.boundingBox())!;
+          const tops: number[] = [];
+          for (let i = 0; i < text.labels.length; i++) {
+            const label = labels.nth(i);
+            // The text's lines, counted from its line boxes: the distinct tops of its client rects.
+            const lines = await label.evaluate((el) => {
+              const range = document.createRange();
+              range.selectNodeContents(el);
+              const rows = new Set(Array.from(range.getClientRects(), (r) => Math.round(r.top)));
+              return rows.size;
+            });
+            expect(lines, `"${text.labels[i]}" at ${size.name} is on one line`).toBe(1);
+            const b = (await label.boundingBox())!;
+            expect(b.x, `"${text.labels[i]}" starts inside the popover`).toBeGreaterThanOrEqual(box.x);
+            expect(b.x + b.width, `"${text.labels[i]}" ends inside the popover`).toBeLessThanOrEqual(box.x + box.width);
+            tops.push(b.y);
+          }
+          expect(await sideScrolls(page)).toBe(false);
+          // The fix keeps the group horizontal where it was: the first two options share a row.
+          if (size.horizontal) expect(tops[1]).toBe(tops[0]);
+          else expect(tops[1]).toBeGreaterThan(tops[0]!);
+        });
+      });
+    }
+  });
+}
