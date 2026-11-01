@@ -2,8 +2,12 @@
 
 Work goes through four steps: **issue → plan → approval → pull request**.
 Nothing is implemented before its plan is approved. The coordinator picks
-what gets planned next; an approved plan decides what gets built, and the
-maintainer decides product, UI and wording questions. Labels carry these decisions.
+what gets planned next; an approved plan decides what gets built. The
+maintainer decides new goals, milestone scope, releases and anything that
+widens access or weakens security or privacy; UI wording, technical
+trade-offs and small product details inside an approved goal are the
+coordinator's ([`CLAUDE.md`](https://github.com/pklnx/mail-archive/blob/main/CLAUDE.md),
+"Coordinator autonomy"). Labels carry these decisions.
 
 ## 1. Issue
 
