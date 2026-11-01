@@ -3,7 +3,7 @@
 mail-archive can sign, every day, which messages the archive holds. If a
 message disappears afterwards, `verify` names it, with the day it was
 attested. This page explains what that proves, what it does not, and what
-you have to do for it to be worth anything.
+you and your operator have to do for it to be worth anything.
 
 ## Tamper-evident, not tamper-proof
 
@@ -11,12 +11,14 @@ The attestations do not stop anyone with access to PostgreSQL or the data
 directory from deleting mail. They make a removal visible afterwards.
 
 Someone who can change the database, the files **and** has the private key
-can also rewrite the chain on the host. The key lies in the data directory,
-so every backup and every copy of it contains the key. The evidence
-therefore never rests on the key staying secret, but on copies kept
-somewhere the archive host cannot write: the public key and the attestation
-file. Without those copies, the attestations only catch mistakes and
-careless tampering.
+can also rewrite the chain on the host. In the hosted instance that is the
+operator, and anyone who takes over the host. The key lies in the data
+directory, so every backup and every copy of it contains the key. The
+evidence therefore never rests on the key staying secret, but on copies
+kept somewhere the archive host cannot write: the public key and the
+attestation file. Without those copies, the attestations only catch
+mistakes and careless tampering. A user or auditor who holds such copies
+can check them without the host; see step 3.
 
 ## What it proves, and what not
 
@@ -44,8 +46,12 @@ and signed with an Ed25519 key. From that:
 
 ## What you do
 
+The steps are the operator's; the public key and the copies of the
+attestation file can be given to users or their auditors, who can check them
+without the host (step 3).
+
 1. **Create the key once** and copy the public key off the host, for
-   example into a password manager, on a printout, or to your auditor:
+   example into a password manager, on a printout, or to the auditor:
    ```sh
    ./ma attest keygen
    ./ma attest public-key
@@ -81,10 +87,11 @@ and signed with an Ed25519 key. From that:
    ```sh
    ./ma attest check --file /offhost/latest/attestations.jsonl --public-key /offhost/signing.pub
    ```
-   `--public-key` trusts only the keys you give, not the ones on the host.
-   The copy must be a prefix of the database chain: attestations that the
-   copy has and the database lacks are findings. Without a database, for
-   example on the machine with the copy:
+   `--public-key` trusts only the keys given, not the ones on the host. The
+   copy must be a prefix of the database chain: attestations that the copy
+   has and the database lacks are findings. Without a database, for example
+   on the machine with the copy, or an auditor's, with the `mail-archive`
+   binary:
    ```sh
    mail-archive attest check --offline --file /srv/mail-archive-attest/latest/attestations.jsonl \
      --public-key /safe/signing.pub
@@ -117,21 +124,22 @@ attestation copies the entries), deletions not yet signed, a key change
 
 ## GoBD
 
-For archives kept under the German GoBD, the chain supports the
-unalterability requirement as evidence: it documents when a message was in
-the archive and makes a later removal visible. It is not a certification and
-does not replace the procedure documentation (Verfahrensdokumentation),
-which should describe the key, the off-host copies and who checks them.
+For archives kept under the German GoBD, the chain supports the unalterability
+requirement as evidence: it documents when a message was in the archive and
+makes a later removal visible. It is not a certification and does not replace
+the procedure documentation (Verfahrensdokumentation), which should describe
+the key, the off-host copies, who holds them and who checks them; see the
+[template](./retention#procedure-documentation-verfahrensdokumentation).
 
 ## Restore from a backup
 
-A backup is the dump first, then the data directory, so after a restore the
-attestation file in the data directory can be ahead of the database. The web
-server at its start, `./ma attest` and `./ma backup` (with a key) then import
-the missing attestations into the database. They check them first (chain,
-trusted key, leaves file), move the message numbering past them, and give
-new numbers to messages archived after the restore inside an imported range.
-Run `./ma attest` right after `./ma migrate`, before anything archives.
+For the operator. A backup is the dump first, then the data directory, so after
+a restore the attestation file in the data directory can be ahead of the
+database. The web server at its start, `./ma attest` and `./ma backup` (with a
+key) then import the missing attestations into the database. They check them
+first (chain, trusted key, leaves file), move the message numbering past them,
+and give new numbers to messages archived after the restore inside an imported
+range. Run `./ma attest` right after `./ma migrate`, before anything archives.
 
 `./ma verify` then lists every attested message the restore lost as
 `removed`. Those still on a server come back with the next sync. The others
@@ -146,7 +154,7 @@ and `attest` and the web server log it; `verify` shows what differs.
 
 ## Key loss and rotation
 
-If the key is lost, or may be known to others:
+For the operator. If the key is lost, or may be known to others:
 
 ```sh
 ./ma attest keygen --rotate
@@ -154,8 +162,8 @@ If the key is lost, or may be known to others:
 
 The current public key moves to `attest/retired-keys.pem`, where it stays
 trusted for older attestations, and a new key signs the next one. `verify`
-notes the change. Copy the new `signing.pub` off the host as well. When you
-check with `--public-key`, pass the old and the new public key.
+notes the change. Copy the new `signing.pub` off the host as well. A check
+with `--public-key` then takes the old and the new public key.
 
 If the key file is gone while attestations exist, the web server logs an
 error and writes none until you run `attest keygen --rotate`; it still

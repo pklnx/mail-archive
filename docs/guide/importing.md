@@ -4,7 +4,8 @@ Older mail often no longer lives on an IMAP server: Thunderbird's local
 folders, Apple Mail exports, Google Takeout archives, a Maildir from a
 previous server, or the `.eml` export of another archive such as
 [piler](#from-piler). `import` stores it like a sync would, with the same
-deduplication.
+deduplication. Importing runs only on the command line: the operator imports
+the files you hand over.
 
 ```sh
 ./ma import old-laptop --from /import/thunderbird --format mbox
@@ -20,12 +21,14 @@ The mail of a journaled mailbox from before journaling can go into its smtp
 account instead, next to what arrives over SMTP; see
 [Into an smtp account](#into-an-smtp-account).
 
-Importing runs only on the command line. The web server never reads files
-from the disk.
+The web server never reads files from the disk, and the web UI has no
+upload: agree with your operator how to hand the files over and which
+account and folder they go into. The import is recorded in the
+[audit log](./audit-log) as `data.import`.
 
 ## Where the files go
 
-With Docker Compose, put the files into `./import` next to
+For the operator. With Docker Compose, put the files into `./import` next to
 `docker-compose.yml` (or the directory `IMPORT_DIR` in `.env` names). The
 container sees it read-only as `/import`, so `--from` starts with `/import/`.
 On Linux the files must be readable by the container user, UID 65532:
@@ -36,8 +39,8 @@ cp -r ~/.thunderbird/xyz.default/Mail/Local\ Folders import/thunderbird
 chmod -R a+rX import
 ```
 
-Nothing is ever written into the source. Once the import is done, you can
-delete `./import`.
+Nothing is ever written into the source. Once the import is done, delete
+`./import`.
 
 ## Sources
 
@@ -124,8 +127,8 @@ cd /var/tmp && pilerexport -A --zip piler-export.zip
 unzip -d piler-export piler-export.zip
 ```
 
-Copy the directory into `./import` and import it, with a folder name for
-the files:
+Hand the directory to your operator, who copies it into `./import` and
+imports it, with a folder name for the files:
 
 ```sh
 ./ma import piler --from /import/piler-export --format eml --folder piler --dry-run
@@ -147,9 +150,9 @@ mail lands in one folder, unread.
 When a mailbox is journaled now and piler held its mail before, its piler
 export can go into the mailbox's smtp account instead, with
 [`--journal`](#into-an-smtp-account). Export the mailbox's mail from piler
-(see `pilerexport --help` for how to choose it), copy it into `./import`,
-and import it into the existing smtp account, here `alice@example.com`
-owned by the user `alice`:
+(see `pilerexport --help` for how to choose it) and hand it to your
+operator, who copies it into `./import` and imports it into the existing
+smtp account, here `alice@example.com` owned by the user `alice`:
 
 ```sh
 ./ma import alice@example.com --journal --user alice --format eml --from /import/piler-alice --label piler --dry-run

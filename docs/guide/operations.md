@@ -1,5 +1,12 @@
 # Backups and upgrades
 
+This page is for the operator, who runs the instance and its host. Users do
+not run any of these commands. What they see of it: an
+[export](#exporting-mail) they asked for, the [banner](./web-ui#sync-problems)
+in the web UI when an account keeps failing, and the
+[one-time steps](#one-time-steps) an upgrade may bring (for example a new
+login requirement).
+
 ## Backups
 
 A complete backup has three parts, made in this order:
@@ -102,7 +109,9 @@ are the only copy, so look at them before `--fix-orphans` moves them aside.
 
 ## Exporting mail
 
-`export` writes archived mail in a format mail clients import:
+Exports run only on the command line, so the operator runs them, for example
+at a user's request. The web UI has no export. `export` writes archived mail
+in a format mail clients import:
 
 ```sh
 ./ma export --user anna --format mbox --out /data/export/anna
@@ -118,7 +127,8 @@ UID 65532: `sudo chown -R "$USER" data/export/anna` makes them yours.
 | `maildir` | One Maildir per folder with read, answered and flagged marks | Mail servers (Dovecot) and clients such as mutt or NeoMutt. |
 
 Exports are **not encrypted**; the files are readable only by their owner.
-Delete them once imported. `verify` ignores the `export/` directory.
+Delete them once imported. `verify` ignores the `export/` directory. Every
+export is in the [audit log](./audit-log) as `data.export`.
 
 ## Upgrades
 
@@ -398,12 +408,12 @@ An account whose syncs fail (a changed password, a provider that blocks the
 login, an expired app password) loses mail until someone notices. These
 things make it visible:
 
-- **The web UI** shows a banner above the mail when one of your accounts
-  keeps failing or has not synced for a while; see
+- **The web UI** shows users a banner above the mail when one of their
+  accounts keeps failing or has not synced for a while; see
   [Web UI](./web-ui#sync-problems).
-- **An alert** through a webhook: one message when an account's syncs keep
-  failing, one when they work again. See [Syncing](./syncing#alerts) for
-  what counts. The same goes for the runs of a
+- **An alert** through a webhook, set up by the operator: one message when an
+  account's syncs keep failing, one when they work again. See
+  [Syncing](./syncing#alerts) for what counts. The same goes for the runs of a
   [recurring fill](./journaling#keep-importing-recurring-fill) of an smtp
   account. Another alert reports mail deleted on the server in bulk; see
   [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
@@ -433,8 +443,8 @@ MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
 ```
 
 Anyone who knows a topic on the public ntfy.sh server can read it, and the
-alerts name your accounts. Use a long random topic, or better a protected
-topic with an access token:
+alerts name the accounts and their owners. Use a long random topic, or
+better a protected topic with an access token:
 
 ```sh
 MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...

@@ -2,12 +2,14 @@
 
 Everyone who uses the web UI has their own login. Each user sees only their
 own accounts, the accounts other users [shared](#shared-accounts) with them,
-and the mail found in them; see [Security](../reference/security#login).
+and the mail found in them; see [Security](../reference/security#login). In
+the hosted instance the admin is the operator: the operator creates your
+login and manages users; you manage your own profile, accounts and shares.
 
 ## The first admin
 
-The first user is created on the command line, usually right after
-installing:
+The operator creates the first user, an admin, on the command line when the
+instance is set up:
 
 ```sh
 ./ma user add patrick --admin
@@ -15,17 +17,17 @@ installing:
 
 Administrators must set up two-factor authentication (TOTP) at their first
 web login, after choosing their own password. Admins cannot turn it off.
-Another admin, or `./ma user reset-2fa NAME`, can reset it; the admin then
-sets it up again at the next login.
+Another admin, or `./ma user reset-2fa NAME` on the command line, can reset
+it; the admin then sets it up again at the next login.
 
 This first user also gets all accounts that were added before any user
 existed.
 
 ## Adding users
 
-Admins open **Users** in the navigation and click **Add user**. In the
-dialog they enter a name (lowercase letters, digits, `.`, `-`, `_`) and
-choose whether the new user is an admin.
+Admins (the operator) open **Users** in the navigation and click **Add
+user**. In the dialog they enter a name (lowercase letters, digits, `.`,
+`-`, `_`) and choose whether the new user is an admin.
 
 ![Users page](/screenshots/users.png)
 
@@ -73,8 +75,8 @@ first. Admins can:
 - **Remove:** only for users without accounts. A user who still owns accounts
   (also removed ones) must hand them over first, on the command line:
   `./ma account move NAME --user OLD --to NEW`. Removed from the user's page,
-  the list takes its place. The shares of other users' accounts with the
-  removed user end; a new user with the same name gets none of them.
+  the list takes its place. The shares of other users' accounts
+  with the removed user end; a new user with the same name gets none of them.
 
 A user whose accounts keep failing to sync is marked with the number of
 those accounts, so you can tell them.
@@ -89,7 +91,13 @@ Admins manage logins and never see other users' mail, unless an owner
 shared an account with them. They do see the [audit log](./audit-log) of
 every user on the **Log** page: searches with their text, which messages
 were opened, account names, IP addresses and browsers. Tell your users
-before they use the archive. Every user sees their own entries there too.
+before they use the archive. Every user sees their own entries there too;
+the command-line entries are visible to admins, and to another user only
+when an entry concerns them (see [The Log page](./audit-log#the-log-page)).
+
+The web UI shows the operator no other user's mail either, but the operator
+runs the server and the database and can technically read the stored mail
+(see [What is protected how](../reference/security#what-is-protected-how)).
 
 ## Your profile
 
@@ -136,7 +144,7 @@ From then on, the login asks for a code after the password. A code works
 only once and only for about 30 seconds before or after its time.
 
 Users who are not admins can turn 2FA off in their profile with their
-password and a code, unless the server requires it for everyone
+password and a code, unless the operator requires it for everyone
 (`MAIL_ARCHIVE_REQUIRE_2FA=true`, see
 [Configuration](../reference/configuration)).
 
@@ -145,9 +153,9 @@ If you lose both the app and the recovery codes, an admin resets your 2FA.
 ## Passkeys
 
 A passkey signs you in with Face ID, Touch ID, Windows Hello or a security
-key, without password and code. It works only at the address in
-`MAIL_ARCHIVE_PUBLIC_URL` (see [Configuration](../reference/configuration)),
-over HTTPS or on `localhost`.
+key, without password and code. It works only at the instance's address,
+which the operator sets as `MAIL_ARCHIVE_PUBLIC_URL` (see
+[Configuration](../reference/configuration)), over HTTPS or on `localhost`.
 
 On the **Sign-in & security** tab, click **Add passkey**. In the dialog,
 enter a name for the passkey (like *iPhone*), your password and, if you use

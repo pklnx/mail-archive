@@ -1,6 +1,6 @@
 # Web UI and search
 
-`docker compose up -d web` serves the UI on <http://localhost:8080>. Log in
+Your operator gives you the address of the instance and your login. Log in
 with your user.
 
 The header holds the logo and app name (a link to all mail), the menu button
@@ -135,8 +135,8 @@ Disabled accounts never appear in it.
 
 Admins see only their own accounts by name. For other users' accounts they
 get a count ("2 accounts of other users keep failing") and **Show users**,
-where each user with failing accounts is marked; only the owner, or
-`./ma status` on the command line, shows which accounts they are. See
+where each user with failing accounts is marked; only the owner, or the
+operator with `./ma status`, shows which accounts they are. See
 [Syncing](./syncing#alerts) for what counts as failing.
 
 ## Only in archive
@@ -329,8 +329,9 @@ attachments show a paperclip in the list.
 
 ![Search with a recipient, a date and a word](/screenshots/search.png)
 
-Messages archived by an older version need a one-time `./ma reindex` before
-filters and full-text search find them; see [Upgrades](./operations#upgrades).
+Messages archived by an older version need a one-time `./ma reindex`, which
+the operator runs after such an upgrade, before filters and full-text search
+find them; see [Upgrades](./operations#upgrades).
 
 ## Conversations
 
@@ -389,9 +390,9 @@ own window, without the browser's address bar.
   address bar.
 
 Browsers offer this only over HTTPS (or as `localhost` on the same
-computer); see [Network access](../reference/security#network-access). The
-app is the same web page: it needs the server and stores nothing for offline
-use.
+computer), which is how your instance is reached; see
+[Network access](../reference/security#network-access). The app is the same
+web page: it needs the server and stores nothing for offline use.
 
 ## Appearance and language
 

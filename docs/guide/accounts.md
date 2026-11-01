@@ -4,8 +4,10 @@ An account is one IMAP mailbox. Its password is stored in PostgreSQL,
 encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`.
 
 Every account belongs to one user, who alone sees it and its mail. Accounts
-added in the web UI belong to you; names are unique per user. On the command
-line, `--user` picks the owner; see [CLI](../reference/cli#accounts).
+added in the web UI belong to you; names are unique per user. Everything on
+this page is done in the web UI; where a command is shown, the operator runs
+it on request (there `--user` picks the owner; see
+[CLI](../reference/cli#accounts)).
 
 Two other kinds of account have no server and are never synced:
 
@@ -13,13 +15,14 @@ Two other kinds of account have no server and are never synced:
   [Importing mail](./importing). Only renaming, moving and removing apply.
 - An **smtp account** receives a copy of every message from your own mail
   server, so nothing deleted between two syncs is missed, whereas an IMAP
-  account is a *snapshot* of the mailbox at each sync; see
-  [Journaling with Postfix](./journaling). It can be enabled, disabled,
-  renamed, moved and removed. Admins add it (Add account → **SMTP
-  journaling**, or `./ma account add-smtp`) and alone change its addresses,
-  because an address decides who receives the copies. The owner brings in
-  the mail from before journaling with **Import existing mail from IMAP**;
-  see [Journaling](./journaling#bring-in-the-mail-from-before-journaling).
+  account is a *snapshot* of the mailbox at each sync; see [Journaling with
+  Postfix](./journaling). It can be enabled, disabled, renamed, moved and
+  removed. Admins add it (Add account → **SMTP journaling**, or
+  `./ma account add-smtp`) and alone change its addresses, because an
+  address decides who receives the copies. The operator opens the archive's
+  SMTP port for your mail server first. The owner brings in the mail from
+  before journaling with **Import existing mail from IMAP**; see
+  [Journaling](./journaling#bring-in-the-mail-from-before-journaling).
 
 ## Adding an account
 
@@ -39,7 +42,7 @@ The server logs in before it saves anything; if the login fails, the form
 shows the server's error and nothing is stored. After saving, the first sync
 starts right away.
 
-**Command line:**
+**Command line** (operator):
 
 ```sh
 ./ma account add personal --host imap.mail.de --username me@mail.de
@@ -67,7 +70,8 @@ Microsoft 365) requires OAuth2 for IMAP and is not supported.
 
 Gmail shows labels as IMAP folders, so one message appears in many folders.
 Deduplication stores it once, but each copy is still downloaded. Archive only
-the folders that contain everything:
+the folders that contain everything, in the web UI under *Folders* or, by the
+operator:
 
 ```sh
 ./ma account add gmail --host imap.gmail.com --username me@gmail.com \
@@ -149,23 +153,24 @@ To change the selection:
   are archived, and roles the server reports (Trash, Spam, Sent, …) show
   next to the names. The section lists the archived folders with their
   messages, and the ones left out under *Not archived*.
-- **Command line:** `./ma account folders NAME` shows which folders will be
-  archived, with their roles, and suggests a command to skip spam and trash.
-  `./ma account set-folders NAME --exclude Spam --exclude Trash` replaces
-  the selection.
+- **Command line** (operator): `./ma account folders NAME` shows which folders
+  will be archived, with their roles, and suggests a command to skip spam and
+  trash. `./ma account set-folders NAME --exclude Spam --exclude Trash`
+  replaces the selection.
 
 ## Changing an account
 
 **Edit** under *Connection* on the account's page opens the form for name,
 server, port, security, user name and password; **Save** stores them. Leave
 the password empty to keep it. Any change to the connection is checked with a
-real login first. On the command line, `./ma account set-password NAME`.
+real login first. The operator can set a password on the command line with
+`./ma account set-password NAME`.
 
 ### Schedule
 
 **Edit** under *Schedule* sets how often the web server syncs the account:
 the server's default, every 15 minutes to every day, or **Not on the
-schedule**; **Save schedule** stores it. On the command line:
+schedule**; **Save schedule** stores it. The operator, on the command line:
 
 ```sh
 ./ma account set-schedule work --sync-interval 30m
@@ -179,7 +184,7 @@ See [The schedule](./syncing#per-account) for the server's minimum and what
 ### Renaming
 
 Change the name under *Connection*; the page stays open under the new name,
-with whatever is open in its other sections. Or:
+with whatever is open in its other sections. Or, by the operator:
 
 ```sh
 ./ma account rename postmaster@pklnx.space pklnx
@@ -209,6 +214,8 @@ This cannot be undone, and the name stays taken: a new account needs a
 different name, or the removed account is deleted completely (below). An
 account without archived mail is deleted completely right away.
 
+The operator's commands for both:
+
 ```sh
 ./ma account disable NAME
 ./ma account remove NAME
@@ -219,7 +226,7 @@ account without archived mail is deleted completely right away.
 A removed account keeps its mail for ever unless an admin deletes it
 completely. This is for accounts that should never have held mail, for
 example an import into the wrong account, whose mail is (also) somewhere
-else:
+else. The operator, on the command line:
 
 ```sh
 ./ma account purge NAME --dry-run      # what would happen
@@ -237,7 +244,7 @@ the **Retention** page first. The web server then deletes in the background.
 The row and the account's page show *Being deleted completely* with the
 messages deleted so far, also for a purge confirmed elsewhere (another
 browser tab, the command line), and the account disappears when it is done.
-Other users' removed accounts are deleted with
+Other users' removed accounts are deleted by the operator with
 `./ma account purge NAME --user USER`.
 
 ![Deleting the removed account old-provider completely: the preview and the field for the number of messages](/screenshots/account-purge.png)
@@ -246,8 +253,9 @@ A purge is only possible when:
 
 - the account is **removed** (`account remove` first);
 - **no retention rule** covers it or one of its folders. Remove the rules
-  first with `./ma retention rule remove ID`, deliberately: a protected
-  account is never deleted by accident;
+  first, on the **Retention** page or by the operator with
+  `./ma retention rule remove ID`, deliberately: a protected account is never
+  deleted by accident;
 - **no legal hold** names it, also a released one (its record keeps the
   account), and no active hold covers any of its mail;
 - it is not being synced, filled or imported into, and no other purge is
@@ -276,20 +284,21 @@ account, owner, locations removed and messages deleted and kept.
 
 The purge runs in batches of 500 messages. An interrupted purge (Ctrl-C, a
 crash) leaves a consistent removed account and resumes with the same
-command, without asking again, or when the web server starts. Meanwhile
+command, without asking again, or when the web server starts (so a purge
+confirmed in the web UI needs nobody to resume it). Meanwhile
 `account list` shows *removed (being deleted)*, the web UI *Being deleted
 completely*.
 
-A purge is **cancelled** when a retention rule or a legal hold for the
-account appears while it runs, or when it would delete more messages than
-confirmed. The row returns to its normal state (**Delete completely…** in its
-menu) and, if the page was open meanwhile, says that the deletion was
-cancelled. The audit log has the reason (*Cancelled account deletion*, with a
-note such as "retention rule #12 added"), and a new preview names the rule
-or hold now in the way. `./ma account purge NAME --cancel` cancels an open
-purge by hand (the web UI has no cancel button), for example when the account
-was moved to another user after the confirmation. What a cancelled purge
-already deleted stays deleted, with its records; the account stays removed
-with the rest of its mail, consistent and searchable. To go on, remove the
-reason and run `account purge` again (or **Delete completely…**): it shows a
-new preview and asks for the new number.
+A purge is **cancelled** when a retention rule or a legal hold for the account
+appears while it runs, or when it would delete more messages than confirmed.
+The row returns to its normal state (**Delete completely…** in its menu) and,
+if the page was open meanwhile, says that the deletion was cancelled. The audit
+log has the reason (*Cancelled account deletion*, with a note such as
+"retention rule #12 added"), and a new preview names the rule or hold now in
+the way. The operator cancels an open purge by hand with
+`./ma account purge NAME --cancel` (the web UI has no cancel button), for
+example when the account was moved to another user after the confirmation.
+What a cancelled purge already deleted stays deleted, with its records; the
+account stays removed with the rest of its mail, consistent and searchable.
+To go on, remove the reason and run `account purge` again (or **Delete
+completely…**): it shows a new preview and asks for the new number.
