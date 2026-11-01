@@ -10,8 +10,8 @@ Current state only. At session end replace these sections; never append. History
 - None.
 
 ## Open tickets
-- #458 release test of 1.3.0 (iPhone, Mac Safari/Firefox, VoiceOver), done by the maintainer after the release; a failure goes into 1.3.1. #468 (Log: future Von gives an API error) is a `followup` bug.
-- 1.4.0 (customer groups): #470 customer groups (wanted, not planned yet), #476 account sharing leaks user names and crosses customers (interim fix until #470, not planned), #468.
+- 1.3.1 (patch, maintainer 2026-11-01, built after the pause): #468 Log future Von gives an API error, #478 VoiceOver reads chosen Log filter values twice, #479 a long attachment name hides the snippet at phone width (`followup` bugs), and #476 account sharing leaks user names and crosses customers: only admins create shares, no migration (maintainer 2026-11-01). None planned yet.
+- 1.4.0 (customer groups): #470 customer groups (wanted, not planned yet).
 - 1.5.0: #392 encryption (#433–#437), #393 auditor (#439–#442), #394 GoBD export CLI (#443, #444), all `ready`; #393 and #394 get revised for groups once #470 is planned. #392 stays here (maintainer).
 - 1.6.0: #395 SMTP AUTH/TLS (#454–#456), #396 start without CLI (#451–#453), #398 WebKit e2e with #343 are `ready`. #397 operator/quotas/mail alerts (#446–#450) is back in `plan` (quota per customer, alerts to admins only). #432 (database encryption) is not planned yet.
 - 1.7.0 (Microsoft and Google, moved to the end by the maintainer on 2026-11-01): #391 OAuth2 (`ready`, #426–#430), #475 journaling from Microsoft 365 (after #430, not planned).
@@ -25,4 +25,4 @@ Current state only. At session end replace these sections; never append. History
 - Target group: individuals and small businesses. #321: Disable stays usable while a sync runs; only Remove is blocked. German term for the deletion grace period: "Karenzzeit" (#339). Releases: no backports, only the newest line; old tags and images stay. Patch releases carry only `bug`/`docs` PRs.
 
 ## Maintainer actions
-- #458 device checks.
+- None. The 1.3.0 release test #458 passed (2026-11-01); its result comment holds the setup fixes for the next release test (the proxy must also rewrite `Origin`; share `team` with `jo` first).
