@@ -3,7 +3,7 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- v1.3.0 (2026-11-01, main 805c2f8, release run 41297250398): attachment search (#390), shared accounts (#389), job queue, Log multi-select, Safari link fix (#459), AND→OR audit filters (#401). All four image tags carry one digest (sha256:f5366854…). Milestone 1.3.0 is closed. The release body still lacks the highlights: the maintainer pastes them (sessions may not edit releases).
+- v1.3.0 (2026-11-01, main 805c2f8, release run 41297250398): attachment search (#390), shared accounts (#389), job queue, Log multi-select, Safari link fix (#459), AND→OR audit filters (#401). All four image tags carry one digest (sha256:f5366854…). Milestone 1.3.0 is closed. The release body carries the highlights (pasted by the maintainer; sessions may not edit releases).
 - **Pause after 1.3.0** (maintainer): no new development until the maintainer resumes; planning and docs only.
 
 ## Open PRs
@@ -25,4 +25,4 @@ Current state only. At session end replace these sections; never append. History
 - Target group: individuals and small businesses. #321: Disable stays usable while a sync runs; only Remove is blocked. German term for the deletion grace period: "Karenzzeit" (#339). Releases: no backports, only the newest line; old tags and images stay. Patch releases carry only `bug`/`docs` PRs.
 
 ## Maintainer actions
-- #458 device checks; paste the highlights into the v1.3.0 release body.
+- #458 device checks.
