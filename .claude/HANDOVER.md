@@ -15,8 +15,7 @@ Current state only. At session end replace these sections; never append. History
 - 1.5.0: #392 encryption (#433–#437), #393 auditor (#439–#442), #394 GoBD export CLI (#443, #444), all `ready`.
 - 1.6.0: #395 SMTP AUTH/TLS (#454–#456), #396 start without CLI (#451–#453), #398 WebKit e2e with #343 are `ready`. #397 operator/quotas/mail alerts (#446–#450) is back in `plan` (quota per customer, alerts to admins only). #432 (database encryption) is not planned yet.
 - #470 customer groups (tenants) in one shared instance: wanted, no milestone yet, not planned.
-- #460 docs rework: parts 1–4 merged (#461, #466, #464, #462) and cuts in #471. Open: the approved guide cuts (#461 items 3, 4, 5, 7), see the #460 comment of 2026-11-01.
-- Follow-up after #462: `docs/development/process.md:6` (maintainer decides UI/wording).
+- #460 docs rework is done: parts 1–4 (#461, #466, #464, #462) and the approved cuts (#471, #473).
 
 ## Active decisions
 - **Operating model** (maintainer, 2026-11-01): one shared instance in full-service mode; the operator is its admin and manages the customers' users and accounts; individual instances for single customers on request. Customer groups follow in #470.
@@ -27,4 +26,4 @@ Current state only. At session end replace these sections; never append. History
 
 ## Maintainer actions
 - #458 device checks; paste the highlights into the v1.3.0 release body.
-- Milestone for #470; whether Microsoft 365 journaling (no SMTP AUTH, out of #395) becomes a goal. (The approved guide cuts are coordinator work, not a maintainer action.)
+- Milestone for #470; whether Microsoft 365 journaling (no SMTP AUTH, out of #395) becomes a goal.
