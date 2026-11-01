@@ -3,10 +3,9 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- v1.2.2 (2026-10-31, main b61f627). **1.3.0 is ready on main 7877466** (code as of bf5b02f; later commits are docs only): every issue of the milestone is closed except the release test #458 (maintainer's device checks). The release dry run (run 41249220196) proposes 1.3.0 and is green. Draft highlights for the notes: the coordinator posts them on the release; they must state #401's AND→OR change for `user`+`actor` and the #459 security fix.
+- v1.2.2 (2026-10-31, main b61f627). **1.3.0 is ready on main 7877466** (app code as of bf5b02f; later commits are docs and test-only fixes): every issue of the milestone is closed except the release test #458 (maintainer's device checks). The release dry run (run 41249220196) proposes 1.3.0 and is green. Draft highlights for the notes: the coordinator posts them on the release; they must state #401's AND→OR change for `user`+`actor` and the #459 security fix.
 
 ## Open PRs (waiting for the maintainer's OK, all reviewed and green)
-- #462: `.claude/` and `CLAUDE.md` (#460 part 4): autonomy, target hardware.
 - #464: docs for the operator (also admin) and users (#460 part 3), being reworked for the full-service model; needs the maintainer's OK.
 
 ## Open tickets
@@ -15,7 +14,7 @@ Current state only. At session end replace these sections; never append. History
 - 1.5.0: #392 encryption (#433–#437), #393 auditor (#439–#442), #394 GoBD export CLI (#443, #444), all `ready`.
 - 1.6.0: #395 SMTP AUTH/TLS (#454–#456), #396 start without CLI (#451–#453), #398 WebKit e2e with #343 are `ready`. #397 operator/quotas/mail alerts (#446–#450) is back in `plan` (quota per customer, alerts to admins only). #432 (database encryption) is not planned yet.
 - #470 customer groups (tenants) in one shared instance: wanted, no milestone yet, not planned.
-- #460 docs rework: parts 1 (#461) and 2 (#466) merged, parts 3 (#464) and 4 (#462) wait for the maintainer. Without content changes the docs shrank only 1–3 %; #461 and #466 list 17 cuts that would need the maintainer's OK.
+- #460 docs rework: parts 1 (#461) and 2 (#466) merged, part 4 (#462) merged, part 3 (#464) waits for the maintainer. Without content changes the docs shrank only 1–3 %; #461 and #466 list 17 cuts that would need the maintainer's OK.
 - Follow-up after #462: `docs/development/process.md:6` (maintainer decides UI/wording).
 
 ## Active decisions
