@@ -205,6 +205,40 @@ interface RowProps {
   count?: number;
 }
 
+/**
+ * A file name's stem and extension: the extension is the last "." with 1 to 10
+ * letters or digits after it and a non-empty stem before it, else "" (#479).
+ */
+export function splitExtension(name: string): [string, string] {
+  const i = name.lastIndexOf(".");
+  const ext = name.slice(i);
+  return i > 0 && /^\.[A-Za-z0-9]{1,10}$/.test(ext) ? [name.slice(0, i), ext] : [name, ""];
+}
+
+/**
+ * "In <name>:" on one line: the stem is cut with "…" where the line ends,
+ * the extension and the colon stay (#479). The stem and the extension are
+ * flex items, which Chromium reads with spaces between them ("annexes .pdf
+ * :"), so screen readers get the text in one piece and the line is hidden
+ * from them.
+ */
+function MatchedAttachment({ name }: { name: string }) {
+  const [stem, ext] = splitExtension(name);
+  const [before, after] = t.inAttachment;
+  return (
+    <span className="mail-row__match">
+      <span className="cds--visually-hidden">{`${before}${name}${after}`}</span>
+      <span className="mail-row__match-line" aria-hidden="true">
+        <Attachment size={12} />
+        {before}
+        <span className="mail-row__match-name">{stem}</span>
+        {ext && <span className="mail-row__match-ext">{ext}</span>}
+        {after}
+      </span>
+    </span>
+  );
+}
+
 function Row({ m, selected, open, nested, count }: RowProps) {
   const on = m.id === selected;
   // Paging in the reading pane moves the selection; keep it in view.
@@ -236,15 +270,16 @@ function Row({ m, selected, open, nested, count }: RowProps) {
         </span>
       </span>
       <span className="mail-row__subject">{m.subject || t.noSubject}</span>
+      {/* Only an attachment matched the search: its name on a line of its own above the
+          snippet from its text, so a long name cannot use up the snippet's two lines (#479).
+          The space keeps the name and the snippet apart in the row's accessible name. */}
+      {m.snippet && !nested && m.matchedAttachment && (
+        <>
+          <MatchedAttachment name={m.matchedAttachment.filename || t.part(m.matchedAttachment.part)} />{" "}
+        </>
+      )}
       {m.snippet && !nested && (
         <span className="mail-row__snippet">
-          {/* Only an attachment matched the search: its name before the snippet from its text. */}
-          {m.matchedAttachment && (
-            <span className="mail-row__match">
-              <Attachment size={12} aria-hidden />
-              {t.inAttachment(m.matchedAttachment.filename || t.part(m.matchedAttachment.part))}{" "}
-            </span>
-          )}
           <Highlight text={m.snippet} />
         </span>
       )}
