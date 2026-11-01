@@ -360,102 +360,22 @@ often, or on the command line:
 The first run happens right away (on the command line in the foreground);
 afterwards the web server runs it on its schedule.
 
-**Which messages.** A recurring fill has no cut-off. A message is imported
-when the account did not receive its Message-ID over SMTP **and** its
-INTERNALDATE is at least **two hours** old. A younger message waits for the
-next run: its journal copy may still be in the mail server's queue. A message
-without a Message-ID cannot be matched with a journal copy; it is imported
-once it is two hours old (a duplicate beats a gap). A date more than a day in
-the future, from a server with a wrong clock, counts as old.
+A recurring fill has no cut-off: a message is imported once it is two hours
+old and the account did not receive its Message-ID over SMTP. A younger
+message waits for the next run, because its journal copy may still be in the
+mail server's queue. How the fill decides in detail, what it does after a
+restart of the web server, with moved, deleted and new folders, its interval
+and counts, health and alerts, and retention are in the reference under
+[`account fill`](../reference/cli#account-fill).
 
-**After a restart.** The web server starts no run of a recurring fill in the
-first 70 minutes after it started: while it was down, Postfix kept the
-journal copies queued and retries them at least every 4000 seconds, and they
-must arrive before the fill sees the mailbox copies. The account's page shows
-such a run as waiting. Re-enabling a disabled smtp account starts no such
-hold: the copies Postfix kept queued while the account answered `451` arrive
-within about an hour, but an overdue recurring fill runs within a minute and
-may import their mailbox copies first. To avoid that, stop the fill before
-you enable the account and resume it an hour later.
-
-**Incremental.** Each run continues every IMAP folder after the last UID the
-previous run decided, like a sync. It stops at the first message that is
-still waiting, so that one and everything after it are looked at again by
-the next run: journaled ones cost only their header, imported ones are
-recognised without downloading them. When a folder's `UIDVALIDITY` changes,
-it is scanned again from the start.
-
-**Moves and deletions are ignored.** A message moved from `INBOX` to
-`Clients/Miller` keeps its Message-ID, INTERNALDATE and size; the fill knows
-it imported it and does not download it again, and `JOURNAL` holds it once.
-A message deleted in the mailbox stays in the archive; nothing is marked
-*only in archive*, and no loss alert is sent. A folder deleted in the mailbox
-is simply not visited; a renamed one is scanned like a new folder, without
-downloading what the fill imported before.
-
-**New folders** are picked up, subject to the fill's include and exclude
-lists. A trash or spam folder that appears later is skipped, because nobody
-confirmed it: the account's page lists it as such, and the command line shows
-it as *not confirmed*. It is filled only if it was confirmed when the fill
-started or was switched on, or if the fill's include list names it.
-
-**Password.** It is kept, encrypted with `MAIL_ARCHIVE_SECRET_KEY`, for as
-long as the fill keeps running, like the password of an IMAP account, and
-deleted when the fill is stopped.
-
-**Interval.** By default the fill runs as often as accounts are synced
-(`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless set); it can have its own,
-from 5 minutes to 30 days, but not below
-`MAIL_ARCHIVE_SYNC_INTERVAL_MIN`. The next run is due that long after the last
-one started. With the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are
-no scheduled runs, and no fill is stale; a fill just started, switched on,
-resumed or interrupted still finishes its current run. Change it on the
-account's page, or with `./ma account fill journal --interval 24h`. The fills
-of all accounts share one queue in the web server, one at a time; a long
-one-time fill delays the recurring runs behind it.
-
-**Counts.** The account's page shows how often the fill runs, when next, how
-the last run ended and its counts: imported and *waiting* (younger than two
-hours). The counts are those of the last run, not of all runs. Runs are not
-written to the [audit log](./audit-log), like scheduled syncs; starting,
-changing, stopping and resuming a fill are.
-
-**Health and alerts.** A recurring fill that keeps failing, for example
-because the mailbox's password changed, is noticed like a sync: after
-`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed runs in a row it is *failing*,
-after two intervals without a successful run *stale*. The banner names the
-account with the mailbox, such as "journal (alice@example.com)",
-[`/healthz/sync`](./operations#healthz-sync) lists the smtp account's ID, and
-the [webhook alert](./operations#webhook-alerts) names the fill and its
-mailbox. Fills of a disabled account do not run, not even a run that was
-about to start, and count as healthy; they run again once the account is
-enabled.
-
-**Stop and resume.** **Stop importing** on the account's page, or
-`./ma account fill journal --cancel`, stops the fill (after its current batch
-if it runs) and deletes its password. What it imported stays.
-**Resume import**, or `--resume`, asks for the password and makes it keep
-running again. A new password for a fill that fails at login works the same
-way: stop it, then resume it with the new password. With several fills, the
-command line takes `--fill ID`; `./ma account fill journal` lists them.
-
-**Turning a one-time fill into a recurring one.** An ended one-time fill has
-**Keep importing new mail** on the account's page, or
-`./ma account fill journal --keep-running`. The password is asked for again.
-The first run scans its IMAP folders again from the start and imports what
-the cut-off left out; what the fill imported before is recognised without
-downloading it again. A fill from before `JOURNAL` first copies the messages
-of its own folders into `JOURNAL`, as locations, without storing any message
-file again. Its old folders stay.
-
-**Moving the account** to another user (`./ma account move`) keeps the fill
-running: it goes on importing the same mailbox, now into the new owner's
-account. The command warns about it; stop the fill if that is not wanted.
-
-**Retention.** A journal copy that retention deleted no longer counts as
-journaled. If the fill sees the mailbox copy of such a message again (after a
-`UIDVALIDITY` change or a move into a new folder), it imports it once. Its
-retention has usually ended too, so the next deletion run lists it.
+**Stop importing** on the account's page, or
+`./ma account fill journal --cancel`, stops the fill and deletes its password;
+what it imported stays. **Resume import**, or `--resume`, asks for the
+password and makes it keep running again; a fill that fails at login gets its
+new password the same way. An ended one-time fill has **Keep importing new
+mail** on the account's page, or `./ma account fill journal --keep-running`,
+which turns it into a recurring one. Change how often it runs on the
+account's page, or with `./ma account fill journal --interval 24h`.
 
 ## Two copies of one message
 
