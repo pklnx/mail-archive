@@ -41,15 +41,25 @@ export function filterOf(s: ViewState, admin: boolean, now = new Date()): AuditF
   };
 }
 
-/** An entry of a filter's list: an action group, an actor or a user. */
+/**
+ * An entry of a filter's list: an action group, an actor or a user.
+ *
+ * The shown text must not be in a field called `text` (#478). Carbon's
+ * MultiSelect (1.119.0, es/components/MultiSelect/MultiSelect.js:292,318-331)
+ * writes `item.text` of every chosen item, without separators, into a visually
+ * hidden span in the field's <label>, which names the combobox button. The
+ * button's content is our comma-separated `label` with the same values, so a
+ * screen reader read each value twice. LogPage.test.tsx and e2e/log.spec.ts
+ * fail if Carbon starts reading another field.
+ */
 interface Choice {
   kind: "group" | "actor" | "user";
   id: string;
-  text: string;
+  name: string;
 }
 /** The lists keep their order: groups as in the API, then actors, then users. */
 const keepOrder = (items: Choice[]) => items;
-const choiceText = (c: Choice | null) => c?.text ?? "";
+const choiceText = (c: Choice | null) => c?.name ?? "";
 
 /** A filter of several values: the chosen names joined, or allText when none is chosen (#376). */
 function ChoiceFilter({
@@ -89,7 +99,7 @@ function ChoiceFilter({
       <MultiSelect<Choice>
         id={id}
         titleText={label}
-        label={chosen.length ? chosen.map((c) => c.text).join(", ") : allText}
+        label={chosen.length ? chosen.map((c) => c.name).join(", ") : allText}
         items={items}
         itemToString={choiceText}
         selectedItems={chosen}
@@ -254,12 +264,12 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
     });
   // Filter changes replace the history entry, like the search filters.
   const set = (patch: Partial<ViewState>) => update(patch, { replace: true });
-  const groupItems: Choice[] = auditGroups.map((g) => ({ kind: "group", id: g, text: t.logGroup(g) }));
+  const groupItems: Choice[] = auditGroups.map((g) => ({ kind: "group", id: g, name: t.logGroup(g) }));
   // Until the list is there (or if it failed), the chosen names stand for themselves.
   const names = known ? [...known] : filter.users;
   const whoItems: Choice[] = [
-    ...auditActors.map((a): Choice => ({ kind: "actor", id: a, text: a === "cli" ? t.logCommandLine : t.logApiKeys })),
-    ...names.map((n): Choice => ({ kind: "user", id: n, text: n })),
+    ...auditActors.map((a): Choice => ({ kind: "actor", id: a, name: a === "cli" ? t.logCommandLine : t.logApiKeys })),
+    ...names.map((n): Choice => ({ kind: "user", id: n, name: n })),
   ];
   const chosenWho = whoItems.filter((i) => (i.kind === "actor" ? filter.actors : filter.users).includes(i.id));
   // Who: admins see everyone's entries; other users when the page has

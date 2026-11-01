@@ -554,6 +554,36 @@ describe("LogPage filters", () => {
     expect(screen.getByTitle("Menü schließen")).toBeTruthy();
     expect(screen.getAllByTitle("Menü öffnen")).toHaveLength(1);
   });
+
+  it("reads each chosen value once, apart (#478)", async () => {
+    applySettings({ language: "de", locale: "de" });
+    const de = messagesFor("de");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toHaveLength(3));
+    await choose(de.logAction, de.logGroup("read"), de.logGroup("login"));
+    await choose(de.logWho, de.logCommandLine);
+    await waitFor(() => expect(fieldText(de.logAction)).toBe("Anmeldungen, Lesen"));
+    // The accessible name as getByRole computes it (dom-accessibility-api),
+    // the name a screen reader reads before the field's content.
+    const nameOf = (label: string) => {
+      let name = "";
+      screen.getByRole("combobox", { name: (n) => n.startsWith(label) && ((name = n), true) });
+      return name;
+    };
+    const cases: [string, string, string[], number][] = [
+      [de.logAction, "Anmeldungen, Lesen", [de.logGroup("login"), de.logGroup("read")], 2],
+      [de.logWho, de.logCommandLine, [de.logCommandLine], 1],
+    ];
+    for (const [label, content, values, count] of cases) {
+      const name = nameOf(label);
+      expect(fieldText(label), label).toBe(content);
+      expect(name, label).toContain(`Ausgewählte Einträge insgesamt: ${count}`);
+      for (const v of values) {
+        expect(name, `${label}: ${v} in the name`).not.toContain(v);
+        expect(`${name} ${content}`.split(v).length - 1, `${label}: ${v} once`).toBe(1);
+      }
+    }
+  });
 });
 
 describe("German", () => {

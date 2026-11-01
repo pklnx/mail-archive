@@ -458,6 +458,14 @@ test.describe("in German", () => {
     expect((await (await both).response())?.status()).toBe(200);
     await page.keyboard.press("Escape");
     await expect(who.text).toHaveText("Kommandozeile, demo");
+    // A screen reader reads each chosen value once (#478): in the field's
+    // content, comma-separated, not also in Carbon's hidden span in the label
+    // that names the combobox.
+    await expect(action.field).toHaveAccessibleName(/^Aktion\s*Ausgewählte Einträge insgesamt: 2\b/);
+    await expect(action.field).not.toHaveAccessibleName(/Suchen|Lesen/);
+    await expect(action.text).toHaveText("Suchen, Lesen");
+    await expect(who.field).toHaveAccessibleName(/^Wer\s*Ausgewählte Einträge insgesamt: 2\b/);
+    await expect(who.field).not.toHaveAccessibleName(/Kommandozeile|\bdemo\b/);
     const address = "?view=log&action=search&action=read&user=demo&actor=cli";
     expect(new URL(page.url()).search).toBe(address);
     const link = main.getByRole("table", { name: "Protokoll" }).getByRole("link", { name: msg!.subject }).first();
