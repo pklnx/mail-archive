@@ -5,6 +5,7 @@ paths:
   - "internal/web/middleware.go"
   - "internal/web/handlers.go"
   - "internal/web/neutralize.go"
+  - "internal/web/linkallow.go"
   - "internal/web/inline.go"
   - "internal/web/preamble.go"
   - "web/src/frameFit.ts"
@@ -16,3 +17,4 @@ paths:
 - The Fetch Metadata guard and its navigation allowlist live in `protect` (`internal/web/middleware.go:49`).
 - Evidence for a serving change is raw requests against the real route table.
 - A change to a guarantee in `docs/reference/security.md` is the maintainer's decision.
+- Links in mail are removed by the server (`neutralizeHTML`, `linkKept`): no served href points into the app. The web UI's link blocker is an extra layer that WebKit does not run (#459).
