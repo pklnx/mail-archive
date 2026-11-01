@@ -20,29 +20,35 @@ import (
 // admins need before anything else works.
 func (f *manageFixture) makeAdmin() {
 	f.t.Helper()
-	ctx := context.Background()
-	u, err := f.st.GetUserByName(ctx, "tester")
+	u, err := f.st.GetUserByName(context.Background(), "tester")
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if err := f.st.SetUserAdmin(ctx, u.ID, true); err != nil {
-		f.t.Fatal(err)
+	setAdminWithTwoFactor(f.t, f.st, u.ID)
+}
+
+// setAdminWithTwoFactor makes the user an admin with 2FA on.
+func setAdminWithTwoFactor(t *testing.T, st *store.Store, userID int64) {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.SetUserAdmin(ctx, userID, true); err != nil {
+		t.Fatal(err)
 	}
 	keyStr, _ := crypto.GenerateKey()
 	key, _ := crypto.ParseKey(keyStr)
 	sealer, err := crypto.NewSealer(key)
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	secret, _ := auth.GenerateTOTPSecret()
-	if err := f.st.BeginTwoFactorSetup(ctx, u.ID, secret, sealer); err != nil {
-		f.t.Fatal(err)
+	if err := st.BeginTwoFactorSetup(ctx, userID, secret, sealer); err != nil {
+		t.Fatal(err)
 	}
 	now := time.Now()
 	code, _ := auth.GenerateTOTP(secret, now)
 	codes, _ := auth.GenerateRecoveryCodes()
-	if err := f.st.ConfirmTwoFactorSetup(ctx, u.ID, code, now, sealer, codes, []byte("recovery key")); err != nil {
-		f.t.Fatal(err)
+	if err := st.ConfirmTwoFactorSetup(ctx, userID, code, now, sealer, codes, []byte("recovery key")); err != nil {
+		t.Fatal(err)
 	}
 }
 
