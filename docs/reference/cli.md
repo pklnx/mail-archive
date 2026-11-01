@@ -18,10 +18,40 @@ With Docker Compose, run every command through the wrapper, for example
 
 | Command | Purpose |
 |---|---|
-| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. See [One-time steps](../guide/operations#one-time-steps). Waits for another running `migrate` (see [Upgrades](../guide/operations#upgrades)). After a killed `migrate`, it may wait for goose's migration lock while the killed command's statement ends, and says so: `waiting for goose's migration lock, held by database backend …`. |
+| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. Waits for another running `migrate`, and after a killed `migrate` for goose's migration lock; see below. |
 | `migrate status` | Show applied and pending migrations. Does not wait for a running migration. |
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. Waits for another running `migrate`, also during its one-time index rebuild, and, like `migrate`, for goose's migration lock. Refuses, like the other commands, while no `migrate` has done that rebuild. |
 | `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |
+
+### migrate
+
+Two `./ma migrate` (or `migrate down`) runs at the same time wait for each
+other: the second prints `another migrate is running; waiting for it` and
+starts once the first is done, also after a long index rebuild. Ctrl-C stops
+the wait, at once as a rule; if the database server cannot be reached at that
+moment, the command needs up to 15 seconds to end, and further Ctrl-C does
+nothing meanwhile. The lock covers the whole command: for `migrate`, the
+index rebuild, the migrations, the audit log partitions and the password
+upgrade; for `migrate down`, its index rebuild check, the audit log
+partitions and the rollback. `./ma migrate status` and `./ma backup` do not
+wait for a running migration; a backup taken meanwhile records the last
+committed migration (see [Backups](../guide/operations#backups)).
+
+If a `migrate` is killed (SIGKILL, a crashed container) during a long
+migration statement, the server ends that statement about 10 seconds after
+the process died, or about 2 minutes after its host vanished (over a TCP
+connection), with PostgreSQL 14 or later on Linux, as in the bundled image.
+Until then the statement still holds goose's migration lock, and the next
+`migrate` or `migrate down` waits for it and says so:
+`waiting for goose's migration lock, held by database backend 12345 (active for 3m12s): ...`.
+The wait has no time limit; Ctrl-C stops it (same 15 second limit). If no
+`migrate` runs anywhere, the message names the `pg_cancel_backend` and
+`pg_terminate_backend` calls that stop the holder. Statements of the killed
+command outside goose's lock (the index rebuild, the audit log partitions,
+the password upgrade) are not waited for: within those 10 seconds a new
+command can start next to such a statement. The web server is not covered:
+it neither waits for nor blocks a migration, so stop it before `./ma migrate`
+when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
 
 ## Users
 
@@ -54,7 +84,7 @@ can do the same in the web UI; see [Users](../guide/users).
 | `account add NAME` | Add an account. Flags: `--host` and `--username` (required), `--port`, `--tls tls\|starttls\|none` (default `tls`), `--include FOLDER`, `--exclude FOLDER` (repeatable), `--password-stdin`, `--skip-check`. The login is checked before saving unless `--skip-check` is set. |
 | `account add-smtp NAME --address ADDRESS` | Add an smtp account that receives copies of every message from a mail server (`--address` repeatable, at least one). An address has no `+`: the part after `+` encodes the original recipient. See [Journaling with Postfix](../guide/journaling). |
 | `account smtp-addresses NAME` | Show the addresses of an smtp account; `--add ADDRESS` and `--remove ADDRESS` (repeatable) change them. An address belongs to one account; the account keeps at least one. |
-| `account fill NAME --host HOST --username USER` | Copy an IMAP mailbox into an smtp account, into its folder `JOURNAL`: the mail from before journaling. A message is imported when its INTERNALDATE is before the cut-off plus one hour and the account did not receive its Message-ID over SMTP. `--port`, `--tls`, `--include`/`--exclude` (repeatable), `--before` (the cut-off, RFC 3339 or `YYYY-MM-DD` for midnight UTC; default now), `--confirm-folders` (copy trash and spam too), `--password-stdin`. With `--keep-running` the fill is recurring: no cut-off, a message is imported once it is two hours old unless journaled, and after the first run here the web server runs it every `--interval` (`default`, the server's `MAIL_ARCHIVE_SYNC_INTERVAL`, or a duration of whole minutes from `5m` to `720h`, not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`); `--before` and `--keep-running` exclude each other. On an existing fill: `--keep-running` switches an ended fill on (asks for the password; its first run scans the fill's folders again and imports what the cut-off left out, after copying the folders of a fill from before `JOURNAL` into it), `--interval D` alone changes the interval of a recurring fill, `--cancel` stops a running or recurring fill, `--resume` continues a failed, partial, cancelled or interrupted fill or resumes a stopped recurring one. `--fill ID` chooses the fill; without it, `--cancel` and `--interval` take the only fill that runs or keeps running (and list the IDs if there are several), `--resume` and `--keep-running` the newest fill. Without flags it lists the fills, with the schedule, health and waiting messages of recurring ones. `--prefix` is no longer accepted; fills started before still finish in their `PREFIX/<IMAP folder>` folders. Exit code `1` when some folders failed. See [Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling) and [Keep importing](../guide/journaling#keep-importing-recurring-fill). |
+| `account fill NAME --host HOST --username USER` | Copy an IMAP mailbox into an smtp account, into its folder `JOURNAL`: the mail from before journaling, once up to a cut-off or, with `--keep-running`, recurring. See below. |
 | `account list` | List accounts with owner, server, login, state (enabled, disabled, removed, removed (being deleted), import) and folder filters. For smtp accounts, SERVER is `smtp` and LOGIN lists the addresses. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the folder filters with `--include` and `--exclude`. No flags: archive all folders. |
@@ -80,6 +110,106 @@ unless `--user` is given.
 
 Folder filters: with `--include`, only those folders are archived; `--exclude`
 then removes folders from what is left. Names are matched case-insensitively.
+
+### account fill
+
+```sh
+./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk
+./ma account fill journal --host imap.example.com --username alice@example.com --exclude Junk \
+  --keep-running --interval 12h
+./ma account fill journal                    # list the fills
+./ma account fill journal --interval 24h     # change the interval of the recurring fill
+./ma account fill journal --cancel           # stop the running or recurring fill
+./ma account fill journal --resume           # continue or resume it
+```
+
+| Flag | Default | |
+|---|---|---|
+| `--host HOST`, `--username USER` | | The IMAP server and login of a new fill. `--port` and `--tls tls\|starttls\|none` (default `tls`) as for `account add`. |
+| `--password-stdin` | asked for | Read the password from stdin. It is kept, encrypted with `MAIL_ARCHIVE_SECRET_KEY`, only while the fill runs; for a recurring fill as long as it keeps running, like the password of an IMAP account, and deleted when the fill is stopped. |
+| `--include FOLDER`, `--exclude FOLDER` | all folders | Which folders to copy (repeatable; see [Folder filters](#accounts)). |
+| `--confirm-folders` | off | Copy trash and spam folders too. |
+| `--before DATE` | now | The cut-off of a one-time fill: RFC 3339, or `YYYY-MM-DD` for midnight UTC. A message is imported when its INTERNALDATE is before the cut-off plus one hour and the account did not receive its Message-ID over SMTP. Not with `--keep-running`. |
+| `--keep-running` | off | A recurring fill: no cut-off, and after the first run here the web server runs it every `--interval`. On an existing fill, switches an ended fill on: the password is asked for again; the first run scans the fill's IMAP folders again from the start and imports what the cut-off left out, what the fill imported before is recognised without downloading it again. A fill from before `JOURNAL` first copies the messages of its own folders into `JOURNAL`, as locations, without storing any message file again; its old folders stay. |
+| `--interval D` | `default` | How often a recurring fill runs: `default` (`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless set) or a duration of whole minutes from `5m` to `720h`, not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`. Alone, it changes the interval of a recurring fill. The next run is due that long after the last one started. With the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are no scheduled runs, and no fill is stale; a fill just started, switched on, resumed or interrupted still finishes its current run. The fills of all accounts share one queue in the web server, one at a time; a long one-time fill delays the recurring runs behind it. |
+| `--cancel` | | Stop a running or recurring fill (after its current batch if it runs) and delete its password. What it imported stays. |
+| `--resume` | | Continue a failed, partial, cancelled or interrupted fill, or make a stopped recurring one keep running again; asks for the password. A new password for a fill that fails at login works the same way: `--cancel`, then `--resume` with the new password. |
+| `--fill ID` | see text | Which fill. Without it, `--cancel` and `--interval` take the only fill that runs or keeps running (and list the IDs if there are several), `--resume` and `--keep-running` the newest fill. |
+| `--prefix` | | No longer accepted; fills started before still finish in their `PREFIX/<IMAP folder>` folders. |
+
+Without flags it lists the fills, with the schedule, health and waiting
+messages of recurring ones. The first run happens in the foreground and
+prints the first message the account received over SMTP and then the
+progress per folder; exit code `1` when some folders failed. The web UI
+offers the same on the account's page; see
+[Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
+and [Keep importing](../guide/journaling#keep-importing-recurring-fill). A
+recurring fill behaves as follows.
+
+**Which messages.** A recurring fill has no cut-off. A message is imported
+when the account did not receive its Message-ID over SMTP **and** its
+INTERNALDATE is at least **two hours** old. A younger message waits for the
+next run: its journal copy may still be in the mail server's queue. A message
+without a Message-ID cannot be matched with a journal copy; it is imported
+once it is two hours old (a duplicate beats a gap). A date more than a day in
+the future, from a server with a wrong clock, counts as old.
+
+**After a restart.** The web server starts no run of a recurring fill in the
+first 70 minutes after it started: while it was down, Postfix kept the
+journal copies queued and retries them at least every 4000 seconds, and they
+must arrive before the fill sees the mailbox copies. The account's page shows
+such a run as waiting. Re-enabling a disabled smtp account starts no such
+hold: the copies Postfix kept queued while the account answered `451` arrive
+within about an hour, but an overdue recurring fill runs within a minute and
+may import their mailbox copies first. To avoid that, stop the fill before
+you enable the account and resume it an hour later.
+
+**Incremental.** Each run continues every IMAP folder after the last UID the
+previous run decided, like a sync. It stops at the first message that is
+still waiting, so that one and everything after it are looked at again by
+the next run: journaled ones cost only their header, imported ones are
+recognised without downloading them. When a folder's `UIDVALIDITY` changes,
+it is scanned again from the start.
+
+**Moves and deletions are ignored.** A message moved from `INBOX` to
+`Clients/Miller` keeps its Message-ID, INTERNALDATE and size; the fill knows
+it imported it and does not download it again, and `JOURNAL` holds it once.
+A message deleted in the mailbox stays in the archive; nothing is marked
+*only in archive*, and no loss alert is sent. A folder deleted in the mailbox
+is simply not visited; a renamed one is scanned like a new folder, without
+downloading what the fill imported before.
+
+**New folders** are picked up, subject to the fill's include and exclude
+lists. A trash or spam folder that appears later is skipped, because nobody
+confirmed it: the account's page lists it as such, and the command line shows
+it as *not confirmed*. It is filled only if it was confirmed when the fill
+started or was switched on, or if the fill's include list names it.
+
+**Counts.** The account's page and the list show how often the fill runs,
+when next, how the last run ended and its counts: imported and *waiting*
+(younger than two hours). The counts are those of the last run, not of all
+runs. Runs are not written to the [audit log](../guide/audit-log), like
+scheduled syncs; starting, changing, stopping and resuming a fill are.
+
+**Health and alerts.** A recurring fill that keeps failing, for example
+because the mailbox's password changed, is noticed like a sync: after
+`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed runs in a row it is *failing*,
+after two intervals without a successful run *stale*. The banner names the
+account with the mailbox, such as "journal (alice@example.com)",
+[`/healthz/sync`](../guide/operations#healthz-sync) lists the smtp account's
+ID, and the [webhook alert](../guide/operations#webhook-alerts) names the
+fill and its mailbox. Fills of a disabled account do not run, not even a run
+that was about to start, and count as healthy; they run again once the
+account is enabled.
+
+**Moving the account** to another user (`account move`) keeps the fill
+running: it goes on importing the same mailbox, now into the new owner's
+account. The command warns about it; stop the fill if that is not wanted.
+
+**Retention.** A journal copy that retention deleted no longer counts as
+journaled. If the fill sees the mailbox copy of such a message again (after a
+`UIDVALIDITY` change or a move into a new folder), it imports it once. Its
+retention has usually ended too, so the next deletion run lists it.
 
 ## Archive
 
