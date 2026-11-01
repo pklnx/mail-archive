@@ -238,15 +238,24 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if v := q.Get("until"); v != "" {
-		if p.Until, err = parseAuditBound(v, true); err != nil {
+	untilGiven := q.Get("until") != ""
+	if untilGiven {
+		if p.Until, err = parseAuditBound(q.Get("until"), true); err != nil {
 			s.fail(w, r, http.StatusBadRequest, "until: "+err.Error(), nil)
 			return
 		}
 	}
+	// A since at or after the default until asks for a period with no
+	// entries yet: an empty page, as in the search (#468). Only a range
+	// given in full that contradicts itself is an error. The empty page
+	// comes after every other check, so a future since skips none of them.
+	empty := false
 	if !p.Since.Before(p.Until) {
-		s.fail(w, r, http.StatusBadRequest, "since must be before until", nil)
-		return
+		if untilGiven {
+			s.fail(w, r, http.StatusBadRequest, "since must be before until", nil)
+			return
+		}
+		empty = true
 	}
 	if _, err := store.AuditActionPatterns(p.Actions); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
@@ -292,6 +301,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	limit, err := parseLimit(q.Get("limit"), auditPageDefault, auditPageMax)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if empty {
+		s.writeJSON(w, http.StatusOK, auditPageJSON{Entries: []auditEntryJSON{}})
 		return
 	}
 	p.Limit = limit + 1 // one more tells whether there is a next page
