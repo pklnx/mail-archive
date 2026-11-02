@@ -60,7 +60,8 @@ is no auto-merge. The `audit` and `docs-audit` checks are not required; what
 a red one means is in [Dependencies](./#dependencies).
 
 Every pull request with app code gets a session review. Risky pull requests
-(deletes, schema changes, rewriting user data, changes to the serving layer:
+(deletes, schema changes, rewriting user data, auth and sessions, external
+services, changes to the serving layer:
 static file serving, response headers, CSP, routing) also get a second, independent
 session review by a separate reviewer agent that does not see the first review
 beforehand. The coordinator labels each of them **`second-review`**, every
