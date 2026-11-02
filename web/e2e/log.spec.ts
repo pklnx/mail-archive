@@ -99,12 +99,18 @@ function choice(main: Locator, label: string) {
   return { field, box, menu: box.getByRole("listbox"), text: field.locator(".cds--list-box__label"), clear: box.getByRole("button", { name: "Auswahl leeren" }) };
 }
 
-async function open(page: Page) {
+/** The page's texts the helpers look for, by language. */
+const texts = {
+  de: { title: "Protokoll", from: "Von", to: "Bis", action: "Aktion", who: "Wer", long: ["Aufbewahrung und Legal Holds", "Benutzerverwaltung", "Manuelle Synchronisierungen"] },
+  en: { title: "Log", from: "From", to: "To", action: "Action", who: "Who", long: ["Retention and legal holds", "User management", "Manual syncs"] },
+};
+
+async function open(page: Page, names = texts.de) {
   await page.goto("/?view=log");
   const main = page.getByRole("main");
-  await expect(main.getByRole("heading", { name: "Protokoll", level: 1 })).toBeVisible();
-  const from = main.getByRole("textbox", { name: "Von" });
-  const to = main.getByRole("textbox", { name: "Bis" });
+  await expect(main.getByRole("heading", { name: names.title, level: 1 })).toBeVisible();
+  const from = main.getByRole("textbox", { name: names.from });
+  const to = main.getByRole("textbox", { name: names.to });
   await expect(from).not.toHaveValue("");
   return { main, from, to, calendar: page.locator(".flatpickr-calendar.open") };
 }
@@ -118,6 +124,60 @@ async function noSideScroll(page: Page) {
 }
 
 type Box = { x: number; y: number; width: number; height: number };
+
+/** The entries of an open filter menu: their labels' sizes and their place in the menu. */
+const menuEntries = (c: ReturnType<typeof choice>) =>
+  c.menu.locator(".cds--checkbox-label").evaluateAll((labels) =>
+    labels.map((l) => {
+      // The text is in Carbon's .cds--checkbox-label-text, a block that cuts
+      // it with "…" (as the label and the option around it do). A range
+      // over the text measures it as laid out, not as clipped.
+      const text = l.querySelector(".cds--checkbox-label-text") ?? l;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const r = range.getBoundingClientRect();
+      const m = l.closest(".cds--list-box__menu")!.getBoundingClientRect();
+      return {
+        text: l.textContent ?? "",
+        // How far the text runs past its box or the label's; 0 when it is not cut.
+        overflow: Math.max(0, text.scrollWidth - text.clientWidth, l.scrollWidth - l.clientWidth),
+        height: l.getBoundingClientRect().height,
+        line: parseFloat(getComputedStyle(l).lineHeight),
+        inside: r.left >= m.left - 1 && r.right <= m.right + 1,
+      };
+    }),
+  );
+
+/**
+ * Opens a filter's menu and checks that it shows every entry in full
+ * (#486): each on one line, not cut and inside the menu; the menu at least
+ * as wide as the field and on screen; the field keeps its box and still
+ * cuts its text; nothing scrolls sideways. Closes the menu again and
+ * returns its box.
+ */
+async function menuInFull(page: Page, c: ReturnType<typeof choice>): Promise<Box> {
+  const before = (await c.box.boundingBox())!;
+  await c.field.click();
+  await expect(c.field).toHaveAttribute("aria-expanded", "true");
+  await expect(c.menu.getByRole("option").first()).toBeVisible();
+  const entries = await menuEntries(c);
+  expect(entries.length, "the menu has entries").toBeGreaterThan(1);
+  for (const e of entries) {
+    expect(e.overflow, `${e.text} is not cut`).toBe(0);
+    expect(e.height, `${e.text} is one line`).toBeLessThanOrEqual(1.5 * e.line);
+    expect(e.inside, `${e.text} is inside the menu`).toBe(true);
+  }
+  const menu = (await c.menu.boundingBox())!;
+  const field = (await c.box.boundingBox())!;
+  expect(menu.width, "the menu is at least as wide as the field").toBeGreaterThanOrEqual(field.width - 1);
+  for (const k of ["x", "y", "width", "height"] as const) expect(Math.abs(field[k] - before[k]), `the field's ${k}`).toBeLessThanOrEqual(1);
+  expect(await c.text.evaluate((el) => getComputedStyle(el).textOverflow)).toBe("ellipsis");
+  await expect(c.menu).toBeInViewport({ ratio: 1 });
+  await noSideScroll(page);
+  await page.keyboard.press("Escape");
+  await expect(c.field).toHaveAttribute("aria-expanded", "false");
+  return menu;
+}
 /** The boxes of From, To and the Action select. */
 async function boxes(from: Locator, to: Locator, action: Locator): Promise<[Box, Box, Box]> {
   const box = async (l: Locator) => {
@@ -417,8 +477,69 @@ test.describe("in German", () => {
     await action.menu.getByRole("option").last().scrollIntoViewIfNeeded();
     await expect(action.menu.getByRole("option").last()).toBeInViewport({ ratio: 1 });
     await noSideScroll(page);
+    // Every entry can be seen in full (#486): none is cut or leaves the menu.
+    const options = action.menu.getByRole("option");
+    for (let i = 0; i < (await options.count()); i++) {
+      await options.nth(i).scrollIntoViewIfNeeded();
+      await expect(options.nth(i)).toBeInViewport({ ratio: 1 });
+    }
+    for (const e of await menuEntries(action)) {
+      expect(e.overflow, `${e.text} is not cut`).toBe(0);
+      expect(e.inside, `${e.text} is inside the menu`).toBe(true);
+    }
+    await noSideScroll(page);
     await page.keyboard.press("Escape");
     await expect(action.menu.getByRole("option")).toHaveCount(0);
+  });
+
+  test("at 390 px a user name longer than the menu wraps in the open Wer menu (#486)", async ({ page }) => {
+    // The demo's names are short; one longer than a phone's width, without
+    // a space, is added to the list the page loads.
+    const long = "verena.oberhuber-mustermann.buchhaltung@example.org";
+    await page.route(/\/api\/users$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const data = (await response.json()) as { users: { name: string }[] };
+      data.users.push({ ...data.users[0]!, name: long });
+      await route.fulfill({ response, json: data });
+    });
+    await page.setViewportSize({ width: 390, height: 780 });
+    const { main } = await open(page);
+    const who = choice(main, "Wer");
+    await who.field.click();
+    const option = who.menu.getByRole("option", { name: long });
+    await option.scrollIntoViewIfNeeded();
+    await expect(option).toBeInViewport({ ratio: 1 });
+    const entry = (await menuEntries(who)).find((e) => e.text === long)!;
+    expect(entry.height, "the long name takes more than one line").toBeGreaterThan(1.5 * entry.line);
+    expect(entry.overflow, "the long name is not cut").toBe(0);
+    expect(entry.inside, "the long name is inside the menu").toBe(true);
+    const menu = (await who.menu.boundingBox())!;
+    const field = (await who.box.boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(field.x - 1);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(field.x + field.width + 1);
+    await noSideScroll(page);
+    await page.keyboard.press("Escape");
+    await expect(who.field).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("a menu in the last column grows to the left and stays on screen (#486)", async ({ page }) => {
+    for (const width of [1056, 900, 672]) {
+      await page.setViewportSize({ width, height: 800 });
+      const { main } = await open(page);
+      // The field whose end is nearest the end of the filter row.
+      const end = (await main.locator(".log-filters").boundingBox())!;
+      let last = choice(main, "Aktion");
+      let gap = Infinity;
+      for (const label of ["Aktion", "Wer"]) {
+        const b = (await choice(main, label).box.boundingBox())!;
+        const g = Math.abs(end.x + end.width - (b.x + b.width));
+        if (g < gap) [last, gap] = [choice(main, label), g];
+      }
+      const menu = await menuInFull(page, last);
+      expect(menu.x + menu.width, `the menu's end at ${width} px`).toBeLessThanOrEqual(width - 16 + 0.5);
+      expect(menu.x, `the menu's start at ${width} px`).toBeGreaterThanOrEqual(16 - 0.5);
+    }
   });
 
   test("Aktion and Wer take several values, kept in the address for a reload and for Back", async ({ page }) => {
@@ -542,3 +663,34 @@ test.describe("in German", () => {
     expect(new URL(page.url()).search).toBe("?view=log");
   });
 });
+
+for (const [locale, names] of [
+  ["de-DE", texts.de],
+  ["en-US", texts.en],
+] as const) {
+  test.describe(locale, () => {
+    test.use({ locale });
+
+    test("the open Aktion and Wer menus show every entry in full (#486)", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      const { main } = await open(page, names);
+      const action = choice(main, names.action);
+      const who = choice(main, names.who);
+      await menuInFull(page, action);
+      await menuInFull(page, who);
+
+      // With the long groups picked, the field's text is longer than the field.
+      await action.field.click();
+      for (const name of names.long) {
+        await action.menu.getByRole("option", { name }).click();
+        await expect(action.menu.getByRole("option", { name })).toHaveAttribute("aria-selected", "true");
+      }
+      await page.keyboard.press("Escape");
+      await expect(action.field).toHaveAttribute("aria-expanded", "false");
+      const cut = await action.text.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(cut.scroll, "the text is longer than the field").toBeGreaterThan(cut.client);
+      await menuInFull(page, action);
+      await menuInFull(page, who);
+    });
+  });
+}

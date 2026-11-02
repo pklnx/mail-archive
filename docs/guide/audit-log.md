@@ -201,15 +201,19 @@ searches, reading, export and backup, accounts, user management, own login
 settings, API keys, manual syncs, retention and legal holds); the list shows
 the entries of any of them. A field names what is picked, with the number of
 picks and a button that clears them; with nothing picked it says "All
-actions" or "Everyone" and does not filter. <kbd>Esc</kbd> closes an open
-list and then leaves the field; <kbd>Delete</kbd> or <kbd>Backspace</kbd> on
-the field clears it. The filters are kept in the page address, so a reload,
+actions" or "Everyone" and does not filter. The field cuts a long text with
+"…", the open list does not: it is as wide as its longest entry, and an
+entry wider than the screen, such as a long user name on a phone, takes two
+lines or more. <kbd>Esc</kbd> closes an open list and then leaves the field;
+<kbd>Delete</kbd> or <kbd>Backspace</kbd> on the field clears it. The filters are kept in the page address, so a reload,
 the browser's Back button after opening a message from the list, and a
 bookmark show the same entries. A bookmark without a From of its own keeps
 showing the last 30 days. A user that no longer exists is dropped from the
 address. A message shows its subject only to a user who may read that
 message too (in an own or shared account); otherwise the start of its
 SHA-256. A click on a subject opens the message.
+
+![The open Action list, every entry in full](/screenshots/log-action-menu.png)
 
 Two kinds of rows are folded, so that the list reads like what happened:
 
