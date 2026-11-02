@@ -46,12 +46,14 @@ Each event writes exactly one entry.
 | `message.list`, `message.page`, `message.conversation` | Only for users with [shared accounts](#shared-accounts), when the request reaches one: a list without search parameters (folder or all mail, also an expanded conversation with `thread`), a further page of any list (`cursor`), and a message's conversation (`members`, the number of messages shown). |
 | `sync.start` | A sync was started by hand, for one account (`reconcile`) or all (`accounts`, the number queued). |
 | `account.share`, `account.unshare` | The owner shared an account with a user, or ended the share; `user` and `user_id`. Sharing an account again records nothing. |
-| `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. `account.move` counts the shares that stay (`shares_kept`); the new owner's own share ends. |
+| `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. `account.move` counts the shares that stay (`shares_kept`); the new owner's own share ends. A move into another [customer group](./users#customer-groups) also has `from_group` and `to_group` (`id`, `name`) and the users whose shares ended (`shares_ended`). |
 | `account.purge`, `account.purge_batch`, `account.purge_finish`, `account.purge_cancel` | A removed account [deleted completely](./accounts#deleting-a-removed-account-completely): confirmed (`purge_id`, `owner`, `kind`, `locations`, `messages`, `deleted`, `kept`), each batch (`locations`, `deleted`, `kept`), its end with the totals, and a cancellation with its `note`. The deleted messages themselves are recorded per message in the deletion records. Purges resumed by the web server are written with actor `cli` and `by: web server`. |
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
+| `user.group_change` | A user moved into another [customer group](./users#customer-groups): `from_group` and `to_group` (`id`, `name`), and `shares_ended`, each with `account`, `owner` and `user`. |
+| `group.add`, `group.rename`, `group.remove` | A customer group was created, renamed (`from`) or removed; `group_id` and `group`. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login: password, 2FA and passkeys. |
 | `profile.change` | A user changed their own web UI settings. `fields` names them (`language`, `locale`), each with its old and new value (`from`, `to`). Saving an unchanged value records nothing. |
-| `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. Group `retention`. |
+| `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. A hold's entries have the account or the user it names as target (`hold.release` from 1.4.0 on). Group `retention`. |
 | `retention.preview`, `retention.confirm`, `retention.cancel`, `retention.batch`, `retention.finish`, `retention.sweep` | A [deletion run](../reference/cli#deletion): proposed (candidates, bytes), confirmed, cancelled, each batch (`deleted`, `kept`), its end with the totals, and removed files. The deleted messages themselves are recorded per message in the deletion records, not here. Runs resumed by the web server are written with actor `cli` and `by: web server`. |
 | `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`); `user.remove` also counts the shares of other users' accounts with the user (`shares_removed`). |
 | `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. `data.import` has `format`, `source` and `folders`; with [`--journal`](./importing#into-an-smtp-account) also `into: "JOURNAL"`, `label` and `import`, the ID of the run the imported locations name. |
@@ -107,6 +109,32 @@ over all of the reader's mail, whose messages the reader also has in own
 accounts, and a conversation whose only message in the shared account is
 the one opened (that message has its own `message.open`).
 
+## Customer groups
+
+From 1.4.0 on, every entry records the [customer group](./users#customer-groups)
+it belongs to, at the time it is written:
+
+- An entry about a user or an account (user and account administration,
+  shares, syncs and fills of an account, retention rules, holds that name a
+  user or an account, purges, API keys, group changes) has that user's group,
+  or the group of the account's owner, even when an admin of another group
+  made it. An entry about a user or account that the change removes keeps the
+  group it had; a move into another group has the new group, and
+  `from_group` in its details names the old one.
+- An entry of a user acting as themselves (logins, their own profile,
+  passkeys and 2FA, their own searches and reads, also of shared accounts,
+  a sync of all their accounts) has that user's group.
+- Instance-level entries have no group, whoever made them: deletion runs and
+  file sweeps (`retention.preview` to `retention.sweep`), holds that name no
+  user or account, `data.backup`, `audit.export`, `jobs.retry`, and failed
+  logins of a name that is not a user.
+- `group.add`, `group.rename` and `group.remove` have the group they are
+  about.
+
+Entries from before 1.4.0 have no group. Older entries keep the names and
+groups they had when they were written: a reader who later moved to another
+group still appears under the old name and group.
+
 ## The fields
 
 | Field | Content |
@@ -116,6 +144,7 @@ the one opened (that message has its own `message.open`).
 | User | ID and name as they were then. Entries stay when a user is removed. |
 | Action | One of the actions above. |
 | Target | A message (its SHA-256), an account or a user, with ID and name. |
+| Group | The [customer group](#customer-groups) of the entry, from 1.4.0 on; none for instance-level entries and older ones. |
 | Client IP | The address of the browser. Behind a reverse proxy, see [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | User agent | The browser's identification, up to 256 bytes, stored once per distinct value. |
 | Details | The search parameters, the login method and reason, and the other values named above. |

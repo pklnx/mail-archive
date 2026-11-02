@@ -149,7 +149,7 @@ func TestDeletionRunWithWaitingWriters(t *testing.T) {
 				started = true
 				w.start(ctx)
 			}
-			return &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+			return storetest.Entry(store.ActorCLI, action)
 		},
 	})
 	if err != nil || run.State != store.RunDone || run.Deleted != 2 {
@@ -177,7 +177,7 @@ func TestSweepWithWaitingWriters(t *testing.T) {
 		// Called with the blob lock held, after the removals.
 		Audit: func() *store.AuditEntry {
 			w.start(ctx)
-			return &store.AuditEntry{Actor: store.ActorCLI, Action: "retention.sweep"}
+			return store.InstanceEntry(store.ActorCLI, "retention.sweep")
 		},
 	})
 	if err != nil || n != 1 {

@@ -30,7 +30,7 @@ func TestUsersSeeOnlyTheirOwnMail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetAccountOwner(ctx, bob.Ref(), other.ID); err != nil {
+	if err := f.st.SetAccountOwner(ctx, bob.Ref(), other.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	g := *f
@@ -198,7 +198,7 @@ func TestOldOwnerCannotChangeMovedAccount(t *testing.T) {
 	f.do("POST", "/api/accounts", withConfirm(f.newAccount("private", "alice", "secret")), 201)
 	f.waitIdle("private")
 	acc, _ := accountByName(f.st, "private")
-	if err := f.st.SetAccountOwner(context.Background(), acc.Ref(), other.ID); err != nil {
+	if err := f.st.SetAccountOwner(context.Background(), acc.Ref(), other.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	f.do("PATCH", "/api/accounts/private", map[string]any{"enabled": false}, 404)

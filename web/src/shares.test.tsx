@@ -108,6 +108,14 @@ describe("Shared with, on the owner's account page", () => {
     await waitFor(() => expect(shares().getByText(t.shareSelf)).toBeTruthy());
   });
 
+  it("says that there is no such user in the owner's group, in English and German (#470)", () => {
+    // The server gives one answer for an unknown name and for a user of
+    // another group; the text must not suggest that the name is unknown
+    // everywhere.
+    expect(messagesFor("en").shareNoUser("kim")).toBe("There is no user named “kim” in your group.");
+    expect(messagesFor("de").shareNoUser("kim")).toBe("In Ihrer Gruppe gibt es keinen Benutzer „kim“.");
+  });
+
   it("lists a removed account's shares to end them, without the field", () => {
     show("/?view=accounts&id=old", data([account("old", { removed: true, sharedWith: [{ user: "pat", since: "2026-10-20T10:00:00Z" }] })]));
     expect(shares().getByText(t.sharesRemovedNote)).toBeTruthy();

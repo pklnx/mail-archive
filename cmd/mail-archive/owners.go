@@ -117,11 +117,16 @@ func newOwner(cmd *cobra.Command, a *app) (*int64, error) {
 
 func newAccountMoveCmd() *cobra.Command {
 	var to string
+	var otherGroup bool
 	cmd := &cobra.Command{
-		Use:   "move NAME --to USER",
+		Use:   "move NAME --to USER [--other-group]",
 		Short: "Hand an account and its archived mail to another user",
 		Long: `Hand an account to another user, who then sees it and the mail found in it
-instead of the current owner. Also works for removed accounts.`,
+instead of the current owner. Also works for removed accounts.
+
+A user of another customer group gets the account only with --other-group:
+the account and its mail then belong to the other customer, and every share
+of the account ends.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := openApp(cmd.Context())
@@ -147,16 +152,24 @@ instead of the current owner. Also works for removed accounts.`,
 			if err != nil {
 				return err
 			}
-			e := cliAccountTarget(cliEntry("account.move"), acc)
+			e := cliAccountTarget(cliTargeted("account.move"), acc)
 			e.Detail("from_user", ownerName(names, acc.OwnerID))
 			e.Detail("to_user", target.Name)
-			if err := a.store.SetAccountOwner(withCLIAudit(cmd, e), acc.Ref(), target.ID); err != nil {
+			if err := a.store.SetAccountOwner(withCLIAudit(cmd, e), acc.Ref(), target.ID, otherGroup); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					return fmt.Errorf("%q already has an account named %q; rename one of them first", target.Name, acc.Name)
+				}
+				if errors.Is(err, store.ErrOtherGroup) {
+					return fmt.Errorf("%q is in another customer group; add --other-group to move the account and its mail to that group (its shares end)", target.Name)
 				}
 				return staleError(err)
 			}
 			fmt.Printf("account %q now belongs to %q\n", acc.Name, target.Name)
+			if ended, ok := e.Details["shares_ended"].([]string); ok {
+				for _, u := range ended {
+					fmt.Printf("share with %q ended\n", u)
+				}
+			}
 			// A recurring fill goes on importing the same mailbox, now for
 			// the new owner.
 			fills, err := a.store.AccountFills(cmd.Context(), acc.ID)
@@ -173,6 +186,7 @@ instead of the current owner. Also works for removed accounts.`,
 		},
 	}
 	cmd.Flags().StringVar(&to, "to", "", "the new owner (required)")
+	cmd.Flags().BoolVar(&otherGroup, "other-group", false, "allow a new owner in another customer group; the account's shares end")
 	_ = cmd.MarkFlagRequired("to")
 	return cmd
 }

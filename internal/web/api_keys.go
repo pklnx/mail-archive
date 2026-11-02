@@ -130,10 +130,17 @@ type scopeJSON struct {
 // auditRefusedKey records a refused key, with its name and owner if it
 // exists. The key itself is never written anywhere.
 func (s *Server) auditRefusedKey(r *http.Request, hash []byte) {
-	e := s.auditEntry(r, "auth.login_failed")
+	k, err := s.store.FindRefusedAPIKey(r.Context(), hash)
+	// A refused key of a known user is about that user; otherwise the
+	// attempt names no one.
+	var e *store.AuditEntry
+	if err == nil {
+		e = s.selfEntry(r, "auth.login_failed")
+	} else {
+		e = s.instanceEntry(r, "auth.login_failed")
+	}
 	e.Detail("method", "api_key")
 	e.Detail("reason", "invalid")
-	k, err := s.store.FindRefusedAPIKey(r.Context(), hash)
 	switch {
 	case err == nil:
 		e.SetUser(k.UserID, k.UserName)
@@ -239,7 +246,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := currentSession(r)
-	e := s.auditEntry(r, "api_key.create")
+	e := s.targetedEntry(r, "api_key.create")
 	e.SetTarget(store.TargetUser, strconv.FormatInt(sess.UserID, 10), sess.UserName)
 	e.Detail("key_name", in.Name)
 	e.Detail("scopes", scopes)
@@ -301,7 +308,7 @@ func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request, owner *int
 		s.fail(w, r, http.StatusNotFound, "not found", nil)
 		return
 	}
-	e := s.auditEntry(r, "api_key.revoke")
+	e := s.targetedEntry(r, "api_key.revoke")
 	e.Detail("reason", reason)
 	by := userID(r)
 	k, err := s.store.RevokeAPIKey(withAudit(r, e), id, owner, &by)

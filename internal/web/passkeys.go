@@ -194,7 +194,7 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 		}
 		return json.Marshal(got)
 	}
-	e := s.auditEntry(r, "auth.login")
+	e := s.selfEntry(r, "auth.login")
 	e.Detail("method", "passkey")
 	login, err := s.store.CompletePasskeyLogin(withAudit(r, e), in.Token, parsed.RawID, verify,
 		hash, s.currentTime().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
@@ -405,7 +405,7 @@ func (s *Server) handleFinishPasskeyRegistration(w http.ResponseWriter, r *http.
 		return
 	}
 	sess := currentSession(r)
-	name, err := s.store.FinishPasskeyRegistration(withAudit(r, s.auditEntry(r, "profile.passkey_add")), sess.UserID, in.Token, func(handle, data []byte) ([]byte, []byte, error) {
+	name, err := s.store.FinishPasskeyRegistration(withAudit(r, s.selfEntry(r, "profile.passkey_add")), sess.UserID, in.Token, func(handle, data []byte) ([]byte, []byte, error) {
 		var session webauthn.SessionData
 		if err := json.Unmarshal(data, &session); err != nil {
 			return nil, nil, err
@@ -431,7 +431,7 @@ func (s *Server) handleRemovePasskey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := currentSession(r)
-	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.auditEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(s.sessionToken(r)))
+	p, err := s.store.RemoveOwnPasskey(withAudit(r, s.selfEntry(r, "profile.passkey_remove")), sess.UserID, id, auth.HashSessionToken(s.sessionToken(r)))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -449,7 +449,7 @@ func (s *Server) handleRemoveUserPasskeys(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	e := s.auditEntry(r, "user.passkeys_removed")
+	e := s.targetedEntry(r, "user.passkeys_removed")
 	auditUser(e, u)
 	n, err := s.store.RemovePasskeys(withAudit(r, e), u.ID)
 	if err != nil {

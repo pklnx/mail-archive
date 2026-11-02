@@ -52,7 +52,7 @@ func TestCreateSMTPImport(t *testing.T) {
 		t.Errorf("200 characters: %v", err)
 	}
 
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "data.import"}
+	e := store.TargetedEntry(store.ActorCLI, "data.import")
 	e.SetTarget(store.TargetAccount, strconv.FormatInt(journal.ID, 10), journal.Name)
 	imp := &store.SMTPImport{AccountID: journal.ID, Label: "piler", Format: "eml", Source: "/import/piler-alice"}
 	if err := st.CreateSMTPImport(store.WithAudit(ctx, e), imp); err != nil || imp.ID == 0 || imp.CreatedAt.IsZero() {

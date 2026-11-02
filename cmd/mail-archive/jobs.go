@@ -160,7 +160,7 @@ jobs.retry.`,
 				return err
 			}
 			defer a.close()
-			e := cliEntry("jobs.retry")
+			e := cliInstance("jobs.retry")
 			e.Detail("kind", kind)
 			n, err := a.store.RetryFailedJobs(withCLIAudit(cmd, e), kind)
 			if err != nil {

@@ -150,7 +150,7 @@ func (s *Server) handleConfirmTwoFactor(w http.ResponseWriter, r *http.Request) 
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	err = s.store.ConfirmTwoFactorSetup(withAudit(r, s.auditEntry(r, "profile.2fa_enable")), sess.UserID, auth.NormalizeTOTPCode(in.Code), s.now(), s.sealer, codes, s.secretKey)
+	err = s.store.ConfirmTwoFactorSetup(withAudit(r, s.selfEntry(r, "profile.2fa_enable")), sess.UserID, auth.NormalizeTOTPCode(in.Code), s.now(), s.sealer, codes, s.secretKey)
 	if errors.Is(err, store.ErrTwoFactorInvalid) {
 		s.limiter.Fail(sess.UserName, s.clientAddr(r))
 		s.fail(w, r, http.StatusUnauthorized, errInvalidSecondFactor, nil)
@@ -211,7 +211,7 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	e := s.auditEntry(r, "auth.login")
+	e := s.selfEntry(r, "auth.login")
 	e.Detail("method", "2fa")
 	user, err := s.store.CompleteTwoFactorLogin(withAudit(r, e), in.Challenge, auth.NormalizeTOTPCode(in.Code), s.now(),
 		s.sealer, s.secretKey, hash, s.now().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
@@ -308,7 +308,7 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.auditEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(s.sessionToken(r))); err != nil {
+	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.selfEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(s.sessionToken(r))); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, "two-factor authentication changed meanwhile; reload and try again", nil)
 			return
@@ -342,7 +342,7 @@ func (s *Server) handleRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	if err := s.store.ReplaceRecoveryCodes(withAudit(r, s.auditEntry(r, "profile.recovery_codes")), sess.UserID, version, codes, s.secretKey); err != nil {
+	if err := s.store.ReplaceRecoveryCodes(withAudit(r, s.selfEntry(r, "profile.recovery_codes")), sess.UserID, version, codes, s.secretKey); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, "two-factor authentication changed meanwhile; reload and try again", nil)
 			return
@@ -359,7 +359,7 @@ func (s *Server) handleResetUserTwoFactor(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	e := s.auditEntry(r, "user.2fa_reset")
+	e := s.targetedEntry(r, "user.2fa_reset")
 	auditUser(e, u)
 	if err := s.store.ResetTwoFactor(withAudit(r, e), u.ID); err != nil {
 		s.failStore(w, r, err)

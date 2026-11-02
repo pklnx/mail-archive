@@ -277,6 +277,23 @@ func (q *Queries) LegalHoldExists(ctx context.Context, id int64) (bool, error) {
 	return exists, err
 }
 
+const legalHoldScope = `-- name: LegalHoldScope :one
+SELECT owner_id, account_id FROM legal_holds WHERE id = $1
+`
+
+type LegalHoldScopeRow struct {
+	OwnerID   *int64
+	AccountID *int64
+}
+
+// Whom a hold names, which decides the class of its audit entries (#470).
+func (q *Queries) LegalHoldScope(ctx context.Context, id int64) (LegalHoldScopeRow, error) {
+	row := q.db.QueryRow(ctx, legalHoldScope, id)
+	var i LegalHoldScopeRow
+	err := row.Scan(&i.OwnerID, &i.AccountID)
+	return i, err
+}
+
 const listLegalHolds = `-- name: ListLegalHolds :many
 SELECT h.id, h.name, h.reason, h.owner_id, ou.name AS owner, h.account_id, a.name AS account, au.name AS account_owner,
        h.filter, h.period_start, h.period_end, h.matched_at, h.created_at, cu.name AS created_by,

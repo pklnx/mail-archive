@@ -155,7 +155,7 @@ func TestAPIKeys(t *testing.T) {
 	if counts, _ := st.APIKeyCounts(ctx); counts[alice.ID] != 2 {
 		t.Fatalf("after reset with keep: %v", counts)
 	}
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "user.password_reset"}
+	e := store.TargetedEntry(store.ActorCLI, "user.password_reset")
 	if err := st.SetUserPassword(store.WithAudit(ctx, e), alice.ID, "h3", store.PasswordReset{MustChange: true, RevokeAPIKeys: true, By: &bob.ID}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestAPIKeys(t *testing.T) {
 		t.Fatalf("revoked_by %d %v", revokedBy, err)
 	}
 	newKey(t, st, alice.ID, "after", []string{"read"}, nil)
-	e = &store.AuditEntry{Actor: store.ActorCLI, Action: "user.remove"}
+	e = store.TargetedEntry(store.ActorCLI, "user.remove")
 	if err := st.DeleteUser(store.WithAudit(ctx, e), alice.ID); err != nil {
 		t.Fatal(err)
 	}

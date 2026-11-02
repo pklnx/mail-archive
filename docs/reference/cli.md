@@ -62,8 +62,9 @@ characters and are prompted twice, or read once from stdin with
 
 | Command | Purpose |
 |---|---|
-| `user add NAME` | Create a user. `--admin` for an admin (admins manage users in the web UI; they do not see other users' mail, but they see everyone's [audit log](../guide/audit-log)). |
-| `user list` | List users with role, state (active, locked, must change password), number of accounts, passkeys and active API keys, and last login. |
+| `user add NAME` | Create a user. `--admin` for an admin (admins manage users in the web UI; they do not see other users' mail, but they see everyone's [audit log](../guide/audit-log)). `--group GROUP` names the user's [customer group](#groups); needed while several groups exist, otherwise the user joins the only one. |
+| `user list` | List users with group, role, state (active, locked, must change password), number of accounts, passkeys and active API keys, and last login. |
+| `user set-group NAME GROUP` | Move the user, with the accounts they own, into another customer group. Ends every share that would cross groups and prints each one. |
 | `user set-password NAME` | Set a new password. Ends the user's sessions. |
 | `user reset-password NAME` | Generate a password, print it once; the user must change it at the next login. Ends the user's sessions, removes their passkeys and revokes their [API keys](./api#api-keys) (`--keep-passkeys` and `--keep-api-keys` keep them). |
 | `user remove-passkeys NAME` | Remove all passkeys of a user, for example after a lost device. Ends the user's sessions. |
@@ -77,6 +78,20 @@ characters and are prompted twice, or read once from stdin with
 The last admin who can log in cannot be locked, removed or demoted. Admins
 can do the same in the web UI; see [Users](../guide/users).
 
+### Groups
+
+[Customer groups](../guide/users#customer-groups) separate the customers of a
+shared instance. Every user belongs to one; an instance starts with
+`Default`. Group names have 1 to 100 characters and are unique regardless of
+case; commands find a group by its name in any case.
+
+| Command | Purpose |
+|---|---|
+| `group add NAME` | Create a group. |
+| `group list` | List groups with their number of users, the accounts those users own (removed ones too), and when each was created. |
+| `group rename NAME NEW-NAME` | Rename a group. |
+| `group remove NAME` | Remove a group. Refused while it has users, and for the last group. |
+
 ## Accounts
 
 | Command | Purpose |
@@ -85,7 +100,7 @@ can do the same in the web UI; see [Users](../guide/users).
 | `account add-smtp NAME --address ADDRESS` | Add an smtp account that receives copies of every message from a mail server (`--address` repeatable, at least one). An address has no `+`: the part after `+` encodes the original recipient. See [Journaling with Postfix](../guide/journaling). |
 | `account smtp-addresses NAME` | Show the addresses of an smtp account; `--add ADDRESS` and `--remove ADDRESS` (repeatable) change them. An address belongs to one account; the account keeps at least one. |
 | `account fill NAME --host HOST --username USER` | Copy an IMAP mailbox into an smtp account, into its folder `JOURNAL`: the mail from before journaling, once up to a cut-off or, with `--keep-running`, recurring. See below. |
-| `account list` | List accounts with owner, server, login, state (enabled, disabled, removed, removed (being deleted), import) and folder filters. For smtp accounts, SERVER is `smtp` and LOGIN lists the addresses. |
+| `account list` | List accounts with owner, the owner's group, server, login, state (enabled, disabled, removed, removed (being deleted), import) and folder filters. For smtp accounts, SERVER is `smtp` and LOGIN lists the addresses. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
 | `account set-folders NAME` | Replace the folder filters with `--include` and `--exclude`. No flags: archive all folders. |
 | `account set-schedule NAME --sync-interval V` | How often the web server syncs the account: `default` (`MAIL_ARCHIVE_SYNC_INTERVAL`), `manual` (not on the schedule; `sync` still syncs it) or a duration of whole minutes from `5m` to `720h`, such as `30m`. A new value below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` is refused. Prints the interval and the next sync. |
@@ -94,7 +109,7 @@ can do the same in the web UI; see [Users](../guide/users).
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. A disabled smtp account answers `451`: the mail server keeps the copies queued for `maximal_queue_lifetime` (5 days by default) and then drops them. |
 | `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced or imported into. Prints how to delete it completely with `account purge`. |
 | `account purge NAME` | Delete a removed account completely: its locations, folders and the account; the name is free again. Messages also in another account stay there; messages whose last location is in this account are deleted like a retention deletion (record, attestation entry, file removed after `MAIL_ARCHIVE_RETENTION_FILE_GRACE`). Refused, naming the reason, for an account that is not removed, has a retention rule, is named by a legal hold (also a released one) or has mail covered by an active hold, is being synced, filled or imported into, or while another purge is open. Shows the locations to remove, the messages to delete and those kept (by owner and account), then asks for the number of messages to delete; `--count N` gives it instead and must match, `--dry-run` stops after the preview. Runs in batches (`--lock-timeout`, default 10 minutes, per batch); an interrupted purge resumes with the same command or when the web server starts. `--cancel` cancels an open purge: what it deleted stays deleted, the account stays removed. See [Deleting a removed account completely](../guide/accounts#deleting-a-removed-account-completely). |
-| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. |
+| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. |
 
 Account changes work while the account is being synced and apply from the
 next sync; only `account remove` waits for the sync to finish. A command

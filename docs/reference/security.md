@@ -87,9 +87,21 @@ and shown to each user with only the locations of accounts they may see. Other
 accounts and messages answer `404`, also when someone guesses a message ID.
 Admins see only their own mail and what was shared with them.
 
-Only an account's owner shares it, with one user at a time, and only for
-reading: search, read and download. Managing, syncing, retention and removal
-stay with the owner; the shared user gets `404` (`403` for the admin-only purge
+Every user belongs to exactly one customer group, and every account to its
+owner's group. An account's owner shares it only with a user of the same
+group, one user at a time, and only for reading. A share request answers the
+same `404` for a name that does not exist and for a user of another group,
+and the store and the database refuse a share across groups. Moving a user or
+an account to another group ends every share that would cross groups. Users
+who are not admins never see names of users of other groups. Admins see every
+group's users, accounts, audit log, retention rules and holds, but no mail
+except their own and what was shared with them. Groups separate customers
+inside one instance: they share one database, one archive directory, one
+secret key and one backup, and a message that several groups received is
+stored once and shown to each only through its own accounts.
+
+A shared user may search, read and download. Managing, syncing, retention
+and removal stay with the owner; the shared user gets `404` (`403` for the admin-only purge
 routes) for the account's management routes. smtp (journal) accounts cannot be shared, so envelopes (BCC
 recipients) stay with their owner. An unshare takes effect on the user's next
 request. Every read of shared mail is in the reader's audit log entries, and

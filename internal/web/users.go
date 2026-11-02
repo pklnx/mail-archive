@@ -91,6 +91,9 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 type newUserInput struct {
 	Name  string `json:"name"`
 	Admin bool   `json:"admin"`
+	// Group is the customer group's id (#470): required while several
+	// groups exist, otherwise the only one.
+	Group *int64 `json:"group"`
 }
 
 // generatedPasswordJSON carries a generated password. It is shown to the
@@ -117,12 +120,24 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	e := s.auditEntry(r, "user.add")
+	e := s.targetedEntry(r, "user.add")
 	e.SetTarget(store.TargetUser, "", name) // the ID is set when it exists
 	e.Detail("admin", in.Admin)
-	if _, err := s.store.CreateUserWithGeneratedPassword(withAudit(r, e), name, hash, in.Admin); err != nil {
-		if errors.Is(err, store.ErrConflict) {
+	nu := store.NewUser{Name: name, PasswordHash: hash, Admin: in.Admin, Generated: true}
+	if in.Group != nil {
+		if *in.Group <= 0 {
+			s.fail(w, r, http.StatusBadRequest, store.ErrUnknownGroup.Error(), nil)
+			return
+		}
+		nu.GroupID = *in.Group
+	}
+	if _, err := s.store.CreateUserInGroup(withAudit(r, e), nu); err != nil {
+		switch {
+		case errors.Is(err, store.ErrConflict):
 			s.fail(w, r, http.StatusConflict, fmt.Sprintf("a user named %q already exists", name), nil)
+			return
+		case errors.Is(err, store.ErrGroupRequired), errors.Is(err, store.ErrUnknownGroup):
+			s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 			return
 		}
 		s.failStore(w, r, err)
@@ -189,7 +204,7 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	e := s.auditEntry(r, "user.password_reset")
+	e := s.targetedEntry(r, "user.password_reset")
 	auditUser(e, u)
 	e.Detail("passkeys_removed", removePasskeys)
 	by := userID(r)
@@ -219,7 +234,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
-	e := s.auditEntry(r, "user.change")
+	e := s.targetedEntry(r, "user.change")
 	auditUser(e, u)
 	switch {
 	case in.Admin != nil && in.Locked == nil:
@@ -249,7 +264,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	e := s.auditEntry(r, "user.remove")
+	e := s.targetedEntry(r, "user.remove")
 	auditUser(e, u)
 	err := s.store.DeleteUser(withAudit(r, e), u.ID)
 	switch {
@@ -323,7 +338,7 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	if err := s.store.ChangeOwnPassword(withAudit(r, s.auditEntry(r, "profile.password_change")), u.ID, hash, auth.HashSessionToken(s.sessionToken(r))); err != nil {
+	if err := s.store.ChangeOwnPassword(withAudit(r, s.selfEntry(r, "profile.password_change")), u.ID, hash, auth.HashSessionToken(s.sessionToken(r))); err != nil {
 		s.failStore(w, r, err)
 		return
 	}

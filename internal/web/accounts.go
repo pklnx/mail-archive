@@ -615,7 +615,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seal := func(id int64) ([]byte, error) { return archive.SealPassword(s.syncer.Sealer, id, *in.Password) }
-	e := s.auditEntry(r, "account.add")
+	e := s.targetedEntry(r, "account.add")
 	e.SetTarget(store.TargetAccount, "", a.Name) // the ID is set when it exists
 	e.Detail("kind", string(store.KindIMAP))
 	if err := s.store.CreateAccountSealed(withAudit(r, e), a, seal); err != nil {
@@ -664,7 +664,7 @@ func (s *Server) createSMTPAccount(w http.ResponseWriter, r *http.Request, in *a
 	if in.Enabled != nil {
 		a.Enabled = *in.Enabled
 	}
-	e := s.auditEntry(r, "account.add")
+	e := s.targetedEntry(r, "account.add")
 	e.SetTarget(store.TargetAccount, "", a.Name) // the ID is set when it exists
 	e.Detail("kind", string(store.KindSMTP))
 	e.Detail("addresses", addrs)
@@ -808,7 +808,7 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		change.SMTPAddresses = &addrs
 	}
 
-	e := s.auditEntry(r, "account.change")
+	e := s.targetedEntry(r, "account.change")
 	auditAccount(e, a)
 	auditAccountChange(e, a.Name, change.Name, in.changedFields(), in.Enabled, change.SyncInterval)
 	err = s.store.UpdateAccount(withAudit(r, e), a.Ref(), change)
@@ -842,7 +842,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	// Deleting must not overlap a sync that writes folders and messages for
 	// the account: it runs under the account's sync lock.
-	e := s.auditEntry(r, "account.remove")
+	e := s.targetedEntry(r, "account.remove")
 	auditAccount(e, a)
 	res, ok, err := s.store.RemoveAccountLocked(withAudit(r, e), a.Ref())
 	if errors.Is(err, store.ErrStale) {
@@ -918,7 +918,7 @@ func (s *Server) handleSyncAccount(w http.ResponseWriter, r *http.Request) {
 	if in.Reconcile {
 		opts = archive.SyncOptions{Reconcile: true, ReconcileMinAge: reconcileFloor}
 	}
-	e := s.auditEntry(r, "sync.start")
+	e := s.targetedEntry(r, "sync.start")
 	auditAccount(e, a)
 	e.Detail("reconcile", in.Reconcile)
 	if !s.audit(w, r, e) {
@@ -947,7 +947,8 @@ func (s *Server) handleSyncAll(w http.ResponseWriter, r *http.Request) {
 			ids = append(ids, a.ID)
 		}
 	}
-	e := s.auditEntry(r, "sync.start")
+	// All of the caller's own accounts: their own act, in their group.
+	e := s.selfEntry(r, "sync.start")
 	e.Detail("accounts", len(ids))
 	if !s.audit(w, r, e) {
 		return

@@ -21,7 +21,7 @@ func TestGoneMessagesPerUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetAccountOwner(ctx, bob.Ref(), other.ID); err != nil {
+	if err := f.st.SetAccountOwner(ctx, bob.Ref(), other.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	g := *f
@@ -132,7 +132,7 @@ func TestReconcileButton(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetAccountOwner(context.Background(), imported.Ref(), user.ID); err != nil {
+	if err := f.st.SetAccountOwner(context.Background(), imported.Ref(), user.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	f.do("POST", "/api/accounts/old/sync", map[string]any{"reconcile": true}, http.StatusConflict)

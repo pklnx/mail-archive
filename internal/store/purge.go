@@ -715,6 +715,9 @@ func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, 
 		if err := q.DeleteAccountFolders(ctx, a.ID); err != nil {
 			return err
 		}
+		if err := keepAccountGroup(ctx, q, a.ID); err != nil {
+			return err
+		}
 		if err := one(q.DeleteAccount(ctx, a.ID)); err != nil {
 			return err
 		}

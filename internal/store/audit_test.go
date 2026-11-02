@@ -112,7 +112,8 @@ func TestAuditPartitions(t *testing.T) {
 func TestAuditAppendOnly(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
-	e := store.AuditEntry{Actor: store.ActorSession, Action: "auth.login", UserAgent: "test-agent", ClientIP: netip.MustParseAddr("192.0.2.1")}
+	e := *store.SelfEntry(store.ActorSession, "auth.login")
+	e.UserAgent, e.ClientIP = "test-agent", netip.MustParseAddr("192.0.2.1")
 	if err := st.Audit(ctx, e); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestAuditAppendOnly(t *testing.T) {
 func TestAuditAppendOnlyOwner(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
-	if err := st.Audit(ctx, store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}); err != nil {
+	if err := st.Audit(ctx, *store.TargetedEntry(store.ActorCLI, "user.add")); err != nil {
 		t.Fatal(err)
 	}
 	conn := connect(t, url)
@@ -209,7 +210,7 @@ func TestAuditAppendOnlyOwner(t *testing.T) {
 func TestAuditMigrationDown(t *testing.T) {
 	ctx := context.Background()
 	st := storetest.New(t)
-	if err := st.Audit(ctx, store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}); err != nil {
+	if err := st.Audit(ctx, *store.TargetedEntry(store.ActorCLI, "user.add")); err != nil {
 		t.Fatal(err)
 	}
 	// First the smtp imports, the recurring fills, the journal folder, the smtp fills, the user settings, the sync intervals, the folder delimiters and the attestations, of which there are none.
@@ -306,7 +307,7 @@ func TestAuditWithChange(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	conn := connect(t, url)
 	ctx := context.Background()
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}
+	e := store.TargetedEntry(store.ActorCLI, "user.add")
 	e.SetTarget(store.TargetUser, "", "alice")
 	actx := store.WithAudit(ctx, e)
 	u, err := st.CreateUser(actx, "alice", "h", false)
@@ -322,14 +323,14 @@ func TestAuditWithChange(t *testing.T) {
 		t.Fatalf("rows %+v", rows)
 	}
 	// A failed change writes no entry.
-	if _, err := st.CreateUser(store.WithAudit(ctx, &store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}), "alice", "h", false); !errors.Is(err, store.ErrConflict) {
+	if _, err := st.CreateUser(store.WithAudit(ctx, store.TargetedEntry(store.ActorCLI, "user.add")), "alice", "h", false); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("duplicate: %v", err)
 	}
 	if n := len(auditRows(t, conn)); n != 1 {
 		t.Fatalf("%d rows after a failed change", n)
 	}
 	// An entry that cannot be written rolls the change back.
-	bad := &store.AuditEntry{Actor: store.ActorCLI, Action: "not valid"}
+	bad := store.InstanceEntry(store.ActorCLI, "not valid")
 	if _, err := st.CreateUser(store.WithAudit(ctx, bad), "bob", "h", false); !errors.Is(err, store.ErrAuditUnavailable) {
 		t.Fatalf("invalid entry: %v", err)
 	}
@@ -346,7 +347,7 @@ func TestAuditUserRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := store.AuditEntry{Actor: store.ActorSession, Action: "auth.login"}
+	e := *store.SelfEntry(store.ActorSession, "auth.login")
 	e.SetUser(u.ID, u.Name)
 	if err := st.Audit(ctx, e); err != nil {
 		t.Fatal(err)
@@ -384,7 +385,7 @@ func TestAuditMissingPartition(t *testing.T) {
 	ctx := context.Background()
 	detachCurrentMonth(t, conn)
 	// A single insert creates the partition and tries again.
-	if err := st.Audit(ctx, store.AuditEntry{Actor: store.ActorCLI, Action: "data.export"}); err != nil {
+	if err := st.Audit(ctx, *store.TargetedEntry(store.ActorCLI, "data.export")); err != nil {
 		t.Fatalf("audit without partition: %v", err)
 	}
 	if n := len(auditRows(t, conn)); n != 1 {
@@ -392,11 +393,11 @@ func TestAuditMissingPartition(t *testing.T) {
 	}
 	// In a transaction it fails once; the next attempt works.
 	detachCurrentMonth(t, conn)
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}
+	e := store.TargetedEntry(store.ActorCLI, "user.add")
 	if _, err := st.CreateUser(store.WithAudit(ctx, e), "alice", "h", false); !errors.Is(err, store.ErrAuditUnavailable) {
 		t.Fatalf("in a transaction: %v", err)
 	}
-	if _, err := st.CreateUser(store.WithAudit(ctx, &store.AuditEntry{Actor: store.ActorCLI, Action: "user.add"}), "alice", "h", false); err != nil {
+	if _, err := st.CreateUser(store.WithAudit(ctx, store.TargetedEntry(store.ActorCLI, "user.add")), "alice", "h", false); err != nil {
 		t.Fatalf("next attempt: %v", err)
 	}
 	if n := len(auditRows(t, conn)); n != 1 {
@@ -409,7 +410,8 @@ func TestAuditCleansInput(t *testing.T) {
 	ctx := context.Background()
 	// A multi-byte character across byte 256 of the user agent.
 	ua := strings.Repeat("a", 255) + "é" + strings.Repeat("b", 10)
-	e := store.AuditEntry{Actor: store.ActorSession, Action: "message.search", UserAgent: ua + "\x00\xff"}
+	e := *store.SelfEntry(store.ActorSession, "message.search")
+	e.UserAgent = ua + "\x00\xff"
 	e.Detail("q", "nul\x00 and \xff invalid")
 	e.Detail("list", []string{"x\x00"})
 	if err := st.Audit(ctx, e); err != nil {
@@ -442,7 +444,9 @@ func TestAuditUserAgentRace(t *testing.T) {
 			s = other
 		}
 		wg.Go(func() {
-			if err := s.Audit(ctx, store.AuditEntry{Actor: store.ActorSession, Action: "auth.login", UserAgent: "same agent"}); err != nil {
+			e := *store.SelfEntry(store.ActorSession, "auth.login")
+			e.UserAgent = "same agent"
+			if err := s.Audit(ctx, e); err != nil {
 				t.Error(err)
 			}
 		})
@@ -479,7 +483,8 @@ func TestAuditUserAgentFewConnections(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 6 {
 		wg.Go(func() {
-			e := &store.AuditEntry{Actor: store.ActorSession, Action: "user.reset_2fa", UserAgent: fmt.Sprintf("agent %d", i)}
+			e := store.TargetedEntry(store.ActorSession, "user.2fa_reset")
+			e.UserAgent = fmt.Sprintf("agent %d", i)
 			if err := small.ResetTwoFactor(store.WithAudit(ctx, e), u.ID); err != nil {
 				t.Error(err)
 			}
@@ -496,7 +501,7 @@ func TestExportAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range []string{"auth.login", "message.open", "user.2fa_reset", "message.search"} {
-		e := store.AuditEntry{Actor: store.ActorSession, Action: a}
+		e := *storetest.Entry(store.ActorSession, a)
 		if a != "user.2fa_reset" {
 			e.SetUser(alice.ID, alice.Name)
 		}
@@ -563,7 +568,7 @@ func TestListAuditWho(t *testing.T) {
 		{"carol", store.ActorSession, "message.open"},
 		{"", store.ActorCLI, "data.backup"},
 	} {
-		entry := store.AuditEntry{Actor: e.actor, Action: e.action}
+		entry := *storetest.Entry(e.actor, e.action)
 		if e.user != "" {
 			entry.SetUser(users[e.user], e.user)
 		}
@@ -629,8 +634,9 @@ func TestAuditSize(t *testing.T) {
 	}
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
-	if err := st.Audit(ctx, store.AuditEntry{Actor: store.ActorSession, Action: "auth.login",
-		UserAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"}); err != nil {
+	login := *store.SelfEntry(store.ActorSession, "auth.login")
+	login.UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+	if err := st.Audit(ctx, login); err != nil {
 		t.Fatal(err)
 	}
 	conn := connect(t, url)

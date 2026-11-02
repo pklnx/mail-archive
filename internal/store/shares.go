@@ -208,8 +208,11 @@ type AccountShare struct {
 // ShareAccount lets user read the account's mail. It is checked against
 // ref like UpdateAccount (ErrNotFound for a gone, removed or foreign
 // account, ErrStale), and fails with ErrNotFound for an unknown user, with
-// ErrShareSelf for the owner and with ErrShareSMTP for an smtp account. It
-// reports false, and changes nothing, if the share exists already.
+// ErrShareSelf for the owner, with ErrShareSMTP for an smtp account and
+// with ErrShareOtherGroup for a user outside the owner's group (#470). The
+// owner's and the user's rows stay locked FOR SHARE until the commit, so
+// neither can change group meanwhile (SetUserGroup). It reports false, and
+// changes nothing, if the share exists already.
 func (s *Store) ShareAccount(ctx context.Context, ref AccountRef, userID int64) (bool, error) {
 	var created bool
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -222,6 +225,23 @@ func (s *Store) ShareAccount(ctx context.Context, ref AccountRef, userID int64) 
 			return ErrShareSelf
 		case AccountKind(r.Kind) == KindSMTP:
 			return ErrShareSMTP
+		case r.OwnerID == nil:
+			return ErrNotFound
+		}
+		users, err := q.LockUserGroups(ctx, []int64{*r.OwnerID, userID})
+		if err != nil {
+			return err
+		}
+		groups := map[int64]int64{}
+		for _, u := range users {
+			groups[u.ID] = u.GroupID
+		}
+		reader, ok := groups[userID]
+		if !ok {
+			return ErrNotFound
+		}
+		if reader != groups[*r.OwnerID] {
+			return ErrShareOtherGroup
 		}
 		n, err := q.InsertAccountShare(ctx, db.InsertAccountShareParams{AccountID: r.ID, UserID: userID})
 		var pgErr *pgconn.PgError

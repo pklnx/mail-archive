@@ -85,6 +85,14 @@ describe("users and profile", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ name: "kim", admin: true });
   });
 
+  it("creates a user in a customer group (#470)", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ name: "kim", password: "abcde-fghjk-mnpqr-stuvw" }), { status: 201 }),
+    );
+    await usersApi.create("kim", false, 7);
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ name: "kim", admin: false, group: 7 });
+  });
+
   it("encodes user names in paths", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     await usersApi.setLocked("a.b", true);

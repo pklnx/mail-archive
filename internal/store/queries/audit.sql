@@ -1,9 +1,16 @@
 -- name: InsertAuditEntry :exec
--- at comes from the database clock (the column default).
+-- at comes from the database clock (the column default). The group (#470)
+-- is group_id if given, else that of group_user_id or of the owner of
+-- group_account_id, as the change's transaction sees them; insertAudit
+-- picks which by the entry's class. Neither found: NULL.
 INSERT INTO audit_log (actor, user_id, user_name, api_key_id, api_key_name, action,
-                       target_type, target_id, target_name, client_ip, user_agent_id, details)
+                       target_type, target_id, target_name, client_ip, user_agent_id, details, group_id)
 VALUES (@actor, sqlc.narg(user_id), sqlc.narg(user_name), sqlc.narg(api_key_id), sqlc.narg(api_key_name), @action,
-        sqlc.narg(target_type), sqlc.narg(target_id), sqlc.narg(target_name), sqlc.narg(client_ip), sqlc.narg(user_agent_id), @details);
+        sqlc.narg(target_type), sqlc.narg(target_id), sqlc.narg(target_name), sqlc.narg(client_ip), sqlc.narg(user_agent_id), @details,
+        coalesce(sqlc.narg(group_id)::bigint,
+                 (SELECT gu.group_id FROM users gu WHERE gu.id = sqlc.narg(group_user_id)::bigint),
+                 (SELECT go.group_id FROM accounts ga JOIN users go ON go.id = ga.owner_id
+                  WHERE ga.id = sqlc.narg(group_account_id)::bigint)));
 
 -- name: AuditUserAgentID :one
 -- The id of a user agent, inserted if new. ON CONFLICT DO UPDATE would be

@@ -72,7 +72,7 @@ period applies is a legal question; check with your tax adviser.`,
 			if err != nil {
 				return err
 			}
-			e := cliAccountTarget(cliEntry("retention.rule_add"), acc)
+			e := cliAccountTarget(cliTargeted("retention.rule_add"), acc)
 			e.Detail("years", years)
 			e.Detail("time_zone", timeZoneOrDefault(timeZone))
 			if folder != "" {
@@ -197,7 +197,7 @@ covers it.`,
 				return err
 			}
 			defer a.close()
-			e := cliEntry("retention.rule_remove")
+			e := cliTargeted("retention.rule_remove")
 			if err := a.store.RemoveRetentionRule(withCLIAudit(cmd, e), id); errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("no rule %d", id)
 			} else if err != nil {
@@ -270,20 +270,27 @@ Without any condition the hold covers the whole archive; that needs --all.`,
 				return err
 			}
 			defer a.close()
-			e := cliEntry("hold.add")
 			u, err := flagUser(cmd, a)
 			if err != nil {
 				return err
+			}
+			var acc *store.Account
+			if account != "" {
+				if acc, err = findAccount(cmd, a, account); err != nil {
+					return err
+				}
+			}
+			// A hold naming a user or an account is about them; one naming
+			// neither covers the instance and has no group (#470).
+			e := cliInstance("hold.add")
+			if u != nil || acc != nil {
+				e = cliTargeted("hold.add")
 			}
 			if u != nil {
 				h.OwnerID = &u.ID
 				cliUserTarget(e, u)
 			}
-			if account != "" {
-				acc, err := findAccount(cmd, a, account)
-				if err != nil {
-					return err
-				}
+			if acc != nil {
 				h.AccountID = &acc.ID
 				cliAccountTarget(e, acc)
 			}
@@ -413,7 +420,10 @@ retention period has ended. The hold stays listed with --released.`,
 				return err
 			}
 			defer a.close()
-			err = a.store.ReleaseLegalHold(withCLIAudit(cmd, cliEntry("hold.release")), id, nil, note)
+			e, err := cliHoldEntry(cmd, a, "hold.release", id)
+			if err == nil {
+				err = a.store.ReleaseLegalHold(withCLIAudit(cmd, e), id, nil, note)
+			}
 			if errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("no legal hold %d", id)
 			}
@@ -475,4 +485,29 @@ func startRetention(ctx context.Context, a *app, blobs *blobstore.Store, log *sl
 		cancel()
 		<-done
 	}
+}
+
+// cliHoldEntry starts the entry of a change to hold id: targeted at the
+// account or the user the hold names, as hold.add was, or instance-level
+// for a hold that names neither (#470). ErrNotFound for an unknown hold.
+func cliHoldEntry(cmd *cobra.Command, a *app, action string, id int64) (*store.AuditEntry, error) {
+	owner, account, err := a.store.LegalHoldScope(cmd.Context(), id)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case account != nil:
+		acc, err := a.store.GetAccount(cmd.Context(), *account)
+		if err != nil {
+			return nil, err
+		}
+		return cliAccountTarget(cliTargeted(action), acc), nil
+	case owner != nil:
+		u, err := a.store.GetUserByID(cmd.Context(), *owner)
+		if err != nil {
+			return nil, err
+		}
+		return cliUserTarget(cliTargeted(action), u), nil
+	}
+	return cliInstance(action), nil
 }

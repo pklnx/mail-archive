@@ -74,7 +74,7 @@ func TestSMTPAccountCommands(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if !regexpMatch(`journal\s+-\s+smtp\s+archive@archive.test, journal@archive.test\s+enabled`, out) {
+	if !regexpMatch(`journal\s+-\s+-\s+smtp\s+archive@archive.test, journal@archive.test\s+enabled`, out) {
 		t.Errorf("list:\n%s", out)
 	}
 	out = captureStdout(t, func() {

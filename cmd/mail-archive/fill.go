@@ -242,7 +242,7 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 	if fl.keepRunning {
 		fill.Confirmed = suggest
 	}
-	e := cliAccountTarget(cliEntry("data.fill"), acc)
+	e := cliAccountTarget(cliTargeted("data.fill"), acc)
 	e.Detail("host", fl.host)
 	e.Detail("username", fl.username)
 	if cutoff != nil {
@@ -376,7 +376,7 @@ func resumeFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) er
 	if _, err := checkLogin(ctx, src, password); err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
-	e := cliAccountTarget(cliEntry("data.fill_resume"), acc)
+	e := cliAccountTarget(cliTargeted("data.fill_resume"), acc)
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(sealer, id, password) }
 	if err := a.store.ResumeFill(withCLIAudit(cmd, e), last.ID, seal); err != nil {
 		return err
@@ -443,7 +443,7 @@ func keepFillRunning(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlag
 		return fmt.Errorf("the server marks %s as trash or spam, and the fill has not copied them; copy them too with --confirm-folders",
 			strings.Join(confirm, ", "))
 	}
-	e := cliAccountTarget(cliEntry("data.fill_change"), acc)
+	e := cliAccountTarget(cliTargeted("data.fill_change"), acc)
 	e.Detail("keep_running", map[string]any{"from": false, "to": true})
 	e.Detail("interval", map[string]any{"from": archive.FillIntervalDetail(fill), "to": archive.FormatOwnInterval(interval)})
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(sealer, id, password) }
@@ -474,7 +474,7 @@ func changeFillInterval(cmd *cobra.Command, a *app, acc *store.Account, fl fillF
 		return err
 	}
 	if !archive.SameOwnInterval(interval, fill.Interval) {
-		e := cliAccountTarget(cliEntry("data.fill_change"), acc)
+		e := cliAccountTarget(cliTargeted("data.fill_change"), acc)
 		e.Detail("interval", map[string]any{"from": archive.FormatOwnInterval(fill.Interval), "to": archive.FormatOwnInterval(interval)})
 		if err := a.store.SetFillInterval(withCLIAudit(cmd, e), fill.ID, interval); err != nil {
 			return err
@@ -522,7 +522,7 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 	sched := scheduleOf(a.cfg)
 	printFill(cmd.OutOrStdout(), fill, fillInfo{sched: sched, now: time.Now()})
 	if !fill.Recurring() {
-		e := cliAccountTarget(cliEntry("data.fill_done"), acc)
+		e := cliAccountTarget(cliTargeted("data.fill_done"), acc)
 		archive.AuditFillDone(e, fill)
 		if err := a.store.Audit(bg, *e); err != nil {
 			return fmt.Errorf("the fill ended (%s), but the audit log was not written: %w", fill.Status, err)
@@ -560,7 +560,7 @@ func cancelFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) er
 	if err != nil {
 		return err
 	}
-	e := cliAccountTarget(cliEntry("data.fill_cancel"), acc)
+	e := cliAccountTarget(cliTargeted("data.fill_cancel"), acc)
 	if err := a.store.CancelFill(withCLIAudit(cmd, e), fill.ID); err != nil {
 		if errors.Is(err, store.ErrFillNotRunning) {
 			return fmt.Errorf("fill %d of %q neither runs nor keeps running", fill.ID, acc.Name)

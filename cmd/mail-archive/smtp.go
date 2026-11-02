@@ -85,7 +85,7 @@ stores alice@example.com as the recipient.`,
 			if acc.OwnerID, err = newOwner(cmd, a); err != nil {
 				return err
 			}
-			e := cliEntry("account.add")
+			e := cliTargeted("account.add")
 			e.SetTarget(store.TargetAccount, "", acc.Name) // the ID is set when it exists
 			e.Detail("kind", string(store.KindSMTP))
 			e.Detail("addresses", addresses)
@@ -128,7 +128,7 @@ server drops it without telling anyone.`,
 				return fmt.Errorf("%q is not an smtp account", acc.Name)
 			}
 			if len(add)+len(remove) > 0 {
-				e := cliAccountTarget(cliEntry("account.change"), acc)
+				e := cliAccountTarget(cliTargeted("account.change"), acc)
 				e.Detail("fields", []string{"addresses"})
 				e.Detail("added", add)
 				e.Detail("removed", remove)

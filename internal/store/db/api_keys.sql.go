@@ -103,7 +103,7 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash []byte) (GetAPIKe
 
 const getAPIKeyLogin = `-- name: GetAPIKeyLogin :one
 SELECT k.id, k.name, k.scopes, k.last_used_at,
-       u.id AS user_id, u.name AS user_name, u.is_admin, u.must_change_password, u.two_factor_enabled
+       u.id AS user_id, u.name AS user_name, u.is_admin, u.must_change_password, u.two_factor_enabled, u.group_id
 FROM api_keys k
 JOIN users u ON u.id = k.user_id
 WHERE k.key_hash = $1
@@ -122,6 +122,7 @@ type GetAPIKeyLoginRow struct {
 	IsAdmin            bool
 	MustChangePassword bool
 	TwoFactorEnabled   bool
+	GroupID            int64
 }
 
 // A key works while it is not revoked or expired and its user is not
@@ -139,6 +140,7 @@ func (q *Queries) GetAPIKeyLogin(ctx context.Context, keyHash []byte) (GetAPIKey
 		&i.IsAdmin,
 		&i.MustChangePassword,
 		&i.TwoFactorEnabled,
+		&i.GroupID,
 	)
 	return i, err
 }

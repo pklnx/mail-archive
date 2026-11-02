@@ -441,7 +441,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	e := s.auditEntry(r, "auth.login")
+	e := s.selfEntry(r, "auth.login")
 	e.SetUser(u.ID, u.Name)
 	e.Detail("method", "password")
 	if err := s.store.StartSession(withAudit(r, e), hash, u.ID, s.currentTime().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent())); err != nil {
@@ -471,7 +471,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		hash := auth.HashSessionToken(token)
 		ctx := r.Context()
 		if sess != nil && token == valid {
-			e := s.auditEntry(r, "auth.logout")
+			e := s.selfEntry(r, "auth.logout")
 			e.SetUser(sess.UserID, sess.UserName)
 			ctx = withAudit(r, e)
 		}
@@ -539,7 +539,7 @@ func (s *Server) housekeeping(ctx context.Context) {
 // The name is kept only if it is a valid user name, so that a password
 // typed into the name field is not stored.
 func (s *Server) auditUnknownLogin(r *http.Request, name, reason string) {
-	e := s.auditEntry(r, "auth.login_failed")
+	e := s.instanceEntry(r, "auth.login_failed")
 	e.Detail("method", "password")
 	e.Detail("reason", reason)
 	if auth.ValidateUserName(name) == nil {

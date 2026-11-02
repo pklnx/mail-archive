@@ -42,7 +42,7 @@ with "retention cancel ID". Only one run can be open.`,
 				return err
 			}
 			defer a.close()
-			run, err := a.store.ProposeDeletion(withCLIAudit(cmd, cliEntry("retention.preview")), nil)
+			run, err := a.store.ProposeDeletion(withCLIAudit(cmd, cliInstance("retention.preview")), nil)
 			if err != nil {
 				return err
 			}
@@ -248,7 +248,7 @@ run resumes with the same command, or when the web server starts.`,
 						return errors.New("not confirmed; nothing was deleted")
 					}
 				}
-				if err := a.store.ConfirmDeletionRun(withCLIAudit(cmd, cliEntry("retention.confirm")), id, nil); err != nil {
+				if err := a.store.ConfirmDeletionRun(withCLIAudit(cmd, cliInstance("retention.confirm")), id, nil); err != nil {
 					return err
 				}
 			case store.RunConfirmed:
@@ -258,7 +258,7 @@ run resumes with the same command, or when the web server starts.`,
 			}
 			done, err := archive.ExecuteDeletionRun(cmd.Context(), a.store, id, archive.DeletionOptions{
 				Grace: a.cfg.RetentionFileGrace, LockTimeout: lockTimeout, Logger: newLogger(a.cfg.LogLevel),
-				Audit:    func(action string) *store.AuditEntry { return cliEntry(action) },
+				Audit:    func(action string) *store.AuditEntry { return cliInstance(action) },
 				Progress: func(d, k int) { fmt.Fprintf(cmd.ErrOrStderr(), "deleted %d, kept %d\n", d, k) },
 			})
 			if err != nil {
@@ -289,7 +289,7 @@ func newRetentionCancelCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			err = a.store.CancelDeletionRun(withCLIAudit(cmd, cliEntry("retention.cancel")), id)
+			err = a.store.CancelDeletionRun(withCLIAudit(cmd, cliInstance("retention.cancel")), id)
 			if errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("no deletion run %d", id)
 			}
@@ -351,7 +351,7 @@ hour. A file whose message was archived again stays.`,
 			}
 			n, err := archive.SweepBlobs(cmd.Context(), a.store, blobs, archive.SweepOptions{
 				LockTimeout: lockTimeout, Logger: newLogger(a.cfg.LogLevel),
-				Audit: func() *store.AuditEntry { return cliEntry("retention.sweep") },
+				Audit: func() *store.AuditEntry { return cliInstance("retention.sweep") },
 			})
 			if err != nil {
 				return err

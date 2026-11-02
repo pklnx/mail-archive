@@ -374,7 +374,7 @@ The login is verified before the account is saved unless --skip-check is set.`,
 				return err
 			}
 			seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, password) }
-			e := cliEntry("account.add")
+			e := cliTargeted("account.add")
 			e.SetTarget(store.TargetAccount, "", acc.Name) // the ID is set when it exists
 			e.Detail("kind", string(store.KindIMAP))
 			if err := a.store.CreateAccountSealed(withCLIAudit(cmd, e), &acc, seal); err != nil {
@@ -507,6 +507,10 @@ func newAccountListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			groups, err := userGroupNames(cmd, a)
+			if err != nil {
+				return err
+			}
 			addresses, err := a.store.SMTPAddresses(cmd.Context())
 			if err != nil {
 				return err
@@ -516,7 +520,7 @@ func newAccountListCmd() *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tOWNER\tSERVER\tLOGIN\tSTATE\tINCLUDE\tEXCLUDE")
+			fmt.Fprintln(w, "NAME\tOWNER\tGROUP\tSERVER\tLOGIN\tSTATE\tINCLUDE\tEXCLUDE")
 			for _, acc := range accounts {
 				if u != nil && (acc.OwnerID == nil || *acc.OwnerID != u.ID) {
 					continue
@@ -534,15 +538,15 @@ func newAccountListCmd() *cobra.Command {
 				}
 				switch acc.Kind {
 				case store.KindImport:
-					fmt.Fprintf(w, "%s\t%s\timport\t-\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID), state)
+					fmt.Fprintf(w, "%s\t%s\t%s\timport\t-\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID), ownerGroup(groups, acc.OwnerID), state)
 					continue
 				case store.KindSMTP:
 					// LOGIN lists the addresses it receives for.
-					fmt.Fprintf(w, "%s\t%s\tsmtp\t%s\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID),
+					fmt.Fprintf(w, "%s\t%s\t%s\tsmtp\t%s\t%s\t-\t-\n", acc.Name, ownerName(names, acc.OwnerID), ownerGroup(groups, acc.OwnerID),
 						listOrDash(addresses[acc.ID], "-"), state)
 					continue
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, ownerName(names, acc.OwnerID), acc.Host, acc.Port, acc.TLSMode,
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s:%d (%s)\t%s\t%s\t%s\t%s\n", acc.Name, ownerName(names, acc.OwnerID), ownerGroup(groups, acc.OwnerID), acc.Host, acc.Port, acc.TLSMode,
 					acc.Username, state, listOrDash(acc.IncludedFolders, "all"), listOrDash(acc.ExcludedFolders, "-"))
 			}
 			return w.Flush()
@@ -560,7 +564,7 @@ func listOrDash(l []string, empty string) string {
 // updateAccount saves a change to an account loaded with loadAccount, only
 // if nobody changed it in between.
 func updateAccount(cmd *cobra.Command, a *app, acc *store.Account, change store.AccountChange) error {
-	e := cliAccountTarget(cliEntry("account.change"), acc)
+	e := cliAccountTarget(cliTargeted("account.change"), acc)
 	e.Detail("fields", accountChangeFields(change))
 	if change.Name != nil {
 		e.Detail("name", map[string]any{"from": acc.Name, "to": *change.Name})
@@ -818,7 +822,7 @@ completely afterwards with "account purge NAME".`,
 			}
 			defer a.close()
 			// Not while a sync writes folders and messages for the account.
-			res, ok, err := a.store.RemoveAccountLocked(withCLIAudit(cmd, cliAccountTarget(cliEntry("account.remove"), acc)), acc.Ref())
+			res, ok, err := a.store.RemoveAccountLocked(withCLIAudit(cmd, cliAccountTarget(cliTargeted("account.remove"), acc)), acc.Ref())
 			if err != nil {
 				return staleError(err)
 			}

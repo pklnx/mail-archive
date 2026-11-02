@@ -320,7 +320,8 @@ func AuditFillDone(e *store.AuditEntry, f *store.Fill) {
 // on its own, like the web server: there is no user, as for the deletion
 // runs it executes.
 func FillDoneEntry(f *store.Fill, account, by string) store.AuditEntry {
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "data.fill_done", Details: map[string]any{"by": by}}
+	e := store.TargetedEntry(store.ActorCLI, "data.fill_done")
+	e.Detail("by", by)
 	e.SetTarget(store.TargetAccount, strconv.FormatInt(f.AccountID, 10), account)
 	AuditFillDone(e, f)
 	return *e

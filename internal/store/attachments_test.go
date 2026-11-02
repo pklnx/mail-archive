@@ -351,7 +351,7 @@ func TestPurgeDeletesAttachmentRows(t *testing.T) {
 	f := newPurgeFixture(t)
 	attachmentRows(t, f.st, f.m1)
 	attachmentRows(t, f.st, f.m2)
-	p, err := f.st.ConfirmPurge(store.WithAudit(f.ctx, &store.AuditEntry{Actor: store.ActorCLI, Action: "account.purge"}), f.acc.Ref(), 1, nil)
+	p, err := f.st.ConfirmPurge(store.WithAudit(f.ctx, store.TargetedEntry(store.ActorCLI, "account.purge")), f.acc.Ref(), 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,9 +365,19 @@ func TestPurgeDeletesAttachmentRows(t *testing.T) {
 	}
 }
 
-// downAttachmentTextMigration rolls back 00033_attachment_text.
+// downGroupsMigration rolls back 00034_customer_groups.
+func downGroupsMigration(t *testing.T, st *store.Store) {
+	t.Helper()
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00034_customer_groups") {
+		t.Fatalf("down: %q %v", m, err)
+	}
+}
+
+// downAttachmentTextMigration rolls back 00034_customer_groups and
+// 00033_attachment_text.
 func downAttachmentTextMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downGroupsMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00033_attachment_text") {
 		t.Fatalf("down: %q %v", m, err)
 	}

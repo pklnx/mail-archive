@@ -747,7 +747,9 @@ const userPath = (name: string) => `/api/users/${encodeURIComponent(name)}`;
 
 export const usersApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ users: ManagedUser[] }>("/api/users", signal)).users,
-  create: async (name: string, admin: boolean) => (await send<GeneratedPassword>("POST", "/api/users", { name, admin }))!,
+  /** group: the customer group's id; needed while several groups exist (#470). */
+  create: async (name: string, admin: boolean, group?: number) =>
+    (await send<GeneratedPassword>("POST", "/api/users", { name, admin, group }))!,
   resetPassword: async (name: string, removePasskeys: boolean, revokeApiKeys: boolean) =>
     (await send<GeneratedPassword>("POST", `${userPath(name)}/password`, { removePasskeys, revokeApiKeys }))!,
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),

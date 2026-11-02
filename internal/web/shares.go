@@ -12,53 +12,56 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
-// Shared accounts (#389). The owner shares an account with another user,
-// who may then search, read and download its mail; managing, syncing and
-// removing it stay with the owner (every management route resolves the
-// account with GetOwnedAccount, so a shared user gets 404). Reads of
-// shared mail are audited with via_owners and via_accounts, which make the
-// entry part of the owner's Log (store.ListAudit).
+// Shared accounts (#389). The owner shares an account with another user
+// of their customer group (#470), who may then search, read and download
+// its mail; managing, syncing and removing it stay with the owner (every
+// management route resolves the account with GetOwnedAccount, so a shared
+// user gets 404). Reads of shared mail are audited with via_owners and
+// via_accounts, which make the entry part of the owner's Log
+// (store.ListAudit).
+//
+// Neither route tells whether a user name exists outside the caller's
+// group (#476): a share looks the user up inside the group only, and an
+// unknown name and a user of another group get the same answer from the
+// same query; an unshare looks up the account's shares, never the user.
 
-// shareTarget resolves the account and the user of a share route. The
-// account must be the caller's own (404 otherwise, like a name that does
-// not exist); the user must exist (404).
-func (s *Server) shareTarget(w http.ResponseWriter, r *http.Request) (*store.Account, *store.User, bool) {
+// errNoUserInGroup answers a share with a name that is not a user of the
+// caller's group, whether it exists elsewhere or not.
+const errNoUserInGroup = "no such user in your group"
+
+// errNotShared answers an unshare with a name the account is not shared
+// with, whether it is a user or not.
+const errNotShared = "the account is not shared with this user"
+
+func shareEntry(e *store.AuditEntry, a *store.Account, userID int64, user string) {
+	auditAccount(e, a)
+	e.Detail("user", user)
+	e.Detail("user_id", userID)
+}
+
+// handleShareAccount lets a user of the caller's group read the caller's
+// account. Sharing again changes nothing and writes no entry.
+func (s *Server) handleShareAccount(w http.ResponseWriter, r *http.Request) {
 	a, err := s.store.GetOwnedAccount(r.Context(), userID(r), r.PathValue("name"))
 	if err != nil {
 		s.failStore(w, r, err)
-		return nil, nil, false
+		return
 	}
-	u, err := s.store.GetUserByName(r.Context(), auth.NormalizeUserName(r.PathValue("user")))
+	u, err := s.store.GetUserByNameInGroup(r.Context(), auth.NormalizeUserName(r.PathValue("user")), currentSession(r).GroupID)
 	if errors.Is(err, store.ErrNotFound) {
-		s.fail(w, r, http.StatusNotFound, "no such user", nil)
-		return nil, nil, false
+		s.fail(w, r, http.StatusNotFound, errNoUserInGroup, nil)
+		return
 	}
 	if err != nil {
 		s.failStore(w, r, err)
-		return nil, nil, false
-	}
-	return a, u, true
-}
-
-func shareEntry(e *store.AuditEntry, a *store.Account, u *store.User) {
-	auditAccount(e, a)
-	e.Detail("user", u.Name)
-	e.Detail("user_id", u.ID)
-}
-
-// handleShareAccount lets a user read the caller's account. Sharing again
-// changes nothing and writes no entry.
-func (s *Server) handleShareAccount(w http.ResponseWriter, r *http.Request) {
-	a, u, ok := s.shareTarget(w, r)
-	if !ok {
 		return
 	}
 	if a.RemovedAt != nil {
 		s.fail(w, r, http.StatusConflict, "account was removed; it can no longer be shared", nil)
 		return
 	}
-	e := s.auditEntry(r, "account.share")
-	shareEntry(e, a, u)
+	e := s.targetedEntry(r, "account.share")
+	shareEntry(e, a, u.ID, u.Name)
 	created, err := s.store.ShareAccount(withAudit(r, e), a.Ref(), u.ID)
 	switch {
 	case errors.Is(err, store.ErrShareSelf):
@@ -66,6 +69,10 @@ func (s *Server) handleShareAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, store.ErrShareSMTP), errors.Is(err, store.ErrStale):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	case errors.Is(err, store.ErrShareOtherGroup):
+		// The user moved to another group since the lookup.
+		s.fail(w, r, http.StatusNotFound, errNoUserInGroup, nil)
 		return
 	case err != nil:
 		s.failStore(w, r, err)
@@ -78,18 +85,34 @@ func (s *Server) handleShareAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUnshareAccount ends a share: the user's next request no longer
-// sees the account. Removed accounts may be unshared too.
+// sees the account. Removed accounts may be unshared too. The user is
+// found among the account's shares, so a name the account is not shared
+// with gets one answer, whether such a user exists or not.
 func (s *Server) handleUnshareAccount(w http.ResponseWriter, r *http.Request) {
-	a, u, ok := s.shareTarget(w, r)
-	if !ok {
+	a, err := s.store.GetOwnedAccount(r.Context(), userID(r), r.PathValue("name"))
+	if err != nil {
+		s.failStore(w, r, err)
 		return
 	}
-	e := s.auditEntry(r, "account.unshare")
-	shareEntry(e, a, u)
-	err := s.store.UnshareAccount(withAudit(r, e), a.Ref(), u.ID)
+	shares, err := s.store.AccountShares(r.Context(), a.ID)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	name := auth.NormalizeUserName(r.PathValue("user"))
+	i := slices.IndexFunc(shares, func(sh store.AccountShare) bool { return sh.User == name })
+	if i < 0 {
+		s.fail(w, r, http.StatusNotFound, errNotShared, nil)
+		return
+	}
+	sh := shares[i]
+	e := s.targetedEntry(r, "account.unshare")
+	shareEntry(e, a, sh.UserID, sh.User)
+	err = s.store.UnshareAccount(withAudit(r, e), a.Ref(), sh.UserID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		s.fail(w, r, http.StatusNotFound, "the account is not shared with this user", nil)
+		// Ended or the user removed since the lookup.
+		s.fail(w, r, http.StatusNotFound, errNotShared, nil)
 		return
 	case errors.Is(err, store.ErrStale):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
@@ -98,7 +121,7 @@ func (s *Server) handleUnshareAccount(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	s.log.Info("account unshared", "account", a.Name, "user", u.Name)
+	s.log.Info("account unshared", "account", a.Name, "user", sh.User)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -194,7 +217,7 @@ func (s *Server) listEntry(w http.ResponseWriter, r *http.Request, sc, full stor
 	case isSearch(q.Get):
 		action = "message.search"
 	}
-	e := s.auditEntry(r, action)
+	e := s.selfEntry(r, action)
 	for _, k := range append(slices.Clone(searchFields), "thread") {
 		if v := q.Get(k); v != "" {
 			e.Detail(k, v)

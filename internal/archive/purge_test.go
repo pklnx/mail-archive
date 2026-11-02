@@ -131,7 +131,7 @@ func TestExecutePurge(t *testing.T) {
 		BatchSize: 1,
 		Audit: func(action string) *store.AuditEntry {
 			actions = append(actions, action)
-			return &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+			return storetest.Entry(store.ActorCLI, action)
 		},
 		Progress: func(p *store.AccountPurge) { progress = append(progress, p.Locations) },
 	})
@@ -317,7 +317,7 @@ func TestPurgeCancelledByBlocker(t *testing.T) {
 				BatchSize: tc.batch,
 				Audit: func(action string) *store.AuditEntry {
 					actions = append(actions, action)
-					return &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+					return storetest.Entry(store.ActorCLI, action)
 				},
 				Progress: func(*store.AccountPurge) {
 					if added != 0 {
@@ -436,7 +436,7 @@ func TestPurgeWithWaitingWriter(t *testing.T) {
 					}
 				}
 			}
-			return &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+			return storetest.Entry(store.ActorCLI, action)
 		},
 	})
 	if err != nil || p.State != store.PurgeDone {
@@ -455,7 +455,7 @@ func TestPurgeStaleLog(t *testing.T) {
 	ctx := context.Background()
 	s := newPurgeSetup(t)
 	id := s.confirm(t)
-	if err := s.st.SetAccountOwner(ctx, s.acc.Ref(), s.bob.ID); err != nil {
+	if err := s.st.SetAccountOwner(ctx, s.acc.Ref(), s.bob.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	var buf strings.Builder

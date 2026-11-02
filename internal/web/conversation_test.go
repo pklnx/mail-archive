@@ -217,7 +217,7 @@ func TestConversationsPerUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.SetAccountOwner(context.Background(), bob.Ref(), other.ID); err != nil {
+	if err := f.st.SetAccountOwner(context.Background(), bob.Ref(), other.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	g := *f

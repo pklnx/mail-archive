@@ -490,7 +490,7 @@ func TestUpdateAccountSMTPAddresses(t *testing.T) {
 	// One change: a new name and a new list, with what was added and removed in the entry.
 	name := "journal2"
 	list := []string{"Archive@Example.com", "new@example.com"}
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.change"}
+	e := store.TargetedEntry(store.ActorCLI, "account.change")
 	if err := st.UpdateAccount(store.WithAudit(ctx, e), a.Ref(), store.AccountChange{Name: &name, SMTPAddresses: &list}); err != nil {
 		t.Fatal(err)
 	}

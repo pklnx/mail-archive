@@ -227,7 +227,7 @@ func TestSearchFilterPlans(t *testing.T) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	seed := `
-INSERT INTO users (name, password_hash) VALUES ('plan', 'x');
+INSERT INTO users (name, password_hash, group_id) SELECT 'plan', 'x', min(id) FROM customer_groups;
 INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id)
 VALUES ('a', 'h', 993, 'tls', 'u', '\x00', (SELECT id FROM users));
 INSERT INTO folders (account_id, name, uidvalidity) SELECT id, 'INBOX', 1 FROM accounts;
@@ -255,7 +255,7 @@ SELECT l.id, 'sender@example.com', ARRAY['bcc' || l.uid || '@example.com', 'kund
 FROM message_locations l JOIN folders f ON f.id = l.folder_id JOIN accounts a ON a.id = f.account_id WHERE a.kind = 'smtp';
 -- A second user with an empty account of their own, who has the first
 -- user's imap account shared (#389).
-INSERT INTO users (name, password_hash) VALUES ('reader', 'x');
+INSERT INTO users (name, password_hash, group_id) SELECT 'reader', 'x', min(id) FROM customer_groups;
 INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id)
 VALUES ('own', 'h', 993, 'tls', 'u', '\x00', (SELECT id FROM users WHERE name = 'reader'));
 INSERT INTO folders (account_id, name, uidvalidity)

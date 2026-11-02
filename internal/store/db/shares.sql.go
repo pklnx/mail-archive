@@ -72,7 +72,9 @@ const listAccountShares = `-- name: ListAccountShares :many
 SELECT s.user_id, u.name AS user_name, s.created_at
 FROM account_shares s
 JOIN users u ON u.id = s.user_id
-WHERE s.account_id = $1
+JOIN accounts a ON a.id = s.account_id
+JOIN users o ON o.id = a.owner_id
+WHERE s.account_id = $1 AND u.group_id = o.group_id
 ORDER BY u.name
 `
 
@@ -82,6 +84,8 @@ type ListAccountSharesRow struct {
 	CreatedAt time.Time
 }
 
+// Only readers in the owner's group (#470), so a stray row never shows the
+// owner a name of another group.
 func (q *Queries) ListAccountShares(ctx context.Context, accountID int64) ([]ListAccountSharesRow, error) {
 	rows, err := q.db.Query(ctx, listAccountShares, accountID)
 	if err != nil {
@@ -107,7 +111,8 @@ SELECT s.account_id, u.name AS user_name, s.created_at
 FROM account_shares s
 JOIN accounts a ON a.id = s.account_id
 JOIN users u ON u.id = s.user_id
-WHERE a.owner_id = $1::bigint
+JOIN users o ON o.id = a.owner_id
+WHERE a.owner_id = $1::bigint AND u.group_id = o.group_id
 ORDER BY s.account_id, u.name
 `
 
@@ -117,7 +122,8 @@ type ListOwnerSharesRow struct {
 	CreatedAt time.Time
 }
 
-// The shares of every account of an owner, by account and user name.
+// The shares of every account of an owner, by account and user name; only
+// readers in the owner's group, as ListAccountShares.
 func (q *Queries) ListOwnerShares(ctx context.Context, ownerID int64) ([]ListOwnerSharesRow, error) {
 	rows, err := q.db.Query(ctx, listOwnerShares, ownerID)
 	if err != nil {
@@ -147,6 +153,7 @@ JOIN users u ON u.id = a.owner_id
 WHERE a.owner_id = $1::bigint
    OR $2::boolean
       AND a.id IN (SELECT s.account_id FROM account_shares s WHERE s.user_id = $1::bigint)
+      AND u.group_id = (SELECT v.group_id FROM users v WHERE v.id = $1::bigint)
 ORDER BY own DESC, u.name, a.name, a.id
 `
 
@@ -168,6 +175,9 @@ type ListScopeAccountsRow struct {
 // Shared accounts (#389): read access of other users to an account.
 // The accounts a user may read: their own and, with include_shared, those
 // shared with them. Removed accounts included; their mail stays readable.
+// A shared account counts only while its owner is in the viewer's group
+// (#470): the triggers keep shares inside a group, and a stray row would
+// still grant nothing.
 func (q *Queries) ListScopeAccounts(ctx context.Context, arg ListScopeAccountsParams) ([]ListScopeAccountsRow, error) {
 	rows, err := q.db.Query(ctx, listScopeAccounts, arg.UserID, arg.IncludeShared)
 	if err != nil {

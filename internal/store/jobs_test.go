@@ -557,7 +557,7 @@ func TestRetryFailedJobs(t *testing.T) {
 	f := newJobsFixture(t)
 	f.enqueue(testJob("a", 0), testJob("b", 0), testJob("c", 0))
 	f.exec(`UPDATE jobs SET state = 'failed', attempts = 3, last_error = 'panic', finished_at = now() WHERE key IN ('a', 'b')`)
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "jobs.retry"}
+	e := store.InstanceEntry(store.ActorCLI, "jobs.retry")
 	e.Detail("kind", "test")
 	n, err := f.st.RetryFailedJobs(store.WithAudit(f.ctx, e), "test")
 	if err != nil || n != 2 {
