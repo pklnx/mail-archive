@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   Button,
   Link,
@@ -17,6 +17,7 @@ import { foldEntries, shortUserAgent } from "./auditLog";
 import { isPlainClick } from "./clicks";
 import { dayOfDate, shiftDay, timestamp } from "./format";
 import { t, translateWithId } from "./i18n";
+import { menuSide, type MenuPlacement } from "./menuSide";
 import { TableSkeleton } from "./tableSkeleton";
 import { auditActors, auditGroups, formatState, parseState, useViewState, type ViewState } from "./urlState";
 
@@ -61,7 +62,37 @@ interface Choice {
 const keepOrder = (items: Choice[]) => items;
 const choiceText = (c: Choice | null) => c?.name ?? "";
 
-/** A filter of several values: the chosen names joined, or allText when none is chosen (#376). */
+const atStart: MenuPlacement = { side: "start", cap: null };
+
+/**
+ * The edges of what is visible of the page: the Log scrolls inside
+ * .accounts-page, whose client box leaves out a classic scrollbar, so the
+ * narrower of it and the window.
+ */
+function visibleBounds(el: Element): { left: number; right: number } {
+  let left = 0;
+  let right = window.innerWidth;
+  const page = el.closest(".accounts-page");
+  if (page) {
+    const r = page.getBoundingClientRect();
+    left = Math.max(left, r.left + page.clientLeft);
+    right = Math.min(right, r.left + page.clientLeft + page.clientWidth);
+  }
+  return { left, right };
+}
+
+/**
+ * A filter of several values: the chosen names joined, or allText when none is chosen (#376).
+ *
+ * The field keeps its cell's width and cuts its text with "…" (#408); the
+ * open menu shows every entry in full (#486): layout.css makes it as wide as
+ * its longest entry. A menu wider than its field grows from the field's start;
+ * when that would leave the visible area, it grows to the left from the
+ * field's end (log-filter--menu-end), and when neither side has room it takes
+ * the larger one and its entries wrap (menuSide). The side is measured once
+ * per opening, before the menu is painted; a resize while it is open is not
+ * followed, the next opening measures again.
+ */
 function ChoiceFilter({
   id,
   label,
@@ -77,6 +108,30 @@ function ChoiceFilter({
   chosen: Choice[];
   onChange: (chosen: Choice[]) => void;
 }) {
+  const wrapper = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [place, setPlace] = useState<MenuPlacement>(atStart);
+  // Runs after Carbon has rendered the open menu (onMenuChange is called in
+  // the same handler as its own setIsOpen) and before the browser paints it.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(atStart);
+      return;
+    }
+    const w = wrapper.current;
+    const field = w?.querySelector(".cds--list-box");
+    const menu = w?.querySelector(".cds--list-box__menu");
+    if (!w || !field || !menu) return;
+    const f = field.getBoundingClientRect();
+    const { left, right } = visibleBounds(w);
+    setPlace(menuSide(f.left, f.right, menu.getBoundingClientRect().width, left, right));
+  }, [open]);
+  // display: contents keeps the field the grid cell of .log-filters. Set
+  // through the CSSOM, as the cap, so the CSP (style-src 'self') allows them.
+  const style: CSSProperties & Record<"--log-filter-menu-cap", string | undefined> = {
+    display: "contents",
+    "--log-filter-menu-cap": place.cap === null ? undefined : `${place.cap}px`,
+  };
   // Escape on the closed field leaves it and keeps the choice, as everywhere
   // else in the app (#311, #411). Carbon's MultiSelect clears the selection on
   // Escape with the menu closed (as on Delete/Backspace), and App.tsx's global
@@ -94,8 +149,7 @@ function ChoiceFilter({
     trigger.blur();
   };
   return (
-    // display: contents keeps the field the grid cell of .log-filters.
-    <div style={{ display: "contents" }} onKeyDownCapture={leaveOnEscape}>
+    <div ref={wrapper} className={place.side === "end" ? "log-filter--menu-end" : undefined} style={style} onKeyDownCapture={leaveOnEscape}>
       <MultiSelect<Choice>
         id={id}
         titleText={label}
@@ -109,6 +163,7 @@ function ChoiceFilter({
         clearSelectionDescription={t.carbon.selection.description}
         clearSelectionText={t.carbon.selection.clear}
         clearAnnouncement={t.carbon.selection.cleared}
+        onMenuChange={setOpen}
         onChange={({ selectedItems }) => {
           const picked = selectedItems ?? [];
           // In the list's order, so the address does not follow the order of the clicks.

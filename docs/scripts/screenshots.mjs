@@ -400,6 +400,14 @@ for (const scheme of ["light", "dark"]) {
   await p.getByRole("main").getByRole("combobox", { name: "Action" }).getByText("Logins, Reading").waitFor();
   await p.getByRole("main").getByText("Opened message").first().waitFor();
   await shot(p, "log");
+  // The open Action list shows every entry in full (#486), scrolled to its
+  // end, where the longest are.
+  const main = p.getByRole("main");
+  await main.getByRole("combobox", { name: "Action" }).click();
+  const last = main.getByRole("listbox").getByRole("option", { name: "Retention and legal holds" });
+  await last.waitFor();
+  await last.scrollIntoViewIfNeeded();
+  await shot(p, "log-action-menu", { keepFocus: true });
   await p.context().close();
 }
 

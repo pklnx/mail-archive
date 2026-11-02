@@ -850,3 +850,93 @@ describe("LogPage date range", () => {
     expect(calendar.textContent).toContain("Oktober");
   });
 });
+
+describe("the side of an open filter menu (#486)", () => {
+  type Rect = { left: number; right: number };
+  /**
+   * Stubs the boxes the page measures when a menu opens: the field
+   * (.cds--list-box), the open menu (.cds--list-box__menu) and the page's
+   * scroll container (.accounts-page, from 0 to `page`), in a window as wide
+   * as set here, not jsdom's default.
+   */
+  function boxes(field: Rect, menuWidth: number, { page = 1000, window = 1000 } = {}) {
+    vi.stubGlobal("innerWidth", window);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("accounts-page") ? page : 0;
+    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const r = this.classList.contains("cds--list-box__menu")
+        ? { left: field.left, right: field.left + menuWidth }
+        : this.classList.contains("cds--list-box")
+          ? field
+          : this.classList.contains("accounts-page")
+            ? { left: 0, right: page }
+            : { left: 0, right: 0 };
+      return { ...r, x: r.left, y: 0, top: 0, bottom: 40, width: r.right - r.left, height: 40, toJSON: () => r } as DOMRect;
+    });
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Opens Aktion with the keyboard and returns ChoiceFilter's wrapper and the field. */
+  async function openAction() {
+    render(<LogPage admin open={() => {}} />);
+    const action = filterField(t.logAction);
+    const wrapper = action.closest(".cds--list-box__wrapper")!.parentElement!;
+    expect(wrapper.style.display).toBe("contents");
+    act(() => action.focus());
+    fireEvent.keyDown(action, { key: "ArrowDown", keyCode: 40 });
+    await waitFor(() => expect(action.getAttribute("aria-expanded")).toBe("true"));
+    return { action, wrapper };
+  }
+
+  async function close(action: HTMLElement) {
+    fireEvent.keyDown(action, { key: "Escape", keyCode: 27 });
+    await waitFor(() => expect(action.getAttribute("aria-expanded")).toBe("false"));
+  }
+
+  it("grows to the left when the menu would cross the window's end, and starts over when closed", async () => {
+    // From 600, a 400 px menu ends at 1000, past 1000 - 16.
+    boxes({ left: 600, right: 800 }, 400);
+    const { action, wrapper } = await openAction();
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(true);
+    expect(wrapper.style.getPropertyValue("--log-filter-menu-cap")).toBe("");
+    await close(action);
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(false);
+  });
+
+  it("measures against the scroll container when it is narrower than the window", async () => {
+    // A classic scrollbar: the container's client box ends at 1000 in a 1200 px window.
+    boxes({ left: 600, right: 800 }, 400, { page: 1000, window: 1200 });
+    const { action, wrapper } = await openAction();
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(true);
+    await close(action);
+  });
+
+  it("measures against the window when it is narrower than the scroll container", async () => {
+    // From 500, a 390 px menu ends at 890: inside 1000 - 16, past 900 - 16.
+    boxes({ left: 500, right: 700 }, 390, { page: 1000, window: 900 });
+    const { action, wrapper } = await openAction();
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(true);
+    await close(action);
+  });
+
+  it("keeps the menu at the field's start when it fits", async () => {
+    boxes({ left: 600, right: 800 }, 300);
+    const { action, wrapper } = await openAction();
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(false);
+    expect(wrapper.style.getPropertyValue("--log-filter-menu-cap")).toBe("");
+    await close(action);
+  });
+
+  it("caps a menu that fits on neither side to the larger one, and drops the cap when closed", async () => {
+    // Room after the field's start 1000 - 16 - 500 = 484, before its end 700 - 16 = 684.
+    boxes({ left: 500, right: 700 }, 900);
+    const { action, wrapper } = await openAction();
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(true);
+    expect(wrapper.style.getPropertyValue("--log-filter-menu-cap")).toBe("684px");
+    expect(wrapper.style.display).toBe("contents");
+    await close(action);
+    expect(wrapper.style.getPropertyValue("--log-filter-menu-cap")).toBe("");
+    expect(wrapper.classList.contains("log-filter--menu-end")).toBe(false);
+  });
+});
