@@ -2211,9 +2211,42 @@ select,
 /* Aktion and Wer (MultiSelect, #376): Carbon's label is an inline-block on
    the wrapper's 20 px line, 2 px lower than the date fields' labels; as a
    block it lines up, and so do the fields. The field fills its cell, its
-   text stays on one line and ends in "…" (Carbon's .cds--list-box__label). */
+   text stays on one line and ends in "…" (Carbon's .cds--list-box__label);
+   the open menu does not cut its entries (#486, below). */
 .log-filters .cds--list-box__wrapper > .cds--label {
   display: block;
+}
+/* The open menu (#486): as wide as its longest entry, never narrower than
+   the field, never wider than the window less the page's 1rem gutters, or
+   than the room ChoiceFilter (LogPage.tsx) measured when neither side has
+   enough. It is absolutely positioned, so the grid cell keeps its width. */
+.log-filters .cds--list-box__menu {
+  inline-size: max-content;
+  min-inline-size: 100%;
+  max-inline-size: var(--log-filter-menu-cap, calc(100vw - 2rem));
+}
+/* A menu that would leave the visible area at the end grows to the left,
+   ending at the field's end. */
+.log-filter--menu-end .cds--list-box__menu {
+  inset-inline: auto 0;
+}
+/* Entries are never cut, they wrap where the menu has reached its maximum
+   (a phone, a very long user name). A one-line entry keeps Carbon's 2.5rem
+   (md); the menu's max-block-size stays Carbon's 5.5 entries. */
+.log-filters .cds--list-box__menu-item {
+  block-size: auto;
+  min-block-size: 2.5rem;
+}
+.log-filters .cds--list-box__menu-item__option,
+.log-filters .cds--list-box__menu-item__option .cds--checkbox-label,
+.log-filters .cds--list-box__menu-item .cds--checkbox-label-text {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+.log-filters .cds--list-box__menu-item__option {
+  block-size: auto;
 }
 .log-table__time {
   white-space: nowrap;
