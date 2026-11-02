@@ -9,6 +9,13 @@ export const lg = "(min-width: 66rem)";
 /** Carbon's md. From here up a settings table shows its secondary columns (layout.css, .app-wide-only). */
 export const md = "(min-width: 42rem)";
 
+/**
+ * Where the header shows the user actions as icons with tooltips (#488),
+ * else the user panel with icon and text: from md up, and only with hover,
+ * since a tooltip is an icon's only visible text. Touch tablets keep the panel.
+ */
+export const headerActions = "(min-width: 42rem) and (hover: hover)";
+
 /** From here up the mail view shows the list and the reading pane side by side (layout.css). */
 export const twoPane = "(min-width: 48rem)";
 

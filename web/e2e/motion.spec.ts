@@ -107,12 +107,17 @@ for (const reduced of [false, true]) {
     test.describe("desktop", () => {
       test.use(desktop);
 
-      test("the conversation panel and the user panel", async ({ page }) => {
+      test("the conversation panel", async ({ page }) => {
         const { dialog } = await openConversation(page);
         expect((await motionOf(dialog)).animation).toBe(reduced ? "none" : "app-contextual-in");
         await escapeClosesAtOnce(page, ".conversation-overlay");
         await expect(dialog).toHaveCount(0);
+      });
 
+      // The panel is there below 42rem or without hover (#488): a narrow window.
+      test("the user panel", async ({ page }) => {
+        await page.setViewportSize({ width: 600, height: 800 });
+        await mailList(page);
         await page.getByRole("banner").getByRole("button", { name: /^User \(/ }).click();
         const panel = page.locator(".cds--header-panel.app-user-panel");
         await expect(panel).toHaveClass(/cds--header-panel--expanded/);

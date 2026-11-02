@@ -7,7 +7,7 @@ import { App } from "./App";
 import type { Account, AccountsResponse, Folder, MessageDetail, MessageSummary, User } from "./api";
 import { applySettings, messagesFor, t } from "./i18n";
 import { filterTextFor } from "./filterText";
-import { lg, twoPane as twoPaneQuery } from "./breakpoints";
+import { headerActions as iconsQuery, lg, twoPane as twoPaneQuery } from "./breakpoints";
 
 const f = (name: string, messages = 1): Folder => ({ name, delimiter: "/", messages, lastSyncedAt: null, lastReconciledAt: null });
 
@@ -626,6 +626,21 @@ describe("user panel (#284)", () => {
     });
   }
 
+  it("shows a decorative icon before each item's text; the item's name stays its text (#488)", async () => {
+    await renderApp();
+    open();
+    expect(items()).toHaveLength(4);
+    for (const el of items()) {
+      const icon = el.querySelector("svg");
+      expect(icon, el.textContent!).not.toBeNull();
+      expect(icon!.getAttribute("aria-hidden")).toBe("true");
+      // The icon comes before the text.
+      expect(icon!.compareDocumentPosition(within(el).getByText(el.textContent!)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(el.getAttribute("aria-label")).toBe(el.textContent);
+    }
+    expect(items().map((el) => el.textContent)).toEqual([t.profile, t.shortcuts, t.switchTheme("dark"), t.logOut]);
+  });
+
   it("opens on a click with the focus on Profile: name, Profile, Keyboard shortcuts, theme, Log out, each named by its text and in the tab order", async () => {
     await renderApp();
     open();
@@ -828,6 +843,209 @@ describe("user panel (#284)", () => {
     intoFrame();
     expect(panel()).toBeNull();
     expect(action().getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+/**
+ * matchMedia whose answers to the lg, two-pane and header icons queries can
+ * change while the app runs; a change reaches every listener of any query.
+ */
+function liveMedia(initial: { wide: boolean; twoPane: boolean; icons: boolean }) {
+  const state = { ...initial };
+  const listeners: { query: string; fn: (e: { matches: boolean; media: string }) => void }[] = [];
+  const matches = (query: string) => (query === lg && state.wide) || (query === twoPaneQuery && state.twoPane) || (query === iconsQuery && state.icons);
+  window.matchMedia = (query: string) =>
+    ({
+      get matches() {
+        return matches(query);
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, fn: () => void) => listeners.push({ query, fn }),
+      removeEventListener: (_: string, fn: () => void) => {
+        const at = listeners.findIndex((l) => l.fn === fn);
+        if (at >= 0) listeners.splice(at, 1);
+      },
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList;
+  return (patch: Partial<typeof state>) =>
+    act(() => {
+      Object.assign(state, patch);
+      listeners.slice().forEach(({ query, fn }) => fn({ matches: matches(query), media: query }));
+    });
+}
+
+describe("the user actions as icons in the header (#488)", () => {
+  beforeEach(() => {
+    listed = [summary("m1", "First"), summary("m2", "Second")];
+  });
+
+  // The shell header (a view may add a banner of its own).
+  const bar = () => Array.from(document.querySelectorAll<HTMLElement>("header.cds--header .cds--header__global .cds--header__action"));
+  const named = (name: string) => bar().find((el) => el.getAttribute("aria-label") === name)!;
+  const failed = t.logoutFailed("500 Internal Server Error");
+  const app = (logout: () => void, logoutError = "") => <App user={user()} logout={logout} logoutError={logoutError} />;
+  const tooltipOpen = () => document.querySelector(".cds--popover--open");
+
+  for (const lang of ["en", "de"] as const) {
+    it(`holds Profile (with the name), Keyboard shortcuts, the theme switch and Log out, each named, and no user panel (${lang})`, async () => {
+      liveMedia({ wide: true, twoPane: true, icons: true });
+      applySettings({ language: lang, locale: lang });
+      try {
+        const m = messagesFor(lang);
+        await renderApp();
+        const names = [m.profileOf("alice"), m.shortcuts, m.switchTheme("dark"), m.logOut];
+        expect(bar().map((el) => el.getAttribute("aria-label"))).toEqual(names);
+        const header = screen.getByRole("banner");
+        // Each is reachable by its name, and Profile is a link.
+        const profile = within(header).getByRole("link", { name: names[0] });
+        expect(profile.getAttribute("href")).toBe("/?view=profile");
+        for (const name of names.slice(1)) expect(within(header).getByRole("button", { name })).toBe(named(name));
+        for (const el of bar()) expect(el.tabIndex).toBe(0);
+        expect(within(header).queryByRole("button", { name: m.userPanelOf("alice") })).toBeNull();
+        expect(document.querySelector(".app-user-panel")).toBeNull();
+        if (lang === "de") expect(names).toEqual(["Profil (alice)", "Tastenkürzel", "Zum dunklen Modus wechseln", "Abmelden"]);
+      } finally {
+        applySettings({ language: "en", locale: "en" });
+      }
+    });
+  }
+
+  it("opens Profile on a plain click and leaves a Ctrl click to the browser", async () => {
+    liveMedia({ wide: true, twoPane: true, icons: true });
+    await renderApp();
+    const profile = named(t.profileOf("alice"));
+    expect(fireEvent.click(profile, { ctrlKey: true })).toBe(true);
+    expect(new URLSearchParams(window.location.search).get("view")).toBeNull();
+    expect(fireEvent.click(profile)).toBe(false);
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("profile");
+  });
+
+  it("switches the theme; the action's name follows", async () => {
+    liveMedia({ wide: true, twoPane: true, icons: true });
+    await renderApp();
+    fireEvent.click(named(t.switchTheme("dark")));
+    expect(document.documentElement.classList.contains("cds--g100")).toBe(true);
+    expect(bar()[2]!.getAttribute("aria-label")).toBe(t.switchTheme("light"));
+    fireEvent.click(bar()[2]!);
+    expect(document.documentElement.classList.contains("cds--white")).toBe(true);
+    expect(bar()[2]!.getAttribute("aria-label")).toBe(t.switchTheme("dark"));
+    document.documentElement.className = "";
+  });
+
+  it("opens the shortcuts; Escape returns the focus to their action", async () => {
+    liveMedia({ wide: true, twoPane: true, icons: true });
+    await renderApp();
+    const action = named(t.shortcuts);
+    act(() => action.focus());
+    fireEvent.click(action);
+    const dialog = await screen.findByRole("dialog", { name: t.shortcuts });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    key(document.activeElement!, "Escape");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull());
+    expect(document.activeElement).toBe(named(t.shortcuts));
+  });
+
+  it("shows a failed Log out as the alert under the header, with the focus kept on Log out (#327)", async () => {
+    liveMedia({ wide: true, twoPane: true, icons: true });
+    const logout = vi.fn();
+    const r = render(app(logout));
+    await screen.findByRole("treeitem", { name: /^work$/, hidden: true });
+    act(() => named(t.logOut).focus());
+    fireEvent.click(named(t.logOut));
+    expect(logout).toHaveBeenCalledTimes(1);
+    r.rerender(app(logout, failed));
+    const alert = screen.getAllByRole("alert").find((el) => el.textContent?.includes(failed))!;
+    expect(document.querySelector(".app-shell__body")!.firstElementChild!.contains(alert)).toBe(true);
+    expect(document.activeElement).toBe(named(t.logOut));
+  });
+
+  it("leaves Escape on a focused action to its tooltip, which closes, with the focus kept there", async () => {
+    liveMedia({ wide: true, twoPane: true, icons: true });
+    await renderApp();
+    const profile = named(t.profileOf("alice"));
+    act(() => profile.focus());
+    fireEvent.mouseEnter(profile);
+    await waitFor(() => expect(tooltipOpen()).not.toBeNull());
+    // Not taken by the app: fireEvent returns false only for a prevented default.
+    expect(key(profile, "Escape")).toBe(true);
+    await waitFor(() => expect(tooltipOpen()).toBeNull());
+    expect(document.activeElement).toBe(profile);
+  });
+
+  describe("next to the SideNav overlay (42–66rem)", () => {
+    const openNav = () => {
+      menuButton().focus();
+      fireEvent.click(menuButton());
+      expect(sideNav().className).toContain("cds--side-nav--expanded");
+    };
+
+    it("Log out closes the SideNav first: a failure alert is not in the inert page, the focus stays on Log out", async () => {
+      liveMedia({ wide: false, twoPane: true, icons: true });
+      const logout = vi.fn();
+      const r = render(app(logout));
+      await screen.findByRole("treeitem", { name: /^work$/, hidden: true });
+      openNav();
+      // As a mouse click in Chromium: the action takes the focus, then the click.
+      act(() => named(t.logOut).focus());
+      fireEvent.click(named(t.logOut));
+      expect(logout).toHaveBeenCalledTimes(1);
+      r.rerender(app(logout, failed));
+      expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+      const alert = screen.getAllByRole("alert").find((el) => el.textContent?.includes(failed))!;
+      expect(alert.closest("[inert]")).toBeNull();
+      expect(document.activeElement).toBe(named(t.logOut));
+    });
+
+    it("Keyboard shortcuts closes the SideNav and opens the overview; Escape returns the focus to the action", async () => {
+      liveMedia({ wide: false, twoPane: true, icons: true });
+      await renderApp();
+      openNav();
+      act(() => named(t.shortcuts).focus());
+      fireEvent.click(named(t.shortcuts));
+      expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+      const dialog = await screen.findByRole("dialog", { name: t.shortcuts });
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+      key(document.activeElement!, "Escape");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull());
+      expect(document.activeElement).toBe(named(t.shortcuts));
+    });
+
+    it("Profile closes the SideNav and keeps the focus on Profile", async () => {
+      liveMedia({ wide: false, twoPane: true, icons: true });
+      await renderApp();
+      openNav();
+      const profile = named(t.profileOf("alice"));
+      act(() => profile.focus());
+      fireEvent.click(profile);
+      expect(new URLSearchParams(window.location.search).get("view")).toBe("profile");
+      expect(sideNav().className).not.toContain("cds--side-nav--expanded");
+      expect(document.activeElement).toBe(named(t.profileOf("alice")));
+    });
+  });
+
+  it("closes an open user panel when the window changes to the icon bar; the shortcuts work afterwards", async () => {
+    const change = liveMedia({ wide: true, twoPane: true, icons: false });
+    await renderApp();
+    await screen.findByRole("button", { name: /First/ });
+    const action = screen.getByRole("button", { name: t.userPanelOf("alice") });
+    act(() => action.focus());
+    fireEvent.click(action);
+    expect(screen.getByRole("list", { name: t.userPanelOf("alice") })).toBeTruthy();
+    change({ icons: true });
+    expect(screen.queryByRole("list", { name: t.userPanelOf("alice") })).toBeNull();
+    expect(bar()).toHaveLength(4);
+    // A panel left open in App's state would still take these keys.
+    expect(key(document.body, "Escape")).toBe(true);
+    key(document.body, "?");
+    expect(await screen.findByRole("dialog", { name: t.shortcuts })).toBeTruthy();
+    // And back: the panel is closed, its action there again.
+    key(document.activeElement!, "Escape");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: t.shortcuts })).toBeNull());
+    change({ icons: false });
+    expect(screen.getByRole("button", { name: t.userPanelOf("alice") }).getAttribute("aria-expanded")).toBe("false");
   });
 });
 

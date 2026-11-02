@@ -45,12 +45,11 @@ test("login with password and authentication code", async ({ page }) => {
   await page.getByRole("button", { name: "Log in" }).click();
 
   // kim has no accounts: the mail view opens empty, with kim logged in.
-  const user = page.getByRole("button", { name: `User (${twoFactorUser.name})`, exact: true });
+  const user = page.getByRole("banner").getByRole("link", { name: `Profile (${twoFactorUser.name})`, exact: true });
   await expect(user).toBeVisible();
   await expect(page.getByRole("searchbox", { name: "Search mail" })).toBeVisible();
-  // Log out is in the user panel (#284).
-  await user.click();
-  await page.getByRole("list", { name: `User (${twoFactorUser.name})` }).getByRole("button", { name: "Log out" }).click();
+  // Log out is an action in the header bar on a wide window with a mouse (#488).
+  await page.getByRole("banner").getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page.getByLabel("User name")).toBeVisible();
   // After Log out the passkey option is back without a reload (#380).
   await expect(passkeyButton(page)).toBeVisible();
