@@ -101,8 +101,9 @@ runs the server and the database and can technically read the stored mail
 
 ## Your profile
 
-The person icon in the header, then **Profile**, or **Profile** in the
-navigation opens your profile. It has three tabs:
+The profile icon in the header (on phones and touch screens: the person
+icon, then **Profile**), or **Profile** in the navigation opens your
+profile. It has three tabs:
 
 - **Display:** the [language and formats](./web-ui#appearance-and-language)
   of the web UI.

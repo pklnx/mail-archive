@@ -3,19 +3,22 @@ import { Asleep, Light } from "@carbon/icons-react";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { t } from "./i18n";
 
+/** The icon for switching to next: the sun for light, the moon for dark. */
+export const themeIcon = (next: Theme) => (next === "light" ? Light : Asleep);
+
 /**
  * Switches between light and dark; the choice overrides the system setting.
- * A ghost icon button on the login pages; in the app the user panel has
- * the switch (UserPanel.tsx).
+ * A ghost icon button on the login pages; in the app the header has the
+ * switch (UserPanel.tsx).
  */
 export function ThemeToggle() {
   const theme = useTheme();
   const next: Theme = theme === "dark" ? "light" : "dark";
   const label = t.switchTheme(next);
-  const icon = theme === "dark" ? <Light size={20} /> : <Asleep size={20} />;
+  const Icon = themeIcon(next);
   return (
     <IconButton kind="ghost" label={label} align="bottom-end" onClick={() => setTheme(next)}>
-      {icon}
+      <Icon size={20} />
     </IconButton>
   );
 }

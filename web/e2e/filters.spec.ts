@@ -233,10 +233,11 @@ test.describe("desktop, Safari and Firefox click model", () => {
 // With the user panel open, Edit filters closes the panel and opens the
 // popover at its field (#335, S2): with Chromium's clicks, and under the
 // click model, where the focus does not move, so no blur closes the panel and
-// Edit filters must close it itself (`editFilters` in App.tsx).
+// Edit filters must close it itself (`editFilters` in App.tsx). A mouse
+// window narrower than 42rem, which keeps the panel (#488).
 for (const model of [false, true]) {
-  test.describe(model ? "desktop, Safari and Firefox click model" : "desktop 1280×800", () => {
-    test.use({ viewport: { width: 1280, height: 800 } });
+  test.describe(model ? "narrow window, Safari and Firefox click model" : "narrow window 600×800", () => {
+    test.use({ viewport: { width: 600, height: 800 } });
 
     test("with the user panel open, Edit filters closes it and opens the popover at its field", async ({ page }) => {
       if (model) await useClickModel(page);

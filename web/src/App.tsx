@@ -10,8 +10,8 @@ import { ActiveFilters, QuickFilters, editTarget, type FocusRequest } from "./Se
 import { hasPrefix, searchFilter } from "./searchSyntax";
 import { SidebarPanel, drawerFocusTarget } from "./Sidebar";
 import { ShellNav } from "./ShellNav";
-import { UserPanel } from "./UserPanel";
-import { lg, twoPane, useMediaQuery } from "./breakpoints";
+import { HeaderActions, UserPanel } from "./UserPanel";
+import { headerActions, lg, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
@@ -102,8 +102,13 @@ export function App({ user, logout, logoutError }: Props) {
   const layout = useSidebarLayout(user.name, sidebarCap);
   const asideId = useId();
   const navId = useId();
-  // The header's user panel (UserPanel.tsx). Its state is here: the key
-  // listener below needs it, and it hands over to and from the SideNav.
+  // The header's user actions (UserPanel.tsx): icons with tooltips in the
+  // bar on a wide window with hover, else the user panel (#488). Only one
+  // form is rendered, so Tab and screen readers see one set.
+  const iconBar = useMediaQuery(headerActions);
+  const shortcutsAction = useRef<HTMLButtonElement>(null);
+  // The user panel's state is here: the key listener below needs it, and it
+  // hands over to and from the SideNav.
   const [userOpen, setUserOpen] = useState(false);
   const userId = useId();
   const userAction = useRef<HTMLButtonElement>(null);
@@ -114,6 +119,11 @@ export function App({ user, logout, logoutError }: Props) {
   };
   // A click into the mail frame reaches neither popover's own close (#349).
   useFrameFocusClose(userOpen, () => closeUser(false));
+  // A panel that is no longer rendered keeps no open state, or the Escape
+  // listener would still see it open.
+  useEffect(() => {
+    if (iconBar) setUserOpen(false);
+  }, [iconBar]);
   useFrameFocusClose(filtersOpen, () => setFiltersOpen(false));
 
   // Follow the URL when it changes from outside (back button).
@@ -192,6 +202,11 @@ export function App({ user, logout, logoutError }: Props) {
   const aside = useRef<HTMLElement>(null);
   const sideNav = useRef<HTMLElement>(null);
   const opener = useRef<HTMLElement | null>(null);
+  /** Closes the SideNav overlay without a focus return to the menu button: something else takes over. */
+  const closeNav = () => {
+    opener.current = null;
+    setMenuOpen(false);
+  };
   const overlay = menuOpen ? "menu" : foldersOpen ? "folders" : "";
   useEffect(() => {
     if (overlay) {
@@ -243,7 +258,9 @@ export function App({ user, logout, logoutError }: Props) {
         if (e.key === "Escape") setMenuOpen(false);
         return;
       }
-      // Before ownedByWidget: an open tooltip of the panel's action would claim the Escape.
+      // Before ownedByWidget: an open tooltip of the panel's action would claim
+      // the Escape (panel form). In the icon bar userOpen stays false, so
+      // Escape on a focused action is left to Carbon, which closes its tooltip.
       if (userOpen) {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -381,35 +398,58 @@ export function App({ user, logout, logoutError }: Props) {
           {t.appName}
         </HeaderName>
         <HeaderGlobalBar>
-          <UserPanel
-            name={user.name}
-            id={userId}
-            open={userOpen}
-            actionRef={userAction}
-            panelRef={userPanel}
-            toggle={() => {
-              if (userOpen) return closeUser(true);
-              // The panel replaces the SideNav: no focus return to the menu button.
-              opener.current = null;
-              setMenuOpen(false);
-              setUserOpen(true);
-            }}
-            close={closeUser}
-            profile={() => {
-              closeUser(true);
-              show("profile");
-            }}
-            shortcuts={() => {
-              closeUser(true);
-              shortcutsOpener.current = userAction.current;
-              setShortcuts(true);
-            }}
-            logout={() => {
-              // Close the panel first, so on a phone it does not cover a failure alert.
-              closeUser(true);
-              logout();
-            }}
-          />
+          {iconBar ? (
+            <HeaderActions
+              name={user.name}
+              shortcutsRef={shortcutsAction}
+              // Each closes the SideNav overlay first (42–66rem), without a focus
+              // return to the menu button, as the panel's action does: one
+              // overlay does not open another, a failure alert is not left in
+              // the inert page behind it (#327), and the focus stays on Profile.
+              profile={() => {
+                closeNav();
+                show("profile");
+              }}
+              shortcuts={() => {
+                closeNav();
+                shortcutsOpener.current = shortcutsAction.current;
+                setShortcuts(true);
+              }}
+              logout={() => {
+                closeNav();
+                logout();
+              }}
+            />
+          ) : (
+            <UserPanel
+              name={user.name}
+              id={userId}
+              open={userOpen}
+              actionRef={userAction}
+              panelRef={userPanel}
+              toggle={() => {
+                if (userOpen) return closeUser(true);
+                // The panel replaces the SideNav: no focus return to the menu button.
+                closeNav();
+                setUserOpen(true);
+              }}
+              close={closeUser}
+              profile={() => {
+                closeUser(true);
+                show("profile");
+              }}
+              shortcuts={() => {
+                closeUser(true);
+                shortcutsOpener.current = userAction.current;
+                setShortcuts(true);
+              }}
+              logout={() => {
+                // Close the panel first, so on a phone it does not cover a failure alert.
+                closeUser(true);
+                logout();
+              }}
+            />
+          )}
         </HeaderGlobalBar>
       </Header>
       <ShellNav

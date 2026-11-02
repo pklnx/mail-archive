@@ -135,6 +135,15 @@ select,
   letter-spacing: 0.16px;
   overflow-wrap: anywhere;
 }
+/* Each item: its icon before its text (#488); a long text wraps beside the icon. */
+.app-user-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.app-user-panel__item > svg {
+  flex: none;
+}
 /* Its items that are buttons look like the link items. */
 :where(.app-user-panel) button.cds--switcher__item-link {
   inline-size: 100%;

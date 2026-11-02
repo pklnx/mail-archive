@@ -171,12 +171,12 @@ test.describe("desktop", () => {
       page.locator(".mail-row").first(),
     ];
     for (const el of chrome) expect(await userSelect(el)).toBe("none");
-    // The user panel's items (#284), inside the header.
-    await page.getByRole("banner").getByRole("button", { name: "User (demo)", exact: true }).click();
-    const item = page.getByRole("list", { name: "User (demo)" }).getByRole("button", { name: "Keyboard shortcuts" });
-    await expect(item).toBeVisible();
-    expect(await userSelect(item)).toBe("none");
-    await page.keyboard.press("Escape");
+    // The user actions in the header bar (#488).
+    for (const name of ["Profile (demo)", "Keyboard shortcuts", "Log out"]) {
+      const action = page.locator("header.cds--header .cds--header__global").getByRole(name.startsWith("Profile") ? "link" : "button", { name, exact: true });
+      await expect(action).toBeVisible();
+      expect(await userSelect(action)).toBe("none");
+    }
 
     await openMessage(page, /Photos from the weekend/);
     expect(await userSelect(page.locator(".reader-bar"))).toBe("none");

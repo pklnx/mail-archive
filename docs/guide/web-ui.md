@@ -4,14 +4,21 @@ Your operator gives you the address of the instance and your login. Log in
 with your user.
 
 The header holds the logo and app name (a link to all mail), the menu button
-on smaller screens (see [Layout](#layout)) and, on the right, the person
-icon. The icon opens the user panel: your name, your
-[profile](./users#your-profile), **Keyboard shortcuts**, the light/dark
-switch and **Log out**; a click outside it or <kbd>Esc</kbd> closes it. If
-signing out fails (server unreachable or an error), you stay signed in, an
-error under the header gives the reason, and **Log out** tries once more.
+on smaller screens (see [Layout](#layout)) and, on the right, your actions.
+On a large screen with a mouse these are four icons, each named in a
+tooltip when you point at it or reach it with <kbd>Tab</kbd>: your
+[profile](./users#your-profile) (with your name), **Keyboard shortcuts**, the
+light/dark switch and **Log out**.
 
-![The user panel, opened from the person icon](/screenshots/user-panel.png)
+![The header's icons, with the tooltip of the profile icon](/screenshots/header-actions.png)
+
+On phones, touch screens and narrow windows, the person icon opens the user
+panel instead: your name and the same four entries, each with its icon
+beside the text; a tap outside it or <kbd>Esc</kbd> closes it. If signing
+out fails (server unreachable or an error), you stay signed in, an error
+under the header gives the reason, and **Log out** tries once more.
+
+<img src="/screenshots/user-panel.png" alt="The user panel on a phone, opened from the person icon" width="320">
 
 The navigation on the left lists **All mail**, **Only in archive** (once
 there is such mail), [Accounts](./accounts), **Log** (your
@@ -371,12 +378,13 @@ half of a conversation.
 | <kbd>/</kbd> | Moves to the search field. |
 | <kbd>j</kbd> | Next message; with no message open, opens the first one. |
 | <kbd>k</kbd> | Previous message. |
-| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation, the folders opened over the page or the user panel. |
+| <kbd>u</kbd> or <kbd>Esc</kbd> | Back to the list; <kbd>Esc</kbd> also closes the navigation, the folders opened over the page or the user panel (phones and touch screens). |
 | <kbd>g</kbd> then <kbd>a</kbd> | All mail. |
 | <kbd>?</kbd> | Lists the shortcuts. |
 
 They do not apply while you type in a field (<kbd>Esc</kbd> leaves the
-field), while a dialog is open or while the user panel is open. With no
+field), while a dialog is open or while the user panel is open (phones and
+touch screens). With no
 message open, the reading pane points to <kbd>?</kbd>.
 
 On a phone, opening a message moves the focus to its subject, and going back
@@ -398,9 +406,10 @@ web page: it needs the server and stores nothing for offline use.
 
 ## Appearance and language
 
-Light and dark mode follow the system. **Switch to dark mode** or **Switch
-to light mode** in the user panel overrides it; on the login page the
-sun/moon button does. The choice is remembered in the browser.
+Light and dark mode follow the system. The light/dark icon in the header
+(on phones and touch screens: **Switch to dark mode** or **Switch to light
+mode** in the user panel) overrides it; on the login page the sun/moon
+button does. The choice is remembered in the browser.
 
 The colours are those of the pklnx design system: IBM's Carbon with Purple
 as the interactive colour of buttons, links and selected items, in both
