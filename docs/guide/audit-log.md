@@ -50,7 +50,7 @@ Each event writes exactly one entry.
 | `account.purge`, `account.purge_batch`, `account.purge_finish`, `account.purge_cancel` | A removed account [deleted completely](./accounts#deleting-a-removed-account-completely): confirmed (`purge_id`, `owner`, `kind`, `locations`, `messages`, `deleted`, `kept`), each batch (`locations`, `deleted`, `kept`), its end with the totals, and a cancellation with its `note`. The deleted messages themselves are recorded per message in the deletion records. Purges resumed by the web server are written with actor `cli` and `by: web server`. |
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
 | `user.group_change` | A user moved into another [customer group](./users#customer-groups): `from_group` and `to_group` (`id`, `name`), and `shares_ended`, each with `account`, `owner` and `user`. |
-| `group.add`, `group.rename`, `group.remove` | A customer group was created, renamed (`from`) or removed; `group_id` and `group`. |
+| `group.add`, `group.rename`, `group.remove` | A customer group was created, renamed (`from`) or removed; `group_id` and `group`. Group `users`, with the `user.*` actions. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login: password, 2FA and passkeys. |
 | `profile.change` | A user changed their own web UI settings. `fields` names them (`language`, `locale`), each with its old and new value (`from`, `to`). Saving an unchanged value records nothing. |
 | `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. A hold's entries have the account or the user it names as target (`hold.release` from 1.4.0 on). Group `retention`. |
@@ -135,6 +135,20 @@ Entries from before 1.4.0 have no group. Older entries keep the names and
 groups they had when they were written: a reader who later moved to another
 group still appears under the old name and group.
 
+Admins filter the log by group: **Group** on the [Log page](#the-log-page),
+`group` in `GET /api/audit` and `--group` in [`./ma audit`](#writing-it-out).
+"No group" (`group=none`, `--without-group`) lists the entries without one:
+those from before 1.4.0 and the instance-level ones. The filter goes by the
+group an entry was written under: a user's or account's move into another
+group is listed under the new group, and the old one is only in the
+details (`from_group`), which the filter does not read.
+
+A removed group's entries keep its id. They stay selectable by that id
+(`group=<id>` in the API, `--group-id` on the command line), so an
+offboarded customer's log can still be exported. Such an entry shows the
+group as "Removed group 7" on the Log page and as `{"id": 7, "removed":
+true}` in the API. An id that no group and no entry has is refused.
+
 ## The fields
 
 | Field | Content |
@@ -208,6 +222,15 @@ of them, for example alice's and the command line's. The **Who** column is
 for admins; for everyone else, an entry from the command line says so under
 its target.
 
+With two or more [customer groups](#customer-groups), admins also get
+**Group**, between **Action** and **Who**: all groups (the default), one
+group, or "No group" for the entries from before 1.4.0 and the
+instance-level ones. A group narrows the **Who** list to its users and keeps
+only the picked users who belong to it; with **Who** set as well, the list
+shows the entries of those users or actors in that group. The **Who**
+column then names each entry's group under its user. Users who are not
+admins never see groups. With one group, the page looks as before.
+
 Owners of shared accounts also see other users' reads of them; see
 [Shared accounts](#shared-accounts). The **Who** column then shows for them
 too, with the reader's name, and the entry says what the reader saw: "jo's
@@ -237,8 +260,8 @@ lines or more. <kbd>Esc</kbd> closes an open list and then leaves the field;
 <kbd>Delete</kbd> or <kbd>Backspace</kbd> on the field clears it. The filters are kept in the page address, so a reload,
 the browser's Back button after opening a message from the list, and a
 bookmark show the same entries. A bookmark without a From of its own keeps
-showing the last 30 days. A user that no longer exists is dropped from the
-address. A message shows its subject only to a user who may read that
+showing the last 30 days. A user or a group that no longer exists is
+dropped from the address. A message shows its subject only to a user who may read that
 message too (in an own or shared account); otherwise the start of its
 SHA-256. A click on a subject opens the message.
 
@@ -267,6 +290,7 @@ for the GoBD records:
 ```sh
 ./ma audit --since 2026-01-01 --format csv --out /data/audit-2026.csv
 ./ma audit --since 2026-10-01 --until 2026-10-31 --user alice --action read --format jsonl
+./ma audit --since 2026-01-01 --group "Meier GmbH" --format csv --out /data/audit-meier-2026.csv
 ```
 
 `--since` is required, `--until` is exclusive (a plain date includes that
@@ -274,14 +298,20 @@ day). A plain date is a day in UTC, not in your time zone; for another zone
 give RFC 3339 with an offset, such as `2026-10-01T00:00:00+02:00`.
 `--action` takes a group (`login`, `search`, `read`, `export`, `accounts`,
 `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, and is
-repeatable. `--user` selects a current user's entries. Without `--out`, the
+repeatable. `--user` selects a current user's entries. `--group NAME`
+selects the entries of a [customer group](#customer-groups) (the name in any
+case), `--group-id N` those of a group by its id, also of a removed group,
+and `--without-group` those without one: from before 1.4.0 and
+instance-level work; the three exclude each other. Without `--out`, the
 entries go to stdout. A file must not exist yet; it is written with mode
 0600 and appears when it is complete. Each run is recorded as
-`audit.export`.
+`audit.export`, with `group_id` (and `group` for `--group`), or
+`without_group`.
 
 CSV has the columns `at`, `actor`, `user_id`, `user_name`, `api_key_name`,
 `action`, `target_type`, `target_id`, `target_name`, `client_ip`,
-`user_agent` and `details` (as JSON). A cell that starts with `=`, `+`,
+`user_agent`, `details` (as JSON) and `group_id` (the customer group's id,
+empty without one; JSON lines: `groupId`, missing without one). A cell that starts with `=`, `+`,
 `-`, `@`, a tab or a carriage return gets a leading `'`, so a spreadsheet
 does not run a search query as a formula. JSON lines carry the values
 unchanged.

@@ -27,7 +27,9 @@ var auditPlanBase = time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 // log of several thousand rows over three months. Other users' reads of an
 // owner's shared accounts (ListSharedReadsForOwner, #389) come from the
 // partial index audit_log_via_owners_idx of each partition that holds rows
-// below the cursor.
+// below the cursor. One customer group's entries (ListAuditEntriesForGroup,
+// #470) come from the partial index audit_log_group_idx backward, also as
+// a cached generic plan; the entries without a group from the pkey.
 func TestAuditListPlans(t *testing.T) {
 	_, url := storetest.NewWithURL(t)
 	ctx := context.Background()
@@ -112,14 +114,115 @@ func TestAuditListPlans(t *testing.T) {
 			}
 			check(t, explain(t, &rec), "user_id_at_id_idx")
 		})
+		t.Run("group", func(t *testing.T) {
+			var rec explainer
+			_, err := db.New(&rec).ListAuditEntriesForGroup(ctx, db.ListAuditEntriesForGroupParams{
+				Viewer: 1, GroupID: 2, Since: since, Until: until, Patterns: []string{"%"}, CursorAt: cursor, CursorID: 1, Lim: 101,
+			})
+			if !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			check(t, explain(t, &rec), "group_id_at_id_idx")
+		})
+		// With users, actors and actions the group stays the index
+		// condition; they are filters. With few rows below the cursor the
+		// planner may take a bitmap of the group's rows and sort them, which
+		// is as cheap there; it never reads the partitions in full.
+		t.Run("group who", func(t *testing.T) {
+			var rec explainer
+			_, err := db.New(&rec).ListAuditEntriesForGroup(ctx, db.ListAuditEntriesForGroupParams{
+				Viewer: 1, GroupID: 2, Since: since, Until: until, UserIds: []int64{3, 4}, Actors: []string{"cli"},
+				Patterns: []string{"message.open"}, CursorAt: cursor, CursorID: 1, Lim: 101,
+			})
+			if !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			plan := explain(t, &rec)
+			if !strings.Contains(plan, "group_id_at_id_idx") || strings.Contains(plan, "Seq Scan on audit_log") {
+				t.Errorf("plan does not read the group index:\n%s", plan)
+			}
+		})
+		t.Run("no group", func(t *testing.T) {
+			var rec explainer
+			_, err := db.New(&rec).ListAuditEntries(ctx, db.ListAuditEntriesParams{
+				Viewer: 1, Since: since, Until: until, NoGroup: true, Patterns: []string{"%"}, CursorAt: cursor, CursorID: 1, Lim: 101,
+			})
+			if !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			check(t, explain(t, &rec), "_pkey")
+		})
 	}
+	// Whether a removed group's id still has entries (AuditGroupKnown): for
+	// an id no entry has, the costly case that looks at every partition, each
+	// partition with rows is probed through audit_log_group_idx and none is
+	// read in full. (An id with entries stops at its first row whatever the
+	// plan; empty partitions are seq-scanned by PostgreSQL 18, at no cost.)
+	t.Run("group known", func(t *testing.T) {
+		var rec explainer
+		_, err := db.New(&rec).AuditGroupKnown(ctx, 99)
+		if !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		plan := explain(t, &rec)
+		rows, err := conn.Query(ctx, "SELECT DISTINCT tableoid::regclass::text FROM audit_log")
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(parts) < 3 {
+			t.Fatalf("partitions with rows: %v", parts)
+		}
+		for _, p := range parts {
+			if strings.Contains(plan, "Seq Scan on "+p+" ") || !strings.Contains(plan, p+"_group_id_at_id_idx") {
+				t.Errorf("partition %s is not probed through its group index:\n%s", p, plan)
+			}
+		}
+	})
+	t.Run("group generic", func(t *testing.T) {
+		var rec explainer
+		_, err := db.New(&rec).ListAuditEntriesForGroup(ctx, db.ListAuditEntriesForGroupParams{})
+		if !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		if _, err := conn.Exec(ctx, "SET plan_cache_mode = force_generic_plan"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = conn.Exec(ctx, "RESET plan_cache_mode") }()
+		if _, err := conn.Exec(ctx, "PREPARE group_entries AS "+rec.sql); err != nil {
+			t.Fatal(err)
+		}
+		lit := func(t time.Time) string { return "'" + t.Format(time.RFC3339) + "'" }
+		// viewer, group_id, since, until, user_ids, actors, patterns,
+		// cursor_at, cursor_id, lim.
+		for _, cursor := range []string{"NULL", lit(late)} {
+			rows, err := conn.Query(ctx, fmt.Sprintf("EXPLAIN EXECUTE group_entries(1, 2, %s, %s, NULL, NULL, ARRAY['%%'], %s, 1, 101)",
+				lit(since), lit(until), cursor))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := strings.Join(lines, "\n")
+			if !strings.Contains(plan, "$2") {
+				t.Errorf("not a generic plan:\n%s", plan)
+			}
+			check(t, plan, "group_id_at_id_idx")
+		}
+	})
 	t.Run("shared reads generic", sharedReadsGeneric)
 }
 
 // seedAuditPlanLog inserts n audit entries step apart from base on, after
 // creating the partitions of their months (the migration creates only this
 // month's and the next three). 1 % are other users' reads through user 3's
-// share.
+// share. Four customer groups (#470) take turns, and every fifth entry has
+// none.
 func seedAuditPlanLog(t *testing.T, conn *pgx.Conn, base time.Time, n int, step time.Duration) {
 	t.Helper()
 	ctx := context.Background()
@@ -132,11 +235,12 @@ func seedAuditPlanLog(t *testing.T, conn *pgx.Conn, base time.Time, n int, step 
 		}
 	}
 	if _, err := conn.Exec(ctx, `
-INSERT INTO audit_log (at, actor, user_id, user_name, action, details)
+INSERT INTO audit_log (at, actor, user_id, user_name, action, details, group_id)
 SELECT $1::timestamptz + i * $3::interval,
        'session', i % 10 + 1, 'user' || (i % 10 + 1),
        CASE WHEN i % 3 = 0 THEN 'message.search' ELSE 'message.open' END,
-       CASE WHEN i % 100 = 0 THEN '{"via_owners":[3]}' ELSE '{}' END::jsonb
+       CASE WHEN i % 100 = 0 THEN '{"via_owners":[3]}' ELSE '{}' END::jsonb,
+       CASE WHEN i % 5 = 0 THEN NULL ELSE i % 4 + 1 END
 FROM generate_series(1, $2::int) i`, base, n, step); err != nil {
 		t.Fatal(err)
 	}

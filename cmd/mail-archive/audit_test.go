@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,5 +268,182 @@ func TestAuditCommand(t *testing.T) {
 	}
 	if exports != 3 {
 		t.Errorf("%d audit.export entries, want 3", exports)
+	}
+}
+
+// --group and --without-group (#470, part 3): the entries of one customer
+// group, or those without one; they exclude each other, and the group is
+// recorded with the export.
+func TestAuditCommandGroups(t *testing.T) {
+	s := newArchiveSetup(t)
+	ctx := context.Background()
+	anna, _ := s.st.GetUserByName(ctx, "anna")
+	bob, _ := s.st.GetUserByName(ctx, "bob")
+	meier, err := s.st.CreateGroup(ctx, "Meier GmbH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.st.SetUserGroup(ctx, bob.ID, meier.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range []*store.User{anna, bob} {
+		e := *store.SelfEntry(store.ActorSession, "message.open")
+		e.SetUser(u.ID, u.Name)
+		if err := s.st.Audit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.st.Audit(ctx, *store.InstanceEntry(store.ActorCLI, "data.backup")); err != nil {
+		t.Fatal(err)
+	}
+	def := func(t *testing.T) *store.Group {
+		t.Helper()
+		g, err := s.st.GetGroupByName(ctx, "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g
+	}
+	dir := t.TempDir()
+	today := time.Now().UTC().Format(time.DateOnly)
+	// export runs the command into a new file and returns user/action of
+	// each line, the export's own entry last if it is in the selection.
+	n := 0
+	export := func(args ...string) string {
+		t.Helper()
+		n++
+		out := filepath.Join(dir, fmt.Sprintf("%d.jsonl", n))
+		args = append([]string{"--since", today, "--format", "jsonl", "--out", out}, args...)
+		if err := captureErr(t, func() error { return runCmd(t, newAuditCmd(), "", args...) }); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		data, _ := os.ReadFile(out)
+		var rows []string
+		if len(data) == 0 {
+			return ""
+		}
+		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+			var j auditJSON
+			if err := json.Unmarshal([]byte(line), &j); err != nil {
+				t.Fatalf("%s: %v", line, err)
+			}
+			rows = append(rows, j.User+"/"+j.Action)
+		}
+		return strings.Join(rows, " ")
+	}
+	if got := export("--group", "meier gmbh"); got != "bob/message.open" {
+		t.Errorf("--group: %s", got)
+	}
+	if got := export("--group", "Default", "--user", "bob"); got != "" {
+		t.Errorf("--group Default --user bob: %s", got)
+	}
+	if got := export("--group", "Default", "--action", "read"); got != "anna/message.open" {
+		t.Errorf("--group Default --action read: %s", got)
+	}
+	// Without a group: the backup and every export, this one included.
+	if got := export("--without-group"); got != "/data.backup /audit.export /audit.export /audit.export /audit.export" {
+		t.Errorf("--without-group: %s", got)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--group", "Nobody"}, `group "Nobody" not found`},
+		{[]string{"--group", "Default", "--without-group"}, "exclude each other"},
+		{[]string{"--group-id", "1", "--without-group"}, "exclude each other"},
+		{[]string{"--group-id", "1", "--group", "Default"}, "exclude each other"},
+		{[]string{"--group-id", "999999"}, "group id 999999 not found"},
+		{[]string{"--group-id", "-2"}, "must be a group id"},
+	} {
+		args := append([]string{"--since", today, "--format", "csv"}, c.args...)
+		if err := captureErr(t, func() error { return runCmd(t, newAuditCmd(), "", args...) }); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: %v, want %q", c.args, err, c.want)
+		}
+	}
+
+	// A removed group's entries keep its id: --group-id still selects them
+	// (an offboarded customer's log), and the export names the id.
+	gone, err := s.st.CreateGroup(ctx, "Gone GmbH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	erin, err := s.st.CreateUserInGroup(ctx, store.NewUser{Name: "erin", PasswordHash: "h", GroupID: gone.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := *store.SelfEntry(store.ActorSession, "message.open")
+	read.SetUser(erin.ID, erin.Name)
+	if err := s.st.Audit(ctx, read); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.st.SetUserGroup(ctx, erin.ID, meier.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.st.DeleteGroup(ctx, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	goneID := strconv.FormatInt(gone.ID, 10)
+	if got := export("--group-id", goneID); got != "erin/message.open" {
+		t.Errorf("--group-id of a removed group: %s", got)
+	}
+	if got := export("--group-id", strconv.FormatInt(meier.ID, 10)); got != "bob/message.open" {
+		t.Errorf("--group-id of a current group: %s", got)
+	}
+	// The group column: the id, empty without a group.
+	csvOut := filepath.Join(dir, "groups.csv")
+	if err := captureErr(t, func() error {
+		return runCmd(t, newAuditCmd(), "", "--since", today, "--format", "csv", "--out", csvOut, "--action", "read")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cf, _ := os.Open(csvOut)
+	records, err := csv.NewReader(cf).ReadAll()
+	_ = cf.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cells []string
+	for _, r := range records {
+		cells = append(cells, r[3]+":"+r[len(r)-1])
+	}
+	want := fmt.Sprintf("user_name:group_id anna:%d bob:%d erin:%d", def(t).ID, meier.ID, gone.ID)
+	if strings.Join(cells, " ") != want {
+		t.Errorf("csv group column %q, want %q", cells, want)
+	}
+	jsonOut := filepath.Join(dir, "groups.jsonl")
+	if err := captureErr(t, func() error {
+		return runCmd(t, newAuditCmd(), "", "--since", today, "--format", "jsonl", "--out", jsonOut, "--user", "erin")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(jsonOut)
+	if !strings.Contains(string(data), fmt.Sprintf(`"groupId":%d`, gone.ID)) {
+		t.Errorf("jsonl without groupId: %s", data)
+	}
+	backup := filepath.Join(dir, "backup.jsonl")
+	if err := captureErr(t, func() error {
+		return runCmd(t, newAuditCmd(), "", "--since", today, "--format", "jsonl", "--out", backup, "--action", "data.backup")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(backup); !strings.Contains(string(data), "data.backup") || strings.Contains(string(data), "groupId") {
+		t.Errorf("an entry without a group: %s", data)
+	}
+	// Each export records its selection.
+	var got []string
+	for _, r := range auditLog(t, s.st) {
+		if r.Action != "audit.export" {
+			continue
+		}
+		var d map[string]any
+		_ = json.Unmarshal(r.Details, &d)
+		got = append(got, fmt.Sprint(d["group"], "/", d["group_id"], "/", d["without_group"]))
+	}
+	dg := fmt.Sprintf("Default/%d/<nil>", def(t).ID)
+	wantDetails := []string{fmt.Sprintf("Meier GmbH/%d/<nil>", meier.ID), dg, dg, "<nil>/<nil>/true",
+		fmt.Sprintf("<nil>/%d/<nil>", gone.ID), fmt.Sprintf("<nil>/%d/<nil>", meier.ID),
+		"<nil>/<nil>/<nil>", "<nil>/<nil>/<nil>", "<nil>/<nil>/<nil>"}
+	if strings.Join(got, ",") != strings.Join(wantDetails, ",") {
+		t.Errorf("audit.export details %q, want %q", got, wantDetails)
 	}
 }

@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+const auditGroupKnown = `-- name: AuditGroupKnown :one
+SELECT EXISTS (SELECT 1 FROM customer_groups WHERE id = $1::bigint)
+    OR EXISTS (SELECT 1 FROM audit_log WHERE group_id = $1::bigint)
+`
+
+// Whether a group id can be filtered by (#470): a current group, or one
+// since removed whose id entries still carry (audit_log_group_idx).
+func (q *Queries) AuditGroupKnown(ctx context.Context, groupID int64) (*bool, error) {
+	row := q.db.QueryRow(ctx, auditGroupKnown, groupID)
+	var column_1 *bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const auditSubjects = `-- name: AuditSubjects :many
 SELECT m.sha256::text AS sha256, m.subject
 FROM messages m
@@ -89,21 +103,25 @@ func (q *Queries) EnsureAuditPartitions(ctx context.Context, monthsAhead int32) 
 
 const exportAuditEntries = `-- name: ExportAuditEntries :many
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_id, l.api_key_name, l.action,
-       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 WHERE l.at >= $1 AND l.at < $2
   AND ($3::bigint IS NULL OR l.user_id = $3)
-  AND l.action LIKE ANY ($4::text[])
-  AND (l.at, l.id) > ($5::timestamptz, $6::bigint)
+  AND ($4::bigint IS NULL OR l.group_id = $4)
+  AND (NOT $5::boolean OR l.group_id IS NULL)
+  AND l.action LIKE ANY ($6::text[])
+  AND (l.at, l.id) > ($7::timestamptz, $8::bigint)
 ORDER BY l.at, l.id
-LIMIT $7
+LIMIT $9
 `
 
 type ExportAuditEntriesParams struct {
 	Since    time.Time
 	Until    time.Time
 	UserID   *int64
+	GroupID  *int64
+	NoGroup  bool
 	Patterns []string
 	AfterAt  time.Time
 	AfterID  int64
@@ -125,15 +143,19 @@ type ExportAuditEntriesRow struct {
 	ClientIp   *netip.Addr
 	UserAgent  *string
 	Details    []byte
+	GroupID    *int64
 }
 
 // One batch of the entries in [since, until) after (after_at, after_id), oldest
-// first, optionally of one user.
+// first, optionally of one user, and of one customer group or of none
+// (no_group: entries from before 1.4.0 and instance-level ones, #470).
 func (q *Queries) ExportAuditEntries(ctx context.Context, arg ExportAuditEntriesParams) ([]ExportAuditEntriesRow, error) {
 	rows, err := q.db.Query(ctx, exportAuditEntries,
 		arg.Since,
 		arg.Until,
 		arg.UserID,
+		arg.GroupID,
+		arg.NoGroup,
 		arg.Patterns,
 		arg.AfterAt,
 		arg.AfterID,
@@ -161,6 +183,7 @@ func (q *Queries) ExportAuditEntries(ctx context.Context, arg ExportAuditEntries
 			&i.ClientIp,
 			&i.UserAgent,
 			&i.Details,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -229,7 +252,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
        l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
-       s.subject
+       s.subject, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 LEFT JOIN LATERAL (
@@ -243,10 +266,11 @@ LEFT JOIN LATERAL (
 WHERE l.at >= $2 AND l.at < $3
   AND ((coalesce(cardinality($4::bigint[]), 0) = 0 AND coalesce(cardinality($5::text[]), 0) = 0)
        OR l.user_id = ANY ($4::bigint[]) OR l.actor = ANY ($5::text[]))
-  AND l.action LIKE ANY ($6::text[])
-  AND ($7::timestamptz IS NULL OR (l.at, l.id) < ($7, $8::bigint))
+  AND (NOT $6::boolean OR l.group_id IS NULL)
+  AND l.action LIKE ANY ($7::text[])
+  AND ($8::timestamptz IS NULL OR (l.at, l.id) < ($8, $9::bigint))
 ORDER BY l.at DESC, l.id DESC
-LIMIT $9
+LIMIT $10
 `
 
 type ListAuditEntriesParams struct {
@@ -255,6 +279,7 @@ type ListAuditEntriesParams struct {
 	Until    time.Time
 	UserIds  []int64
 	Actors   []string
+	NoGroup  bool
 	Patterns []string
 	CursorAt *time.Time
 	CursorID int64
@@ -276,13 +301,16 @@ type ListAuditEntriesRow struct {
 	UserAgent  *string
 	Details    []byte
 	Subject    *string
+	GroupID    *int64
 }
 
 // A page of every user's entries in [since, until), newest first, for
 // admins; optionally narrowed to the entries whose user is one of user_ids
 // or whose actor is one of actors (a union; both empty means all). coalesce
-// because pgx sends a nil slice as NULL. subject is the message's subject
-// only if the viewer has a location of it.
+// because pgx sends a nil slice as NULL. no_group keeps only the entries
+// without a customer group (#470: from before 1.4.0, or instance-level),
+// still read through the pkey; one group: ListAuditEntriesForGroup.
+// subject is the message's subject only if the viewer has a location of it.
 func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]ListAuditEntriesRow, error) {
 	rows, err := q.db.Query(ctx, listAuditEntries,
 		arg.Viewer,
@@ -290,6 +318,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 		arg.Until,
 		arg.UserIds,
 		arg.Actors,
+		arg.NoGroup,
 		arg.Patterns,
 		arg.CursorAt,
 		arg.CursorID,
@@ -317,6 +346,114 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.UserAgent,
 			&i.Details,
 			&i.Subject,
+			&i.GroupID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntriesForGroup = `-- name: ListAuditEntriesForGroup :many
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
+       s.subject, l.group_id
+FROM audit_log l
+LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
+LEFT JOIN LATERAL (
+    SELECT m.subject FROM messages m
+    WHERE l.target_type = 'message' AND m.sha256 = l.target_id::bpchar
+      AND EXISTS (SELECT 1 FROM message_locations ml
+                  JOIN folders f ON f.id = ml.folder_id
+                  JOIN accounts a ON a.id = f.account_id
+                  WHERE ml.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
+) s ON true
+WHERE l.group_id = $2::bigint
+  AND l.at >= $3 AND l.at < $4
+  AND ((coalesce(cardinality($5::bigint[]), 0) = 0 AND coalesce(cardinality($6::text[]), 0) = 0)
+       OR l.user_id = ANY ($5::bigint[]) OR l.actor = ANY ($6::text[]))
+  AND l.action LIKE ANY ($7::text[])
+  AND ($8::timestamptz IS NULL OR (l.at, l.id) < ($8, $9::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT $10
+`
+
+type ListAuditEntriesForGroupParams struct {
+	Viewer   int64
+	GroupID  int64
+	Since    time.Time
+	Until    time.Time
+	UserIds  []int64
+	Actors   []string
+	Patterns []string
+	CursorAt *time.Time
+	CursorID int64
+	Lim      int32
+}
+
+type ListAuditEntriesForGroupRow struct {
+	ID         int64
+	At         time.Time
+	Actor      string
+	UserID     *int64
+	UserName   *string
+	ApiKeyName *string
+	Action     string
+	TargetType *string
+	TargetID   *string
+	TargetName *string
+	ClientIp   *netip.Addr
+	UserAgent  *string
+	Details    []byte
+	Subject    *string
+	GroupID    *int64
+}
+
+// A page of one customer group's entries in [since, until), newest first,
+// for admins (#470), narrowed like ListAuditEntries by user_ids and actors
+// (a union, intersected with the group). A separate query, so that a cached
+// generic plan still reads the partial index audit_log_group_idx
+// (group_id, at, id) backward; group_id = implies its predicate.
+func (q *Queries) ListAuditEntriesForGroup(ctx context.Context, arg ListAuditEntriesForGroupParams) ([]ListAuditEntriesForGroupRow, error) {
+	rows, err := q.db.Query(ctx, listAuditEntriesForGroup,
+		arg.Viewer,
+		arg.GroupID,
+		arg.Since,
+		arg.Until,
+		arg.UserIds,
+		arg.Actors,
+		arg.Patterns,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditEntriesForGroupRow
+	for rows.Next() {
+		var i ListAuditEntriesForGroupRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Actor,
+			&i.UserID,
+			&i.UserName,
+			&i.ApiKeyName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.TargetName,
+			&i.ClientIp,
+			&i.UserAgent,
+			&i.Details,
+			&i.Subject,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -331,7 +468,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 const listAuditEntriesForUser = `-- name: ListAuditEntriesForUser :many
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
        l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
-       s.subject
+       s.subject, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 LEFT JOIN LATERAL (
@@ -375,11 +512,13 @@ type ListAuditEntriesForUserRow struct {
 	UserAgent  *string
 	Details    []byte
 	Subject    *string
+	GroupID    *int64
 }
 
 // A page of one user's own entries, newest first. A separate query rather
 // than "user_id IS NULL OR", so that a cached generic plan still uses
-// audit_log_user_idx.
+// audit_log_user_idx. group_id only keeps the row type of
+// ListAuditEntries: a non-admin's page never shows a group.
 func (q *Queries) ListAuditEntriesForUser(ctx context.Context, arg ListAuditEntriesForUserParams) ([]ListAuditEntriesForUserRow, error) {
 	rows, err := q.db.Query(ctx, listAuditEntriesForUser,
 		arg.UserID,
@@ -412,6 +551,7 @@ func (q *Queries) ListAuditEntriesForUser(ctx context.Context, arg ListAuditEntr
 			&i.UserAgent,
 			&i.Details,
 			&i.Subject,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
