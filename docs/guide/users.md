@@ -29,7 +29,9 @@ existed.
 
 Admins (the operator) open **Users** in the navigation and click **Add
 user**. In the dialog they enter a name (lowercase letters, digits, `.`,
-`-`, `_`) and choose whether the new user is an admin.
+`-`, `_`) and choose whether the new user is an admin. While there are two
+or more [customer groups](#customer-groups), they also choose the user's
+group; with a group filter set, that group is chosen already.
 
 ![Users page](/screenshots/users.png)
 
@@ -60,17 +62,20 @@ for anyone. An individual instance stays at that one group.
   log.
 - User names are unique across the whole instance, because login is by name.
   Prefix them per customer, for example `meier.anna`.
-- Moving a user to another group (`./ma user set-group NAME GROUP`) moves
-  their accounts with them and ends every share that would cross groups: the
-  user's accounts shared with users of the old group and old-group accounts
-  shared with the user. The command prints them, and the audit log records
-  them (`user.group_change`).
+- Moving a user to another group (**Change group** in the user's menu, or
+  `./ma user set-group NAME GROUP`) moves their accounts with them and ends
+  every share that would cross groups: the user's accounts shared with users
+  of the old group and old-group accounts shared with the user. The dialog
+  says so before; afterwards the page says how many shares ended, the command
+  prints them, and the audit log records them (`user.group_change`). Admins
+  change their own group on the command line or through another admin.
 - Handing an account to a user of another group needs
   `./ma account move NAME --to USER --other-group`, and ends all of the
   account's shares.
 - A group without users can be removed; the last group cannot.
 
-The operator manages groups on the command line:
+While there is one group, the users page looks as it always did. The
+operator creates the second group on the command line:
 
 ```sh
 ./ma group add "Steuerbüro Meier"
@@ -79,20 +84,29 @@ The operator manages groups on the command line:
 ./ma group list
 ```
 
+With two or more groups, the users page has a **Group** column, a group
+filter above the table and **Change group** in each user's menu, and a
+user's page shows the group. Under the table, **Groups** lists every group
+with its users and accounts; **Add group** adds one, and each group's menu
+has **Rename** and **Remove**, which stays off while the group has users.
+
+![The customer groups under the users table](/screenshots/user-groups.png)
+
 Groups separate customers logically, inside one database and one archive
 directory (see [Security](../reference/security#login)). A customer who needs
 physical separation gets an individual instance.
 
 ## Managing users
 
-The users page is a table with each user's role, state, sign-in (2FA,
-passkeys, API keys), accounts and last login. On a phone the table shows
+The users page is a table with each user's role, its customer group (with
+two or more), state, sign-in (2FA, passkeys, API keys), accounts and last
+login. On a phone the table shows
 the name, the state and the menu; role and last login are in a second line
 under the name.
 
 The name opens the **user's page**: the role and state, a row of tiles
 (accounts, last login, two-factor authentication, passkeys, when the user
-was created) and the user's [API keys](#api-keys). The page has its own
+was created, and the customer group with two or more) and the user's [API keys](#api-keys). The page has its own
 address, so Back, reload and bookmarks work.
 
 ![A user's page](/screenshots/user-detail.png)
@@ -117,6 +131,8 @@ first. Admins can:
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in;
   their API keys stop working until they are unlocked.
 - **Make admin / Remove admin.**
+- **Change group:** with two or more [customer groups](#customer-groups);
+  ends the shares that would cross groups.
 - **Remove:** only for users without accounts. A user who still owns accounts
   (also removed ones) must hand them over first, on the command line:
   `./ma account move NAME --user OLD --to NEW`. Removed from the user's page,

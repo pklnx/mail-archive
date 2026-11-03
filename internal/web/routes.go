@@ -72,6 +72,11 @@ func (s *Server) routes() []route {
 		h("POST /api/users/{name}/password", s.handleResetUserPassword, accessSession),
 		h("POST /api/users/{name}/2fa/reset", s.handleResetUserTwoFactor, accessSession),
 		h("DELETE /api/users/{name}/passkeys", s.handleRemoveUserPasskeys, accessSession),
+		// Customer groups (#470): admins only, with a session.
+		h("GET /api/groups", s.handleListGroups, accessSession),
+		h("POST /api/groups", s.handleCreateGroup, accessSession),
+		h("PATCH /api/groups/{id}", s.handleRenameGroup, accessSession),
+		h("DELETE /api/groups/{id}", s.handleDeleteGroup, accessSession),
 		h("GET /api/api-keys", s.handleListAllAPIKeys, accessSession),
 		h("DELETE /api/api-keys/{id}", s.handleRevokeAnyAPIKey, accessSession),
 

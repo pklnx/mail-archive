@@ -2476,3 +2476,9 @@ select,
     transition: none;
   }
 }
+
+/* The group filter above the users table (#470). */
+.users-filter {
+  max-inline-size: 20rem;
+  margin-block-end: 1rem;
+}

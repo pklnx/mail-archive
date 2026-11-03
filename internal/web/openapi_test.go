@@ -394,6 +394,10 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{accountPurgeJSON{}, "AccountPurge", true},
 		{sharedAccountJSON{}, "SharedAccount", true},
 		{sharedWithJSON{}, "AccountShare", true},
+		{adminUserJSON{}, "AdminUser", true},
+		{groupRefJSON{}, "GroupRef", true},
+		{groupJSON{}, "Group", true},
+		{groupInput{}, "GroupInput", false},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {
