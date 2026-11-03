@@ -105,7 +105,7 @@ func TestExecuteDeletionRun(t *testing.T) {
 		BatchSize: 2,
 		Audit: func(action string) *store.AuditEntry {
 			actions = append(actions, action)
-			return &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+			return storetest.Entry(store.ActorCLI, action)
 		},
 	})
 	if err != nil || run.State != store.RunDone || run.Deleted != 3 || run.Kept != 0 {

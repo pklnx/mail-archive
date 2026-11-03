@@ -174,27 +174,37 @@ func (q *Queries) ExportAuditEntries(ctx context.Context, arg ExportAuditEntries
 
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_log (actor, user_id, user_name, api_key_id, api_key_name, action,
-                       target_type, target_id, target_name, client_ip, user_agent_id, details)
+                       target_type, target_id, target_name, client_ip, user_agent_id, details, group_id)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12)
+        $7, $8, $9, $10, $11, $12,
+        coalesce($13::bigint,
+                 (SELECT gu.group_id FROM users gu WHERE gu.id = $14::bigint),
+                 (SELECT go.group_id FROM accounts ga JOIN users go ON go.id = ga.owner_id
+                  WHERE ga.id = $15::bigint)))
 `
 
 type InsertAuditEntryParams struct {
-	Actor       string
-	UserID      *int64
-	UserName    *string
-	ApiKeyID    *int64
-	ApiKeyName  *string
-	Action      string
-	TargetType  *string
-	TargetID    *string
-	TargetName  *string
-	ClientIp    *netip.Addr
-	UserAgentID *int64
-	Details     []byte
+	Actor          string
+	UserID         *int64
+	UserName       *string
+	ApiKeyID       *int64
+	ApiKeyName     *string
+	Action         string
+	TargetType     *string
+	TargetID       *string
+	TargetName     *string
+	ClientIp       *netip.Addr
+	UserAgentID    *int64
+	Details        []byte
+	GroupID        *int64
+	GroupUserID    *int64
+	GroupAccountID *int64
 }
 
-// at comes from the database clock (the column default).
+// at comes from the database clock (the column default). The group (#470)
+// is group_id if given, else that of group_user_id or of the owner of
+// group_account_id, as the change's transaction sees them; insertAudit
+// picks which by the entry's class. Neither found: NULL.
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
 	_, err := q.db.Exec(ctx, insertAuditEntry,
 		arg.Actor,
@@ -209,6 +219,9 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.ClientIp,
 		arg.UserAgentID,
 		arg.Details,
+		arg.GroupID,
+		arg.GroupUserID,
+		arg.GroupAccountID,
 	)
 	return err
 }

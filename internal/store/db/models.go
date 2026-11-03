@@ -129,6 +129,7 @@ type AuditLog struct {
 	ClientIp    *netip.Addr
 	UserAgentID *int64
 	Details     []byte
+	GroupID     *int64
 }
 
 type AuditUserAgent struct {
@@ -139,6 +140,12 @@ type AuditUserAgent struct {
 type BlobRemoval struct {
 	Sha256 string
 	DueAt  time.Time
+}
+
+type CustomerGroup struct {
+	ID        int64
+	Name      string
+	CreatedAt time.Time
 }
 
 type DeletedMessage struct {
@@ -453,6 +460,7 @@ type User struct {
 	WebauthnHandle         []byte
 	Language               string
 	Locale                 string
+	GroupID                int64
 }
 
 type WebauthnCeremony struct {

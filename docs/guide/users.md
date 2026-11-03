@@ -5,6 +5,8 @@ own accounts, the accounts other users [shared](#shared-accounts) with them,
 and the mail found in them; see [Security](../reference/security#login). In
 the hosted instance the admin is the operator: the operator creates your
 login and manages users; you manage your own profile, accounts and shares.
+In a shared instance every user belongs to one [customer group](#customer-groups),
+and shares stay inside it.
 
 ## The first admin
 
@@ -36,7 +38,50 @@ it **once**. Hand it over safely. At the first login the user must choose
 their own password before they can do anything else.
 
 On the command line, `./ma user add NAME` asks for a password instead, and
-`./ma user reset-password NAME` generates one like the web UI does.
+`./ma user reset-password NAME` generates one like the web UI does. While
+several [customer groups](#customer-groups) exist, a new user needs one:
+`./ma user add NAME --group GROUP`, or `group` in
+[`POST /api/users`](../reference/api#users-and-profile).
+
+## Customer groups
+
+One shared instance can serve several customers, for example a tax office
+and a coaching business. Every user belongs to exactly one customer group,
+and every account to its owner's group. An instance starts with one group,
+`Default`, which holds every user; while it is the only one, nothing changes
+for anyone. An individual instance stays at that one group.
+
+- Users share accounts only with users of their own group. Asked for a name
+  that is not in their group, the server gives one answer, whether the name
+  exists in another group or not, so no customer learns another customer's
+  user names.
+- Users who are not admins never see group names, other members or names of
+  other groups. Admins (the operator) see every group's users and their audit
+  log.
+- User names are unique across the whole instance, because login is by name.
+  Prefix them per customer, for example `meier.anna`.
+- Moving a user to another group (`./ma user set-group NAME GROUP`) moves
+  their accounts with them and ends every share that would cross groups: the
+  user's accounts shared with users of the old group and old-group accounts
+  shared with the user. The command prints them, and the audit log records
+  them (`user.group_change`).
+- Handing an account to a user of another group needs
+  `./ma account move NAME --to USER --other-group`, and ends all of the
+  account's shares.
+- A group without users can be removed; the last group cannot.
+
+The operator manages groups on the command line:
+
+```sh
+./ma group add "Steuerbüro Meier"
+./ma user add meier.anna --group "Steuerbüro Meier"
+./ma user set-group jo "Steuerbüro Meier"
+./ma group list
+```
+
+Groups separate customers logically, inside one database and one archive
+directory (see [Security](../reference/security#login)). A customer who needs
+physical separation gets an individual instance.
 
 ## Managing users
 
@@ -181,8 +226,9 @@ the Passwords app).
 The owner of an account can let another user read it: search, open and
 download its mail. Managing, syncing and removing the account, retention
 and legal holds stay with the owner. Only the owner shares, also among
-admins, one account with one user at a time, by the user's exact name.
-smtp (journal) accounts cannot be shared.
+admins, one account with one user at a time, by the user's exact name, and
+only with a user of their own [customer group](#customer-groups). smtp
+(journal) accounts cannot be shared.
 
 - The shared user sees the account as `owner/name` (for example
   `anna/info`), with its folders, their counts and when each was last
@@ -195,7 +241,8 @@ smtp (journal) accounts cannot be shared.
   account keeps its shares (they can be ended, not added); deleting it
   completely ends them. `./ma account move` keeps the shares; the new owner's
   own share ends, and the old owner keeps no access unless the new owner
-  shares it.
+  shares it. Moving the account or one of its users into another group ends
+  the shares that would cross groups.
 - Every read of shared mail is in the [audit log](./audit-log#shared-accounts),
   and the owner sees it in their Log with the reader's name and whether a
   session or an API key read it, without the reader's IP address, browser

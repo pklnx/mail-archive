@@ -321,7 +321,7 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = f.st.SetAccountOwner(f.ctx, acc.Ref(), f.bob.ID)
+	err = f.st.SetAccountOwner(f.ctx, acc.Ref(), f.bob.ID, false)
 	if !errors.Is(err, store.ErrOnHold) {
 		t.Errorf("moving an account away from a held user: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	acc, _ = f.st.GetOwnedAccount(f.ctx, f.alice.ID, "work")
-	if err := f.st.SetAccountOwner(f.ctx, acc.Ref(), f.bob.ID); err != nil {
+	if err := f.st.SetAccountOwner(f.ctx, acc.Ref(), f.bob.ID, false); err != nil {
 		t.Errorf("moving after the release: %v", err)
 	}
 }

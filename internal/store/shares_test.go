@@ -367,8 +367,8 @@ func TestShareLifecycle(t *testing.T) {
 	f := newShareFixture(t)
 	f.share(f.infoID, f.bob)
 	f.share(f.infoID, f.uwe)
-	move := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.move"}
-	if err := f.st.SetAccountOwner(store.WithAudit(f.ctx, move), f.account(f.infoID).Ref(), f.bob.ID); err != nil {
+	move := store.TargetedEntry(store.ActorCLI, "account.move")
+	if err := f.st.SetAccountOwner(store.WithAudit(f.ctx, move), f.account(f.infoID).Ref(), f.bob.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	// bob's own share is dropped, uwe's is kept (decision 5).
@@ -387,7 +387,7 @@ func TestShareLifecycle(t *testing.T) {
 	}
 
 	f.share(f.priv, f.uwe)
-	remove := &store.AuditEntry{Actor: store.ActorCLI, Action: "user.remove"}
+	remove := store.TargetedEntry(store.ActorCLI, "user.remove")
 	if err := f.st.DeleteUser(store.WithAudit(f.ctx, remove), f.uwe.ID); err != nil {
 		t.Fatal(err)
 	}

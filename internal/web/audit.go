@@ -26,10 +26,28 @@ import (
 
 const errAuditUnavailable = "the audit log cannot be written; nothing was done"
 
-// auditEntry starts an entry for r: the logged-in user, the API key if the
+// targetedEntry starts an entry for r about a user, an account or a group:
+// it is recorded under that one's customer group (#470).
+func (s *Server) targetedEntry(r *http.Request, action string) *store.AuditEntry {
+	return s.requestEntry(r, store.TargetedEntry(store.ActorSession, action))
+}
+
+// selfEntry starts an entry for r of the user acting as themself (login,
+// own profile, own reads): it is recorded under their group.
+func (s *Server) selfEntry(r *http.Request, action string) *store.AuditEntry {
+	return s.requestEntry(r, store.SelfEntry(store.ActorSession, action))
+}
+
+// instanceEntry starts an entry for r of instance-level work: it has no
+// group, even when the admin who does it belongs to one.
+func (s *Server) instanceEntry(r *http.Request, action string) *store.AuditEntry {
+	return s.requestEntry(r, store.InstanceEntry(store.ActorSession, action))
+}
+
+// requestEntry fills e from r: the logged-in user, the API key if the
 // request used one, and the client.
-func (s *Server) auditEntry(r *http.Request, action string) *store.AuditEntry {
-	e := &store.AuditEntry{Actor: store.ActorSession, Action: action, ClientIP: s.clientIP(r), UserAgent: r.UserAgent()}
+func (s *Server) requestEntry(r *http.Request, e *store.AuditEntry) *store.AuditEntry {
+	e.ClientIP, e.UserAgent = s.clientIP(r), r.UserAgent()
 	if sess := currentSession(r); sess != nil {
 		e.SetUser(sess.UserID, sess.UserName)
 	}
@@ -80,12 +98,15 @@ const (
 // auditLoginFailed records a refused login. u is nil when the user is not
 // known.
 func (s *Server) auditLoginFailed(r *http.Request, method, reason string, u *store.User) {
-	e := s.auditEntry(r, "auth.login_failed")
+	var e *store.AuditEntry
+	if u != nil {
+		e = s.selfEntry(r, "auth.login_failed")
+		e.SetUser(u.ID, u.Name)
+	} else {
+		e = s.instanceEntry(r, "auth.login_failed")
+	}
 	e.Detail("method", method)
 	e.Detail("reason", reason)
-	if u != nil {
-		e.SetUser(u.ID, u.Name)
-	}
 	s.auditBestEffort(r, e)
 }
 
@@ -112,7 +133,7 @@ func (s *Server) searchEntry(r *http.Request) *store.AuditEntry {
 	if !isSearch(q.Get) {
 		return nil
 	}
-	e := s.auditEntry(r, "message.search")
+	e := s.selfEntry(r, "message.search")
 	for _, k := range searchFields {
 		if v := q.Get(k); v != "" {
 			e.Detail(k, v)

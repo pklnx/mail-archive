@@ -28,7 +28,9 @@ func sessionStore(t *testing.T, ctx context.Context, url string) *store.Store {
 // the store caches ids per user agent, so each case needs its own.
 func agentEntry(t *testing.T, action string) *store.AuditEntry {
 	// Only session and API key entries carry a user agent.
-	return &store.AuditEntry{Actor: store.ActorSession, Action: action, UserAgent: "agent of " + t.Name() + " " + action}
+	e := storetest.Entry(store.ActorSession, action)
+	e.UserAgent = "agent of " + t.Name() + " " + action
+	return e
 }
 
 // TestSessionTxNeedsNoPool (#166): the transactions of a purge or deletion
@@ -137,14 +139,14 @@ func TestSessionTxNeedsNoPool(t *testing.T) {
 		detachCurrentMonth(t, conn)
 		// The insert fails and rolls the batch back; the partition is
 		// created on the session's connection for the next attempt.
-		entry := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.purge_batch"}
+		entry := store.TargetedEntry(store.ActorCLI, "account.purge_batch")
 		if _, err := sess.Batch(store.WithAudit(ctx, entry), p.ID, 10, 0); !errors.Is(err, store.ErrAuditUnavailable) || ctx.Err() != nil {
 			t.Fatalf("batch without partition: %v (ctx %v)", err, ctx.Err())
 		}
 		if !slices.Contains(partitions(t, conn), partitionName(0)) {
 			t.Fatalf("partition not created: %v", partitions(t, conn))
 		}
-		entry = &store.AuditEntry{Actor: store.ActorCLI, Action: "account.purge_batch"}
+		entry = store.TargetedEntry(store.ActorCLI, "account.purge_batch")
 		if res, err := sess.Batch(store.WithAudit(ctx, entry), p.ID, 10, 0); err != nil || !res.Done {
 			t.Fatalf("next attempt %+v %v", res, err)
 		}

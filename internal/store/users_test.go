@@ -87,7 +87,7 @@ func TestUserSettings(t *testing.T) {
 		t.Fatalf("new user: %q %q", alice.Language, alice.Locale)
 	}
 	change := func(c store.ProfileChange) (bool, error) {
-		e := &store.AuditEntry{Actor: store.ActorSession, Action: "profile.change"}
+		e := store.SelfEntry(store.ActorSession, "profile.change")
 		return st.UpdateProfile(store.WithAudit(ctx, e), alice.ID, c)
 	}
 	de, deAT := "de", "de-AT"

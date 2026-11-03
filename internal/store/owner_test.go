@@ -110,7 +110,7 @@ func TestFirstUserAdoptsAccounts(t *testing.T) {
 	}
 
 	// Moving between users, with name conflicts per owner.
-	if err := st.SetAccountOwner(ctx, a.Ref(), second.ID); err != nil {
+	if err := st.SetAccountOwner(ctx, a.Ref(), second.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.ListOwnedAccounts(ctx, second.ID); len(got) != 1 || got[0].Name != "before-users" {
@@ -120,10 +120,10 @@ func TestFirstUserAdoptsAccounts(t *testing.T) {
 	if err := st.CreateAccount(ctx, clash); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetAccountOwner(ctx, clash.Ref(), second.ID); !errors.Is(err, store.ErrConflict) {
+	if err := st.SetAccountOwner(ctx, clash.Ref(), second.ID, false); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("move onto a taken name: %v", err)
 	}
-	if err := st.SetAccountOwner(ctx, late.Ref(), first.ID); err != nil {
+	if err := st.SetAccountOwner(ctx, late.Ref(), first.ID, false); err != nil {
 		t.Fatal(err)
 	}
 

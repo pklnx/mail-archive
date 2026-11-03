@@ -163,7 +163,7 @@ func (s *Server) handleConfirmPurge(w http.ResponseWriter, r *http.Request) {
 		s.beforeConfirmPurge()
 	}
 	by := userID(r)
-	purge, err := s.store.ConfirmPurge(withAudit(r, s.auditEntry(r, "account.purge")), a.Ref(), *in.Count, &by)
+	purge, err := s.store.ConfirmPurge(withAudit(r, s.targetedEntry(r, "account.purge")), a.Ref(), *in.Count, &by)
 	var blocked *store.PurgeBlockedError
 	var changed *store.PurgeChangedError
 	switch {

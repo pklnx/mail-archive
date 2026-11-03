@@ -38,13 +38,13 @@ func TestAuditPage(t *testing.T) {
 		[]store.Location{{FolderID: folder.ID, UID: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	open := store.AuditEntry{Actor: store.ActorSession, Action: "message.open"}
+	open := *store.SelfEntry(store.ActorSession, "message.open")
 	open.SetUser(alice.ID, "alice")
 	open.SetTarget(store.TargetMessage, sha, "")
 	if err := f.st.Audit(ctx, open); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.Audit(ctx, store.AuditEntry{Actor: store.ActorCLI, Action: "data.backup"}); err != nil {
+	if err := f.st.Audit(ctx, *store.InstanceEntry(store.ActorCLI, "data.backup")); err != nil {
 		t.Fatal(err)
 	}
 	a := f.as()
@@ -140,13 +140,19 @@ func TestAuditPageWho(t *testing.T) {
 	alice := f.addUser("alice", keyPassword, false)
 	bob := f.addUser("bob", keyPassword, false)
 	keyID := int64(1)
-	for _, e := range []store.AuditEntry{
-		{Actor: store.ActorSession, Action: "message.open", UserID: &alice.ID, UserName: "alice"},
-		{Actor: store.ActorSession, Action: "message.open", UserID: &bob.ID, UserName: "bob"},
-		{Actor: store.ActorAPIKey, Action: "message.search", UserID: &bob.ID, UserName: "bob", APIKeyID: &keyID, APIKeyName: "script"},
-		{Actor: store.ActorCLI, Action: "data.backup"},
+	withUser := func(e *store.AuditEntry, u *store.User) *store.AuditEntry {
+		e.SetUser(u.ID, u.Name)
+		return e
+	}
+	bobKey := withUser(store.SelfEntry(store.ActorAPIKey, "message.search"), bob)
+	bobKey.APIKeyID, bobKey.APIKeyName = &keyID, "script"
+	for _, e := range []*store.AuditEntry{
+		withUser(store.SelfEntry(store.ActorSession, "message.open"), alice),
+		withUser(store.SelfEntry(store.ActorSession, "message.open"), bob),
+		bobKey,
+		store.InstanceEntry(store.ActorCLI, "data.backup"),
 	} {
-		if err := f.st.Audit(ctx, e); err != nil {
+		if err := f.st.Audit(ctx, *e); err != nil {
 			t.Fatal(err)
 		}
 	}

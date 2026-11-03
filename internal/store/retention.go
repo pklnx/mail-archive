@@ -170,6 +170,12 @@ func (s *Store) RemoveRetentionRule(ctx context.Context, id int64) error {
 			return err
 		}
 		if e := auditFrom(ctx); e != nil {
+			// A rule is always about an account: the entry is recorded
+			// under the group of its owner (#470), which the entry has no
+			// target to find.
+			if e.GroupID, err = q.AccountGroupID(ctx, r.AccountID); err != nil {
+				return err
+			}
 			e.Detail("rule_id", id)
 			e.Detail("years", r.Years)
 			if r.Folder != nil {
@@ -342,6 +348,20 @@ func (s *Store) ReleaseLegalHold(ctx context.Context, id int64, by *int64, note 
 		}
 		return nil
 	})
+}
+
+// LegalHoldScope returns the owner and the account a hold names, either
+// or both nil; ErrNotFound for an unknown hold. A hold that names neither
+// is instance-level: its entries have no group (#470).
+func (s *Store) LegalHoldScope(ctx context.Context, id int64) (owner, account *int64, err error) {
+	r, err := s.q.LegalHoldScope(ctx, id)
+	if isNoRows(err) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return r.OwnerID, r.AccountID, nil
 }
 
 // holdMatchPage is how many search results are stored at a time.

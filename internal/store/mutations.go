@@ -178,7 +178,13 @@ func nonNil(l []string) []string {
 // like UpdateAccount. It fails with ErrConflict if that user already has an
 // account with the same name. Removed accounts can be moved too, so their
 // archived mail moves along. Shares stay, except one with the new owner.
-func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64) error {
+//
+// A new owner in another customer group (#470) is refused with
+// ErrOtherGroup unless allowOtherGroup: then every share of the account
+// ends, since all its readers are in the old group, and the pending entry
+// gets from_group, to_group and shares_ended and is recorded under the new
+// group. Both owners' rows stay locked FOR SHARE until the commit.
+func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64, allowOtherGroup bool) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		r, err := q.LockAccount(ctx, ref.ID)
 		if errors.Is(err, pgx.ErrNoRows) || err == nil && !sameOwner(r.OwnerID, ref.OwnerID) {
@@ -201,6 +207,32 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 				return newHoldError(holds, "%v: the account's owner is on legal hold %s")
 			}
 		}
+		ids := []int64{owner}
+		if r.OwnerID != nil {
+			ids = append(ids, *r.OwnerID)
+		}
+		users, err := q.LockUserGroups(ctx, ids)
+		if err != nil {
+			return err
+		}
+		groups := map[int64]int64{}
+		for _, u := range users {
+			groups[u.ID] = u.GroupID
+		}
+		to, ok := groups[owner]
+		if !ok {
+			return fmt.Errorf("new owner: %w", ErrNotFound)
+		}
+		otherGroup := r.OwnerID != nil && groups[*r.OwnerID] != to
+		if otherGroup && !allowOtherGroup {
+			return ErrOtherGroup
+		}
+		var ended []string
+		if otherGroup {
+			if ended, err = q.DeleteAllAccountShares(ctx, ref.ID); err != nil {
+				return err
+			}
+		}
 		err = one(q.SetAccountOwner(ctx, db.SetAccountOwnerParams{ID: ref.ID, OwnerID: &owner}))
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -208,6 +240,22 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		}
 		if err != nil {
 			return err
+		}
+		if otherGroup {
+			if e := auditFrom(ctx); e != nil {
+				from, err := q.GetGroupByID(ctx, groups[*r.OwnerID])
+				if err != nil {
+					return err
+				}
+				dest, err := q.GetGroupByID(ctx, to)
+				if err != nil {
+					return err
+				}
+				e.GroupID = &to
+				e.Detail("from_group", map[string]any{"id": from.ID, "name": from.Name})
+				e.Detail("to_group", map[string]any{"id": dest.ID, "name": dest.Name})
+				e.Detail("shares_ended", nonNil(ended))
+			}
 		}
 		// The new owner sees the account as their own; other shares stay,
 		// and the old owner keeps no access unless shared (#389).
@@ -277,6 +325,9 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 		result = AccountDeleted
 		if e != nil {
 			e.Detail("result", string(result))
+		}
+		if err := keepAccountGroup(ctx, q, ref.ID); err != nil {
+			return err
 		}
 		if err := q.DeleteAccountFolders(ctx, ref.ID); err != nil {
 			return err

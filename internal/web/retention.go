@@ -115,7 +115,7 @@ func (s *Server) handleCreateRetentionRule(w http.ResponseWriter, r *http.Reques
 		s.failStore(w, r, err)
 		return
 	}
-	e := s.auditEntry(r, "retention.rule_add")
+	e := s.targetedEntry(r, "retention.rule_add")
 	auditAccount(e, acc)
 	e.Detail("years", in.Years)
 	if in.Folder != "" {
@@ -149,7 +149,7 @@ func (s *Server) handleDeleteRetentionRule(w http.ResponseWriter, r *http.Reques
 		s.fail(w, r, http.StatusNotFound, "not found", nil)
 		return
 	}
-	if err := s.store.RemoveRetentionRule(withAudit(r, s.auditEntry(r, "retention.rule_remove")), id); err != nil {
+	if err := s.store.RemoveRetentionRule(withAudit(r, s.targetedEntry(r, "retention.rule_remove")), id); err != nil {
 		s.failStore(w, r, err)
 		return
 	}
@@ -236,7 +236,11 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 			h.Filter = nil
 		}
 	}
-	e := s.auditEntry(r, "hold.add")
+	// A hold naming a user or an account is about them (their group); one
+	// naming neither covers the instance and has no group (#470). The
+	// account wins over the user as the target, as before.
+	var owner *store.User
+	var account *store.Account
 	if in.User != "" {
 		u, err := s.store.GetUserByName(r.Context(), auth.NormalizeUserName(in.User))
 		if errors.Is(err, store.ErrNotFound) {
@@ -248,7 +252,7 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.OwnerID = &u.ID
-		auditUser(e, u)
+		owner = u
 	}
 	if in.AccountID != nil {
 		acc, err := s.store.GetAccount(r.Context(), *in.AccountID)
@@ -260,7 +264,18 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 			s.failStore(w, r, err)
 			return
 		}
-		auditAccount(e, acc)
+		account = acc
+	}
+	var e *store.AuditEntry
+	switch {
+	case account != nil:
+		e = s.targetedEntry(r, "hold.add")
+		auditAccount(e, account)
+	case owner != nil:
+		e = s.targetedEntry(r, "hold.add")
+		auditUser(e, owner)
+	default:
+		e = s.instanceEntry(r, "hold.add")
 	}
 	if h.OwnerID == nil && h.AccountID == nil && h.Filter == nil && h.PeriodStart == nil && h.PeriodEnd == nil && !in.All {
 		s.fail(w, r, http.StatusBadRequest, "a hold without user, account, period or filter covers the whole archive; confirm with all", nil)
@@ -305,8 +320,12 @@ func (s *Server) handleReleaseLegalHold(w http.ResponseWriter, r *http.Request) 
 	if !s.decode(w, r, &in) {
 		return
 	}
+	e, ok := s.holdEntry(w, r, "hold.release", id)
+	if !ok {
+		return
+	}
 	by := userID(r)
-	err = s.store.ReleaseLegalHold(withAudit(r, s.auditEntry(r, "hold.release")), id, &by, in.Note)
+	err = s.store.ReleaseLegalHold(withAudit(r, e), id, &by, in.Note)
 	switch {
 	case errors.Is(err, store.ErrInvalidRetention):
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
@@ -368,7 +387,7 @@ func (s *Server) handleCreateDeletionRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	by := userID(r)
-	run, err := s.store.ProposeDeletion(withAudit(r, s.auditEntry(r, "retention.preview")), &by)
+	run, err := s.store.ProposeDeletion(withAudit(r, s.instanceEntry(r, "retention.preview")), &by)
 	if errors.Is(err, store.ErrRunOpen) {
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
@@ -476,7 +495,7 @@ func (s *Server) handleConfirmDeletionRun(w http.ResponseWriter, r *http.Request
 		return
 	}
 	by := userID(r)
-	err = s.store.ConfirmDeletionRun(withAudit(r, s.auditEntry(r, "retention.confirm")), id, &by)
+	err = s.store.ConfirmDeletionRun(withAudit(r, s.instanceEntry(r, "retention.confirm")), id, &by)
 	if errors.Is(err, store.ErrRunState) {
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
@@ -500,7 +519,7 @@ func (s *Server) handleCancelDeletionRun(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	err := s.store.CancelDeletionRun(withAudit(r, s.auditEntry(r, "retention.cancel")), id)
+	err := s.store.CancelDeletionRun(withAudit(r, s.instanceEntry(r, "retention.cancel")), id)
 	if errors.Is(err, store.ErrRunState) {
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
@@ -511,4 +530,36 @@ func (s *Server) handleCancelDeletionRun(w http.ResponseWriter, r *http.Request)
 	}
 	s.log.Info("deletion run cancelled", "run", id, "by", currentSession(r).UserName)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// holdEntry starts the entry of a change to hold id: targeted at the
+// account or the user the hold names, as hold.add was, or instance-level
+// for a hold that names neither (#470). An unknown hold answers 404.
+func (s *Server) holdEntry(w http.ResponseWriter, r *http.Request, action string, id int64) (*store.AuditEntry, bool) {
+	owner, account, err := s.store.LegalHoldScope(r.Context(), id)
+	if err != nil {
+		s.failStore(w, r, err)
+		return nil, false
+	}
+	switch {
+	case account != nil:
+		e := s.targetedEntry(r, action)
+		acc, err := s.store.GetAccount(r.Context(), *account)
+		if err != nil {
+			s.failStore(w, r, err)
+			return nil, false
+		}
+		auditAccount(e, acc)
+		return e, true
+	case owner != nil:
+		e := s.targetedEntry(r, action)
+		u, err := s.store.GetUserByID(r.Context(), *owner)
+		if err != nil {
+			s.failStore(w, r, err)
+			return nil, false
+		}
+		auditUser(e, u)
+		return e, true
+	}
+	return s.instanceEntry(r, action), true
 }

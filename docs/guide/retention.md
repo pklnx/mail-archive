@@ -224,6 +224,14 @@ deleted. mail-archive cannot write it, but this template covers its part.
 Copy it and fill in the brackets; in the hosted instance the operator is the
 party that runs it under your contract. Add what is yours.
 
+Mandantentrennung is logical, enforced by the application, not by separate
+databases. Deleting a group's mail (retention, account purge) removes that
+group's locations; the message file stays only while another group has its
+own location of it. The audit log records each entry's group from 1.4.0 on;
+earlier entries have none. If physical separation is required for a customer,
+that customer gets an individual instance (see
+[Customer groups](./users#customer-groups)).
+
 ```md
 # Procedure documentation: e-mail archive
 

@@ -96,7 +96,7 @@ change their own login with them (`403`); they use the profile endpoint.
 | Endpoint | Description |
 |---|---|
 | `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
-| `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. |
+| `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. `"group"` is the id of the user's [customer group](../guide/users#customer-groups): needed while several groups exist (`400 "choose a group"`), otherwise the user joins the only one; an unknown id is `400 "unknown group"`. |
 | `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed and their API keys revoked too, unless the body says `{"removePasskeys": false}` or `{"revokeApiKeys": false}`. |
 | `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}` or `{"locked": true\|false}`. `409` for the last admin. |
 | `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
@@ -340,8 +340,8 @@ none.
 
 | Endpoint | Description |
 |---|---|
-| `PUT /api/accounts/{name}/shares/{user}` | Share an own account with the user. `204`; sharing again changes nothing and writes no entry. `400` for the owner, `404` for an unknown account or user (also another user's account, for admins too), `409` for an smtp account (its envelopes stay with the owner), a removed account, or an account changed meanwhile. Sessions only. Audited as `account.share`. |
-| `DELETE /api/accounts/{name}/shares/{user}` | End the share: the user's next request no longer sees the account. `204`, `404` without such a share. Also for removed accounts. Sessions only. Audited as `account.unshare`. |
+| `PUT /api/accounts/{name}/shares/{user}` | Share an own account with a user of the caller's [customer group](../guide/users#customer-groups). `204`; sharing again changes nothing and writes no entry. `400` for the owner, `404` for an unknown account (also another user's account, for admins too), and `404 "no such user in your group"` for a name that is no user of the caller's group, the same for an unknown name and for a user of another group; `409` for an smtp account (its envelopes stay with the owner), a removed account, or an account changed meanwhile. Sessions only. Audited as `account.share`. |
+| `DELETE /api/accounts/{name}/shares/{user}` | End the share: the user's next request no longer sees the account. `204`; `404 "the account is not shared with this user"` without such a share, whether a user of that name exists or not. Also for removed accounts. Sessions only. Audited as `account.unshare`. |
 
 Reads of shared mail are recorded with `via_owners` and `via_accounts`, which
 put them into the owner's Log; lists, further pages and conversations that

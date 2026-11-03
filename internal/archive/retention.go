@@ -333,8 +333,11 @@ func (r *Retention) RunOnce(ctx context.Context) {
 	} else if id != 0 {
 		run, err := r.Store.DeletionRun(ctx, id)
 		if err == nil && run.State == store.RunConfirmed {
+			// A deletion run works on the whole instance: no group (#470).
 			audit := func(action string) *store.AuditEntry {
-				return &store.AuditEntry{Actor: store.ActorCLI, Action: action, Details: map[string]any{"by": "web server"}}
+				e := store.InstanceEntry(store.ActorCLI, action)
+				e.Detail("by", "web server")
+				return e
 			}
 			run, err = ExecuteDeletionRun(ctx, r.Store, id, DeletionOptions{Grace: r.Grace, Audit: audit, Logger: log})
 			switch {
@@ -351,7 +354,9 @@ func (r *Retention) RunOnce(ctx context.Context) {
 	}
 	r.resumePurge(ctx, log)
 	audit := func() *store.AuditEntry {
-		return &store.AuditEntry{Actor: store.ActorCLI, Action: "retention.sweep", Details: map[string]any{"by": "web server"}}
+		e := store.InstanceEntry(store.ActorCLI, "retention.sweep")
+		e.Detail("by", "web server")
+		return e
 	}
 	if _, err := SweepBlobs(ctx, r.Store, r.Blobs, SweepOptions{Audit: audit, Logger: log}); err != nil && ctx.Err() == nil {
 		if errors.Is(err, ErrBlobsBusy) {
@@ -373,7 +378,8 @@ func (r *Retention) resumePurge(ctx context.Context, log *slog.Logger) {
 		return
 	}
 	audit := func(action string) *store.AuditEntry {
-		e := &store.AuditEntry{Actor: store.ActorCLI, Action: action, Details: map[string]any{"by": "web server"}}
+		e := store.TargetedEntry(store.ActorCLI, action)
+		e.Detail("by", "web server")
 		e.SetTarget(store.TargetAccount, strconv.FormatInt(p.AccountID, 10), p.Account)
 		return e
 	}

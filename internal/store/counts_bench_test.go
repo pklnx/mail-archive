@@ -35,7 +35,7 @@ func TestFolderCountCost(t *testing.T) {
 	// new ones for 90% of them. About 10% of all messages also sit in a
 	// second folder.
 	seed := `
-INSERT INTO users (name, password_hash) VALUES ('bench', 'x');
+INSERT INTO users (name, password_hash, group_id) SELECT 'bench', 'x', min(id) FROM customer_groups;
 INSERT INTO accounts (name, host, port, tls_mode, username, password_enc, owner_id)
 SELECT 'acct' || a, 'h', 993, 'tls', 'u', '\x00', (SELECT id FROM users)
 FROM generate_series(1, 5) a;

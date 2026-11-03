@@ -851,6 +851,14 @@ paths:
                 admin:
                   type: boolean
                   default: false
+                group:
+                  type: integer
+                  format: int64
+                  description: |
+                    The id of the user's customer group. Required while
+                    several groups exist (`400 choose a group`), otherwise
+                    the user joins the only one. An unknown id is
+                    `400 unknown group`.
       responses:
         "201":
           description: Added. The generated password is shown only here.
@@ -1806,8 +1814,9 @@ paths:
       description: |
         The user may then search, read and download the account's mail;
         managing, syncing and removing it stay with the owner. Only the
-        owner shares, also among admins. Sharing again changes nothing.
-        Written to the audit log as `account.share`.
+        owner shares, also among admins, and only with a user of their own
+        customer group. Sharing again changes nothing. Written to the audit
+        log as `account.share`.
       responses:
         "204":
           description: The account is shared with the user.
@@ -1820,7 +1829,10 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
-          description: No own account of this name, or no such user.
+          description: |
+            No own account of this name, or no user of this name in the
+            caller's group (`no such user in your group`): the same answer
+            for a name that does not exist and for a user of another group.
           content:
             application/json:
               schema:
@@ -1845,7 +1857,10 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
-          description: No own account of this name, no such user, or no such share.
+          description: |
+            No own account of this name, or the account is not shared with
+            a user of this name (`the account is not shared with this user`),
+            whether such a user exists or not.
           content:
             application/json:
               schema:

@@ -153,7 +153,7 @@ func TestPurge(t *testing.T) {
 		t.Fatalf("fixture %v %v", beforeLocs, beforeMsgs)
 	}
 
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.purge"}
+	e := store.TargetedEntry(store.ActorCLI, "account.purge")
 	p, err := f.st.ConfirmPurge(store.WithAudit(f.ctx, e), f.acc.Ref(), 1, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -551,7 +551,7 @@ func TestPurgeEmptyBatchNotAudited(t *testing.T) {
 	if res, err := f.st.PurgeBatch(f.ctx, p.ID, 100, 0); err != nil || !res.Done {
 		t.Fatalf("batch %+v %v", res, err)
 	}
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: "account.purge_batch"}
+	e := store.TargetedEntry(store.ActorCLI, "account.purge_batch")
 	actx := store.WithAudit(f.ctx, e)
 	if res, err := f.st.PurgeBatch(actx, p.ID, 100, 0); err != nil || !res.Done || res.Locations != 0 {
 		t.Fatalf("empty batch %+v %v", res, err)
@@ -573,7 +573,7 @@ func TestPurgeEmptyBatchNotAudited(t *testing.T) {
 func TestPurgeStale(t *testing.T) {
 	f := newPurgeFixture(t)
 	p := f.confirm(1)
-	if err := f.st.SetAccountOwner(f.ctx, f.acc.Ref(), f.bob.ID); err != nil {
+	if err := f.st.SetAccountOwner(f.ctx, f.acc.Ref(), f.bob.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.st.PurgeBatch(f.ctx, p.ID, 10, 0)

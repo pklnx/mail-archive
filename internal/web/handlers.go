@@ -699,7 +699,7 @@ func disposition(kind, filename string) string {
 }
 
 func (s *Server) messageEntry(r *http.Request, action, sha string) *store.AuditEntry {
-	e := s.auditEntry(r, action)
+	e := s.selfEntry(r, action)
 	e.SetTarget(store.TargetMessage, sha, "")
 	return e
 }

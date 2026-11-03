@@ -227,7 +227,7 @@ several users have an account with that name). Removed accounts are included.`,
 			if err != nil {
 				return err
 			}
-			e := cliEntry("data.export")
+			e := cliTargeted("data.export")
 			e.Detail("format", format)
 			e.Detail("out", out)
 			if folder != "" {
@@ -358,7 +358,7 @@ the database container and writes DIR on the host.`,
 			name := "mailarchive-" + now.Format("20060102T150405Z") + ".dump"
 			// A dump is an export of everything. ./ma backup runs pg_dump
 			// itself, after this command with --note-only.
-			e := cliEntry("data.backup")
+			e := cliInstance("data.backup")
 			if noteOnly {
 				if len(args) == 1 {
 					e.Detail("dump", args[0])

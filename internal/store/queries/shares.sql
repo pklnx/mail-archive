@@ -3,6 +3,9 @@
 -- name: ListScopeAccounts :many
 -- The accounts a user may read: their own and, with include_shared, those
 -- shared with them. Removed accounts included; their mail stays readable.
+-- A shared account counts only while its owner is in the viewer's group
+-- (#470): the triggers keep shares inside a group, and a stray row would
+-- still grant nothing.
 SELECT a.id, a.name, u.id AS owner_id, u.name AS owner, a.kind,
        (a.removed_at IS NOT NULL)::boolean AS removed, (a.owner_id = @user_id::bigint)::boolean AS own
 FROM accounts a
@@ -10,6 +13,7 @@ JOIN users u ON u.id = a.owner_id
 WHERE a.owner_id = @user_id::bigint
    OR @include_shared::boolean
       AND a.id IN (SELECT s.account_id FROM account_shares s WHERE s.user_id = @user_id::bigint)
+      AND u.group_id = (SELECT v.group_id FROM users v WHERE v.id = @user_id::bigint)
 ORDER BY own DESC, u.name, a.name, a.id;
 
 -- name: InsertAccountShare :execrows
@@ -21,19 +25,25 @@ ON CONFLICT (account_id, user_id) DO NOTHING;
 DELETE FROM account_shares WHERE account_id = @account_id AND user_id = @user_id;
 
 -- name: ListAccountShares :many
+-- Only readers in the owner's group (#470), so a stray row never shows the
+-- owner a name of another group.
 SELECT s.user_id, u.name AS user_name, s.created_at
 FROM account_shares s
 JOIN users u ON u.id = s.user_id
-WHERE s.account_id = @account_id
+JOIN accounts a ON a.id = s.account_id
+JOIN users o ON o.id = a.owner_id
+WHERE s.account_id = @account_id AND u.group_id = o.group_id
 ORDER BY u.name;
 
 -- name: ListOwnerShares :many
--- The shares of every account of an owner, by account and user name.
+-- The shares of every account of an owner, by account and user name; only
+-- readers in the owner's group, as ListAccountShares.
 SELECT s.account_id, u.name AS user_name, s.created_at
 FROM account_shares s
 JOIN accounts a ON a.id = s.account_id
 JOIN users u ON u.id = s.user_id
-WHERE a.owner_id = @owner_id::bigint
+JOIN users o ON o.id = a.owner_id
+WHERE a.owner_id = @owner_id::bigint AND u.group_id = o.group_id
 ORDER BY s.account_id, u.name;
 
 -- name: CountUserShares :one

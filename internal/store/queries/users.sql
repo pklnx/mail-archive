@@ -1,10 +1,15 @@
 -- name: CreateUser :one
-INSERT INTO users (name, password_hash, is_admin, must_change_password)
-VALUES ($1, $2, $3, $4)
+INSERT INTO users (name, password_hash, is_admin, must_change_password, group_id)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetUserByName :one
 SELECT * FROM users WHERE name = $1;
+
+-- name: GetUserByNameInGroup :one
+-- One query whether the name is unknown or a user of another group, so
+-- the two cannot be told apart (#476).
+SELECT * FROM users WHERE name = @name AND group_id = @group_id;
 
 -- name: GetUserByID :one
 SELECT * FROM users WHERE id = $1;
@@ -63,7 +68,7 @@ VALUES ($1, $2, $3, $4);
 -- A session is valid while it has not expired, was used after the idle
 -- cutoff and its user is not locked.
 SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled,
-       u.language, u.locale
+       u.language, u.locale, u.group_id
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1

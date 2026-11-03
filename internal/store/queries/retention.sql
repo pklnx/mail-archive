@@ -98,3 +98,7 @@ SELECT a.id, a.name, a.kind, (a.removed_at IS NOT NULL)::boolean AS removed, u.n
 FROM accounts a
 LEFT JOIN users u ON u.id = a.owner_id
 ORDER BY u.name NULLS FIRST, a.name;
+
+-- name: LegalHoldScope :one
+-- Whom a hold names, which decides the class of its audit entries (#470).
+SELECT owner_id, account_id FROM legal_holds WHERE id = @id;

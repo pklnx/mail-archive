@@ -119,7 +119,7 @@ func TestMoveAndMutationsRace(t *testing.T) {
 		var moveErr, updateErr error
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go func() { defer wg.Done(); moveErr = st.SetAccountOwner(ctx, ref, bob.ID) }()
+		go func() { defer wg.Done(); moveErr = st.SetAccountOwner(ctx, ref, bob.ID, false) }()
 		go func() {
 			defer wg.Done()
 			off := false
@@ -147,7 +147,7 @@ func TestMoveAndMutationsRace(t *testing.T) {
 	// current version.
 	a, _ := accountByName(st, "acc0")
 	if *a.OwnerID != bob.ID {
-		if err := st.SetAccountOwner(ctx, a.Ref(), bob.ID); err != nil {
+		if err := st.SetAccountOwner(ctx, a.Ref(), bob.ID, false); err != nil {
 			t.Fatal(err)
 		}
 		a, _ = st.GetAccount(ctx, a.ID)
@@ -161,7 +161,7 @@ func TestMoveAndMutationsRace(t *testing.T) {
 	if _, err := st.DeleteOrRemoveAccount(ctx, asAlice); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("delete by the old owner: %v", err)
 	}
-	if err := st.SetAccountOwner(ctx, asAlice, alice.ID); !errors.Is(err, store.ErrNotFound) {
+	if err := st.SetAccountOwner(ctx, asAlice, alice.ID, false); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("move back by the old owner: %v", err)
 	}
 }

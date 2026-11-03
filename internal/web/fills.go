@@ -341,7 +341,7 @@ func (s *Server) handleStartFill(w http.ResponseWriter, r *http.Request) {
 		// Later runs skip trash and spam folders nobody confirmed.
 		fill.Confirmed = archive.SuggestExclusions(folders, in.IncludedFolders, in.ExcludedFolders)
 	}
-	e := s.auditEntry(r, "data.fill")
+	e := s.targetedEntry(r, "data.fill")
 	auditAccount(e, a)
 	e.Detail("host", src.Host)
 	e.Detail("username", src.Username)
@@ -482,7 +482,7 @@ func (s *Server) switchFillOn(w http.ResponseWriter, r *http.Request, a *store.A
 		})
 		return
 	}
-	e := s.auditEntry(r, "data.fill_change")
+	e := s.targetedEntry(r, "data.fill_change")
 	auditAccount(e, a)
 	e.Detail("keep_running", map[string]any{"from": false, "to": true})
 	e.Detail("interval", map[string]any{"from": archive.FillIntervalDetail(fill), "to": archive.FormatOwnInterval(interval)})
@@ -515,7 +515,7 @@ func (s *Server) changeFillInterval(w http.ResponseWriter, r *http.Request, a *s
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	e := s.auditEntry(r, "data.fill_change")
+	e := s.targetedEntry(r, "data.fill_change")
 	auditAccount(e, a)
 	e.Detail("interval", map[string]any{"from": archive.FormatOwnInterval(fill.Interval), "to": archive.FormatOwnInterval(interval)})
 	err := s.store.SetFillInterval(withAudit(r, e), fill.ID, interval)
@@ -568,7 +568,7 @@ func (s *Server) handleResumeFill(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
 		return
 	}
-	e := s.auditEntry(r, "data.fill_resume")
+	e := s.targetedEntry(r, "data.fill_resume")
 	auditAccount(e, a)
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(s.syncer.Sealer, id, in.Password) }
 	err := s.store.ResumeFill(withAudit(r, e), fill.ID, seal)
@@ -604,7 +604,7 @@ func (s *Server) handleCancelFill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelFill(w http.ResponseWriter, r *http.Request, a *store.Account, fill *store.Fill) {
-	e := s.auditEntry(r, "data.fill_cancel")
+	e := s.targetedEntry(r, "data.fill_cancel")
 	auditAccount(e, a)
 	err := s.store.CancelFill(withAudit(r, e), fill.ID)
 	switch {

@@ -131,7 +131,7 @@ func TestImportCommand(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if !regexpMatch(`old\s+anna\s+import\s+-\s+import`, list) {
+	if !regexpMatch(`old\s+anna\s+Default\s+import\s+-\s+import`, list) {
 		t.Errorf("account list:\n%s", list)
 	}
 	status := captureStdout(t, func() {

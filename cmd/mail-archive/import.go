@@ -151,7 +151,7 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), "%s: read %d, added %d\n", f.Folder, f.Read, f.Added)
 		},
 	}
-	e := cliAccountTarget(cliEntry("data.import"), acc)
+	e := cliAccountTarget(cliTargeted("data.import"), acc)
 	e.Detail("format", o.format)
 	e.Detail("source", o.from)
 	e.Detail("folders", len(folders))
@@ -222,7 +222,7 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	if err != nil {
 		return err
 	}
-	e := cliAccountTarget(cliEntry("data.import"), acc)
+	e := cliAccountTarget(cliTargeted("data.import"), acc)
 	e.Detail("format", o.format)
 	e.Detail("source", o.from)
 	e.Detail("folders", len(folders))
@@ -316,7 +316,7 @@ func importAccount(cmd *cobra.Command, a *app, name string) (*store.Account, err
 			return acc, nil
 		}
 		acc = &store.Account{Kind: store.KindImport, Name: name, OwnerID: owner}
-		e := cliEntry("account.add")
+		e := cliTargeted("account.add")
 		e.SetTarget(store.TargetAccount, "", name) // the ID is set when it exists
 		e.Detail("kind", string(store.KindImport))
 		err = a.store.CreateAccount(store.WithAudit(ctx, e), acc)

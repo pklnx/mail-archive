@@ -33,6 +33,7 @@ func main() {
 		newKeygenCmd(),
 		newAccountCmd(),
 		newUserCmd(),
+		newGroupCmd(),
 		newSyncCmd(),
 		newStatusCmd(),
 		newReindexCmd(),

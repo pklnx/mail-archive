@@ -191,7 +191,7 @@ func TestAuditCommand(t *testing.T) {
 	s := newArchiveSetup(t)
 	ctx := context.Background()
 	anna, _ := s.st.GetUserByName(ctx, "anna")
-	e := store.AuditEntry{Actor: store.ActorSession, Action: "message.search"}
+	e := *store.SelfEntry(store.ActorSession, "message.search")
 	e.SetUser(anna.ID, anna.Name)
 	e.SetTarget(store.TargetUser, "1", "=HYPERLINK(\"http://evil\")")
 	e.Detail("q", "-2+3")

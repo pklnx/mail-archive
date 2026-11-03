@@ -95,7 +95,7 @@ its mail.`,
 			} else if count != p.Deleted {
 				return fmt.Errorf("--count %d does not match the %d message(s) to delete; nothing was deleted", count, p.Deleted)
 			}
-			e := cliAccountTarget(cliEntry("account.purge"), acc)
+			e := cliAccountTarget(cliTargeted("account.purge"), acc)
 			purge, err := a.store.ConfirmPurge(withCLIAudit(cmd, e), p.Account.Ref(), count, nil)
 			var blocked *store.PurgeBlockedError
 			switch {
@@ -127,7 +127,7 @@ func userArg(cmd *cobra.Command) string {
 func purgeOptions(cmd *cobra.Command, a *app, acc *store.Account, lockTimeout time.Duration) archive.PurgeOptions {
 	return archive.PurgeOptions{
 		Grace: a.cfg.RetentionFileGrace, LockTimeout: lockTimeout, Logger: newLogger(a.cfg.LogLevel),
-		Audit: func(action string) *store.AuditEntry { return cliAccountTarget(cliEntry(action), acc) },
+		Audit: func(action string) *store.AuditEntry { return cliAccountTarget(cliTargeted(action), acc) },
 		Progress: func(p *store.AccountPurge) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "%d location(s) removed, %d message(s) deleted, %d kept\n", p.Locations, p.Deleted, p.Kept)
 		},
@@ -222,7 +222,7 @@ func cancelAccountPurge(cmd *cobra.Command, a *app, acc *store.Account) error {
 	if open == nil || open.AccountID != acc.ID {
 		return fmt.Errorf("account %q has no open purge", acc.Name)
 	}
-	e := cliAccountTarget(cliEntry("account.purge_cancel"), acc)
+	e := cliAccountTarget(cliTargeted("account.purge_cancel"), acc)
 	if err := a.store.CancelPurge(withCLIAudit(cmd, e), open.ID, "cancelled from the command line"); err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,9 @@ var ErrAuditUnavailable = errors.New("the audit log cannot be written")
 var ErrNotMigrated = errors.New("the database schema is not up to date; run migrate")
 
 // AuditEntry is one row of the audit log. The time comes from the database.
+// Start one with TargetedEntry, SelfEntry or InstanceEntry: its class says
+// which customer group it is recorded under (#470), and an entry without a
+// class is refused.
 type AuditEntry struct {
 	Actor      string
 	UserID     *int64
@@ -55,6 +59,178 @@ type AuditEntry struct {
 	ClientIP   netip.Addr
 	UserAgent  string
 	Details    map[string]any
+	// GroupID is set by the store for a targeted entry whose target is gone
+	// or changes group in the change's transaction, and for group actions;
+	// otherwise the group comes from the class (see AuditClass).
+	GroupID *int64
+
+	class AuditClass
+}
+
+// AuditClass says whose customer group an audit entry is recorded under
+// (#470). It belongs to the entry, not to its action: a legal hold, for
+// example, is targeted with an owner or account and instance-level without.
+type AuditClass string
+
+// The audit classes.
+const (
+	// AuditTargeted: about a user or an account (or a group). The group of
+	// that user, or of the account's owner, as the change's transaction
+	// sees it, unless GroupID says otherwise.
+	AuditTargeted AuditClass = "targeted"
+	// AuditSelf: the actor acting as themself (logins, own profile and
+	// passkeys, own reads, also through a share): the actor's group.
+	AuditSelf AuditClass = "self"
+	// AuditInstance: the operator's work on the instance (deletion runs,
+	// sweeps, holds without owner or account, backups, exports of the log,
+	// failed logins of unknown names): no group, whoever the actor is.
+	AuditInstance AuditClass = "instance"
+)
+
+// TargetedEntry starts an entry about a user, an account or a group.
+func TargetedEntry(actor, action string) *AuditEntry {
+	return &AuditEntry{Actor: actor, Action: action, class: AuditTargeted}
+}
+
+// SelfEntry starts an entry of the actor acting as themself.
+func SelfEntry(actor, action string) *AuditEntry {
+	return &AuditEntry{Actor: actor, Action: action, class: AuditSelf}
+}
+
+// InstanceEntry starts an entry of instance-level work, recorded without a
+// group.
+func InstanceEntry(actor, action string) *AuditEntry {
+	return &AuditEntry{Actor: actor, Action: action, class: AuditInstance}
+}
+
+// Class returns the entry's class; empty for an entry not made by one of
+// the constructors, which insertAudit refuses.
+func (e *AuditEntry) Class() AuditClass { return e.class }
+
+// auditActionClasses lists every action and the classes its entries may
+// take. insertAudit refuses an action that is not listed or an entry of a
+// class not listed for its action, so a new action has to be classified
+// here, and a test checks every action the code names against this list.
+var auditActionClasses = map[string][]AuditClass{
+	"auth.login":        {AuditSelf},
+	"auth.logout":       {AuditSelf},
+	"auth.login_failed": {AuditSelf, AuditInstance}, // instance: the name is unknown
+
+	"profile.change":          {AuditSelf},
+	"profile.password_change": {AuditSelf},
+	"profile.2fa_enable":      {AuditSelf},
+	"profile.2fa_disable":     {AuditSelf},
+	"profile.recovery_codes":  {AuditSelf},
+	"profile.passkey_add":     {AuditSelf},
+	"profile.passkey_remove":  {AuditSelf},
+
+	"api_key.create": {AuditTargeted},
+	"api_key.revoke": {AuditTargeted},
+
+	"user.add":              {AuditTargeted},
+	"user.change":           {AuditTargeted},
+	"user.remove":           {AuditTargeted},
+	"user.password_set":     {AuditTargeted},
+	"user.password_reset":   {AuditTargeted},
+	"user.2fa_reset":        {AuditTargeted},
+	"user.passkeys_removed": {AuditTargeted},
+	"user.group_change":     {AuditTargeted},
+
+	"group.add":    {AuditTargeted},
+	"group.rename": {AuditTargeted},
+	"group.remove": {AuditTargeted},
+
+	"account.add":          {AuditTargeted},
+	"account.change":       {AuditTargeted},
+	"account.remove":       {AuditTargeted},
+	"account.move":         {AuditTargeted},
+	"account.share":        {AuditTargeted},
+	"account.unshare":      {AuditTargeted},
+	"account.purge":        {AuditTargeted},
+	"account.purge_batch":  {AuditTargeted},
+	"account.purge_finish": {AuditTargeted},
+	"account.purge_cancel": {AuditTargeted},
+
+	"message.search":       {AuditSelf},
+	"message.list":         {AuditSelf},
+	"message.page":         {AuditSelf},
+	"message.open":         {AuditSelf},
+	"message.html":         {AuditSelf},
+	"message.raw":          {AuditSelf},
+	"message.part":         {AuditSelf},
+	"message.conversation": {AuditSelf},
+
+	"sync.start": {AuditTargeted, AuditSelf}, // self: all of the actor's own accounts
+
+	"data.export":      {AuditTargeted},
+	"data.import":      {AuditTargeted},
+	"data.fill":        {AuditTargeted},
+	"data.fill_change": {AuditTargeted},
+	"data.fill_resume": {AuditTargeted},
+	"data.fill_cancel": {AuditTargeted},
+	"data.fill_done":   {AuditTargeted},
+	"data.backup":      {AuditInstance},
+	"audit.export":     {AuditInstance},
+	"jobs.retry":       {AuditInstance},
+
+	"retention.rule_add":    {AuditTargeted},
+	"retention.rule_remove": {AuditTargeted},
+	"hold.add":              {AuditTargeted, AuditInstance}, // instance: no owner and no account
+	"hold.release":          {AuditTargeted, AuditInstance},
+	"retention.preview":     {AuditInstance},
+	"retention.confirm":     {AuditInstance},
+	"retention.cancel":      {AuditInstance},
+	"retention.batch":       {AuditInstance},
+	"retention.finish":      {AuditInstance},
+	"retention.sweep":       {AuditInstance},
+}
+
+// AuditActionClasses returns a copy of the classes each action may take.
+func AuditActionClasses() map[string][]AuditClass {
+	out := make(map[string][]AuditClass, len(auditActionClasses))
+	for a, c := range auditActionClasses {
+		out[a] = slices.Clone(c)
+	}
+	return out
+}
+
+// ErrAuditClass is returned for an entry whose class is missing or not
+// allowed for its action.
+var ErrAuditClass = errors.New("audit entry without a valid class")
+
+// checkClass returns the user and the account whose group the entry is
+// recorded under, by its class; refused without a class allowed for its
+// action.
+func checkClass(e *AuditEntry) (user, account *int64, err error) {
+	allowed, ok := auditActionClasses[e.Action]
+	if !ok || e.class == "" || !slices.Contains(allowed, e.class) {
+		return nil, nil, fmt.Errorf("%w: %q as %q", ErrAuditClass, e.Action, e.class)
+	}
+	if e.GroupID != nil && e.class != AuditTargeted {
+		return nil, nil, fmt.Errorf("%w: %q as %q with a group", ErrAuditClass, e.Action, e.class)
+	}
+	switch e.class {
+	case AuditSelf:
+		return e.UserID, nil, nil
+	case AuditTargeted:
+		// Only a numeric id of a user or account target counts; anything
+		// else leaves the group NULL rather than failing the change.
+		id, ok := targetNumber(e.TargetID)
+		switch {
+		case !ok:
+		case e.TargetType == TargetUser:
+			return &id, nil, nil
+		case e.TargetType == TargetAccount:
+			return nil, &id, nil
+		}
+	}
+	return nil, nil, nil
+}
+
+// targetNumber parses a target id; false for one that is not a bigint.
+func targetNumber(s string) (int64, bool) {
+	id, err := strconv.ParseInt(s, 10, 64)
+	return id, err == nil
 }
 
 // SetUser records the user the entry is about or by.
@@ -162,6 +338,14 @@ func (s *Store) auditUserAgent(ctx context.Context, e *AuditEntry) (*int64, erro
 // insertAudit writes e with the user agent id ua through q, which may be a
 // transaction's: it never uses the pool itself.
 func insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) error {
+	groupUser, groupAccount, err := checkClass(e)
+	if err != nil {
+		return err
+	}
+	var group *int64
+	if e.class == AuditTargeted {
+		group = e.GroupID
+	}
 	details, err := json.Marshal(cleanDetail(e.Details))
 	if err != nil {
 		return err
@@ -179,6 +363,7 @@ func insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) e
 		ApiKeyID: e.APIKeyID, ApiKeyName: nullString(e.APIKeyName), Action: e.Action,
 		TargetType: nullString(e.TargetType), TargetID: nullString(e.TargetID), TargetName: nullString(e.TargetName),
 		ClientIp: ip, UserAgentID: ua, Details: details,
+		GroupID: group, GroupUserID: groupUser, GroupAccountID: groupAccount,
 	})
 }
 

@@ -22,12 +22,25 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
-// cliEntry starts an audit entry of a command. Commands have no user, IP or
-// user agent; the operating system user and MAIL_ARCHIVE_OPERATOR (set by
-// ./ma to the host user) say who ran it. Neither is verified: whoever runs
-// the command holds the database password.
-func cliEntry(action string) *store.AuditEntry {
-	e := &store.AuditEntry{Actor: store.ActorCLI, Action: action}
+// cliTargeted starts the audit entry of a command about a user, an account
+// or a group, recorded under that one's customer group (#470).
+func cliTargeted(action string) *store.AuditEntry {
+	return cliEntry(store.TargetedEntry(store.ActorCLI, action))
+}
+
+// cliInstance starts the audit entry of a command that works on the
+// instance (maintenance, deletion runs, holds without owner or account):
+// it has no group. Commands never act as a user, so there is no self
+// entry.
+func cliInstance(action string) *store.AuditEntry {
+	return cliEntry(store.InstanceEntry(store.ActorCLI, action))
+}
+
+// cliEntry fills in who ran a command. Commands have no user, IP or user
+// agent; the operating system user and MAIL_ARCHIVE_OPERATOR (set by ./ma
+// to the host user) say who ran it. Neither is verified: whoever runs the
+// command holds the database password.
+func cliEntry(e *store.AuditEntry) *store.AuditEntry {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		e.Detail("os_user", u.Username)
 	} else {
@@ -154,7 +167,7 @@ spreadsheets do not run it as a formula.`,
 			}
 			defer a.close()
 			f := store.AuditFilter{Since: from, Until: to, Actions: actions}
-			e := cliEntry("audit.export")
+			e := cliInstance("audit.export")
 			e.Detail("format", format)
 			e.Detail("since", from.UTC().Format(time.RFC3339))
 			e.Detail("until", to.UTC().Format(time.RFC3339))

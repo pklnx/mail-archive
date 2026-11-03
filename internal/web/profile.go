@@ -42,7 +42,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	sess := currentSession(r)
 	change := store.ProfileChange{Language: in.Language, Locale: in.Locale}
-	if _, err := s.store.UpdateProfile(withAudit(r, s.auditEntry(r, "profile.change")), sess.UserID, change); err != nil {
+	if _, err := s.store.UpdateProfile(withAudit(r, s.selfEntry(r, "profile.change")), sess.UserID, change); err != nil {
 		s.failStore(w, r, err)
 		return
 	}

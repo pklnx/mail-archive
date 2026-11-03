@@ -46,7 +46,7 @@ func TestSyncAndImportLinkConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.store.SetAccountOwner(f.ctx, acc.Ref(), user.ID); err != nil {
+	if err := f.store.SetAccountOwner(f.ctx, acc.Ref(), user.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	expectResult(t, f.sync()["alice"], 2, 2)
