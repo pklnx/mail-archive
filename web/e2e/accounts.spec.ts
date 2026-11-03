@@ -385,13 +385,15 @@ async function pageOf(browser: Browser, user: { name: string; password: string }
 }
 
 // Shared accounts (#389, part 3). pat owns team; jo has no account. pat
-// shares team with jo on its page, jo finds its mail in search and the
+// cannot share with kim, of another customer group (#470), and shares team
+// with jo on its page, jo finds its mail in search and the
 // folder tree, pat's Log shows jo's search without its terms, and after
 // pat removes jo the same search finds nothing.
 test.describe("sharing an account", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("the owner shares, the reader finds the mail, the owner's Log shows it, and after Remove the next search is empty", async ({ page, browser }) => {
+  test("the owner shares, the reader finds the mail, the owner's Log shows it, and after Remove the next search is empty", async ({ page, browser, guards }) => {
+    guards.allowHTTPError("/api/accounts/team/shares/kim", 404);
     await logIn(page, shareOwner);
     await page.goto("/?view=accounts&id=team");
     const main = page.getByRole("main");
@@ -438,6 +440,14 @@ test.describe("sharing an account", () => {
       await expect(list.getByText("No messages match your search.")).toBeVisible();
       await expect(list.getByRole("button", { name: /Spring campaign kickoff/ })).toHaveCount(0);
       await expect(jo.getByRole("treeitem", { name: "team · pat" })).toHaveCount(0);
+
+      // kim is in the demo's other customer group (#470): the answer is the
+      // one for a name that does not exist, and nothing is shared.
+      await shares.getByLabel("User name").fill("kim");
+      await shares.getByRole("button", { name: "Share" }).click();
+      await expect(shares.getByText("There is no user named “kim” in your group.", { exact: true })).toBeVisible();
+      await expect(shares.getByLabel("User name")).toHaveAttribute("aria-invalid", "true");
+      await expect(shares.getByText("Not shared with anyone.")).toBeVisible();
     } finally {
       await jo.context().close();
     }

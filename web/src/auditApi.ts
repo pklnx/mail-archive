@@ -84,16 +84,20 @@ export function auditQuery(f: AuditFilter, cursor = ""): string {
   return p.toString();
 }
 
-/** A user of the admin's user list, with the customer group GET /api/users gives each (#470). */
-export type GroupedUser = ManagedUser & { group?: AuditGroup };
+/**
+ * A user of the admin's user list with the customer group GET /api/users
+ * gives each (#470); read as optional, so a list without groups counts as
+ * one group.
+ */
+export type GroupedUser = Omit<ManagedUser, "group"> & { group?: AuditGroup };
 
 export const auditApi = {
   list: (f: AuditFilter, cursor: string, signal?: AbortSignal) =>
     getJSON<{ entries: AuditEntry[]; nextCursor?: string }>(`/api/audit?${auditQuery(f, cursor)}`, signal),
   /**
    * The customer groups, for the Group filter of an admin's Log (#470).
-   * GET /api/groups (part 2 of #470) answers { groups: [...] } like
-   * GET /api/users; a bare list is read as well.
+   * GET /api/groups answers { groups: [...] } like GET /api/users; a bare
+   * list is read as well.
    */
   groups: async (signal?: AbortSignal) => {
     const r = await getJSON<AuditGroup[] | { groups?: AuditGroup[] }>("/api/groups", signal);

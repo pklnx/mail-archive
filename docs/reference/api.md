@@ -90,20 +90,26 @@ Revoked and expired keys stay listed for 30 days.
 
 ## Users and profile
 
-The user endpoints are only for admins; other users get `403`. Admins cannot
-change their own login with them (`403`); they use the profile endpoint.
+The user and group endpoints are only for admins; other users get `403`,
+before anything is looked up, and so do API keys. Admins cannot change their
+own login with them (`403`); they use the profile endpoint, and change their
+own group only on the command line or through another admin.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`. |
+| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`, `group` (the user's [customer group](../guide/users#customer-groups), `{"id", "name"}`). |
 | `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. `"group"` is the id of the user's [customer group](../guide/users#customer-groups): needed while several groups exist (`400 "choose a group"`), otherwise the user joins the only one; an unknown id is `400 "unknown group"`. |
 | `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed and their API keys revoked too, unless the body says `{"removePasskeys": false}` or `{"revokeApiKeys": false}`. |
-| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}` or `{"locked": true\|false}`. `409` for the last admin. |
+| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` and `locked` answer `204`; `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n}` (`0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id. Audited as `user.group_change`, with the ended shares. |
 | `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
 | `DELETE /api/users/{name}/passkeys` | Remove all passkeys of another user and end their sessions (`204`). |
 | `DELETE /api/users/{name}` | Remove a user, with their API keys. `409` while they own accounts, or for the last admin. |
 | `GET /api/api-keys` | Every user's API keys, like `GET /api/profile/api-keys` plus `user`. Never the keys themselves. |
 | `DELETE /api/api-keys/{id}` | Revoke any user's key, also an own one (`204`). |
+| `GET /api/groups` | All [customer groups](../guide/users#customer-groups) by name: `{"groups": [{"id", "name", "users", "accounts", "createdAt"}]}`; `accounts` counts the accounts of the group's users, removed ones included. |
+| `POST /api/groups` | Add a group with `{"name": "..."}` (1 to 100 characters, without control characters; spaces at either end are removed). Answers `201` with the group. `409` for a name a group has already, in any case. Audited as `group.add`. |
+| `PATCH /api/groups/{id}` | Rename a group with `{"name": "..."}` (`204`). `404` for an unknown id, `409` for a name another group has. Audited as `group.rename`. |
+| `DELETE /api/groups/{id}` | Remove a group without users (`204`). `409` while it has users, and for the last group. Audited as `group.remove`. |
 | `GET /api/profile/2fa` | `{"enabled", "required", "admin", "setupPending"}`. |
 | `POST /api/profile/2fa/setup` | Start setup: `{"secret", "otpauthUri", "qrDataUrl"}` (a PNG data URL). `409` while 2FA is on. |
 | `POST /api/profile/2fa/confirm` | Finish setup with `{"code": "..."}`. Answers `{"recoveryCodes": [...]}`, shown only here. `401` for a wrong code. |

@@ -885,13 +885,20 @@ paths:
     patch:
       tags: [users]
       operationId: updateUser
-      summary: Change a user's role or lock state
+      summary: Change a user's role, lock state or customer group
+      description: |
+        `group` moves the user into that customer group, with the accounts
+        they own. Every share that would then cross groups ends: the user's
+        accounts shared with users of the old group, and old-group accounts
+        shared with the user. The answer says how many ended; the audit
+        entry `user.group_change` lists them. Admins change their own group
+        only on the command line or through another admin.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              description: Exactly one of the two fields.
+              description: Exactly one of the three fields.
               type: object
               additionalProperties: false
               minProperties: 1
@@ -901,9 +908,24 @@ paths:
                   type: boolean
                 locked:
                   type: boolean
+                group:
+                  type: integer
+                  format: int64
+                  description: The id of the customer group to move the user into; an unknown id is `400 unknown group`.
       responses:
+        "200":
+          description: Moved into the group (`group`), or already in it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sharesEnded]
+                properties:
+                  sharesEnded:
+                    type: integer
+                    description: How many shares the move ended.
         "204":
-          description: Changed.
+          description: Changed (`admin`, `locked`).
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1063,6 +1085,112 @@ paths:
           $ref: "#/components/responses/AdminOnly"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /api/groups:
+    get:
+      tags: [users]
+      operationId: listGroups
+      summary: All customer groups
+      description: |
+        Every group with the number of its users and of their accounts
+        (removed accounts included), by name. Admins only; users who are not
+        admins get `403` before anything is looked up.
+      responses:
+        "200":
+          description: The groups.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Group"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    post:
+      tags: [users]
+      operationId: createGroup
+      summary: Add a customer group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GroupInput"
+      responses:
+        "201":
+          description: Added (without users or accounts yet).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: A group with that name exists, in any case.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/groups/{id}:
+    parameters:
+      - $ref: "#/components/parameters/numericID"
+    patch:
+      tags: [users]
+      operationId: renameGroup
+      summary: Rename a customer group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GroupInput"
+      responses:
+        "204":
+          description: Renamed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Another group has that name, in any case.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [users]
+      operationId: deleteGroup
+      summary: Remove a customer group without users
+      responses:
+        "204":
+          description: Removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The group still has users, or it is the last group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/retention/rules:
     get:
@@ -3094,7 +3222,7 @@ components:
 
     AdminUser:
       type: object
-      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, apiKeys, accounts, failingAccounts, createdAt, lastLoginAt, self]
+      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, apiKeys, accounts, failingAccounts, createdAt, lastLoginAt, self, group]
       properties:
         name:
           type: string
@@ -3124,6 +3252,45 @@ components:
         self:
           type: boolean
           description: The logged-in admin, whose own row cannot be changed here.
+        group:
+          $ref: "#/components/schemas/GroupRef"
+    GroupRef:
+      type: object
+      description: A user's customer group.
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+    Group:
+      type: object
+      required: [id, name, users, accounts, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        users:
+          type: integer
+        accounts:
+          type: integer
+          description: The accounts of the group's users, removed ones included.
+        createdAt:
+          type: string
+          format: date-time
+    GroupInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Without control characters; spaces at either end are removed.
     GeneratedPassword:
       type: object
       required: [name, password]

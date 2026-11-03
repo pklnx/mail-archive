@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey } from "./api";
 import { auditQuery } from "./auditApi";
 
 describe("folderQuestion", () => {
@@ -74,32 +74,6 @@ describe("session", () => {
 
 describe("users and profile", () => {
   afterEach(() => vi.restoreAllMocks());
-
-  it("creates a user and returns the generated password", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ name: "kim", password: "abcde-fghjk-mnpqr-stuvw" }), { status: 201 }),
-    );
-    expect(await usersApi.create("kim", true)).toEqual({ name: "kim", password: "abcde-fghjk-mnpqr-stuvw" });
-    const [path, init] = fetch.mock.calls[0]!;
-    expect(path).toBe("/api/users");
-    expect(init?.method).toBe("POST");
-    expect(JSON.parse(String(init?.body))).toEqual({ name: "kim", admin: true });
-  });
-
-  it("creates a user in a customer group (#470)", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ name: "kim", password: "abcde-fghjk-mnpqr-stuvw" }), { status: 201 }),
-    );
-    await usersApi.create("kim", false, 7);
-    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ name: "kim", admin: false, group: 7 });
-  });
-
-  it("encodes user names in paths", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
-    await usersApi.setLocked("a.b", true);
-    expect(fetch.mock.calls[0]![0]).toBe("/api/users/a.b");
-    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ locked: true });
-  });
 
   it("sends the password change", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));

@@ -113,7 +113,7 @@ describe("Shared with, on the owner's account page", () => {
     // another group; the text must not suggest that the name is unknown
     // everywhere.
     expect(messagesFor("en").shareNoUser("kim")).toBe("There is no user named “kim” in your group.");
-    expect(messagesFor("de").shareNoUser("kim")).toBe("In Ihrer Gruppe gibt es keinen Benutzer „kim“.");
+    expect(messagesFor("de").shareNoUser("kim")).toBe("In deiner Gruppe gibt es keinen Benutzer „kim“.");
   });
 
   it("lists a removed account's shares to end them, without the field", () => {

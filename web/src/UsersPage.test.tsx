@@ -9,14 +9,20 @@ import { shortDate } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
 import { settingsTextFor } from "./settingsText";
 import { expectLoaded, expectLoading } from "./test/loading";
+import type { CustomerGroup } from "./userAdminApi";
 import { UsersPage } from "./UsersPage";
+import { usersTextFor } from "./usersText";
 
 function user(name: string, more: Partial<ManagedUser> = {}): ManagedUser {
   return {
     name, admin: false, locked: false, mustChangePassword: false, twoFactorEnabled: false, passkeys: 0, apiKeys: 0, accounts: 1,
-    failingAccounts: 0, createdAt: "2026-10-01T00:00:00Z", lastLoginAt: null, self: false, ...more,
+    failingAccounts: 0, createdAt: "2026-10-01T00:00:00Z", lastLoginAt: null, self: false, group: { id: 1, name: "Default" }, ...more,
   };
 }
+
+const defaultGroup: CustomerGroup = { id: 1, name: "Default", users: 4, accounts: 4, createdAt: "2026-09-01T00:00:00Z" };
+/** The groups GET /api/groups answers: one, so the group UI is hidden, unless a test sets more (#470). */
+let groups: CustomerGroup[];
 
 const users = [
   user("alice", { admin: true, self: true, twoFactorEnabled: true, lastLoginAt: "2026-10-20T10:00:00Z" }),
@@ -41,11 +47,15 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/?view=users");
   requests = [];
   revoked = new Set();
+  groups = [defaultGroup];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
     const method = init?.method ?? "GET";
     requests.push({ method, url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
     if (method === "GET" && url === "/api/users") return json({ users });
+    if (method === "GET" && url === "/api/groups") return json({ groups });
+    if (method === "POST" && url === "/api/groups") return json({ id: 9, name: "New", users: 0, accounts: 0, createdAt: "2026-10-30T00:00:00Z" }, 201);
+    if (method === "PATCH" && init?.body && "group" in JSON.parse(String(init.body))) return json({ sharesEnded: 1 });
     if (method === "GET" && url === "/api/api-keys") {
       return json({ keys: [bobKey, aliceKey].map((k) => (revoked.has(k.id) ? { ...k, state: "revoked" } : k)) });
     }
@@ -102,6 +112,12 @@ async function showUser(name: string) {
   window.history.replaceState(null, "", `/?view=users&id=${name}`);
   render(<UsersPage />);
   await screen.findByRole("heading", { level: 1, name });
+}
+
+/** Opens a user's page after an earlier render, in a fresh one. */
+async function showUserAgain(name: string) {
+  cleanup();
+  await showUser(name);
 }
 
 const h1 = (name: string) => screen.getByRole("heading", { level: 1, name });
@@ -548,6 +564,190 @@ describe("UsersPage", () => {
   });
 });
 
+describe("customer groups (#470)", () => {
+  const us = usersTextFor("en");
+  const b: CustomerGroup = { id: 2, name: "Meier", users: 2, accounts: 3, createdAt: "2026-10-02T00:00:00Z" };
+  const empty: CustomerGroup = { id: 3, name: "Empty", users: 0, accounts: 0, createdAt: "2026-10-03T00:00:00Z" };
+  let saved: ManagedUser[];
+  beforeEach(() => {
+    saved = [...users];
+    users.splice(0, users.length, ...saved.map((u) => (u.name === "carol" || u.name === "dave" ? { ...u, group: { id: 2, name: "Meier" } } : u)));
+  });
+  afterEach(() => {
+    users.splice(0, users.length, ...saved);
+  });
+  const groupsTable = () => within(screen.getByRole("table", { name: us.groupsTitle }));
+
+  it("shows no group column, filter, section, menu item or form field while there is one group", async () => {
+    await show();
+    await waitFor(() => expect(requests.some((r) => r.url === "/api/groups")).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByRole("columnheader", { name: us.colGroup })).toBeNull();
+    expect(screen.queryByLabelText(us.colGroup)).toBeNull();
+    expect(screen.queryByRole("heading", { name: us.groupsTitle })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: t.userActions("bob") }));
+    expect(screen.queryByRole("menuitem", { name: us.changeGroup })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: t.addUser }));
+    const modal = within(dialog());
+    expect(modal.queryByLabelText(us.colGroup)).toBeNull();
+    fireEvent.change(modal.getByLabelText(t.userName), { target: { value: "erin" } });
+    fireEvent.click(modal.getByRole("button", { name: t.addUser }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "POST", url: "/api/users", body: { name: "erin", admin: false } }]));
+    await showUserAgain("bob");
+    expect(screen.queryByText(us.colGroup)).toBeNull();
+  });
+
+  it("shows each user's group in a column and filters the table by group with two or more", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    await screen.findByRole("columnheader", { name: us.colGroup });
+    expect(within(row("carol")).getByText("Meier")).toBeTruthy();
+    expect(within(row("bob")).getByText("Default")).toBeTruthy();
+    // The phone line under the name has the group too.
+    expect(row("carol").querySelector(".users-table__more")?.textContent).toMatch(/^user · Meier · /);
+    const filter = screen.getByLabelText(us.colGroup) as HTMLSelectElement;
+    expect([...filter.options].map((o) => o.text)).toEqual([us.allGroups, "Default", "Meier"]);
+    fireEvent.change(filter, { target: { value: "2" } });
+    expect(screen.queryByText("bob", { selector: ".users-table__name" })).toBeNull();
+    expect(row("carol")).toBeTruthy();
+    expect(row("dave")).toBeTruthy();
+    fireEvent.change(filter, { target: { value: "" } });
+    expect(row("bob")).toBeTruthy();
+  });
+
+  it("requires a group in the Add user form with two or more, and sends the chosen one", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    await screen.findByRole("columnheader", { name: us.colGroup });
+    fireEvent.click(screen.getByRole("button", { name: t.addUser }));
+    const modal = within(dialog());
+    fireEvent.change(modal.getByLabelText(t.userName), { target: { value: "erin" } });
+    const group = modal.getByLabelText(us.colGroup) as HTMLSelectElement;
+    expect(group.value).toBe("");
+    fireEvent.click(modal.getByRole("button", { name: t.addUser }));
+    expect(modal.getByText(us.groupRequired)).toBeTruthy();
+    expect(document.activeElement).toBe(group);
+    expect(changes()).toEqual([]);
+    fireEvent.change(group, { target: { value: "2" } });
+    fireEvent.click(modal.getByRole("button", { name: t.addUser }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "POST", url: "/api/users", body: { name: "erin", admin: false, group: 2 } }]));
+  });
+
+  it("preselects the filtered group in the Add user form", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    fireEvent.change(await screen.findByLabelText(us.colGroup), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: t.addUser }));
+    expect((within(dialog()).getByLabelText(us.colGroup) as HTMLSelectElement).value).toBe("2");
+  });
+
+  it("changes a user's group after a confirmation that says which shares end, and says how many did", async () => {
+    groups = [defaultGroup, b, empty];
+    await show();
+    await screen.findByRole("columnheader", { name: us.colGroup });
+    pick("bob", us.changeGroup);
+    const modal = within(dialog());
+    expect(modal.getByText(us.changeGroupTitle("bob"))).toBeTruthy();
+    expect(modal.getByText(us.changeGroupText("bob", "Default"))).toBeTruthy();
+    const to = modal.getByLabelText(us.newGroup) as HTMLSelectElement;
+    // The user's own group is not a choice.
+    expect([...to.options].map((o) => o.text)).toEqual([us.chooseGroup, "Meier", "Empty"]);
+    fireEvent.click(modal.getByRole("button", { name: us.changeGroup }));
+    expect(modal.getByText(us.groupRequired)).toBeTruthy();
+    expect(changes()).toEqual([]);
+    fireEvent.change(to, { target: { value: "2" } });
+    fireEvent.click(modal.getByRole("button", { name: us.changeGroup }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "PATCH", url: "/api/users/bob", body: { group: 2 } }]));
+    expect(await screen.findByText(us.groupChanged("bob", "Meier", 1))).toBeTruthy();
+    expect(us.groupChanged("bob", "Meier", 1)).toBe("bob is now in Meier. 1 share ended.");
+    expect(us.groupChanged("bob", "Meier", 0)).toBe("bob is now in Meier. No shares ended.");
+    expect(us.groupChanged("bob", "Meier", 3)).toBe("bob is now in Meier. 3 shares ended.");
+  });
+
+  it("preselects the only other group in the Change group dialog", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    await screen.findByRole("columnheader", { name: us.colGroup });
+    pick("carol", us.changeGroup);
+    expect(within(dialog()).getByText(us.changeGroupText("carol", "Meier"))).toBeTruthy();
+    expect((within(dialog()).getByLabelText(us.newGroup) as HTMLSelectElement).value).toBe("1");
+    fireEvent.click(within(dialog()).getByRole("button", { name: us.changeGroup }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "PATCH", url: "/api/users/carol", body: { group: 1 } }]));
+  });
+
+  it("lists the groups with their counts; Add, Rename, and Remove only for a group without users", async () => {
+    groups = [defaultGroup, b, empty];
+    await show();
+    const table = await screen.findByRole("table", { name: us.groupsTitle });
+    expect(screen.getByRole("region", { name: us.groupsTitle })).toBeTruthy();
+    const meier = within(table).getByText("Meier").closest("tr")!;
+    expect([...meier.querySelectorAll("td")].slice(0, 2).map((c) => c.textContent)).toEqual(["2", "3"]);
+    // At most one primary button: Add group is not.
+    expect(screen.getByRole("button", { name: us.addGroup }).className).not.toMatch(/cds--btn--primary/);
+
+    fireEvent.click(screen.getByRole("button", { name: us.addGroup }));
+    let modal = within(dialog());
+    fireEvent.click(modal.getByRole("button", { name: us.addGroup }));
+    expect(modal.getByText(us.groupNameRequired)).toBeTruthy();
+    fireEvent.change(modal.getByLabelText(us.groupName), { target: { value: "  Lindqvist " } });
+    fireEvent.click(modal.getByRole("button", { name: us.addGroup }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "POST", url: "/api/groups", body: { name: "Lindqvist" } }]));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(groupsTable().getByRole("button", { name: us.groupActions("Meier") }));
+    fireEvent.click(screen.getByRole("menuitem", { name: us.renameGroup }));
+    modal = within(dialog());
+    expect(modal.getByText(us.renameGroupTitle("Meier"))).toBeTruthy();
+    expect((modal.getByLabelText(us.groupName) as HTMLInputElement).value).toBe("Meier");
+    fireEvent.change(modal.getByLabelText(us.groupName), { target: { value: "Meier & Co" } });
+    fireEvent.click(modal.getByRole("button", { name: us.renameGroup }));
+    await waitFor(() => expect(changes()[1]).toEqual({ method: "PATCH", url: "/api/groups/2", body: { name: "Meier & Co" } }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // A group with users cannot be removed.
+    fireEvent.click(groupsTable().getByRole("button", { name: us.groupActions("Meier") }));
+    expect(screen.getByRole("menuitem", { name: us.removeGroup }).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    fireEvent.click(groupsTable().getByRole("button", { name: us.groupActions("Empty") }));
+    const remove = screen.getByRole("menuitem", { name: us.removeGroup });
+    expect(remove.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(remove);
+    expect(within(dialog()).getByText(us.removeGroupTitle("Empty"))).toBeTruthy();
+    expect(changes()).toHaveLength(2);
+    fireEvent.click(within(dialog()).getByRole("button", { name: us.removeGroup }));
+    await waitFor(() => expect(changes()[2]).toEqual({ method: "DELETE", url: "/api/groups/3", body: undefined }));
+  });
+
+  it("shows the server's refusal of a taken group name in the dialog", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    await screen.findByRole("table", { name: us.groupsTitle });
+    const fetch = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+      if (init?.method === "POST" && url === "/api/groups") {
+        return new Response(JSON.stringify({ error: 'a group named "meier" already exists' }), { status: 409 });
+      }
+      return fetch(url, init);
+    });
+    fireEvent.click(screen.getByRole("button", { name: us.addGroup }));
+    const modal = within(dialog());
+    fireEvent.change(modal.getByLabelText(us.groupName), { target: { value: "meier" } });
+    fireEvent.click(modal.getByRole("button", { name: us.addGroup }));
+    expect((await modal.findByText(t.failed('a group named "meier" already exists'))).getAttribute("role")).toBe("alert");
+    // The dialog stays open, with the name, for another try.
+    expect((modal.getByLabelText(us.groupName) as HTMLInputElement).value).toBe("meier");
+  });
+
+  it("shows the group on a user's page with two or more", async () => {
+    groups = [defaultGroup, b];
+    await showUser("carol");
+    const tile = (await screen.findByText(us.colGroup)).closest(".app-summary__tile")!;
+    expect(tile.textContent).toContain("Meier");
+  });
+});
+
 describe("German", () => {
   const english = [/\bClose\b/, /Copy to clipboard/, /Copied/, /\bOptions\b/, /\bLoading\b/, /Focus sentinel/, /\bdanger\b/, /\bexpand\b/i,
     /\bcollapse\b/i, /Expand current row/, /Increment/, /Decrement/];
@@ -584,6 +784,28 @@ describe("German", () => {
       fireEvent.click(screen.getByRole("button", { name: de.addUser }));
       noEnglish();
       await act(async () => {});
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
+  });
+
+  it("shows the groups in German (#470)", async () => {
+    groups = [defaultGroup, { id: 2, name: "Meier", users: 0, accounts: 0, createdAt: "2026-10-02T00:00:00Z" }];
+    applySettings({ language: "de", locale: "de" });
+    try {
+      const de = messagesFor("de");
+      const ude = usersTextFor("de");
+      render(<UsersPage />);
+      await screen.findByRole("table", { name: ude.groupsTitle });
+      expect(screen.getByRole("columnheader", { name: ude.colGroup })).toBeTruthy();
+      expect(screen.getByRole("button", { name: ude.addGroup })).toBeTruthy();
+      noEnglish();
+      fireEvent.click(screen.getByRole("button", { name: de.userActions("bob") }));
+      fireEvent.click(screen.getByRole("menuitem", { name: ude.changeGroup }));
+      expect(within(dialog()).getByText("Freigaben zwischen bob und Benutzern von Default enden. Die Konten von bob ziehen mit um.")).toBeTruthy();
+      noEnglish();
+      expect(document.body.textContent).not.toMatch(/Change group|Groups|Add group|Shares between/);
+      expect(ude.groupChanged("bob", "Meier", 2)).toBe("bob ist jetzt in Meier. 2 Freigaben endeten.");
     } finally {
       applySettings({ language: "en", locale: "en" });
     }

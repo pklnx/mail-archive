@@ -379,6 +379,13 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("region", { name: "API keys" }).waitFor();
   await shot(p, "user-detail");
 
+  // The customer groups under the users table (#470): the demo has two.
+  await p.goto(base + "/?view=users");
+  const groups = main.getByRole("region", { name: "Groups" });
+  await groups.getByRole("rowheader", { name: "Lindqvist Design" }).waitFor();
+  await groups.scrollIntoViewIfNeeded();
+  await shot(p, "user-groups");
+
   // The rules: the table with Add rule above it.
   await p.goto(base + "/?view=retention");
   await main.getByRole("tab", { name: "Rules", selected: true }).waitFor();

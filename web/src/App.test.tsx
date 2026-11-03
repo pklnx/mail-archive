@@ -1351,8 +1351,9 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
       "fetch",
       vi.fn(async (path: string) => {
         if (path === "/api/users") {
-          return json({ users: [{ name: "bob", admin: false, locked: false, mustChangePassword: false, twoFactorEnabled: false, passkeys: 0, apiKeys: 0, accounts: 0, failingAccounts: 0, createdAt: "2026-10-01T00:00:00Z", lastLoginAt: null, self: false }] });
+          return json({ users: [{ name: "bob", admin: false, locked: false, mustChangePassword: false, twoFactorEnabled: false, passkeys: 0, apiKeys: 0, accounts: 0, failingAccounts: 0, createdAt: "2026-10-01T00:00:00Z", lastLoginAt: null, self: false, group: { id: 1, name: "Default" } }] });
         }
+        if (path === "/api/groups") return json({ groups: [{ id: 1, name: "Default", users: 1, accounts: 0, createdAt: "2026-10-01T00:00:00Z" }] });
         if (path === "/api/api-keys") return json({ keys: [] });
         if (path === "/api/retention/rules") return json({ rules: [], accounts: [], minYears: 6, defaultTimeZone: "Europe/Berlin" });
         if (path.startsWith("/api/audit?")) return json({ entries: [] });
