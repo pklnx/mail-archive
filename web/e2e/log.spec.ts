@@ -662,6 +662,115 @@ test.describe("in German", () => {
     await expect(action.text).toHaveText("Alle Aktionen");
     expect(new URL(page.url()).search).toBe("?view=log");
   });
+
+  // The customer group filter (#470, part 3). The demo has one group until
+  // part 2 of #470: the user list and the group list the page loads are
+  // routed to name a second one, "Meier GmbH", for kim, lee and sam. The
+  // log itself comes from the server, filtered by the demo's real group.
+  test.describe("with two customer groups", () => {
+    const meier = { id: 999_999, name: "Meier GmbH" };
+    async function twoGroups(page: Page) {
+      // The demo group's id: the admin's own login is recorded under it.
+      const res = await page.request.get("/api/audit?action=auth.login&limit=50");
+      expect(res.status()).toBe(200);
+      const entries = ((await res.json()) as { entries: { group?: { id: number; name?: string } }[] }).entries;
+      const group = entries.find((e) => e.group)?.group;
+      expect(group, "the admin's login has a group").toBeDefined();
+      const def = { id: group!.id, name: group!.name ?? "" };
+      await page.route(/\/api\/users$/, async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const data = (await response.json()) as { users: { name: string; group?: unknown }[] };
+        for (const u of data.users) u.group = ["kim", "lee", "sam"].includes(u.name) ? meier : def;
+        await route.fulfill({ response, json: data });
+      });
+      await page.route(/\/api\/groups$/, (route) => route.fulfill({ json: { groups: [def, meier] } }));
+      return def;
+    }
+    const groupField = (main: Locator) => main.getByRole("combobox", { name: "Gruppe" });
+
+    test("at 1280 px Gruppe is a cell of the filter row between Aktion and Wer, and narrows Wer", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      const def = await twoGroups(page);
+      const { main, from } = await open(page);
+      const group = groupField(main);
+      await expect(group).toBeVisible();
+      await expect(group.locator("option")).toHaveText(["Alle Gruppen", def.name, "Meier GmbH", "Ohne Gruppe"]);
+      const action = choice(main, "Aktion");
+      const who = choice(main, "Wer");
+      const [f, a, g] = await boxes(from, action.box, group);
+      const w = (await who.box.boundingBox())!;
+      // Gruppe comes after Aktion and before Wer, as high as the others,
+      // and as wide as Aktion.
+      expect(g.x > a.x || g.y > a.y, `Gruppe ${JSON.stringify(g)} after Aktion ${JSON.stringify(a)}`).toBe(true);
+      expect(w.x > g.x || w.y > g.y, `Wer ${JSON.stringify(w)} after Gruppe ${JSON.stringify(g)}`).toBe(true);
+      expect(Math.abs(g.height - f.height), `Gruppe ${g.height}, Von ${f.height}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(g.width - a.width), `Gruppe ${g.width}, Aktion ${a.width}`).toBeLessThanOrEqual(2);
+      if (Math.abs(g.y - a.y) <= 1) expect(g.x).toBeGreaterThanOrEqual(a.x + a.width);
+      await noSideScroll(page);
+
+      // The rows name their group in Wer.
+      const table = main.getByRole("table", { name: "Protokoll" });
+      await expect(table.getByRole("row").filter({ hasText: "demo" }).first()).toContainText(def.name);
+
+      // The demo group: its id is sent, Wer lists only its users.
+      const since = await startOf(page, await defaultSince(page));
+      const chosen = auditRequestAll(page, { since: [since], group: [String(def.id)] });
+      await group.selectOption(String(def.id));
+      expect((await (await chosen).response())?.status()).toBe(200);
+      expect(new URL(page.url()).search).toBe(`?view=log&customer=${def.id}`);
+      await who.field.click();
+      await expect(who.menu.getByRole("option", { name: "demo", exact: true })).toBeVisible();
+      for (const name of ["kim", "lee", "sam"]) await expect(who.menu.getByRole("option", { name, exact: true })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+
+      // A reload keeps it; no group: the entries before 1.4.0 and of the instance.
+      const reloaded = auditRequestAll(page, { since: [since], group: [String(def.id)] });
+      await page.reload();
+      await reloaded;
+      await expect(group).toHaveValue(String(def.id));
+      const none = auditRequestAll(page, { since: [since], group: ["none"] });
+      await group.selectOption("none");
+      expect((await (await none).response())?.status()).toBe(200);
+      await who.field.click();
+      await expect(who.menu.getByRole("option", { name: "kim", exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
+      const all = auditRequestAll(page, { since: [since] });
+      await group.selectOption("");
+      await all;
+      expect(new URL(page.url()).search).toBe("?view=log");
+    });
+
+    test("at 390 px Gruppe is stacked full width between Aktion and Wer", async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 780 });
+      await twoGroups(page);
+      const { main, from } = await open(page);
+      const group = groupField(main);
+      await expect(group).toBeVisible();
+      const [f, a, g] = await boxes(from, choice(main, "Aktion").box, group);
+      const w = (await choice(main, "Wer").box.boundingBox())!;
+      expect(g.y).toBeGreaterThan(a.y + a.height);
+      expect(w.y).toBeGreaterThan(g.y + g.height);
+      expect(Math.abs(g.width - f.width), `Von ${f.width}, Gruppe ${g.width}`).toBeLessThanOrEqual(2);
+      expect(Math.abs(g.x - f.x)).toBeLessThanOrEqual(1);
+      await noSideScroll(page);
+    });
+  });
+
+  test("with the demo's one group there is no Gruppe and no request for groups", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      if (new URL(r.url()).pathname === "/api/groups") asked.push(r.url());
+    });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const users = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/users");
+    const { main } = await open(page);
+    expect((await users).status()).toBe(200);
+    await expect(choice(main, "Wer").field).toBeVisible();
+    await expect(main.getByRole("table", { name: "Protokoll" })).toBeVisible();
+    await expect(main.getByRole("combobox", { name: "Gruppe" })).toHaveCount(0);
+    expect(asked).toEqual([]);
+  });
 });
 
 for (const [locale, names] of [

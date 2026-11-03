@@ -3,6 +3,8 @@ import {
   Button,
   Link,
   MultiSelect,
+  Select,
+  SelectItem,
   Table,
   TableBody,
   TableCell,
@@ -12,8 +14,9 @@ import {
   TableRow,
 } from "@carbon/react";
 import { DateRange } from "./DateRange";
-import { auditApi, auditQuery, usersApi, type AuditEntry, type AuditFilter, type ManagedUser } from "./api";
-import { foldEntries, shortUserAgent } from "./auditLog";
+import { usersApi } from "./api";
+import { auditApi, auditQuery, type AuditEntry, type AuditFilter, type AuditGroup, type GroupedUser } from "./auditApi";
+import { auditAction, foldEntries, shortUserAgent } from "./auditLog";
 import { isPlainClick } from "./clicks";
 import { dayOfDate, shiftDay, timestamp } from "./format";
 import { t, translateWithId } from "./i18n";
@@ -25,12 +28,13 @@ export { auditGroups };
 
 /** The default period: the last 30 local days. */
 export function defaultFilter(now = new Date()): AuditFilter {
-  return { since: shiftDay(dayOfDate(now), -30), until: "", actions: [], users: [], actors: [] };
+  return { since: shiftDay(dayOfDate(now), -30), until: "", actions: [], users: [], actors: [], group: "" };
 }
 
 /**
  * The filter of the page address (#376): without since= the default period;
- * users and actors only for admins, the others ignore them.
+ * users, actors and the customer group (#470) only for admins, the others
+ * ignore them.
  */
 export function filterOf(s: ViewState, admin: boolean, now = new Date()): AuditFilter {
   return {
@@ -39,6 +43,7 @@ export function filterOf(s: ViewState, admin: boolean, now = new Date()): AuditF
     actions: s.action,
     users: admin ? s.user : [],
     actors: admin ? s.actor : [],
+    group: admin ? s.customer : "",
   };
 }
 
@@ -252,22 +257,50 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   // null while the list loads; "failed" if it could not be loaded.
-  const [users, setUsers] = useState<ManagedUser[] | "failed" | null>(null);
+  const [users, setUsers] = useState<GroupedUser[] | "failed" | null>(null);
+  // The customer groups (#470), likewise; their filter shows with two or more.
+  const [groups, setGroups] = useState<AuditGroup[] | "failed" | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const id = useId();
 
   useEffect(() => {
     if (admin) usersApi.list().then(setUsers, () => setUsers("failed"));
   }, [admin]);
+  // The group list is asked for only when the users are in two or more
+  // groups (GET /api/users names each one's group): with one group nothing
+  // about groups is shown and no request is made, so a group without users
+  // does not count then.
+  useEffect(() => {
+    if (users === "failed") setGroups("failed");
+    if (!Array.isArray(users)) return;
+    const n = new Set(users.flatMap((u) => (u.group ? [u.group.id] : []))).size;
+    if (n < 2) {
+      setGroups([]);
+      return;
+    }
+    const ctl = new AbortController();
+    auditApi.groups(ctl.signal).then(setGroups, () => {
+      if (!ctl.signal.aborted) setGroups("failed");
+    });
+    return () => ctl.abort();
+  }, [users]);
 
   // The filter as sent. Once the user list is there, names of users that are
   // gone are dropped, so an old bookmark shows the others and not a 404; if
   // the list failed, the address is sent as it is (#376 plan review). An
-  // admin's request with users waits for the list: one request, not two.
+  // admin's request with users waits for the list: one request, not two. The
+  // customer group likewise (#470): a removed group is dropped, and so is
+  // the filter while fewer than two groups exist, as it is not shown then.
   const known = Array.isArray(users) ? new Set(users.map((u) => u.name)) : null;
+  const multi = Array.isArray(groups) && groups.length >= 2;
   const wanted = filterOf(state, admin);
-  const filter = known ? { ...wanted, users: wanted.users.filter((u) => known.has(u)) } : wanted;
-  const waiting = admin && users === null && wanted.users.length > 0;
+  const knownGroup = (g: string) => g === "none" || (Array.isArray(groups) && groups.some((x) => String(x.id) === g));
+  const filter = {
+    ...wanted,
+    users: known ? wanted.users.filter((u) => known.has(u)) : wanted.users,
+    group: Array.isArray(groups) && !(multi && knownGroup(wanted.group ?? "")) ? "" : wanted.group,
+  };
+  const waiting = admin && ((users === null && wanted.users.length > 0) || (groups === null && wanted.group !== ""));
   const query = auditQuery(filter);
 
   // The address follows: dropped users and values the page ignores go, as a replace.
@@ -275,6 +308,10 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
   useEffect(() => {
     if (Array.isArray(users)) update({ user: JSON.parse(pruned) as string[] }, { replace: true });
   }, [users, pruned, update]);
+  const prunedGroup = filter.group ?? "";
+  useEffect(() => {
+    if (Array.isArray(groups)) update({ customer: prunedGroup }, { replace: true });
+  }, [groups, prunedGroup, update]);
 
   useEffect(() => {
     if (waiting) return;
@@ -320,8 +357,18 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
   // Filter changes replace the history entry, like the search filters.
   const set = (patch: Partial<ViewState>) => update(patch, { replace: true });
   const groupItems: Choice[] = auditGroups.map((g) => ({ kind: "group", id: g, name: t.logGroup(g) }));
-  // Until the list is there (or if it failed), the chosen names stand for themselves.
-  const names = known ? [...known] : filter.users;
+  // Until the list is there (or if it failed), the chosen names stand for
+  // themselves. A chosen customer group narrows the list to its users (#470);
+  // chosen names of others stay, so they can be taken out.
+  const groupId = multi && filter.group && filter.group !== "none" ? Number(filter.group) : 0;
+  const inGroup = (u: GroupedUser) => !groupId || u.group?.id === groupId;
+  const names = Array.isArray(users) ? [...new Set([...users.filter(inGroup).map((u) => u.name), ...filter.users])] : filter.users;
+  // A new group keeps only the chosen users that belong to it.
+  const changeGroup = (g: string) => {
+    const id = g && g !== "none" ? Number(g) : 0;
+    const keep = Array.isArray(users) && id ? filter.users.filter((n) => users.some((u) => u.name === n && u.group?.id === id)) : filter.users;
+    set({ customer: g, user: keep });
+  };
   const whoItems: Choice[] = [
     ...auditActors.map((a): Choice => ({ kind: "actor", id: a, name: a === "cli" ? t.logCommandLine : t.logApiKeys })),
     ...names.map((n): Choice => ({ kind: "user", id: n, name: n })),
@@ -357,6 +404,15 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
             chosen={groupItems.filter((i) => filter.actions.includes(i.id))}
             onChange={(c) => set({ action: c.map((i) => i.id) })}
           />
+          {admin && multi && (
+            <Select id={`${id}-group`} labelText={t.logCustomerGroup} value={filter.group} onChange={(e) => changeGroup(e.target.value)}>
+              <SelectItem value="" text={t.logAllGroups} />
+              {groups.map((g) => (
+                <SelectItem key={g.id} value={String(g.id)} text={g.name} />
+              ))}
+              <SelectItem value="none" text={t.logNoGroup} />
+            </Select>
+          )}
           {admin && (
             <ChoiceFilter
               id={`${id}-who`}
@@ -399,6 +455,7 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
                         entry={row.entry}
                         admin={admin}
                         who={who}
+                        groups={multi}
                         open={open}
                         fold={
                           row.folded.length > 0 && (
@@ -416,7 +473,7 @@ export function LogPage({ admin, open }: { admin: boolean; open: (sha: string) =
                         }
                       />
                       {isOpen &&
-                        row.folded.map((e) => <EntryRow key={e.id} id={`${folded}-${e.id}`} entry={e} admin={admin} who={who} open={open} nested />)}
+                        row.folded.map((e) => <EntryRow key={e.id} id={`${folded}-${e.id}`} entry={e} admin={admin} who={who} groups={multi} open={open} nested />)}
                     </Fragment>
                   );
                 })}
@@ -450,6 +507,7 @@ function EntryRow({
   entry: e,
   admin,
   who: showWho,
+  groups = false,
   open,
   fold,
   nested = false,
@@ -459,6 +517,8 @@ function EntryRow({
   admin: boolean;
   /** The Who column is shown. */
   who: boolean;
+  /** Two or more customer groups exist: the Who column names the entry's (#470). */
+  groups?: boolean;
   open: (sha: string) => void;
   fold?: ReactNode;
   nested?: boolean;
@@ -477,11 +537,16 @@ function EntryRow({
       <TableCell className="log-table__time app-tabular">{timestamp(e.at)}</TableCell>
       <TableCell>
         <span className="log-table__action">
-          <span className={failed ? "app-text-error log-table__strong" : "log-table__strong"}>{t.auditAction(e.action)}</span>
+          <span className={failed ? "app-text-error log-table__strong" : "log-table__strong"}>{auditAction(e.action)}</span>
           {fold}
         </span>
       </TableCell>
-      {showWho && <TableCell>{who}</TableCell>}
+      {showWho && (
+        <TableCell>
+          {who}
+          {groups && e.group?.name && <span className="log-table__detail app-text-secondary">{e.group.name}</span>}
+        </TableCell>
+      )}
       <TableCell className="log-table__target">
         {target &&
           (sha ? (

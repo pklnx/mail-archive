@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, accountsApi, auditQuery, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey, usersApi } from "./api";
+import { auditQuery } from "./auditApi";
 
 describe("folderQuestion", () => {
   it("returns the folders the server asks about", () => {

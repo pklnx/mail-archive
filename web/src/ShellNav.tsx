@@ -20,8 +20,8 @@ interface Props {
   go: (patch: Partial<ViewState>) => void;
 }
 
-const noLogFilters = { since: null, until: "", action: [], user: [], actor: [] } satisfies Partial<ViewState>;
-const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [] };
+const noLogFilters = { since: null, until: "", action: [], user: [], actor: [], customer: "" } satisfies Partial<ViewState>;
+const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [], customer: "" };
 
 /**
  * The shell's side navigation: the fixed sections of the app. Accounts and

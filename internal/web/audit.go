@@ -237,7 +237,19 @@ type auditEntryJSON struct {
 	// ViaShare: another user's read of the viewer's shared account, in a
 	// non-admin's page; its details are cut down to what the owner may see.
 	ViaShare bool `json:"viaShare,omitempty"`
+	// Group: the customer group the entry is recorded under (#470), in an
+	// admin's page only; none for entries from before 1.4.0 and
+	// instance-level ones. Its name is missing once the group is removed.
+	Group *auditGroupJSON `json:"group,omitempty"`
 }
+
+type auditGroupJSON struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// auditGroupNone is the group= value of the entries without a group.
+const auditGroupNone = "none"
 
 type auditPageJSON struct {
 	Entries    []auditEntryJSON `json:"entries"`
@@ -283,10 +295,13 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Each user and actor may repeat; an entry matches if its user is one
-	// of them or its actor is (a union). The checks run in a fixed order so
-	// that a non-admin cannot tell existing names from unknown ones.
+	// of them or its actor is (a union). group (#470) is one group's id or
+	// none, and intersects with them. The checks run in a fixed order (403,
+	// cap, formats, lookups) so that a non-admin cannot tell existing names
+	// or groups from unknown ones.
 	userNames, actors := auditValues(q["user"], auth.NormalizeUserName), auditValues(q["actor"], nil)
-	if !sess.IsAdmin && (len(userNames) > 0 || len(actors) > 0) {
+	group := q.Get("group")
+	if !sess.IsAdmin && (len(userNames) > 0 || len(actors) > 0 || group != "") {
 		s.fail(w, r, http.StatusForbidden, "only admins can see other users' entries", nil)
 		return
 	}
@@ -303,6 +318,15 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.Actors = actors
+	var groupID int64
+	if group == auditGroupNone {
+		p.NoGroup = true
+	} else if group != "" {
+		if groupID, err = strconv.ParseInt(group, 10, 64); err != nil || groupID <= 0 {
+			s.fail(w, r, http.StatusBadRequest, "group must be a group id or none", nil)
+			return
+		}
+	}
 	for _, name := range userNames {
 		u, err := s.store.GetUserByName(r.Context(), name)
 		if err != nil {
@@ -310,6 +334,18 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.UserIDs = append(p.UserIDs, u.ID)
+	}
+	if groupID != 0 {
+		g, err := s.store.GetGroup(r.Context(), groupID)
+		if errors.Is(err, store.ErrUnknownGroup) {
+			s.fail(w, r, http.StatusBadRequest, "unknown group", nil)
+			return
+		}
+		if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		p.GroupID = &g.ID
 	}
 	if c := q.Get("cursor"); c != "" {
 		at, id, err := decodeAuditCursor(c)
@@ -340,6 +376,11 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		out.NextCursor = encodeAuditCursor(last.At, last.ID)
 		recs = recs[:limit]
 	}
+	groups, err := s.auditGroupNames(r.Context(), sess, recs)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	for _, rec := range recs {
 		e := auditEntryJSON{
 			ID: rec.ID, At: rec.At.UTC(), Actor: rec.Actor, User: rec.UserName, APIKey: rec.APIKeyName, Action: rec.Action,
@@ -348,9 +389,30 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		if rec.TargetType != "" {
 			e.Target = &auditTargetJSON{Type: rec.TargetType, ID: rec.TargetID, Name: rec.TargetName, Subject: rec.Subject}
 		}
+		if sess.IsAdmin && rec.GroupID != nil {
+			e.Group = &auditGroupJSON{ID: *rec.GroupID, Name: groups[*rec.GroupID]}
+		}
 		out.Entries = append(out.Entries, e)
 	}
 	s.writeJSON(w, http.StatusOK, out)
+}
+
+// auditGroupNames returns the names of the customer groups, by id, for an
+// admin's page that has entries with a group: one lookup per page. Others
+// get none, as they never see a group.
+func (s *Server) auditGroupNames(ctx context.Context, sess *store.Session, recs []store.AuditRecord) (map[int64]string, error) {
+	if !sess.IsAdmin || !slices.ContainsFunc(recs, func(r store.AuditRecord) bool { return r.GroupID != nil }) {
+		return nil, nil
+	}
+	list, err := s.store.ListGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]string, len(list))
+	for _, g := range list {
+		out[g.ID] = g.Name
+	}
+	return out, nil
 }
 
 // auditValues returns the non-empty values of a repeatable parameter in

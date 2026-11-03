@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { formatState, parseState, useViewState, type ViewState } from "./urlState";
 
-const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [] };
+const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [], customer: "" };
 
 describe("url state", () => {
   it("round-trips and omits empty fields", () => {
@@ -102,6 +102,17 @@ describe("the Log's filters", () => {
     // Groups and actors in the list's order; users as given.
     expect(s).toEqual({ ...log, action: ["read", "export"], actor: ["cli", "api_key"], user: ["bob", "cli"] });
     expect(parseState("?view=log&until=2026-10-20").until).toBe("2026-10-20");
+  });
+  // The customer group (#470): customer=, since group= lists conversations.
+  it("keep a customer group's id or none, apart from the conversation list", () => {
+    for (const v of ["2", "none"]) {
+      const s = parseState(`?view=log&customer=${v}&group=1`);
+      expect(s).toEqual({ ...log, customer: v, group: "1" });
+      expect(formatState(s)).toBe(`?group=1&view=log&customer=${v}`);
+    }
+    for (const v of ["", "0", "-1", "02", "1.5", "NONE", "Meier"]) expect(parseState(`?view=log&customer=${v}`).customer, v).toBe("");
+    expect(parseState("?customer=2")).toEqual(empty);
+    expect(formatState({ ...empty, customer: "2" })).toBe("");
   });
   it("mean nothing outside the Log", () => {
     expect(parseState("?since=2026-10-01&until=2026-10-20&action=read&user=bob&actor=cli")).toEqual(empty);

@@ -1543,6 +1543,20 @@ paths:
               enum: [session, api_key, cli]
           style: form
           explode: true
+        - name: group
+          in: query
+          description: |
+            Admins only. A customer group's id: only the entries recorded
+            under that group. `none`: only the entries without a group, from
+            before 1.4.0 or instance-level (deletion runs, backups,
+            maintenance, failed logins of unknown names). Intersects with
+            `user` and `actor`; an empty value is no filter.
+          schema:
+            oneOf:
+              - type: integer
+                minimum: 1
+              - type: string
+                enum: [none]
         - name: cursor
           in: query
           description: "`nextCursor` of the previous page."
@@ -1576,7 +1590,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          description: "`user` or `actor` from a user who is not an admin, checked before the values themselves."
+          description: "`user`, `actor` or `group` from a user who is not an admin, checked before the values themselves."
           content:
             application/json:
               schema:
@@ -2868,6 +2882,18 @@ components:
         viaShare:
           type: boolean
           description: Another user's read of an account the viewer shared; only in a non-admin's page.
+        group:
+          type: object
+          description: |
+            The customer group the entry is recorded under; only in an
+            admin's page, and missing for entries from before 1.4.0 and
+            instance-level ones. `name` is missing once the group is removed.
+          required: [id]
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
 
     Retry:
       type: object

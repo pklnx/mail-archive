@@ -432,7 +432,8 @@ async function errorFor(path: string, res: Response): Promise<ApiError> {
   return err;
 }
 
-async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+/** GETs path as JSON; a failure throws an ApiError. */
+export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal, headers: { Accept: "application/json" } });
   if (!res.ok) throw await errorFor(path, res);
   return (await res.json()) as T;
@@ -758,77 +759,6 @@ export const usersApi = {
   reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
   removePasskeys: (name: string) => send("DELETE", `${userPath(name)}/passkeys`),
 };
-
-/** One row of the audit log. */
-export interface AuditEntry {
-  id: number;
-  at: string;
-  actor: "session" | "api_key" | "cli";
-  /** The user's name at the time. */
-  user?: string;
-  /** The name of the API key, for actor api_key. */
-  apiKey?: string;
-  action: string;
-  target: { type: "message" | "account" | "user"; id: string; name?: string; subject?: string } | null;
-  clientIp?: string;
-  userAgent?: string;
-  details: Record<string, unknown>;
-  /**
-   * Another user's read of the viewer's shared account (#389): no IP, user
-   * agent or key name, and details cut down to via_accounts and, for lists,
-   * the named first page's terms or only whether it searched (search).
-   */
-  viaShare?: boolean;
-}
-
-/**
- * The filters of the Log page. since and until are inclusive local days
- * "YYYY-MM-DD" (or ""). actions are action groups, any of them; users (names)
- * and actors ("cli", "api_key") are for admins only, and an entry of any of
- * them matches (#376). An empty list is no filter.
- */
-export interface AuditFilter {
-  since: string;
-  until: string;
-  actions: string[];
-  users: string[];
-  actors: string[];
-}
-
-/**
- * The first instant of the local day ymd plus n days, as RFC 3339 (#402).
- * new Date(y, m, d) is local midnight, also on 23 h and 25 h days, and the
- * day's first instant where midnight does not exist; it rolls over month and
- * year ends. A value that is not a day is passed on for the server to refuse.
- */
-function localDayStart(ymd: string, n: number): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
-  if (!m) return ymd;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + n).toISOString();
-}
-
-/**
- * The query string of GET /api/audit for a filter and a page cursor. The
- * server reads a plain date as a UTC day, so the local days go as instants
- * (#402): since is the start of the From day, until the start of the day
- * after To (the server's until is exclusive).
- */
-export function auditQuery(f: AuditFilter, cursor = ""): string {
-  const p = new URLSearchParams();
-  if (f.since) p.set("since", localDayStart(f.since, 0));
-  if (f.until) p.set("until", localDayStart(f.until, 1));
-  for (const a of f.actions) p.append("action", a);
-  for (const u of f.users) p.append("user", u);
-  for (const a of f.actors) p.append("actor", a);
-  if (cursor) p.set("cursor", cursor);
-  return p.toString();
-}
-
-export const auditApi = {
-  list: (f: AuditFilter, cursor: string, signal?: AbortSignal) =>
-    getJSON<{ entries: AuditEntry[]; nextCursor?: string }>(`/api/audit?${auditQuery(f, cursor)}`, signal),
-};
-
 
 /** A retention rule: an account's (or folder's) mail is kept for years after the end of its year. */
 export interface RetentionRule {

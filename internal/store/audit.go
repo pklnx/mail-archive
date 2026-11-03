@@ -489,7 +489,7 @@ var auditGroups = map[string][]string{
 	"read":      {"message.open", "message.html", "message.raw", "message.part", "message.conversation"},
 	"export":    {"data.%", "audit.export"},
 	"accounts":  {"account.%"},
-	"users":     {"user.%"},
+	"users":     {"user.%", "group.%"},
 	"profile":   {"profile.%"},
 	"api_keys":  {"api_key.%"},
 	"sync":      {"sync.%"},
@@ -523,7 +523,16 @@ type AuditFilter struct {
 	Since, Until time.Time
 	UserID       *int64
 	Actions      []string // groups or actions; none means all
+	// GroupID keeps only the entries of one customer group; NoGroup only
+	// those without one (#470): from before 1.4.0, or instance-level.
+	GroupID *int64
+	NoGroup bool
 }
+
+// ErrAuditGroupFilter is returned for a filter that names a group and asks
+// for entries without one, or for a group filter on a page that is not an
+// admin's.
+var ErrAuditGroupFilter = errors.New("invalid customer group filter")
 
 // AuditRecord is a stored audit entry.
 type AuditRecord struct {
@@ -543,6 +552,9 @@ type AuditRecord struct {
 	// Subject of a target message, set only by ListAudit and only for a
 	// message the viewer has a location of.
 	Subject string
+	// GroupID is the customer group the entry is recorded under (#470),
+	// set only by ListAudit of an admin's page (All); nil without one.
+	GroupID *int64
 	// ViaShare: another user's read of the viewer's shared account, in a
 	// non-admin's ListAudit; its details are cut down by shareView, and it
 	// has no client address, user agent or API key name.
@@ -555,11 +567,14 @@ func (s *Store) ExportAudit(ctx context.Context, f AuditFilter, fn func(AuditRec
 	if err != nil {
 		return err
 	}
+	if f.GroupID != nil && f.NoGroup {
+		return ErrAuditGroupFilter
+	}
 	const batch = 1000
 	afterAt, afterID := f.Since, int64(0)
 	for {
 		rows, err := s.q.ExportAuditEntries(ctx, db.ExportAuditEntriesParams{
-			Since: f.Since, Until: f.Until, UserID: f.UserID, Patterns: patterns,
+			Since: f.Since, Until: f.Until, UserID: f.UserID, GroupID: f.GroupID, NoGroup: f.NoGroup, Patterns: patterns,
 			AfterAt: afterAt, AfterID: afterID, Lim: batch,
 		})
 		if err != nil {
@@ -592,10 +607,15 @@ type AuditPage struct {
 	// entries are listed; with All (admins), every user's, optionally
 	// narrowed to the entries whose user is one of UserIDs or whose actor is
 	// one of Actors (a union, like several actions). Both empty means all.
-	Viewer       int64
-	All          bool
-	UserIDs      []int64
-	Actors       []string
+	Viewer  int64
+	All     bool
+	UserIDs []int64
+	Actors  []string
+	// GroupID keeps only the entries of one customer group, NoGroup only
+	// those without one (#470); both only with All. They intersect with
+	// UserIDs and Actors.
+	GroupID      *int64
+	NoGroup      bool
 	Since, Until time.Time
 	Actions      []string // groups or actions; none means all
 	// After the entry (CursorAt, CursorID) of the previous page.
@@ -613,13 +633,26 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 	if err != nil {
 		return nil, err
 	}
+	if (p.GroupID != nil || p.NoGroup) && (!p.All || (p.GroupID != nil && p.NoGroup)) {
+		return nil, ErrAuditGroupFilter
+	}
 	var rows []db.ListAuditEntriesRow
-	if p.All {
-		rows, err = s.q.ListAuditEntries(ctx, db.ListAuditEntriesParams{
-			Viewer: p.Viewer, Since: p.Since, Until: p.Until, UserIds: p.UserIDs, Actors: p.Actors,
+	switch {
+	case p.GroupID != nil:
+		var group []db.ListAuditEntriesForGroupRow
+		group, err = s.q.ListAuditEntriesForGroup(ctx, db.ListAuditEntriesForGroupParams{
+			Viewer: p.Viewer, GroupID: *p.GroupID, Since: p.Since, Until: p.Until, UserIds: p.UserIDs, Actors: p.Actors,
 			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
 		})
-	} else {
+		for _, r := range group {
+			rows = append(rows, db.ListAuditEntriesRow(r))
+		}
+	case p.All:
+		rows, err = s.q.ListAuditEntries(ctx, db.ListAuditEntriesParams{
+			Viewer: p.Viewer, Since: p.Since, Until: p.Until, UserIds: p.UserIDs, Actors: p.Actors, NoGroup: p.NoGroup,
+			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
+		})
+	default:
 		var own []db.ListAuditEntriesForUserRow
 		own, err = s.q.ListAuditEntriesForUser(ctx, db.ListAuditEntriesForUserParams{
 			UserID: p.Viewer, Since: p.Since, Until: p.Until,
@@ -639,6 +672,9 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 			APIKeyName: deref(r.ApiKeyName), Action: r.Action, TargetType: deref(r.TargetType),
 			TargetID: deref(r.TargetID), TargetName: deref(r.TargetName), UserAgent: deref(r.UserAgent),
 			Details: r.Details, Subject: deref(r.Subject),
+		}
+		if p.All {
+			rec.GroupID = r.GroupID
 		}
 		if r.ClientIp != nil {
 			rec.ClientIP = r.ClientIp.String()

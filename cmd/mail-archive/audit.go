@@ -113,8 +113,9 @@ func ensureAuditPartitions(ctx context.Context, st *store.Store) {
 
 func newAuditCmd() *cobra.Command {
 	var (
-		since, until, userName, format, out string
-		actions                             []string
+		since, until, userName, groupName, format, out string
+		actions                                        []string
+		withoutGroup                                   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "audit --since DATE --format csv|jsonl [--out FILE]",
@@ -125,14 +126,17 @@ DATE is YYYY-MM-DD (midnight UTC) or RFC 3339. --until is exclusive; a plain
 date includes that day. --action takes a group (login, search, read,
 export, accounts, users, profile, api_keys, sync, retention) or an action such as
 message.open, and is repeatable. --user selects the entries of a current
-user.
+user. --group selects the entries recorded under a customer group;
+--without-group those without one: from before 1.4.0, or instance-level
+work such as deletion runs, backups and maintenance.
 
 The export itself is recorded as audit.export. FILE must not exist; it is
 written with mode 0600 and appears when it is complete. In CSV, a cell that
 starts with =, +, -, @, a tab or a carriage return gets a leading ' so that
 spreadsheets do not run it as a formula.`,
 		Example: `  mail-archive audit --since 2026-01-01 --format csv --out /data/audit-2026.csv
-  mail-archive audit --since 2026-10-01 --until 2026-10-31 --user alice --action read --format jsonl`,
+  mail-archive audit --since 2026-10-01 --until 2026-10-31 --user alice --action read --format jsonl
+  mail-archive audit --since 2026-01-01 --group "Meier GmbH" --format csv --out /data/audit-meier.csv`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if format != "csv" && format != "jsonl" {
@@ -153,6 +157,9 @@ spreadsheets do not run it as a formula.`,
 			}
 			if _, err := store.AuditActionPatterns(actions); err != nil {
 				return fmt.Errorf("--action: %w", err)
+			}
+			if groupName != "" && withoutGroup {
+				return errors.New("--group and --without-group exclude each other")
 			}
 			if out != "" {
 				if _, err := os.Lstat(out); err == nil {
@@ -188,6 +195,22 @@ spreadsheets do not run it as a formula.`,
 				f.UserID = &u.ID
 				cliUserTarget(e, u)
 			}
+			if groupName != "" {
+				g, err := a.store.GetGroupByName(cmd.Context(), groupName)
+				if errors.Is(err, store.ErrUnknownGroup) {
+					return fmt.Errorf("group %q not found", strings.TrimSpace(groupName))
+				}
+				if err != nil {
+					return err
+				}
+				f.GroupID = &g.ID
+				e.Detail("group", g.Name)
+				e.Detail("group_id", g.ID)
+			}
+			if withoutGroup {
+				f.NoGroup = true
+				e.Detail("without_group", true)
+			}
 			if err := auditNow(cmd, a, e); err != nil {
 				return err
 			}
@@ -202,6 +225,8 @@ spreadsheets do not run it as a formula.`,
 	cmd.Flags().StringVar(&since, "since", "", "the first day (required)")
 	cmd.Flags().StringVar(&until, "until", "", "the end, exclusive; a plain date includes that day (default: now)")
 	cmd.Flags().StringVar(&userName, "user", "", "only this user's entries")
+	cmd.Flags().StringVar(&groupName, "group", "", "only the entries of this customer group")
+	cmd.Flags().BoolVar(&withoutGroup, "without-group", false, "only the entries without a customer group (before 1.4.0, or instance-level)")
 	cmd.Flags().StringArrayVar(&actions, "action", nil, "only these actions or groups (repeatable)")
 	cmd.Flags().StringVar(&format, "format", "", "csv or jsonl (required)")
 	cmd.Flags().StringVar(&out, "out", "", "write to this new file instead of stdout")

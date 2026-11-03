@@ -2,7 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 
 // The UI state lives in the URL query (?q=&account=&folder=&group=&gone=&m=&view=,
 // the page keys tab=&id=&add=&import= of the settings views, and the Log's
-// filters since=&until=&action=&user=&actor=), so the back button, reloads and
+// filters since=&until=&action=&user=&actor=&customer=), so the back button, reloads and
 // bookmarks work without a router library.
 
 /** The action groups of the Log's filter, as the API names them. */
@@ -47,9 +47,14 @@ export interface ViewState {
   user: string[];
   /** With view=log: the actors cli and api_key (repeated actor=). */
   actor: string[];
+  /**
+   * With view=log: a customer group's id, or "none" for the entries without
+   * one (#470); "" for all. Not group=, which lists conversations.
+   */
+  customer: string;
 }
 
-const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "tab", "id", "add", "import", "since", "until", "action", "user", "actor"];
+const keys: (keyof ViewState)[] = ["q", "account", "folder", "group", "gone", "m", "view", "tab", "id", "add", "import", "since", "until", "action", "user", "actor", "customer"];
 
 /**
  * The page keys and the views they belong to. Other views drop them, so
@@ -65,6 +70,7 @@ const pageKeys: Partial<Record<keyof ViewState, readonly string[]>> = {
   action: ["log"],
   user: ["log"],
   actor: ["log"],
+  customer: ["log"],
 };
 const inView = (k: keyof ViewState, view: string) => pageKeys[k]?.includes(view) ?? true;
 const oneOf = (v: string | null, allowed: readonly string[]) => (v !== null && allowed.includes(v) ? v : "");
@@ -101,7 +107,7 @@ export function parseState(search: string): ViewState {
 }
 
 /** The Log's filters; a value that is not a day counts as not given. */
-function logState(p: URLSearchParams): Pick<ViewState, "since" | "until" | "action" | "user" | "actor"> {
+function logState(p: URLSearchParams): Pick<ViewState, "since" | "until" | "action" | "user" | "actor" | "customer"> {
   const since = p.get("since");
   const until = p.get("until");
   return {
@@ -110,6 +116,7 @@ function logState(p: URLSearchParams): Pick<ViewState, "since" | "until" | "acti
     action: someOf(p, "action", auditGroups),
     user: allOf(p, "user"),
     actor: someOf(p, "actor", auditActors),
+    customer: /^([1-9]\d*|none)$/.test(p.get("customer") ?? "") ? p.get("customer")! : "",
   };
 }
 

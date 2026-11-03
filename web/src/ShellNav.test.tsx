@@ -5,8 +5,8 @@ import { ShellNav } from "./ShellNav";
 import type { ViewState } from "./urlState";
 
 /** The Log's filters as a section's link leaves them. */
-const noLog = { since: null, until: "", action: [], user: [], actor: [] };
-const view = (patch: Partial<ViewState> = {}): ViewState => ({ q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [], ...patch });
+const noLog = { since: null, until: "", action: [], user: [], actor: [], customer: "" };
+const view = (patch: Partial<ViewState> = {}): ViewState => ({ q: "", account: "", folder: "", group: "", gone: "", m: "", view: "", tab: "", id: "", add: "", import: "", since: null, until: "", action: [], user: [], actor: [], customer: "", ...patch });
 
 function nav(props: Partial<Parameters<typeof ShellNav>[0]> = {}) {
   const go = vi.fn();
