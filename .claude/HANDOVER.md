@@ -16,9 +16,9 @@ Current state only. At session end replace these sections; never append. History
 - #372 device checks round 2: Android parts open.
 
 ## Active decisions
-- **Operating model** (maintainer, 2026-11-01): one shared instance in full-service mode; the operator is its admin and manages the customers' users and accounts; individual instances for single customers on request. Customer groups follow in #470.
+- **Operating model** (maintainer, 2026-11-01): one shared instance in full-service mode; the operator is its admin and manages the customers' users and accounts; individual instances for single customers on request. Customer groups shipped in 1.4.0 (#470).
 - **Coordinator autonomy** (maintainer, 2026-10-31): the coordinator decides alone on UI wording, technical trade-offs, small product details inside an approved goal, and tightening security, and records them. It always asks about new goals and milestone scope, releases, and anything that widens access or weakens security or privacy (including `security.md` guarantees). It reports at milestones and blockers only.
-- **Customer groups** (maintainer 2026-11-02/03): one shared instance, groups separate customers logically; no group admin; sharing by exact name inside the group; group UI hidden with one group, the first extra group is created on the CLI; older Log entries keep the names and groups they had (security.md).
+- **Customer groups** (maintainer 2026-11-02/03): one shared instance, groups separate customers logically; no group admin; sharing by exact name inside the group; group UI hidden with one group, the first extra group is created on the CLI; older Log entries keep the names they had (security.md) and the group of their time (audit-log.md).
 - **GitHub operations without an MCP tool** (maintainer, 2026-11-01): agents do them themselves (milestones via the REST fallback in `.claude/github-operations.md`), not the maintainer.
 - **Target hardware:** plans state memory and CPU cost on 4 GB RAM / 2 cores and stay within it.
 - #459 (Safari): the server rewrites links in served HTML mail; navigations to `/api` with `Sec-Fetch-Site` `cross-site`/`same-site` get 403. Stored mail, `/raw`, parts and exports stay byte-identical.
