@@ -138,6 +138,10 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrUnknownGroup):
 		s.fail(w, r, http.StatusNotFound, "no such group", nil)
 		return
+	case errors.Is(err, store.ErrGroupHeld):
+		// Holds are released, never deleted: their record keeps the group.
+		s.fail(w, r, http.StatusConflict, "a legal hold names the group, so it stays", nil)
+		return
 	case errors.Is(err, store.ErrGroupInUse):
 		s.fail(w, r, http.StatusConflict, "the group still has users; move them to another group first", nil)
 		return

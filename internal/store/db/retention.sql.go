@@ -11,7 +11,7 @@ import (
 )
 
 const activeFilterHolds = `-- name: ActiveFilterHolds :many
-SELECT h.id, h.owner_id, h.account_id, a.name AS account, a.owner_id AS account_owner, h.filter
+SELECT h.id, h.owner_id, h.account_id, a.name AS account, a.owner_id AS account_owner, h.group_id, h.filter
 FROM legal_holds h
 LEFT JOIN accounts a ON a.id = h.account_id
 WHERE h.released_at IS NULL AND h.filter IS NOT NULL
@@ -24,11 +24,12 @@ type ActiveFilterHoldsRow struct {
 	AccountID    *int64
 	Account      *string
 	AccountOwner *int64
+	GroupID      *int64
 	Filter       []byte
 }
 
 // The active holds whose filter is matched by search, with the owner of
-// their account.
+// their account and the group they name.
 func (q *Queries) ActiveFilterHolds(ctx context.Context) ([]ActiveFilterHoldsRow, error) {
 	rows, err := q.db.Query(ctx, activeFilterHolds)
 	if err != nil {
@@ -44,6 +45,7 @@ func (q *Queries) ActiveFilterHolds(ctx context.Context) ([]ActiveFilterHoldsRow
 			&i.AccountID,
 			&i.Account,
 			&i.AccountOwner,
+			&i.GroupID,
 			&i.Filter,
 		); err != nil {
 			return nil, err
@@ -56,22 +58,74 @@ func (q *Queries) ActiveFilterHolds(ctx context.Context) ([]ActiveFilterHoldsRow
 	return items, nil
 }
 
+const activeGroupHoldsOnUser = `-- name: ActiveGroupHoldsOnUser :many
+SELECT h.id FROM legal_holds h
+WHERE h.released_at IS NULL AND h.group_id = $1::bigint
+  AND (h.owner_id IS NULL OR h.owner_id = $2::bigint)
+  AND EXISTS (SELECT 1 FROM accounts a
+              WHERE a.owner_id = $2::bigint AND (h.account_id IS NULL OR h.account_id = a.id))
+ORDER BY h.id
+`
+
+type ActiveGroupHoldsOnUserParams struct {
+	GroupID int64
+	OwnerID int64
+}
+
+// Active holds naming the user's group that cover one of the accounts the
+// user owns: moving the user to another group would release that mail
+// (#470). A user without accounts releases nothing.
+func (q *Queries) ActiveGroupHoldsOnUser(ctx context.Context, arg ActiveGroupHoldsOnUserParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, activeGroupHoldsOnUser, arg.GroupID, arg.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const activeHoldsOnOwner = `-- name: ActiveHoldsOnOwner :many
 SELECT id FROM legal_holds
-WHERE released_at IS NULL AND owner_id = $1::bigint
-  AND (account_id IS NULL OR account_id = $2::bigint)
+WHERE released_at IS NULL
+  AND (account_id IS NULL OR account_id = $1::bigint)
+  AND (owner_id IS NULL OR owner_id = $2::bigint)
+  AND (group_id IS NULL OR group_id = $3::bigint)
+  AND NOT ((owner_id IS NULL OR owner_id = $4::bigint)
+           AND (group_id IS NULL OR group_id = $5::bigint))
 ORDER BY id
 `
 
 type ActiveHoldsOnOwnerParams struct {
-	OwnerID   int64
-	AccountID int64
+	AccountID  int64
+	OwnerID    int64
+	GroupID    int64
+	NewOwnerID int64
+	NewGroupID int64
 }
 
-// Active holds that cover an account through its owner: moving the
-// account to another user would release its mail from them.
+// Active holds that cover the account now, through its owner or the
+// owner's customer group (#470), and would not once it belongs to the new
+// owner in the new group: moving it would release its mail from them.
+// The other conditions (period, filter) do not change with the owner.
 func (q *Queries) ActiveHoldsOnOwner(ctx context.Context, arg ActiveHoldsOnOwnerParams) ([]int64, error) {
-	rows, err := q.db.Query(ctx, activeHoldsOnOwner, arg.OwnerID, arg.AccountID)
+	rows, err := q.db.Query(ctx, activeHoldsOnOwner,
+		arg.AccountID,
+		arg.OwnerID,
+		arg.GroupID,
+		arg.NewOwnerID,
+		arg.NewGroupID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -194,9 +248,9 @@ func (q *Queries) HoldsNamingUser(ctx context.Context, ownerID int64) ([]int64, 
 }
 
 const insertLegalHold = `-- name: InsertLegalHold :one
-INSERT INTO legal_holds (name, reason, owner_id, account_id, filter, period_start, period_end, created_by)
+INSERT INTO legal_holds (name, reason, owner_id, account_id, group_id, filter, period_start, period_end, created_by)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8)
+        $7, $8, $9)
 RETURNING id, created_at
 `
 
@@ -205,6 +259,7 @@ type InsertLegalHoldParams struct {
 	Reason      string
 	OwnerID     *int64
 	AccountID   *int64
+	GroupID     *int64
 	Filter      []byte
 	PeriodStart *time.Time
 	PeriodEnd   *time.Time
@@ -222,6 +277,7 @@ func (q *Queries) InsertLegalHold(ctx context.Context, arg InsertLegalHoldParams
 		arg.Reason,
 		arg.OwnerID,
 		arg.AccountID,
+		arg.GroupID,
 		arg.Filter,
 		arg.PeriodStart,
 		arg.PeriodEnd,
@@ -278,19 +334,20 @@ func (q *Queries) LegalHoldExists(ctx context.Context, id int64) (bool, error) {
 }
 
 const legalHoldScope = `-- name: LegalHoldScope :one
-SELECT owner_id, account_id FROM legal_holds WHERE id = $1
+SELECT owner_id, account_id, group_id FROM legal_holds WHERE id = $1
 `
 
 type LegalHoldScopeRow struct {
 	OwnerID   *int64
 	AccountID *int64
+	GroupID   *int64
 }
 
 // Whom a hold names, which decides the class of its audit entries (#470).
 func (q *Queries) LegalHoldScope(ctx context.Context, id int64) (LegalHoldScopeRow, error) {
 	row := q.db.QueryRow(ctx, legalHoldScope, id)
 	var i LegalHoldScopeRow
-	err := row.Scan(&i.OwnerID, &i.AccountID)
+	err := row.Scan(&i.OwnerID, &i.AccountID, &i.GroupID)
 	return i, err
 }
 
@@ -298,11 +355,14 @@ const listLegalHolds = `-- name: ListLegalHolds :many
 SELECT h.id, h.name, h.reason, h.owner_id, ou.name AS owner, h.account_id, a.name AS account, au.name AS account_owner,
        h.filter, h.period_start, h.period_end, h.matched_at, h.created_at, cu.name AS created_by,
        h.released_at, ru.name AS released_by, h.release_note,
-       (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id)::bigint AS matched
+       (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id)::bigint AS matched,
+       h.group_id, hg.name AS group_name, cg.id AS covered_group_id, cg.name AS covered_group_name
 FROM legal_holds h
 LEFT JOIN users ou ON ou.id = h.owner_id
 LEFT JOIN accounts a ON a.id = h.account_id
 LEFT JOIN users au ON au.id = a.owner_id
+LEFT JOIN customer_groups hg ON hg.id = h.group_id
+LEFT JOIN customer_groups cg ON cg.id = coalesce(h.group_id, ou.group_id, au.group_id)
 LEFT JOIN users cu ON cu.id = h.created_by
 LEFT JOIN users ru ON ru.id = h.released_by
 WHERE $1::boolean OR h.released_at IS NULL
@@ -310,26 +370,33 @@ ORDER BY h.id
 `
 
 type ListLegalHoldsRow struct {
-	ID           int64
-	Name         string
-	Reason       string
-	OwnerID      *int64
-	Owner        *string
-	AccountID    *int64
-	Account      *string
-	AccountOwner *string
-	Filter       []byte
-	PeriodStart  *time.Time
-	PeriodEnd    *time.Time
-	MatchedAt    *time.Time
-	CreatedAt    time.Time
-	CreatedBy    *string
-	ReleasedAt   *time.Time
-	ReleasedBy   *string
-	ReleaseNote  *string
-	Matched      int64
+	ID               int64
+	Name             string
+	Reason           string
+	OwnerID          *int64
+	Owner            *string
+	AccountID        *int64
+	Account          *string
+	AccountOwner     *string
+	Filter           []byte
+	PeriodStart      *time.Time
+	PeriodEnd        *time.Time
+	MatchedAt        *time.Time
+	CreatedAt        time.Time
+	CreatedBy        *string
+	ReleasedAt       *time.Time
+	ReleasedBy       *string
+	ReleaseNote      *string
+	Matched          int64
+	GroupID          *int64
+	GroupName        *string
+	CoveredGroupID   *int64
+	CoveredGroupName *string
 }
 
+// group_id is the group the hold names (#470); covered_group_id the group
+// whose mail it covers: that one, or the group of its user or of its
+// account's owner. NULL: every group.
 func (q *Queries) ListLegalHolds(ctx context.Context, released bool) ([]ListLegalHoldsRow, error) {
 	rows, err := q.db.Query(ctx, listLegalHolds, released)
 	if err != nil {
@@ -358,6 +425,10 @@ func (q *Queries) ListLegalHolds(ctx context.Context, released bool) ([]ListLega
 			&i.ReleasedBy,
 			&i.ReleaseNote,
 			&i.Matched,
+			&i.GroupID,
+			&i.GroupName,
+			&i.CoveredGroupID,
+			&i.CoveredGroupName,
 		); err != nil {
 			return nil, err
 		}
@@ -371,23 +442,27 @@ func (q *Queries) ListLegalHolds(ctx context.Context, released bool) ([]ListLega
 
 const listRetentionAccounts = `-- name: ListRetentionAccounts :many
 SELECT a.id, a.name, a.kind, (a.removed_at IS NOT NULL)::boolean AS removed, u.name AS owner,
-       coalesce((SELECT array_agg(f.name ORDER BY f.name) FROM folders f WHERE f.account_id = a.id), '{}')::text[] AS folders
+       coalesce((SELECT array_agg(f.name ORDER BY f.name) FROM folders f WHERE f.account_id = a.id), '{}')::text[] AS folders,
+       g.id AS group_id, g.name AS group_name
 FROM accounts a
 LEFT JOIN users u ON u.id = a.owner_id
+LEFT JOIN customer_groups g ON g.id = u.group_id
 ORDER BY u.name NULLS FIRST, a.name
 `
 
 type ListRetentionAccountsRow struct {
-	ID      int64
-	Name    string
-	Kind    string
-	Removed bool
-	Owner   *string
-	Folders []string
+	ID        int64
+	Name      string
+	Kind      string
+	Removed   bool
+	Owner     *string
+	Folders   []string
+	GroupID   *int64
+	GroupName *string
 }
 
-// Every account with its owner and folders, for choosing a rule's or a
-// hold's account.
+// Every account with its owner, its owner's group and its folders, for
+// choosing a rule's or a hold's account.
 func (q *Queries) ListRetentionAccounts(ctx context.Context) ([]ListRetentionAccountsRow, error) {
 	rows, err := q.db.Query(ctx, listRetentionAccounts)
 	if err != nil {
@@ -404,6 +479,8 @@ func (q *Queries) ListRetentionAccounts(ctx context.Context) ([]ListRetentionAcc
 			&i.Removed,
 			&i.Owner,
 			&i.Folders,
+			&i.GroupID,
+			&i.GroupName,
 		); err != nil {
 			return nil, err
 		}
@@ -417,10 +494,12 @@ func (q *Queries) ListRetentionAccounts(ctx context.Context) ([]ListRetentionAcc
 
 const listRetentionRules = `-- name: ListRetentionRules :many
 SELECT r.id, r.account_id, a.name AS account, a.kind AS account_kind, (a.removed_at IS NOT NULL)::boolean AS account_removed,
-       u.name AS owner, r.folder, r.years, r.time_zone, r.note, r.created_at, cu.name AS created_by
+       u.name AS owner, r.folder, r.years, r.time_zone, r.note, r.created_at, cu.name AS created_by,
+       g.id AS group_id, g.name AS group_name
 FROM retention_rules r
 JOIN accounts a ON a.id = r.account_id
 LEFT JOIN users u ON u.id = a.owner_id
+LEFT JOIN customer_groups g ON g.id = u.group_id
 LEFT JOIN users cu ON cu.id = r.created_by
 ORDER BY u.name NULLS FIRST, a.name, r.folder NULLS FIRST
 `
@@ -438,8 +517,11 @@ type ListRetentionRulesRow struct {
 	Note           string
 	CreatedAt      time.Time
 	CreatedBy      *string
+	GroupID        *int64
+	GroupName      *string
 }
 
+// With the customer group of the account (its owner's, #470).
 func (q *Queries) ListRetentionRules(ctx context.Context) ([]ListRetentionRulesRow, error) {
 	rows, err := q.db.Query(ctx, listRetentionRules)
 	if err != nil {
@@ -462,6 +544,8 @@ func (q *Queries) ListRetentionRules(ctx context.Context) ([]ListRetentionRulesR
 			&i.Note,
 			&i.CreatedAt,
 			&i.CreatedBy,
+			&i.GroupID,
+			&i.GroupName,
 		); err != nil {
 			return nil, err
 		}
@@ -471,6 +555,19 @@ func (q *Queries) ListRetentionRules(ctx context.Context) ([]ListRetentionRulesR
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockAccountOwnerShare = `-- name: LockAccountOwnerShare :one
+SELECT owner_id FROM accounts WHERE id = $1 FOR SHARE
+`
+
+// The account's owner, the row locked FOR SHARE: no move of the account
+// commits until the transaction ends.
+func (q *Queries) LockAccountOwnerShare(ctx context.Context, id int64) (*int64, error) {
+	row := q.db.QueryRow(ctx, lockAccountOwnerShare, id)
+	var owner_id *int64
+	err := row.Scan(&owner_id)
+	return owner_id, err
 }
 
 const lockRetentionChanges = `-- name: LockRetentionChanges :exec
@@ -484,10 +581,23 @@ func (q *Queries) LockRetentionChanges(ctx context.Context, class int32) error {
 	return err
 }
 
+const lockUserGroupShare = `-- name: LockUserGroupShare :one
+SELECT group_id FROM users WHERE id = $1 FOR SHARE
+`
+
+// The user's group, the row locked FOR SHARE: a hold naming the user and a
+// group is checked against a group that cannot change until the commit.
+func (q *Queries) LockUserGroupShare(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockUserGroupShare, id)
+	var group_id int64
+	err := row.Scan(&group_id)
+	return group_id, err
+}
+
 const releaseLegalHold = `-- name: ReleaseLegalHold :one
 UPDATE legal_holds SET released_at = now(), released_by = $1, release_note = $2::text
 WHERE id = $3 AND released_at IS NULL
-RETURNING name, owner_id, account_id
+RETURNING name, owner_id, account_id, group_id
 `
 
 type ReleaseLegalHoldParams struct {
@@ -500,12 +610,18 @@ type ReleaseLegalHoldRow struct {
 	Name      string
 	OwnerID   *int64
 	AccountID *int64
+	GroupID   *int64
 }
 
 func (q *Queries) ReleaseLegalHold(ctx context.Context, arg ReleaseLegalHoldParams) (ReleaseLegalHoldRow, error) {
 	row := q.db.QueryRow(ctx, releaseLegalHold, arg.ReleasedBy, arg.Note, arg.ID)
 	var i ReleaseLegalHoldRow
-	err := row.Scan(&i.Name, &i.OwnerID, &i.AccountID)
+	err := row.Scan(
+		&i.Name,
+		&i.OwnerID,
+		&i.AccountID,
+		&i.GroupID,
+	)
 	return i, err
 }
 

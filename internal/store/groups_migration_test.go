@@ -56,13 +56,16 @@ func TestGroupsMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	downGroupHoldsMigration(t, st)
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "several customer groups exist") {
 		t.Fatalf("down with two groups: %v", err)
 	}
 	if err := st.DeleteGroup(ctx, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	downGroupsMigration(t, st)
+	if m, err := st.MigrateDown(ctx); err != nil || !strings.Contains(m, "00034_customer_groups") {
+		t.Fatalf("down: %q %v", m, err)
+	}
 	if n := q(`SELECT count(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'group_id'`); n != 0 {
 		t.Fatal("users.group_id survived the Down")
 	}

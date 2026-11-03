@@ -223,7 +223,7 @@ deleted.`,
 }
 
 func newHoldAddCmd() *cobra.Command {
-	var reason, account, since, until string
+	var reason, account, group, since, until string
 	var filter store.HoldFilter
 	var all bool
 	cmd := &cobra.Command{
@@ -233,6 +233,9 @@ func newHoldAddCmd() *cobra.Command {
 
   --user        mail in the user's accounts
   --account     mail in one account (with --user when the name is not unique)
+  --group       mail in the accounts of the users of a customer group, also
+                of users who join it later; a --user or --account must be
+                in that group
   --since, --until
                 mail whose Date header or received date falls in the period
                 (YYYY-MM-DD in UTC, or RFC 3339); mail without dates counts
@@ -244,7 +247,8 @@ func newHoldAddCmd() *cobra.Command {
 
 Without any condition the hold covers the whole archive; that needs --all.`,
 		Example: `  mail-archive hold add "Tax audit 2026" --reason "Betriebsprüfung, letter of 2026-09-01" --account work --until 2024-01-01
-  mail-archive hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon`,
+  mail-archive hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon
+  mail-archive hold add "Meier audit" --reason "Betriebsprüfung Meier GmbH" --group "Meier GmbH"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			h := store.NewLegalHold{Name: args[0], Reason: reason}
@@ -280,10 +284,17 @@ Without any condition the hold covers the whole archive; that needs --all.`,
 					return err
 				}
 			}
-			// A hold naming a user or an account is about them; one naming
-			// neither covers the instance and has no group (#470).
+			if group != "" {
+				g, err := findGroup(cmd, a, group)
+				if err != nil {
+					return err
+				}
+				h.GroupID = &g.ID
+			}
+			// A hold naming a user, an account or a group is about them;
+			// one naming none covers the instance and has no group (#470).
 			e := cliInstance("hold.add")
-			if u != nil || acc != nil {
+			if u != nil || acc != nil || h.GroupID != nil {
 				e = cliTargeted("hold.add")
 			}
 			if u != nil {
@@ -294,8 +305,8 @@ Without any condition the hold covers the whole archive; that needs --all.`,
 				h.AccountID = &acc.ID
 				cliAccountTarget(e, acc)
 			}
-			if h.OwnerID == nil && h.AccountID == nil && h.Filter == nil && h.PeriodStart == nil && h.PeriodEnd == nil && !all {
-				return errors.New("a hold without --user, --account, a period or a filter covers the whole archive; add --all if that is intended")
+			if h.OwnerID == nil && h.AccountID == nil && h.GroupID == nil && h.Filter == nil && h.PeriodStart == nil && h.PeriodEnd == nil && !all {
+				return errors.New("a hold without --user, --account, --group, a period or a filter covers the whole archive; add --all if that is intended")
 			}
 			id, err := a.store.AddLegalHold(withCLIAudit(cmd, e), h)
 			if err != nil {
@@ -316,6 +327,7 @@ Without any condition the hold covers the whole archive; that needs --all.`,
 	cmd.Flags().StringVar(&reason, "reason", "", "why the mail is held (required)")
 	cmd.Flags().String("user", "", "only mail in this user's accounts; also picks the account of --account")
 	cmd.Flags().StringVar(&account, "account", "", "only mail in this account")
+	cmd.Flags().StringVar(&group, "group", "", "only mail in the accounts of this customer group's users")
 	cmd.Flags().StringVar(&since, "since", "", "only mail from this date on")
 	cmd.Flags().StringVar(&until, "until", "", "only mail before the end of this date")
 	cmd.Flags().StringVar(&filter.Query, "query", "", "only mail that search finds with this text")
@@ -373,6 +385,9 @@ func holdScope(h *store.LegalHold) string {
 	}
 	if h.Account != "" {
 		parts = append(parts, fmt.Sprintf("account %s (%s)", h.Account, h.AccountOwner))
+	}
+	if h.Group != "" {
+		parts = append(parts, "group "+h.Group)
 	}
 	if h.PeriodStart != nil {
 		parts = append(parts, "from "+h.PeriodStart.UTC().Format(time.DateOnly))
@@ -488,26 +503,30 @@ func startRetention(ctx context.Context, a *app, blobs *blobstore.Store, log *sl
 }
 
 // cliHoldEntry starts the entry of a change to hold id: targeted at the
-// account or the user the hold names, as hold.add was, or instance-level
-// for a hold that names neither (#470). ErrNotFound for an unknown hold.
+// account, the user or the group the hold names, as hold.add was, or
+// instance-level for a hold that names none of them (#470). ErrNotFound
+// for an unknown hold.
 func cliHoldEntry(cmd *cobra.Command, a *app, action string, id int64) (*store.AuditEntry, error) {
-	owner, account, err := a.store.LegalHoldScope(cmd.Context(), id)
+	scope, err := a.store.LegalHoldScope(cmd.Context(), id)
 	if err != nil {
 		return nil, err
 	}
 	switch {
-	case account != nil:
-		acc, err := a.store.GetAccount(cmd.Context(), *account)
+	case scope.AccountID != nil:
+		acc, err := a.store.GetAccount(cmd.Context(), *scope.AccountID)
 		if err != nil {
 			return nil, err
 		}
 		return cliAccountTarget(cliTargeted(action), acc), nil
-	case owner != nil:
-		u, err := a.store.GetUserByID(cmd.Context(), *owner)
+	case scope.OwnerID != nil:
+		u, err := a.store.GetUserByID(cmd.Context(), *scope.OwnerID)
 		if err != nil {
 			return nil, err
 		}
 		return cliUserTarget(cliTargeted(action), u), nil
+	case scope.GroupID != nil:
+		// The store records it under the group.
+		return cliTargeted(action), nil
 	}
 	return cliInstance(action), nil
 }

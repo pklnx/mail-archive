@@ -327,11 +327,15 @@ func (d *DeletionSession) Finish(ctx context.Context, runID int64) error {
 // the year their retention period ended in. A message in two folders
 // counts in both.
 type DeletionGroup struct {
-	Owner    string
-	Account  string
-	Folder   string
-	Year     int
-	Messages int64
+	Owner   string
+	Account string
+	Folder  string
+	// GroupID and CustomerGroup: the customer group of the account's owner
+	// (#470); nil and empty without an owner.
+	GroupID       *int64
+	CustomerGroup string
+	Year          int
+	Messages      int64
 }
 
 // DeletionRunSummary groups a run's pending candidates for the review.
@@ -342,7 +346,10 @@ func (s *Store) DeletionRunSummary(ctx context.Context, runID int64) ([]Deletion
 	}
 	out := make([]DeletionGroup, len(rows))
 	for i, r := range rows {
-		out[i] = DeletionGroup{Owner: r.Owner, Account: r.Account, Folder: r.Folder, Year: int(r.Year), Messages: r.Messages}
+		out[i] = DeletionGroup{
+			Owner: r.Owner, Account: r.Account, Folder: r.Folder, GroupID: r.GroupID, CustomerGroup: deref(r.GroupName),
+			Year: int(r.Year), Messages: r.Messages,
+		}
 	}
 	return out, nil
 }

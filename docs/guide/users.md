@@ -72,7 +72,10 @@ for anyone. An individual instance stays at that one group.
 - Handing an account to a user of another group needs
   `./ma account move NAME --to USER --other-group`, and ends all of the
   account's shares.
-- A group without users can be removed; the last group cannot.
+- A group without users can be removed; the last group cannot, nor a group
+  that a [legal hold](./retention#holds-per-customer-group) names. A legal
+  hold on a group also keeps its users with accounts in it until the hold is
+  released.
 
 While there is one group, the users page looks as it always did. The
 operator creates the second group on the command line:

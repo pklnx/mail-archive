@@ -131,6 +131,8 @@ func newGroupRemoveCmd() *cobra.Command {
 			}
 			err = a.store.DeleteGroup(withCLIAudit(cmd, cliTargeted("group.remove")), g.ID)
 			switch {
+			case errors.Is(err, store.ErrGroupHeld):
+				return fmt.Errorf("group %q stays: a legal hold names it (holds are released, never deleted)", g.Name)
 			case errors.Is(err, store.ErrGroupInUse):
 				return fmt.Errorf("group %q still has users; move them first with: %s user set-group NAME GROUP", g.Name, commandName())
 			case errors.Is(err, store.ErrLastGroup):

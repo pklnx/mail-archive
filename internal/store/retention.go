@@ -45,6 +45,11 @@ func (e *HoldError) Is(target error) bool { return target == ErrOnHold }
 // field out of range, a missing name or note.
 var ErrInvalidRetention = errors.New("invalid")
 
+// ErrInvalidHold is returned for a hold whose user or account is not in
+// the customer group it names (#470): such a hold would cover nothing. It
+// wraps ErrInvalidRetention.
+var ErrInvalidHold = fmt.Errorf("%w: the user or account is not in the hold's group", ErrInvalidRetention)
+
 // ErrInvalidTimeZone is returned for a time zone PostgreSQL does not know.
 // It wraps ErrInvalidRetention.
 var ErrInvalidTimeZone = fmt.Errorf("%w: unknown time zone", ErrInvalidRetention)
@@ -66,12 +71,16 @@ type RetentionRule struct {
 	AccountKind    AccountKind
 	AccountRemoved bool
 	Owner          string // empty for an account without owner
-	Folder         string // empty: every folder of the account
-	Years          int
-	TimeZone       string
-	Note           string
-	CreatedAt      time.Time
-	CreatedBy      string // empty: the command line, or a removed user
+	// GroupID and Group are the customer group of the account's owner
+	// (#470); nil and empty without an owner.
+	GroupID   *int64
+	Group     string
+	Folder    string // empty: every folder of the account
+	Years     int
+	TimeZone  string
+	Note      string
+	CreatedAt time.Time
+	CreatedBy string // empty: the command line, or a removed user
 }
 
 // NewRetentionRule is a rule to add.
@@ -151,6 +160,7 @@ func (s *Store) RetentionRules(ctx context.Context) ([]RetentionRule, error) {
 			ID: r.ID, AccountID: r.AccountID, Account: r.Account, AccountKind: AccountKind(r.AccountKind),
 			AccountRemoved: r.AccountRemoved, Owner: deref(r.Owner), Folder: deref(r.Folder), Years: int(r.Years),
 			TimeZone: r.TimeZone, Note: r.Note, CreatedAt: r.CreatedAt, CreatedBy: deref(r.CreatedBy),
+			GroupID: r.GroupID, Group: deref(r.GroupName),
 		}
 	}
 	return out, nil
@@ -205,10 +215,14 @@ func (f *HoldFilter) IsZero() bool {
 // NewLegalHold is a hold to add. Every condition that is set must match;
 // with none, the hold covers the whole archive.
 type NewLegalHold struct {
-	Name        string
-	Reason      string
-	OwnerID     *int64
-	AccountID   *int64
+	Name      string
+	Reason    string
+	OwnerID   *int64
+	AccountID *int64
+	// GroupID limits the hold to the accounts whose owner is in this
+	// customer group, also of users who join it later (#470). With an
+	// owner or an account, they must be in the group (ErrInvalidHold).
+	GroupID     *int64
 	Filter      *HoldFilter
 	PeriodStart *time.Time
 	PeriodEnd   *time.Time
@@ -225,9 +239,17 @@ type LegalHold struct {
 	AccountID    *int64
 	Account      string
 	AccountOwner string
-	Filter       *HoldFilter
-	PeriodStart  *time.Time
-	PeriodEnd    *time.Time
+	// GroupID and Group: the customer group the hold names (#470).
+	GroupID *int64
+	Group   string
+	// CoveredGroupID and CoveredGroup: the group whose mail the hold
+	// covers: the one it names, or the group of its user or of its
+	// account's owner; nil when it covers every group.
+	CoveredGroupID *int64
+	CoveredGroup   string
+	Filter         *HoldFilter
+	PeriodStart    *time.Time
+	PeriodEnd      *time.Time
 	// MatchedAt is when the filter's matches were last stored; until then
 	// a filter hold covers its whole scope.
 	MatchedAt   *time.Time
@@ -263,10 +285,22 @@ func (s *Store) AddLegalHold(ctx context.Context, h NewLegalHold) (int64, error)
 		if err := q.LockRetentionChanges(ctx, retentionLockClass); err != nil {
 			return err
 		}
+		var group *db.CustomerGroup
+		if h.GroupID != nil {
+			g, err := checkHoldGroup(ctx, q, h)
+			if err != nil {
+				return err
+			}
+			group = g
+		}
 		row, err := q.InsertLegalHold(ctx, db.InsertLegalHoldParams{
-			Name: h.Name, Reason: h.Reason, OwnerID: h.OwnerID, AccountID: h.AccountID, Filter: filter,
+			Name: h.Name, Reason: h.Reason, OwnerID: h.OwnerID, AccountID: h.AccountID, GroupID: h.GroupID, Filter: filter,
 			PeriodStart: h.PeriodStart, PeriodEnd: h.PeriodEnd, CreatedBy: h.CreatedBy,
 		})
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == "legal_holds_group_id_fkey" {
+			return ErrUnknownGroup // removed concurrently
+		}
 		if err != nil {
 			return err
 		}
@@ -274,6 +308,7 @@ func (s *Store) AddLegalHold(ctx context.Context, h NewLegalHold) (int64, error)
 		if e := auditFrom(ctx); e != nil {
 			e.Detail("hold_id", id)
 			e.Detail("name", h.Name)
+			auditHoldGroup(e, group)
 			if filter != nil {
 				e.Detail("filter", h.Filter)
 			}
@@ -287,6 +322,67 @@ func (s *Store) AddLegalHold(ctx context.Context, h NewLegalHold) (int64, error)
 		return nil
 	})
 	return id, err
+}
+
+// checkHoldGroup returns the group a new hold names; ErrUnknownGroup if
+// there is none, ErrInvalidHold if the hold's user, or its account's
+// owner, is in another group. Their rows stay locked FOR SHARE until the
+// commit, so that neither a group change (SetUserGroup) nor an account
+// move (SetAccountOwner) slips in between: those wait, and then see the
+// hold.
+func checkHoldGroup(ctx context.Context, q *db.Queries, h NewLegalHold) (*db.CustomerGroup, error) {
+	g, err := q.GetGroupByID(ctx, *h.GroupID)
+	if isNoRows(err) {
+		return nil, ErrUnknownGroup
+	}
+	if err != nil {
+		return nil, err
+	}
+	users := []*int64{h.OwnerID}
+	if h.AccountID != nil {
+		owner, err := q.LockAccountOwnerShare(ctx, *h.AccountID)
+		if isNoRows(err) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if owner == nil { // an account without owner is in no group
+			return nil, ErrInvalidHold
+		}
+		users = append(users, owner)
+	}
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		gid, err := q.LockUserGroupShare(ctx, *u)
+		if isNoRows(err) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if gid != g.ID {
+			return nil, ErrInvalidHold
+		}
+	}
+	return &g, nil
+}
+
+// auditHoldGroup records the group a hold names in its pending entry; a
+// targeted entry without a user or account target is recorded under that
+// group (#470).
+func auditHoldGroup(e *AuditEntry, g *db.CustomerGroup) {
+	if g == nil {
+		return
+	}
+	e.Detail("group_id", g.ID)
+	e.Detail("group", g.Name)
+	if e.class == AuditTargeted && e.GroupID == nil {
+		id := g.ID
+		e.GroupID = &id
+	}
 }
 
 // LegalHolds lists the active holds, and the released ones too with
@@ -304,6 +400,7 @@ func (s *Store) LegalHolds(ctx context.Context, released bool) ([]LegalHold, err
 			PeriodStart: r.PeriodStart, PeriodEnd: r.PeriodEnd, MatchedAt: r.MatchedAt, Matched: r.Matched,
 			CreatedAt: r.CreatedAt, CreatedBy: deref(r.CreatedBy), ReleasedAt: r.ReleasedAt,
 			ReleasedBy: deref(r.ReleasedBy), ReleaseNote: deref(r.ReleaseNote),
+			GroupID: r.GroupID, Group: deref(r.GroupName), CoveredGroupID: r.CoveredGroupID, CoveredGroup: deref(r.CoveredGroupName),
 		}
 		if r.Filter != nil {
 			h.Filter = &HoldFilter{}
@@ -345,23 +442,40 @@ func (s *Store) ReleaseLegalHold(ctx context.Context, id int64, by *int64, note 
 			e.Detail("hold_id", id)
 			e.Detail("name", r.Name)
 			e.Detail("note", note)
+			if r.GroupID != nil {
+				g, err := q.GetGroupByID(ctx, *r.GroupID)
+				if err != nil {
+					return err
+				}
+				auditHoldGroup(e, &g)
+			}
 		}
 		return nil
 	})
 }
 
-// LegalHoldScope returns the owner and the account a hold names, either
-// or both nil; ErrNotFound for an unknown hold. A hold that names neither
-// is instance-level: its entries have no group (#470).
-func (s *Store) LegalHoldScope(ctx context.Context, id int64) (owner, account *int64, err error) {
+// HoldScope is whom a hold names; any of them may be nil.
+type HoldScope struct {
+	OwnerID, AccountID, GroupID *int64
+}
+
+// Instance reports whether the hold names no user, account or group: it is
+// instance-level, and its entries have no group (#470).
+func (h HoldScope) Instance() bool {
+	return h.OwnerID == nil && h.AccountID == nil && h.GroupID == nil
+}
+
+// LegalHoldScope returns whom a hold names; ErrNotFound for an unknown
+// hold.
+func (s *Store) LegalHoldScope(ctx context.Context, id int64) (HoldScope, error) {
 	r, err := s.q.LegalHoldScope(ctx, id)
 	if isNoRows(err) {
-		return nil, nil, ErrNotFound
+		return HoldScope{}, ErrNotFound
 	}
 	if err != nil {
-		return nil, nil, err
+		return HoldScope{}, err
 	}
-	return r.OwnerID, r.AccountID, nil
+	return HoldScope{OwnerID: r.OwnerID, AccountID: r.AccountID, GroupID: r.GroupID}, nil
 }
 
 // holdMatchPage is how many search results are stored at a time.
@@ -370,8 +484,8 @@ const holdMatchPage = 500
 // MatchLegalHolds stores, for every active filter hold, the messages its
 // filter finds now, and returns how many were new. Matches are only ever
 // added. Search sees what a user sees, so the filter runs as the hold's
-// user, as the owner of its account, or, for a hold without either, as
-// every user.
+// user, as the owner of its account, for a group hold without either as
+// every user of the group (#470), and otherwise as every user.
 func (s *Store) MatchLegalHolds(ctx context.Context) (int64, error) {
 	holds, err := s.q.ActiveFilterHolds(ctx)
 	if err != nil {
@@ -398,7 +512,9 @@ func (s *Store) MatchLegalHolds(ctx context.Context) (int64, error) {
 				return added, err
 			}
 			for _, u := range users {
-				owners = append(owners, u.ID)
+				if h.GroupID == nil || u.GroupID == *h.GroupID {
+					owners = append(owners, u.ID)
+				}
 			}
 		}
 		for _, owner := range owners {
@@ -484,6 +600,10 @@ type RetentionAccount struct {
 	Kind    AccountKind
 	Removed bool
 	Owner   string
+	// GroupID and Group: the customer group of the owner (#470); nil and
+	// empty without an owner.
+	GroupID *int64
+	Group   string
 	Folders []string
 }
 
@@ -495,7 +615,10 @@ func (s *Store) RetentionAccounts(ctx context.Context) ([]RetentionAccount, erro
 	}
 	out := make([]RetentionAccount, len(rows))
 	for i, r := range rows {
-		out[i] = RetentionAccount{ID: r.ID, Name: r.Name, Kind: AccountKind(r.Kind), Removed: r.Removed, Owner: deref(r.Owner), Folders: nonNil(r.Folders)}
+		out[i] = RetentionAccount{
+			ID: r.ID, Name: r.Name, Kind: AccountKind(r.Kind), Removed: r.Removed, Owner: deref(r.Owner),
+			GroupID: r.GroupID, Group: deref(r.GroupName), Folders: nonNil(r.Folders),
+		}
 	}
 	return out, nil
 }

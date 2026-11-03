@@ -238,6 +238,7 @@ type LegalHold struct {
 	ReleasedAt  *time.Time
 	ReleasedBy  *int64
 	ReleaseNote *string
+	GroupID     *int64
 }
 
 type LegalHoldMessage struct {

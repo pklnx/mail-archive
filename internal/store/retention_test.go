@@ -325,7 +325,7 @@ func TestHoldsGuardUsersAndAccounts(t *testing.T) {
 	if !errors.Is(err, store.ErrOnHold) {
 		t.Errorf("moving an account away from a held user: %v", err)
 	}
-	checkHoldError(t, err, fmt.Sprintf("named by a legal hold: the account's owner is on legal hold #%d", hold), hold)
+	checkHoldError(t, err, fmt.Sprintf("named by a legal hold: the account's owner or their group is on legal hold #%d", hold), hold)
 
 	// A user named by a hold is never deleted, even after the release.
 	carol, err := f.st.CreateUser(f.ctx, "carol", "h", false)

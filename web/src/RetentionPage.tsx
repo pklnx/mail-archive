@@ -24,6 +24,7 @@ import {
   PopoverContent,
   Select,
   SelectItem,
+  SelectItemGroup,
   SkeletonText,
   Tab,
   Table,
@@ -48,6 +49,7 @@ import {
   retentionApi,
   usersApi,
   type DeletionRun,
+  type GroupRef,
   type LegalHold,
   type ManagedUser,
   type RetentionAccount,
@@ -58,7 +60,8 @@ import { DangerModal } from "./DangerModal";
 import { day, fileSize } from "./format";
 import { t, translateWithId } from "./i18n";
 import { Loading, ViewFallback } from "./lazyView";
-import { RunPage, RunStateTag } from "./RetentionRun";
+import { GroupFilter, RunPage, RunStateTag } from "./RetentionRun";
+import { retentionText } from "./retentionText";
 import { parseQuery } from "./searchSyntax";
 import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
 import { settingsText } from "./settingsText";
@@ -79,6 +82,7 @@ export function holdScope(h: LegalHold): string {
   const parts: string[] = [];
   if (h.user) parts.push(t.holdScopeUser(h.user));
   if (h.account) parts.push(t.holdScopeAccount(h.account, h.accountOwner || "-"));
+  if (h.group) parts.push(retentionText().holdScopeGroup(h.group.name));
   if (h.since) parts.push(t.holdScopeFrom(day(h.since)));
   if (h.until) parts.push(t.holdScopeBefore(day(h.until)));
   if (h.filter) {
@@ -88,6 +92,31 @@ export function holdScope(h: LegalHold): string {
     parts.push(`${terms.filter(Boolean).join(" ")} (${h.matchedAt ? t.holdMatched(h.matched) : t.holdNotMatched})`);
   }
   return parts.length ? parts.join(", ") : t.holdScopeAll;
+}
+
+/** The name of the group an entry is in: of its account's owner, or of the hold. */
+const groupName = (g: GroupRef | null, none: string) => g?.name ?? none;
+
+/**
+ * The accounts as options of a Select: with two or more customer groups,
+ * under a heading per group (#470), in the groups' order; accounts without
+ * an owner last.
+ */
+function accountOptions(accounts: RetentionAccount[], groups: GroupRef[]): ReactNode {
+  const option = (a: RetentionAccount) => <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />;
+  if (groups.length < 2) return accounts.map(option);
+  const rt = retentionText();
+  const sections = [...groups.map((g) => ({ key: String(g.id), label: g.name, id: g.id as number | null })), { key: "none", label: rt.noGroup, id: null }];
+  return sections.map((g) => {
+    const list = accounts.filter((a) => (a.group?.id ?? null) === g.id);
+    return (
+      list.length > 0 && (
+        <SelectItemGroup key={g.key} label={g.label}>
+          {list.map(option)}
+        </SelectItemGroup>
+      )
+    );
+  });
 }
 
 /** Whether a run is still open: proposed, or confirmed and being deleted. */
@@ -141,6 +170,8 @@ export function RetentionPage() {
   // "Hold added", from the add page, on the Holds tab until the tab changes.
   const [notice, setNotice] = useState("");
   const [showReleased, setShowReleased] = useState(false);
+  // The customer group filter of the rules and holds (#470): only with two or more groups.
+  const [groupFilter, setGroupFilter] = useState("");
   const [asking, setAsking] = useState<{ kind: "rule"; rule: RetentionRule } | { kind: "hold"; hold: LegalHold } | null>(null);
   const menus = useMenuButtons();
   const heading = useRef<HTMLHeadingElement>(null);
@@ -185,6 +216,11 @@ export function RetentionPage() {
     if (holdsShown) void reloadHolds();
   }, [holdsShown, reloadHolds]);
   const holdList = holds?.released === released ? holds.list : null;
+  const groups = data?.groups ?? [];
+  const multi = groups.length >= 2;
+  // A filter of a group that is gone (or of a single group left) shows all.
+  const filtered = multi && groups.some((g) => String(g.id) === groupFilter) ? groupFilter : "";
+  const groupFilterBox = multi && <GroupFilter id="retention-group-filter" groups={groups} value={filtered} set={setGroupFilter} />;
 
   // The runs, for the Runs tab and a run's page; null when loading them failed.
   const runsShown = tab === "runs";
@@ -318,6 +354,7 @@ export function RetentionPage() {
         {data && (
           <HoldForm
             accounts={data.accounts}
+            groups={data.groups}
             cancel={() => toTab(true)}
             added={(matched) => {
               setNotice(t.holdAdded(matched));
@@ -334,6 +371,7 @@ export function RetentionPage() {
     content = (
       <RuleDetail
         rule={r}
+        withGroup={multi}
         heading={heading}
         parent={parent}
         notices={notices}
@@ -351,6 +389,7 @@ export function RetentionPage() {
     content = (
       <HoldDetail
         hold={h}
+        withGroup={multi}
         heading={heading}
         parent={parent}
         notices={notices}
@@ -367,7 +406,9 @@ export function RetentionPage() {
       />
     );
   } else if (run) {
-    content = <RunPage key={run.id} id={run.id} state={run.state} listed={run} heading={heading} parent={parent} changed={reloadRuns} />;
+    content = (
+      <RunPage key={run.id} id={run.id} state={run.state} listed={run} groups={groups} heading={heading} parent={parent} changed={reloadRuns} />
+    );
   } else {
     content = (
       <>
@@ -419,9 +460,11 @@ export function RetentionPage() {
                         />
                       ),
                     )}
+                    {data && groupFilterBox}
                     {data && (
                       <RulesTable
-                        rules={data.rules}
+                        rules={filtered ? data.rules.filter((r) => String(r.group?.id) === filtered) : data.rules}
+                        withGroup={multi}
                         menus={menus}
                         open={(id) => go({ id: String(id) })}
                         add={() => go({ add: "rule" })}
@@ -449,8 +492,11 @@ export function RetentionPage() {
                         title={notice}
                       />
                     )}
+                    {groupFilterBox}
                     <HoldsTable
-                      holds={holdList}
+                      // A hold of every group covers the filtered group's mail too.
+                      holds={filtered ? (holdList?.filter((h) => !h.coveredGroup || String(h.coveredGroup.id) === filtered) ?? null) : holdList}
+                      withGroup={multi}
                       showReleased={showReleased}
                       setShowReleased={setShowReleased}
                       menus={menus}
@@ -680,6 +726,7 @@ function HoldsFilter({ showReleased, setShowReleased }: { showReleased: boolean;
 
 function RulesTable({
   rules,
+  withGroup,
   menus,
   open,
   add,
@@ -687,6 +734,8 @@ function RulesTable({
   lost,
 }: {
   rules: RetentionRule[];
+  /** Two or more customer groups: a column with the account's group. */
+  withGroup: boolean;
   menus: ReturnType<typeof useMenuButtons>;
   open: (id: number) => void;
   add: () => void;
@@ -708,6 +757,7 @@ function RulesTable({
           <TableHead>
             <TableRow>
               <TableHeader>{s.colRule}</TableHeader>
+              {withGroup && <TableHeader className="app-wide-only">{retentionText().colGroup}</TableHeader>}
               <TableHeader>{s.colPeriod}</TableHeader>
               <TableHeader className="app-wide-only">{t.ruleNote}</TableHeader>
               <TableHeader className="app-wide-only">{s.created}</TableHeader>
@@ -739,6 +789,7 @@ function RulesTable({
                   }
                   lost={lost}
                 >
+                  {withGroup && <TableCell className="app-wide-only">{groupName(r.group, retentionText().noGroup)}</TableCell>}
                   <TableCell>
                     {t.ruleYearsCount(r.years)} · {r.timeZone}
                   </TableCell>
@@ -767,6 +818,7 @@ const HoldTag = ({ hold }: { hold: LegalHold }) =>
 
 function HoldsTable({
   holds,
+  withGroup,
   showReleased,
   setShowReleased,
   menus,
@@ -777,6 +829,8 @@ function HoldsTable({
   lost,
 }: {
   holds: LegalHold[] | null;
+  /** Two or more customer groups: a column with the group whose mail a hold covers. */
+  withGroup: boolean;
   showReleased: boolean;
   setShowReleased: (on: boolean) => void;
   menus: ReturnType<typeof useMenuButtons>;
@@ -814,6 +868,7 @@ function HoldsTable({
             <TableRow>
               <TableHeader>{s.colHold}</TableHeader>
               <TableHeader className="app-wide-only">{s.colCovers}</TableHeader>
+              {withGroup && <TableHeader className="app-wide-only">{retentionText().colGroup}</TableHeader>}
               <TableHeader>{s.colStatus}</TableHeader>
               <TableHeader className="app-wide-only">{s.created}</TableHeader>
               <TableHeader>
@@ -839,6 +894,7 @@ function HoldsTable({
                 lost={lost}
               >
                 <TableCell className="app-wide-only app-break-words">{holdScope(h)}</TableCell>
+                {withGroup && <TableCell className="app-wide-only">{groupName(h.coveredGroup, retentionText().allGroups)}</TableCell>}
                 <TableCell>
                   <HoldTag hold={h} />
                 </TableCell>
@@ -952,12 +1008,14 @@ function RunsTable({
 /** A rule's page: what it covers, its period and note; Remove rule in the menu. Rules are not edited. */
 function RuleDetail({
   rule: r,
+  withGroup,
   heading,
   parent,
   notices,
   menu,
 }: {
   rule: RetentionRule;
+  withGroup: boolean;
   heading: RefObject<HTMLHeadingElement | null>;
   parent: { label: string; href: string; go: () => void };
   notices: ReactNode;
@@ -985,6 +1043,7 @@ function RuleDetail({
         items={[
           { label: s.colPeriod, value: t.ruleYearsCount(r.years) },
           { label: t.ruleTimeZone, value: r.timeZone },
+          ...(withGroup ? [{ label: retentionText().colGroup, value: groupName(r.group, retentionText().noGroup) }] : []),
           { label: s.created, value: <span className="app-summary__lines">{t.ruleCreated(r.createdBy, day(r.createdAt))}</span> },
         ]}
       />
@@ -1003,12 +1062,14 @@ function RuleDetail({
 /** A hold's page: its scope, the reason and, once released, the note; Release in the menu while it is active. */
 function HoldDetail({
   hold: h,
+  withGroup,
   heading,
   parent,
   notices,
   menu,
 }: {
   hold: LegalHold;
+  withGroup: boolean;
   heading: RefObject<HTMLHeadingElement | null>;
   parent: { label: string; href: string; go: () => void };
   notices: ReactNode;
@@ -1023,6 +1084,7 @@ function HoldDetail({
       <SummaryTiles
         items={[
           { label: s.colCovers, value: <span className="app-summary__lines">{holdScope(h)}</span> },
+          ...(withGroup ? [{ label: retentionText().colGroup, value: groupName(h.coveredGroup, retentionText().allGroups) }] : []),
           { label: s.created, value: <span className="app-summary__lines">{t.ruleCreated(h.createdBy, day(h.createdAt))}</span> },
           ...(h.releasedAt
             ? [{ label: s.released, value: <span className="app-summary__lines">{t.holdReleased(h.releasedBy, day(h.releasedAt), h.releaseNote)}</span> }]
@@ -1138,9 +1200,7 @@ function RuleForm({ data, cancel, added }: { data: RetentionRules; cancel: () =>
             }}
           >
             <SelectItem value="" text="" />
-            {data.accounts.map((a) => (
-              <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
-            ))}
+            {accountOptions(data.accounts, data.groups)}
           </Select>
           <Select id={`${id}-folder`} labelText={t.ruleFolder} value={folder} disabled={!account} onChange={(e) => setFolder(e.target.value)}>
             <SelectItem value="" text={t.ruleAllFolders} />
@@ -1209,10 +1269,26 @@ function RuleForm({ data, cancel, added }: { data: RetentionRules; cancel: () =>
   );
 }
 
-/** The Add hold page's form: a hold without user, account or filter needs the box for the whole archive. */
-function HoldForm({ accounts, cancel, added }: { accounts: RetentionAccount[]; cancel: () => void; added: (matched?: number) => void }) {
+/**
+ * The Add hold page's form: a hold without user, account, group or filter
+ * needs the box for the whole archive. With two or more customer groups it
+ * has a group (#470), which narrows the users and accounts to choose.
+ */
+function HoldForm({
+  accounts,
+  groups,
+  cancel,
+  added,
+}: {
+  accounts: RetentionAccount[];
+  groups: GroupRef[];
+  cancel: () => void;
+  added: (matched?: number) => void;
+}) {
+  const rt = retentionText();
   const [name, setName] = useState("");
   const [reason, setReason] = useState("");
+  const [group, setGroup] = useState("");
   const [user, setUser] = useState("");
   const [accountId, setAccountId] = useState("");
   const [query, setQuery] = useState("");
@@ -1228,7 +1304,17 @@ function HoldForm({ accounts, cancel, added }: { accounts: RetentionAccount[]; c
   const filter = p.text || p.from || p.to || p.attachment || p.hasAttachment
     ? { q: p.text, from: p.from, to: p.to, attachment: p.attachment, hasAttachment: p.hasAttachment }
     : null;
-  const unscoped = !user && !accountId && !filter && !p.after && !p.before;
+  const unscoped = !user && !accountId && !group && !filter && !p.after && !p.before;
+  // Only the users and accounts of the chosen group can be in its hold.
+  const inGroup = (g: GroupRef | null | undefined) => !group || String(g?.id) === group;
+  const groupUsers = users.filter((u) => inGroup(u.group));
+  const groupAccounts = accounts.filter((a) => inGroup(a.group));
+  const chooseGroup = (g: string) => {
+    setGroup(g);
+    const fits = (x: GroupRef | null | undefined) => !g || String(x?.id) === g;
+    if (user && !fits(users.find((u) => u.name === user)?.group)) setUser("");
+    if (accountId && !fits(accounts.find((a) => String(a.id) === accountId)?.group)) setAccountId("");
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -1241,6 +1327,7 @@ function HoldForm({ accounts, cancel, added }: { accounts: RetentionAccount[]; c
         reason,
         user,
         accountId: accountId ? Number(accountId) : null,
+        group: group ? Number(group) : null,
         filter,
         // after: is inclusive, before: exclusive, both local midnight.
         since: p.after ? new Date(`${p.after}T00:00:00`).toISOString() : null,
@@ -1260,18 +1347,24 @@ function HoldForm({ accounts, cancel, added }: { accounts: RetentionAccount[]; c
         <TextInput id={`${id}-name`} labelText={t.holdName} value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
         <TextInput id={`${id}-reason`} labelText={t.holdReason} value={reason} maxLength={2000} required onChange={(e) => setReason(e.target.value)} />
       </div>
+      {groups.length >= 2 && (
+        <Select id={`${id}-group`} labelText={rt.colGroup} helperText={rt.holdGroupHint} value={group} onChange={(e) => chooseGroup(e.target.value)}>
+          <SelectItem value="" text={rt.anyGroup} />
+          {groups.map((g) => (
+            <SelectItem key={g.id} value={String(g.id)} text={g.name} />
+          ))}
+        </Select>
+      )}
       <div className="form-row form-row--two">
         <Select id={`${id}-user`} labelText={t.holdUser} value={user} onChange={(e) => setUser(e.target.value)}>
           <SelectItem value="" text={t.holdAnyUser} />
-          {users.map((u) => (
+          {groupUsers.map((u) => (
             <SelectItem key={u.name} value={u.name} text={u.name} />
           ))}
         </Select>
         <Select id={`${id}-account`} labelText={t.holdAccount} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
           <SelectItem value="" text={t.holdAnyAccount} />
-          {accounts.map((a) => (
-            <SelectItem key={a.id} value={String(a.id)} text={accountLabel(a)} />
-          ))}
+          {accountOptions(groupAccounts, group ? [] : groups)}
         </Select>
       </div>
       <TextInput id={`${id}-filter`} labelText={t.holdFilter} helperText={t.holdFilterHint} value={query} onChange={(e) => setQuery(e.target.value)} />

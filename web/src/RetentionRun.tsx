@@ -5,6 +5,8 @@ import {
   Button,
   InlineLoading,
   MenuItem,
+  Select,
+  SelectItem,
   SkeletonText,
   Table,
   TableBody,
@@ -16,11 +18,12 @@ import {
   Tag,
   TextInput,
 } from "@carbon/react";
-import { retentionApi, type DeletionReview, type DeletionRun } from "./api";
+import { retentionApi, type DeletionReview, type DeletionRun, type GroupRef } from "./api";
 import { DangerModal } from "./DangerModal";
 import { day, fileSize } from "./format";
 import { t } from "./i18n";
 import { Loading } from "./lazyView";
+import { retentionText } from "./retentionText";
 import { DetailHeader, RowMenu, SummaryTiles } from "./settingsParts";
 import { settingsText } from "./settingsText";
 
@@ -65,6 +68,22 @@ export function PathText({ text }: { text: string }) {
   );
 }
 
+/**
+ * The customer group filter above a table (#470): all groups, or one. Its
+ * caller shows it only with two or more groups.
+ */
+export function GroupFilter({ id, groups, value, set }: { id: string; groups: GroupRef[]; value: string; set: (v: string) => void }) {
+  const rt = retentionText();
+  return (
+    <Select id={id} className="retention-group-filter" labelText={rt.colGroup} value={value} onChange={(e) => set(e.target.value)}>
+      <SelectItem value="" text={rt.allGroups} />
+      {groups.map((g) => (
+        <SelectItem key={g.id} value={String(g.id)} text={g.name} />
+      ))}
+    </Select>
+  );
+}
+
 /** The states a run must reach for an action to have done what was asked. */
 const reached = { confirm: ["confirmed", "done"], cancel: ["cancelled"] } as const;
 
@@ -74,6 +93,8 @@ export interface RunPageProps {
   state?: string;
   /** The run as listed, for the title until the review is loaded. */
   listed?: DeletionRun;
+  /** The customer groups: with two or more, the groups of messages show theirs, with a filter (#470). */
+  groups?: GroupRef[];
   heading: RefObject<HTMLHeadingElement | null>;
   parent: { label: string; href: string; go: () => void };
   /** Loads the runs again; null when that failed. */
@@ -86,7 +107,7 @@ export interface RunPageProps {
  * which asks for the typed count in a danger Modal; Cancel run is in the
  * overflow menu and asks nothing more. Loading the page moves no focus.
  */
-export function RunPage({ id, state, listed, heading, parent, changed }: RunPageProps) {
+export function RunPage({ id, state, listed, groups = [], heading, parent, changed }: RunPageProps) {
   const s = settingsText();
   const [review, setReview] = useState<DeletionReview | null>(null);
   const [error, setError] = useState("");
@@ -223,7 +244,7 @@ export function RunPage({ id, state, listed, heading, parent, changed }: RunPage
         </Loading>
       )}
       {proposed && run.candidates === 0 && <p>{t.runEmpty}</p>}
-      {review && review.groups.length > 0 && <RunGroups review={review} title={s.groups} />}
+      {review && review.groups.length > 0 && <RunGroups review={review} title={s.groups} customerGroups={groups} />}
       {review && run && review.candidates.length > 0 && (
         <Accordion>
           <AccordionItem title={t.runHashes(review.listed, run.candidates)}>
@@ -254,29 +275,41 @@ export function RunPage({ id, state, listed, heading, parent, changed }: RunPage
   );
 }
 
-/** The groups of a run: messages by owner / account / folder and the year their period ended. */
-function RunGroups({ review, title }: { review: DeletionReview; title: string }) {
+/**
+ * The groups of a run: messages by owner / account / folder and the year
+ * their period ended; with two or more customer groups also the owner's
+ * group, and a filter by it (#470). A run deletes over every group.
+ */
+function RunGroups({ review, title, customerGroups }: { review: DeletionReview; title: string; customerGroups: GroupRef[] }) {
   const id = useId();
+  const rt = retentionText();
+  const [filter, setFilter] = useState("");
+  const multi = customerGroups.length >= 2;
+  const chosen = multi && customerGroups.some((g) => String(g.id) === filter) ? filter : "";
+  const rows = chosen ? review.groups.filter((g) => String(g.group?.id) === chosen) : review.groups;
   return (
     <section className="page__section" aria-labelledby={`${id}-groups`}>
       <h2 id={`${id}-groups`} className="type-heading-03">
         {title}
       </h2>
+      {multi && <GroupFilter id={`${id}-filter`} groups={customerGroups} value={chosen} set={setFilter} />}
       <TableContainer className="run-groups app-table">
         <Table size="sm" aria-label={t.runGroupsHead}>
           <TableHead>
             <TableRow>
               <TableHeader>{t.runGroupsHead}</TableHeader>
+              {multi && <TableHeader className="app-wide-only">{rt.colGroup}</TableHeader>}
               <TableHeader>{t.runYear}</TableHeader>
               <TableHeader className="run-groups__number">{t.runMessages}</TableHeader>
             </TableRow>
           </TableHead>
           <TableBody>
-            {review.groups.map((g) => (
+            {rows.map((g) => (
               <TableRow key={`${g.owner}/${g.account}/${g.folder}/${g.year}`}>
                 <TableCell>
                   <PathText text={`${g.owner || "-"} / ${g.account} / ${g.folder}`} />
                 </TableCell>
+                {multi && <TableCell className="app-wide-only">{g.group?.name ?? rt.noGroup}</TableCell>}
                 <TableCell className="app-tabular">{g.year}</TableCell>
                 <TableCell className="app-tabular run-groups__number">{g.messages}</TableCell>
               </TableRow>
