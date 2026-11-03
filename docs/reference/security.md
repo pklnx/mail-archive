@@ -93,7 +93,8 @@ group, one user at a time, and only for reading. A share request answers the
 same `404` for a name that does not exist and for a user of another group,
 and the store and the database refuse a share across groups. Moving a user or
 an account to another group ends every share that would cross groups. Users
-who are not admins never see names of users of other groups. Admins see every
+who are not admins never see names of users of other groups, except in older
+Log entries from the time that user was still in the same group. Admins see every
 group's users, accounts, audit log, retention rules and holds, but no mail
 except their own and what was shared with them. Groups separate customers
 inside one instance: they share one database, one archive directory, one

@@ -100,6 +100,12 @@ These rules are excluded in `.squawk.toml`:
 | `constraint-missing-not-valid`, `adding-foreign-key-constraint`, `disallowed-unique-constraint`, `ban-drop-constraint`, `ban-drop-not-null` | They are about lock times on busy tables; the archive migrates while it is stopped. |
 | `prefer-bigint-over-int`, `prefer-bigint-over-smallint`, `prefer-identity`, `ban-char-field`, `prefer-robust-stmts` | Style; the schema already decides these case by case. |
 
+A finding that the reviewer judged not affected in one statement is
+silenced for that statement only, never by turning the rule off: a comment
+with the reason, then `-- squawk-ignore RULE` on the line right before the
+statement (as for `SET NOT NULL` on the small `users` table in 00034). The
+rule stays on for every other statement and migration.
+
 With these rules, the `Up` sections of the 30 migrations on `main` (as of
 2026-10-28) give 3 findings, all for generated columns in released migrations
 (00002, 00019). The gate checks only added migrations, so `main` needs no

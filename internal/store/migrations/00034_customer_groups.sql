@@ -36,26 +36,34 @@ SELECT setval(pg_get_serial_sequence('customer_groups', 'id'),
 INSERT INTO customer_groups (name) VALUES ('Default');
 ALTER TABLE users ADD COLUMN group_id BIGINT REFERENCES customer_groups (id) ON DELETE RESTRICT;
 UPDATE users SET group_id = (SELECT id FROM customer_groups);
+-- users has a few rows per customer, all filled by the UPDATE above, and
+-- ./ma migrate runs before the server starts (review gate: accepted).
+-- squawk-ignore adding-not-nullable-field
 ALTER TABLE users ALTER COLUMN group_id SET NOT NULL;
 CREATE INDEX users_group_idx ON users (group_id);
 
 -- No share crosses groups, whatever writes it. A new or changed share is
--- checked at once; a user's group change and an account's owner change
--- are checked at commit, so the transaction that makes them can first end
--- the shares that would cross (store.SetUserGroup, SetAccountOwner).
+-- checked at once, with the owner's and the reader's rows locked FOR SHARE
+-- (in id order) until the commit: a concurrent group change of either
+-- waits for the share, and a group change not yet committed makes the
+-- share wait and then see the new group. A user's group change and an
+-- account's owner change are checked at commit, so the transaction that
+-- makes them can first end the shares that would cross (store.SetUserGroup,
+-- SetAccountOwner).
 -- +goose StatementBegin
 CREATE FUNCTION account_shares_same_group() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
+    owner        BIGINT;
     owner_group  BIGINT;
     reader_group BIGINT;
 BEGIN
+    SELECT owner_id INTO owner FROM accounts WHERE id = NEW.account_id;
+    PERFORM 1 FROM users WHERE id IN (owner, NEW.user_id) ORDER BY id FOR SHARE;
     SELECT group_id INTO reader_group FROM users WHERE id = NEW.user_id;
     IF NOT FOUND THEN
         RETURN NEW; -- the foreign key refuses it
     END IF;
-    SELECT u.group_id INTO owner_group
-    FROM accounts a JOIN users u ON u.id = a.owner_id
-    WHERE a.id = NEW.account_id;
+    SELECT group_id INTO owner_group FROM users WHERE id = owner;
     IF owner_group IS DISTINCT FROM reader_group THEN
         RAISE EXCEPTION 'account % and user % are not in the same customer group', NEW.account_id, NEW.user_id
             USING ERRCODE = 'check_violation';

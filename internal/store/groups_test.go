@@ -275,6 +275,69 @@ func TestShareRacesGroupChange(t *testing.T) {
 	})
 }
 
+// TestShareWaitsForGroupChange (#470, test 6, review B of #500): a group
+// change of the reader that is not committed yet holds the reader's row
+// FOR UPDATE. The share waits for it at ShareAccount's FOR SHARE, sees the
+// new group after the commit and refuses; without that lock it would read
+// the old group and create a share that crosses groups.
+func TestShareWaitsForGroupChange(t *testing.T) {
+	f := newGroupFixture(t)
+	mover, err := f.conn.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mover.Rollback(f.ctx) }()
+	if _, err := mover.Exec(f.ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, f.uwe.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mover.Exec(f.ctx, `UPDATE users SET group_id = $1 WHERE id = $2`, f.b.ID, f.uwe.ID); err != nil {
+		t.Fatal(err)
+	}
+	ref := f.account(f.infoID).Ref()
+	done := make(chan error, 1)
+	go func() { _, err := f.st.ShareAccount(f.ctx, ref, f.uwe.ID); done <- err }()
+	waitForLockWait(t, connect(t, f.url), done)
+	if err := mover.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, store.ErrShareOtherGroup) {
+		t.Fatalf("share during the group change: %v, want ErrShareOtherGroup", err)
+	}
+	f.checkNoCrossing()
+}
+
+// TestShareTriggerLocksUsers (#500, coordinator decision): the database
+// layer holds on its own against concurrent raw writes. A raw share not
+// committed yet holds both users' rows FOR SHARE (the insert trigger), so a
+// raw group change of the reader waits for it and is then refused at its
+// commit; without the trigger's lock it would not wait and both would
+// commit, leaving a share across groups.
+func TestShareTriggerLocksUsers(t *testing.T) {
+	f := newGroupFixture(t)
+	share, err := f.conn.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = share.Rollback(f.ctx) }()
+	if _, err := share.Exec(f.ctx, `INSERT INTO account_shares (account_id, user_id) VALUES ($1, $2)`, f.infoID, f.uwe.ID); err != nil {
+		t.Fatal(err)
+	}
+	other := connect(t, f.url)
+	done := make(chan error, 1)
+	go func() {
+		_, err := other.Exec(context.Background(), `UPDATE users SET group_id = $1 WHERE id = $2`, f.b.ID, f.uwe.ID)
+		done <- err
+	}()
+	waitForLockWait(t, connect(t, f.url), done)
+	if err := share.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !isCheckViolation(err) {
+		t.Fatalf("group change after the share: %v, want a check violation", err)
+	}
+	f.checkNoCrossing()
+}
+
 // TestGroupTriggersAtCommit (#470, test 7): a raw group change or owner
 // change that leaves a crossing share fails at commit.
 func TestGroupTriggersAtCommit(t *testing.T) {
@@ -604,6 +667,46 @@ func TestAuditGroupColumn(t *testing.T) {
 		if es := groupedEntries(t, f.conn, action); len(es) != 1 || groupOf(es[0]) != want {
 			t.Errorf("%s: %+v, want group %s", action, es, want)
 		}
+	}
+}
+
+// TestPurgeFinishKeepsGroup (#470, test 12, review A of #500): the end of
+// an account purge is written after the account row is gone and keeps the
+// group the account had, that of its owner (here in group B).
+func TestPurgeFinishKeepsGroup(t *testing.T) {
+	f := newPurgeFixture(t)
+	conn := connect(t, f.url)
+	b, err := f.st.CreateGroup(f.ctx, "B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// alice's other accounts are not shared, so the move ends nothing.
+	if _, err := f.st.SetUserGroup(f.ctx, f.alice.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := f.confirm(1)
+	if err := f.st.CheckPurgeCount(f.ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		res, err := f.st.PurgeBatch(f.ctx, p.ID, 500, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Done {
+			break
+		}
+	}
+	e := store.TargetedEntry(store.ActorCLI, "account.purge_finish")
+	e.SetTarget(store.TargetAccount, fmt.Sprint(f.acc.ID), f.acc.Name)
+	if _, err := f.st.FinishPurge(store.WithAudit(f.ctx, e), p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := countOf(t, conn, `SELECT count(*) FROM accounts WHERE id = $1`, f.acc.ID); n != 0 {
+		t.Fatal("the account is still there")
+	}
+	if es := groupedEntries(t, conn, "account.purge_finish"); len(es) != 1 || groupOf(es[0]) != fmt.Sprint(b.ID) {
+		t.Fatalf("purge_finish entries %+v, want group %d", es, b.ID)
 	}
 }
 
