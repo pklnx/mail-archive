@@ -55,6 +55,9 @@ func (w *groupWorld) sendJSON(c credential, method, path string, body any) (int,
 	if c.cookie != "" {
 		req.AddCookie(&http.Cookie{Name: cookieName, Value: c.cookie})
 	}
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		w.t.Fatal(err)
@@ -301,5 +304,121 @@ func TestAuditGroupsOfAdminActions(t *testing.T) {
 	}
 	if got := w.groupColumn("user.add"); got != def {
 		t.Errorf("user.add of newa: group %s, want %s", got, def)
+	}
+}
+
+// TestGroupRoutesAdminOnly (#470, part 2): a user who is not an admin, and
+// an admin's API key, get 403 on every group route before anything is
+// looked up: an existing and an unknown id get the same answer, byte for
+// byte, and nothing changes or is logged.
+func TestGroupRoutesAdminOnly(t *testing.T) {
+	w := newGroupWorld(t)
+	n := len(auditLog(t, w.st))
+	for _, c := range []credential{w.creds["a"], w.creds["a-key"], w.creds["x-key"]} {
+		if status, body := w.sendJSON(c, "GET", "/api/groups", nil); status != http.StatusForbidden {
+			t.Errorf("GET as %s: %d %s", c.name, status, body)
+		}
+		if status, body := w.sendJSON(c, "POST", "/api/groups", map[string]any{"name": "C"}); status != http.StatusForbidden {
+			t.Errorf("POST as %s: %d %s", c.name, status, body)
+		}
+		for _, method := range []string{"PATCH", "DELETE"} {
+			s1, existing := w.sendJSON(c, method, fmt.Sprintf("/api/groups/%d", w.b.ID), map[string]any{"name": "C"})
+			s2, unknown := w.sendJSON(c, method, fmt.Sprintf("/api/groups/%d", w.b.ID+100), map[string]any{"name": "C"})
+			if s1 != http.StatusForbidden || s2 != http.StatusForbidden || !bytes.Equal(existing, unknown) {
+				t.Errorf("%s as %s: existing %d %s; unknown %d %s", method, c.name, s1, existing, s2, unknown)
+			}
+		}
+		// The group change of PATCH /api/users is admin-only too.
+		if status, body := w.sendJSON(c, "PATCH", "/api/users/b", map[string]any{"group": w.b.ID}); status != http.StatusForbidden {
+			t.Errorf("PATCH user as %s: %d %s", c.name, status, body)
+		}
+	}
+	if got := newEntries(t, w.st, n); len(got) != 0 {
+		t.Errorf("logged %+v", got)
+	}
+	groups, err := w.st.ListGroups(context.Background())
+	if err != nil || len(groups) != 2 || groups[0].Name != "B" || groups[1].Name != "Default" {
+		t.Fatalf("groups %+v, %v", groups, err)
+	}
+	if u, err := w.st.GetUserByName(context.Background(), "b"); err != nil || u.GroupID != w.def.ID {
+		t.Fatalf("b %+v, %v", u, err)
+	}
+}
+
+// TestGroupRoutes (#470, part 2): the admin lists, adds, renames and
+// removes groups (the fixture's tester owns two accounts in Default); a
+// duplicate name (in any case) is 409, a group with
+// users cannot be removed, and each change is logged under its group.
+func TestGroupRoutes(t *testing.T) {
+	w := newGroupWorld(t)
+	cx := w.creds["x"]
+	list := func() []groupJSON {
+		t.Helper()
+		var r struct{ Groups []groupJSON }
+		w.fetchJSON(cx, "/api/groups", &r)
+		return r.Groups
+	}
+	got := list()
+	if len(got) != 2 || got[0].Name != "B" || got[0].Users != 1 || got[0].Accounts != 1 ||
+		got[1].Name != "Default" || got[1].Users != 4 || got[1].Accounts != 3 || got[1].ID != w.def.ID || got[1].CreatedAt.IsZero() {
+		t.Fatalf("groups %+v", got)
+	}
+
+	status, body := w.sendJSON(cx, "POST", "/api/groups", map[string]any{"name": "  Steuerbüro Meier "})
+	var c groupJSON
+	if status != http.StatusCreated || json.Unmarshal(body, &c) != nil || c.Name != "Steuerbüro Meier" || c.ID == 0 {
+		t.Fatalf("add: %d %s", status, body)
+	}
+	if g := w.groupColumn("group.add"); g != fmt.Sprint(c.ID) {
+		t.Errorf("group.add recorded under %s, want %d", g, c.ID)
+	}
+	n := len(auditLog(t, w.st))
+	for _, name := range []string{"steuerbüro meier", "b"} {
+		if status, body := w.sendJSON(cx, "POST", "/api/groups", map[string]any{"name": name}); status != http.StatusConflict {
+			t.Errorf("add %q: %d %s", name, status, body)
+		}
+	}
+	for _, in := range []map[string]any{{"name": ""}, {"name": "   "}, {"name": strings.Repeat("x", 101)}, {"name": "a\tb"}, {"title": "C"}} {
+		if status, body := w.sendJSON(cx, "POST", "/api/groups", in); status != http.StatusBadRequest {
+			t.Errorf("add %v: %d %s", in, status, body)
+		}
+	}
+	path := fmt.Sprintf("/api/groups/%d", c.ID)
+	if status, body := w.sendJSON(cx, "PATCH", path, map[string]any{"name": "B"}); status != http.StatusConflict {
+		t.Errorf("rename to B: %d %s", status, body)
+	}
+	for _, p := range []string{fmt.Sprintf("/api/groups/%d", w.b.ID+100), "/api/groups/0", "/api/groups/x"} {
+		if status, body := w.sendJSON(cx, "PATCH", p, map[string]any{"name": "D"}); status != http.StatusNotFound {
+			t.Errorf("rename %s: %d %s", p, status, body)
+		}
+		if status, body := w.sendJSON(cx, "DELETE", p, nil); status != http.StatusNotFound {
+			t.Errorf("remove %s: %d %s", p, status, body)
+		}
+	}
+	if status, body := w.sendJSON(cx, "DELETE", fmt.Sprintf("/api/groups/%d", w.b.ID), nil); status != http.StatusConflict ||
+		!strings.Contains(string(body), "still has users") {
+		t.Errorf("remove B with k: %d %s", status, body)
+	}
+	if got := newEntries(t, w.st, n); len(got) != 0 {
+		t.Errorf("refused changes logged %+v", got)
+	}
+
+	if status, body := w.sendJSON(cx, "PATCH", path, map[string]any{"name": "Meier"}); status != http.StatusNoContent {
+		t.Fatalf("rename: %d %s", status, body)
+	}
+	if e := w.lastEntry(n, "rename"); e.Action != "group.rename" || details(t, e)["group"] != "Meier" || details(t, e)["from"] != "Steuerbüro Meier" {
+		t.Errorf("rename entry %+v", e)
+	}
+	if g := w.groupColumn("group.rename"); g != fmt.Sprint(c.ID) {
+		t.Errorf("group.rename recorded under %s", g)
+	}
+	if status, body := w.sendJSON(cx, "DELETE", path, nil); status != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", status, body)
+	}
+	if g := w.groupColumn("group.remove"); g != fmt.Sprint(c.ID) {
+		t.Errorf("group.remove recorded under %s", g)
+	}
+	if got := list(); len(got) != 2 {
+		t.Errorf("after the remove: %+v", got)
 	}
 }

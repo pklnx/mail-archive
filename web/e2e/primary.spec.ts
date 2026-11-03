@@ -231,11 +231,25 @@ const views: View[] = [
       await main.getByRole("button", { name: "Add user" }).click();
       const dialog = page.getByRole("dialog", { name: "Add user" });
       await dialog.getByLabel("User name").fill(name);
+      // The demo has two customer groups, so the dialog asks for one (#470).
+      await dialog.getByLabel("Group").selectOption({ label: "Default" });
       await dialog.getByRole("button", { name: "Add user" }).click();
       await expect(dialog).toHaveCount(0);
       const generated = main.getByRole("status").filter({ hasText: `Password for ${name}` });
       await expect(generated.getByRole("button", { name: "Copy to clipboard" })).toBeVisible();
       return main;
+    },
+  },
+
+  {
+    // Add group (#470): a dialog of its own under the users table.
+    name: "Users, Add group dialog",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=users", "Users");
+      await main.getByRole("region", { name: "Groups" }).getByRole("button", { name: "Add group" }).click();
+      const dialog = page.getByRole("dialog", { name: "Add group" });
+      await expect(dialog.getByLabel("Group name")).toBeVisible();
+      return dialog;
     },
   },
 

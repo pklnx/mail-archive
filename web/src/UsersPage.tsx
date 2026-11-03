@@ -5,6 +5,8 @@ import {
   CodeSnippet,
   MenuItem,
   MenuItemDivider,
+  Select,
+  SelectItem,
   Table,
   TableBody,
   TableCell,
@@ -26,6 +28,8 @@ import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFo
 import { settingsText } from "./settingsText";
 import { TableSkeleton } from "./tableSkeleton";
 import { formatState, parseState, useViewState } from "./urlState";
+import { groupsApi, userAdminApi, type CustomerGroup } from "./userAdminApi";
+import { usersText } from "./usersText";
 
 /**
  * The text of a failed request. A user named by a legal hold gets a sentence
@@ -40,7 +44,10 @@ const message = (err: unknown) => {
 };
 
 /** A confirmation that is open: what it does, and for whom. */
-type Asking = { kind: "reset" | "lock" | "twoFactor" | "passkeys" | "remove"; user: ManagedUser } | null;
+type Asking = { kind: "reset" | "lock" | "twoFactor" | "passkeys" | "remove" | "group"; user: ManagedUser } | null;
+
+/** A Modal of the Groups section that is open (#470). */
+type GroupAsking = { kind: "add" } | { kind: "rename" | "remove"; group: CustomerGroup } | null;
 
 /** The URL of a user's detail page, or of the list. */
 const hrefOf = (id = "") => formatState({ ...parseState(""), view: "users", id });
@@ -81,8 +88,15 @@ export function UsersPage() {
   const [generated, setGenerated] = useState<GeneratedPassword | null>(null);
   const [asking, setAsking] = useState<Asking>(null);
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  // Customer groups (#470): their UI shows only while there are two or more.
+  const [groups, setGroups] = useState<CustomerGroup[]>([]);
+  const [groupAsking, setGroupAsking] = useState<GroupAsking>(null);
+  const [groupFilter, setGroupFilter] = useState("");
+  const [done, setDone] = useState("");
   const menus = useMenuButtons();
   const heading = useRef<HTMLHeadingElement>(null);
+  const groupsHeading = useRef<HTMLHeadingElement>(null);
+  const us = usersText();
 
   const reload = useCallback(async () => {
     const [listed] = await Promise.all([
@@ -94,9 +108,13 @@ export function UsersPage() {
         (err: unknown) => setError(message(err)),
       ),
       apiKeyApi.listAll().then(setKeys, () => setKeys([])),
+      groupsApi.list().then(setGroups, () => setGroups([])),
     ]);
     return listed;
   }, []);
+  const multi = groups.length >= 2;
+  // A filter of a group that is gone (or of a single group left) shows all.
+  const filtered = multi && groups.some((g) => String(g.id) === groupFilter) ? groupFilter : "";
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -105,6 +123,7 @@ export function UsersPage() {
   // would clear it otherwise. Resolves to whether the action succeeded.
   const run = async (action: () => Promise<unknown>) => {
     setError("");
+    setDone("");
     let failure = "";
     try {
       await action();
@@ -133,8 +152,9 @@ export function UsersPage() {
   const items = (u: ManagedUser, withReset: boolean) => (
     <>
       {withReset && <MenuItem label={t.resetPassword} onClick={() => ask("reset", u)} />}
-      <MenuItem label={u.locked ? t.unlock : t.lock} onClick={() => (u.locked ? void run(() => usersApi.setLocked(u.name, false)) : ask("lock", u))} />
-      <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => usersApi.setAdmin(u.name, !u.admin))} />
+      <MenuItem label={u.locked ? t.unlock : t.lock} onClick={() => (u.locked ? void run(() => userAdminApi.setLocked(u.name, false)) : ask("lock", u))} />
+      <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => userAdminApi.setAdmin(u.name, !u.admin))} />
+      {multi && <MenuItem label={us.changeGroup} onClick={() => ask("group", u)} />}
       {u.twoFactorEnabled && <MenuItem label={t.twoFactorReset} onClick={() => ask("twoFactor", u)} />}
       {u.passkeys > 0 && <MenuItem label={t.removePasskeys} onClick={() => ask("passkeys", u)} />}
       <MenuItemDivider />
@@ -145,6 +165,7 @@ export function UsersPage() {
   const notices = (
     <>
       {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
+      {done && <p role="status">{done}</p>}
       {error && (
         <p role="alert" className="app-text-error">
           {error}
@@ -159,6 +180,7 @@ export function UsersPage() {
         {detail ? (
           <UserDetail
             user={detail}
+            group={multi ? detail.group.name : null}
             keys={keys.filter((k) => k.user === detail.name)}
             heading={heading}
             notices={notices}
@@ -203,17 +225,53 @@ export function UsersPage() {
                 ]}
               />
             )}
-            {users && <UserTable users={users} open={open} menu={(u) => (
-              <RowMenu label={t.userActions(u.name)} register={menus.register(u.name)}>
-                {items(u, true)}
-              </RowMenu>
-            )} />}
+            {users && multi && (
+              <Select
+                id="users-group-filter"
+                className="users-filter"
+                labelText={us.colGroup}
+                value={filtered}
+                onChange={(e) => setGroupFilter(e.target.value)}
+              >
+                <SelectItem value="" text={us.allGroups} />
+                {groups.map((g) => (
+                  <SelectItem key={g.id} value={String(g.id)} text={g.name} />
+                ))}
+              </Select>
+            )}
+            {users && (
+              <UserTable
+                users={filtered ? users.filter((u) => String(u.group.id) === filtered) : users}
+                withGroup={multi}
+                open={open}
+                menu={(u) => (
+                  <RowMenu label={t.userActions(u.name)} register={menus.register(u.name)}>
+                    {items(u, true)}
+                  </RowMenu>
+                )}
+              />
+            )}
+            {users && multi && (
+              <GroupsSection
+                groups={groups}
+                heading={groupsHeading}
+                add={() => setGroupAsking({ kind: "add" })}
+                menu={(g) => (
+                  <RowMenu label={us.groupActions(g.name)} register={menus.register(`group:${g.id}`)}>
+                    <MenuItem label={us.renameGroup} onClick={() => setGroupAsking({ kind: "rename", group: g })} />
+                    <MenuItem label={us.removeGroup} kind="danger" disabled={g.users > 0} onClick={() => setGroupAsking({ kind: "remove", group: g })} />
+                  </RowMenu>
+                )}
+              />
+            )}
           </>
         )}
       </div>
 
       {adding && (
         <AddUserModal
+          groups={multi ? groups : []}
+          initialGroup={filtered}
           cancel={() => setAdding(false)}
           added={(g) => {
             setAdding(false);
@@ -230,11 +288,55 @@ export function UsersPage() {
           confirm={(removePasskeys, revokeApiKeys) => {
             const name = asking.user.name;
             setAsking(null);
-            void run(async () => setGenerated(await usersApi.resetPassword(name, removePasskeys, revokeApiKeys)));
+            void run(async () => setGenerated(await userAdminApi.resetPassword(name, removePasskeys, revokeApiKeys)));
           }}
         />
       )}
-      {asking && asking.kind !== "reset" && (
+      {asking?.kind === "group" && (
+        <ChangeGroupModal
+          user={asking.user}
+          groups={groups}
+          returnFocus={focusBack}
+          cancel={() => setAsking(null)}
+          confirm={(to) => {
+            const name = asking.user.name;
+            setAsking(null);
+            void run(async () => setDone(us.groupChanged(name, to.name, await userAdminApi.setGroup(name, to.id))));
+          }}
+        />
+      )}
+      {groupAsking && groupAsking.kind !== "remove" && (
+        <GroupNameModal
+          group={groupAsking.kind === "rename" ? groupAsking.group : null}
+          cancel={() => setGroupAsking(null)}
+          save={async (name) => {
+            if (groupAsking.kind === "rename") await groupsApi.rename(groupAsking.group.id, name);
+            else await groupsApi.create(name);
+            setGroupAsking(null);
+            setError("");
+            setDone("");
+            await reload();
+          }}
+        />
+      )}
+      {groupAsking?.kind === "remove" && (
+        <DangerModal
+          size="xs"
+          modalHeading={us.removeGroupTitle(groupAsking.group.name)}
+          primaryButtonText={us.removeGroup}
+          secondaryButtonText={t.cancel}
+          returnFocus={() => groupsHeading.current}
+          onRequestClose={() => setGroupAsking(null)}
+          onRequestSubmit={() => {
+            const { id } = groupAsking.group;
+            setGroupAsking(null);
+            void run(() => groupsApi.remove(id));
+          }}
+        >
+          <p>{us.removeGroupText}</p>
+        </DangerModal>
+      )}
+      {asking && asking.kind !== "reset" && asking.kind !== "group" && (
         <ConfirmUser
           asking={asking}
           returnFocus={focusBack}
@@ -243,15 +345,15 @@ export function UsersPage() {
             const { kind, user } = asking;
             setAsking(null);
             const name = user.name;
-            if (kind === "lock") void run(() => usersApi.setLocked(name, true));
-            else if (kind === "twoFactor") void run(() => usersApi.reset2FA(name));
-            else if (kind === "passkeys") void run(() => usersApi.removePasskeys(name));
+            if (kind === "lock") void run(() => userAdminApi.setLocked(name, true));
+            else if (kind === "twoFactor") void run(() => userAdminApi.reset2FA(name));
+            else if (kind === "passkeys") void run(() => userAdminApi.removePasskeys(name));
             else {
               // Removed from its detail page: the list replaces the page.
               // Removed from its row: the row goes, and the focus goes to
               // the list's h1 instead of falling to the body.
               const fromDetail = state.id === name;
-              void run(() => usersApi.remove(name)).then((ok) => {
+              void run(() => userAdminApi.remove(name)).then((ok) => {
                 if (ok && fromDetail) toList(true);
                 else if (ok) heading.current?.focus();
               });
@@ -268,7 +370,18 @@ export function UsersPage() {
  * page; the own row has no menu. Below 42rem the secondary columns give way
  * to a second line under the name.
  */
-function UserTable({ users, open, menu }: { users: ManagedUser[]; open: (name: string) => void; menu: (u: ManagedUser) => ReactNode }) {
+function UserTable({
+  users,
+  withGroup,
+  open,
+  menu,
+}: {
+  users: ManagedUser[];
+  withGroup: boolean;
+  open: (name: string) => void;
+  menu: (u: ManagedUser) => ReactNode;
+}) {
+  const us = usersText();
   return (
     <TableContainer className="users-table app-table">
       <Table aria-label={t.usersTitle} size="lg" overflowMenuOnHover={false}>
@@ -276,6 +389,7 @@ function UserTable({ users, open, menu }: { users: ManagedUser[]; open: (name: s
           <TableRow>
             <TableHeader>{t.colUser}</TableHeader>
             <TableHeader className="app-wide-only">{t.colRole}</TableHeader>
+            {withGroup && <TableHeader className="app-wide-only">{us.colGroup}</TableHeader>}
             <TableHeader>{t.colState}</TableHeader>
             <TableHeader className="app-wide-only">{t.colSignIn}</TableHeader>
             <TableHeader className="app-wide-only">{t.colAccounts}</TableHeader>
@@ -296,7 +410,8 @@ function UserTable({ users, open, menu }: { users: ManagedUser[]; open: (name: s
                 {u.self && <span className="users-table__hint app-text-secondary app-text-small">{t.selfHint}</span>}
                 <span className="users-table__more app-narrow-only app-text-secondary app-text-small">
                   <span>
-                    {u.admin ? t.roleAdmin : t.roleUser} · {lastLogin(u)}
+                    {u.admin ? t.roleAdmin : t.roleUser} · {withGroup && `${u.group.name} · `}
+                    {lastLogin(u)}
                   </span>
                   {u.failingAccounts > 0 && (
                     <span>
@@ -310,6 +425,7 @@ function UserTable({ users, open, menu }: { users: ManagedUser[]; open: (name: s
               <TableCell className="app-wide-only">
                 <RoleTag user={u} />
               </TableCell>
+              {withGroup && <TableCell className="app-wide-only">{u.group.name}</TableCell>}
               <TableCell>
                 <StateTag user={u} />
               </TableCell>
@@ -349,6 +465,7 @@ function UserTable({ users, open, menu }: { users: ManagedUser[]; open: (name: s
  */
 function UserDetail({
   user,
+  group,
   keys,
   heading,
   notices,
@@ -359,6 +476,8 @@ function UserDetail({
   revoke,
 }: {
   user: ManagedUser;
+  /** The user's group, shown while there are two or more; else null. */
+  group: string | null;
   keys: ApiKey[];
   heading: RefObject<HTMLHeadingElement | null>;
   notices: ReactNode;
@@ -427,6 +546,7 @@ function UserDetail({
           { label: t.twoFactor, value: user.twoFactorEnabled ? t.twoFactorStateOn : t.twoFactorStateOff },
           { label: t.passkeys, value: <span className="app-tabular">{user.passkeys}</span> },
           { label: s.created, value: shortDate(user.createdAt) },
+          ...(group === null ? [] : [{ label: usersText().colGroup, value: group }]),
         ]}
       />
       <section className="page__section" aria-labelledby={`${id}-keys`}>
@@ -535,10 +655,27 @@ export function ResetPasswordModal({
   );
 }
 
-/** Add user: a name and the admin choice; the server makes the password. */
-function AddUserModal({ cancel, added }: { cancel: () => void; added: (g: GeneratedPassword) => void }) {
+/**
+ * Add user: a name, the admin choice and, while there are two or more
+ * customer groups, the group (#470); the server makes the password.
+ */
+function AddUserModal({
+  groups,
+  initialGroup,
+  cancel,
+  added,
+}: {
+  /** The groups to choose from; empty while there is only one. */
+  groups: CustomerGroup[];
+  initialGroup: string;
+  cancel: () => void;
+  added: (g: GeneratedPassword) => void;
+}) {
+  const us = usersText();
   const [name, setName] = useState("");
   const [admin, setAdmin] = useState(false);
+  const [group, setGroup] = useState(initialGroup);
+  const groupField = useRef<HTMLSelectElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [tried, setTried] = useState(false);
@@ -553,10 +690,14 @@ function AddUserModal({ cancel, added }: { cancel: () => void; added: (g: Genera
       field.current?.focus();
       return;
     }
+    if (groups.length > 0 && !group) {
+      groupField.current?.focus();
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      added(await usersApi.create(name, admin));
+      added(await userAdminApi.create(name, admin, groups.length > 0 ? Number(group) : undefined));
     } catch (err) {
       setError(message(err));
       setBusy(false);
@@ -593,7 +734,219 @@ function AddUserModal({ cancel, added }: { cancel: () => void; added: (g: Genera
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        {groups.length > 0 && (
+          <Select
+            id={`${id}-group`}
+            ref={groupField}
+            labelText={us.colGroup}
+            required
+            invalid={tried && !group}
+            invalidText={us.groupRequired}
+            value={group}
+            onChange={(e) => setGroup(e.target.value)}
+          >
+            <SelectItem value="" text={us.chooseGroup} />
+            {groups.map((g) => (
+              <SelectItem key={g.id} value={String(g.id)} text={g.name} />
+            ))}
+          </Select>
+        )}
         <Checkbox id={`${id}-admin`} labelText={t.userIsAdmin} checked={admin} onChange={(_, { checked }) => setAdmin(checked)} />
+        {error && (
+          <p role="alert" className="app-text-error">
+            {error}
+          </p>
+        )}
+      </form>
+    </AppModal>
+  );
+}
+
+/**
+ * Change group (#470): the new group, and what the move ends. The user's
+ * shares with users of the old group end; their accounts move along.
+ */
+function ChangeGroupModal({
+  user,
+  groups,
+  returnFocus,
+  cancel,
+  confirm,
+}: {
+  user: ManagedUser;
+  groups: CustomerGroup[];
+  returnFocus: () => HTMLElement | null | undefined;
+  cancel: () => void;
+  confirm: (to: CustomerGroup) => void;
+}) {
+  const us = usersText();
+  const others = groups.filter((g) => g.id !== user.group.id);
+  const [to, setTo] = useState(others.length === 1 ? String(others[0]!.id) : "");
+  const [tried, setTried] = useState(false);
+  const id = useId();
+  const field = useRef<HTMLSelectElement>(null);
+  const submit = (e?: FormEvent) => {
+    e?.preventDefault();
+    setTried(true);
+    const chosen = others.find((g) => String(g.id) === to);
+    if (chosen) confirm(chosen);
+    else field.current?.focus();
+  };
+  return (
+    <AppModal
+      size="sm"
+      modalHeading={us.changeGroupTitle(user.name)}
+      primaryButtonText={us.changeGroup}
+      secondaryButtonText={t.cancel}
+      returnFocus={returnFocus}
+      onRequestClose={cancel}
+      onRequestSubmit={() => submit()}
+    >
+      <form className="modal-stack" onSubmit={submit} noValidate>
+        <p>{us.changeGroupText(user.name, user.group.name)}</p>
+        <Select
+          id={`${id}-group`}
+          ref={field}
+          data-modal-primary-focus=""
+          labelText={us.newGroup}
+          required
+          invalid={tried && !to}
+          invalidText={us.groupRequired}
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+        >
+          <SelectItem value="" text={us.chooseGroup} />
+          {others.map((g) => (
+            <SelectItem key={g.id} value={String(g.id)} text={g.name} />
+          ))}
+        </Select>
+      </form>
+    </AppModal>
+  );
+}
+
+/**
+ * The customer groups under the users table (#470), with Add group and a
+ * menu per group: Rename, and Remove while the group has no users.
+ */
+function GroupsSection({
+  groups,
+  heading,
+  add,
+  menu,
+}: {
+  groups: CustomerGroup[];
+  heading: RefObject<HTMLHeadingElement | null>;
+  add: () => void;
+  menu: (g: CustomerGroup) => ReactNode;
+}) {
+  const us = usersText();
+  const s = settingsText();
+  const id = useId();
+  return (
+    <section className="page__section" aria-labelledby={`${id}-groups`}>
+      <div className="app-section-head">
+        <h2 id={`${id}-groups`} ref={heading} tabIndex={-1} className="type-heading-03 app-page-title">
+          {us.groupsTitle}
+        </h2>
+        <Button kind="tertiary" size="md" renderIcon={Add} onClick={add}>
+          {us.addGroup}
+        </Button>
+      </div>
+      <p className="app-text-secondary">
+        {us.groupsHelp} {us.groupHasUsers}
+      </p>
+      <TableContainer className="users-table app-table">
+        <Table aria-label={us.groupsTitle} size="lg" overflowMenuOnHover={false}>
+          <TableHead>
+            <TableRow>
+              <TableHeader>{t.colName}</TableHeader>
+              <TableHeader>{us.colUsers}</TableHeader>
+              <TableHeader>{t.colAccounts}</TableHeader>
+              <TableHeader className="app-wide-only">{s.created}</TableHeader>
+              <TableHeader>
+                <span className="cds--visually-hidden">{t.colActions}</span>
+              </TableHeader>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {groups.map((g) => (
+              <TableRow key={g.id}>
+                <TableHeader scope="row">
+                  <span className="users-table__name">{g.name}</span>
+                </TableHeader>
+                <TableCell className="app-tabular">{g.users}</TableCell>
+                <TableCell className="app-tabular">{g.accounts}</TableCell>
+                <TableCell className="app-wide-only">{shortDate(g.createdAt)}</TableCell>
+                <TableCell className="cds--table-column-menu">{menu(g)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </section>
+  );
+}
+
+/** Add group, or rename one: the name; the server's refusal (a taken name) shows in the Modal. */
+function GroupNameModal({ group, cancel, save }: { group: CustomerGroup | null; cancel: () => void; save: (name: string) => Promise<void> }) {
+  const us = usersText();
+  const [name, setName] = useState(group?.name ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [tried, setTried] = useState(false);
+  const id = useId();
+  const field = useRef<HTMLInputElement>(null);
+  const title = group ? us.renameGroupTitle(group.name) : us.addGroup;
+  const action = group ? us.renameGroup : us.addGroup;
+
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy) return;
+    setTried(true);
+    if (!name.trim()) {
+      field.current?.focus();
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await save(name.trim());
+    } catch (err) {
+      setError(message(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AppModal
+      size="sm"
+      modalHeading={title}
+      primaryButtonText={action}
+      secondaryButtonText={t.cancel}
+      loadingStatus={busy ? "active" : "inactive"}
+      loadingDescription={action}
+      loadingIconDescription={t.loading}
+      preventCloseOnClickOutside
+      onRequestClose={() => {
+        if (!busy) cancel();
+      }}
+      onRequestSubmit={() => void submit()}
+    >
+      <form className="modal-stack" onSubmit={(e) => void submit(e)} noValidate>
+        <TextInput
+          id={`${id}-name`}
+          ref={field}
+          data-modal-primary-focus=""
+          labelText={us.groupName}
+          autoComplete="off"
+          required
+          maxLength={100}
+          invalid={tried && !name.trim()}
+          invalidText={us.groupNameRequired}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
         {error && (
           <p role="alert" className="app-text-error">
             {error}

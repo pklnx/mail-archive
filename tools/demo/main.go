@@ -250,6 +250,9 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	if err := shareUsers(ctx, st, sealer, syncer, admin, host, portNum); err != nil {
 		return err
 	}
+	if err := demoGroups(ctx, st); err != nil {
+		return err
+	}
 
 	if err := indexAttachments(ctx, st, blobs, log); err != nil {
 		return fmt.Errorf("attachment text: %w", err)
@@ -374,6 +377,31 @@ func shareUsers(ctx context.Context, st *store.Store, sealer *crypto.Sealer, syn
 	}
 	_, err = st.ShareAccount(ctx, personal.Ref(), pat.ID)
 	return err
+}
+
+// secondGroup is the demo's second customer group (#470): kim, lee and
+// sam are in it; the demo admin, pat and jo stay in "Default". With two
+// groups the users page shows its group column, filter and section, and
+// web/e2e/accounts.spec.ts checks that pat cannot share with kim.
+const secondGroup = "Lindqvist Design"
+
+// demoGroups creates the second group and moves kim, lee and sam into it.
+// They have no shares, so nothing ends.
+func demoGroups(ctx context.Context, st *store.Store) error {
+	g, err := st.CreateGroup(ctx, secondGroup)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{twoFactorName, lockedName, "sam"} {
+		u, err := st.GetUserByName(ctx, name)
+		if err != nil {
+			return err
+		}
+		if _, err := st.SetUserGroup(ctx, u.ID, g.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // journal creates an smtp account with copies the mail server delivered,

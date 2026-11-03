@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -246,4 +247,97 @@ func TestProfileSettings(t *testing.T) {
 	lee := f.as()
 	lee.loginOK("lee", "a generated password")
 	lee.expect("PATCH", "/api/profile", map[string]string{"language": "de"}, 403)
+}
+
+// TestUsersListGroup (#470, part 2): every user in GET /api/users carries
+// its group.
+func TestUsersListGroup(t *testing.T) {
+	w := newGroupWorld(t)
+	var r struct{ Users []adminUserJSON }
+	w.fetchJSON(w.creds["x"], "/api/users", &r)
+	want := map[string]groupRefJSON{
+		"a": {w.def.ID, "Default"}, "b": {w.def.ID, "Default"}, "x": {w.def.ID, "Default"}, "tester": {w.def.ID, "Default"},
+		"k": {w.b.ID, "B"},
+	}
+	if len(r.Users) != len(want) {
+		t.Fatalf("users %+v", r.Users)
+	}
+	for _, u := range r.Users {
+		if u.Group != want[u.Name] {
+			t.Errorf("%s: group %+v, want %+v", u.Name, u.Group, want[u.Name])
+		}
+	}
+}
+
+// TestChangeUserGroupAPI (#470, part 2): PATCH /api/users/{name} with a
+// group moves the user, ends the shares that would cross groups and says
+// how many; it is one field among three, and not for the own user.
+func TestChangeUserGroupAPI(t *testing.T) {
+	w := newGroupWorld(t)
+	cx := w.creds["x"]
+	w.share("a/info", "b")
+	w.put("a/info", "INBOX", "one", mail("<one@x>", "One", "Mon, 2 Jan 2023 10:00:00 +0000", "hello"))
+	if names, _ := w.list(w.creds["b"], "account=a/info"); len(names) != 1 {
+		t.Fatalf("b lists %v before the move", names)
+	}
+	n := len(auditLog(t, w.st))
+	for _, body := range []map[string]any{
+		{"group": w.b.ID, "admin": true},
+		{"group": w.b.ID, "locked": true},
+		{},
+	} {
+		if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", body); status != http.StatusBadRequest ||
+			!strings.Contains(string(out), "exactly one of admin, locked and group") {
+			t.Errorf("PATCH %v: %d %s", body, status, out)
+		}
+	}
+	for _, g := range []int64{w.b.ID + 100, 0, -1} {
+		if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"group": g}); status != http.StatusBadRequest ||
+			!strings.Contains(string(out), "unknown group") {
+			t.Errorf("group %d: %d %s", g, status, out)
+		}
+	}
+	if status, out := w.sendJSON(cx, "PATCH", "/api/users/x", map[string]any{"group": w.b.ID}); status != http.StatusForbidden {
+		t.Errorf("own group: %d %s", status, out)
+	}
+	if status, out := w.sendJSON(cx, "PATCH", "/api/users/nobody", map[string]any{"group": w.b.ID}); status != http.StatusNotFound {
+		t.Errorf("unknown user: %d %s", status, out)
+	}
+	if got := newEntries(t, w.st, n); len(got) != 0 {
+		t.Errorf("refused changes logged %+v", got)
+	}
+
+	status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"group": w.b.ID})
+	if status != http.StatusOK || string(out) != `{"sharesEnded":1}`+"\n" {
+		t.Fatalf("move b: %d %q", status, out)
+	}
+	if u, err := w.st.GetUserByName(context.Background(), "b"); err != nil || u.GroupID != w.b.ID {
+		t.Fatalf("b %+v, %v", u, err)
+	}
+	if names, _ := w.list(w.creds["b"], "account=a/info"); len(names) != 0 {
+		t.Errorf("b lists %v after the move", names)
+	}
+	e := w.lastEntry(n, "group change")
+	if e.Action != "user.group_change" || e.TargetName != "b" {
+		t.Fatalf("entry %+v", e)
+	}
+	if ended, _ := details(t, e)["shares_ended"].([]any); len(ended) != 1 {
+		t.Errorf("shares_ended %v", details(t, e)["shares_ended"])
+	}
+	if g := w.groupColumn("user.group_change"); g != fmt.Sprint(w.b.ID) {
+		t.Errorf("recorded under %s", g)
+	}
+	// Into the group the user is in already: nothing ends, nothing is logged.
+	m := len(auditLog(t, w.st))
+	if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"group": w.b.ID}); status != http.StatusOK ||
+		string(out) != `{"sharesEnded":0}`+"\n" {
+		t.Errorf("again: %d %q", status, out)
+	}
+	if got := newEntries(t, w.st, m); len(got) != 0 {
+		t.Errorf("logged %+v", got)
+	}
+	// admin and locked still answer 204.
+	if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"locked": true}); status != http.StatusNoContent {
+		t.Errorf("lock: %d %s", status, out)
+	}
 }

@@ -33,6 +33,8 @@ type adminUserJSON struct {
 	LastLoginAt     *time.Time `json:"lastLoginAt"`
 	// Self marks the logged-in admin, whose own row cannot be changed here.
 	Self bool `json:"self"`
+	// Group is the user's customer group (#470).
+	Group groupRefJSON `json:"group"`
 }
 
 // requireAdmin rejects requests from users who are not admins.
@@ -78,11 +80,17 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	groups, err := s.groupRefs(r)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	out := make([]adminUserJSON, 0, len(users))
 	for _, u := range users {
 		out = append(out, adminUserJSON{
 			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TwoFactorEnabled,
 			Passkeys: passkeys[u.ID], APIKeys: apiKeys[u.ID], Accounts: owned[u.ID], FailingAccounts: failing[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
+			Group: groups[u.GroupID],
 		})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"users": out})
@@ -222,6 +230,8 @@ func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request)
 type userChange struct {
 	Admin  *bool `json:"admin"`
 	Locked *bool `json:"locked"`
+	// Group moves the user into that customer group (#470).
+	Group *int64 `json:"group"`
 }
 
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
@@ -233,19 +243,30 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &in) {
 		return
 	}
+	fields := 0
+	for _, set := range []bool{in.Admin != nil, in.Locked != nil, in.Group != nil} {
+		if set {
+			fields++
+		}
+	}
+	if fields != 1 {
+		s.fail(w, r, http.StatusBadRequest, "send exactly one of admin, locked and group", nil)
+		return
+	}
+	if in.Group != nil {
+		s.changeUserGroup(w, r, u, *in.Group)
+		return
+	}
 	var err error
 	e := s.targetedEntry(r, "user.change")
 	auditUser(e, u)
 	switch {
-	case in.Admin != nil && in.Locked == nil:
+	case in.Admin != nil:
 		e.Detail("admin", *in.Admin)
 		err = s.store.SetUserAdmin(withAudit(r, e), u.ID, *in.Admin)
-	case in.Locked != nil && in.Admin == nil:
+	default:
 		e.Detail("locked", *in.Locked)
 		err = s.store.SetUserLocked(withAudit(r, e), u.ID, *in.Locked)
-	default:
-		s.fail(w, r, http.StatusBadRequest, "send exactly one of admin and locked", nil)
-		return
 	}
 	if errors.Is(err, store.ErrLastAdmin) {
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("%q is the last admin who can log in", u.Name), nil)

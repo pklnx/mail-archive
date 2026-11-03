@@ -1019,7 +1019,7 @@ const de: Messages = {
   unshareLabel: (user) => `${user} entfernen`,
   shareDone: (user) => `Mit ${user} geteilt.`,
   unshareDone: (user) => `${user} kann dieses Konto nicht mehr lesen.`,
-  shareNoUser: (user) => `In Ihrer Gruppe gibt es keinen Benutzer „${user}“.`,
+  shareNoUser: (user) => `In deiner Gruppe gibt es keinen Benutzer „${user}“.`,
   shareSelf: "Das ist dein eigenes Konto.",
   purgeStart: "Vollständig löschen…",
   purgeTitle: (name) => `„${name}“ vollständig löschen?`,

@@ -432,7 +432,7 @@ async function errorFor(path: string, res: Response): Promise<ApiError> {
   return err;
 }
 
-async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+export async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { signal, headers: { Accept: "application/json" } });
   if (!res.ok) throw await errorFor(path, res);
   return (await res.json()) as T;
@@ -449,7 +449,7 @@ async function errorFrom(res: Response): Promise<ApiError> {
 }
 
 // Write requests carry JSON; the server rejects anything else (CSRF guard).
-async function send<T>(method: string, path: string, body?: unknown): Promise<T | null> {
+export async function send<T>(method: string, path: string, body?: unknown): Promise<T | null> {
   const res = await fetch(path, {
     method,
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -735,6 +735,8 @@ export interface ManagedUser {
   lastLoginAt: string | null;
   /** The logged-in admin, whose own row cannot be changed there. */
   self: boolean;
+  /** The user's customer group (#470). */
+  group: { id: number; name: string };
 }
 
 /** A generated password, shown once. */
@@ -743,20 +745,10 @@ export interface GeneratedPassword {
   password: string;
 }
 
-const userPath = (name: string) => `/api/users/${encodeURIComponent(name)}`;
-
+// The list only: the Users page's changes are in userAdminApi.ts, in its
+// lazy chunk (#470 part 2).
 export const usersApi = {
   list: async (signal?: AbortSignal) => (await getJSON<{ users: ManagedUser[] }>("/api/users", signal)).users,
-  /** group: the customer group's id; needed while several groups exist (#470). */
-  create: async (name: string, admin: boolean, group?: number) =>
-    (await send<GeneratedPassword>("POST", "/api/users", { name, admin, group }))!,
-  resetPassword: async (name: string, removePasskeys: boolean, revokeApiKeys: boolean) =>
-    (await send<GeneratedPassword>("POST", `${userPath(name)}/password`, { removePasskeys, revokeApiKeys }))!,
-  setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
-  setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
-  remove: (name: string) => send("DELETE", userPath(name)),
-  reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
-  removePasskeys: (name: string) => send("DELETE", `${userPath(name)}/passkeys`),
 };
 
 /** One row of the audit log. */
