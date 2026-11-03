@@ -134,8 +134,8 @@ func TestAuditPageGroups(t *testing.T) {
 		t.Fatalf("paged ids %v", ids)
 	}
 
-	// Admins: a malformed value and an unknown group are 400; a removed
-	// group too, while its entries keep their id.
+	// Admins: a malformed value is 400, and so is an id that neither a
+	// group nor an entry has.
 	for _, q := range []string{"group=abc", "group=0", "group=-1", "group=1.5", "group=NONE"} {
 		if out := f.expect("GET", "/api/audit?"+q, nil, 400); out["error"] != "group must be a group id or none" {
 			t.Errorf("%s: %v", q, out)
@@ -143,6 +143,45 @@ func TestAuditPageGroups(t *testing.T) {
 	}
 	if out := f.expect("GET", "/api/audit?group=999999", nil, 400); out["error"] != "unknown group" {
 		t.Errorf("unknown group: %v", out)
+	}
+	// A group without entries yet is selectable: an empty page.
+	fresh, err := f.st.CreateGroup(ctx, "Fresh AG")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := auditEntries(t, f.expect("GET", "/api/audit?"+gq(fresh.ID), nil, 200)); len(rows) != 0 {
+		t.Errorf("new group: %v", rows)
+	}
+	// A removed group's entries keep its id: they stay selectable (an
+	// offboarded customer's log), named as removed, without a name.
+	gone, err := f.st.CreateGroup(ctx, "Gone GmbH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dave, err := f.st.CreateUserInGroup(ctx, store.NewUser{Name: "dave", PasswordHash: "h", GroupID: gone.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.Audit(ctx, *self(dave, "message.open")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.SetUserGroup(ctx, dave.ID, def.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.DeleteGroup(ctx, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	goneRows := auditEntries(t, f.expect("GET", "/api/audit?"+gq(gone.ID), nil, 200))
+	if len(goneRows) != 1 || goneRows[0]["user"] != "dave" || goneRows[0]["action"] != "message.open" {
+		t.Fatalf("removed group: %v", goneRows)
+	}
+	if g := goneRows[0]["group"].(map[string]any); g["id"] != float64(gone.ID) || g["removed"] != true || g["name"] != nil {
+		t.Errorf("removed group's entry: %v", g)
+	}
+	for _, e := range auditEntries(t, f.expect("GET", "/api/audit?"+gq(b.ID), nil, 200)) {
+		if g := e["group"].(map[string]any); g["removed"] != nil {
+			t.Errorf("a current group marked removed: %v", g)
+		}
 	}
 
 	// Non-admins get the same 403 for every group value, before any
@@ -162,7 +201,7 @@ func TestAuditPageGroups(t *testing.T) {
 	if status != 403 {
 		t.Fatalf("alice with group: %d %s", status, want)
 	}
-	for _, q := range []string{gq(def.ID), "group=999999", "group=none", "group=abc", gq(b.ID) + "&user=nobody"} {
+	for _, q := range []string{gq(def.ID), gq(gone.ID), "group=999999", "group=none", "group=abc", gq(b.ID) + "&user=nobody"} {
 		if status, body := raw(a, q); status != 403 || body != want {
 			t.Errorf("alice %s: %d %s, want 403 %s", q, status, body, want)
 		}

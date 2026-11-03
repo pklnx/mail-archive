@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+const auditGroupKnown = `-- name: AuditGroupKnown :one
+SELECT EXISTS (SELECT 1 FROM customer_groups WHERE id = $1::bigint)
+    OR EXISTS (SELECT 1 FROM audit_log WHERE group_id = $1::bigint)
+`
+
+// Whether a group id can be filtered by (#470): a current group, or one
+// since removed whose id entries still carry (audit_log_group_idx).
+func (q *Queries) AuditGroupKnown(ctx context.Context, groupID int64) (*bool, error) {
+	row := q.db.QueryRow(ctx, auditGroupKnown, groupID)
+	var column_1 *bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const auditSubjects = `-- name: AuditSubjects :many
 SELECT m.sha256::text AS sha256, m.subject
 FROM messages m
@@ -89,7 +103,7 @@ func (q *Queries) EnsureAuditPartitions(ctx context.Context, monthsAhead int32) 
 
 const exportAuditEntries = `-- name: ExportAuditEntries :many
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_id, l.api_key_name, l.action,
-       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 WHERE l.at >= $1 AND l.at < $2
@@ -129,6 +143,7 @@ type ExportAuditEntriesRow struct {
 	ClientIp   *netip.Addr
 	UserAgent  *string
 	Details    []byte
+	GroupID    *int64
 }
 
 // One batch of the entries in [since, until) after (after_at, after_id), oldest
@@ -168,6 +183,7 @@ func (q *Queries) ExportAuditEntries(ctx context.Context, arg ExportAuditEntries
 			&i.ClientIp,
 			&i.UserAgent,
 			&i.Details,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}

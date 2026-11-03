@@ -32,9 +32,9 @@ export interface AuditEntry {
   /**
    * The customer group the entry is recorded under (#470): in an admin's
    * page only, missing for entries from before 1.4.0 and instance-level
-   * ones; no name once the group is removed.
+   * ones; a removed group has no name and removed: true.
    */
-  group?: { id: number; name?: string };
+  group?: { id: number; name?: string; removed?: boolean };
 }
 
 /**

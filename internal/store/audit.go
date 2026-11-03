@@ -553,12 +553,21 @@ type AuditRecord struct {
 	// message the viewer has a location of.
 	Subject string
 	// GroupID is the customer group the entry is recorded under (#470),
-	// set only by ListAudit of an admin's page (All); nil without one.
+	// set by ExportAudit and by ListAudit of an admin's page (All); nil
+	// without one.
 	GroupID *int64
 	// ViaShare: another user's read of the viewer's shared account, in a
 	// non-admin's ListAudit; its details are cut down by shareView, and it
 	// has no client address, user agent or API key name.
 	ViaShare bool
+}
+
+// AuditGroupKnown reports whether entries can be filtered by the group id:
+// a current group, or a removed one whose id entries still carry (#470),
+// so that an offboarded customer's entries can still be found.
+func (s *Store) AuditGroupKnown(ctx context.Context, id int64) (bool, error) {
+	known, err := s.q.AuditGroupKnown(ctx, id)
+	return known != nil && *known, err
 }
 
 // ExportAudit calls fn for every entry of f, oldest first.
@@ -585,7 +594,7 @@ func (s *Store) ExportAudit(ctx context.Context, f AuditFilter, fn func(AuditRec
 				ID: r.ID, At: r.At, Actor: r.Actor, UserID: r.UserID, UserName: deref(r.UserName),
 				APIKeyName: deref(r.ApiKeyName), Action: r.Action, TargetType: deref(r.TargetType),
 				TargetID: deref(r.TargetID), TargetName: deref(r.TargetName), UserAgent: deref(r.UserAgent),
-				Details: r.Details,
+				Details: r.Details, GroupID: r.GroupID,
 			}
 			if r.ClientIp != nil {
 				rec.ClientIP = r.ClientIp.String()

@@ -1094,6 +1094,21 @@ describe("LogPage customer groups", () => {
     expect(screen.queryByText("Meier GmbH")).toBeNull();
   });
 
+  it("names the entries of a removed group by its id", async () => {
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+      if (!String(url).startsWith("/api/audit")) return answer(url, init);
+      urls.push(String(url));
+      return json({ entries: [entry("message.open", "00:01", { user: "erin", group: { id: 7, removed: true }, target: { type: "account", id: "9", name: "erin reads" } })] });
+    });
+    render(<LogPage admin open={() => {}} />);
+    await screen.findByText("erin reads");
+    await waitFor(() => expect(groupSelect()).not.toBeNull());
+    expect(within(screen.getByText("erin reads").closest("tr")!).getByText(t.logRemovedGroup(7))).toBeTruthy();
+    expect(t.logRemovedGroup(7)).toBe("Removed group 7");
+    expect(messagesFor("de").logRemovedGroup(7)).toBe("Entfernte Gruppe 7");
+  });
+
   it("reads the group list as a bare list too", async () => {
     groups = [def, meier];
     render(<LogPage admin open={() => {}} />);

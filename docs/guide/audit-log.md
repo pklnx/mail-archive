@@ -143,6 +143,12 @@ group an entry was written under: a user's or account's move into another
 group is listed under the new group, and the old one is only in the
 details (`from_group`), which the filter does not read.
 
+A removed group's entries keep its id. They stay selectable by that id
+(`group=<id>` in the API, `--group-id` on the command line), so an
+offboarded customer's log can still be exported. Such an entry shows the
+group as "Removed group 7" on the Log page and as `{"id": 7, "removed":
+true}` in the API. An id that no group and no entry has is refused.
+
 ## The fields
 
 | Field | Content |
@@ -294,15 +300,18 @@ give RFC 3339 with an offset, such as `2026-10-01T00:00:00+02:00`.
 `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, and is
 repeatable. `--user` selects a current user's entries. `--group NAME`
 selects the entries of a [customer group](#customer-groups) (the name in any
-case), `--without-group` those without one: from before 1.4.0 and
-instance-level work; the two exclude each other. Without `--out`, the
+case), `--group-id N` those of a group by its id, also of a removed group,
+and `--without-group` those without one: from before 1.4.0 and
+instance-level work; the three exclude each other. Without `--out`, the
 entries go to stdout. A file must not exist yet; it is written with mode
 0600 and appears when it is complete. Each run is recorded as
-`audit.export`, with `group` and `group_id`, or `without_group`.
+`audit.export`, with `group_id` (and `group` for `--group`), or
+`without_group`.
 
 CSV has the columns `at`, `actor`, `user_id`, `user_name`, `api_key_name`,
 `action`, `target_type`, `target_id`, `target_name`, `client_ip`,
-`user_agent` and `details` (as JSON). A cell that starts with `=`, `+`,
+`user_agent`, `details` (as JSON) and `group_id` (the customer group's id,
+empty without one; JSON lines: `groupId`, missing without one). A cell that starts with `=`, `+`,
 `-`, `@`, a tab or a carriage return gets a leading `'`, so a spreadsheet
 does not run a search query as a formula. JSON lines carry the values
 unchanged.

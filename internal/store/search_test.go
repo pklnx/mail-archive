@@ -213,7 +213,15 @@ func (e *explainer) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 	return nil, errRecorded
 }
 
-func (e *explainer) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
+// QueryRow records a :one query; its row fails with errRecorded.
+func (e *explainer) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	e.sql, e.args = sql, args
+	return recordedRow{}
+}
+
+type recordedRow struct{}
+
+func (recordedRow) Scan(...any) error { return errRecorded }
 
 // The filters and reindex use their indexes on an archive of 50,000
 // messages, a quarter of them with attachments. The plans

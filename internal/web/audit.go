@@ -239,13 +239,15 @@ type auditEntryJSON struct {
 	ViaShare bool `json:"viaShare,omitempty"`
 	// Group: the customer group the entry is recorded under (#470), in an
 	// admin's page only; none for entries from before 1.4.0 and
-	// instance-level ones. Its name is missing once the group is removed.
+	// instance-level ones. A removed group has no name and removed: true.
 	Group *auditGroupJSON `json:"group,omitempty"`
 }
 
 type auditGroupJSON struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name,omitempty"`
+	// Removed: the group no longer exists; it has no name then.
+	Removed bool `json:"removed,omitempty"`
 }
 
 // auditGroupNone is the group= value of the entries without a group.
@@ -336,16 +338,18 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		p.UserIDs = append(p.UserIDs, u.ID)
 	}
 	if groupID != 0 {
-		g, err := s.store.GetGroup(r.Context(), groupID)
-		if errors.Is(err, store.ErrUnknownGroup) {
-			s.fail(w, r, http.StatusBadRequest, "unknown group", nil)
-			return
-		}
+		// A removed group's id still selects its entries; an id no group
+		// and no entry has is unknown.
+		known, err := s.store.AuditGroupKnown(r.Context(), groupID)
 		if err != nil {
 			s.failStore(w, r, err)
 			return
 		}
-		p.GroupID = &g.ID
+		if !known {
+			s.fail(w, r, http.StatusBadRequest, "unknown group", nil)
+			return
+		}
+		p.GroupID = &groupID
 	}
 	if c := q.Get("cursor"); c != "" {
 		at, id, err := decodeAuditCursor(c)
@@ -390,7 +394,8 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			e.Target = &auditTargetJSON{Type: rec.TargetType, ID: rec.TargetID, Name: rec.TargetName, Subject: rec.Subject}
 		}
 		if sess.IsAdmin && rec.GroupID != nil {
-			e.Group = &auditGroupJSON{ID: *rec.GroupID, Name: groups[*rec.GroupID]}
+			name, ok := groups[*rec.GroupID]
+			e.Group = &auditGroupJSON{ID: *rec.GroupID, Name: name, Removed: !ok}
 		}
 		out.Entries = append(out.Entries, e)
 	}

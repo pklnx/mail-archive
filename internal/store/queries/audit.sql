@@ -12,6 +12,12 @@ VALUES (@actor, sqlc.narg(user_id), sqlc.narg(user_name), sqlc.narg(api_key_id),
                  (SELECT go.group_id FROM accounts ga JOIN users go ON go.id = ga.owner_id
                   WHERE ga.id = sqlc.narg(group_account_id)::bigint)));
 
+-- name: AuditGroupKnown :one
+-- Whether a group id can be filtered by (#470): a current group, or one
+-- since removed whose id entries still carry (audit_log_group_idx).
+SELECT EXISTS (SELECT 1 FROM customer_groups WHERE id = @group_id::bigint)
+    OR EXISTS (SELECT 1 FROM audit_log WHERE group_id = @group_id::bigint);
+
 -- name: AuditUserAgentID :one
 -- The id of a user agent, inserted if new. ON CONFLICT DO UPDATE would be
 -- refused by the append-only trigger. Under READ COMMITTED a concurrent
@@ -36,7 +42,7 @@ SELECT audit_log_ensure_partitions(@months_ahead::integer)::integer;
 -- first, optionally of one user, and of one customer group or of none
 -- (no_group: entries from before 1.4.0 and instance-level ones, #470).
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_id, l.api_key_name, l.action,
-       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 WHERE l.at >= @since AND l.at < @until

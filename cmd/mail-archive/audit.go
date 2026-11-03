@@ -116,6 +116,7 @@ func newAuditCmd() *cobra.Command {
 		since, until, userName, groupName, format, out string
 		actions                                        []string
 		withoutGroup                                   bool
+		groupID                                        int64
 	)
 	cmd := &cobra.Command{
 		Use:   "audit --since DATE --format csv|jsonl [--out FILE]",
@@ -127,8 +128,10 @@ date includes that day. --action takes a group (login, search, read,
 export, accounts, users, profile, api_keys, sync, retention) or an action such as
 message.open, and is repeatable. --user selects the entries of a current
 user. --group selects the entries recorded under a customer group;
---without-group those without one: from before 1.4.0, or instance-level
-work such as deletion runs, backups and maintenance.
+--group-id selects them by the group's id, also of a group since removed
+(its entries keep the id, the group_id column); --without-group selects
+the entries without a group: from before 1.4.0, or instance-level work such
+as deletion runs, backups and maintenance.
 
 The export itself is recorded as audit.export. FILE must not exist; it is
 written with mode 0600 and appears when it is complete. In CSV, a cell that
@@ -158,8 +161,11 @@ spreadsheets do not run it as a formula.`,
 			if _, err := store.AuditActionPatterns(actions); err != nil {
 				return fmt.Errorf("--action: %w", err)
 			}
-			if groupName != "" && withoutGroup {
-				return errors.New("--group and --without-group exclude each other")
+			if n := btoi(groupName != "") + btoi(groupID != 0) + btoi(withoutGroup); n > 1 {
+				return errors.New("--group, --group-id and --without-group exclude each other")
+			}
+			if groupID < 0 {
+				return fmt.Errorf("--group-id must be a group id, got %d", groupID)
 			}
 			if out != "" {
 				if _, err := os.Lstat(out); err == nil {
@@ -207,6 +213,18 @@ spreadsheets do not run it as a formula.`,
 				e.Detail("group", g.Name)
 				e.Detail("group_id", g.ID)
 			}
+			if groupID != 0 {
+				// A removed group's id still selects its entries (#470).
+				known, err := a.store.AuditGroupKnown(cmd.Context(), groupID)
+				if err != nil {
+					return err
+				}
+				if !known {
+					return fmt.Errorf("group id %d not found: no group and no entry has it", groupID)
+				}
+				f.GroupID = &groupID
+				e.Detail("group_id", groupID)
+			}
 			if withoutGroup {
 				f.NoGroup = true
 				e.Detail("without_group", true)
@@ -226,6 +244,7 @@ spreadsheets do not run it as a formula.`,
 	cmd.Flags().StringVar(&until, "until", "", "the end, exclusive; a plain date includes that day (default: now)")
 	cmd.Flags().StringVar(&userName, "user", "", "only this user's entries")
 	cmd.Flags().StringVar(&groupName, "group", "", "only the entries of this customer group")
+	cmd.Flags().Int64Var(&groupID, "group-id", 0, "only the entries of the customer group with this id, also of a removed one")
 	cmd.Flags().BoolVar(&withoutGroup, "without-group", false, "only the entries without a customer group (before 1.4.0, or instance-level)")
 	cmd.Flags().StringArrayVar(&actions, "action", nil, "only these actions or groups (repeatable)")
 	cmd.Flags().StringVar(&format, "format", "", "csv or jsonl (required)")
@@ -264,6 +283,9 @@ type auditJSON struct {
 	ClientIP  string           `json:"clientIp,omitempty"`
 	UserAgent string           `json:"userAgent,omitempty"`
 	Details   json.RawMessage  `json:"details"`
+	// GroupID: the customer group the entry is recorded under (#470);
+	// missing for entries without one.
+	GroupID *int64 `json:"groupId,omitempty"`
 }
 
 type auditTargetJSON struct {
@@ -273,7 +295,7 @@ type auditTargetJSON struct {
 }
 
 var auditCSVHeader = []string{"at", "actor", "user_id", "user_name", "api_key_name", "action",
-	"target_type", "target_id", "target_name", "client_ip", "user_agent", "details"}
+	"target_type", "target_id", "target_name", "client_ip", "user_agent", "details", "group_id"}
 
 func writeAudit(ctx context.Context, st *store.Store, f store.AuditFilter, format string, w io.Writer) error {
 	if format == "jsonl" {
@@ -281,7 +303,7 @@ func writeAudit(ctx context.Context, st *store.Store, f store.AuditFilter, forma
 		return st.ExportAudit(ctx, f, func(r store.AuditRecord) error {
 			j := auditJSON{
 				ID: r.ID, At: r.At.UTC(), Actor: r.Actor, UserID: r.UserID, User: r.UserName, APIKey: r.APIKeyName,
-				Action: r.Action, ClientIP: r.ClientIP, UserAgent: r.UserAgent, Details: r.Details,
+				Action: r.Action, ClientIP: r.ClientIP, UserAgent: r.UserAgent, Details: r.Details, GroupID: r.GroupID,
 			}
 			if r.TargetType != "" {
 				j.Target = &auditTargetJSON{Type: r.TargetType, ID: r.TargetID, Name: r.TargetName}
@@ -298,8 +320,12 @@ func writeAudit(ctx context.Context, st *store.Store, f store.AuditFilter, forma
 		if r.UserID != nil {
 			userID = strconv.FormatInt(*r.UserID, 10)
 		}
+		groupID := ""
+		if r.GroupID != nil {
+			groupID = strconv.FormatInt(*r.GroupID, 10)
+		}
 		row := []string{r.At.UTC().Format(time.RFC3339Nano), r.Actor, userID, r.UserName, r.APIKeyName, r.Action,
-			r.TargetType, r.TargetID, r.TargetName, r.ClientIP, r.UserAgent, string(r.Details)}
+			r.TargetType, r.TargetID, r.TargetName, r.ClientIP, r.UserAgent, string(r.Details), groupID}
 		for i, c := range row {
 			row[i] = csvSafe(c)
 		}
@@ -310,6 +336,13 @@ func writeAudit(ctx context.Context, st *store.Store, f store.AuditFilter, forma
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // csvSafe keeps a spreadsheet from reading a cell as a formula.

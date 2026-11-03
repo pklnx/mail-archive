@@ -1547,7 +1547,9 @@ paths:
           in: query
           description: |
             Admins only. A customer group's id: only the entries recorded
-            under that group. `none`: only the entries without a group, from
+            under that group, also of a group since removed (its entries keep
+            the id). An id that neither a group nor an entry has gives `400`.
+            `none`: only the entries without a group, from
             before 1.4.0 or instance-level (deletion runs, backups,
             maintenance, failed logins of unknown names). Intersects with
             `user` and `actor`; an empty value is no filter.
@@ -2887,13 +2889,16 @@ components:
           description: |
             The customer group the entry is recorded under; only in an
             admin's page, and missing for entries from before 1.4.0 and
-            instance-level ones. `name` is missing once the group is removed.
+            instance-level ones. A removed group has no `name` and
+            `removed: true`.
           required: [id]
           properties:
             id:
               type: integer
             name:
               type: string
+            removed:
+              type: boolean
 
     Retry:
       type: object

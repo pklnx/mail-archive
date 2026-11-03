@@ -153,6 +153,35 @@ func TestAuditListPlans(t *testing.T) {
 			check(t, explain(t, &rec), "_pkey")
 		})
 	}
+	// Whether a removed group's id still has entries (AuditGroupKnown): for
+	// an id no entry has, the costly case that looks at every partition, each
+	// partition with rows is probed through audit_log_group_idx and none is
+	// read in full. (An id with entries stops at its first row whatever the
+	// plan; empty partitions are seq-scanned by PostgreSQL 18, at no cost.)
+	t.Run("group known", func(t *testing.T) {
+		var rec explainer
+		_, err := db.New(&rec).AuditGroupKnown(ctx, 99)
+		if !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		plan := explain(t, &rec)
+		rows, err := conn.Query(ctx, "SELECT DISTINCT tableoid::regclass::text FROM audit_log")
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(parts) < 3 {
+			t.Fatalf("partitions with rows: %v", parts)
+		}
+		for _, p := range parts {
+			if strings.Contains(plan, "Seq Scan on "+p+" ") || !strings.Contains(plan, p+"_group_id_at_id_idx") {
+				t.Errorf("partition %s is not probed through its group index:\n%s", p, plan)
+			}
+		}
+	})
 	t.Run("group generic", func(t *testing.T) {
 		var rec explainer
 		_, err := db.New(&rec).ListAuditEntriesForGroup(ctx, db.ListAuditEntriesForGroupParams{})

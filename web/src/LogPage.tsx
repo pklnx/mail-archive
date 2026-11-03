@@ -544,7 +544,7 @@ function EntryRow({
       {showWho && (
         <TableCell>
           {who}
-          {groups && e.group?.name && <span className="log-table__detail app-text-secondary">{e.group.name}</span>}
+          {groups && e.group && <span className="log-table__detail app-text-secondary">{e.group.name || t.logRemovedGroup(e.group.id)}</span>}
         </TableCell>
       )}
       <TableCell className="log-table__target">
