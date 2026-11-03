@@ -5,7 +5,8 @@
 import { useRef, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { auditQuery, type AuditEntry } from "./api";
+import { auditQuery, type AuditEntry } from "./auditApi";
+import { auditAction } from "./auditLog";
 import { FilterPanel } from "./FilterPanel";
 import { filterTextFor } from "./filterText";
 import { dayOfDate, shiftDay } from "./format";
@@ -179,7 +180,7 @@ describe("LogPage", () => {
     // The typed search is one row with its prefixes folded in.
     expect(rows).toHaveLength(1 + 4);
     const open = within(rows[1]!);
-    expect(open.getByText(t.auditAction("message.open"))).toBeTruthy();
+    expect(open.getByText(auditAction("message.open"))).toBeTruthy();
     expect(open.getByText("alice")).toBeTruthy();
     expect(open.getByText("192.0.2.1 · Chrome 140 · Linux")).toBeTruthy();
     const search = within(rows[2]!);
@@ -190,7 +191,7 @@ describe("LogPage", () => {
     expect(cli.tagName).toBe("TD");
     expect(within(rows[3]!).getAllByRole("cell")[2]).toBe(cli);
     expect(within(rows[3]!).getByText("work")).toBeTruthy();
-    const failed = within(rows[4]!).getByText(t.auditAction("auth.login_failed"));
+    const failed = within(rows[4]!).getByText(auditAction("auth.login_failed"));
     expect(failed.className).toContain("app-text-error");
     expect(within(rows[4]!).getByText("password, wrong_password")).toBeTruthy();
   });
@@ -269,7 +270,7 @@ describe("LogPage", () => {
     render(<LogPage admin open={() => {}} />);
     await screen.findByText("Invoice 42");
     fireEvent.click(screen.getByRole("button", { name: t.logMore }));
-    await screen.findByText(t.auditAction("message.download"));
+    await screen.findByText(auditAction("message.download"));
     expect(audit().at(-1)).toBe(`/api/audit?${auditQuery(defaultFilter(), "next")}`);
     expect(screen.getByText("bbbbbbbbbbbb…")).toBeTruthy();
     expect(screen.queryByRole("button", { name: t.logMore })).toBeNull();
@@ -938,5 +939,196 @@ describe("the side of an open filter menu (#486)", () => {
     await close(action);
     expect(wrapper.style.getPropertyValue("--log-filter-menu-cap")).toBe("");
     expect(wrapper.classList.contains("log-filter--menu-end")).toBe(false);
+  });
+});
+
+// The customer group filter of an admin's Log (#470, part 3): only with two
+// or more groups, next to Who, whose list it narrows; sent as group=, kept
+// in the address as customer=. The mock filters as the server does.
+describe("LogPage customer groups", () => {
+  const meier = { id: 2, name: "Meier GmbH" };
+  const def = { id: 1, name: "Default" };
+  const people = [
+    entry("message.open", "00:05", { group: def, target: { type: "account", id: "1", name: "alice reads" } }),
+    entry("auth.login", "00:04", { user: "bob", group: meier, target: { type: "account", id: "2", name: "bob logs in" } }),
+    entry("data.backup", "00:03", { actor: "cli", user: undefined, target: { type: "account", id: "3", name: "cli backs up" } }),
+    entry("message.search", "00:02", { user: "carol", group: meier, target: { type: "account", id: "4", name: "carol searches" } }),
+  ];
+  const names = people.map((e) => e.target!.name!);
+  const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
+  let users: { name: string; group?: { id: number; name: string } }[];
+  let groups: unknown;
+
+  beforeEach(() => {
+    users = [
+      { name: "alice", group: def },
+      { name: "bob", group: meier },
+      { name: "carol", group: meier },
+    ];
+    groups = { groups: [def, meier] };
+    vi.mocked(globalThis.fetch).mockImplementation(async (url) => {
+      const u = new URL(String(url), "http://x");
+      urls.push(String(url));
+      if (u.pathname === "/api/users") return json({ users });
+      if (u.pathname === "/api/groups") return json(groups);
+      const p = u.searchParams;
+      const [who, group] = [p.getAll("user"), p.get("group")];
+      if (group && group !== "none" && !["1", "2"].includes(group)) return json({ error: "unknown group" }, 400);
+      const match = people.filter(
+        (e) =>
+          (who.length === 0 || who.includes(e.user ?? "")) &&
+          (!group || (group === "none" ? !e.group : String(e.group?.id) === group)),
+      );
+      return json({ entries: match });
+    });
+  });
+
+  const shownRows = () => names.filter((n) => screen.queryByText(n)).sort((a, b) => names.indexOf(a) - names.indexOf(b));
+  const since = () => defaultFilter().since;
+  const groupSelect = () => screen.queryByRole("combobox", { name: t.logCustomerGroup }) as HTMLSelectElement | null;
+  /** The entries of the Who menu, as shown. */
+  const whoOptions = () => {
+    fireEvent.click(filterField(t.logWho));
+    const menu = filterField(t.logWho).closest(".cds--list-box")!;
+    const list = within(menu as HTMLElement).getAllByRole("option").map((o) => o.textContent);
+    fireEvent.click(filterField(t.logWho));
+    return list;
+  };
+
+  it("shows the Group filter between Action and Who with every group, all and none, and the group in the Who column", async () => {
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    await waitFor(() => expect(groupSelect()).not.toBeNull());
+    const select = groupSelect()!;
+    expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
+      ["", t.logAllGroups],
+      ["1", "Default"],
+      ["2", "Meier GmbH"],
+      ["none", t.logNoGroup],
+    ]);
+    expect(select.value).toBe("");
+    // The order of the filter cells.
+    const cells = [...document.querySelector(".log-filters")!.querySelectorAll("label")].map((l) => l.textContent);
+    expect(cells.slice(-3)).toEqual([t.logAction, t.logCustomerGroup, t.logWho]);
+    // Each row names its group under the user; the backup has none.
+    const row = (name: string) => screen.getByText(name).closest("tr")!;
+    expect(within(row("bob logs in")).getByText("Meier GmbH")).toBeTruthy();
+    expect(within(row("alice reads")).getByText("Default")).toBeTruthy();
+    expect(within(row("cli backs up")).queryByText(/Default|Meier/)).toBeNull();
+    expect(audit()).toEqual([query({ since: since() })]);
+  });
+
+  it("sends the chosen group, narrows Who to its users and keeps it in the address", async () => {
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(groupSelect()).not.toBeNull());
+    expect(whoOptions()).toEqual([t.logCommandLine, t.logApiKeys, "alice", "bob", "carol"]);
+    fireEvent.change(groupSelect()!, { target: { value: "2" } });
+    await waitFor(() => expect(shownRows()).toEqual(["bob logs in", "carol searches"]));
+    expect(audit().at(-1)).toBe(query({ since: since(), group: "2" }));
+    expect(window.location.search).toBe("?view=log&customer=2");
+    expect(whoOptions()).toEqual([t.logCommandLine, t.logApiKeys, "bob", "carol"]);
+    // It intersects with Who.
+    await choose(t.logWho, "carol");
+    await waitFor(() => expect(shownRows()).toEqual(["carol searches"]));
+    expect(audit().at(-1)).toBe(query({ since: since(), users: ["carol"], group: "2" }));
+    // Another group keeps only the chosen users of that group.
+    fireEvent.change(groupSelect()!, { target: { value: "1" } });
+    await waitFor(() => expect(shownRows()).toEqual(["alice reads"]));
+    expect(audit().at(-1)).toBe(query({ since: since(), group: "1" }));
+    expect(window.location.search).toBe("?view=log&customer=1");
+    expect(whoOptions()).toEqual([t.logCommandLine, t.logApiKeys, "alice"]);
+    // No group: every user may have entries from before 1.4.0.
+    fireEvent.change(groupSelect()!, { target: { value: "none" } });
+    await waitFor(() => expect(shownRows()).toEqual(["cli backs up"]));
+    expect(audit().at(-1)).toBe(query({ since: since(), group: "none" }));
+    expect(whoOptions()).toEqual([t.logCommandLine, t.logApiKeys, "alice", "bob", "carol"]);
+    fireEvent.change(groupSelect()!, { target: { value: "" } });
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    expect(window.location.search).toBe("?view=log");
+  });
+
+  it("reads the group from the address with one request, and drops a removed group", async () => {
+    window.history.replaceState(null, "", "/?view=log&customer=2&user=bob");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(["bob logs in"]));
+    expect(audit()).toEqual([query({ since: since(), users: ["bob"], group: "2" })]);
+    expect(groupSelect()!.value).toBe("2");
+    restart();
+    window.history.replaceState(null, "", "/?view=log&customer=9");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    expect(audit()).toEqual([query({ since: since() })]);
+    expect(window.location.search).toBe("?view=log");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows nothing of groups with one group, and does not ask for them", async () => {
+    users = users.map((u) => ({ ...u, group: def }));
+    window.history.replaceState(null, "", "/?view=log&customer=1");
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    expect(groupSelect()).toBeNull();
+    expect(urls.some((u) => u.startsWith("/api/groups"))).toBe(false);
+    expect(screen.queryByText("Meier GmbH")).toBeNull();
+    expect(screen.queryByText("Default")).toBeNull();
+    // A one-group instance has no group filter: the address loses it.
+    expect(audit()).toEqual([query({ since: since() })]);
+    expect(window.location.search).toBe("?view=log");
+    expect(whoOptions()).toEqual([t.logCommandLine, t.logApiKeys, "alice", "bob", "carol"]);
+  });
+
+  it("reads users without a group (before the group routes) as one group", async () => {
+    users = users.map(({ name }) => ({ name }));
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    expect(groupSelect()).toBeNull();
+    expect(urls.filter((u) => !u.startsWith("/api/audit"))).toEqual(["/api/users"]);
+  });
+
+  it("goes by the group list: one group there shows no filter, also if the users named two", async () => {
+    groups = { groups: [def] };
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(urls).toContain("/api/groups"));
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    expect(groupSelect()).toBeNull();
+    expect(screen.queryByText("Meier GmbH")).toBeNull();
+  });
+
+  it("names the entries of a removed group by its id", async () => {
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+      if (!String(url).startsWith("/api/audit")) return answer(url, init);
+      urls.push(String(url));
+      return json({ entries: [entry("message.open", "00:01", { user: "erin", group: { id: 7, removed: true }, target: { type: "account", id: "9", name: "erin reads" } })] });
+    });
+    render(<LogPage admin open={() => {}} />);
+    await screen.findByText("erin reads");
+    await waitFor(() => expect(groupSelect()).not.toBeNull());
+    expect(within(screen.getByText("erin reads").closest("tr")!).getByText(t.logRemovedGroup(7))).toBeTruthy();
+    expect(t.logRemovedGroup(7)).toBe("Removed group 7");
+    expect(messagesFor("de").logRemovedGroup(7)).toBe("Entfernte Gruppe 7");
+  });
+
+  it("reads the group list as a bare list too", async () => {
+    groups = [def, meier];
+    render(<LogPage admin open={() => {}} />);
+    await waitFor(() => expect(groupSelect()?.options.length).toBe(4));
+  });
+
+  it("never offers or sends a group to a non-admin, whose rows show none", async () => {
+    window.history.replaceState(null, "", "/?view=log&customer=2");
+    render(<LogPage admin={false} open={() => {}} />);
+    await waitFor(() => expect(shownRows()).toEqual(names));
+    expect(urls).toEqual([query({ since: since() })]);
+    expect(groupSelect()).toBeNull();
+    expect(screen.queryByText("Meier GmbH")).toBeNull();
+  });
+
+  it("names the filter in German", async () => {
+    applySettings({ language: "de", locale: "de" });
+    const de = messagesFor("de");
+    render(<LogPage admin open={() => {}} />);
+    const select = await waitFor(() => screen.getByRole("combobox", { name: de.logCustomerGroup }) as HTMLSelectElement);
+    expect([...select.options].map((o) => o.textContent)).toEqual(["Alle Gruppen", "Default", "Meier GmbH", "Ohne Gruppe"]);
   });
 });

@@ -662,6 +662,99 @@ test.describe("in German", () => {
     await expect(action.text).toHaveText("Alle Aktionen");
     expect(new URL(page.url()).search).toBe("?view=log");
   });
+
+  // The customer group filter (#470, part 3), against the demo's two groups:
+  // "Default" (demo, pat, jo) and "Lindqvist Design" (kim, lee, sam). The
+  // one-group case (no filter, no request) is in LogPage.test.tsx.
+  test.describe("with the demo's two customer groups", () => {
+    const lindqvist = "Lindqvist Design";
+    /** The demo's groups by name, from the API the page asks too. */
+    async function demoGroups(page: Page) {
+      const res = await page.request.get("/api/groups");
+      expect(res.status()).toBe(200);
+      const { groups } = (await res.json()) as { groups: { id: number; name: string }[] };
+      return Object.fromEntries(groups.map((g) => [g.name, g.id]));
+    }
+    const groupField = (main: Locator) => main.getByRole("combobox", { name: "Gruppe" });
+
+    test("at 1280 px Gruppe is a cell of the filter row between Aktion and Wer, and narrows Wer", async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      const ids = await demoGroups(page);
+      expect(Object.keys(ids)).toEqual(["Default", lindqvist]);
+      const { main, from } = await open(page);
+      const group = groupField(main);
+      await expect(group).toBeVisible();
+      await expect(group.locator("option")).toHaveText(["Alle Gruppen", "Default", lindqvist, "Ohne Gruppe"]);
+      const action = choice(main, "Aktion");
+      const who = choice(main, "Wer");
+      const [f, a, g] = await boxes(from, action.box, group);
+      const w = (await who.box.boundingBox())!;
+      // Gruppe comes after Aktion and before Wer, as high as the others,
+      // and as wide as Aktion.
+      expect(g.x > a.x || g.y > a.y, `Gruppe ${JSON.stringify(g)} after Aktion ${JSON.stringify(a)}`).toBe(true);
+      expect(w.x > g.x || w.y > g.y, `Wer ${JSON.stringify(w)} after Gruppe ${JSON.stringify(g)}`).toBe(true);
+      expect(Math.abs(g.height - f.height), `Gruppe ${g.height}, Von ${f.height}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(g.width - a.width), `Gruppe ${g.width}, Aktion ${a.width}`).toBeLessThanOrEqual(2);
+      if (Math.abs(g.y - a.y) <= 1) expect(g.x).toBeGreaterThanOrEqual(a.x + a.width);
+      await noSideScroll(page);
+
+      // The rows name their group in Wer: the demo admin's login is Default's.
+      const table = main.getByRole("table", { name: "Protokoll" });
+      await expect(table.getByRole("row").filter({ hasText: "Angemeldet" }).filter({ hasText: "demo" }).first()).toContainText("Default");
+
+      // Lindqvist Design: its id is sent, Wer lists only its users.
+      const since = await startOf(page, await defaultSince(page));
+      const chosen = auditRequestAll(page, { since: [since], group: [String(ids[lindqvist])] });
+      await group.selectOption({ label: lindqvist });
+      expect((await (await chosen).response())?.status()).toBe(200);
+      expect(new URL(page.url()).search).toBe(`?view=log&customer=${ids[lindqvist]}`);
+      await who.field.click();
+      for (const name of ["kim", "lee", "sam"]) await expect(who.menu.getByRole("option", { name, exact: true })).toBeVisible();
+      for (const name of ["demo", "pat", "jo"]) await expect(who.menu.getByRole("option", { name, exact: true })).toHaveCount(0);
+      // With Wer as well: the entries of kim in that group.
+      const kim = auditRequestAll(page, { since: [since], user: ["kim"], group: [String(ids[lindqvist])] });
+      await who.menu.getByRole("option", { name: "kim", exact: true }).click();
+      expect((await (await kim).response())?.status()).toBe(200);
+      await page.keyboard.press("Escape");
+
+      // A reload keeps both; Default drops kim, who is not in it.
+      const reloaded = auditRequestAll(page, { since: [since], user: ["kim"], group: [String(ids[lindqvist])] });
+      await page.reload();
+      await reloaded;
+      await expect(group).toHaveValue(String(ids[lindqvist]));
+      await expect(who.text).toHaveText("kim");
+      const def = auditRequestAll(page, { since: [since], group: [String(ids["Default"])] });
+      await group.selectOption({ label: "Default" });
+      await def;
+      await expect(who.text).toHaveText("Alle");
+      await expect(table.getByRole("row").filter({ hasText: "demo" }).first()).toContainText("Default");
+      // No group: the entries before 1.4.0 and of the instance; Wer lists everyone.
+      const none = auditRequestAll(page, { since: [since], group: ["none"] });
+      await group.selectOption("none");
+      expect((await (await none).response())?.status()).toBe(200);
+      await who.field.click();
+      for (const name of ["demo", "kim"]) await expect(who.menu.getByRole("option", { name, exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
+      const all = auditRequestAll(page, { since: [since] });
+      await group.selectOption("");
+      await all;
+      expect(new URL(page.url()).search).toBe("?view=log");
+    });
+
+    test("at 390 px Gruppe is stacked full width between Aktion and Wer", async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 780 });
+      const { main, from } = await open(page);
+      const group = groupField(main);
+      await expect(group).toBeVisible();
+      const [f, a, g] = await boxes(from, choice(main, "Aktion").box, group);
+      const w = (await choice(main, "Wer").box.boundingBox())!;
+      expect(g.y).toBeGreaterThan(a.y + a.height);
+      expect(w.y).toBeGreaterThan(g.y + g.height);
+      expect(Math.abs(g.width - f.width), `Von ${f.width}, Gruppe ${g.width}`).toBeLessThanOrEqual(2);
+      expect(Math.abs(g.x - f.x)).toBeLessThanOrEqual(1);
+      await noSideScroll(page);
+    });
+  });
 });
 
 for (const [locale, names] of [

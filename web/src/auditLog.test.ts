@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { auditQuery, type AuditEntry } from "./api";
-import { foldEntries, shortUserAgent } from "./auditLog";
+import { auditQuery, type AuditEntry } from "./auditApi";
+import { auditAction, foldEntries, shortUserAgent } from "./auditLog";
 import { defaultFilter, entryDetail, targetLabel } from "./LogPage";
 import { messagesFor, t } from "./i18n";
 
@@ -111,28 +111,34 @@ describe("entry texts", () => {
   it("words the share entries and the lists of the reader's own Log (#389)", () => {
     expect(entryDetail(entry("account.share", "00:00", { details: { user: "pat", user_id: 4 } }))).toBe(t.logShareWith("pat"));
     expect(entryDetail(entry("message.list", "00:00", { details: { account: "anna/work", folder: "INBOX", via_owners: [2] } }))).toBe("account:anna/work folder:INBOX");
-    const de = messagesFor("de");
     for (const a of ["message.list", "message.page", "message.conversation", "account.share", "account.unshare"]) {
-      expect(t.auditAction(a)).not.toBe(a);
-      expect(de.auditAction(a)).not.toBe(a);
+      expect(auditAction(a)).not.toBe(a);
+      expect(auditAction(a, "de")).not.toBe(a);
     }
-    expect(t.auditAction("account.share")).toBe("Shared account");
-    expect(de.auditAction("account.unshare")).toBe("Freigabe beendet");
+    expect(auditAction("account.share")).toBe("Shared account");
+    expect(auditAction("account.unshare", "de")).toBe("Freigabe beendet");
   });
   it("words every action and falls back to the name", () => {
-    expect(t.auditAction("message.open")).not.toBe("message.open");
-    expect(t.auditAction("data.fill_change")).toBe("Changed import from IMAP");
-    expect(t.auditAction("data.fill_cancel")).toBe("Stopped or cancelled import from IMAP");
-    expect(t.auditAction("future.thing")).toBe("future.thing");
+    expect(auditAction("message.open")).not.toBe("message.open");
+    expect(auditAction("data.fill_change")).toBe("Changed import from IMAP");
+    expect(auditAction("data.fill_cancel")).toBe("Stopped or cancelled import from IMAP");
+    expect(auditAction("future.thing")).toBe("future.thing");
+  });
+  it("words the customer group actions in every language (#470)", () => {
+    for (const a of ["user.group_change", "group.add", "group.rename", "group.remove"]) {
+      expect(auditAction(a)).not.toBe(a);
+      expect(auditAction(a, "de")).not.toBe(a);
+    }
+    expect(auditAction("group.add")).toBe("Added group");
+    expect(auditAction("user.group_change", "de")).toBe("Gruppe des Benutzers geändert");
   });
   it("words the account purge actions in every language", () => {
-    const de = messagesFor("de");
     for (const a of ["account.purge", "account.purge_batch", "account.purge_finish", "account.purge_cancel"]) {
-      expect(t.auditAction(a)).not.toBe(a);
-      expect(de.auditAction(a)).not.toBe(a);
+      expect(auditAction(a)).not.toBe(a);
+      expect(auditAction(a, "de")).not.toBe(a);
     }
-    expect(t.auditAction("account.purge")).toBe("Account deletion confirmed");
-    expect(de.auditAction("account.purge")).toBe("Löschen des Kontos bestätigt");
+    expect(auditAction("account.purge")).toBe("Account deletion confirmed");
+    expect(auditAction("account.purge", "de")).toBe("Löschen des Kontos bestätigt");
   });
   it("shortens user agents", () => {
     expect(shortUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0")).toBe("Firefox 141 · Windows");

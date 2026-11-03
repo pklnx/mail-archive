@@ -12,6 +12,12 @@ VALUES (@actor, sqlc.narg(user_id), sqlc.narg(user_name), sqlc.narg(api_key_id),
                  (SELECT go.group_id FROM accounts ga JOIN users go ON go.id = ga.owner_id
                   WHERE ga.id = sqlc.narg(group_account_id)::bigint)));
 
+-- name: AuditGroupKnown :one
+-- Whether a group id can be filtered by (#470): a current group, or one
+-- since removed whose id entries still carry (audit_log_group_idx).
+SELECT EXISTS (SELECT 1 FROM customer_groups WHERE id = @group_id::bigint)
+    OR EXISTS (SELECT 1 FROM audit_log WHERE group_id = @group_id::bigint);
+
 -- name: AuditUserAgentID :one
 -- The id of a user agent, inserted if new. ON CONFLICT DO UPDATE would be
 -- refused by the append-only trigger. Under READ COMMITTED a concurrent
@@ -33,13 +39,16 @@ SELECT audit_log_ensure_partitions(@months_ahead::integer)::integer;
 
 -- name: ExportAuditEntries :many
 -- One batch of the entries in [since, until) after (after_at, after_id), oldest
--- first, optionally of one user.
+-- first, optionally of one user, and of one customer group or of none
+-- (no_group: entries from before 1.4.0 and instance-level ones, #470).
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_id, l.api_key_name, l.action,
-       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 WHERE l.at >= @since AND l.at < @until
   AND (sqlc.narg(user_id)::bigint IS NULL OR l.user_id = sqlc.narg(user_id))
+  AND (sqlc.narg(group_id)::bigint IS NULL OR l.group_id = sqlc.narg(group_id))
+  AND (NOT @no_group::boolean OR l.group_id IS NULL)
   AND l.action LIKE ANY (@patterns::text[])
   AND (l.at, l.id) > (@after_at::timestamptz, @after_id::bigint)
 ORDER BY l.at, l.id
@@ -49,11 +58,13 @@ LIMIT @lim;
 -- A page of every user's entries in [since, until), newest first, for
 -- admins; optionally narrowed to the entries whose user is one of user_ids
 -- or whose actor is one of actors (a union; both empty means all). coalesce
--- because pgx sends a nil slice as NULL. subject is the message's subject
--- only if the viewer has a location of it.
+-- because pgx sends a nil slice as NULL. no_group keeps only the entries
+-- without a customer group (#470: from before 1.4.0, or instance-level),
+-- still read through the pkey; one group: ListAuditEntriesForGroup.
+-- subject is the message's subject only if the viewer has a location of it.
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
        l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
-       s.subject
+       s.subject, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 LEFT JOIN LATERAL (
@@ -67,6 +78,7 @@ LEFT JOIN LATERAL (
 WHERE l.at >= @since AND l.at < @until
   AND ((coalesce(cardinality(@user_ids::bigint[]), 0) = 0 AND coalesce(cardinality(@actors::text[]), 0) = 0)
        OR l.user_id = ANY (@user_ids::bigint[]) OR l.actor = ANY (@actors::text[]))
+  AND (NOT @no_group::boolean OR l.group_id IS NULL)
   AND l.action LIKE ANY (@patterns::text[])
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
 ORDER BY l.at DESC, l.id DESC
@@ -75,10 +87,11 @@ LIMIT @lim;
 -- name: ListAuditEntriesForUser :many
 -- A page of one user's own entries, newest first. A separate query rather
 -- than "user_id IS NULL OR", so that a cached generic plan still uses
--- audit_log_user_idx.
+-- audit_log_user_idx. group_id only keeps the row type of
+-- ListAuditEntries: a non-admin's page never shows a group.
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
        l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
-       s.subject
+       s.subject, l.group_id
 FROM audit_log l
 LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
 LEFT JOIN LATERAL (
@@ -91,6 +104,34 @@ LEFT JOIN LATERAL (
 ) s ON true
 WHERE l.user_id = @user_id::bigint
   AND l.at >= @since AND l.at < @until
+  AND l.action LIKE ANY (@patterns::text[])
+  AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT @lim;
+
+-- name: ListAuditEntriesForGroup :many
+-- A page of one customer group's entries in [since, until), newest first,
+-- for admins (#470), narrowed like ListAuditEntries by user_ids and actors
+-- (a union, intersected with the group). A separate query, so that a cached
+-- generic plan still reads the partial index audit_log_group_idx
+-- (group_id, at, id) backward; group_id = implies its predicate.
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
+       s.subject, l.group_id
+FROM audit_log l
+LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
+LEFT JOIN LATERAL (
+    SELECT m.subject FROM messages m
+    WHERE l.target_type = 'message' AND m.sha256 = l.target_id::bpchar
+      AND EXISTS (SELECT 1 FROM message_locations ml
+                  JOIN folders f ON f.id = ml.folder_id
+                  JOIN accounts a ON a.id = f.account_id
+                  WHERE ml.message_sha256 = m.sha256 AND a.owner_id = @viewer::bigint)
+) s ON true
+WHERE l.group_id = @group_id::bigint
+  AND l.at >= @since AND l.at < @until
+  AND ((coalesce(cardinality(@user_ids::bigint[]), 0) = 0 AND coalesce(cardinality(@actors::text[]), 0) = 0)
+       OR l.user_id = ANY (@user_ids::bigint[]) OR l.actor = ANY (@actors::text[]))
   AND l.action LIKE ANY (@patterns::text[])
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
 ORDER BY l.at DESC, l.id DESC

@@ -544,6 +544,10 @@ func TestExportAudit(t *testing.T) {
 	if p, _ := store.AuditActionPatterns([]string{"user.2fa_reset"}); p[0] != `user.2fa\_reset` {
 		t.Errorf("underscore not escaped: %v", p)
 	}
+	// User management includes the customer groups (#470).
+	if p, _ := store.AuditActionPatterns([]string{"users"}); strings.Join(p, " ") != "user.% group.%" {
+		t.Errorf("users: %v", p)
+	}
 }
 
 // Admins narrow the Log page to several users and actors: an entry matches
