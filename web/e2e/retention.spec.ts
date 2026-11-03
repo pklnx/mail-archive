@@ -179,6 +179,50 @@ test("retention rule, legal hold, deletion run confirmed by count", async ({ pag
   await expect(main.getByRole("tab", { name: "Rules" })).toBeFocused();
 });
 
+// A legal hold on a customer group (#470 part 4): the demo has two groups,
+// so the hold form has a group, which narrows the users to choose; the
+// holds table shows each hold's group and filters by it. The hold is on
+// "Lindqvist Design", whose users have no mail the other tests delete, and
+// is released at the end.
+test("legal hold on a customer group", async ({ page }) => {
+  const hold = unique("e2e group hold");
+  await page.goto("/?view=retention&tab=holds&add=hold");
+  const main = page.getByRole("main");
+  await expect(main.getByRole("heading", { name: "Add hold", level: 1 })).toBeVisible();
+  await main.getByLabel("Name", { exact: true }).fill(hold);
+  await main.getByLabel("Reason").fill("Betriebsprüfung Lindqvist");
+  const user = main.getByRole("combobox", { name: "User", exact: true });
+  await expect(user.getByRole("option", { name: "pat", exact: true })).toHaveCount(1);
+  await main.getByRole("combobox", { name: "Customer group" }).selectOption({ label: "Lindqvist Design" });
+  // Only the group's users are left to choose.
+  await expect(user.getByRole("option", { name: "pat", exact: true })).toHaveCount(0);
+  await expect(user.getByRole("option", { name: "sam", exact: true })).toHaveCount(1);
+  // A group is a scope of its own: no box for the whole archive.
+  await expect(main.getByRole("checkbox", { name: "Hold the whole archive" })).toHaveCount(0);
+  await main.getByRole("button", { name: "Add hold" }).click();
+  await expect(main.getByText("Hold added.")).toBeVisible();
+  const row = main.getByRole("row").filter({ hasText: hold });
+  await expect(row).toContainText("group Lindqvist Design");
+  await expect(row.getByRole("cell", { name: "Lindqvist Design", exact: true })).toBeVisible();
+
+  // The filter by the other group hides it.
+  const filter = main.getByRole("combobox", { name: "Customer group" });
+  await filter.selectOption({ label: "Default" });
+  await expect(row).toHaveCount(0);
+  await filter.selectOption({ label: "Lindqvist Design" });
+  await expect(row).toHaveCount(1);
+
+  // Released, it stays as a record.
+  await row.getByRole("link", { name: hold }).click();
+  await expect(main.locator(".app-summary__tile").filter({ hasText: "Customer group" })).toContainText("Lindqvist Design");
+  await main.getByRole("button", { name: `Actions for ${hold}` }).click();
+  await page.getByRole("menuitem", { name: "Release" }).click();
+  const release = page.getByRole("dialog", { name: `Release the hold “${hold}”?` });
+  await release.getByLabel("Why is it released?").fill("e2e done");
+  await release.getByRole("button", { name: "Release" }).click();
+  await expect(main.locator(".app-detail-title__tags")).toHaveText("released");
+});
+
 test("on a phone the retention tables fit the width and their menus are on screen", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 800 });
   await page.goto("/?view=retention");

@@ -804,13 +804,17 @@ func TestPurgeMigration(t *testing.T) {
 	if _, err := c.Exec(ctx, `INSERT INTO message_deletions (message_seq, sha256, reason) VALUES (1, $1, 'account_purge')`, hashOf('a')); err == nil {
 		t.Error("account_purge reason before 00030")
 	}
-	// The old location_held is back.
-	hold := f.hold(store.NewLegalHold{OwnerID: &f.alice.ID})
+	// The old location_held is back. The hold is written by hand: the
+	// store's queries know legal_holds.group_id (00035).
+	var hold int64
+	if err := c.QueryRow(ctx, "INSERT INTO legal_holds (name, owner_id) VALUES ('audit', $1) RETURNING id", f.alice.ID).Scan(&hold); err != nil {
+		t.Fatal(err)
+	}
 	var held bool
 	if err := c.QueryRow(ctx, "SELECT location_held(NULL, $1, NULL, NULL)", f.inbox.ID).Scan(&held); err != nil || !held {
 		t.Errorf("location_held after down: %v %v", held, err)
 	}
-	if err := st.ReleaseLegalHold(ctx, hold, nil, "done"); err != nil {
+	if _, err := c.Exec(ctx, "UPDATE legal_holds SET released_at = now(), release_note = 'done' WHERE id = $1", hold); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Migrate(ctx); err != nil {

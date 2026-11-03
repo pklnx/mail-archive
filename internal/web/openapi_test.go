@@ -398,6 +398,9 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{groupRefJSON{}, "GroupRef", true},
 		{groupJSON{}, "Group", true},
 		{groupInput{}, "GroupInput", false},
+		{retentionRuleJSON{}, "RetentionRule", true},
+		{retentionAccountJSON{}, "RetentionAccount", true},
+		{legalHoldJSON{}, "LegalHold", true},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {

@@ -4,11 +4,12 @@
 // the same one as before.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeletionReview, DeletionRun, LegalHold, RetentionRule, RetentionRules } from "./api";
+import type { DeletionReview, DeletionRun, GroupRef, LegalHold, RetentionRule, RetentionRules } from "./api";
 import { day } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
 import { accountLabel, countMatches, holdScope, RetentionPage, runOpen } from "./RetentionPage";
 import { RunPage } from "./RetentionRun";
+import { retentionTextFor } from "./retentionText";
 import { settingsTextFor } from "./settingsText";
 import { expectLoaded, expectLoading } from "./test/loading";
 
@@ -22,6 +23,8 @@ const hold = (h: Partial<LegalHold>): LegalHold => ({
   accountId: null,
   account: "",
   accountOwner: "",
+  group: null,
+  coveredGroup: null,
   filter: null,
   since: null,
   until: null,
@@ -77,12 +80,13 @@ describe("countMatches", () => {
   });
 });
 
+const defaultGroup: GroupRef = { id: 1, name: "Default" };
 const rule5: RetentionRule = {
-  id: 5, accountId: 1, account: "personal", accountKind: "imap", accountRemoved: false, owner: "demo", folder: "Archive/2014", years: 10,
+  id: 5, accountId: 1, account: "personal", accountKind: "imap", accountRemoved: false, owner: "demo", group: defaultGroup, folder: "Archive/2014", years: 10,
   timeZone: "Europe/Berlin", note: "GoBD", createdAt: "2026-10-01T00:00:00Z", createdBy: "demo",
 };
 const rule7: RetentionRule = {
-  id: 7, accountId: 2, account: "old", accountKind: "import", accountRemoved: true, owner: "", folder: "", years: 8,
+  id: 7, accountId: 2, account: "old", accountKind: "import", accountRemoved: true, owner: "", group: null, folder: "", years: 8,
   timeZone: "Europe/Berlin", note: "", createdAt: "2026-10-02T00:00:00Z", createdBy: "",
 };
 const what5 = "demo / personal / Archive/2014";
@@ -90,9 +94,11 @@ const what7 = `- / old (${t.ruleRemoved}) / ${t.ruleAllFolders}`;
 const rules = (list: RetentionRule[]): RetentionRules => ({
   rules: list,
   accounts: [
-    { id: 1, name: "personal", kind: "imap", removed: false, owner: "demo", folders: ["INBOX", "Archive/2014"] },
-    { id: 2, name: "old", kind: "import", removed: true, owner: "", folders: [] },
+    { id: 1, name: "personal", kind: "imap", removed: false, owner: "demo", group: defaultGroup, folders: ["INBOX", "Archive/2014"] },
+    { id: 2, name: "old", kind: "import", removed: true, owner: "", group: null, folders: [] },
+    ...extraAccounts,
   ],
+  groups: groupList,
   minYears: 6,
   defaultTimeZone: "Europe/Berlin",
 });
@@ -103,6 +109,10 @@ const run = (r: Partial<DeletionRun>): DeletionRun => ({
 });
 
 let ruleList: RetentionRule[];
+/** The customer groups (#470): one, as on an instance without groups, unless a test adds some. */
+let groupList: GroupRef[];
+/** Accounts of other groups, for the group tests. */
+let extraAccounts: RetentionRules["accounts"];
 let holdList: LegalHold[];
 let runs: DeletionRun[];
 let review: DeletionReview;
@@ -125,6 +135,8 @@ beforeEach(() => {
   answer = null;
   gate = null;
   ruleList = [rule5, rule7];
+  groupList = [defaultGroup];
+  extraAccounts = [];
   holdList = [
     hold({ id: 8, name: "Case 4711", user: "alice", reason: "lawsuit 12 O 345/26" }),
     hold({ id: 9, name: "Old case", releasedAt: "2026-10-02T00:00:00Z", releasedBy: "demo", releaseNote: "closed" }),
@@ -132,7 +144,7 @@ beforeEach(() => {
   runs = [run({ id: 2, state: "done", candidates: 4, deleted: 3, kept: 1 }), run({})];
   review = {
     run: run({}),
-    groups: [{ owner: "demo", account: "personal", folder: "Archive/2014", year: 2014, messages: 2 }],
+    groups: [{ owner: "demo", account: "personal", folder: "Archive/2014", group: defaultGroup, year: 2014, messages: 2 }],
     candidates: [
       { sha256: "c".repeat(64), size: 1, retainUntil: "", state: "pending" },
       { sha256: "d".repeat(64), size: 1, retainUntil: "", state: "pending" },
@@ -153,7 +165,9 @@ beforeEach(() => {
     if (method === "GET" && u.startsWith("/api/legal-holds")) {
       return json({ holds: holdList.filter((h) => u.includes("released=1") || !h.releasedAt) });
     }
-    if (method === "GET" && u === "/api/users") return json({ users: [{ name: "alice" }] });
+    if (method === "GET" && u === "/api/users") {
+      return json({ users: [{ name: "alice", group: defaultGroup }, { name: "kim", group: { id: 2, name: "Meier GmbH" } }] });
+    }
     if (method === "GET" && u === "/api/retention/runs") return runsFail ? json({ error: "database unavailable" }, 503) : json({ runs });
     if (method === "GET" && u.startsWith("/api/retention/runs/")) {
       // The review has the run's current state, as the server's does.
@@ -713,7 +727,7 @@ describe("RetentionPage", () => {
       fireEvent.click(add);
       await waitFor(() =>
         expect(changes()).toEqual([
-          { method: "POST", url: "/api/legal-holds", body: { name: "Audit", reason: "Tax audit 2026", user: "", accountId: null, filter: null, since: null, until: null, all: true } },
+          { method: "POST", url: "/api/legal-holds", body: { name: "Audit", reason: "Tax audit 2026", user: "", accountId: null, group: null, filter: null, since: null, until: null, all: true } },
         ]),
       );
       // Back on the tab, which shows the notice until the tab changes.
@@ -1042,6 +1056,134 @@ describe("RetentionPage", () => {
       await waitFor(() => expect(window.location.search).toBe("?view=retention&tab=runs"));
       expect(await screen.findByText(t.runLine(3, 2, "2.0 KB"))).toBeTruthy();
     });
+  });
+});
+
+describe("customer groups (#470 part 4)", () => {
+  const meier: GroupRef = { id: 2, name: "Meier GmbH" };
+  const rt = retentionTextFor("en");
+  const rule9: RetentionRule = { ...rule5, id: 9, accountId: 3, account: "office", owner: "kim", group: meier, folder: "" };
+  /** Two groups: kim's account office and a rule on it in Meier GmbH, holds of each group and of every group. */
+  function twoGroups() {
+    groupList = [defaultGroup, meier];
+    extraAccounts = [{ id: 3, name: "office", kind: "imap", removed: false, owner: "kim", group: meier, folders: ["INBOX"] }];
+    ruleList = [rule5, rule7, rule9];
+    holdList = [
+      hold({ id: 8, name: "Case 4711", user: "alice", coveredGroup: defaultGroup }),
+      hold({ id: 11, name: "Meier audit", group: meier, coveredGroup: meier }),
+      hold({ id: 12, name: "Everything", since: "2020-01-01T00:00:00Z" }),
+    ];
+  }
+  const groupFilter = () => screen.getByRole("combobox", { name: rt.colGroup });
+  const columnTexts = (table: HTMLElement) => [...table.querySelectorAll("thead th")].map((th) => th.textContent);
+
+  it("shows no group column, filter or field while there is one group", async () => {
+    await show("", what5);
+    expect(screen.queryByRole("combobox", { name: rt.colGroup })).toBeNull();
+    expect(columnTexts(screen.getByRole("table", { name: t.retentionRulesTab }))).not.toContain(rt.colGroup);
+    cleanup();
+    await show("&add=hold", t.holdAdd);
+    await screen.findByRole("option", { name: "alice" });
+    expect(screen.queryByLabelText(rt.colGroup)).toBeNull();
+    cleanup();
+    await showRun3();
+    await screen.findByText(s.groups);
+    expect(screen.queryByRole("combobox", { name: rt.colGroup })).toBeNull();
+    expect(columnTexts(screen.getByRole("table", { name: t.runGroupsHead }))).not.toContain(rt.colGroup);
+  });
+
+  it("filters the rules by group and shows each rule's group", async () => {
+    twoGroups();
+    await show("", what5);
+    const table = screen.getByRole("table", { name: t.retentionRulesTab });
+    expect(columnTexts(table)).toContain(rt.colGroup);
+    expect(within(row(what5)).getByText("Default")).toBeTruthy();
+    expect(within(row(what7)).getByText(rt.noGroup)).toBeTruthy();
+    fireEvent.change(groupFilter(), { target: { value: "2" } });
+    expect(screen.queryByRole("link", { name: what5 })).toBeNull();
+    expect(within(row(`kim / office / ${t.ruleAllFolders}`)).getByText("Meier GmbH")).toBeTruthy();
+    fireEvent.change(groupFilter(), { target: { value: "" } });
+    expect(screen.getByRole("link", { name: what5 })).toBeTruthy();
+  });
+
+  it("filters the holds by group, keeping the holds of every group", async () => {
+    twoGroups();
+    await show("&tab=holds", "Case 4711");
+    expect(within(row("Meier audit")).getByText("Meier GmbH")).toBeTruthy();
+    expect(within(row("Everything")).getByText(rt.allGroups)).toBeTruthy();
+    expect(within(row("Meier audit")).getAllByText(rt.holdScopeGroup("Meier GmbH")).length).toBeGreaterThan(0);
+    fireEvent.change(groupFilter(), { target: { value: "2" } });
+    expect(screen.queryByRole("link", { name: "Case 4711" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Meier audit" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Everything" })).toBeTruthy();
+  });
+
+  it("adds a hold on a group, narrowing the users and accounts to the group's", async () => {
+    twoGroups();
+    await show("&add=hold", t.holdAdd);
+    await screen.findByRole("option", { name: "kim" });
+    fireEvent.change(screen.getByLabelText(t.holdName), { target: { value: "Meier audit" } });
+    fireEvent.change(screen.getByLabelText(t.holdReason), { target: { value: "Betriebsprüfung" } });
+    // Grouped account choices while no group is chosen.
+    const account = screen.getByLabelText(t.holdAccount);
+    expect([...account.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["Default", "Meier GmbH", rt.noGroup]);
+    fireEvent.change(screen.getByLabelText(t.holdUser), { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText(rt.colGroup), { target: { value: "2" } });
+    // alice is not in Meier GmbH: her choice goes, and only kim is left.
+    expect((screen.getByLabelText(t.holdUser) as HTMLSelectElement).value).toBe("");
+    expect(within(screen.getByLabelText(t.holdUser)).queryByRole("option", { name: "alice" })).toBeNull();
+    expect(within(account).getAllByRole("option").map((o) => o.textContent)).toEqual([t.holdAnyAccount, "kim / office"]);
+    // A group is a scope: no box for the whole archive.
+    expect(screen.queryByLabelText(t.holdAll)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: t.holdAdd }));
+    await waitFor(() => expect(changes()).toHaveLength(1));
+    expect(changes()[0]!.body).toEqual({
+      name: "Meier audit", reason: "Betriebsprüfung", user: "", accountId: null, group: 2, filter: null, since: null, until: null, all: false,
+    });
+  });
+
+  it("groups the accounts of the Add rule form by group", async () => {
+    twoGroups();
+    await show("&add=rule", t.ruleAdd);
+    const account = screen.getByLabelText(t.ruleAccount);
+    expect([...account.querySelectorAll("optgroup")].map((g) => [g.label, [...g.querySelectorAll("option")].map((o) => o.textContent)])).toEqual([
+      ["Default", ["demo / personal"]],
+      ["Meier GmbH", ["kim / office"]],
+      [rt.noGroup, [`- / old (${t.ruleRemoved})`]],
+    ]);
+  });
+
+  it("shows the group of each group of messages in a run's review, with a filter", async () => {
+    twoGroups();
+    review = {
+      ...review,
+      groups: [
+        { owner: "demo", account: "personal", folder: "Archive/2014", group: defaultGroup, year: 2014, messages: 2 },
+        { owner: "kim", account: "office", folder: "INBOX", group: meier, year: 2015, messages: 1 },
+      ],
+    };
+    await showRun3();
+    const table = await screen.findByRole("table", { name: t.runGroupsHead });
+    expect(columnTexts(table)).toContain(rt.colGroup);
+    expect(within(table).getByText("Meier GmbH")).toBeTruthy();
+    fireEvent.change(groupFilter(), { target: { value: "2" } });
+    expect(within(table).queryByText("Default")).toBeNull();
+    expect(within(table).getAllByRole("row")).toHaveLength(2);
+  });
+
+  it("shows the group texts in German", async () => {
+    twoGroups();
+    applySettings({ language: "de", locale: "de" });
+    try {
+      const rd = retentionTextFor("de");
+      await show("&tab=holds", "Case 4711");
+      expect(screen.getByRole("combobox", { name: rd.colGroup })).toBeTruthy();
+      expect(within(row("Everything")).getByText(rd.allGroups)).toBeTruthy();
+      expect(within(row("Meier audit")).getAllByText(rd.holdScopeGroup("Meier GmbH")).length).toBeGreaterThan(0);
+      expect(document.body.textContent).not.toMatch(/Customer group|All groups|group Meier/);
+    } finally {
+      applySettings({ language: "en", locale: "en" });
+    }
   });
 });
 

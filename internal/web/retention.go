@@ -11,36 +11,53 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
-// Retention rules and legal holds (#55). Admins only.
+// Retention rules and legal holds (#55). Admins only. Rules, accounts,
+// holds and the groups of a deletion review carry their customer group
+// (#470), and a hold can name a group.
+
+// groupRef is the JSON of a customer group an entry belongs to; nil
+// without one.
+func groupRef(id *int64, name string) *groupRefJSON {
+	if id == nil {
+		return nil
+	}
+	return &groupRefJSON{ID: *id, Name: name}
+}
 
 type retentionRuleJSON struct {
-	ID             int64     `json:"id"`
-	AccountID      int64     `json:"accountId"`
-	Account        string    `json:"account"`
-	AccountKind    string    `json:"accountKind"`
-	AccountRemoved bool      `json:"accountRemoved"`
-	Owner          string    `json:"owner"`
-	Folder         string    `json:"folder"` // empty: every folder
-	Years          int       `json:"years"`
-	TimeZone       string    `json:"timeZone"`
-	Note           string    `json:"note"`
-	CreatedAt      time.Time `json:"createdAt"`
-	CreatedBy      string    `json:"createdBy"`
+	ID             int64  `json:"id"`
+	AccountID      int64  `json:"accountId"`
+	Account        string `json:"account"`
+	AccountKind    string `json:"accountKind"`
+	AccountRemoved bool   `json:"accountRemoved"`
+	Owner          string `json:"owner"`
+	// Group is the account's owner's customer group; null without an owner.
+	Group     *groupRefJSON `json:"group"`
+	Folder    string        `json:"folder"` // empty: every folder
+	Years     int           `json:"years"`
+	TimeZone  string        `json:"timeZone"`
+	Note      string        `json:"note"`
+	CreatedAt time.Time     `json:"createdAt"`
+	CreatedBy string        `json:"createdBy"`
 }
 
 type retentionAccountJSON struct {
-	ID      int64    `json:"id"`
-	Name    string   `json:"name"`
-	Kind    string   `json:"kind"`
-	Removed bool     `json:"removed"`
-	Owner   string   `json:"owner"`
-	Folders []string `json:"folders"`
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Removed bool   `json:"removed"`
+	Owner   string `json:"owner"`
+	// Group is the owner's customer group; null without an owner.
+	Group   *groupRefJSON `json:"group"`
+	Folders []string      `json:"folders"`
 }
 
 type retentionRulesJSON struct {
 	Rules []retentionRuleJSON `json:"rules"`
 	// Accounts to choose from, with their folders.
 	Accounts []retentionAccountJSON `json:"accounts"`
+	// Groups are every customer group, for a hold's group and the filters.
+	Groups []groupRefJSON `json:"groups"`
 	// MinYears: shorter rules need force.
 	MinYears        int    `json:"minYears"`
 	DefaultTimeZone string `json:"defaultTimeZone"`
@@ -60,20 +77,30 @@ func (s *Server) handleListRetentionRules(w http.ResponseWriter, r *http.Request
 		s.failStore(w, r, err)
 		return
 	}
+	groups, err := s.store.ListGroups(r.Context())
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	out := retentionRulesJSON{
 		Rules: make([]retentionRuleJSON, 0, len(rules)), Accounts: make([]retentionAccountJSON, 0, len(accounts)),
+		Groups:   make([]groupRefJSON, 0, len(groups)),
 		MinYears: store.MinBusinessLetterYears, DefaultTimeZone: store.DefaultRetentionTimeZone,
+	}
+	for _, g := range groups {
+		out.Groups = append(out.Groups, groupRefJSON{ID: g.ID, Name: g.Name})
 	}
 	for _, x := range rules {
 		out.Rules = append(out.Rules, retentionRuleJSON{
 			ID: x.ID, AccountID: x.AccountID, Account: x.Account, AccountKind: string(x.AccountKind), AccountRemoved: x.AccountRemoved,
-			Owner: x.Owner, Folder: x.Folder, Years: x.Years, TimeZone: x.TimeZone, Note: x.Note,
+			Owner: x.Owner, Group: groupRef(x.GroupID, x.Group), Folder: x.Folder, Years: x.Years, TimeZone: x.TimeZone, Note: x.Note,
 			CreatedAt: x.CreatedAt, CreatedBy: x.CreatedBy,
 		})
 	}
 	for _, a := range accounts {
 		out.Accounts = append(out.Accounts, retentionAccountJSON{
-			ID: a.ID, Name: a.Name, Kind: string(a.Kind), Removed: a.Removed, Owner: a.Owner, Folders: a.Folders,
+			ID: a.ID, Name: a.Name, Kind: string(a.Kind), Removed: a.Removed, Owner: a.Owner,
+			Group: groupRef(a.GroupID, a.Group), Folders: a.Folders,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, out)
@@ -166,13 +193,18 @@ type holdFilterJSON struct {
 }
 
 type legalHoldJSON struct {
-	ID           int64           `json:"id"`
-	Name         string          `json:"name"`
-	Reason       string          `json:"reason"`
-	User         string          `json:"user"`
-	AccountID    *int64          `json:"accountId"`
-	Account      string          `json:"account"`
-	AccountOwner string          `json:"accountOwner"`
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Reason       string `json:"reason"`
+	User         string `json:"user"`
+	AccountID    *int64 `json:"accountId"`
+	Account      string `json:"account"`
+	AccountOwner string `json:"accountOwner"`
+	// Group is the customer group the hold names (#470); null if none.
+	Group *groupRefJSON `json:"group"`
+	// CoveredGroup is the group whose mail the hold covers: Group, or the
+	// group of its user or of its account's owner; null for every group.
+	CoveredGroup *groupRefJSON   `json:"coveredGroup"`
 	Filter       *holdFilterJSON `json:"filter"`
 	Since        *time.Time      `json:"since"`
 	Until        *time.Time      `json:"until"`
@@ -198,7 +230,8 @@ func (s *Server) handleListLegalHolds(w http.ResponseWriter, r *http.Request) {
 	for _, h := range holds {
 		j := legalHoldJSON{
 			ID: h.ID, Name: h.Name, Reason: h.Reason, User: h.Owner, AccountID: h.AccountID, Account: h.Account,
-			AccountOwner: h.AccountOwner, Since: h.PeriodStart, Until: h.PeriodEnd, MatchedAt: h.MatchedAt, Matched: h.Matched,
+			AccountOwner: h.AccountOwner, Group: groupRef(h.GroupID, h.Group),
+			CoveredGroup: groupRef(h.CoveredGroupID, h.CoveredGroup), Since: h.PeriodStart, Until: h.PeriodEnd, MatchedAt: h.MatchedAt, Matched: h.Matched,
 			CreatedAt: h.CreatedAt, CreatedBy: h.CreatedBy, ReleasedAt: h.ReleasedAt, ReleasedBy: h.ReleasedBy, ReleaseNote: h.ReleaseNote,
 		}
 		if f := h.Filter; f != nil {
@@ -210,13 +243,16 @@ func (s *Server) handleListLegalHolds(w http.ResponseWriter, r *http.Request) {
 }
 
 type legalHoldInput struct {
-	Name      string          `json:"name"`
-	Reason    string          `json:"reason"`
-	User      string          `json:"user"`
-	AccountID *int64          `json:"accountId"`
-	Filter    *holdFilterJSON `json:"filter"`
-	Since     *time.Time      `json:"since"`
-	Until     *time.Time      `json:"until"`
+	Name      string `json:"name"`
+	Reason    string `json:"reason"`
+	User      string `json:"user"`
+	AccountID *int64 `json:"accountId"`
+	// Group is a customer group's id (#470): the hold covers the accounts
+	// of its users only, also of users who join it later.
+	Group  *int64          `json:"group"`
+	Filter *holdFilterJSON `json:"filter"`
+	Since  *time.Time      `json:"since"`
+	Until  *time.Time      `json:"until"`
 	// All confirms a hold without any condition, over the whole archive.
 	All bool `json:"all"`
 }
@@ -236,9 +272,22 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 			h.Filter = nil
 		}
 	}
-	// A hold naming a user or an account is about them (their group); one
-	// naming neither covers the instance and has no group (#470). The
-	// account wins over the user as the target, as before.
+	// A hold naming a user or an account is about them (their group), one
+	// naming only a group about that group; one naming none of them covers
+	// the instance and has no group (#470). The account wins over the user
+	// as the target, as before.
+	if in.Group != nil {
+		g, err := s.store.GetGroup(r.Context(), *in.Group)
+		if errors.Is(err, store.ErrUnknownGroup) {
+			s.fail(w, r, http.StatusBadRequest, "unknown group", nil)
+			return
+		}
+		if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		h.GroupID = &g.ID
+	}
 	var owner *store.User
 	var account *store.Account
 	if in.User != "" {
@@ -274,10 +323,13 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 	case owner != nil:
 		e = s.targetedEntry(r, "hold.add")
 		auditUser(e, owner)
+	case h.GroupID != nil:
+		// The store records it under the group.
+		e = s.targetedEntry(r, "hold.add")
 	default:
 		e = s.instanceEntry(r, "hold.add")
 	}
-	if h.OwnerID == nil && h.AccountID == nil && h.Filter == nil && h.PeriodStart == nil && h.PeriodEnd == nil && !in.All {
+	if h.OwnerID == nil && h.AccountID == nil && h.GroupID == nil && h.Filter == nil && h.PeriodStart == nil && h.PeriodEnd == nil && !in.All {
 		s.fail(w, r, http.StatusBadRequest, "a hold without user, account, period or filter covers the whole archive; confirm with all", nil)
 		return
 	}
@@ -286,6 +338,10 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 	id, err := s.store.AddLegalHold(withAudit(r, e), h)
 	if errors.Is(err, store.ErrInvalidRetention) {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	if errors.Is(err, store.ErrUnknownGroup) {
+		s.fail(w, r, http.StatusBadRequest, "unknown group", nil)
 		return
 	}
 	if err != nil {
@@ -405,11 +461,14 @@ func (s *Server) handleCreateDeletionRun(w http.ResponseWriter, r *http.Request)
 const maxReviewCandidates = 1000
 
 type deletionGroupJSON struct {
-	Owner    string `json:"owner"`
-	Account  string `json:"account"`
-	Folder   string `json:"folder"`
-	Year     int    `json:"year"`
-	Messages int64  `json:"messages"`
+	Owner   string `json:"owner"`
+	Account string `json:"account"`
+	Folder  string `json:"folder"`
+	// Group is the customer group of the account's owner (#470); null
+	// without an owner.
+	Group    *groupRefJSON `json:"group"`
+	Year     int           `json:"year"`
+	Messages int64         `json:"messages"`
 }
 
 type deletionCandidateJSON struct {
@@ -458,7 +517,9 @@ func (s *Server) handleGetDeletionRun(w http.ResponseWriter, r *http.Request) {
 		Listed     int                     `json:"listed"`
 	}{Run: toRunJSON(run), Groups: make([]deletionGroupJSON, 0, len(groups)), Candidates: []deletionCandidateJSON{}}
 	for _, g := range groups {
-		out.Groups = append(out.Groups, deletionGroupJSON{Owner: g.Owner, Account: g.Account, Folder: g.Folder, Year: g.Year, Messages: g.Messages})
+		out.Groups = append(out.Groups, deletionGroupJSON{
+			Owner: g.Owner, Account: g.Account, Folder: g.Folder, Group: groupRef(g.GroupID, g.CustomerGroup), Year: g.Year, Messages: g.Messages,
+		})
 	}
 	for i, c := range candidates {
 		if i == maxReviewCandidates {
@@ -533,33 +594,37 @@ func (s *Server) handleCancelDeletionRun(w http.ResponseWriter, r *http.Request)
 }
 
 // holdEntry starts the entry of a change to hold id: targeted at the
-// account or the user the hold names, as hold.add was, or instance-level
-// for a hold that names neither (#470). An unknown hold answers 404.
+// account, the user or the group the hold names, as hold.add was, or
+// instance-level for a hold that names none of them (#470). An unknown
+// hold answers 404.
 func (s *Server) holdEntry(w http.ResponseWriter, r *http.Request, action string, id int64) (*store.AuditEntry, bool) {
-	owner, account, err := s.store.LegalHoldScope(r.Context(), id)
+	scope, err := s.store.LegalHoldScope(r.Context(), id)
 	if err != nil {
 		s.failStore(w, r, err)
 		return nil, false
 	}
 	switch {
-	case account != nil:
+	case scope.AccountID != nil:
 		e := s.targetedEntry(r, action)
-		acc, err := s.store.GetAccount(r.Context(), *account)
+		acc, err := s.store.GetAccount(r.Context(), *scope.AccountID)
 		if err != nil {
 			s.failStore(w, r, err)
 			return nil, false
 		}
 		auditAccount(e, acc)
 		return e, true
-	case owner != nil:
+	case scope.OwnerID != nil:
 		e := s.targetedEntry(r, action)
-		u, err := s.store.GetUserByID(r.Context(), *owner)
+		u, err := s.store.GetUserByID(r.Context(), *scope.OwnerID)
 		if err != nil {
 			s.failStore(w, r, err)
 			return nil, false
 		}
 		auditUser(e, u)
 		return e, true
+	case scope.GroupID != nil:
+		// The store records it under the group.
+		return s.targetedEntry(r, action), true
 	}
 	return s.instanceEntry(r, action), true
 }

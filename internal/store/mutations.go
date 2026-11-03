@@ -196,17 +196,6 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		if r.Version != ref.Version {
 			return ErrStale
 		}
-		// A hold on the current owner would no longer cover the account's
-		// mail once it belongs to someone else.
-		if r.OwnerID != nil && *r.OwnerID != owner {
-			holds, err := q.ActiveHoldsOnOwner(ctx, db.ActiveHoldsOnOwnerParams{OwnerID: *r.OwnerID, AccountID: ref.ID})
-			if err != nil {
-				return err
-			}
-			if len(holds) > 0 {
-				return newHoldError(holds, "%v: the account's owner is on legal hold %s")
-			}
-		}
 		ids := []int64{owner}
 		if r.OwnerID != nil {
 			ids = append(ids, *r.OwnerID)
@@ -222,6 +211,20 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		to, ok := groups[owner]
 		if !ok {
 			return fmt.Errorf("new owner: %w", ErrNotFound)
+		}
+		// A hold on the current owner, or on the owner's group (#470), would
+		// no longer cover the account's mail once it belongs to someone else
+		// in another group.
+		if r.OwnerID != nil && *r.OwnerID != owner {
+			holds, err := q.ActiveHoldsOnOwner(ctx, db.ActiveHoldsOnOwnerParams{
+				AccountID: ref.ID, OwnerID: *r.OwnerID, GroupID: groups[*r.OwnerID], NewOwnerID: owner, NewGroupID: to,
+			})
+			if err != nil {
+				return err
+			}
+			if len(holds) > 0 {
+				return newHoldError(holds, "%v: the account's owner or their group is on legal hold %s")
+			}
 		}
 		otherGroup := r.OwnerID != nil && groups[*r.OwnerID] != to
 		if otherGroup && !allowOtherGroup {

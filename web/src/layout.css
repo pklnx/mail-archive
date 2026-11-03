@@ -2477,8 +2477,9 @@ select,
   }
 }
 
-/* The group filter above the users table (#470). */
-.users-filter {
+/* The customer group filter above the users table and the retention tables (#470). */
+.users-filter,
+.retention-group-filter {
   max-inline-size: 20rem;
   margin-block-end: 1rem;
 }

@@ -1355,7 +1355,7 @@ describe("keyboard shortcuts on the admin pages (#168 part 5)", () => {
         }
         if (path === "/api/groups") return json({ groups: [{ id: 1, name: "Default", users: 1, accounts: 0, createdAt: "2026-10-01T00:00:00Z" }] });
         if (path === "/api/api-keys") return json({ keys: [] });
-        if (path === "/api/retention/rules") return json({ rules: [], accounts: [], minYears: 6, defaultTimeZone: "Europe/Berlin" });
+        if (path === "/api/retention/rules") return json({ rules: [], accounts: [], groups: [], minYears: 6, defaultTimeZone: "Europe/Berlin" });
         if (path.startsWith("/api/audit?")) return json({ entries: [] });
         return base(path);
       }),

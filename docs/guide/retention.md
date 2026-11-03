@@ -117,6 +117,11 @@ account-wide rule and give each folder its own.
 Rules are added and removed, not changed. Removing a rule keeps its mail for
 ever again, unless another rule covers it.
 
+With two or more [customer groups](./users#customer-groups), the rules table
+has a **Customer group** column (the group of the account's owner) and a
+**Customer group** filter above it, and **Add rule** lists the accounts under
+a heading per group. An account without an owner is in no group.
+
 ### smtp accounts with a fill
 
 An smtp account has one folder, `JOURNAL`: what arrives over SMTP, what a
@@ -149,6 +154,7 @@ syntax. Or the operator, on the command line:
 ```sh
 ./ma hold add "Tax audit 2026" --reason "Betriebsprüfung, letter of 2026-09-01" --account work --until 2024-01-01
 ./ma hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon
+./ma hold add "Meier audit" --reason "Betriebsprüfung Meier GmbH" --group "Steuerbüro Meier"
 ```
 The table lists the active holds; the filter button (funnel icon) in
 its toolbar shows released holds too (**Show released holds**). Each hold
@@ -168,12 +174,39 @@ Holds are released with a note and never deleted. A user named by a hold
 can therefore not be removed (lock them instead), and an account whose owner
 is on hold cannot move to another user.
 
+### Holds per customer group
+
+With two or more [customer groups](./users#customer-groups), a hold can name
+a group (**Customer group** on **Add hold**, `--group` on the command line).
+It then covers every account whose owner is in that group, also the accounts
+of users who join the group after the hold was added. Like the other
+conditions it only narrows the hold: a user or an account it names must be
+in the group (the form offers only those), and the hold covers nothing
+outside it.
+
+- A user cannot move out of a group whose active hold covers the accounts
+  they own, and an account cannot move to a user of another group while such
+  a hold covers it: release the hold first. A user without accounts moves.
+- A group that a hold names, active or released, cannot be removed: the hold
+  is a record and keeps it.
+- The holds table has a **Customer group** column: the group the hold names,
+  or the group of its user or account; **All groups** for a hold that covers
+  every group. The **Customer group** filter above the table shows the holds
+  of one group together with those of all groups, since both keep that
+  group's mail.
+- The audit log records a hold that names only a group, and its release,
+  under that group; a hold without user, account or group is instance-level
+  and has no group.
+
 ## Deletion runs
 
 An admin starts a run under **Retention → Deletion runs** → **New deletion
 run**, which opens the run's page. It shows the counts by owner, account,
 folder and year, and the hashes, not subjects (admins do not read other
-users' mail there). **Delete N messages** asks for the number of messages,
+users' mail there); with two or more customer groups, each line also shows
+the owner's group, and a **Customer group** filter narrows the lines. A run
+always covers every group: a message that several groups received is stored
+once and deleted only when none of its places is kept. **Delete N messages** asks for the number of messages,
 typed in, in a dialog; **Cancel run** is in the page's menu (⋯). The web
 server then deletes in the background; the page shows the progress.
 

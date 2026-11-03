@@ -365,16 +365,26 @@ func TestPurgeDeletesAttachmentRows(t *testing.T) {
 	}
 }
 
-// downGroupsMigration rolls back 00034_customer_groups.
+// downGroupsMigration rolls back 00035_group_holds and
+// 00034_customer_groups.
 func downGroupsMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downGroupHoldsMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00034_customer_groups") {
 		t.Fatalf("down: %q %v", m, err)
 	}
 }
 
-// downAttachmentTextMigration rolls back 00034_customer_groups and
-// 00033_attachment_text.
+// downGroupHoldsMigration rolls back 00035_group_holds.
+func downGroupHoldsMigration(t *testing.T, st *store.Store) {
+	t.Helper()
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00035_group_holds") {
+		t.Fatalf("down: %q %v", m, err)
+	}
+}
+
+// downAttachmentTextMigration rolls back 00035_group_holds,
+// 00034_customer_groups and 00033_attachment_text.
 func downAttachmentTextMigration(t *testing.T, st *store.Store) {
 	t.Helper()
 	downGroupsMigration(t, st)

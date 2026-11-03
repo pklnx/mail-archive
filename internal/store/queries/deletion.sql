@@ -107,21 +107,23 @@ UPDATE deletion_candidates SET state = @state
 WHERE run_id = @run_id AND message_sha256 = ANY (@shas::bpchar[]) AND state = 'pending';
 
 -- name: DeletionRunSummary :many
--- The pending candidates of a run by owner, account, folder and the year
--- their retention period ended in, for the review. A message found in two
--- folders counts in both. A period ends at 1 January in its rule's zone,
+-- The pending candidates of a run by owner (with the owner's customer
+-- group), account, folder and the year their retention period ended in,
+-- for the review. A message found in two folders counts in both. A period ends at 1 January in its rule's zone,
 -- which the candidate does not carry; one day after the end is in the next
 -- year in UTC for any rule zone west of UTC and up to +24 h east (#406).
 SELECT coalesce(u.name, '')::text AS owner, a.name AS account, f.name AS folder,
        (extract(year FROM (c.retain_until + interval '1 day') AT TIME ZONE 'UTC') - 1)::int AS year,
-       count(DISTINCT c.message_sha256)::bigint AS messages
+       count(DISTINCT c.message_sha256)::bigint AS messages,
+       g.id AS group_id, g.name AS group_name
 FROM deletion_candidates c
 JOIN message_locations l ON l.message_sha256 = c.message_sha256
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
 LEFT JOIN users u ON u.id = a.owner_id
+LEFT JOIN customer_groups g ON g.id = u.group_id
 WHERE c.run_id = @run_id AND c.state = 'pending'
-GROUP BY 1, 2, 3, 4
+GROUP BY 1, 2, 3, 4, g.id, g.name
 ORDER BY 1, 2, 3, 4;
 
 -- name: DeletionCandidateDetails :many

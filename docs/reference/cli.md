@@ -90,7 +90,7 @@ case; commands find a group by its name in any case.
 | `group add NAME` | Create a group. |
 | `group list` | List groups with their number of users, the accounts those users own (removed ones too), and when each was created. |
 | `group rename NAME NEW-NAME` | Rename a group. |
-| `group remove NAME` | Remove a group. Refused while it has users, and for the last group. |
+| `group remove NAME` | Remove a group. Refused while it has users, while a legal hold names it (also a released one), and for the last group. |
 
 ## Accounts
 
@@ -425,11 +425,14 @@ whatever the rules say: during a tax audit, a lawsuit or an investigation.
 ```sh
 ./ma hold add "Tax audit 2026" --reason "Betriebsprüfung, letter of 2026-09-01" --account work --until 2024-01-01
 ./ma hold add "Falcon dispute" --reason "lawsuit 12 O 345/26" --query falcon
+./ma hold add "Meier audit" --reason "Betriebsprüfung Meier GmbH" --group "Steuerbüro Meier"
 ./ma hold list [--released]
 ./ma hold release 1 --note "audit closed on 2026-12-01"
 ```
 
-Every condition given must match: `--user`, `--account`, `--since` and
+Every condition given must match: `--user`, `--account`, `--group` (the
+accounts of a [customer group](#groups)'s users, also of users who join it
+later; a `--user` or `--account` must be in it), `--since` and
 `--until` (the Date header or received date; mail without dates counts as
 inside), and a search filter (`--query`, `--sender`, `--recipient`,
 `--attachment`, `--has-attachment`). A filter is matched by search, as the
@@ -441,7 +444,11 @@ archive and needs `--all`.
 Holds are released with a note, never deleted. A user named by a hold can
 therefore not be removed (lock them instead), an account whose owner is on
 hold cannot be moved to another user, and an empty account named by a hold
-is kept as removed instead of being deleted.
+is kept as removed instead of being deleted. A user cannot leave a group
+whose active hold covers their accounts (`user set-group`), an account
+cannot move into another group while such a hold covers it, and a group that
+a hold names stays (`group remove` is refused). `hold list` shows a group
+hold as `group NAME`.
 
 ### deletion
 

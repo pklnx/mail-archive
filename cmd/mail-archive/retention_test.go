@@ -22,7 +22,7 @@ func runOut(t *testing.T, cmd *cobra.Command, args ...string) (string, error) {
 }
 
 func TestRetentionCommands(t *testing.T) {
-	newArchiveSetup(t)
+	setup := newArchiveSetup(t)
 
 	if out, err := runOut(t, newRetentionCmd(), "rule", "list"); err != nil || !strings.Contains(out, "no retention rules") {
 		t.Fatalf("empty list: %v\n%s", err, out)
@@ -81,6 +81,37 @@ func TestRetentionCommands(t *testing.T) {
 	}
 	if out, _ := runOut(t, newHoldCmd(), "list", "--released"); !strings.Contains(out, "released ") || !strings.Contains(out, "closed") {
 		t.Fatalf("list --released:\n%s", out)
+	}
+
+	// A hold on a customer group (#470): listed with its group, its
+	// entries recorded under it; the group then stays.
+	if err := runCmd(t, newGroupCmd(), "", "add", "Meier"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runOut(t, newHoldCmd(), "add", "x", "--reason", "y", "--group", "nosuch"); err == nil || !strings.Contains(err.Error(), `group "nosuch" not found`) {
+		t.Fatalf("hold on an unknown group: %v", err)
+	}
+	if _, err := runOut(t, newHoldCmd(), "add", "x", "--reason", "y", "--group", "Meier", "--user", "anna"); err == nil ||
+		!strings.Contains(err.Error(), "not in the hold's group") {
+		t.Fatalf("hold on anna in Meier: %v", err)
+	}
+	out, err = runOut(t, newHoldCmd(), "add", "Meier audit", "--reason", "Betriebsprüfung", "--group", "meier")
+	if err != nil || !strings.Contains(out, "legal hold 3 added") {
+		t.Fatalf("group hold: %v\n%s", err, out)
+	}
+	if out, _ := runOut(t, newHoldCmd(), "list"); !regexpMatch(`(?m)^3\s+Meier audit\s+group Meier\s`, out) {
+		t.Fatalf("hold list with a group hold:\n%s", out)
+	}
+	if out, err := runOut(t, newHoldCmd(), "release", "3", "--note", "closed"); err != nil || !strings.Contains(out, "released") {
+		t.Fatalf("release the group hold: %v\n%s", err, out)
+	}
+	if err := runCmd(t, newGroupCmd(), "", "remove", "Meier"); err == nil || !strings.Contains(err.Error(), "a legal hold names it") {
+		t.Fatalf("remove a group a hold names: %v", err)
+	}
+	var n int
+	if err := connectDB(t, setup.url).QueryRow(context.Background(), `SELECT count(*) FROM audit_log a JOIN customer_groups g ON g.id = a.group_id
+		WHERE a.action IN ('hold.add', 'hold.release') AND a.details->>'name' = 'Meier audit' AND g.name = 'Meier'`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("group hold entries under Meier: %d (%v), want 2", n, err)
 	}
 
 	status := captureStdout(t, func() { _ = runCmd(t, newStatusCmd(), "") })

@@ -1204,7 +1204,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [rules, accounts, minYears, defaultTimeZone]
+                required: [rules, accounts, groups, minYears, defaultTimeZone]
                 properties:
                   rules:
                     type: array
@@ -1212,9 +1212,14 @@ paths:
                       $ref: "#/components/schemas/RetentionRule"
                   accounts:
                     type: array
-                    description: Every account with its owner and folders.
+                    description: Every account with its owner, its owner's customer group and its folders.
                     items:
                       $ref: "#/components/schemas/RetentionAccount"
+                  groups:
+                    type: array
+                    description: Every customer group, by name, for a hold's group and the filters.
+                    items:
+                      $ref: "#/components/schemas/GroupRef"
                   minYears:
                     type: integer
                     description: Rules shorter than this (business letters, §147 AO) need `force`.
@@ -1339,7 +1344,8 @@ paths:
         Every condition that is set must match. A filter is matched at once
         by search, as the owner of the mail sees it; until then the hold
         covers its whole scope. Without any condition the hold covers the
-        whole archive, which needs `all`.
+        whole archive, which needs `all`. With `group`, a `user` or
+        `accountId` must be in that customer group (`400` otherwise).
       requestBody:
         required: true
         content:
@@ -1361,6 +1367,13 @@ paths:
                 accountId:
                   type: [integer, "null"]
                   format: int64
+                group:
+                  type: [integer, "null"]
+                  format: int64
+                  description: |
+                    Only mail in the accounts of this customer group's users,
+                    also of users who join it later. An unknown id is
+                    `400 "unknown group"`.
                 filter:
                   oneOf:
                     - type: "null"
@@ -1508,7 +1521,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [owner, account, folder, year, messages]
+                      required: [owner, account, folder, group, year, messages]
                       properties:
                         owner:
                           type: string
@@ -1516,6 +1529,11 @@ paths:
                           type: string
                         folder:
                           type: string
+                        group:
+                          description: The customer group of the account's owner; null without an owner.
+                          oneOf:
+                            - type: "null"
+                            - $ref: "#/components/schemas/GroupRef"
                         year:
                           type: integer
                         messages:
@@ -3256,7 +3274,7 @@ components:
           $ref: "#/components/schemas/GroupRef"
     GroupRef:
       type: object
-      description: A user's customer group.
+      description: A customer group, by id and name.
       required: [id, name]
       properties:
         id:
@@ -4362,7 +4380,7 @@ components:
           type: integer
     RetentionRule:
       type: object
-      required: [id, accountId, account, accountKind, accountRemoved, owner, folder, years, timeZone, note, createdAt, createdBy]
+      required: [id, accountId, account, accountKind, accountRemoved, owner, group, folder, years, timeZone, note, createdAt, createdBy]
       properties:
         id:
           type: integer
@@ -4379,6 +4397,11 @@ components:
           type: boolean
         owner:
           type: string
+        group:
+          description: The customer group of the account's owner; null without an owner.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/GroupRef"
         folder:
           type: string
           description: Empty for every folder of the account.
@@ -4396,7 +4419,7 @@ components:
           description: Empty for the command line.
     RetentionAccount:
       type: object
-      required: [id, name, kind, removed, owner, folders]
+      required: [id, name, kind, removed, owner, group, folders]
       properties:
         id:
           type: integer
@@ -4410,6 +4433,11 @@ components:
           type: boolean
         owner:
           type: string
+        group:
+          description: The customer group of the owner; null without an owner.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/GroupRef"
         folders:
           type: array
           items:
@@ -4431,8 +4459,8 @@ components:
           type: boolean
     LegalHold:
       type: object
-      required: [id, name, reason, user, accountId, account, accountOwner, filter, since, until, matchedAt, matched,
-                 createdAt, createdBy, releasedAt, releasedBy, releaseNote]
+      required: [id, name, reason, user, accountId, account, accountOwner, group, coveredGroup, filter, since, until, matchedAt,
+                 matched, createdAt, createdBy, releasedAt, releasedBy, releaseNote]
       properties:
         id:
           type: integer
@@ -4451,6 +4479,19 @@ components:
           type: string
         accountOwner:
           type: string
+        group:
+          description: The customer group the hold names; null if it names none.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/GroupRef"
+        coveredGroup:
+          description: |
+            The customer group whose mail the hold covers: `group`, or the
+            group of its user or of its account's owner; null when it covers
+            every group.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/GroupRef"
         filter:
           oneOf:
             - type: "null"

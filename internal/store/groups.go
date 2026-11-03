@@ -32,6 +32,18 @@ var ErrUnknownGroup = errors.New("unknown group")
 // removed.
 var ErrGroupInUse = errors.New("the group still has users")
 
+// ErrGroupHeld is returned when a group that a legal hold names, active or
+// released, would be removed (#470): holds are a record and keep what they
+// name. errors.Is matches it to ErrGroupInUse too.
+var ErrGroupHeld error = groupHeldError{}
+
+type groupHeldError struct{}
+
+func (groupHeldError) Error() string { return "a legal hold names the group" }
+
+// Is makes ErrGroupHeld match ErrGroupInUse.
+func (groupHeldError) Is(target error) bool { return target == ErrGroupInUse }
+
 // ErrLastGroup is returned when the only group would be removed: every
 // user needs one.
 var ErrLastGroup = errors.New("the last group cannot be removed")
@@ -149,8 +161,8 @@ func (s *Store) RenameGroup(ctx context.Context, id int64, name string) error {
 }
 
 // DeleteGroup removes a group without users. ErrGroupInUse while it has
-// users, ErrLastGroup for the only group, ErrUnknownGroup for an unknown
-// id.
+// users, ErrGroupHeld (also ErrGroupInUse) while a legal hold names it,
+// ErrLastGroup for the only group, ErrUnknownGroup for an unknown id.
 func (s *Store) DeleteGroup(ctx context.Context, id int64) error {
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		g, err := q.LockGroup(ctx, id)
@@ -173,10 +185,14 @@ func (s *Store) DeleteGroup(ctx context.Context, id int64) error {
 		auditGroup(ctx, g)
 		return one(q.DeleteGroup(ctx, id))
 	})
-	// A user added concurrently: the foreign key refuses the delete
-	// (restrict_violation on PostgreSQL 18, foreign_key_violation before).
+	// A legal hold naming the group (released ones too), or a user added
+	// concurrently: the foreign key refuses the delete (restrict_violation
+	// on PostgreSQL 18, foreign_key_violation before).
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503") {
+		if pgErr.ConstraintName == "legal_holds_group_id_fkey" {
+			return ErrGroupHeld
+		}
 		return ErrGroupInUse
 	}
 	return err
@@ -242,6 +258,10 @@ type GroupChange struct {
 // shared with users of the old group and old-group accounts shared with
 // the user. The pending entry (user.group_change) gets from_group,
 // to_group and shares_ended, and is recorded under the new group.
+//
+// An active legal hold that names the old group and covers an account the
+// user owns refuses the change with a HoldError (#470, part 4): in the new
+// group, the hold would no longer cover that mail.
 func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupChange, error) {
 	var c GroupChange
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -264,6 +284,13 @@ func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupC
 		if u.GroupID == groupID {
 			skipAudit(ctx)
 			return nil
+		}
+		holds, err := q.ActiveGroupHoldsOnUser(ctx, db.ActiveGroupHoldsOnUserParams{GroupID: u.GroupID, OwnerID: userID})
+		if err != nil {
+			return err
+		}
+		if len(holds) > 0 {
+			return newHoldError(holds, "%v: the user's accounts are held through their group by legal hold %s")
 		}
 		_, err = q.SetUserGroup(ctx, db.SetUserGroupParams{ID: userID, GroupID: groupID})
 		var pgErr *pgconn.PgError

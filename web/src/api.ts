@@ -737,7 +737,13 @@ export interface ManagedUser {
   /** The logged-in admin, whose own row cannot be changed there. */
   self: boolean;
   /** The user's customer group (#470). */
-  group: { id: number; name: string };
+  group: GroupRef;
+}
+
+/** A customer group (#470), by id and name. */
+export interface GroupRef {
+  id: number;
+  name: string;
 }
 
 /** A generated password, shown once. */
@@ -760,6 +766,8 @@ export interface RetentionRule {
   accountKind: string;
   accountRemoved: boolean;
   owner: string;
+  /** The customer group of the account's owner; null without an owner. */
+  group: GroupRef | null;
   /** Empty for every folder of the account. */
   folder: string;
   years: number;
@@ -776,12 +784,16 @@ export interface RetentionAccount {
   kind: string;
   removed: boolean;
   owner: string;
+  /** The customer group of the owner; null without an owner. */
+  group: GroupRef | null;
   folders: string[];
 }
 
 export interface RetentionRules {
   rules: RetentionRule[];
   accounts: RetentionAccount[];
+  /** Every customer group, by name. */
+  groups: GroupRef[];
   /** Rules shorter than this need force. */
   minYears: number;
   defaultTimeZone: string;
@@ -812,6 +824,10 @@ export interface LegalHold {
   accountId: number | null;
   account: string;
   accountOwner: string;
+  /** The customer group the hold names; null if none. */
+  group: GroupRef | null;
+  /** The group whose mail it covers: group, or its user's or account's; null for every group. */
+  coveredGroup: GroupRef | null;
   filter: HoldFilter | null;
   since: string | null;
   until: string | null;
@@ -829,6 +845,8 @@ export interface LegalHoldInput {
   reason: string;
   user: string;
   accountId: number | null;
+  /** A customer group's id: only the mail of its users' accounts. */
+  group: number | null;
   filter: HoldFilter | null;
   since: string | null;
   until: string | null;
@@ -869,7 +887,8 @@ export interface DeletionRun {
 /** A run for review: counts by place and year, and candidates by hash only. */
 export interface DeletionReview {
   run: DeletionRun;
-  groups: { owner: string; account: string; folder: string; year: number; messages: number }[];
+  /** group: the customer group of the account's owner; null without an owner. */
+  groups: { owner: string; account: string; folder: string; group: GroupRef | null; year: number; messages: number }[];
   candidates: { sha256: string; size: number; retainUntil: string; state: "pending" | "deleted" | "kept" }[];
   /** How many candidates are listed; at most 1000. */
   listed: number;

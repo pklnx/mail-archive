@@ -23,6 +23,7 @@ func TestRetentionNeedsAdmin(t *testing.T) {
 		{"DELETE", "/api/retention/rules/1", nil},
 		{"GET", "/api/legal-holds", nil},
 		{"POST", "/api/legal-holds", map[string]any{"name": "x", "reason": "y", "all": true}},
+		{"POST", "/api/legal-holds", map[string]any{"name": "x", "reason": "y", "group": 1}},
 		{"POST", "/api/legal-holds/1/release", map[string]any{"note": "z"}},
 	} {
 		f.expect(c.method, c.path, c.body, 403)
