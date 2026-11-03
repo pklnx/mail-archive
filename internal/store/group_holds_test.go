@@ -182,6 +182,75 @@ func TestGroupHoldWaitsForGroupChange(t *testing.T) {
 	}
 }
 
+// TestGroupHoldRacesAccountMove (#503 review B): a hold naming an account
+// and its group, and a move of that account to another group, in both
+// orders. Never a hold whose account check passed on the account's old
+// owner. The barriers are row locks the test holds on its own connection;
+// it waits for the blocked statement itself (waitForLockWait).
+func TestGroupHoldRacesAccountMove(t *testing.T) {
+	t.Run("move commits first", func(t *testing.T) {
+		// The move is not committed yet and holds the account row. The hold
+		// waits at LockAccountOwnerShare (FOR SHARE), sees kim, of group B,
+		// after the commit and refuses; without that lock it would read
+		// alice, of group A, and add a hold on an account of B.
+		f := newGroupFixture(t)
+		mover, err := f.conn.Begin(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = mover.Rollback(f.ctx) }()
+		if _, err := mover.Exec(f.ctx, `UPDATE accounts SET owner_id = $1 WHERE id = $2`, f.kim.ID, f.infoID); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := f.st.AddLegalHold(f.ctx, store.NewLegalHold{Name: "x", AccountID: &f.infoID, GroupID: &f.a.ID})
+			done <- err
+		}()
+		waitForLockWait(t, connect(t, f.url), done)
+		if err := mover.Commit(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; !errors.Is(err, store.ErrInvalidHold) {
+			t.Fatalf("hold during the move: %v, want ErrInvalidHold", err)
+		}
+		if n := countOf(t, f.conn, "SELECT count(*) FROM legal_holds"); n != 0 {
+			t.Fatalf("%d holds after the refused one", n)
+		}
+	})
+	t.Run("hold commits first", func(t *testing.T) {
+		// A hold that is not committed yet holds the account row FOR SHARE,
+		// as AddLegalHold does. The move waits for it at its FOR UPDATE,
+		// then sees the hold and refuses.
+		f := newGroupFixture(t)
+		holder, err := f.conn.Begin(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = holder.Rollback(f.ctx) }()
+		var hold int64
+		if _, err := holder.Exec(f.ctx, `SELECT owner_id FROM accounts WHERE id = $1 FOR SHARE`, f.infoID); err != nil {
+			t.Fatal(err)
+		}
+		if err := holder.QueryRow(f.ctx, `INSERT INTO legal_holds (name, account_id, group_id) VALUES ('x', $1, $2) RETURNING id`,
+			f.infoID, f.a.ID).Scan(&hold); err != nil {
+			t.Fatal(err)
+		}
+		ref := f.account(f.infoID).Ref()
+		done := make(chan error, 1)
+		go func() { done <- f.st.SetAccountOwner(f.ctx, ref, f.kim.ID, true) }()
+		waitForLockWait(t, connect(t, f.url), done)
+		if err := holder.Commit(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		err = <-done
+		checkHoldError(t, err, fmt.Sprintf("named by a legal hold: the account's owner or their group is on legal hold #%d", hold), hold)
+		if a := f.account(f.infoID); *a.OwnerID != f.alice.ID {
+			t.Fatal("info moved")
+		}
+	})
+}
+
 // TestGroupHoldGuardsMoves: a user or an account cannot leave a group
 // whose hold covers their mail; inside the group, and without mail, they
 // can.
