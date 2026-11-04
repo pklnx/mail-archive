@@ -46,6 +46,8 @@ cleanup() {
 	fi
 	docker rm -f "$imap" >/dev/null 2>&1 || true
 	in_data 'rm -rf /data/* /data/.[!.]*' >/dev/null 2>&1 || true
+	docker compose --progress quiet run --rm --no-deps -T --entrypoint sh -v "$work/keys:/keys" postgres \
+		-c 'rm -rf /keys/* /keys/.[!.]*; chmod 0777 /keys' >/dev/null 2>&1 || true
 	docker compose --progress quiet --profile worker down -v >/dev/null 2>&1 || true
 	rm -f .env
 	rm -rf "$work"
@@ -65,6 +67,7 @@ POSTGRES_PASSWORD=smoke-test
 MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
 ARCHIVE_DIR=$work/data
 IMPORT_DIR=$work/import
+ARCHIVE_KEY_DIR=$work/keys
 POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-0}
 WEB_PORT=${SMOKE_WEB_PORT:-0}
 MAIL_ARCHIVE_PUBLIC_URL=http://localhost
@@ -231,6 +234,21 @@ expect "$work/out" 'public key [A-Za-z0-9+/]{43}='
 expect "$work/out" 'attestation #1: 7 new message\(s\), 0 deletion\(s\), 7 message\(s\) in total'
 in_data 'wc -l < /data/attest/attestations.jsonl && test -s /data/attest/leaves/1.txt' > "$work/out"
 expect "$work/out" '^ *1$'
+
+echo "== encryption keygen"
+# A one-off container with the keys directory writable; afterwards every
+# service reads the key through its read-only mount.
+./ma encryption keygen | tee "$work/out"
+expect "$work/out" '^wrote archive key /keys/archive\.key \(fingerprint [0-9a-f]{16}\)$'
+expect "$work/out" '^  [A-Za-z0-9+/]{43}=$'
+echo 'MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key' >> .env
+./ma encryption status | tee "$work/out"
+expect "$work/out" 'archive key: file /keys/archive\.key, fingerprint [0-9a-f]{16}: opens the keyring'
+if [ "$(uname -s)" = Linux ]; then
+	docker compose --progress quiet run --rm --no-deps -T --entrypoint sh -v "$work/keys:/keys" postgres \
+		-c 'stat -c "%u:%g %a" /keys/archive.key' > "$work/out"
+	expect "$work/out" '^65532:65532 400'
+fi
 
 echo "== export"
 ./ma export --user smoke --format mbox --out /data/export/smoke | tee "$work/out"

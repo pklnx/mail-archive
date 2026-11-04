@@ -49,6 +49,8 @@ func main() {
 		newServeCmd(),
 		newWorkerCmd(),
 		newJobsCmd(),
+		newEncryptionCmd(),
+		newDecryptCmd(),
 	)
 	if err := root.ExecuteContext(ctx); err != nil {
 		var exitErr *exitError

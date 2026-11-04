@@ -69,6 +69,20 @@ if [ "${1:-}" = backup ]; then
 	exit 0
 fi
 
+# encryption keygen writes the archive key into the keys directory
+# (ARCHIVE_KEY_DIR, default ./keys), which every other service mounts
+# read-only: a one-off container with it writable, run as root so that it
+# can write there and give the files to the container user. The data
+# directory is prepared first, as by migrate, so that the keyring in it does
+# not leave a fresh directory owned by root.
+if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
+	shift 2
+	compose run --rm --no-deps $build -T --user 0:0 mail-archive prepare-data ||
+		echo "warning: could not prepare the data directory (ARCHIVE_DIR in .env, default ./data)" >&2
+	exec docker compose --progress quiet run --rm --no-deps $build -T --user 0:0 \
+		-e MAIL_ARCHIVE_COMMAND=./ma mail-archive-keygen encryption keygen --chown 65532:65532 "$@"
+fi
+
 # Allocate a TTY only when attached to a terminal (not in cron or pipes),
 # so the hidden password prompt works interactively and stdin works otherwise.
 tty_flag=-T
