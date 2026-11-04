@@ -163,3 +163,40 @@ func TestKeyInDataDirOtherPath(t *testing.T) {
 		t.Errorf("missing data dir: %v, %v", got, err)
 	}
 }
+
+// TestKeyInDataDirDeeper: the key lies further below a directory that is,
+// through another path, the data directory or one of its subdirectories
+// (a bind mount of <data> or <data>/keys with the key in a subdirectory of
+// the mount). The walk over the key's ancestors must find it.
+func TestKeyInDataDirDeeper(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dataDir, "keys"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mount := func(target string) func(string) (os.FileInfo, error) {
+		return func(p string) (os.FileInfo, error) {
+			if p == "/mnt-keys" {
+				return os.Stat(target)
+			}
+			if strings.HasPrefix(p, "/mnt-keys/") {
+				return nil, os.ErrNotExist // below the mount: not created
+			}
+			return os.Stat(p)
+		}
+	}
+	for name, target := range map[string]string{
+		"mount of the data dir": dataDir,
+		"mount of <data>/keys":  filepath.Join(dataDir, "keys"),
+	} {
+		for _, key := range []string{"/mnt-keys/a/archive.key", "/mnt-keys/a/b/archive.key"} {
+			got, err := keyInDataDir(key, dataDir, mount(target))
+			if err != nil || !got {
+				t.Errorf("%s, %s: %v, %v; want true", name, key, got, err)
+			}
+		}
+	}
+	got, err := keyInDataDir("/mnt-keys/a/b/archive.key", dataDir, mount(t.TempDir()))
+	if err != nil || got {
+		t.Errorf("mount of another dir: %v, %v; want false", got, err)
+	}
+}
