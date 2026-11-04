@@ -261,7 +261,7 @@ in the data directory's keyring. Needs no database. restore-dump uses it; by
 hand:
 
   mail-archive unseal-stream --keyring mailarchive-<time>.keyring < mailarchive-<time>.dump.enc |
-    pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL"
+    pg_restore --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL"
 
 Only authenticated data is written. A damaged or cut backup makes it stop
 with an error and a non-zero exit before the end of its output, so that
@@ -287,9 +287,9 @@ func newRestoreDumpCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore-dump FILE",
 		Short: "Load a backup's database dump, encrypted or not, and reconcile encryption at rest",
-		Long: `Replace the database with the dump FILE written by backup, in one
-transaction: pg_restore --clean --if-exists --no-owner --single-transaction
---exit-on-error. An encrypted dump (*.dump.enc) is decrypted on its way into
+		Long: `Load the dump FILE written by backup into the database, which must be
+new and empty, in one transaction: pg_restore --no-owner
+--single-transaction --exit-on-error. An encrypted dump (*.dump.enc) is decrypted on its way into
 pg_restore with the archive key and the keyring copy next to it
 (mailarchive-<time>.keyring, or --keyring), else the data directory's. If
 the dump is damaged or cut, pg_restore is stopped and the database stays
@@ -303,8 +303,10 @@ data directory next to a dump that says off make the state encrypting, to
 be finished with encryption enable. --reconcile-only does only this, for
 example after migrate on a dump older than the schema.
 
-Copy the data directory back first, and stop the web server and the worker:
-it refuses while they run. Needs pg_restore in PATH, at least the server's
+Copy the data directory back first, stop the web server and the worker (it
+refuses while they run), and create an empty database: it refuses one that
+holds anything, since pg_restore --clean cannot replace this schema (the
+partitions of the audit log). Needs pg_restore in PATH, at least the server's
 major version. The Docker image has none: with Docker Compose use
 "./ma restore-dump FILE", which runs pg_restore in the database container.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -327,6 +329,11 @@ major version. The Docker image has none: with Docker Compose use
 				return err
 			}
 			defer lock.Release()
+			if !reconcileOnly {
+				if err := requireEmptyDatabase(ctx, a); err != nil {
+					return err
+				}
+			}
 			if preflight {
 				return nil
 			}
@@ -345,6 +352,32 @@ major version. The Docker image has none: with Docker Compose use
 	_ = cmd.Flags().MarkHidden("preflight")
 	cmd.MarkFlagsMutuallyExclusive("reconcile-only", "preflight")
 	return cmd
+}
+
+// requireEmptyDatabase refuses a database that holds anything: a dump is
+// restored only into a new, empty database. pg_restore --clean cannot
+// replace an existing one, because it cannot drop the partitions of
+// audit_log (their constraints are inherited), and a restore over one that
+// went on despite errors would mix the two.
+func requireEmptyDatabase(ctx context.Context, a *app) error {
+	n, err := a.store.UserRelations(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	cfg, err := pgconn.ParseConfig(a.cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("%s: %w", config.EnvDatabaseURL, err)
+	}
+	if commandName() == "./ma" {
+		return fmt.Errorf("the database %q is not empty (%d tables and other relations); a dump is restored only into a new, empty database. "+
+			"With the web server and the worker stopped: docker compose exec -T postgres dropdb -U mailarchive --force mailarchive && "+
+			"docker compose exec -T postgres createdb -U mailarchive mailarchive", cfg.Database, n)
+	}
+	return fmt.Errorf("the database %q is not empty (%d tables and other relations); a dump is restored only into a new, empty database: "+
+		"drop and create it (dropdb --force, createdb) or point %s at a new one", cfg.Database, n, config.EnvDatabaseURL)
 }
 
 // isSealed reports whether the file starts like an encrypted file.
@@ -444,7 +477,7 @@ func runRestore(ctx context.Context, job restoreJob, out io.Writer) error {
 	}
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, job.PgRestore, //nolint:gosec // pg_restore from PATH
-		"--clean", "--if-exists", "--no-owner", "--single-transaction", "--exit-on-error", "--no-password",
+		"--no-owner", "--single-transaction", "--exit-on-error", "--no-password",
 		"--dbname="+cfg.Database)
 	cmd.Env, cmd.Stdout, cmd.Stderr = env, out, &stderr
 	stdin, err := cmd.StdinPipe()

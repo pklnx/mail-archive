@@ -138,8 +138,8 @@ if [ "${1:-}" = backup ]; then
 	exit 0
 fi
 
-# restore-dump loads a dump written by backup into the database, in one
-# transaction, with pg_restore in the database container. An encrypted dump
+# restore-dump loads a dump written by backup into the database, which must
+# be empty, in one transaction, with pg_restore in the database container. An encrypted dump
 # (MA-ENC1 header) is decrypted by unseal-stream on its way there, with the
 # keyring copy next to it. Then restore-dump --reconcile-only reconciles the
 # keyring and the state of encryption at rest with the data directory and
@@ -154,10 +154,11 @@ if [ "${1:-}" = restore-dump ]; then
 		echo "error: $file: no such file" >&2
 		exit 2
 	fi
-	# Refuses while the web server, the worker or another writer runs.
+	# Refuses while the web server, the worker or another writer runs, and
+	# when the database is not empty.
 	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma mail-archive restore-dump --preflight || exit 1
 	restore() {
-		compose exec -T postgres pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error \
+		compose exec -T postgres pg_restore --no-owner --single-transaction --exit-on-error \
 			-U mailarchive -d mailarchive
 	}
 	if [ "$(head -c 7 "$file")" = MA-ENC1 ]; then

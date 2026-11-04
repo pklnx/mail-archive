@@ -131,16 +131,22 @@ the [command reference](../reference/cli#verify) for the findings.
    `sudo chown -R 65532:65532 data` (for rootless Docker, see
    [Linux hosts](./getting-started#linux-hosts)). Stop the web server and
    the worker: `docker compose stop web worker`.
-2. Load the dump into the database, which replaces what is there:
+2. Load the dump into a new, empty database:
    ```sh
+   docker compose exec -T postgres dropdb -U mailarchive --force mailarchive
+   docker compose exec -T postgres createdb -U mailarchive mailarchive
    ./ma restore-dump backups/mailarchive-<time>.dump.enc
    ```
    (or the `.dump` of an archive without encryption). It runs `pg_restore`
    in the database container in one transaction; an encrypted dump is
    decrypted on its way there with the keyring copy next to it. A damaged or
-   cut dump is refused, and the database stays as it was. Without Docker
-   Compose: `mail-archive restore-dump FILE`, with `pg_restore` in `PATH`.
-   It refuses while a writer runs.
+   cut dump is refused, and the database stays empty. `restore-dump`
+   refuses a database that holds anything: `pg_restore --clean` cannot
+   replace this schema (it cannot drop the partitions of the audit log), so
+   a restore over the old database would fail half-way or mix both. Without
+   Docker Compose: `mail-archive restore-dump FILE`, with `pg_restore` in
+   `PATH`, into a database made with `dropdb --force` and `createdb`. It
+   refuses while a writer runs.
 3. `./ma migrate`, then `./ma attest` if attestations are on (it imports
    the attestations written after the dump, before anything archives; see
    [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,

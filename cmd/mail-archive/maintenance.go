@@ -782,9 +782,11 @@ Restore:
 		keys = "the key into .env and the archive key file into the keys directory"
 	}
 	if d.Compose {
-		fmt.Fprintf(&b, `1. Put %s, copy the data directory back, and stop the web server and
-   the worker (docker compose stop web worker).
-2. Load the dump, which replaces the database in one transaction:
+		fmt.Fprintf(&b, `1. Put %s, copy the data directory back, stop the web server and
+   the worker (docker compose stop web worker), and create an empty database:
+   docker compose exec -T postgres dropdb -U mailarchive --force mailarchive
+   docker compose exec -T postgres createdb -U mailarchive mailarchive
+2. Load the dump into it, in one transaction:
    ./ma restore-dump <this directory>/%s
 `, keys, d.Dump)
 	} else {
@@ -794,18 +796,17 @@ Restore:
 		}
 		fmt.Fprintf(&b, `1. Set %s, copy the data directory back, create an empty database,
    and stop the web server and the worker.
-2. Load the dump, which replaces the database in one transaction (needs
-   pg_restore in PATH):
+2. Load the dump into it, in one transaction (needs pg_restore in PATH):
    mail-archive restore-dump %s
 `, keys, d.Dump)
 		if d.Keyring != "" {
 			fmt.Fprintf(&b, `   or by hand:
    mail-archive unseal-stream --keyring %s < %s |
-     pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL"
+     pg_restore --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL"
 `, d.Keyring, d.Dump)
 		} else {
 			fmt.Fprintf(&b, `   or by hand:
-   pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL" %s
+   pg_restore --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL" %s
 `, d.Dump)
 		}
 	}

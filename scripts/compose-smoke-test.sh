@@ -225,7 +225,7 @@ expect "$work/out" "4 already there"
 
 echo "== verify"
 ./ma verify | tee "$work/out"
-expect "$work/out" 'checked 7 message\(s\): no problems'
+expect "$work/out" 'checked 7 message\(s\)( and [0-9]+ attestation\(s\))?: no problems'
 
 echo "== attest"
 ./ma attest keygen | tee "$work/out"
@@ -272,7 +272,7 @@ if in_data "grep -rqa 'Smoke test' /data/messages"; then
 	exit 1
 fi
 ./ma verify | tee "$work/out"
-expect "$work/out" 'checked 7 message\(s\): no problems'
+expect "$work/out" 'checked 7 message\(s\)( and [0-9]+ attestation\(s\))?: no problems'
 
 echo "== export"
 ./ma export --user smoke --format mbox --out /data/export/smoke > "$work/out" 2>&1
@@ -325,8 +325,24 @@ echo "== restore-dump into a fresh database"
 # A recovery key added after the backup lives in the keyring file only; the
 # restore must keep it (the newer generation wins).
 ./ma encryption add-key | tee "$work/out"
-docker compose --progress quiet exec -T postgres psql -q -U mailarchive -d postgres \
-	-c 'DROP DATABASE mailarchive WITH (FORCE)' -c 'CREATE DATABASE mailarchive'
+docker compose --progress quiet exec -T postgres dropdb -U mailarchive --force mailarchive
+docker compose --progress quiet exec -T postgres createdb -U mailarchive mailarchive
+tables() {
+	docker compose --progress quiet exec -T postgres psql -U mailarchive -d mailarchive -Atc \
+		"SELECT count(*) FROM pg_tables WHERE schemaname = 'public'"
+}
+# A damaged dump is refused and leaves the new database empty.
+cut=$work/backups/cut.dump.enc
+head -c "$(($(wc -c < "$dump") - 1))" "$dump" > "$cut"
+if ./ma restore-dump "$cut" > "$work/out" 2>&1; then
+	echo "expected ./ma restore-dump to refuse a cut dump" >&2
+	exit 1
+fi
+expect "$work/out" 'the database is unchanged'
+if [ "$(tables | tr -d ' \r')" != 0 ]; then
+	echo "a cut dump left tables behind" >&2
+	exit 1
+fi
 ./ma restore-dump "$dump" | tee "$work/out"
 expect "$work/out" "restored $dump"
 expect "$work/out" 'restored database: encryption at rest on, keyring copy generation [0-9]+'
@@ -336,17 +352,13 @@ expect "$work/out" 'keyring: the keyring file is newer than the dump.s copy'
 expect "$work/out" "unique messages in archive: 7"
 expect "$work/out" 'encryption at rest: on'
 ./ma verify | tee "$work/out"
-expect "$work/out" 'checked 7 message\(s\): no problems'
-# A damaged dump is refused and changes nothing.
-cut=$work/backups/cut.dump.enc
-head -c "$(($(wc -c < "$dump") - 1))" "$dump" > "$cut"
-if ./ma restore-dump "$cut" > "$work/out" 2>&1; then
-	echo "expected ./ma restore-dump to refuse a cut dump" >&2
+expect "$work/out" 'checked 7 message\(s\)( and [0-9]+ attestation\(s\))?: no problems'
+# A database that is not empty is refused, before pg_restore runs.
+if ./ma restore-dump "$dump" > "$work/out" 2>&1; then
+	echo "expected ./ma restore-dump to refuse a database that is not empty" >&2
 	exit 1
 fi
-expect "$work/out" 'the database is unchanged'
-./ma status > "$work/out"
-expect "$work/out" "unique messages in archive: 7"
+expect "$work/out" 'is not empty'
 
 echo "== audit"
 # Every step above that reads, imports, exports or changes was recorded,

@@ -340,7 +340,7 @@ func TestRunRestore(t *testing.T) {
 		t.Errorf("pg_restore read %d bytes, want %d", len(got), len(plain))
 	}
 	args, _ := os.ReadFile(filepath.Join(logDir, "args"))
-	for _, want := range []string{"--clean", "--if-exists", "--no-owner", "--single-transaction", "--exit-on-error", "--dbname=archive"} {
+	for _, want := range []string{"--no-owner", "--single-transaction", "--exit-on-error", "--dbname=archive"} {
 		if !strings.Contains(string(args), want+"\n") {
 			t.Errorf("args lack %s:\n%s", want, args)
 		}
@@ -638,5 +638,38 @@ func TestExportWarnsInsideDataDir(t *testing.T) {
 	}
 	if got := run(filepath.Join(t.TempDir(), "anna")); strings.Contains(got, "not encrypted") {
 		t.Errorf("outside the data directory: %q", got)
+	}
+}
+
+// TestRestoreDumpIntoNonEmptyDatabase: a dump is restored only into an
+// empty database. Over an existing one, pg_restore --clean cannot drop the
+// partitions of audit_log (their inherited constraints), so restore-dump
+// refuses before pg_restore runs, names how to get an empty database, and
+// changes nothing (CI fix of #518).
+func TestRestoreDumpIntoNonEmptyDatabase(t *testing.T) {
+	s, _, _ := restoreEnv(t)
+	dir := filepath.Join(t.TempDir(), "backups")
+	captureStdout(t, func() {
+		if err := runCmd(t, newBackupCmd(), "", dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+	dumps, _ := filepath.Glob(filepath.Join(dir, "*.dump.enc"))
+	if len(dumps) != 1 {
+		t.Fatalf("dumps %v", dumps)
+	}
+	if _, err := s.st.CreateUser(context.Background(), "after-the-backup", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRestoreDump(t, dumps[0])
+	if err == nil || !strings.Contains(err.Error(), "not empty") || !strings.Contains(err.Error(), "createdb") {
+		t.Fatalf("restore over an existing database: %v\n%s", err, out)
+	}
+	if _, err := s.st.GetUserByName(context.Background(), "after-the-backup"); err != nil {
+		t.Errorf("the refused restore changed the database: %v", err)
+	}
+	// --preflight, which ./ma runs before its own pg_restore, refuses too.
+	if _, err := runRestoreDump(t, "--preflight"); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Errorf("preflight on an existing database: %v", err)
 	}
 }
