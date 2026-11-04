@@ -52,12 +52,17 @@ const totpSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
 let step = Math.floor(Date.now() / 30000);
 function totp() {
   step++;
+  return totpAt(totpSecret, step);
+}
+
+/** The RFC 6238 code of a base32 secret for a time step. */
+function totpAt(secret, at) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
-  for (const c of totpSecret) bits += alphabet.indexOf(c).toString(2).padStart(5, "0");
+  for (const c of secret) bits += alphabet.indexOf(c).toString(2).padStart(5, "0");
   const key = Buffer.from(bits.match(/.{8}/g).map((b) => parseInt(b, 2)));
   const msg = Buffer.alloc(8);
-  msg.writeBigUInt64BE(BigInt(step));
+  msg.writeBigUInt64BE(BigInt(at));
   const mac = createHmac("sha1", key).update(msg).digest();
   const off = mac[mac.length - 1] & 0xf;
   return String((mac.readUInt32BE(off) & 0x7fffffff) % 1000000).padStart(6, "0");
@@ -90,10 +95,27 @@ async function loginAs(user) {
   return state;
 }
 
+// The demo auditor (#393, tools/demo): 2FA with a secret of its own, set up
+// with a code from an hour ago, so the current time step is unused. One
+// active grant, which the login picks.
+const auditor = { username: "stb-meyer", password: "stb-meyer-password", secret: "GEZDGNBVGEZDGNBVGEZDGNBVGEZDGNBV" };
+async function loginAuditor() {
+  const ctx = await browser.newContext(contextOptions);
+  const res = await ctx.request.post(base + "/api/session", { data: { username: auditor.username, password: auditor.password }, headers: { Origin: base } });
+  if (!res.ok()) throw new Error(`auditor login failed: ${res.status()}`);
+  const { challenge } = await res.json();
+  const code = totpAt(auditor.secret, Math.floor(Date.now() / 30000));
+  const second = await ctx.request.post(base + "/api/session/2fa", { data: { challenge, code }, headers: { Origin: base } });
+  if (!second.ok()) throw new Error(`auditor second factor failed: ${second.status()}`);
+  const state = await ctx.storageState();
+  await ctx.close();
+  return state;
+}
+
 // phone: a touch screen, so the UI shows its touch sizes (pointer: coarse).
-// as: another user's login instead of the demo admin's.
-async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = false, as } = {}) {
-  const storageState = as ? await loginAs(as) : loggedIn ? await loginOnce() : undefined;
+// as: another user's login instead of the demo admin's; state: a stored session.
+async function page(colorScheme, viewport = desktop, { loggedIn = true, phone = false, as, state } = {}) {
+  const storageState = state ?? (as ? await loginAs(as) : loggedIn ? await loginOnce() : undefined);
   const ctx = await browser.newContext({
     ...contextOptions,
     colorScheme,
@@ -474,6 +496,28 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("button", { name: `Delete ${run.candidates} messages` }).click();
   await p.getByRole("dialog").getByLabel(/^To delete, type the number of messages/).waitFor();
   await shot(p, "retention-run", { keepFocus: true });
+  await p.context().close();
+}
+
+// Auditor access (#393): the owner's page with the demo grants, and the
+// auditor's view of the case.
+{
+  const p = await page("light");
+  await p.goto(base + "/?view=auditors");
+  const main = p.getByRole("main");
+  // The demo names its cases by the years before DOCS_NOW.
+  await main.getByRole("row").filter({ hasText: /^Betriebsprüfung / }).getByText("No access yet").waitFor();
+  await main.getByRole("row").filter({ hasText: /^Umsatzsteuer-Sonderprüfung / }).getByText("No access yet").waitFor();
+  await shot(p, "auditor-access");
+  await p.context().close();
+}
+{
+  const p = await page("light", desktop, { state: await loginAuditor() });
+  await p.goto(base + "/");
+  await p.getByText("Auditor access", { exact: true }).waitFor();
+  await p.getByRole("treeitem", { name: "work · demo" }).waitFor();
+  await p.getByRole("list", { name: "Messages" }).getByRole("button").first().waitFor();
+  await shot(p, "auditor-view");
   await p.context().close();
 }
 

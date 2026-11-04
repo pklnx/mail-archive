@@ -167,7 +167,7 @@ describe("LogPage", () => {
     expect(fieldText(t.logAction)).toBe(t.logAllActions);
     fireEvent.click(filterField(t.logAction));
     const groups = screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"));
-    expect(groups).toEqual(["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"].map((g) => t.logGroup(g)));
+    expect(groups).toEqual(["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention", "auditor"].map((g) => t.logGroup(g)));
     expect(screen.queryByRole("combobox", { name: new RegExp(`^${t.logWho}`) })).toBeNull();
     expect(urls).not.toContain("/api/users");
   });
@@ -230,6 +230,47 @@ describe("LogPage", () => {
     expect(pat.getByText(t.logSharedViaKey)).toBeTruthy();
     expect(pat.getAllByRole("cell")[4]!.textContent).toBe("");
     expect(screen.getByText(t.logOwnNote)).toBeTruthy();
+  });
+
+  it("shows an owner the entries of their auditor grants: the auditor's terms, the operator, refusals and grant changes (#393)", async () => {
+    const via = [{ id: 3, owner: 2, key: "alice/work", n: 4 }];
+    const audited = [
+      entry("message.search", "00:40", { user: "stb-meyer", viaShare: true, viaAuditor: true, details: { q: "Rechnung", auditor_grant: 7, via_accounts: via } }),
+      entry("auditor.denied", "00:39", {
+        user: "stb-meyer", viaShare: true, viaAuditor: true,
+        details: { auditor_grant: 7, method: "GET", route: "GET /api/profile/api-keys", reason: "not_allowed" },
+      }),
+      entry("auditor.revoke", "00:38", { user: "operator", viaShare: true, viaAuditor: true, details: { auditor_grant: 7, label: "Prüfung 2023", reason: "operator" } }),
+      entry("auth.login", "00:37", { user: "stb-meyer", viaShare: true, viaAuditor: true, details: { method: "totp", auditor_grant: 7 } }),
+      entry("auditor.grant", "00:36", { details: { auditor_grant: 7, label: "Prüfung 2023" }, target: { type: "user", id: "9", name: "stb-meyer" } }),
+      ...page1,
+    ];
+    vi.mocked(globalThis.fetch).mockImplementation(async () => new Response(JSON.stringify({ entries: audited }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    render(<LogPage admin={false} open={() => {}} />);
+    await screen.findByText("Invoice 42");
+    const rows = screen.getAllByRole("row");
+    const cells = (i: number) => within(rows[i]!).getAllByRole("cell").map((c) => c.textContent);
+    // The auditor's search keeps its terms (Q6), also over the whole case.
+    expect(cells(1)[2]).toBe("stb-meyer");
+    expect(within(rows[1]!).getByText(`“Rechnung”; ${t.logShared("stb-meyer", "search", 4, "work")}`)).toBeTruthy();
+    expect(cells(2)[1]).toBe(auditAction("auditor.denied"));
+    expect(within(rows[2]!).getByText("case 7, GET GET /api/profile/api-keys, not available to auditors")).toBeTruthy();
+    // Anyone but the auditor is the operator, in words.
+    expect(cells(3)[1]).toBe(auditAction("auditor.revoke"));
+    expect(cells(3)[2]).toBe("Operator");
+    expect(within(rows[3]!).getByText("“Prüfung 2023”, by the operator")).toBeTruthy();
+    // The auditor's login keeps its method.
+    expect(within(rows[4]!).getByText("totp")).toBeTruthy();
+    expect(cells(5)[1]).toBe(auditAction("auditor.grant"));
+    expect(within(rows[5]!).getByText("“Prüfung 2023”")).toBeTruthy();
+  });
+
+  it("names the auditor actions in German", () => {
+    for (const action of ["auditor.grant", "auditor.extend", "auditor.revoke", "auditor.grant_change", "auditor.select", "auditor.denied", "account.list"]) {
+      expect(auditAction(action, "en"), action).not.toBe(action);
+      expect(auditAction(action, "de"), action).not.toBe(action);
+      expect(auditAction(action, "de"), action).not.toBe(auditAction(action, "en"));
+    }
   });
 
   it("shows the table skeleton without the Who column to a non-admin", () => {

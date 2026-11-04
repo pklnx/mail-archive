@@ -67,6 +67,16 @@ describe("Folder tree", () => {
     expect(JSON.parse(localStorage.getItem("mail-archive.sidebar.alice")!).collapsed).toEqual({ work: ["Archive"] });
   });
 
+  it("shows no counts for an auditor's granted folders, also not a sum of 0 for a collapsed parent (#393)", () => {
+    // GET /api/accounts of an auditor: no enabled flag, folders without counts.
+    const granted = { ...data(), accounts: [], shared: [{ key: "pat/team", name: "team", owner: "pat", kind: "imap", removed: false, folders: [{ name: "Archive", delimiter: "/" }, { name: "Archive/2024", delimiter: "/" }] }] } as unknown as AccountsResponse;
+    render(<Harness state={view()} d={granted} select={() => {}} />);
+    expect(node(/^team · pat$/).textContent).not.toContain(t.disabled);
+    fireEvent.click(caret("Archive"));
+    expect(node("Archive").getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".folder-tree__count")).toBeNull();
+  });
+
   it("selects the account with its node or All folders, and toggles only with the caret", () => {
     const select = vi.fn();
     render(<Harness state={view()} d={data()} select={select} />);

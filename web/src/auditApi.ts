@@ -30,6 +30,11 @@ export interface AuditEntry {
    */
   viaShare?: boolean;
   /**
+   * With viaShare: an entry of the viewer's auditor grants (#393), by the
+   * auditor or by someone else, who is then named "operator".
+   */
+  viaAuditor?: boolean;
+  /**
    * The customer group the entry is recorded under (#470): in an admin's
    * page only, missing for entries from before 1.4.0 and instance-level
    * ones; a removed group has no name and removed: true.

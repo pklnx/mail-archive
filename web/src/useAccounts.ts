@@ -18,7 +18,8 @@ export function isActive(data: AccountsResponse | null): boolean {
   return !!data?.accounts.some((a) => a.sync.state !== "idle" || a.purging);
 }
 
-export function useAccounts(): AccountsState {
+/** poll false loads the list once and again only on reload (an auditor's, #393). */
+export function useAccounts(poll = true): AccountsState {
   const [data, setData] = useState<AccountsResponse | null>(null);
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
@@ -32,19 +33,19 @@ export function useAccounts(): AccountsState {
       (d) => {
         setData(d);
         setError("");
-        timer.current = window.setTimeout(reload, isActive(d) ? ACTIVE_MS : IDLE_MS);
+        if (poll) timer.current = window.setTimeout(reload, isActive(d) ? ACTIVE_MS : IDLE_MS);
       },
       (err: unknown) => {
         if (ctrl.signal.aborted) return;
         setError(err instanceof Error ? err.message : String(err));
-        timer.current = window.setTimeout(reload, IDLE_MS);
+        if (poll) timer.current = window.setTimeout(reload, IDLE_MS);
       },
     );
     return () => {
       ctrl.abort();
       window.clearTimeout(timer.current);
     };
-  }, [tick, reload]);
+  }, [tick, reload, poll]);
 
   return { data, error, reload };
 }

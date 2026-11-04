@@ -20,6 +20,7 @@ import { Document, DocumentPdf } from "@carbon/icons-react";
 import { ApiError, profileApi, retryAfter, type TwoFactorSetup as TwoFactorSetupState } from "./api";
 import { applySettings, canonical, languages, lang, messagesFor, needsReload, settings, t, type Settings } from "./i18n";
 import { ApiKeySection } from "./ApiKeys";
+import { auditorText } from "./auditorText";
 import { AppModal } from "./DangerModal";
 import { Loading } from "./lazyView";
 import { FormError, Success } from "./notices";
@@ -192,7 +193,8 @@ export function DisplaySettings({ reload = () => location.reload() }: { reload?:
 type ProfileTab = "display" | "security" | "apiKeys";
 const tabs: ProfileTab[] = ["display", "security", "apiKeys"];
 
-export function ProfilePage({ name }: { name: string }) {
+/** auditor (#393): no API keys, and 2FA stays on (an admin resets it). */
+export function ProfilePage({ name, auditor = false }: { name: string; auditor?: boolean }) {
   const [changed, setChanged] = useState(false);
   const [tab, setTab] = useState<ProfileTab>("display");
   // Counts 2FA changes, so the sections that ask for a code read the status again.
@@ -216,7 +218,7 @@ export function ProfilePage({ name }: { name: string }) {
           >
             <Tab>{t.tabDisplay}</Tab>
             <Tab>{t.tabSecurity}</Tab>
-            <Tab>{t.apiKeys}</Tab>
+            {!auditor && <Tab>{t.apiKeys}</Tab>}
           </TabList>
           {/* A contained tab's panel is a layer of its own: the fields in it sit on the next one. */}
           <TabPanels>
@@ -234,7 +236,7 @@ export function ProfilePage({ name }: { name: string }) {
                 </section>
                 <section className="page__section">
                   <h2 className="type-heading-03">{t.twoFactor}</h2>
-                  <TwoFactorSetup user={name} status onChange={twoFactorChanged} />
+                  <TwoFactorSetup user={name} status auditor={auditor} onChange={twoFactorChanged} />
                 </section>
                 <section className="page__section">
                   <h2 className="type-heading-03">{t.passkeys}</h2>
@@ -242,11 +244,13 @@ export function ProfilePage({ name }: { name: string }) {
                 </section>
               </Layer>
             </TabPanel>
-            <TabPanel className="profile-panel">
-              <Layer>
-                <ApiKeySection twoFactorVersion={twoFactorVersion} />
-              </Layer>
-            </TabPanel>
+            {!auditor && (
+              <TabPanel className="profile-panel">
+                <Layer>
+                  <ApiKeySection twoFactorVersion={twoFactorVersion} />
+                </Layer>
+              </TabPanel>
+            )}
           </TabPanels>
         </Tabs>
       </div>
@@ -322,11 +326,14 @@ export function RecoveryCodes({ sheet, done }: { sheet: RecoverySheet; done: () 
 export function TwoFactorSetup({
   user,
   status = false,
+  auditor = false,
   onDone,
   onChange,
 }: {
   user: string;
   status?: boolean;
+  /** An auditor's 2FA cannot be turned off or get new codes here (#393). */
+  auditor?: boolean;
   onDone?: () => void;
   onChange?: (enabled: boolean) => void;
 }) {
@@ -462,7 +469,7 @@ export function TwoFactorSetup({
     <div className="profile-form">
       {codes}
       {tag}
-      {state.admin ? <p className="app-text-secondary">{t.twoFactorAdminRequired}</p> : (
+      {auditor ? <p className="app-text-secondary">{auditorText().auditorTwoFactor}</p> : state.admin ? <p className="app-text-secondary">{t.twoFactorAdminRequired}</p> : (
         <>
           <Form className="profile-form" onSubmit={(e) => void regenerate(e)}>
             {codeInput("regenerate", false)}

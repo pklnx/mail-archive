@@ -136,7 +136,7 @@ describe("phone navigation (below lg)", () => {
     await renderApp(true);
     expect(screen.queryByRole("button", { name: "More" })).toBeNull();
     expect(screen.queryAllByRole("navigation", { name: t.mainNavigation })).toHaveLength(1);
-    expect(within(sideNav()).getAllByRole("link").map((l) => l.textContent)).toEqual([t.allMail, t.navAccounts, t.users, t.log, t.retention, t.profile]);
+    expect(within(sideNav()).getAllByRole("link").map((l) => l.textContent)).toEqual([t.allMail, t.navAccounts, t.auditorAccess, t.users, t.log, t.retention, t.profile]);
   });
 
   it("opens the SideNav from the menu button, with focus in it, and closes it with Escape", async () => {

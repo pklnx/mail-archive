@@ -42,7 +42,7 @@ const noSession: Answer = { status: 401, body: { error: "not logged in" } };
 const withPasskeys: Answer = { status: 401, body: { error: "not logged in", setupRequired: false, passkeyOrigin: window.location.origin } };
 
 function renderGate() {
-  return render(<AuthGate>{(u) => <p>app for {u.name}</p>}</AuthGate>);
+  return render(<AuthGate>{(s) => <p>app for {s.user.name}</p>}</AuthGate>);
 }
 
 const password = () => screen.getByLabelText(t.fieldPassword, { selector: "input" }) as HTMLInputElement;
@@ -289,9 +289,9 @@ describe("logout (#327)", () => {
   function renderApp() {
     return render(
       <AuthGate>
-        {(u, logout, logoutError) => (
+        {(s, logout, logoutError) => (
           <div>
-            <p>app for {u.name}</p>
+            <p>app for {s.user.name}</p>
             <button onClick={logout}>{t.logOut}</button>
             {logoutError && <p role="alert">{logoutError}</p>}
           </div>
@@ -415,9 +415,9 @@ describe("passkeys on the login page after the session ends (#380)", () => {
   function renderApp() {
     return render(
       <AuthGate>
-        {(u, logout) => (
+        {(s, logout) => (
           <div>
-            <p>app for {u.name}</p>
+            <p>app for {s.user.name}</p>
             <button onClick={logout}>{t.logOut}</button>
           </div>
         )}

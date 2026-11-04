@@ -32,7 +32,8 @@ export function mailAccounts(data: AccountsResponse): MailAccount[] {
     ),
     ...data.shared.map(
       (a): MailAccount => ({
-        key: a.key, name: a.name, owner: a.owner, kind: a.kind, enabled: a.enabled, removed: a.removed, folders: a.folders,
+        // An auditor's accounts (#393) carry no enabled flag and no counts: they read as enabled.
+        key: a.key, name: a.name, owner: a.owner, kind: a.kind, enabled: a.enabled !== false, removed: a.removed, folders: a.folders,
         syncState: "idle", health: "ok",
       }),
     ),

@@ -426,7 +426,9 @@ async function errorFor(path: string, res: Response): Promise<ApiError> {
   const err = await errorFrom(res);
   // The session ended, or the user still has to replace a generated
   // password: the login gate checks the session again.
-  if ((res.status === 401 && !path.startsWith(sessionPath)) || err.body.passwordChangeRequired === true || err.body.twoFactorSetupRequired === true) {
+  // An auditor's session without a grant (#393) likewise: the gate asks for one.
+  const b = err.body;
+  if ((res.status === 401 && !path.startsWith(sessionPath)) || b.passwordChangeRequired === true || b.twoFactorSetupRequired === true || b.grantSelectionRequired === true) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   return err;
@@ -580,13 +582,37 @@ export interface User {
   /** Web UI settings: "auto" (follow the browser) or a tag. */
   language: string;
   locale: string;
+  /** Reads only through the grants of owners (#393). */
+  auditor?: boolean;
+}
+
+/** An active grant of an auditor's session (#393). */
+export interface SessionGrant {
+  id: number;
+  label: string;
+  owner: string;
+  periodFrom: string | null;
+  periodUntil: string | null;
+  startsAt: string;
+  endsAt: string;
+}
+
+/**
+ * A session: the user and, for an auditor, the grant it reads through, the
+ * active grants and whether one must be picked first.
+ */
+export interface Session {
+  user: User;
+  grant?: SessionGrant;
+  grants?: SessionGrant[];
+  grantSelectionRequired?: boolean;
 }
 
 /**
  * The login state: a user, or none and whether the first admin is missing.
  * passkeyOrigin is where passkey logins work, if the server offers them.
  */
-export type SessionState = { user: User } | { user: null; setupRequired: boolean; passkeyOrigin?: string };
+export type SessionState = Session | { user: null; setupRequired: boolean; passkeyOrigin?: string };
 
 export const sessionApi = {
   get: async (signal?: AbortSignal): Promise<SessionState> => {
@@ -597,12 +623,11 @@ export const sessionApi = {
       return { user: null, setupRequired: err.body.setupRequired === true, passkeyOrigin: typeof origin === "string" ? origin : undefined };
     }
     if (!res.ok) throw await errorFrom(res);
-    return (await res.json()) as { user: User };
+    return (await res.json()) as Session;
   },
-  login: async (username: string, password: string): Promise<{ user?: User; twoFactorRequired?: boolean; challenge?: string }> =>
-    (await send<{ user?: User; twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
-  login2FA: async (challenge: string, code: string): Promise<User> =>
-    (await send<{ user: User }>("POST", "/api/session/2fa", { challenge, code }))!.user,
+  login: async (username: string, password: string) =>
+    (await send<Partial<Session> & { twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
+  login2FA: async (challenge: string, code: string) => (await send<Session>("POST", "/api/session/2fa", { challenge, code }))!,
   logout: () => send("DELETE", sessionPath),
 };
 
@@ -637,8 +662,7 @@ export function unknownPasskey(err: unknown): { rpId: string; credentialId: stri
 
 export const passkeyApi = {
   beginLogin: async () => (await send<Ceremony>("POST", "/api/session/passkey/begin"))!,
-  finishLogin: async (token: string, credential: unknown) =>
-    (await send<{ user: User }>("POST", "/api/session/passkey/finish", { token, credential }))!.user,
+  finishLogin: async (token: string, credential: unknown) => (await send<Session>("POST", "/api/session/passkey/finish", { token, credential }))!,
   list: () => getJSON<PasskeyList>("/api/profile/passkeys"),
   beginRegistration: async (name: string, currentPassword: string, code: string) =>
     (await send<Ceremony>("POST", "/api/profile/passkeys/begin", { name, currentPassword, code }))!,
@@ -738,6 +762,8 @@ export interface ManagedUser {
   self: boolean;
   /** The user's customer group (#470). */
   group: GroupRef;
+  /** An auditor login (#393): reads only what owners grant it. */
+  auditor?: boolean;
 }
 
 /** A customer group (#470), by id and name. */

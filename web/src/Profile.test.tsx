@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applySettings, messagesFor, settings, t } from "./i18n";
+import { auditorTextFor } from "./auditorText";
 import { DisplaySettings, ProfilePage, RecoveryCodes, TwoFactorSetup, formatChoices, formatLabel } from "./Profile";
 import { expectLoaded, expectLoading } from "./test/loading";
 
@@ -244,6 +245,20 @@ describe("ProfilePage", () => {
     expect(screen.queryByRole("button", { name: t.apiKeyCreate })).toBeNull();
     // The hidden sections are mounted and load anyway.
     await waitFor(() => expect(requests.map((r) => r.url)).toEqual(expect.arrayContaining(["/api/profile/passkeys", "/api/profile/api-keys"])));
+  });
+
+  it("shows an auditor no API keys and no way to turn 2FA off or renew its codes (#393)", async () => {
+    twoFactorEnabled = true;
+    render(<ProfilePage name="stb-meyer" auditor />);
+    expect(screen.getAllByRole("tab").map((x) => x.textContent)).toEqual([t.tabDisplay, t.tabSecurity]);
+    open(t.tabSecurity);
+    const panel = screen.getByRole("tabpanel", { name: t.tabSecurity });
+    expect(await within(panel).findByText(auditorTextFor("en").auditorTwoFactor)).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: t.twoFactorDisable })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: t.twoFactorRegenerate })).toBeNull();
+    await within(panel).findByRole("button", { name: t.passkeyAdd });
+    // The server refuses an auditor's API keys and records each refusal: never asked.
+    expect(requests.map((r) => r.url)).not.toContain("/api/profile/api-keys");
   });
 
   it("shows skeletons while the sections load, with one status per tab (#287)", async () => {

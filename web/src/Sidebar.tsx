@@ -248,7 +248,8 @@ function FolderItem({ node, account, ids, selected, select, collapsed }: ItemPro
   const inside = !open && selected !== null && contains(node, selected);
   const id = ids.folder(account, node.path);
   // A collapsed parent shows the sum of its subtree; a path part only then.
-  const count = !open ? subtreeMessages(node) : f ? f.messages : undefined;
+  // Without counts (an auditor's folders, #393) none, also not a sum of 0.
+  const count = !open ? (counted(node) ? subtreeMessages(node) : undefined) : f?.messages;
   const countTitle = open ? undefined : t.subtreeCount(subtreeMessages(node));
   return (
     <TreeNode
@@ -270,6 +271,9 @@ function FolderItem({ node, account, ids, selected, select, collapsed }: ItemPro
     </TreeNode>
   );
 }
+
+/** Whether a folder in the subtree has a count. */
+const counted = (node: FolderNode): boolean => node.folder?.messages !== undefined || node.children.some(counted);
 
 function contains(node: FolderNode, folder: string): boolean {
   return node.children.some((c) => c.folder?.name === folder || contains(c, folder));
