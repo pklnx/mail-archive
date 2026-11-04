@@ -35,6 +35,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/jobs` | Background jobs on the queue in the `jobs` table: the registry of kinds and the bounded pool that `serve` and `worker` run (see [Background jobs](#background-jobs)). |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
+| `internal/blobcrypt` | Encryption at rest: the STREAM-AES-256-GCM file format, the keyring and the archive key (see [Encryption at rest](#encryption-at-rest)). Standard library only; no database. |
 | `internal/config` | Configuration from environment variables. |
 | `internal/imaptest` | In-memory IMAP server for tests. |
 | `internal/testwait` | Waiting in tests: `Signal`, a broadcast, and `Until`, which checks a condition again after each signal instead of on a timer. |
@@ -250,6 +251,128 @@ survives a power loss. That needs a disposable VM or a fault-injecting
 block device, power cuts at the publication and removal boundaries, a
 restart, and a check that every acknowledged blob and every pending removal
 is still there.
+
+## Encryption at rest
+
+`internal/blobcrypt` holds the file format, the keyring and the archive key
+of encryption at rest (#392). Storing message files and backups in this
+format follows in later steps; this section specifies what is fixed now.
+Only the Go standard library is used (`crypto/aes`, `crypto/cipher` GCM,
+`crypto/hkdf`, `crypto/hmac`, `crypto/rand`).
+
+### Key hierarchy
+
+- **Archive key (KEK):** 32 random bytes, base64, from
+  `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` or `MAIL_ARCHIVE_ARCHIVE_KEY` (see
+  [Configuration](../reference/configuration#encryption-at-rest)). Never
+  stored by the app. Its **fingerprint** is the first 8 bytes of
+  HMAC-SHA256(KEK, `"mail-archive kek fingerprint v1"`), in hex.
+- **Keyring key:** 32 random bytes per keyring. Each **slot** wraps it under
+  one KEK: AES-256-GCM with the key HKDF-SHA256(KEK, no salt,
+  `"mail-archive keyslot v1"`), a random 12-byte nonce, and as associated
+  data `"mail-archive keyslot v1\0"` ‖ archive id (16 bytes) ‖ fingerprint
+  (8 bytes).
+- **Data keys (DK):** 32 random bytes each, under a random non-zero 32-bit
+  id. All of them are sealed together with AES-256-GCM under
+  HKDF-SHA256(keyring key, no salt, `"mail-archive keyring body v1"`), a
+  random nonce, and as associated data the canonical metadata:
+  `"mail-archive keyring v1\0"` ‖ archive id ‖ generation (uint64) ‖ current
+  key id (uint32) ‖ slot count (uint16) ‖ per slot its fingerprint (8 bytes),
+  label length (uint16), label and creation time (Unix seconds, int64), all
+  big-endian. Plaintext: per data key its id (uint32) ‖ key, ascending.
+- **File key:** per file HKDF-SHA256(DK, salt = the header's 32 random
+  bytes, `"mail-archive blob v1"` ‖ purpose byte).
+
+So the archive id is in every slot's associated data and the generation,
+current key and slot list are in the data keys' associated data: none of
+them can change without a KEK. The keyring key lets a slot be added or
+removed without the other KEKs, as with LUKS keyslots. A removed KEK still
+opens older copies of the keyring (backups), so after a KEK leak a new
+keyring key and data key are needed, not only `remove-key`.
+
+### Keyring file
+
+`<data dir>/keys/keyring`, mode 0600 in a 0700 directory, JSON:
+
+```json
+{
+  "format": "mail-archive keyring 1",
+  "archive_id": "<32 hex digits>",
+  "generation": 2,
+  "current_key": 2615952247,
+  "slots": [
+    {"fingerprint": "<16 hex digits>", "label": "archive key",
+     "created": "2026-11-04T10:00:00Z", "wrapped": "<base64: nonce ‖ sealed keyring key>"}
+  ],
+  "sealed": "<base64: nonce ‖ sealed data keys>"
+}
+```
+
+Parsing is strict: unknown fields, trailing data, more than 16 slots or 64
+data keys, a file over 64 KiB, upper-case hex, a non-UTC time or a wrapped
+part of the wrong length are refused. The metadata is trusted only after a
+KEK has opened the keyring. Every change increments the generation and
+replaces the file atomically (temporary file in `keys/`, `fsync`, `rename`,
+`fsync` of the directory); a leftover temporary file is ignored. The
+commands that change it hold an exclusive `flock` on `keys/keyring.lock`
+and refuse while another holds it. The copy in the database and the
+reconciliation of the two copies follow with the blob store.
+
+### File format (STREAM-AES-256-GCM)
+
+| Bytes | Field |
+|---|---|
+| 0–7 | magic `MA-ENC1\n` |
+| 8 | version, `1` |
+| 9 | purpose: `1` message, `2` backup |
+| 10 | chunk size exponent, `16` (64 KiB) |
+| 11 | reserved, `0` |
+| 12–15 | data key id, uint32 big-endian, not `0` |
+| 16–47 | salt, 32 random bytes |
+| 48–63 | padding, `0` |
+
+Then the chunks: each holds 64 KiB of plaintext (the last one 0 to 64 KiB)
+followed by its 16-byte GCM tag. The nonce of chunk *i* is *i* as an
+11-byte big-endian counter followed by a flag byte, `1` for the final chunk
+and `0` otherwise. Every chunk's associated data is the 64-byte header; the
+final chunk's is the header followed by the **binding**: the plaintext's
+SHA-256 for a message, nothing for a backup. So a message file renamed to
+another hash fails to open. The final chunk is full when the plaintext
+length is a positive multiple of 64 KiB; only an empty plaintext has an
+empty final chunk. A file of *n* plaintext bytes is therefore 64 + *n* + 16
+× max(1, ⌈*n* / 65536⌉) bytes: 64 bytes plus 0.025 %.
+
+A reader accepts only version 1, purposes 1 and 2, exponent 16, a non-zero
+key id and zero reserved and padding bytes, before it allocates anything.
+It derives the chunk count from the file size, refuses an empty final chunk
+after a full one, and authenticates the final chunk on open, so the size
+and the binding are proven before the first read. Every other chunk is
+authenticated when it is read. Truncation, a dropped, reordered or appended
+chunk, trailing bytes, any flipped header bit, another data key and
+another binding are all refused (`ErrCorrupt`); a header naming a data key
+the keyring lacks is `ErrUnknownKey`. A negative size, or one beyond the
+largest whole number of chunks an int64 holds, is refused before any
+arithmetic. The reader gives `Read`, `Seek`, `ReadAt` and `Size` with one
+64 KiB buffer behind a mutex, so one reader can be shared between
+goroutines (`TestReaderConcurrent`).
+
+The known-answer vectors in `internal/blobcrypt/testdata` freeze the file
+and the keyring formats; their keys are derived from public labels in the
+test. `TestSpecByHand` rebuilds a file from the primitives as written here.
+`FuzzOpen` feeds crafted headers and sizes.
+
+**Cost** (benchmarks, one core of the CI-class Xeon): encrypting with
+SHA-256 at the same time, as a writer does, runs at about 1.2–1.35 GB/s,
+0.06 ms for a 75 KB message; decrypting at the same speed. Each open stream
+holds about 75 KiB (one chunk buffer plus the cipher state), independent of
+the file size, well inside the 4 GB / 2 core budget.
+
+### Commands
+
+`encryption keygen`, `add-key`, `remove-key` and `status`, and `decrypt`,
+need no database (see the [command line](../reference/cli#encryption)).
+`decrypt` recovers a file with the KEK and the keyring alone, from a copy of
+`data/` or a backup.
 
 ## Journaling and fills
 

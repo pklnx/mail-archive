@@ -108,8 +108,16 @@ services:
       # Background jobs (attachment text) the web server runs at a time;
       # 0 with the worker service below. See docs/guide/operations.md.
       MAIL_ARCHIVE_JOB_WORKERS: ${WEB_JOB_WORKERS:-1}
+      # Encryption at rest: the archive key that opens the keyring
+      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
+      # set MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
+      # docs/reference/configuration.md.
+      MAIL_ARCHIVE_ARCHIVE_KEY_FILE: ${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}
+      MAIL_ARCHIVE_ARCHIVE_KEY: ${MAIL_ARCHIVE_ARCHIVE_KEY:-}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
+      # The archive key, read-only, outside the data directory.
+      - ${ARCHIVE_KEY_DIR:-./keys}:/keys:ro
     ports:
       # WEB_BIND=0.0.0.0 (or a LAN or Tailscale address) opens it to a network.
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
@@ -148,8 +156,16 @@ services:
       # Go's heap limit: mem_limit minus 128 MiB of WebAssembly memory per worker
       # (outside the Go heap) minus 64 MiB of headroom. See operations.md.
       GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-576MiB}
+      # Encryption at rest: the archive key that opens the keyring
+      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
+      # set MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
+      # docs/reference/configuration.md.
+      MAIL_ARCHIVE_ARCHIVE_KEY_FILE: ${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}
+      MAIL_ARCHIVE_ARCHIVE_KEY: ${MAIL_ARCHIVE_ARCHIVE_KEY:-}
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
+      # The archive key, read-only, outside the data directory.
+      - ${ARCHIVE_KEY_DIR:-./keys}:/keys:ro
 
   mail-archive:
     build:
@@ -192,11 +208,39 @@ services:
       MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
       # How long the files of messages deleted by retention stay (backups).
       MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}
+      # Encryption at rest: the archive key that opens the keyring
+      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
+      # set MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
+      # docs/reference/configuration.md.
+      MAIL_ARCHIVE_ARCHIVE_KEY_FILE: ${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}
+      MAIL_ARCHIVE_ARCHIVE_KEY: ${MAIL_ARCHIVE_ARCHIVE_KEY:-}
     volumes:
       # Raw .eml files. A bind mount keeps them visible on the host for backups.
       - ${ARCHIVE_DIR:-./data}:/data
       # mbox files and Maildirs for `./ma import`, read-only.
       - ${IMPORT_DIR:-./import}:/import:ro
+      # The archive key, read-only, outside the data directory.
+      - ${ARCHIVE_KEY_DIR:-./keys}:/keys:ro
+
+  # One-shot `./ma encryption keygen`: writes keys/archive.key and the
+  # keyring in data/. The only service with the keys directory writable;
+  # ./ma runs it as root and the files go to the container user.
+  mail-archive-keygen:
+    build:
+      context: .
+      args:
+        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
+    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
+    profiles: ["cli"]
+    # No process in the container can gain privileges (setuid binaries).
+    security_opt:
+      - no-new-privileges:true
+    command: ["encryption", "keygen", "--chown", "65532:65532"]
+    environment:
+      MAIL_ARCHIVE_ARCHIVE_KEY_FILE: /keys/archive.key
+    volumes:
+      - ${ARCHIVE_DIR:-./data}:/data
+      - ${ARCHIVE_KEY_DIR:-./keys}:/keys
 
 volumes:
   pgdata:
