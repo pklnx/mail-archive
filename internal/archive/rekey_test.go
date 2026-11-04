@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -436,4 +438,74 @@ func TestChangeKeyringWritersLock(t *testing.T) {
 	if _, err := archive.ChangeKeyring(e.ctx, e.st, opts, func(*blobcrypt.Keyring) error { return nil }); !errors.Is(err, store.ErrWritersExcluded) {
 		t.Fatalf("during a conversion: %v", err)
 	}
+}
+
+// copyTree copies the directory src to dst (created), files and modes.
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		b, err := os.ReadFile(p) //nolint:gosec // the test's own data directory
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Plan revision 1, B2 (from #436's note on #437): a data directory restored
+// from before a rekey, next to a database from after it, keeps every file
+// readable. The keyring file from before holds the old data key, the
+// database copy only the new one; the next start keeps both (the union)
+// with the new key current, and writes the result to both copies.
+// Counter-proof: blobcrypt.Reconcile without the union (the older copy's
+// keys not added) loses the old key, and the restored files do not read.
+func TestRekeyDataDirFromBeforeRestored(t *testing.T) {
+	e := newArchiveEnv(t)
+	msgs, kek, ring := e.enabled(4)
+	oldKey := ring.CurrentKey()
+	before := t.TempDir()
+	copyTree(t, e.data, before)
+
+	res, err := archive.Rekey(e.ctx, e.st, e.newBlobs(), e.rekeyOpts(kek, nil))
+	if err != nil || !slices.Equal(res.Deleted, []uint32{oldKey}) {
+		t.Fatalf("rekey: %+v %v", res, err)
+	}
+	// Restore data/ from before the rekey; the database stays.
+	if err := os.RemoveAll(e.data); err != nil {
+		t.Fatal(err)
+	}
+	copyTree(t, before, e.data)
+	for h := range msgs {
+		if e.keyOf(h) != oldKey {
+			t.Fatal("the restored files do not name the old key")
+		}
+	}
+
+	a, err := e.atRest(archive.RoleWriter, kek, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	if a.Keyring.CurrentKey() != res.NewKey {
+		t.Fatalf("current %08x, want the new key %08x", a.Keyring.CurrentKey(), res.NewKey)
+	}
+	if !e.hasKey(kek, oldKey) || !e.hasKey(kek, res.NewKey) {
+		t.Fatal("the copies do not hold both data keys")
+	}
+	e.readAll(kek, msgs)
 }
