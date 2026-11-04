@@ -62,6 +62,8 @@ const views = [
   { view: "users", heading: "Users" },
   // A detail page loads its view's chunk too.
   { view: "users&id=kim", heading: "kim" },
+  // The owner's grants (#393).
+  { view: "auditors", heading: "Auditor access" },
   { view: "retention", heading: "Retention" },
   { view: "retention&tab=holds", heading: "Retention" },
   // The demo's one rule.

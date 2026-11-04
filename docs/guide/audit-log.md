@@ -296,6 +296,15 @@ results* (`message.page`), *Showed conversation* (`message.conversation`),
 *Shared account* (`account.share`) and *Ended account share*
 (`account.unshare`).
 
+Owners who gave [auditor access](./users#auditor-access) see the auditor's
+entries the same way, with the auditor's search terms, also of searches over
+the whole case. Anyone else who changed the grant, such as the operator,
+shows as **Operator**. A refused request (*Refused auditor request*) names
+its method and route and why it was refused; *Granted*, *Extended*, *Ended*
+and *Changed auditor access* name the case and, for an end, the reason;
+*Chose audit case* is the auditor's choice of a case, and *Listed accounts*
+the auditor's account list.
+
 ![Log page](/screenshots/log.png)
 
 **From** and **To** are a date range, the same as in the search filters:
@@ -303,7 +312,7 @@ pick it in the calendar, or type the dates in your date format, shown under
 the fields. The To day is included. An empty From shows the last 30 days and
 empties To. In **Action**, pick one or several groups of actions (logins,
 searches, reading, export and backup, accounts, user management, own login
-settings, API keys, manual syncs, retention and legal holds); the list shows
+settings, API keys, manual syncs, retention and legal holds, auditor access); the list shows
 the entries of any of them. A field names what is picked, with the number of
 picks and a button that clears them; with nothing picked it says "All
 actions" or "Everyone" and does not filter. The field cuts a long text with

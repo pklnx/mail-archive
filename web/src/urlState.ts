@@ -6,7 +6,7 @@ import { useCallback, useSyncExternalStore } from "react";
 // bookmarks work without a router library.
 
 /** The action groups of the Log's filter, as the API names them. */
-export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention"] as const;
+export const auditGroups = ["login", "search", "read", "export", "accounts", "users", "profile", "api_keys", "sync", "retention", "auditor"] as const;
 /** The actors the Log's Who filter offers besides users. */
 export const auditActors = ["cli", "api_key"] as const;
 

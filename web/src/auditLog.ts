@@ -67,6 +67,13 @@ const actionsEn = {
   "data.fill_done": "Finished import from IMAP",
   "data.backup": "Backup",
   "audit.export": "Exported log",
+  "auditor.grant": "Granted auditor access",
+  "auditor.extend": "Extended auditor access",
+  "auditor.revoke": "Ended auditor access",
+  "auditor.grant_change": "Changed auditor access",
+  "auditor.select": "Chose audit case",
+  "auditor.denied": "Refused auditor request",
+  "account.list": "Listed accounts",
 };
 const actionsDe: Record<keyof typeof actionsEn, string> = {
   "auth.login": "Angemeldet",
@@ -131,8 +138,74 @@ const actionsDe: Record<keyof typeof actionsEn, string> = {
   "data.fill_done": "Import aus IMAP beendet",
   "data.backup": "Backup",
   "audit.export": "Protokoll exportiert",
+  "auditor.grant": "Prüferzugang gegeben",
+  "auditor.extend": "Prüferzugang verlängert",
+  "auditor.revoke": "Prüferzugang beendet",
+  "auditor.grant_change": "Prüferzugang geändert",
+  "auditor.select": "Prüfungsfall gewählt",
+  "auditor.denied": "Anfrage des Prüfers abgelehnt",
+  "account.list": "Konten aufgelistet",
 };
 const actionNames: Record<Lang, Record<string, string>> = { en: actionsEn, de: actionsDe };
+
+// The words of auditor entries (#393): the name an owner sees for anyone
+// but their auditor, and the reasons of refusals and of ended grants.
+const auditorEn = {
+  operator: "Operator",
+  grant: (id: number) => `case ${id}`,
+  reasons: {
+    not_allowed: "not available to auditors",
+    password_change_required: "before the password change",
+    two_factor_required: "before the 2FA setup",
+    grant_selection_required: "before a case was chosen",
+    admin_only: "admins only",
+    owner: "by the owner",
+    operator: "by the operator",
+    group_change: "group change",
+    account_move: "account moved to another owner",
+    account_purge: "account deleted",
+    user_removed: "auditor removed",
+  } as Record<string, string>,
+};
+const auditorDe: typeof auditorEn = {
+  operator: "Betreiber",
+  grant: (id) => `Fall ${id}`,
+  reasons: {
+    not_allowed: "für Prüfer nicht verfügbar",
+    password_change_required: "vor der Passwortänderung",
+    two_factor_required: "vor der Einrichtung der 2FA",
+    grant_selection_required: "bevor ein Fall gewählt war",
+    admin_only: "nur für Admins",
+    owner: "durch den Besitzer",
+    operator: "durch den Betreiber",
+    group_change: "Gruppenwechsel",
+    account_move: "Konto an anderen Besitzer übertragen",
+    account_purge: "Konto gelöscht",
+    user_removed: "Prüfer entfernt",
+  },
+};
+const auditorWords: Record<Lang, typeof auditorEn> = { en: auditorEn, de: auditorDe };
+
+/** The name in an entry's Who column: "operator" of an owner's auditor entries in words (#393). */
+export function entryUser(e: AuditEntry, l: Lang = lang): string {
+  return e.viaAuditor && e.user === "operator" ? auditorWords[l].operator : (e.user ?? "");
+}
+
+/**
+ * The detail of an auditor's grant change, choice or refusal (#393): the
+ * case's label or number, the refused method and route, and the reason, in
+ * words.
+ */
+export function auditorDetail(e: AuditEntry, l: Lang = lang): string {
+  const w = auditorWords[l];
+  const d = e.details;
+  const parts: string[] = [];
+  if (typeof d.label === "string") parts.push(`“${d.label}”`);
+  else if (typeof d.auditor_grant === "number") parts.push(w.grant(d.auditor_grant));
+  if (typeof d.method === "string" && typeof d.route === "string") parts.push(`${d.method} ${d.route}`);
+  if (typeof d.reason === "string") parts.push(w.reasons[d.reason] ?? d.reason);
+  return parts.join(", ");
+}
 
 /** An audit action in words, in the current language or l; an unknown action as it is. */
 export function auditAction(a: string, l: Lang = lang): string {

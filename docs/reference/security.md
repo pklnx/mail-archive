@@ -127,8 +127,8 @@ in the shared account is the message that was opened. A legal hold on a shared
 account is never shown to the shared user, admins included.
 
 **Auditors** (tax advisors and tax auditors) are logins an admin creates
-(`./ma user add NAME --auditor`, or `POST /api/users` with
-`"auditor": true`; the Users page follows in a later release). The role never changes:
+(on the Users page with the role **Auditor**, `./ma user add NAME --auditor`,
+or `POST /api/users` with `"auditor": true`). The role never changes:
 an auditor is never an admin, owns no accounts, receives no shares and holds
 no API keys (a key of an auditor opens nothing). An auditor reads only
 through an auditor grant: one owner's accounts, all or some of their folders,

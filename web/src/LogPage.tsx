@@ -16,7 +16,7 @@ import {
 import { DateRange } from "./DateRange";
 import { usersApi } from "./api";
 import { auditApi, auditQuery, type AuditEntry, type AuditFilter, type AuditGroup, type GroupedUser } from "./auditApi";
-import { auditAction, foldEntries, shortUserAgent } from "./auditLog";
+import { auditAction, auditorDetail, entryUser, foldEntries, shortUserAgent } from "./auditLog";
 import { isPlainClick } from "./clicks";
 import { dayOfDate, shiftDay, timestamp } from "./format";
 import { t, translateWithId } from "./i18n";
@@ -218,10 +218,11 @@ function viaAccounts(d: Record<string, unknown>): { name: string; n: number }[] 
  */
 function sharedDetail(e: AuditEntry): string {
   const d = e.details;
-  const user = e.user ?? "";
+  const user = entryUser(e);
   const via = viaAccounts(d);
   if (listActions.includes(e.action)) {
-    const named = e.action !== "message.page" && typeof d.account === "string";
+    // An auditor's terms stay in the owner's view (#393, Q6), also of searches over all of the case.
+    const named = e.action !== "message.page" && (typeof d.account === "string" || e.viaAuditor === true);
     // A first page is a search or a list by its action; a further page says so in search.
     const kind = e.action === "message.search" || (e.action === "message.page" && d.search === true) ? "search" : "list";
     return [named ? listParams(d) : "", ...via.map((a) => t.logShared(user, kind, a.n, a.name))].filter(Boolean).join("; ");
@@ -233,7 +234,10 @@ function sharedDetail(e: AuditEntry): string {
 /** The detail worth a glance: the search text, a login's method and reason, changed settings. */
 export function entryDetail(e: AuditEntry): string {
   const d = e.details;
-  if (e.viaShare) return sharedDetail(e);
+  // Grant changes, choices and refusals of auditor access (#393), in every Log.
+  if (e.action.startsWith("auditor.")) return auditorDetail(e);
+  // An auditor's login in the owner's view keeps its method and reason.
+  if (e.viaShare && !(e.viaAuditor && e.action.startsWith("auth."))) return sharedDetail(e);
   if (listActions.includes(e.action)) return listParams(d);
   if ((e.action === "account.share" || e.action === "account.unshare") && typeof d.user === "string") return t.logShareWith(d.user);
   if (e.action.startsWith("auth.")) return [d.method, d.reason].filter((v) => typeof v === "string").join(", ");
@@ -530,7 +534,7 @@ function EntryRow({
   const key = e.apiKey ? t.logViaKey(e.apiKey) : e.viaShare && e.actor === "api_key" ? t.logSharedViaKey : "";
   const detail = [entryDetail(e), key, !admin && cli ? t.logCLI : ""].filter(Boolean);
   const failed = e.action === "auth.login_failed";
-  const who = [e.user ?? "", cli ? t.logCLI : ""].filter(Boolean).join(" · ");
+  const who = [entryUser(e), cli ? t.logCLI : ""].filter(Boolean).join(" · ");
   const sha = e.target?.type === "message" && e.target.subject ? e.target.id : "";
   return (
     <TableRow id={id} className={nested ? "log-table__nested" : undefined}>

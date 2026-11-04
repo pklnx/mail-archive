@@ -250,6 +250,31 @@ rights on PostgreSQL, in the hosted instance the operator, can still remove all
 of this; your off-host copy of the attestations then shows it. See
 [Tamper evidence](./tamper-evidence).
 
+## Data access in a tax audit (Z1/Z2/Z3)
+
+In a tax audit (Außenprüfung) the tax office may access the archived mail
+in three ways (§147 Abs. 6 AO). This is how mail-archive maps them; whether
+it is enough in your case is a question for your tax adviser.
+
+- **Z1, unmittelbarer Datenzugriff:** the auditor reads the data in the
+  system itself, read-only. The owner gives the auditor's login access to
+  the accounts, folders and period the audit covers, for a limited time
+  ([Auditor access](./users#auditor-access)). The auditor uses the archive's
+  own search and filters, sees nothing outside the grant and changes
+  nothing. The grant documents what the taxpayer made available, and every
+  search and read is in the owner's [Log](./audit-log#auditors).
+- **Z2, mittelbarer Datenzugriff:** the owner or their tax advisor searches
+  as the auditor asks, and shows the results. This needs nothing extra; the
+  searches are in the Log as the owner's own.
+- **Z3, Datenträgerüberlassung:** the data on a storage medium. Auditors do
+  not export in the web UI; the owner asks the operator for an export on the
+  command line (see [Exporting mail](./operations#exporting-mail)).
+
+**Before the audit, ask the operator for a [legal hold](#legal-holds)** over
+the period, by account, owner or [customer group](#holds-per-customer-group).
+A grant creates no hold: a deletion run may still remove mail whose period
+ended, and that mail then leaves the auditor's view as well.
+
 ## Procedure documentation (Verfahrensdokumentation)
 
 GoBD expects you to document how mail is captured, stored, protected and
@@ -297,6 +322,9 @@ that customer gets an individual instance (see
 - Administrative access to the server, PostgreSQL and the data directory:
   [persons]. Every search, read, export and change is in the audit log,
   exported [how often] to [place].
+- Tax audits: the auditor [name, tax office] reads [accounts, folders,
+  period] through an auditor grant from [date] to [date], granted by
+  [person]; a legal hold over the period was added on [date].
 
 ## 5. Retention and deletion
 - Rules: [account/folder → years, legal basis], added on [date] by [person].

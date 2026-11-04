@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button, CodeSnippet, Form, InlineNotification, PasswordInput, TextInput } from "@carbon/react";
-import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type SessionState, type User } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type Session, type SessionState } from "./api";
 import { ThemeToggle } from "./ThemeToggle";
 import { applySettings, t } from "./i18n";
 import { ProductMark } from "./ProductMark";
@@ -11,13 +11,18 @@ import { LazyView, lazyNamed } from "./lazyView";
 // view's chunk (#288), so the login page does not carry them.
 const PasswordForm = lazyNamed(() => import("./Profile"), "PasswordForm");
 const TwoFactorSetup = lazyNamed(() => import("./Profile"), "TwoFactorSetup");
+// An auditor's grant choice (#393) comes with the auditor shell's chunk.
+const GrantChoice = lazyNamed(() => import("./AuditorShell"), "GrantChoice");
 
 type GateState = SessionState | { loading: true } | { error: string };
 
 interface Props {
-  /** Renders the app for a logged-in user. */
-  /** logoutError is the reason the last Log out failed ("" if it did not); the user is still signed in. */
-  children: (user: User, logout: () => void, logoutError: string) => ReactNode;
+  /**
+   * Renders the app for a logged-in user. logoutError is the reason the last
+   * Log out failed ("" if it did not); the user is still signed in. update
+   * replaces the session, e.g. after an auditor switched grants (#393).
+   */
+  children: (session: Session, logout: () => void, logoutError: string, update: (s: Session) => void) => ReactNode;
 }
 
 /**
@@ -25,6 +30,11 @@ interface Props {
  * page, or how to create the first admin. Any 401 from the API (the session
  * ended) brings the login page back; the URL is kept, so the user returns
  * to the same view after logging in.
+ *
+ * Until the forced steps are done (a new password, the 2FA setup, an
+ * auditor's grant choice) only their screens show, and the app with its
+ * requests does not start: the server refuses those requests then, and
+ * records each refusal of an auditor (#441).
  */
 export function AuthGate({ children }: Props) {
   const [state, setGateState] = useState<GateState>({ loading: true });
@@ -91,7 +101,8 @@ export function AuthGate({ children }: Props) {
           <Heading title={t.chooseOwnPassword} text={t.chooseOwnPasswordText} />
           <div className="auth-page__form">
             <LazyView inline>
-              <PasswordForm done={() => setState({ user: { ...user, mustChangePassword: false } })} />
+              {/* The rest of the session (an auditor's grants) stays. */}
+              <PasswordForm done={() => setState({ ...state, user: { ...user, mustChangePassword: false } })} />
             </LazyView>
           </div>
           <div>
@@ -122,10 +133,21 @@ export function AuthGate({ children }: Props) {
         </Centered>
       );
     }
-    return children(state.user, logout, logoutError);
+    if (state.user.auditor && (state.grantSelectionRequired || !state.grant)) {
+      return (
+        <Centered>
+          <Brand />
+          <LazyView inline>
+            <GrantChoice grants={state.grants ?? []} done={setState} logout={logout} />
+          </LazyView>
+          {logoutError && <ErrorNotice text={logoutError} alert />}
+        </Centered>
+      );
+    }
+    return children(state, logout, logoutError, setState);
   }
   if (state.setupRequired) return <SetupNotice check={check} />;
-  return <LoginPage done={(user) => setState({ user })} passkeyOrigin={state.passkeyOrigin} />;
+  return <LoginPage done={setState} passkeyOrigin={state.passkeyOrigin} />;
 }
 
 function Centered({ children }: { children: ReactNode }) {
@@ -191,7 +213,7 @@ export function passkeyError(err: unknown): string {
   return t.failed(err instanceof Error ? err.message : String(err));
 }
 
-function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passkeyOrigin?: string }) {
+function LoginPage({ done, passkeyOrigin }: { done: (s: Session) => void; passkeyOrigin?: string }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -264,7 +286,7 @@ function LoginPage({ done, passkeyOrigin }: { done: (user: User) => void; passke
     setError("");
     try {
       const result = await sessionApi.login(username, password);
-      if (result.user) done(result.user);
+      if (result.user) done(result as Session);
       else if (result.twoFactorRequired && result.challenge) {
         // Second step. The code field reuses the password state: clear it,
         // so the password is never shown in the visible code field.

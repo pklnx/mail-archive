@@ -31,9 +31,9 @@ describe("user admin requests", () => {
     expect(sent(fetch)).toEqual({ path: "/api/users/a.b", method: "PATCH", body: { locked: true } });
   });
 
-  it("moves a user into a group and resolves to the number of ended shares", async () => {
-    const fetch = respond({ sharesEnded: 2 });
-    expect(await userAdminApi.setGroup("jo", 3)).toBe(2);
+  it("moves a user into a group and resolves to the numbers of ended shares and auditor grants", async () => {
+    const fetch = respond({ sharesEnded: 2, grantsRevoked: 1 });
+    expect(await userAdminApi.setGroup("jo", 3)).toEqual({ sharesEnded: 2, grantsRevoked: 1 });
     expect(sent(fetch)).toEqual({ path: "/api/users/jo", method: "PATCH", body: { group: 3 } });
   });
 });

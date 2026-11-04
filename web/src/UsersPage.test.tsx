@@ -802,9 +802,9 @@ describe("German", () => {
       noEnglish();
       fireEvent.click(screen.getByRole("button", { name: de.userActions("bob") }));
       fireEvent.click(screen.getByRole("menuitem", { name: ude.changeGroup }));
-      expect(within(dialog()).getByText("Freigaben zwischen bob und Benutzern von Default enden. Die Konten von bob ziehen mit um.")).toBeTruthy();
+      expect(within(dialog()).getByText("Freigaben und Prüferzugänge zwischen bob und Benutzern von Default enden. Die Konten von bob ziehen mit um.")).toBeTruthy();
       noEnglish();
-      expect(document.body.textContent).not.toMatch(/Change group|Groups|Add group|Shares between/);
+      expect(document.body.textContent).not.toMatch(/Change group|Groups|Add group|Shares (between|and)/);
       expect(ude.groupChanged("bob", "Meier", 2)).toBe("bob ist jetzt in Meier. 2 Freigaben endeten.");
     } finally {
       applySettings({ language: "en", locale: "en" });
@@ -832,5 +832,94 @@ describe("German", () => {
     } finally {
       applySettings({ language: "en", locale: "en" });
     }
+  });
+});
+
+describe("auditor logins (#393 part 3)", () => {
+  const us = usersTextFor("en");
+  const b: CustomerGroup = { id: 2, name: "Meier", users: 1, accounts: 0, createdAt: "2026-10-02T00:00:00Z" };
+  const auditor = user("stb-meyer", { auditor: true, accounts: 0, twoFactorEnabled: true });
+  beforeEach(() => {
+    users.push(auditor);
+    const fetch = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.mocked(globalThis.fetch).mockImplementation(async (url, init) => {
+      if (init?.method === "DELETE" && url === "/api/users/stb-meyer") {
+        requests.push({ method: "DELETE", url: String(url), body: undefined });
+        const ended = [{ id: 4, label: "Betriebsprüfung 2023", owner: "pat", auditor: "stb-meyer" }];
+        return new Response(JSON.stringify({ grantsRevoked: ended }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (init?.method === "PATCH" && url === "/api/users/stb-meyer") {
+        requests.push({ method: "PATCH", url: String(url), body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ sharesEnded: 0, grantsRevoked: 2 }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return fetch(url, init);
+    });
+  });
+  afterEach(() => {
+    users.splice(users.indexOf(auditor), 1);
+  });
+
+  it("creates an auditor with the role choice, in the chosen group with two or more", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    await screen.findByRole("columnheader", { name: us.colGroup });
+    fireEvent.click(screen.getByRole("button", { name: t.addUser }));
+    const modal = within(dialog());
+    expect((modal.getByLabelText(us.roleMember) as HTMLInputElement).checked).toBe(true);
+    expect(modal.queryByText(us.auditorHelp)).toBeNull();
+    fireEvent.change(modal.getByLabelText(t.userName), { target: { value: "stb-schmidt" } });
+    fireEvent.click(modal.getByLabelText(us.roleAuditor));
+    // What an auditor is, said where the role is chosen.
+    expect(modal.getByText(us.auditorHelp)).toBeTruthy();
+    fireEvent.click(modal.getByRole("button", { name: t.addUser }));
+    expect(modal.getByText(us.groupRequired)).toBeTruthy();
+    expect(changes()).toEqual([]);
+    fireEvent.change(modal.getByLabelText(us.colGroup), { target: { value: "2" } });
+    fireEvent.click(modal.getByRole("button", { name: t.addUser }));
+    await waitFor(() =>
+      expect(changes()).toEqual([{ method: "POST", url: "/api/users", body: { name: "stb-schmidt", admin: false, auditor: true, group: 2 } }]),
+    );
+  });
+
+  it("creates an auditor in the only group with one group", async () => {
+    await show();
+    fireEvent.click(screen.getByRole("button", { name: t.addUser }));
+    const modal = within(dialog());
+    fireEvent.change(modal.getByLabelText(t.userName), { target: { value: "stb-schmidt" } });
+    fireEvent.click(modal.getByLabelText(us.roleAuditor));
+    fireEvent.click(modal.getByRole("button", { name: t.addUser }));
+    await waitFor(() => expect(changes()).toEqual([{ method: "POST", url: "/api/users", body: { name: "stb-schmidt", admin: false, auditor: true } }]));
+  });
+
+  it("shows the auditor role and offers no Make admin for it", async () => {
+    await show();
+    expect(within(row("stb-meyer")).getByText(us.roleAuditorTag)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: t.userActions("stb-meyer") }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([t.resetPassword, t.lock, t.twoFactorReset, t.removeUser]);
+  });
+
+  it("says that auditor grants end with a group move, and how many did", async () => {
+    groups = [defaultGroup, b];
+    await show();
+    await screen.findByRole("columnheader", { name: us.colGroup });
+    pick("bob", us.changeGroup);
+    expect(within(dialog()).getByText("Shares and auditor grants between bob and users of Default end. The accounts bob owns move along.")).toBeTruthy();
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.cancel }));
+    pick("stb-meyer", us.changeGroup);
+    // An auditor owns no accounts.
+    expect(within(dialog()).getByText("Shares and auditor grants between stb-meyer and users of Default end.")).toBeTruthy();
+    fireEvent.click(within(dialog()).getByRole("button", { name: us.changeGroup }));
+    expect(await screen.findByText("stb-meyer is now in Meier. No shares ended. 2 auditor grants ended.")).toBeTruthy();
+  });
+
+  it("names what a removal of an auditor ends, before and after", async () => {
+    await show();
+    pick("stb-meyer", t.removeUser);
+    expect(within(dialog()).getByText(`${us.removeAuditorText("stb-meyer")} ${t.removeUserText}`)).toBeTruthy();
+    fireEvent.click(within(dialog()).getByRole("button", { name: t.removeUser }));
+    expect(await screen.findByText("stb-meyer is removed. Auditor grants ended: “Betriebsprüfung 2023” (pat).")).toBeTruthy();
+    // Another user's removal says nothing of grants.
+    pick("bob", t.removeUser);
+    expect(within(dialog()).getByText(t.removeUserText)).toBeTruthy();
   });
 });
