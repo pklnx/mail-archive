@@ -2,6 +2,7 @@ package blobcrypt
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -132,10 +133,10 @@ func TestRewrapSlots(t *testing.T) {
 		t.Errorf("dropped key: %v", err)
 	}
 	if s, ok := p.Slot(Fingerprint(rk)); !ok || s.Label != "recovery key" || !s.Created.Equal(t0) {
-		t.Errorf("kept slot %+v", s)
+		t.Errorf("kept slot %s %q %v", s.Fingerprint, s.Label, s.Created)
 	}
 	if s, ok := p.Slot(Fingerprint(fresh)); !ok || s.Label != "new recovery" || !s.Created.Equal(later) {
-		t.Errorf("new slot %+v", s)
+		t.Errorf("new slot %s %q %v", s.Fingerprint, s.Label, s.Created)
 	}
 }
 
@@ -164,5 +165,54 @@ func TestDataKeyLifecycle(t *testing.T) {
 	}
 	if got := p.DataKeyIDs(); len(got) != 1 || got[0] != id {
 		t.Errorf("data keys %v", got)
+	}
+}
+
+// ReplaceSlot (rotate-key) swaps only the replaced key's slot: the new key
+// and every other slot open the keyring, the replaced key does not, and
+// the keyring key and the data keys stay (coordinator decision on #437,
+// 6640615690). Counter-proof: keeping the replaced slot lets the old key
+// open the new keyring.
+func TestReplaceSlot(t *testing.T) {
+	k, kek := newTestKeyring(t)
+	rk, nk := randomKey(t), randomKey(t)
+	if err := k.AddSlot(rk, "recovery key", t0); err != nil {
+		t.Fatal(err)
+	}
+	ringKey, ids, gen := append([]byte(nil), k.ringKey...), k.DataKeyIDs(), k.Generation()
+	if err := k.ReplaceSlot(Fingerprint(rk), rk, t0); err == nil {
+		t.Error("replacing a key by itself accepted")
+	}
+	if err := k.ReplaceSlot("0123456789abcdef", nk, t0); err == nil {
+		t.Error("replacing an absent slot accepted")
+	}
+	if err := k.ReplaceSlot(Fingerprint(kek), rk, t0); err == nil {
+		t.Error("a key that already has a slot accepted")
+	}
+	if k.Generation() != gen {
+		t.Fatalf("a refused ReplaceSlot changed the generation to %d", k.Generation())
+	}
+	later := t0.Add(time.Hour)
+	if err := k.ReplaceSlot(Fingerprint(kek), nk, later); err != nil {
+		t.Fatal(err)
+	}
+	if k.Generation() != gen+1 || len(k.Slots()) != 2 {
+		t.Fatalf("generation %d, slots %v", k.Generation(), k.fingerprints())
+	}
+	p, _ := reparse(t, k)
+	if err := p.Open(kek); !errors.Is(err, ErrNoSlot) {
+		t.Errorf("the replaced key: %v", err)
+	}
+	for _, key := range [][]byte{nk, rk} {
+		q, _ := reparse(t, k)
+		if err := q.Open(key); err != nil {
+			t.Errorf("key %s: %v", Fingerprint(key), err)
+		}
+		if !slices.Equal(q.ringKey, ringKey) || !slices.Equal(q.DataKeyIDs(), ids) {
+			t.Error("the keyring key or the data keys changed")
+		}
+	}
+	if s, ok := k.Slot(Fingerprint(nk)); !ok || s.Label != "archive key" || !s.Created.Equal(later) {
+		t.Errorf("new slot %s %q %v", s.Fingerprint, s.Label, s.Created)
 	}
 }

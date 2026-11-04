@@ -570,13 +570,17 @@ backup would lose its slot to the newer database copy at the next start
 (coordinator note on #437). None of them changes the current data key, so
 the generation, which running writers pinned, stays.
 
-A new **keyring key** (`Keyring.Rewrap`) is wrapped for the keys at hand
-only: the slots kept must be proven by their KEK (it unwraps the slot to
-the current keyring key), so every other slot is dropped. `rotate-key`
-writes a new KEK (key file first, then the keyring) and rewraps for it, the
-kept keys and a new recovery key; the data keys stay, so no file changes.
-It does not help after a leak: the old KEK and an older keyring copy still
-yield the old keyring key and the data keys.
+`rotate-key` writes a new KEK (key file first, then the keyring) and
+replaces the configured KEK's slot with one for it (`Keyring.ReplaceSlot`),
+under the **existing** keyring key; every other slot and the data keys stay,
+so no file changes (coordinator decision on #437, 6640615690). A new
+keyring key there would protect nothing: `rotate-key` adds no data key, so
+a replaced KEK with an older keyring copy can only reach data keys the
+current keyring holds anyway. It does not help after a leak; `rekey` does.
+
+A new **keyring key** (`Keyring.Rewrap`, `rekey` only) is wrapped for the
+keys at hand only: the slots kept must be proven by their KEK (it unwraps
+the slot to the current keyring key), so every other slot is dropped.
 
 `encryption rekey` (`archive.Rekey`) runs offline like `enable`, with the
 same locks, cursor, batches, generation guard and clean-pass rule:
@@ -585,7 +589,11 @@ same locks, cursor, batches, generation guard and clean-pass rule:
    and a new keyring key for the configured KEK, the kept keys and a new
    recovery key, and records the database copy with the state `rekeying`
    in one statement (`StartBlobRekey`, compare-and-swap on the keyring
-   generation), then writes the file. A KEK whose slot was removed before
+   generation). The new recovery key is shown right then
+   (`RekeyOptions.ShowRecoveryKey`), before the file is written and before
+   any file is converted: the old recovery slots are already gone, so a run
+   killed later must not leave the operator without one. Then it writes the
+   file. A resumed run lists the slots and points to `add-key`. A KEK whose slot was removed before
    opens neither the new keyring nor its new data key, whatever older copy
    it has (coordinator decision on #437).
 2. Each file whose header names another data key is decrypted and

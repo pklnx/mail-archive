@@ -193,3 +193,48 @@ func TestRekeyOrphans(t *testing.T) {
 		t.Error("ResetNamed kept keys")
 	}
 }
+
+// The rekey's new copy is read back before it replaces the old file: a
+// copy damaged after it was written is refused, the old file stays as it
+// was, and no temp file is left (review round 1 of #519, B; the rekey
+// variant of TestConversionReadsBackTempCopy). Counter-proof: without the
+// readBack call in reencrypt, the damaged copy replaces the original.
+func TestRekeyReadsBackTempCopy(t *testing.T) {
+	content := "Subject: Rueckleseprobe\r\n\r\nInhalt\r\n"
+	s, rec, root, _, oldID, _ := rekeyStore(t, content)
+	h := sha(content)
+	enc := s.abs(EncPath(h))
+	before, _ := os.ReadFile(enc)
+	rec.onBefore("close:TEMP", func(string) {
+		temps, _ := filepath.Glob(filepath.Join(root, "tmp", "rekey-*"))
+		if len(temps) != 1 {
+			t.Errorf("temp copies %v", temps)
+		}
+		for _, p := range temps {
+			data, err := os.ReadFile(p)
+			if err != nil || len(data) <= blobcrypt.HeaderSize+2 {
+				t.Errorf("temp copy %s: %d bytes, %v", p, len(data), err)
+				continue
+			}
+			data[blobcrypt.HeaderSize+2] ^= 1
+			if err := os.WriteFile(p, data, 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	c, err := s.NewRekey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := c.Message(h)
+	if err == nil {
+		t.Fatalf("damaged temp copy accepted: outcome %v", o)
+	}
+	if after, _ := os.ReadFile(enc); !bytes.Equal(after, before) {
+		t.Fatal("the old file changed")
+	}
+	if !slices.Contains(c.NamedKeys(), oldID) && headerKeyOf(t, enc) != oldID {
+		t.Error("the old file does not name the old key")
+	}
+	assertNoTemp(t, root)
+}

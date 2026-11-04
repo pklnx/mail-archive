@@ -387,33 +387,26 @@ keyring file restored from a backup keeps its slot. `add-key`, `remove-key`
 and `rotate-key` may run while the web server and the worker run; they
 refuse while `enable`, `disable` or `rekey` runs.
 
-**rotate-key** writes a new archive key and a new keyring key; no message
-file is touched. Then set `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key`
-in `.env` and restart (`docker compose up -d`); with the old key the
-services would not start again. A new keyring key can only be wrapped for
-keys at hand, so it drops every slot whose key you do not give it: it adds
-a new recovery key (printed once; `--no-recovery` skips it), and keeps an
-existing recovery key with `--keep-key-file`. To give one with `./ma`, write
-it to a file in the keys directory that only the container user can read,
-pass the file, and delete it afterwards:
+**rotate-key** is for a routine rotation and for an archive key that is
+lost or retired. It writes a new archive key and replaces the configured
+key's slot with one for it; every other slot stays, recovery keys included,
+and no message file is touched. Then set
+`MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key` in `.env` and restart
+(`docker compose up -d`); with the old key the services would not start
+again.
 
-```sh
-sudo install -m 0400 -o 65532 -g 65532 /dev/stdin keys/recovery.key  # paste the key, then Ctrl-D
-./ma encryption rotate-key --new-key-file /keys/archive-2.key --keep-key-file /keys/recovery.key
-sudo rm keys/recovery.key
-```
-
-**rotate-key does not help after a key leaked.** The old key, together with
-any older copy of the keyring (every backup and every copy of `data/` holds
-one), still opens the data keys of that time, and so every file encrypted
-with them. After a leak:
+**rotate-key alone does not help after a key leaked.** The old key,
+together with any older copy of the keyring (every backup and every copy
+of `data/` holds one), still opens the data keys of that time, and so every
+file encrypted with them. After a leak of any key:
 
 1. Remove the leaked key's slot: for a recovery key
    `./ma encryption remove-key FINGERPRINT`; for the archive key
-   `./ma encryption rotate-key --new-key-file /keys/archive-2.key`, and set
-   `.env` as above.
+   `./ma encryption rotate-key --new-key-file /keys/archive-2.key`, which
+   removes the replaced key's slot, and set `.env` as above.
 2. Stop everything that writes, as for `enable`
-   (`docker compose stop web worker`), and run `./ma encryption rekey`.
+   (`docker compose stop web worker`), and run `./ma encryption rekey`
+   (see below for the recovery keys it keeps).
 3. Start again: `docker compose up -d`.
 
 `rekey` creates a new data key and a new keyring key, then re-encrypts
@@ -423,6 +416,28 @@ keyring it is used with. **Backups made before stay readable with the
 leaked key**: they hold the keyring and the data keys of their time.
 Replace them by new backups and destroy the old ones, and old snapshots,
 where that matters.
+
+**Which slots rekey keeps.** A new keyring key can only be wrapped for keys
+at hand, so `rekey`:
+
+- keeps the slot of the configured archive key;
+- keeps the slot of each key you give with `--keep-key-file`;
+- adds a new recovery key, unless `--no-recovery`;
+- **drops every other slot, recovery keys included**, and lists each one.
+
+The new recovery key is printed as soon as its slot is recorded, before the
+first file is converted: write it down then, because the old recovery keys
+no longer open the keyring from that moment. If the run is interrupted
+before you saw it, the rerun lists the slots; add a recovery key with
+`./ma encryption add-key`. To keep an existing recovery key instead, write
+it to a file in the keys directory that only the container user can read,
+pass the file, and delete it afterwards:
+
+```sh
+sudo install -m 0400 -o 65532 -g 65532 /dev/stdin keys/recovery.key  # paste the key, then Ctrl-D
+./ma encryption rekey --keep-key-file /keys/recovery.key --no-recovery
+sudo rm keys/recovery.key
+```
 
 `rekey` follows the rules of `enable`: writers stopped, the progress
 printed, resumable by running it again, and done only after a full pass

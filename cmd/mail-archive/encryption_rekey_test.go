@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pklnx/mail-archive/internal/archive"
@@ -46,9 +48,14 @@ func bothCopies(t *testing.T, st *store.Store, dataDir string) []*blobcrypt.Keyr
 	return []*blobcrypt.Keyring{file, db}
 }
 
-// rotate-key writes a new archive key, replaces the keyring key and keeps
-// only the given recovery key besides a new one; the old archive key opens
-// neither copy afterwards. rekey then re-encrypts under a new data key.
+// rotate-key writes a new archive key and replaces only the configured
+// key's slot: the old archive key opens neither copy, the untouched
+// recovery key still opens both, and no recovery key is printed
+// (coordinator decision on #437, 6640615690). Counter-proofs: without the
+// removal of the replaced slot the old key opens the keyring; with the
+// former Rewrap that kept no unsupplied slot, the recovery key does not.
+// rekey then keeps the configured key and the --keep-key-file key, drops
+// the other slot, and re-encrypts under a new data key.
 func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 	s := newEncSetup(t)
 	st := s.withDB(t)
@@ -76,20 +83,19 @@ func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 		t.Errorf("rotate-key into the data directory: %v", err)
 	}
 	if _, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey, "--keep-key-file", s.keyFile); err == nil {
-		t.Error("keeping the configured key accepted")
+		t.Error("rotate-key took --keep-key-file, which only rekey has")
 	}
 	if _, err := os.Stat(newKey); err == nil {
 		t.Fatal("a refused rotate-key left a key file")
 	}
-	out, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey, "--keep-key-file", writeTestKey(t, rk))
+	out, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey)
 	if err != nil {
 		t.Fatalf("rotate-key: %v\n%s", err, out)
 	}
-	m := printedKey.FindStringSubmatch(out)
-	if m == nil || !strings.Contains(out, config.EnvArchiveKeyFile+"="+newKey) || !strings.Contains(out, "encryption rekey") {
+	if printedKey.MatchString(out) || !strings.Contains(out, config.EnvArchiveKeyFile+"="+newKey) || !strings.Contains(out, "encryption rekey") ||
+		!strings.Contains(out, "replaces key "+blobcrypt.Fingerprint(oldKEK)) {
 		t.Fatalf("rotate-key output:\n%s", out)
 	}
-	newRecovery, _ := blobcrypt.ParseKEK(m[1])
 	if info, err := os.Stat(newKey); err != nil || info.Mode().Perm() != 0o400 {
 		t.Fatalf("new key file: %v %v", info, err)
 	}
@@ -102,7 +108,10 @@ func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 		if err := k.Open(oldKEK); !errors.Is(err, blobcrypt.ErrNoSlot) {
 			t.Errorf("copy %d: the old archive key: %v", i, err)
 		}
-		for _, key := range [][]byte{nk, rk, newRecovery} {
+		if len(k.Slots()) != 2 {
+			t.Errorf("copy %d: %d slots, want 2", i, len(k.Slots()))
+		}
+		for _, key := range [][]byte{nk, rk} {
 			if err := k.Open(key); err != nil {
 				t.Errorf("copy %d: key %s: %v", i, blobcrypt.Fingerprint(key), err)
 			}
@@ -120,6 +129,16 @@ func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 		t.Errorf("rekey while serve runs: %v", err)
 	}
 	lock.Release()
+	// A second recovery key that rekey is not given: its slot is dropped.
+	out, err = runEnc(t, newEncryptionCmd(), "add-key", "--label", "second recovery")
+	if err != nil {
+		t.Fatalf("add-key: %v\n%s", err, out)
+	}
+	m := printedKey.FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("add-key output:\n%s", out)
+	}
+	second, _ := blobcrypt.ParseKEK(m[1])
 	before := bothCopies(t, st, s.dataDir)[0]
 	if err := before.Open(nk); err != nil {
 		t.Fatal(err)
@@ -129,7 +148,7 @@ func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 		t.Fatalf("rekey: %v\n%s", err, out)
 	}
 	if printedKey.MatchString(out) || !regexp.MustCompile(`deleted the old data key [0-9a-f]{8}`).MatchString(out) ||
-		!strings.Contains(out, "dropped the slot of key "+blobcrypt.Fingerprint(newRecovery)) || !strings.Contains(out, "rekey done") {
+		!strings.Contains(out, "dropped the slot of key "+blobcrypt.Fingerprint(second)) || !strings.Contains(out, "rekey done") {
 		t.Fatalf("rekey output:\n%s", out)
 	}
 	after := openTestKeyring(t, s.dataDir)
@@ -172,14 +191,16 @@ func blockKeyringFile(t *testing.T, dataDir string) {
 }
 
 // A rotate-key whose change reached the database copy but not the keyring
-// file keeps the new key file and prints the new recovery key: the
-// database copy opens only with them, and the next start rebuilds the
-// file from it. Counter-proof: removing the key file on every error (the
-// cleanup before this fix) leaves no key that opens the new keyring.
+// file keeps the new key file: the database copy no longer opens with the
+// replaced key, and the next start rebuilds the file from it.
+// Counter-proofs: removing the key file on every error leaves no archive
+// key that opens the new keyring; ChangeKeyring returning no keyring on a
+// file error prints nothing.
 func TestEncryptionRotateKeyFileNotWritten(t *testing.T) {
 	s := newEncSetup(t)
 	st := s.withDB(t)
-	s.keygen(t)
+	recovery := s.keygen(t)
+	rk, _ := blobcrypt.ParseKEK(recovery)
 	if out, err := runEnc(t, newEncryptionCmd(), "enable"); err != nil {
 		t.Fatalf("enable: %v\n%s", err, out)
 	}
@@ -190,11 +211,9 @@ func TestEncryptionRotateKeyFileNotWritten(t *testing.T) {
 	if !errors.Is(err, archive.ErrKeyringFileNotWritten) {
 		t.Fatalf("rotate-key: %v\n%s", err, out)
 	}
-	m := printedKey.FindStringSubmatch(out)
-	if m == nil || !strings.Contains(out, "wrote archive key "+newKey) {
+	if !strings.Contains(out, "wrote archive key "+newKey) {
 		t.Fatalf("output:\n%s", out)
 	}
-	rk, _ := blobcrypt.ParseKEK(m[1])
 	if err := os.RemoveAll(blobcrypt.KeyringPath(s.dataDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -222,4 +241,52 @@ func bothCopiesDB(t *testing.T, st *store.Store) *blobcrypt.Keyring {
 		t.Fatal(err)
 	}
 	return k
+}
+
+// rekeyStartWriter snapshots, at the first line of the conversion, what the
+// operator has seen so far.
+type rekeyStartWriter struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	atStart string
+	seen    bool
+}
+
+func (w *rekeyStartWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.seen && strings.Contains(string(p), "re-encrypting the message files") {
+		w.atStart, w.seen = w.buf.String(), true
+	}
+	return w.buf.Write(p)
+}
+
+// rekey prints the new recovery key before it converts the first file: the
+// start has dropped the old recovery slot, so a run killed during the
+// conversion must not leave the operator without a recovery key (review
+// round 1 of #519; the test follows reviewer A's). Counter-proof: printing
+// the key only after archive.Rekey returns, as before.
+func TestEncryptionRekeyShowsRecoveryKeyFirst(t *testing.T) {
+	s := newEncSetup(t)
+	st := s.withDB(t)
+	s.keygen(t)
+	blobs, _ := blobstore.New(s.dataDir)
+	if _, _, err := blobs.Put(strings.NewReader("Subject: x\r\n\r\ny\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runEnc(t, newEncryptionCmd(), "enable"); err != nil {
+		t.Fatalf("enable: %v\n%s", err, out)
+	}
+	w := &rekeyStartWriter{}
+	if err := encryptionRekey(context.Background(), w, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	m := printedKey.FindStringSubmatch(w.atStart)
+	if !w.seen || m == nil {
+		t.Fatalf("the new recovery key was not shown before the conversion began; output so far:\n%s", w.atStart)
+	}
+	rk, _ := blobcrypt.ParseKEK(m[1])
+	if err := bothCopiesDB(t, st).Open(rk); err != nil {
+		t.Fatalf("the shown key: %v", err)
+	}
 }

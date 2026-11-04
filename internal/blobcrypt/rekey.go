@@ -66,8 +66,45 @@ func (k *Keyring) Rewrap(keep [][]byte, add []NewSlot) (dropped []Slot, err erro
 	if err := k.bump(); err != nil {
 		return nil, err
 	}
+	old := k.ringKey
 	k.ringKey, k.slots = next.ringKey, next.slots
+	clear(old)
 	return dropped, nil
+}
+
+// ReplaceSlot replaces the slot of the key with fingerprint old by a slot
+// for kek, wrapping the existing keyring key, for `encryption rotate-key`
+// (#392, part 5; coordinator decision on #437, 6640615690). Every other
+// slot stays, recovery keys included, and so do the data keys. The new slot
+// takes the old one's label. The keyring must be open; the generation
+// increases once.
+//
+// The replaced key no longer opens this keyring, but still opens older
+// copies of it, and through them the same keyring key and data keys: after
+// a leak, a rekey is needed (Rewrap with a new data key).
+func (k *Keyring) ReplaceSlot(old string, kek []byte, created time.Time) error {
+	if k.keys == nil {
+		return ErrNotOpen
+	}
+	s, ok := k.Slot(old)
+	if !ok {
+		return fmt.Errorf("no slot with fingerprint %q", old)
+	}
+	if Fingerprint(kek) == old {
+		return errors.New("the new key is the key it replaces")
+	}
+	next := slices.Clone(k.slots)
+	i := slices.IndexFunc(next, func(x Slot) bool { return x.Fingerprint == old })
+	next = slices.Delete(next, i, i+1)
+	tmp := &Keyring{archiveID: k.archiveID, ringKey: k.ringKey, slots: next}
+	if err := tmp.addSlot(kek, s.Label, created); err != nil {
+		return err
+	}
+	if err := k.bump(); err != nil {
+		return err
+	}
+	k.slots = tmp.slots
+	return nil
 }
 
 // provenSlot returns the slot of kek, once kek has unwrapped it to the

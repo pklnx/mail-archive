@@ -21,6 +21,12 @@ type RekeyOptions struct {
 	Keep [][]byte
 	// Recovery adds a new recovery key (RekeyResult.RecoveryKey).
 	Recovery bool
+	// ShowRecoveryKey is called with the new recovery key as soon as its
+	// slot is recorded, before the keyring file is written and before any
+	// file is converted: the old slots are gone by then, so the operator
+	// must have the key even if the run is killed later (review round 1
+	// of #519). The command prints it.
+	ShowRecoveryKey func(key []byte)
 	// AfterFinalFile, for tests, runs at the end after the keyring file
 	// without the old data keys is written and before the state on is
 	// recorded; an error ends the run as an interruption would.
@@ -120,8 +126,8 @@ func Rekey(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts Re
 		if row == nil || row.State != store.BlobRekeying {
 			return nil, errors.New("encryption at rest changed during start-up; start again")
 		}
-	} else if len(opts.Keep) > 0 {
-		fmt.Fprintln(opts.Out, "a rekey in progress resumes; its keyring was set when it started, so the kept keys given now change nothing")
+	} else {
+		resumeNote(opts, ring)
 	}
 	res.NewKey = ring.CurrentKey()
 	if err := blobs.SetKeys(ring, true); err != nil {
@@ -145,6 +151,20 @@ func Rekey(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts Re
 	}
 	res.State = store.BlobOn
 	return res, nil
+}
+
+// resumeNote tells the operator, on a resumed rekey, which keys open the
+// keyring: the start dropped the slots not kept, and the recovery key it
+// added may never have been shown if that run was killed early.
+func resumeNote(opts RekeyOptions, ring *blobcrypt.Keyring) {
+	if len(opts.Keep) > 0 || opts.Recovery {
+		fmt.Fprintln(opts.Out, "a rekey in progress resumes; its slots were set when it started, so the keys given now change nothing")
+	}
+	fmt.Fprintln(opts.Out, "the keyring's slots:")
+	for _, s := range ring.Slots() {
+		fmt.Fprintf(opts.Out, "  %s  %s  %s\n", s.Fingerprint, s.Created.UTC().Format("2006-01-02T15:04:05Z"), s.Label)
+	}
+	fmt.Fprintln(opts.Out, "If the recovery key of the interrupted start was not shown, add one with `encryption add-key`.")
 }
 
 // startRekey is the step from on to rekeying: a new current data key and a
@@ -178,21 +198,20 @@ func startRekey(ctx context.Context, st *store.Store, row *store.BlobEncryption,
 	}); err != nil {
 		return err
 	}
-	// Recorded: the recovery key has its slot and must be shown, whatever
-	// happens next.
+	// Recorded: the recovery key has its slot and must be shown now,
+	// whatever happens next.
 	res.Started, res.Dropped, res.RecoveryKey = true, dropped, rk
-	// From here on the rekey is recorded: a crash before the file is
-	// written leaves a newer database copy, which the rerun reconciles
-	// into the file.
-	if err := blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(opts.DataDir), ring); err != nil {
-		return err
-	}
 	fmt.Fprintf(opts.Out, "encryption at rest: on → rekeying (data key %08x → %08x, new keyring key, keyring generation %d)\n",
 		res.OldKey, ring.CurrentKey(), ring.Generation())
 	for _, s := range dropped {
 		fmt.Fprintf(opts.Out, "dropped the slot of key %s (%s); that key no longer opens the keyring\n", s.Fingerprint, s.Label)
 	}
-	return nil
+	if rk != nil && opts.ShowRecoveryKey != nil {
+		opts.ShowRecoveryKey(rk)
+	}
+	// A crash before the file is written leaves a newer database copy,
+	// which the rerun reconciles into the file.
+	return blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(opts.DataDir), ring)
 }
 
 // finishRekey deletes the old data keys that the clean pass found named by

@@ -112,7 +112,7 @@ func TestRekeyArchive(t *testing.T) {
 		t.Fatalf("result %+v", res)
 	}
 	if len(res.Dropped) != 1 || res.Dropped[0].Fingerprint != blobcrypt.Fingerprint(oldRecovery) {
-		t.Fatalf("dropped %+v", res.Dropped)
+		t.Fatalf("dropped %d slot(s), want the old recovery key's", len(res.Dropped))
 	}
 	if r := e.row(); r.State != store.BlobOn || r.Generation != gen+2 || r.CurrentKey != res.NewKey || r.Cursor != "" {
 		t.Fatalf("row %+v (generation before %d)", r, gen)
@@ -228,8 +228,13 @@ func TestRekeyDeletesOldKeyOnlyAfterCleanPass(t *testing.T) {
 	if res.Started || res.State != store.BlobOn || res.Converted != 1 || res.Passes != 3 || !slices.Equal(res.Deleted, []uint32{oldKey}) {
 		t.Fatalf("rerun: %+v", res)
 	}
-	if !strings.Contains(out.String(), "resuming after "+r.Cursor) {
-		t.Errorf("output: %s", out.String())
+	// The resumed run lists the slots and says how to get a recovery key
+	// if the interrupted start's one was never shown (review round 1 of
+	// #519). Counter-proof: without resumeNote, the lines are missing.
+	for _, want := range []string{"resuming after " + r.Cursor, "the keyring's slots:", blobcrypt.Fingerprint(kek), "add one with `encryption add-key`"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
 	}
 	if e.keyOf(h) != res.NewKey || e.hasKey(kek, oldKey) {
 		t.Fatal("straggler not re-encrypted, or old key kept")
@@ -508,4 +513,52 @@ func TestRekeyDataDirFromBeforeRestored(t *testing.T) {
 		t.Fatal("the copies do not hold both data keys")
 	}
 	e.readAll(kek, msgs)
+}
+
+// The new recovery key is shown as soon as its slot is recorded, before
+// the first batch: the start has already dropped the old recovery slots,
+// so a run killed during the conversion must not leave the operator
+// without one (review round 1 of #519, both reviews). Counter-proof:
+// calling ShowRecoveryKey only after the conversion leaves it unshown at
+// the first batch.
+func TestRekeyShowsRecoveryKeyBeforeFirstBatch(t *testing.T) {
+	e := newArchiveEnv(t)
+	_, kek, _ := e.enabled(8)
+	oldRecovery, _ := blobcrypt.GenerateKEK()
+	if _, err := archive.ChangeKeyring(e.ctx, e.st, archive.KeyringChangeOptions{DataDir: e.data, KEK: kek, Command: "add-key", Logger: quiet},
+		func(k *blobcrypt.Keyring) error { return k.AddSlot(oldRecovery, "recovery key", t0) }); err != nil {
+		t.Fatal(err)
+	}
+	var shown []byte
+	opts := e.rekeyOpts(kek, nil)
+	opts.Recovery, opts.BatchFiles = true, 3
+	opts.ShowRecoveryKey = func(k []byte) { shown = k }
+	opts.AfterBatch = func(b int) error {
+		if b != 1 {
+			return nil
+		}
+		if shown == nil {
+			return errors.New("the new recovery key was not shown before the first batch")
+		}
+		// It is the key that opens the database copy now; the old one
+		// does not.
+		db, err := blobcrypt.ParseKeyring(e.row().Keyring)
+		if err != nil {
+			return err
+		}
+		if err := db.Open(shown); err != nil {
+			return fmt.Errorf("the shown key does not open the database copy: %w", err)
+		}
+		if db.HasSlot(blobcrypt.Fingerprint(oldRecovery)) {
+			return errors.New("the old recovery slot is still there")
+		}
+		return nil
+	}
+	res, err := archive.Rekey(e.ctx, e.st, e.newBlobs(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(shown, res.RecoveryKey) {
+		t.Fatal("the shown key is not the result's recovery key")
+	}
 }
