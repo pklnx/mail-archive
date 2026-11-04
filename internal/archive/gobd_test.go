@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -578,6 +579,17 @@ func TestGoBDZIP(t *testing.T) {
 	if readFile(t, a) != readFile(t, b) {
 		t.Error("the same snapshot gave different ZIPs")
 	}
+	// Every entry has the injected time, not the wall clock's.
+	zr, err := zip.OpenReader(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range zr.File {
+		if !e.Modified.Equal(gobdClock) {
+			t.Errorf("%s: time %v", e.Name, e.Modified)
+		}
+	}
+	_ = zr.Close()
 	// The boundary: 3 messages fit a limit of 3, not of 2.
 	if _, err := zipOf("three.zip", 3); err != nil {
 		t.Errorf("3 of 3: %v", err)
@@ -611,6 +623,10 @@ func TestGoBDDeterministicDir(t *testing.T) {
 	b.mustRun(t)
 	if diff := treeDiff(t, a.opts.Out, b.opts.Out); diff != "" {
 		t.Error(diff)
+	}
+	if st := readFile(t, filepath.Join(a.opts.Out, gobd.StatementFile)); !strings.Contains(st, "created 2026-11-04T10:00:00Z\n") ||
+		!strings.Contains(st, "id 0123456789abcdef0123456789abcdef\n") {
+		t.Errorf("not the injected clock and id:\n%s", st)
 	}
 }
 
