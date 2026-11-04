@@ -154,7 +154,7 @@ func TestAuditorRouteMatrix(t *testing.T) {
 
 // TestAuditorKeyRefused: an API key inserted for an auditor directly (the
 // store refuses to create one) opens nothing, on an allowlisted read route
-// too, and the key login writes the refusal.
+// too.
 func TestAuditorKeyRefused(t *testing.T) {
 	w := newAuditorWorld(t)
 	key, hash, hint, err := auth.NewAPIKey()
@@ -163,9 +163,12 @@ func TestAuditorKeyRefused(t *testing.T) {
 	}
 	w.sql(`INSERT INTO api_keys (user_id, name, key_hash, hint, scopes) VALUES ($1, 'planted', $2, $3, ARRAY['read'])`,
 		w.users["auda"].ID, hash, hint)
+	// Two layers: the key login finds no key of an auditor (401), and
+	// authenticateKey refuses an auditor's key it is given (403).
 	for _, path := range []string{"/api/messages", "/api/accounts", "/api/messages/" + w.ids["M"]} {
 		status, body := w.fetch(credential{name: "auda's key", key: key}, path)
-		if status != http.StatusUnauthorized || strings.Contains(string(body), "Matrix") {
+		refused := status == http.StatusUnauthorized || status == http.StatusForbidden && string(body) == `{"error":"`+errNotForAuditors+`"}`+"\n"
+		if !refused || strings.Contains(string(body), "Matrix") || strings.Contains(string(body), "info") {
 			t.Errorf("%s with auda's key: %d %s", path, status, body)
 		}
 	}
