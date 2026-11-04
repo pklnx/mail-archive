@@ -22,7 +22,7 @@ import { useViewState } from "./urlState";
 import { t } from "./i18n";
 import { labelOfKey } from "./mailAccounts";
 import { LazyView, lazyNamed } from "./lazyView";
-import type { User } from "./api";
+import type { Session, SessionGrant, User } from "./api";
 
 // The non-mail views and the shortcuts overview load on demand (#288); the
 // mail view stays in the initial bundle. scripts/lazyChunks.mjs lists these
@@ -32,6 +32,9 @@ const UsersPage = lazyNamed(() => import("./UsersPage"), "UsersPage");
 const RetentionPage = lazyNamed(() => import("./RetentionPage"), "RetentionPage");
 const LogPage = lazyNamed(() => import("./LogPage"), "LogPage");
 const ProfilePage = lazyNamed(() => import("./Profile"), "ProfilePage");
+// Auditor access (#393): the owner's page, and the auditor's banner.
+const AuditorAccess = lazyNamed(() => import("./AuditorAccess"), "AuditorAccess");
+const AuditorBanner = lazyNamed(() => import("./AuditorShell"), "AuditorBanner");
 const ShortcutsModal = lazyNamed(() => import("./ShortcutsModal"), "ShortcutsModal");
 // The filter form with its date picker (#286), mounted while its popover is open.
 const FilterPanel = lazyNamed(() => import("./FilterPanel"), "FilterPanel");
@@ -41,9 +44,11 @@ interface Props {
   logout: () => void;
   /** Why the last Log out failed ("" if it did not): shown as an alert under the header. */
   logoutError: string;
+  /** An auditor's session (#393): the grant it reads through, the others, and the switch to one. */
+  auditor?: { grant: SessionGrant; grants: SessionGrant[]; switched: (s: Session) => void };
 }
 
-export function App({ user, logout, logoutError }: Props) {
+export function App({ user, logout, logoutError, auditor }: Props) {
   const [state, update] = useViewState();
   const [query, setQuery] = useState(state.q);
   // Below lg the shell's SideNav (menuOpen) and the folder column
@@ -95,7 +100,9 @@ export function App({ user, logout, logoutError }: Props) {
     if (!shortcuts) shortcutsOpener.current = document.activeElement;
     setShortcuts(true);
   };
-  const accounts = useAccounts();
+  // An auditor's account list does not change, and every request of it is
+  // a logged read in the owner's Log (#393): it loads once, without polls.
+  const accounts = useAccounts(!auditor);
   const collapsed = useCollapsed(user.name, accounts.data);
   // The sidebar's usable maximum follows the mail view's width (#310).
   const [sidebarCap, mailViewRef] = useSidebarCap();
@@ -146,8 +153,12 @@ export function App({ user, logout, logoutError }: Props) {
     gone: state.gone === "1",
   };
   const reading = state.m !== "";
+  // An auditor has the mail, the Log and the profile (#393).
   const page =
-    state.view === "profile" || state.view === "log" || state.view === "accounts" || (user.admin && (state.view === "users" || state.view === "retention"));
+    state.view === "profile" ||
+    state.view === "log" ||
+    (!auditor && (state.view === "accounts" || state.view === "auditors")) ||
+    (user.admin && (state.view === "users" || state.view === "retention"));
   const mailView = !page;
 
   // Previous and next message in list order. Paging replaces the history
@@ -460,6 +471,8 @@ export function App({ user, logout, logoutError }: Props) {
         id={navId}
         state={state}
         admin={user.admin}
+        auditor={!!auditor}
+        owner={!!accounts.data?.accounts.length}
         gone={gone}
         rail={wide}
         expanded={menuOpen && !wide}
@@ -481,6 +494,19 @@ export function App({ user, logout, logoutError }: Props) {
             subtitle={logoutError}
           />
         )}
+        {auditor && (
+          <LazyView inline fallback={null}>
+            <AuditorBanner
+              grant={auditor.grant}
+              grants={auditor.grants}
+              switched={(s) => {
+                // The new case starts on its mail, without the old one's place.
+                window.history.replaceState(null, "", "/");
+                auditor.switched(s);
+              }}
+            />
+          </LazyView>
+        )}
         <HealthBanner
           data={accounts.data}
           admin={user.admin}
@@ -491,7 +517,7 @@ export function App({ user, logout, logoutError }: Props) {
       {state.view === "profile" ? (
         <main inert={pageInert} className="app-view">
           <LazyView key={state.view}>
-            <ProfilePage name={user.name} />
+            <ProfilePage name={user.name} auditor={!!auditor} />
           </LazyView>
         </main>
       ) : state.view === "users" && user.admin ? (
@@ -506,13 +532,19 @@ export function App({ user, logout, logoutError }: Props) {
             <RetentionPage />
           </LazyView>
         </main>
+      ) : state.view === "auditors" && !auditor ? (
+        <main inert={pageInert} className="app-view">
+          <LazyView key={state.view}>
+            <AuditorAccess twoFactor={user.twoFactorEnabled} accounts={accounts.data} />
+          </LazyView>
+        </main>
       ) : state.view === "log" ? (
         <main inert={pageInert} className="app-view">
           <LazyView key={state.view}>
             <LogPage admin={user.admin} open={(m) => update({ view: "", m })} />
           </LazyView>
         </main>
-      ) : state.view === "accounts" ? (
+      ) : state.view === "accounts" && !auditor ? (
         <main inert={pageInert} className="app-view">
           <LazyView key={state.view}>
             <AccountsPage

@@ -13,20 +13,33 @@ export interface CustomerGroup {
   createdAt: string;
 }
 
+/** A grant that ended with its auditor's removal (#393): it stays in its owner's list as history. */
+export interface RevokedGrant {
+  id: number;
+  label: string;
+  owner: string;
+  auditor: string;
+}
+
 const userPath = (name: string) => `/api/users/${encodeURIComponent(name)}`;
 const groupPath = (id: number) => `/api/groups/${id}`;
 
 export const userAdminApi = {
-  /** group: the customer group's id; needed while several groups exist (#470). */
-  create: async (name: string, admin: boolean, group?: number) =>
-    (await send<GeneratedPassword>("POST", "/api/users", { name, admin, group }))!,
+  /**
+   * group: the customer group's id; needed while several groups exist
+   * (#470). auditor: an auditor login (#393), never an admin; sent only when set.
+   */
+  create: async (name: string, admin: boolean, group?: number, auditor = false) =>
+    (await send<GeneratedPassword>("POST", "/api/users", { name, admin, ...(auditor && { auditor }), group }))!,
   resetPassword: async (name: string, removePasskeys: boolean, revokeApiKeys: boolean) =>
     (await send<GeneratedPassword>("POST", `${userPath(name)}/password`, { removePasskeys, revokeApiKeys }))!,
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
   setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
-  /** Moves the user into the group; resolves to the number of shares that ended. */
-  setGroup: async (name: string, group: number) => (await send<{ sharesEnded: number }>("PATCH", userPath(name), { group }))!.sharesEnded,
-  remove: (name: string) => send("DELETE", userPath(name)),
+  /** Moves the user into the group; resolves to how many shares and auditor grants (#393) ended. */
+  setGroup: async (name: string, group: number) =>
+    (await send<{ sharesEnded: number; grantsRevoked?: number }>("PATCH", userPath(name), { group }))!,
+  /** Removes the user; for an auditor resolves to the grants that ended (#393), else to none. */
+  remove: async (name: string) => (await send<{ grantsRevoked?: RevokedGrant[] }>("DELETE", userPath(name)))?.grantsRevoked ?? [],
   reset2FA: (name: string) => send("POST", `${userPath(name)}/2fa/reset`),
   removePasskeys: (name: string) => send("DELETE", `${userPath(name)}/passkeys`),
 };

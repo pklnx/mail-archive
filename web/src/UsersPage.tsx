@@ -5,6 +5,8 @@ import {
   CodeSnippet,
   MenuItem,
   MenuItemDivider,
+  RadioButton,
+  RadioButtonGroup,
   Select,
   SelectItem,
   Table,
@@ -52,9 +54,12 @@ type GroupAsking = { kind: "add" } | { kind: "rename" | "remove"; group: Custome
 /** The URL of a user's detail page, or of the list. */
 const hrefOf = (id = "") => formatState({ ...parseState(""), view: "users", id });
 
+/** The role in words: admin, auditor (#393) or user. */
+const roleOf = (user: ManagedUser) => (user.admin ? t.roleAdmin : user.auditor ? usersText().roleAuditorTag : t.roleUser);
+
 const RoleTag = ({ user }: { user: ManagedUser }) => (
-  <Tag size="sm" type={user.admin ? "purple" : "gray"}>
-    {user.admin ? t.roleAdmin : t.roleUser}
+  <Tag size="sm" type={user.admin ? "purple" : user.auditor ? "teal" : "gray"}>
+    {roleOf(user)}
   </Tag>
 );
 
@@ -153,7 +158,8 @@ export function UsersPage() {
     <>
       {withReset && <MenuItem label={t.resetPassword} onClick={() => ask("reset", u)} />}
       <MenuItem label={u.locked ? t.unlock : t.lock} onClick={() => (u.locked ? void run(() => userAdminApi.setLocked(u.name, false)) : ask("lock", u))} />
-      <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => userAdminApi.setAdmin(u.name, !u.admin))} />
+      {/* An auditor's role is fixed (#393). */}
+      {!u.auditor && <MenuItem label={u.admin ? t.removeAdmin : t.makeAdmin} onClick={() => void run(() => userAdminApi.setAdmin(u.name, !u.admin))} />}
       {multi && <MenuItem label={us.changeGroup} onClick={() => ask("group", u)} />}
       {u.twoFactorEnabled && <MenuItem label={t.twoFactorReset} onClick={() => ask("twoFactor", u)} />}
       {u.passkeys > 0 && <MenuItem label={t.removePasskeys} onClick={() => ask("passkeys", u)} />}
@@ -301,7 +307,10 @@ export function UsersPage() {
           confirm={(to) => {
             const name = asking.user.name;
             setAsking(null);
-            void run(async () => setDone(us.groupChanged(name, to.name, await userAdminApi.setGroup(name, to.id))));
+            void run(async () => {
+              const ended = await userAdminApi.setGroup(name, to.id);
+              setDone(us.groupChanged(name, to.name, ended.sharesEnded, ended.grantsRevoked ?? 0));
+            });
           }}
         />
       )}
@@ -353,7 +362,11 @@ export function UsersPage() {
               // Removed from its row: the row goes, and the focus goes to
               // the list's h1 instead of falling to the body.
               const fromDetail = state.id === name;
-              void run(() => userAdminApi.remove(name)).then((ok) => {
+              // An auditor's removal ends its grants (#393): they are named.
+              void run(async () => {
+                const ended = await userAdminApi.remove(name);
+                if (user.auditor) setDone(us.auditorRemoved(name, ended));
+              }).then((ok) => {
                 if (ok && fromDetail) toList(true);
                 else if (ok) heading.current?.focus();
               });
@@ -410,7 +423,7 @@ function UserTable({
                 {u.self && <span className="users-table__hint app-text-secondary app-text-small">{t.selfHint}</span>}
                 <span className="users-table__more app-narrow-only app-text-secondary app-text-small">
                   <span>
-                    {u.admin ? t.roleAdmin : t.roleUser} · {withGroup && `${u.group.name} · `}
+                    {roleOf(u)} · {withGroup && `${u.group.name} · `}
                     {lastLogin(u)}
                   </span>
                   {u.failingAccounts > 0 && (
@@ -583,7 +596,7 @@ function ConfirmUser({
         ? [t.twoFactorResetTitle(user.name), t.twoFactorResetText, t.twoFactorReset]
         : kind === "passkeys"
           ? [t.removePasskeysTitle(user.name, user.passkeys), t.removePasskeysText, t.removePasskeys]
-          : [t.removeUserTitle(user.name), t.removeUserText, t.removeUser];
+          : [t.removeUserTitle(user.name), user.auditor ? `${usersText().removeAuditorText(user.name)} ${t.removeUserText}` : t.removeUserText, t.removeUser];
   return (
     <DangerModal
       size="xs"
@@ -673,7 +686,8 @@ function AddUserModal({
 }) {
   const us = usersText();
   const [name, setName] = useState("");
-  const [admin, setAdmin] = useState(false);
+  // The role (#393): a user, an admin, or an auditor (never both).
+  const [role, setRole] = useState<"user" | "admin" | "auditor">("user");
   const [group, setGroup] = useState(initialGroup);
   const groupField = useRef<HTMLSelectElement>(null);
   const [busy, setBusy] = useState(false);
@@ -697,7 +711,7 @@ function AddUserModal({
     setBusy(true);
     setError("");
     try {
-      added(await userAdminApi.create(name, admin, groups.length > 0 ? Number(group) : undefined));
+      added(await userAdminApi.create(name, role === "admin", groups.length > 0 ? Number(group) : undefined, role === "auditor"));
     } catch (err) {
       setError(message(err));
       setBusy(false);
@@ -751,7 +765,18 @@ function AddUserModal({
             ))}
           </Select>
         )}
-        <Checkbox id={`${id}-admin`} labelText={t.userIsAdmin} checked={admin} onChange={(_, { checked }) => setAdmin(checked)} />
+        <RadioButtonGroup
+          name={`${id}-role`}
+          legendText={us.role}
+          orientation="vertical"
+          valueSelected={role}
+          onChange={(v) => setRole(v as typeof role)}
+          helperText={role === "auditor" ? us.auditorHelp : undefined}
+        >
+          <RadioButton id={`${id}-role-user`} value="user" labelText={us.roleMember} />
+          <RadioButton id={`${id}-admin`} value="admin" labelText={t.userIsAdmin} />
+          <RadioButton id={`${id}-auditor`} value="auditor" labelText={us.roleAuditor} />
+        </RadioButtonGroup>
         {error && (
           <p role="alert" className="app-text-error">
             {error}
@@ -803,7 +828,7 @@ function ChangeGroupModal({
       onRequestSubmit={() => submit()}
     >
       <form className="modal-stack" onSubmit={submit} noValidate>
-        <p>{us.changeGroupText(user.name, user.group.name)}</p>
+        <p>{us.changeGroupText(user.name, user.group.name, user.auditor)}</p>
         <Select
           id={`${id}-group`}
           ref={field}

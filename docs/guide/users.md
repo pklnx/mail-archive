@@ -6,7 +6,8 @@ and the mail found in them; see [Security](../reference/security#login). In
 the hosted instance the admin is the operator: the operator creates your
 login and manages users; you manage your own profile, accounts and shares.
 In a shared instance every user belongs to one [customer group](#customer-groups),
-and shares stay inside it.
+and shares stay inside it. A tax advisor or tax auditor gets an
+[auditor login](#auditor-access), which reads only what an owner grants it.
 
 ## The first admin
 
@@ -29,9 +30,10 @@ existed.
 
 Admins (the operator) open **Users** in the navigation and click **Add
 user**. In the dialog they enter a name (lowercase letters, digits, `.`,
-`-`, `_`) and choose whether the new user is an admin. While there are two
-or more [customer groups](#customer-groups), they also choose the user's
-group; with a group filter set, that group is chosen already.
+`-`, `_`) and choose the role: **User**, **Admin** or **Auditor** (see
+[Auditor access](#auditor-access)). While there are two or more
+[customer groups](#customer-groups), they also choose the user's group, for
+every role; with a group filter set, that group is chosen already.
 
 ![Users page](/screenshots/users.png)
 
@@ -133,14 +135,17 @@ first. Admins can:
   once, after asking. This also works for your own keys, on your own page.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in;
   their API keys stop working until they are unlocked.
-- **Make admin / Remove admin.**
+- **Make admin / Remove admin:** not for auditors, whose role never changes.
 - **Change group:** with two or more [customer groups](#customer-groups);
-  ends the shares that would cross groups.
+  ends the shares and [auditor grants](#auditor-access) that would cross
+  groups. The page then says how many of each ended.
 - **Remove:** only for users without accounts. A user who still owns accounts
   (also removed ones) must hand them over first, on the command line:
   `./ma account move NAME --user OLD --to NEW`. Removed from the user's page,
   the list takes its place. The shares of other users' accounts
   with the removed user end; a new user with the same name gets none of them.
+  Removing an auditor ends its grants first, as the dialog says; the page
+  then names them, and they stay in their owners' lists as history.
 
 A user whose accounts keep failing to sync is marked with the number of
 those accounts, so you can tell them.
@@ -278,6 +283,98 @@ reader's search terms unless the search named the account.
 
 Sharing is done with `PUT` and `DELETE /api/accounts/{name}/shares/{user}`
 (see the [JSON API](../reference/api#shared-accounts)).
+
+## Auditor access
+
+For a tax audit or the work of a tax advisor, an owner can give an auditor
+read-only access to some of their accounts for a limited time (the
+unmittelbarer Datenzugriff of GoBD, see
+[Data access in a tax audit](./retention#data-access-in-a-tax-audit-z1-z2-z3)).
+The auditor searches, opens and downloads that mail and its attachments, and
+nothing else. Every access is in the owner's [Log](./audit-log#auditors).
+
+### Auditor logins
+
+The operator creates the login: on the users page with **Add user** and the
+role **Auditor**, or with `./ma user add NAME --auditor` (see
+[CLI](../reference/cli#auditors)). The password is generated and shown once.
+
+- An auditor belongs to one [customer group](#customer-groups) and reads only
+  grants of owners in that group. A tax advisor who works for two customers
+  of a shared instance gets one login per customer group, for example
+  `meier.stb-schmidt` and `lindqvist.stb-schmidt`.
+- The role never changes: an auditor is never an admin, owns no accounts,
+  receives no shares and has no API keys. The users page shows it as
+  `auditor`.
+- Moving an auditor to another group (**Change group**) ends all its grants;
+  the dialog says so. Removing it ends them too; they stay in the owners'
+  lists as history.
+
+### The first sign-in
+
+At the first login the auditor chooses their own password, then sets up
+[two-factor authentication](#two-factor-authentication), which auditors
+cannot turn off (an admin resets it). With more than one active grant, the
+auditor then chooses the case to open. Until these steps are done the app
+shows only them and sends nothing else. An auditor without an active grant
+cannot log in.
+
+The auditor's app has **All mail**, **Log** and **Profile**. A banner names
+the case, its owner, the last day of access and the message period, and
+says that every access is recorded. With several grants, **Audit case** in
+the banner switches to another one; the app then starts again on that
+case's mail. The granted accounts are in the folder column as `name · owner`,
+with the granted folders only and without counts. The profile has no API
+keys tab.
+
+![The auditor's view of a case](/screenshots/auditor-view.png)
+
+### Granting access
+
+Owners open **Auditor access** in the navigation (shown while you own
+accounts) and click **Grant access**:
+
+- **Auditor's login name:** the exact name the operator gave the login. A
+  name that is not an auditor of your customer group, unknown or not, gets
+  one answer: "There is no auditor with this name in your customer group."
+- **Case:** a label you and the auditor see, such as *Betriebsprüfung
+  2021–2023*.
+- **Accounts:** one or more of your own accounts, each with **All folders,
+  also later ones** or only the folders you tick. A folder created later is
+  covered only with all folders. smtp (journal) accounts cannot be granted.
+- **Messages from / to:** optional; only mail of these days, in your
+  browser's time zone, the last day included.
+- **Access from / until:** 28 days from today unless you choose others. The
+  access ends after the last day, and at most 365 days after its start or
+  after its latest extension.
+- Your password and, with 2FA, a code.
+
+![The Auditor access page](/screenshots/auditor-access.png)
+
+The table lists every grant with its accounts, period, validity, state and
+the auditor's last access (their newest login, search or read in your Log):
+
+- **Active**, **Not started** or **Expired**;
+- **Suspended** while you or the auditor are locked; unlocking restores it;
+- **Ended**, with the reason: revoked by you or by the operator, a move of
+  you or the auditor to another customer group (the auditor is then no
+  longer named), its accounts moved to another owner or deleted, or the
+  auditor's login removed. An ended grant stays as history.
+
+**Extend** in a grant's menu moves its last day later, again with your
+password and code. What a grant covers cannot be changed: to change it,
+revoke it and grant access anew. **Revoke** ends the access at once, also
+the auditor's open sessions; it cannot be undone.
+
+- An account that moves to another owner (`./ma account move`) leaves your
+  grants; a grant left without accounts ends.
+- A removed account stays in its grants until it is deleted completely: the
+  auditor can still read its mail inside the grant's period until the purge.
+- Admins revoke any grant with `./ma auditor revoke ID` (`./ma auditor list`
+  lists them); your list then says "Revoked by the operator".
+
+Granting is also possible with
+[`/api/auditor-grants`](../reference/api#auditors).
 
 ## API keys
 
