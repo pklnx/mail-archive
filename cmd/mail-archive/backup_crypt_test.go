@@ -775,6 +775,23 @@ func TestRestoreDumpHold(t *testing.T) {
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "did not finish") || len(rest) != 0 {
 		t.Errorf("without restored: %v\n%s", err, rest)
 	}
+
+	// ./ma's "failed" ends the holder by itself, while its input stays
+	// open: it does not depend on the end of its input reaching it.
+	switchDatabase(t)
+	in, _, done = startHold(t)
+	defer in.Close() //nolint:errcheck // a pipe
+	if _, err := io.WriteString(in, "failed\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "did not finish") {
+			t.Errorf("after failed: %v", err)
+		}
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("--hold still waits for the end of its input after \"failed\"")
+	}
 }
 
 // TestRestoreDumpForeignKeyring: a keyring copy of another archive than the

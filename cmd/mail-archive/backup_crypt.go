@@ -384,10 +384,13 @@ func requireEmptyDatabase(ctx context.Context, a *app) error {
 	if commandName() == "./ma" {
 		return fmt.Errorf("the database %q is not empty (%d tables and other relations); a dump is restored only into a new, empty database. "+
 			"With the web server and the worker stopped: docker compose exec -T postgres dropdb -U mailarchive --force mailarchive && "+
-			"docker compose exec -T postgres createdb -U mailarchive mailarchive", cfg.Database, n)
+			"docker compose exec -T postgres createdb -U mailarchive mailarchive. "+
+			"If it holds a restore that was interrupted before its reconciliation, run ./ma restore-dump --reconcile-only instead", cfg.Database, n)
 	}
 	return fmt.Errorf("the database %q is not empty (%d tables and other relations); a dump is restored only into a new, empty database: "+
-		"drop and create it (dropdb --force, createdb) or point %s at a new one", cfg.Database, n, config.EnvDatabaseURL)
+		"drop and create it (dropdb --force, createdb) or point %s at a new one. "+
+		"If it holds a restore that was interrupted before its reconciliation, run %s restore-dump --reconcile-only instead",
+		cfg.Database, n, config.EnvDatabaseURL, commandName())
 }
 
 // Lines of the --hold protocol between ./ma and restore-dump.
@@ -401,9 +404,10 @@ const (
 // caller, it runs the checks of a restore (an empty database, and a keyring
 // copy of this archive), prints "ready", and keeps the lock while ./ma
 // restores. When ./ma then writes "restored", it reconciles under the same
-// lock and returns; at the end of its input without that line (the restore
-// failed, or ./ma was interrupted) it returns an error without
-// reconciling. So no writer can start from the checks to the end of the
+// lock and returns; on any other line ("failed", which ./ma writes when the
+// restore failed) or at the end of its input (./ma was interrupted) it
+// returns an error without reconciling. It reads one line only, so it does
+// not depend on the end of its input reaching it through docker. So no writer can start from the checks to the end of the
 // reconciliation.
 func holdForRestore(ctx context.Context, a *app, in io.Reader, out io.Writer) error {
 	if err := requireEmptyDatabase(ctx, a); err != nil {

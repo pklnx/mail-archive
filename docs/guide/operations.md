@@ -155,6 +155,12 @@ the [command reference](../reference/cli#verify) for the findings.
    [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,
    then `./ma verify`.
 
+**Interrupted** (Ctrl-C, a lost terminal): `pg_restore` in the database
+container may still finish after `./ma` ended, without the reconciliation.
+Run `./ma status`. If the database holds the dump, run
+`./ma restore-dump --reconcile-only`; otherwise recreate the empty database
+and start the restore again.
+
 Files newer than the dump show up as orphans. The sync adopts those still on
 the server. Others came from mail deleted on the server since the dump: they
 are the only copy, so look at them before `--fix-orphans` moves them aside.

@@ -147,9 +147,11 @@ fi
 # "ready", waits while pg_restore runs, and when told "restored" reconciles
 # the keyring and the state of encryption at rest under the same lock and
 # prints what it changed.
-if [ "${1:-}" = restore-dump ]; then
+# `restore-dump --reconcile-only` (and --help) restores nothing: it goes
+# to the plain command below, which takes its locks itself.
+if [ "${1:-}" = restore-dump ] && case ${2:-} in -*) false ;; *) true ;; esac; then
 	if [ $# -ne 2 ] || [ -z "$2" ]; then
-		echo "usage: ./ma restore-dump FILE" >&2
+		echo "usage: ./ma restore-dump FILE   (or ./ma restore-dump --reconcile-only)" >&2
 		exit 2
 	fi
 	file=$2
@@ -173,11 +175,17 @@ if [ "${1:-}" = restore-dump ]; then
 	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_KEYRING_COPY mail-archive \
 		restore-dump --hold <"$fifos/to-holder" >"$fifos/from-holder" &
 	holder=$!
-	# Closing fd 3 without "restored" makes the holder give up (also when
-	# this script ends early); fd 4 carries its output.
+	# Any line but "restored", or the end of fd 3 (also when this script
+	# ends early), makes the holder give up; fd 4 carries its output.
 	exec 3>"$fifos/to-holder" 4<"$fifos/from-holder"
 	rm -rf "$fifos"
 	finish() { # finish <status>: let the holder end, then exit
+		if [ "$1" -ne 0 ]; then
+			# Explicitly, so the holder does not depend on the end of its
+			# input reaching it; in a subshell, so a holder that is gone
+			# cannot end this script by SIGPIPE.
+			(echo failed >&3) 2>/dev/null || true
+		fi
 		exec 3>&-
 		cat <&4
 		wait "$holder" || [ "$1" -ne 0 ] || exit 1
@@ -186,6 +194,10 @@ if [ "${1:-}" = restore-dump ]; then
 	if ! IFS= read -r line <&4 || [ "$line" != ready ]; then
 		# The holder refused (writers running, database not empty, another
 		# archive's keyring) and said why on stderr.
+		finish 1
+	fi
+	if ! kill -0 "$holder" 2>/dev/null; then
+		echo "error: the lock holder ended before the restore; nothing was restored: run ./ma restore-dump $file again" >&2
 		finish 1
 	fi
 	restore() {
@@ -208,7 +220,13 @@ if [ "${1:-}" = restore-dump ]; then
 		finish 1
 	fi
 	echo "restored $file"
-	echo restored >&3
+	# The holder must still be there to reconcile; writing to its FIFO
+	# without it would end this script by SIGPIPE.
+	if ! kill -0 "$holder" 2>/dev/null || ! (echo restored >&3) 2>/dev/null; then
+		echo "error: the lock holder ended during the restore, so the restore ran without the writers lock and nothing was reconciled:" \
+			"stop anything that started meanwhile (docker compose stop web worker), then run ./ma restore-dump --reconcile-only" >&2
+		finish 1
+	fi
 	finish 0
 fi
 

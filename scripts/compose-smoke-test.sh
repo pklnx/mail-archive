@@ -344,7 +344,16 @@ tables() {
 # A damaged dump is refused and leaves the new database empty.
 cut=$work/backups/cut.dump.enc
 head -c "$(($(wc -c < "$dump") - 1))" "$dump" > "$cut"
-if ./ma restore-dump "$cut" > "$work/out" 2>&1; then
+# A watchdog: a holder that never saw the end of the restore would hang
+# here instead of failing.
+status=0
+timeout 300 ./ma restore-dump "$cut" > "$work/out" 2>&1 || status=$?
+if [ "$status" -eq 124 ]; then
+	cat "$work/out" >&2
+	echo "./ma restore-dump of a cut dump hung" >&2
+	exit 1
+fi
+if [ "$status" -eq 0 ]; then
 	echo "expected ./ma restore-dump to refuse a cut dump" >&2
 	exit 1
 fi
@@ -363,6 +372,9 @@ expect "$work/out" "unique messages in archive: 7"
 expect "$work/out" 'encryption at rest: on'
 ./ma verify | tee "$work/out"
 expect "$work/out" 'checked 7 message\(s\)( and [0-9]+ attestation\(s\))?: no problems'
+# The way back after an interrupted restore or a migrate: the copies agree now.
+./ma restore-dump --reconcile-only | tee "$work/out"
+expect "$work/out" 'keyring: the database copy and the keyring file agree'
 # A database that is not empty is refused, before pg_restore runs.
 if ./ma restore-dump "$dump" > "$work/out" 2>&1; then
 	echo "expected ./ma restore-dump to refuse a database that is not empty" >&2
