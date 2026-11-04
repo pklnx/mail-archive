@@ -178,6 +178,16 @@ of the account ends.`,
 					fmt.Printf("share with %q ended\n", u)
 				}
 			}
+			// The account leaves the old owner's auditor grants (#393).
+			if changed, ok := e.Details["grants_changed"].([]store.ChangedGrant); ok {
+				for _, g := range changed {
+					what := "no longer includes the account"
+					if g.Revoked {
+						what = "revoked: it has no account left"
+					}
+					fmt.Printf("auditor grant %d (%q) %s\n", g.ID, g.Label, what)
+				}
+			}
 			// A recurring fill goes on importing the same mailbox, now for
 			// the new owner.
 			fills, err := a.store.AccountFills(cmd.Context(), acc.ID)

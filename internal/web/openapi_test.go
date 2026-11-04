@@ -61,6 +61,15 @@ func compareSpec(routes []route, spec map[string]any) []string {
 		if want := expectedSecurity(rt.access); !reflect.DeepEqual(sec, want) {
 			problems = append(problems, fmt.Sprintf("%s: security is %v, want %v", rt.pattern, sec, want))
 		}
+		// x-auditor (#393) marks exactly the auditor allowlist; public
+		// routes need no login, so it says nothing there.
+		if rt.access != accessPublic {
+			if x, _ := op["x-auditor"].(bool); x != rt.auditor {
+				problems = append(problems, fmt.Sprintf("%s: x-auditor is %v, want %v", rt.pattern, x, rt.auditor))
+			}
+		} else if _, ok := op["x-auditor"]; ok {
+			problems = append(problems, rt.pattern+": x-auditor on a public route")
+		}
 		declared := make(map[string]bool)
 		for _, list := range []any{item["parameters"], op["parameters"]} {
 			params, _ := list.([]any)
@@ -168,7 +177,7 @@ func TestCompareSpec(t *testing.T) {
 	}
 	op := func(id string) map[string]any { return map[string]any{"operationId": id} }
 	routes := []route{
-		{pattern: "GET /api/things"},
+		{pattern: "GET /api/things", auditor: true},
 		{pattern: "DELETE /api/things/{id}"},
 		{pattern: "GET /healthz", access: accessPublic},
 		{pattern: "GET /{$}", access: accessPublic, ui: true},
@@ -176,7 +185,7 @@ func TestCompareSpec(t *testing.T) {
 	}
 	good := func() map[string]any {
 		return map[string]any{
-			"/api/things":      map[string]any{"get": op("list")},
+			"/api/things":      map[string]any{"get": map[string]any{"operationId": "list", "x-auditor": true}},
 			"/api/things/{id}": map[string]any{"parameters": param, "delete": op("remove")},
 			"/healthz":         map[string]any{"get": map[string]any{"operationId": "health", "security": []any{}}},
 		}
@@ -200,6 +209,11 @@ func TestCompareSpec(t *testing.T) {
 			`DELETE /api/things/{id}: no path parameter "id"`},
 		{"duplicate operationId", func(p map[string]any) { p["/api/things/{id}"].(map[string]any)["delete"] = op("list") },
 			`operationId "list" is also used by`},
+		{"auditor route without x-auditor", func(p map[string]any) { p["/api/things"] = map[string]any{"get": op("list")} },
+			"GET /api/things: x-auditor is false, want true"},
+		{"x-auditor on a route outside the allowlist", func(p map[string]any) {
+			p["/api/things/{id}"] = map[string]any{"parameters": param, "delete": map[string]any{"operationId": "remove", "x-auditor": true}}
+		}, "DELETE /api/things/{id}: x-auditor is true, want false"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			paths := good()

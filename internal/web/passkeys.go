@@ -221,16 +221,23 @@ func (s *Server) handleFinishPasskeyLogin(w http.ResponseWriter, r *http.Request
 		s.auditLoginFailed(r, "passkey", reasonLocked, nil)
 		s.fail(w, r, http.StatusForbidden, "this user is locked", nil)
 		return
+	case s.refuseNoGrant(w, r, "passkey", err, nil):
+		return
 	case err != nil:
 		s.failStore(w, r, err)
 		return
 	}
 	u := login.User
+	body, err := s.loginBody(r.Context(), u, hash, u.TwoFactorEnabled)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	s.limiter.Succeed(u.Name)
 	s.deleteOldSessions(r)
 	s.log.Info("login", "user", u.Name, "addr", s.clientIP(r), "passkey", login.PasskeyName)
 	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, u.TwoFactorEnabled, u.Language, u.Locale)})
+	s.writeJSON(w, http.StatusOK, body)
 }
 
 type passkeyJSON struct {

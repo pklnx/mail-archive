@@ -375,6 +375,123 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 	return items, nil
 }
 
+const listAuditEntriesForGrant = `-- name: ListAuditEntriesForGrant :many
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
+       s.subject, l.group_id
+FROM audit_log l
+LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
+LEFT JOIN LATERAL (
+    SELECT m.subject FROM messages m
+    WHERE l.target_type = 'message' AND m.sha256 = l.target_id::bpchar
+      AND EXISTS (SELECT 1 FROM message_locations ml
+                  JOIN folders f ON f.id = ml.folder_id
+                  JOIN accounts a ON a.id = f.account_id
+                  WHERE ml.message_sha256 = m.sha256 AND a.owner_id = $1::bigint)
+) s ON true
+WHERE l.details ? 'via_owners'
+  AND l.details -> 'via_owners' @> to_jsonb($2::bigint)
+  AND l.details -> 'auditor_grant' = to_jsonb($3::bigint)
+  AND l.at >= $4 AND l.at < $5
+  AND ((coalesce(cardinality($6::bigint[]), 0) = 0 AND coalesce(cardinality($7::text[]), 0) = 0)
+       OR l.user_id = ANY ($6::bigint[]) OR l.actor = ANY ($7::text[]))
+  AND ($8::bigint IS NULL OR l.group_id = $8)
+  AND (NOT $9::boolean OR l.group_id IS NULL)
+  AND l.action LIKE ANY ($10::text[])
+  AND ($11::timestamptz IS NULL OR (l.at, l.id) < ($11, $12::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT $13
+`
+
+type ListAuditEntriesForGrantParams struct {
+	Viewer   int64
+	OwnerID  int64
+	GrantID  int64
+	Since    time.Time
+	Until    time.Time
+	UserIds  []int64
+	Actors   []string
+	GroupID  *int64
+	NoGroup  bool
+	Patterns []string
+	CursorAt *time.Time
+	CursorID int64
+	Lim      int32
+}
+
+type ListAuditEntriesForGrantRow struct {
+	ID         int64
+	At         time.Time
+	Actor      string
+	UserID     *int64
+	UserName   *string
+	ApiKeyName *string
+	Action     string
+	TargetType *string
+	TargetID   *string
+	TargetName *string
+	ClientIp   *netip.Addr
+	UserAgent  *string
+	Details    []byte
+	Subject    *string
+	GroupID    *int64
+}
+
+// A page of one auditor grant's entries in [since, until), newest first,
+// for admins (#393): every entry of a grant carries its owner in
+// via_owners, so the partial GIN index audit_log_via_owners_idx finds
+// them; auditor_grant then keeps the grant's. Narrowed like
+// ListAuditEntries by user_ids and actors, and by one group or none.
+func (q *Queries) ListAuditEntriesForGrant(ctx context.Context, arg ListAuditEntriesForGrantParams) ([]ListAuditEntriesForGrantRow, error) {
+	rows, err := q.db.Query(ctx, listAuditEntriesForGrant,
+		arg.Viewer,
+		arg.OwnerID,
+		arg.GrantID,
+		arg.Since,
+		arg.Until,
+		arg.UserIds,
+		arg.Actors,
+		arg.GroupID,
+		arg.NoGroup,
+		arg.Patterns,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditEntriesForGrantRow
+	for rows.Next() {
+		var i ListAuditEntriesForGrantRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.At,
+			&i.Actor,
+			&i.UserID,
+			&i.UserName,
+			&i.ApiKeyName,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.TargetName,
+			&i.ClientIp,
+			&i.UserAgent,
+			&i.Details,
+			&i.Subject,
+			&i.GroupID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditEntriesForGroup = `-- name: ListAuditEntriesForGroup :many
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
        l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
@@ -499,9 +616,10 @@ LEFT JOIN LATERAL (
 WHERE l.user_id = $1::bigint
   AND l.at >= $2 AND l.at < $3
   AND l.action LIKE ANY ($4::text[])
-  AND ($5::timestamptz IS NULL OR (l.at, l.id) < ($5, $6::bigint))
+  AND ($5::bigint IS NULL OR l.details -> 'auditor_grant' = to_jsonb($5::bigint))
+  AND ($6::timestamptz IS NULL OR (l.at, l.id) < ($6, $7::bigint))
 ORDER BY l.at DESC, l.id DESC
-LIMIT $7
+LIMIT $8
 `
 
 type ListAuditEntriesForUserParams struct {
@@ -509,6 +627,7 @@ type ListAuditEntriesForUserParams struct {
 	Since    time.Time
 	Until    time.Time
 	Patterns []string
+	GrantID  *int64
 	CursorAt *time.Time
 	CursorID int64
 	Lim      int32
@@ -542,6 +661,7 @@ func (q *Queries) ListAuditEntriesForUser(ctx context.Context, arg ListAuditEntr
 		arg.Since,
 		arg.Until,
 		arg.Patterns,
+		arg.GrantID,
 		arg.CursorAt,
 		arg.CursorID,
 		arg.Lim,
@@ -582,16 +702,21 @@ func (q *Queries) ListAuditEntriesForUser(ctx context.Context, arg ListAuditEntr
 
 const listSharedReadsForOwner = `-- name: ListSharedReadsForOwner :many
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.action,
-       l.target_type, l.target_id, l.target_name, l.details
+       l.target_type, l.target_id, l.target_name, l.details,
+       (l.user_id IS NOT NULL
+        AND coalesce((SELECT u.is_auditor FROM users u WHERE u.id = l.user_id),
+                     l.details ? 'auditor_grant'
+                     AND l.action NOT IN ('auditor.grant', 'auditor.extend', 'auditor.revoke', 'auditor.grant_change')))::boolean AS by_auditor
 FROM audit_log l
 WHERE l.details ? 'via_owners'
   AND l.details -> 'via_owners' @> to_jsonb($1::bigint)
   AND l.user_id IS DISTINCT FROM $1::bigint
   AND l.at >= $2 AND l.at < $3
   AND l.action LIKE ANY ($4::text[])
-  AND ($5::timestamptz IS NULL OR (l.at, l.id) < ($5, $6::bigint))
+  AND ($5::bigint IS NULL OR l.details -> 'auditor_grant' = to_jsonb($5::bigint))
+  AND ($6::timestamptz IS NULL OR (l.at, l.id) < ($6, $7::bigint))
 ORDER BY l.at DESC, l.id DESC
-LIMIT $7
+LIMIT $8
 `
 
 type ListSharedReadsForOwnerParams struct {
@@ -599,6 +724,7 @@ type ListSharedReadsForOwnerParams struct {
 	Since    time.Time
 	Until    time.Time
 	Patterns []string
+	GrantID  *int64
 	CursorAt *time.Time
 	CursorID int64
 	Lim      int32
@@ -615,6 +741,7 @@ type ListSharedReadsForOwnerRow struct {
 	TargetID   *string
 	TargetName *string
 	Details    []byte
+	ByAuditor  bool
 }
 
 // A page of other users' reads of the owner's shared accounts in [since,
@@ -622,13 +749,20 @@ type ListSharedReadsForOwnerRow struct {
 // owner. details ? 'via_owners' repeats the partial index's predicate:
 // without it the planner walks every partition through the pkey. No client
 // address, user agent or API key name: the owner sees time, user, action
-// and message only.
+// and message only. by_auditor (#393): the entry's user is an auditor, or,
+// once that user was removed, the entry names a grant and is none of the
+// grant changes, which only owners, admins and the command line write (a
+// member's entries never name a grant; entries without a user are the
+// command line's). Such entries, and every auditor.* entry, get
+// auditorView instead of shareView. A user's role never changes. grant_id
+// keeps only the entries of one grant.
 func (q *Queries) ListSharedReadsForOwner(ctx context.Context, arg ListSharedReadsForOwnerParams) ([]ListSharedReadsForOwnerRow, error) {
 	rows, err := q.db.Query(ctx, listSharedReadsForOwner,
 		arg.OwnerID,
 		arg.Since,
 		arg.Until,
 		arg.Patterns,
+		arg.GrantID,
 		arg.CursorAt,
 		arg.CursorID,
 		arg.Lim,
@@ -651,6 +785,7 @@ func (q *Queries) ListSharedReadsForOwner(ctx context.Context, arg ListSharedRea
 			&i.TargetID,
 			&i.TargetName,
 			&i.Details,
+			&i.ByAuditor,
 		); err != nil {
 			return nil, err
 		}

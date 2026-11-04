@@ -45,11 +45,13 @@ func (s *Server) instanceEntry(r *http.Request, action string) *store.AuditEntry
 }
 
 // requestEntry fills e from r: the logged-in user, the API key if the
-// request used one, and the client.
+// request used one, and the client. Every entry of an auditor's session
+// also gets the grant and its owner (tagAuditor, #393).
 func (s *Server) requestEntry(r *http.Request, e *store.AuditEntry) *store.AuditEntry {
 	e.ClientIP, e.UserAgent = s.clientIP(r), r.UserAgent()
 	if sess := currentSession(r); sess != nil {
 		e.SetUser(sess.UserID, sess.UserName)
+		s.tagAuditor(r.Context(), e, sess)
 	}
 	if k := currentAPIKey(r); k != nil {
 		e.Actor, e.APIKeyID, e.APIKeyName = store.ActorAPIKey, &k.ID, k.Name
@@ -237,6 +239,10 @@ type auditEntryJSON struct {
 	// ViaShare: another user's read of the viewer's shared account, in a
 	// non-admin's page; its details are cut down to what the owner may see.
 	ViaShare bool `json:"viaShare,omitempty"`
+	// ViaAuditor (with viaShare): an entry of the viewer's auditor grants
+	// (#393) by the auditor or by someone else, whose name is then
+	// "operator".
+	ViaAuditor bool `json:"viaAuditor,omitempty"`
 	// Group: the customer group the entry is recorded under (#470), in an
 	// admin's page only; none for entries from before 1.4.0 and
 	// instance-level ones. A removed group has no name and removed: true.
@@ -303,7 +309,9 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// or groups from unknown ones.
 	userNames, actors := auditValues(q["user"], auth.NormalizeUserName), auditValues(q["actor"], nil)
 	group := q.Get("group")
+	grantText := q.Get("grant")
 	if !sess.IsAdmin && (len(userNames) > 0 || len(actors) > 0 || group != "") {
+		s.auditorDeniedEntry(r, sess, "GET /api/audit", reasonAdminOnly)
 		s.fail(w, r, http.StatusForbidden, "only admins can see other users' entries", nil)
 		return
 	}
@@ -328,6 +336,48 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, http.StatusBadRequest, "group must be a group id or none", nil)
 			return
 		}
+	}
+	// grant (#393) keeps one auditor grant's entries. A non-admin may name
+	// only an own grant: an unknown and a foreign ID get the same 404 from
+	// one query, before any page is read. An admin's unknown ID is a 400,
+	// as for group.
+	if grantText != "" {
+		id, err := strconv.ParseInt(grantText, 10, 64)
+		switch {
+		case (err != nil || id <= 0) && sess.IsAdmin:
+			s.fail(w, r, http.StatusBadRequest, "grant must be a grant id", nil)
+			return
+		case err != nil || id <= 0:
+			s.fail(w, r, http.StatusNotFound, errNoSuchGrant, nil)
+			return
+		}
+		if sess.IsAdmin {
+			owner, err := s.store.GrantOwner(r.Context(), id)
+			if errors.Is(err, store.ErrNotFound) {
+				s.fail(w, r, http.StatusBadRequest, "unknown grant", nil)
+				return
+			}
+			if err != nil {
+				s.failStore(w, r, err)
+				return
+			}
+			p.GrantOwner = owner
+		} else if _, err := s.store.OwnerGrant(r.Context(), id, sess.UserID); errors.Is(err, store.ErrNotFound) {
+			s.fail(w, r, http.StatusNotFound, errNoSuchGrant, nil)
+			return
+		} else if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		p.GrantID = &id
+	}
+	if sess.IsAuditor {
+		// Subjects of what the auditor reads now: the grant's scope.
+		sc, ok := s.requestScope(w, r)
+		if !ok {
+			return
+		}
+		p.Scope = &sc
 	}
 	for _, name := range userNames {
 		u, err := s.store.GetUserByName(r.Context(), name)
@@ -388,7 +438,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	for _, rec := range recs {
 		e := auditEntryJSON{
 			ID: rec.ID, At: rec.At.UTC(), Actor: rec.Actor, User: rec.UserName, APIKey: rec.APIKeyName, Action: rec.Action,
-			ClientIP: rec.ClientIP, UserAgent: rec.UserAgent, Details: rec.Details, ViaShare: rec.ViaShare,
+			ClientIP: rec.ClientIP, UserAgent: rec.UserAgent, Details: rec.Details, ViaShare: rec.ViaShare, ViaAuditor: rec.ViaAuditor,
 		}
 		if rec.TargetType != "" {
 			e.Target = &auditTargetJSON{Type: rec.TargetType, ID: rec.TargetID, Name: rec.TargetName, Subject: rec.Subject}

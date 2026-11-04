@@ -242,6 +242,18 @@ func (q *Queries) GetGrantUsers(ctx context.Context, arg GetGrantUsersParams) (G
 	return i, err
 }
 
+const grantOwner = `-- name: GrantOwner :one
+SELECT owner_id FROM auditor_grants WHERE id = $1
+`
+
+// The owner of a grant, for an admin's grant filter of the Log.
+func (q *Queries) GrantOwner(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, grantOwner, id)
+	var owner_id int64
+	err := row.Scan(&owner_id)
+	return owner_id, err
+}
+
 const insertGrant = `-- name: InsertGrant :one
 INSERT INTO auditor_grants (auditor_id, owner_id, label, period_from, period_until, starts_at, ends_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -341,6 +353,64 @@ func (q *Queries) ListActiveGrants(ctx context.Context, auditorID int64) ([]List
 			&i.PeriodUntil,
 			&i.StartsAt,
 			&i.EndsAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllGrants = `-- name: ListAllGrants :many
+SELECT g.id, g.label, g.starts_at, g.ends_at, g.revoked_at, g.revoke_reason, g.created_at,
+       o.name AS owner_name, a.name AS auditor_name, cg.name AS group_name,
+       EXISTS (SELECT 1 FROM active_auditor_grants v WHERE v.id = g.id)::boolean AS active
+FROM auditor_grants g
+JOIN users o ON o.id = g.owner_id
+JOIN customer_groups cg ON cg.id = o.group_id
+LEFT JOIN users a ON a.id = g.auditor_id
+ORDER BY g.created_at DESC, g.id DESC
+`
+
+type ListAllGrantsRow struct {
+	ID           int64
+	Label        string
+	StartsAt     time.Time
+	EndsAt       time.Time
+	RevokedAt    *time.Time
+	RevokeReason *string
+	CreatedAt    time.Time
+	OwnerName    string
+	AuditorName  *string
+	GroupName    string
+	Active       bool
+}
+
+// Every grant with its history, newest first, for the command line.
+func (q *Queries) ListAllGrants(ctx context.Context) ([]ListAllGrantsRow, error) {
+	rows, err := q.db.Query(ctx, listAllGrants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAllGrantsRow
+	for rows.Next() {
+		var i ListAllGrantsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Label,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.RevokedAt,
+			&i.RevokeReason,
+			&i.CreatedAt,
+			&i.OwnerName,
+			&i.AuditorName,
+			&i.GroupName,
+			&i.Active,
 		); err != nil {
 			return nil, err
 		}

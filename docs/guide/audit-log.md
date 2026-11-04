@@ -36,26 +36,28 @@ Each event writes exactly one entry.
 | Action | When |
 |---|---|
 | `auth.login` | A login succeeded; `method` is `password`, `2fa` or `passkey`. With 2FA, the entry is written after the second step. |
-| `auth.login_failed` | A login was refused; `method`, and `reason`: `wrong_password`, `unknown_user`, `locked`, `second_factor`, `unknown_passkey` or `passkey_invalid`. For an unknown user, the name is kept only if it is a valid user name, so a password typed into the name field is not stored. A refused [API key](../reference/api#api-keys) has `method: api_key` and `reason` `invalid` (no such key), `revoked`, `expired` or `locked`, with the key's `key_id`, `key_name` and owner when the key exists. The key itself is never stored. |
+| `auth.login_failed` | A login was refused; `method`, and `reason`: `wrong_password`, `unknown_user`, `locked`, `second_factor`, `unknown_passkey`, `passkey_invalid` or `no_access` (an [auditor](#auditors) without an active grant, after a correct password and second factor). For an unknown user, the name is kept only if it is a valid user name, so a password typed into the name field is not stored. A refused [API key](../reference/api#api-keys) has `method: api_key` and `reason` `invalid` (no such key), `revoked`, `expired` or `locked`, with the key's `key_id`, `key_name` and owner when the key exists. The key itself is never stored. |
 | `auth.logout` | A valid session logged out. |
 | `message.search` | A list with a search or filter: `q`, `from`, `to`, `attachment`, `after`, `before` or `has`. The details hold every parameter that was set. |
 | `message.open` | A message was opened. |
 | `message.html` | Its HTML body was loaded; `images: true` with remote images. `inline_images` counts the embedded images (`cid:` references) shown, `inline_omitted` those shown empty (unknown, not an image type that is shown, past the 10 MiB limit, or unreadable). |
 | `message.raw` | The `.eml` file was downloaded. |
 | `message.part` | An attachment was loaded; `index`, `content_type` and `inline`. In older entries also an inline image of an HTML message. |
-| `message.list`, `message.page`, `message.conversation` | Only for users with [shared accounts](#shared-accounts), when the request reaches one: a list without search parameters (folder or all mail, also an expanded conversation with `thread`), a further page of any list (`cursor`), and a message's conversation (`members`, the number of messages shown). |
+| `message.list`, `message.page`, `message.conversation` | Only for users with [shared accounts](#shared-accounts), when the request reaches one, and for every request of an [auditor](#auditors): a list without search parameters (folder or all mail, also an expanded conversation with `thread`), a further page of any list (`cursor`), and a message's conversation (`members`, the number of messages shown). |
 | `sync.start` | A sync was started by hand, for one account (`reconcile`) or all (`accounts`, the number queued). |
 | `account.share`, `account.unshare` | The owner shared an account with a user, or ended the share; `user` and `user_id`. Sharing an account again records nothing. |
-| `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. `account.move` counts the shares that stay (`shares_kept`); the new owner's own share ends. A move into another [customer group](./users#customer-groups) also has `from_group` and `to_group` (`id`, `name`) and the users whose shares ended (`shares_ended`). |
+| `account.add`, `account.change`, `account.remove`, `account.move` | Account management in the web UI or on the command line. `account.change` names the changed fields, the old and new name, the new state and the new `sync_interval` (`default`, `manual` or a duration such as `30m0s`), never the server, login or password. `account.add` of an smtp account records its `addresses`; a change of them records `added` and `removed`. The upgrade that renamed the journal folder of smtp accounts wrote one `account.change` per smtp account with `"by": "migration 00027"`, the `folder` (`INBOX` to `JOURNAL`) and the renamed `retention_rules`, and a `retention.rule_remove` for each rule on `JOURNAL` it removed. `account.remove` says whether the account was `deleted` or `removed`. `account.move` counts the shares that stay (`shares_kept`); the new owner's own share ends. A move into another [customer group](./users#customer-groups) also has `from_group` and `to_group` (`id`, `name`) and the users whose shares ended (`shares_ended`). A move to another owner takes the account out of the old owner's [auditor grants](#auditors): `grants_changed` lists them (`id`, `label`, `revoked` for a grant left without accounts). |
 | `account.purge`, `account.purge_batch`, `account.purge_finish`, `account.purge_cancel` | A removed account [deleted completely](./accounts#deleting-a-removed-account-completely): confirmed (`purge_id`, `owner`, `kind`, `locations`, `messages`, `deleted`, `kept`), each batch (`locations`, `deleted`, `kept`), its end with the totals, and a cancellation with its `note`. The deleted messages themselves are recorded per message in the deletion records. Purges resumed by the web server are written with actor `cli` and `by: web server`. |
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
-| `user.group_change` | A user moved into another [customer group](./users#customer-groups): `from_group` and `to_group` (`id`, `name`), and `shares_ended`, each with `account`, `owner` and `user`. |
+| `user.group_change` | A user moved into another [customer group](./users#customer-groups): `from_group` and `to_group` (`id`, `name`), and `shares_ended`, each with `account`, `owner` and `user`; `grants_revoked` lists the [auditor grants](#auditors) the move revoked (`id`, `label`, `owner`, `auditor`). |
+| `auditor.grant`, `auditor.extend`, `auditor.revoke`, `auditor.grant_change` | An [auditor grant](#auditors) was created (`label`, the `accounts` with `all_folders` or `folders`, `period_from`, `period_until`, `starts_at`, `ends_at`), extended (`from`, `to`), revoked (`reason`: `owner`, `operator`, `group_change`, `account_move`, `account_purge` or `user_removed`) or lost an account to a move (`reason: account_move`, `account`). The target is the auditor; every entry has `auditor_grant` and is recorded under the grant's group. Group `auditor`. |
+| `auditor.select`, `auditor.denied`, `account.list` | An auditor picked the grant their session reads through (`auditor_grant`, `label`), had a request refused (`method`, `route`, `reason`: `not_allowed` outside the allowlist, `password_change_required`, `two_factor_required`, `grant_selection_required` before the setup or the grant choice is done, `admin_only` for a Log filter only admins may use; nothing was done), or listed the granted accounts (`accounts`, the number). |
 | `group.add`, `group.rename`, `group.remove` | A customer group was created, renamed (`from`) or removed; `group_id` and `group`. Group `users`, with the `user.*` actions. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login: password, 2FA and passkeys. |
 | `profile.change` | A user changed their own web UI settings. `fields` names them (`language`, `locale`), each with its old and new value (`from`, `to`). Saving an unchanged value records nothing. |
 | `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. A hold's entries have the account or the user it names as target (`hold.release` from 1.4.0 on); a hold that names only a [customer group](./retention#holds-per-customer-group) has `group_id` and `group` in its details and is recorded under that group. Group `retention`. |
 | `retention.preview`, `retention.confirm`, `retention.cancel`, `retention.batch`, `retention.finish`, `retention.sweep` | A [deletion run](../reference/cli#deletion): proposed (candidates, bytes), confirmed, cancelled, each batch (`deleted`, `kept`), its end with the totals, and removed files. The deleted messages themselves are recorded per message in the deletion records, not here. Runs resumed by the web server are written with actor `cli` and `by: web server`. |
-| `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`); `user.remove` also counts the shares of other users' accounts with the user (`shares_removed`). |
+| `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`); `user.remove` also counts the shares of other users' accounts with the user (`shares_removed`), and for an auditor lists the grants revoked before the removal (`grants_revoked`). |
 | `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. `data.import` has `format`, `source` and `folders`; with [`--journal`](./importing#into-an-smtp-account) also `into: "JOURNAL"`, `label` and `import`, the ID of the run the imported locations name. A [GoBD export](./gobd-export) (`format: gobd`) has `selection` (users, accounts, folders, hold, grant, period and time zone as given, never a group name), `out`, `resume`, `requested_by` when given, `auditor_grant` with `--grant`, and `owners` when it covers several users. |
 | `data.export_done` | The end of a GoBD export, also of one that stopped: `id`, the counts (`messages`, `locations`, `missing`, `bytes`), `complete`, `manifest_sha256` (the SHA-256 of `SHA256SUMS`) and `statement_sha256` (of `STATEMENT.txt`), with which a customer's copy can be checked later; `aborted` with the reason when it stopped, and `group_moved_after_snapshot` with the names of the selected users and accounts that changed group while it ran. |
 | `data.fill`, `data.fill_change`, `data.fill_resume`, `data.fill_cancel`, `data.fill_done` | A [fill](./journaling#bring-in-the-mail-from-before-journaling) of an smtp account from IMAP: started (`fill`, `host`, `username`, `folders`, and `before`, or for a [recurring fill](./journaling#keep-importing-recurring-fill) `keep_running` and `interval`; `prefix` for fills from before fills wrote into `JOURNAL`), changed (`fill_change`: switched to recurring with `keep_running` and `interval` as `{"from", "to"}`, or a new `interval`), resumed, cancelled or stopped, and the end of a one-time fill with `status` and the counts. The runs of a recurring fill are not logged, like scheduled syncs. A fill the web server ran ends without a user, with `"by": "web server"`. The password is never recorded. The Log page lists them under the Export filter, with the other `data.*` actions. |
@@ -70,7 +72,7 @@ Not recorded:
   folder listed without a search, further pages of a list (the first page
   was recorded), expanding a conversation (the search was recorded), the
   conversation of a message. Over shared accounts these are recorded (see
-  above);
+  above), and for auditors all of them except the status;
 - reading the log;
 - requests with an API key that the web UI would not record either, such as
   `GET /api/status`; the key's last use is in the profile instead;
@@ -158,6 +160,47 @@ A removed group's entries keep its id. They stay selectable by that id
 offboarded customer's log can still be exported. Such an entry shows the
 group as "Removed group 7" on the Log page and as `{"id": 7, "removed":
 true}` in the API. An id that no group and no entry has is refused.
+
+## Auditors
+
+An auditor (a tax advisor or tax auditor, see
+[Security](../reference/security#login)) reads an owner's mail only through
+an auditor grant. Every request of an auditor that reads archive data is
+recorded: the account list (`account.list`), every folder listing and search
+page, also empty ones, and every opened message, HTML body, download and
+attachment; such a read fails closed when its entry cannot be written. Every
+refused request (`auditor.denied`, best effort: the request stays refused
+whether or not its entry is written) and every grant choice
+(`auditor.select`) is recorded too. Reads of the auditor's own data are not:
+the session, the status, the own Log and the own grant list. Each entry of an auditor's
+session carries the grant (`auditor_grant`) and its owner (`via_owners`),
+which puts it into the owner's Log; while the session has no grant yet (an
+auditor with several grants before picking one), the login, its denials and
+password changes carry the owners of all the auditor's active grants.
+
+| Entry | Recorded under |
+|---|---|
+| `auditor.grant`, `auditor.extend`, `auditor.revoke`, `auditor.grant_change` | The grant's group (the owner's), also when an admin of another group or the command line revokes it. A revocation caused by a group move has its own `auditor.revoke` in the group the grant was in; `user.group_change` is under the new group. |
+| `auditor.select`, `auditor.denied`, `account.list`, and the auditor's logins, searches and reads | The auditor's group, which is the grant's. |
+
+Who sees what:
+
+- **The owner** sees their own grant entries, and the auditor's entries and
+  others' changes of their grants, marked as another user's read: the
+  action, the target, the search terms (also of searches over all granted
+  mail), the login method and reason, and the grant. Never the address,
+  browser or API key name, and no other owner's accounts. An actor who is
+  neither the owner nor the auditor, such as an admin, possibly of another
+  group, or the command line, is shown as "operator". Older entries keep the
+  auditor's name, also after the auditor left the group or was removed.
+- **The auditor** sees their own entries, as every user does.
+- **Admins** see everything, with the group.
+- Nobody else: other members of the group and users of other groups see
+  none of it.
+
+`grant=ID` in `GET /api/audit` keeps one grant's entries: owners name their
+own grants (an unknown and another owner's ID get the same `404`), admins
+any grant.
 
 ## The fields
 

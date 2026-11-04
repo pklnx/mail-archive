@@ -35,6 +35,8 @@ type adminUserJSON struct {
 	Self bool `json:"self"`
 	// Group is the user's customer group (#470).
 	Group groupRefJSON `json:"group"`
+	// Auditor: the user reads only through auditor grants (#393).
+	Auditor bool `json:"auditor"`
 }
 
 // requireAdmin rejects requests from users who are not admins.
@@ -90,7 +92,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, adminUserJSON{
 			Name: u.Name, Admin: u.IsAdmin, Locked: u.LockedAt != nil, MustChangePassword: u.MustChangePassword, TwoFactorEnabled: u.TwoFactorEnabled,
 			Passkeys: passkeys[u.ID], APIKeys: apiKeys[u.ID], Accounts: owned[u.ID], FailingAccounts: failing[u.ID], CreatedAt: u.CreatedAt, LastLoginAt: u.LastLoginAt, Self: u.ID == userID(r),
-			Group: groups[u.GroupID],
+			Group: groups[u.GroupID], Auditor: u.IsAuditor,
 		})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"users": out})
@@ -102,6 +104,9 @@ type newUserInput struct {
 	// Group is the customer group's id (#470): required while several
 	// groups exist, otherwise the only one.
 	Group *int64 `json:"group"`
+	// Auditor creates an auditor (#393): never an admin, never the first
+	// user; owners of the group then grant it access.
+	Auditor bool `json:"auditor"`
 }
 
 // generatedPasswordJSON carries a generated password. It is shown to the
@@ -130,8 +135,12 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	e := s.targetedEntry(r, "user.add")
 	e.SetTarget(store.TargetUser, "", name) // the ID is set when it exists
+	if in.Admin && in.Auditor {
+		s.fail(w, r, http.StatusBadRequest, store.ErrAuditorAdmin.Error(), nil)
+		return
+	}
 	e.Detail("admin", in.Admin)
-	nu := store.NewUser{Name: name, PasswordHash: hash, Admin: in.Admin, Generated: true}
+	nu := store.NewUser{Name: name, PasswordHash: hash, Admin: in.Admin, Generated: true, Auditor: in.Auditor}
 	if in.Group != nil {
 		if *in.Group <= 0 {
 			s.fail(w, r, http.StatusBadRequest, store.ErrUnknownGroup.Error(), nil)
@@ -144,14 +153,15 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrConflict):
 			s.fail(w, r, http.StatusConflict, fmt.Sprintf("a user named %q already exists", name), nil)
 			return
-		case errors.Is(err, store.ErrGroupRequired), errors.Is(err, store.ErrUnknownGroup):
+		case errors.Is(err, store.ErrGroupRequired), errors.Is(err, store.ErrUnknownGroup),
+			errors.Is(err, store.ErrAuditorAdmin), errors.Is(err, store.ErrFirstUserAuditor):
 			s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 			return
 		}
 		s.failStore(w, r, err)
 		return
 	}
-	s.log.Info("user added", "user", name, "admin", in.Admin, "by", currentSession(r).UserName)
+	s.log.Info("user added", "user", name, "admin", in.Admin, "auditor", in.Auditor, "by", currentSession(r).UserName)
 	s.writeJSON(w, http.StatusCreated, generatedPasswordJSON{Name: name, Password: pw})
 }
 
@@ -272,6 +282,10 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("%q is the last admin who can log in", u.Name), nil)
 		return
 	}
+	if errors.Is(err, store.ErrAuditorAdmin) {
+		s.fail(w, r, http.StatusConflict, err.Error(), nil)
+		return
+	}
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -304,6 +318,16 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user removed", "user", u.Name, "by", currentSession(r).UserName)
+	if u.IsAuditor {
+		// The grants the removal revoked (#393, decision 27); they stay in
+		// their owners' lists as history.
+		revoked, _ := e.Details["grants_revoked"].([]store.RevokedGrant)
+		if revoked == nil {
+			revoked = []store.RevokedGrant{}
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"grantsRevoked": revoked})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
