@@ -179,12 +179,12 @@ func (s *Server) currentTime() time.Time {
 // Handler returns the HTTP handler with all routes and protections.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	accessOf := make(map[string]access)
+	rules := make(map[string]route)
 	for _, rt := range s.routes() {
 		mux.Handle(rt.pattern, rt.handler)
-		accessOf[rt.pattern] = rt.access
+		rules[rt.pattern] = route{pattern: rt.pattern, access: rt.access, auditor: rt.auditor}
 	}
-	return s.protect(s.authenticate(mux, accessOf))
+	return s.protect(s.authenticate(mux, rules))
 }
 
 // newHTTPServer is the HTTP server for handler. A request has 10 seconds

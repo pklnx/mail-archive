@@ -27,12 +27,23 @@ type route struct {
 	// catchAll answers paths under /api/ that no other route takes; it is
 	// not in the spec.
 	catchAll bool
+	// auditor: an auditor (#393) may call the route. Deny by default: an
+	// auditor's request to any other route that needs a login answers 403
+	// and writes auditor.denied. openapi.yaml marks the same routes with
+	// x-auditor.
+	auditor bool
 }
 
 // routes lists every route of the server.
 func (s *Server) routes() []route {
 	h := func(pattern string, f http.HandlerFunc, a access) route {
 		return route{pattern: pattern, handler: f, access: a}
+	}
+	// au is h for a route an auditor may call (the allowlist).
+	au := func(pattern string, f http.HandlerFunc, a access) route {
+		rt := h(pattern, f, a)
+		rt.auditor = true
+		return rt
 	}
 	app := ui.Handler()
 	routes := []route{
@@ -43,24 +54,26 @@ func (s *Server) routes() []route {
 		h("GET /healthz/jobs", s.handleJobsHealth, accessPublic),
 		h("GET "+openAPIPath, s.handleOpenAPI, accessPublic),
 
-		h("GET /api/session", s.handleGetSession, accessLogin),
-		h("POST /api/session", s.handleLogin, accessLogin),
-		h("POST /api/session/2fa", s.handleTwoFactorLogin, accessLogin),
-		h("POST "+passkeyLoginBeginPath, s.handleBeginPasskeyLogin, accessLogin),
-		h("POST "+passkeyLoginFinishPath, s.handleFinishPasskeyLogin, accessLogin),
-		h("DELETE /api/session", s.handleLogout, accessLogin),
+		au("GET /api/session", s.handleGetSession, accessLogin),
+		au("POST /api/session", s.handleLogin, accessLogin),
+		au("POST /api/session/2fa", s.handleTwoFactorLogin, accessLogin),
+		au("POST "+passkeyLoginBeginPath, s.handleBeginPasskeyLogin, accessLogin),
+		au("POST "+passkeyLoginFinishPath, s.handleFinishPasskeyLogin, accessLogin),
+		au("DELETE /api/session", s.handleLogout, accessLogin),
+		// An auditor picks the grant the session reads through (#393).
+		au("PUT /api/session/grant", s.handleSelectGrant, accessSession),
 
-		h("PUT "+profilePasswordPath, s.handleChangeOwnPassword, accessSession),
-		h("PATCH /api/profile", s.handleUpdateProfile, accessSession),
-		h("GET /api/profile/2fa", s.handleGetTwoFactor, accessSession),
-		h("POST /api/profile/2fa/setup", s.handleBeginTwoFactor, accessSession),
-		h("POST /api/profile/2fa/confirm", s.handleConfirmTwoFactor, accessSession),
+		au("PUT "+profilePasswordPath, s.handleChangeOwnPassword, accessSession),
+		au("PATCH /api/profile", s.handleUpdateProfile, accessSession),
+		au("GET /api/profile/2fa", s.handleGetTwoFactor, accessSession),
+		au("POST /api/profile/2fa/setup", s.handleBeginTwoFactor, accessSession),
+		au("POST /api/profile/2fa/confirm", s.handleConfirmTwoFactor, accessSession),
 		h("DELETE /api/profile/2fa", s.handleDisableTwoFactor, accessSession),
 		h("POST /api/profile/2fa/recovery-codes", s.handleRegenerateRecoveryCodes, accessSession),
-		h("GET /api/profile/passkeys", s.handleListPasskeys, accessSession),
-		h("POST /api/profile/passkeys/begin", s.handleBeginPasskeyRegistration, accessSession),
-		h("POST /api/profile/passkeys/finish", s.handleFinishPasskeyRegistration, accessSession),
-		h("DELETE /api/profile/passkeys/{id}", s.handleRemovePasskey, accessSession),
+		au("GET /api/profile/passkeys", s.handleListPasskeys, accessSession),
+		au("POST /api/profile/passkeys/begin", s.handleBeginPasskeyRegistration, accessSession),
+		au("POST /api/profile/passkeys/finish", s.handleFinishPasskeyRegistration, accessSession),
+		au("DELETE /api/profile/passkeys/{id}", s.handleRemovePasskey, accessSession),
 		h("GET /api/profile/api-keys", s.handleListAPIKeys, accessSession),
 		h("POST /api/profile/api-keys", s.handleCreateAPIKey, accessSession),
 		h("DELETE /api/profile/api-keys/{id}", s.handleRevokeOwnAPIKey, accessSession),
@@ -92,11 +105,19 @@ func (s *Server) routes() []route {
 		h("POST /api/retention/runs/{id}/confirm", s.handleConfirmDeletionRun, accessSession),
 		h("POST /api/retention/runs/{id}/cancel", s.handleCancelDeletionRun, accessSession),
 
-		// Users see their own entries, admins everyone's.
-		h("GET /api/audit", s.handleAudit, accessSession),
+		// Auditor grants (#393): owners manage their own with a session, no
+		// API key, as for shares; auditors list theirs; admins revoke any.
+		au("GET /api/auditor-grants", s.handleListGrants, accessSession),
+		h("POST /api/auditor-grants", s.handleCreateGrant, accessSession),
+		h("GET /api/auditor-grants/{id}", s.handleGetGrant, accessSession),
+		h("PATCH /api/auditor-grants/{id}", s.handleExtendGrant, accessSession),
+		h("DELETE /api/auditor-grants/{id}", s.handleRevokeGrant, accessSession),
 
-		h("GET /api/status", s.handleStatus, accessRead),
-		h("GET /api/accounts", s.handleAccounts, accessRead),
+		// Users see their own entries, admins everyone's.
+		au("GET /api/audit", s.handleAudit, accessSession),
+
+		au("GET /api/status", s.handleStatus, accessRead),
+		au("GET /api/accounts", s.handleAccounts, accessRead),
 		h("POST /api/accounts", s.handleCreateAccount, accessSession),
 		h("PATCH /api/accounts/{name}", s.handleUpdateAccount, accessSession),
 		h("DELETE /api/accounts/{name}", s.handleDeleteAccount, accessSession),
@@ -115,16 +136,16 @@ func (s *Server) routes() []route {
 		h("DELETE /api/accounts/{name}/shares/{user}", s.handleUnshareAccount, accessSession),
 		h("POST /api/sync", s.handleSyncAll, accessSync),
 
-		h("GET /api/messages", s.handleListMessages, accessRead),
-		h("GET /api/messages/{sha}", s.handleMessage, accessRead),
-		h("GET /api/messages/{sha}/conversation", s.handleConversation, accessRead),
-		h("GET /api/messages/{sha}/html", s.handleMessageHTML, accessRead),
-		h("GET /api/messages/{sha}/raw", s.handleMessageRaw, accessRead),
-		h("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart, accessRead),
+		au("GET /api/messages", s.handleListMessages, accessRead),
+		au("GET /api/messages/{sha}", s.handleMessage, accessRead),
+		au("GET /api/messages/{sha}/conversation", s.handleConversation, accessRead),
+		au("GET /api/messages/{sha}/html", s.handleMessageHTML, accessRead),
+		au("GET /api/messages/{sha}/raw", s.handleMessageRaw, accessRead),
+		au("GET /api/messages/{sha}/parts/{n}", s.handleMessagePart, accessRead),
 
 		// Unknown paths and methods under /api/ answer JSON 404 (after the
 		// login), not the mux's text.
-		{pattern: "/api/", handler: http.HandlerFunc(s.handleUnknownAPI), access: accessSession, catchAll: true},
+		{pattern: "/api/", handler: http.HandlerFunc(s.handleUnknownAPI), access: accessSession, catchAll: true, auditor: true},
 
 		{pattern: "GET /{$}", handler: app, access: accessPublic, ui: true},
 		{pattern: "GET /assets/", handler: app, access: accessPublic, ui: true},

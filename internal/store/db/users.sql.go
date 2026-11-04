@@ -151,9 +151,10 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 
 const getSession = `-- name: GetSession :one
 SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled,
-       u.language, u.locale, u.group_id, u.is_auditor, s.grant_id
+       u.language, u.locale, u.group_id, u.is_auditor, s.grant_id, sg.owner_id AS grant_owner_id
 FROM sessions s
 JOIN users u ON u.id = s.user_id
+LEFT JOIN auditor_grants sg ON sg.id = s.grant_id
 WHERE s.id = $1
   AND s.expires_at > now()
   AND s.last_seen_at > $2
@@ -181,12 +182,14 @@ type GetSessionRow struct {
 	GroupID            int64
 	IsAuditor          bool
 	GrantID            *int64
+	GrantOwnerID       *int64
 }
 
 // A session is valid while it has not expired, was used after the idle
 // cutoff and its user is not locked. An auditor's session also needs an
 // active grant (#393): the one it is bound to, or any while it has none
-// yet. For members the NOT short-circuits the lookup.
+// yet. For members the NOT short-circuits the lookup. grant_owner_id is
+// the owner of the session's grant, whose Log gets the auditor's entries.
 func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSessionRow, error) {
 	row := q.db.QueryRow(ctx, getSession, arg.ID, arg.IdleCutoff)
 	var i GetSessionRow
@@ -203,6 +206,7 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.GroupID,
 		&i.IsAuditor,
 		&i.GrantID,
+		&i.GrantOwnerID,
 	)
 	return i, err
 }

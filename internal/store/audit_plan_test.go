@@ -104,6 +104,31 @@ func TestAuditListPlans(t *testing.T) {
 			}
 			checkSharedReads(t, conn, explain(t, &rec), cursor)
 		})
+		// One auditor grant's entries (#393): an owner's shared reads of
+		// that grant keep the via_owners index; an admin's grant filter
+		// (ListAuditEntriesForGrant) reads it too, through the grant
+		// owner's via_owners.
+		t.Run("shared reads of a grant", func(t *testing.T) {
+			var rec explainer
+			grant := int64(7)
+			_, err := db.New(&rec).ListSharedReadsForOwner(ctx, db.ListSharedReadsForOwnerParams{
+				OwnerID: 3, Since: since, Until: until, Patterns: []string{"%"}, GrantID: &grant, CursorAt: cursor, CursorID: 1, Lim: 101,
+			})
+			if !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			checkSharedReads(t, conn, explain(t, &rec), cursor)
+		})
+		t.Run("grant", func(t *testing.T) {
+			var rec explainer
+			_, err := db.New(&rec).ListAuditEntriesForGrant(ctx, db.ListAuditEntriesForGrantParams{
+				Viewer: 1, OwnerID: 3, GrantID: 7, Since: since, Until: until, Patterns: []string{"%"}, CursorAt: cursor, CursorID: 1, Lim: 101,
+			})
+			if !errors.Is(err, errRecorded) {
+				t.Fatalf("record: %v", err)
+			}
+			checkSharedReads(t, conn, explain(t, &rec), cursor)
+		})
 		t.Run("own", func(t *testing.T) {
 			var rec explainer
 			_, err := db.New(&rec).ListAuditEntriesForUser(ctx, db.ListAuditEntriesForUserParams{
@@ -334,7 +359,9 @@ func sharedReadsGeneric(t *testing.T) {
 	// EXPLAIN takes no parameters, hence the literals.
 	lit := func(t time.Time) string { return "'" + t.Format(time.RFC3339) + "'" }
 	for _, cursor := range []string{"NULL", lit(base.AddDate(0, 2, 5))} {
-		rows, err := conn.Query(ctx, fmt.Sprintf("EXPLAIN EXECUTE shared_reads(3, %s, %s, ARRAY['%%'], %s, 1, 101)",
+		// owner_id, since, until, patterns, grant_id (#393), cursor_at,
+		// cursor_id, lim.
+		rows, err := conn.Query(ctx, fmt.Sprintf("EXPLAIN EXECUTE shared_reads(3, %s, %s, ARRAY['%%'], NULL, %s, 1, 101)",
 			lit(base.AddDate(0, -1, 0)), lit(base.AddDate(0, 4, 0)), cursor))
 		if err != nil {
 			t.Fatal(err)

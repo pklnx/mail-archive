@@ -63,6 +63,11 @@ type AuditEntry struct {
 	// or changes group in the change's transaction, and for group actions;
 	// otherwise the group comes from the class (see AuditClass).
 	GroupID *int64
+	// Unwritable, when set, keeps the entry from being written: the caller
+	// could not fill a detail the entry must carry (an auditor's grant
+	// owners, #393). Writing it fails with this error, so a change or read
+	// that needs the entry fails closed.
+	Unwritable error
 
 	class AuditClass
 }
@@ -349,6 +354,9 @@ func (s *Store) auditUserAgent(ctx context.Context, e *AuditEntry) (*int64, erro
 // insertAudit writes e with the user agent id ua through q, which may be a
 // transaction's: it never uses the pool itself.
 func insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) error {
+	if e.Unwritable != nil {
+		return e.Unwritable
+	}
 	groupUser, groupAccount, err := checkClass(e)
 	if err != nil {
 		return err
@@ -572,6 +580,9 @@ type AuditRecord struct {
 	// non-admin's ListAudit; its details are cut down by shareView, and it
 	// has no client address, user agent or API key name.
 	ViaShare bool
+	// ViaAuditor (with ViaShare): an entry of the viewer's auditor grants
+	// (#393) by someone else, cut down by auditorView.
+	ViaAuditor bool
 }
 
 // AuditGroupKnown reports whether entries can be filtered by the group id:
@@ -643,6 +654,16 @@ type AuditPage struct {
 	CursorAt *time.Time
 	CursorID int64
 	Limit    int
+	// GrantID keeps only the entries of one auditor grant (#393). Without
+	// All, the caller checked that the viewer owns it; with All,
+	// GrantOwner is its owner, whose via_owners every entry of the grant
+	// carries.
+	GrantID    *int64
+	GrantOwner int64
+	// Scope, if set, is what the viewer reads now, for the subjects of
+	// message entries: an auditor's grant scope (#393). Nil means the
+	// viewer's own and shared accounts.
+	Scope *Scope
 }
 
 // ListAudit returns a page of entries, newest first. A non-admin's page
@@ -659,6 +680,15 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 	}
 	var rows []db.ListAuditEntriesRow
 	switch {
+	case p.All && p.GrantID != nil:
+		var grant []db.ListAuditEntriesForGrantRow
+		grant, err = s.q.ListAuditEntriesForGrant(ctx, db.ListAuditEntriesForGrantParams{
+			Viewer: p.Viewer, OwnerID: p.GrantOwner, GrantID: *p.GrantID, Since: p.Since, Until: p.Until, UserIds: p.UserIDs, Actors: p.Actors,
+			GroupID: p.GroupID, NoGroup: p.NoGroup, Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
+		})
+		for _, r := range grant {
+			rows = append(rows, db.ListAuditEntriesRow(r))
+		}
 	case p.GroupID != nil:
 		var group []db.ListAuditEntriesForGroupRow
 		group, err = s.q.ListAuditEntriesForGroup(ctx, db.ListAuditEntriesForGroupParams{
@@ -676,7 +706,7 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 	default:
 		var own []db.ListAuditEntriesForUserRow
 		own, err = s.q.ListAuditEntriesForUser(ctx, db.ListAuditEntriesForUserParams{
-			UserID: p.Viewer, Since: p.Since, Until: p.Until,
+			UserID: p.Viewer, Since: p.Since, Until: p.Until, GrantID: p.GrantID,
 			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
 		})
 		for _, r := range own {
@@ -708,29 +738,29 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 		// same cursor: merged and cut to Limit, the page goes on where the
 		// last kept row ends.
 		shared, err := s.q.ListSharedReadsForOwner(ctx, db.ListSharedReadsForOwnerParams{
-			OwnerID: p.Viewer, Since: p.Since, Until: p.Until,
+			OwnerID: p.Viewer, Since: p.Since, Until: p.Until, GrantID: p.GrantID,
 			Patterns: patterns, CursorAt: p.CursorAt, CursorID: p.CursorID, Lim: clampInt32(p.Limit),
 		})
 		if err != nil {
 			return nil, err
 		}
 		for _, r := range shared {
-			// Grant entries written by others (an admin's revocation, a
-			// group move) carry the owner in via_owners but need their own
-			// view (auditorView, #393 part 2), which also hides the actor's
-			// name; until then the owner's page leaves them out.
-			if strings.HasPrefix(r.Action, "auditor.") {
-				continue
-			}
-			details, err := shareView(r.Action, r.Details, p.Viewer)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, AuditRecord{
+			rec := AuditRecord{
 				ID: r.ID, At: r.At, Actor: r.Actor, UserID: r.UserID, UserName: deref(r.UserName), Action: r.Action,
 				TargetType: deref(r.TargetType), TargetID: deref(r.TargetID), TargetName: deref(r.TargetName),
-				Details: details, ViaShare: true,
-			})
+				ViaShare: true,
+			}
+			// Chosen by the source row (#393): an auditor's own entry, or
+			// a grant entry written by someone else (an admin's
+			// revocation, a group move).
+			if r.ByAuditor || strings.HasPrefix(r.Action, "auditor.") {
+				if err := auditorView(&rec, r.ByAuditor, r.Details, p.Viewer); err != nil {
+					return nil, err
+				}
+			} else if rec.Details, err = shareView(r.Action, r.Details, p.Viewer); err != nil {
+				return nil, err
+			}
+			out = append(out, rec)
 		}
 		slices.SortFunc(out, func(a, b AuditRecord) int {
 			if c := b.At.Compare(a.At); c != 0 {
@@ -742,7 +772,7 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 			out = out[:p.Limit]
 		}
 	}
-	if err := s.auditSubjects(ctx, p.Viewer, out); err != nil {
+	if err := s.auditSubjects(ctx, p.Viewer, p.Scope, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -753,8 +783,9 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 // admin still sees no subject of mail they cannot read. A shared read's
 // message.conversation entry whose requested message the viewer cannot
 // read loses its target: only its hash would show.
-func (s *Store) auditSubjects(ctx context.Context, viewer int64, recs []AuditRecord) error {
+func (s *Store) auditSubjects(ctx context.Context, viewer int64, scope *Scope, recs []AuditRecord) error {
 	var shas []string
+	var err error
 	for _, r := range recs {
 		if r.TargetType == TargetMessage && r.Subject == "" && r.TargetID != "" {
 			shas = append(shas, r.TargetID)
@@ -763,8 +794,10 @@ func (s *Store) auditSubjects(ctx context.Context, viewer int64, recs []AuditRec
 	if len(shas) == 0 {
 		return nil
 	}
-	sc, err := s.ViewerScope(ctx, viewer)
-	if err != nil {
+	var sc Scope
+	if scope != nil {
+		sc = *scope
+	} else if sc, err = s.ViewerScope(ctx, viewer); err != nil {
 		return err
 	}
 	all, folderAccounts, folders := sc.folderParams()
@@ -866,4 +899,66 @@ func shareView(action string, details []byte, viewer int64) (json.RawMessage, er
 		}
 	}
 	return json.Marshal(out)
+}
+
+// AuditorViewFields are the details an owner sees of an entry of their
+// auditor grants written by someone else (auditorView), besides the
+// owner's own via_accounts: the grant, the search fields with their terms
+// (the owner sees what the auditor searched, Q6), the login method and
+// reason, the denied route, and what a grant change was.
+var AuditorViewFields = []string{
+	DetailAuditorGrant,
+	"q", "account", "folder", "from", "to", "attachment", "after", "before", "has", "gone", "group", "thread",
+	"method", "reason", "route", "accounts",
+	"label", "ends_at", "members", "index", "content_type", "inline", "images",
+}
+
+// AuditOperator is the name an owner sees instead of anyone other than
+// the auditor of their grant (#393, decision 22): an admin may sit in
+// another customer group, whose users' names an owner never sees.
+const AuditOperator = "operator"
+
+// auditorView cuts an entry of the viewer's auditor grants, written by
+// someone else, down to what the owner may see (#393, 9.4). It is an
+// allowlist: the action, the target and AuditorViewFields stay, and
+// via_accounts keeps only the viewer's own accounts; via_owners and every
+// other key go. The record has no client address, user agent or API key
+// name (ListSharedReadsForOwner reads none). An actor who is not an
+// auditor (an admin, the command line, an owner's group move) is shown as
+// "operator".
+func auditorView(rec *AuditRecord, byAuditor bool, details []byte, viewer int64) error {
+	var in map[string]json.RawMessage
+	if err := json.Unmarshal(details, &in); err != nil {
+		return err
+	}
+	out := map[string]any{}
+	for _, k := range AuditorViewFields {
+		if v, ok := in[k]; ok {
+			out[k] = v
+		}
+	}
+	// "accounts" of a grant entry are the owner's own (the grant's scope);
+	// an account.list's "accounts" is a count.
+	if raw, ok := in[DetailViaAccounts]; ok {
+		var via []ViaAccount
+		if err := json.Unmarshal(raw, &via); err != nil {
+			return err
+		}
+		mine := []ViaAccount{}
+		for _, a := range via {
+			if a.Owner == viewer {
+				mine = append(mine, a)
+			}
+		}
+		out[DetailViaAccounts] = mine
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	rec.Details, rec.ViaAuditor = b, true
+	if !byAuditor {
+		rec.UserID, rec.UserName = nil, AuditOperator
+	}
+	return nil
 }

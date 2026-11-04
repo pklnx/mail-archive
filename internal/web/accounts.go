@@ -155,14 +155,84 @@ type accountsResponse struct {
 	OtherFailing *int64 `json:"otherFailing,omitempty"`
 }
 
+// auditorAccountJSON is an account of an auditor's grant (#393): what
+// reading it needs, with only the granted folders, without counts, sync
+// state or times (a count could tell about mail outside the period).
+type auditorAccountJSON struct {
+	Key     string              `json:"key"` // owner/name, for account=
+	Name    string              `json:"name"`
+	Owner   string              `json:"owner"`
+	Kind    string              `json:"kind"`
+	Removed bool                `json:"removed"`
+	Folders []auditorFolderJSON `json:"folders"`
+}
+
+type auditorFolderJSON struct {
+	Name      string  `json:"name"`
+	Delimiter *string `json:"delimiter"`
+}
+
+// auditorAccountsResponse is GET /api/accounts for an auditor: no own
+// accounts, the grant's accounts in shared, nothing to manage.
+type auditorAccountsResponse struct {
+	Accounts []accountJSON        `json:"accounts"`
+	Shared   []auditorAccountJSON `json:"shared"`
+	Manage   bool                 `json:"manage"`
+}
+
+// handleAuditorAccounts lists the accounts of the auditor's grant, read
+// only through the grant's scope (store.AuditorScope, which reads
+// active_auditor_grant_accounts), and logs it (account.list) before
+// anything is sent.
+func (s *Server) handleAuditorAccounts(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.requestScope(w, r)
+	if !ok {
+		return
+	}
+	list, err := s.store.ListAccountFolders(r.Context(), sc)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
+	out := auditorAccountsResponse{Accounts: []accountJSON{}, Shared: []auditorAccountJSON{}}
+	var via []store.ViaAccount
+	for _, a := range list {
+		if _, granted := sc.Account(a.ID); !granted {
+			continue
+		}
+		j := auditorAccountJSON{Key: a.Owner + "/" + a.Name, Name: a.Name, Owner: a.Owner, Kind: string(a.Kind), Removed: a.Removed, Folders: []auditorFolderJSON{}}
+		for _, f := range a.Folders {
+			delim := f.Delimiter
+			if !a.Kind.HasServer() {
+				slash := "/"
+				delim = &slash
+			}
+			j.Folders = append(j.Folders, auditorFolderJSON{Name: f.Name, Delimiter: delim})
+		}
+		out.Shared = append(out.Shared, j)
+		via = append(via, store.ViaAccount{ID: a.ID, Owner: a.OwnerID, Key: j.Key})
+	}
+	e := s.selfEntry(r, store.ActionAccountList)
+	e.Detail("accounts", len(out.Shared))
+	setVia(e, via)
+	if !s.audit(w, r, e) {
+		return
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
+	if isAuditor(r) {
+		s.handleAuditorAccounts(w, r)
+		return
+	}
 	ctx := r.Context()
 	accounts, err := s.store.ListOwnedAccounts(ctx, userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}

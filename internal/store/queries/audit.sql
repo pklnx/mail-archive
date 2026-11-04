@@ -105,6 +105,7 @@ LEFT JOIN LATERAL (
 WHERE l.user_id = @user_id::bigint
   AND l.at >= @since AND l.at < @until
   AND l.action LIKE ANY (@patterns::text[])
+  AND (sqlc.narg(grant_id)::bigint IS NULL OR l.details -> 'auditor_grant' = to_jsonb(sqlc.narg(grant_id)::bigint))
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
 ORDER BY l.at DESC, l.id DESC
 LIMIT @lim;
@@ -137,21 +138,64 @@ WHERE l.group_id = @group_id::bigint
 ORDER BY l.at DESC, l.id DESC
 LIMIT @lim;
 
+-- name: ListAuditEntriesForGrant :many
+-- A page of one auditor grant's entries in [since, until), newest first,
+-- for admins (#393): every entry of a grant carries its owner in
+-- via_owners, so the partial GIN index audit_log_via_owners_idx finds
+-- them; auditor_grant then keeps the grant's. Narrowed like
+-- ListAuditEntries by user_ids and actors, and by one group or none.
+SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.api_key_name, l.action,
+       l.target_type, l.target_id, l.target_name, l.client_ip, ua.user_agent, l.details,
+       s.subject, l.group_id
+FROM audit_log l
+LEFT JOIN audit_user_agents ua ON ua.id = l.user_agent_id
+LEFT JOIN LATERAL (
+    SELECT m.subject FROM messages m
+    WHERE l.target_type = 'message' AND m.sha256 = l.target_id::bpchar
+      AND EXISTS (SELECT 1 FROM message_locations ml
+                  JOIN folders f ON f.id = ml.folder_id
+                  JOIN accounts a ON a.id = f.account_id
+                  WHERE ml.message_sha256 = m.sha256 AND a.owner_id = @viewer::bigint)
+) s ON true
+WHERE l.details ? 'via_owners'
+  AND l.details -> 'via_owners' @> to_jsonb(@owner_id::bigint)
+  AND l.details -> 'auditor_grant' = to_jsonb(@grant_id::bigint)
+  AND l.at >= @since AND l.at < @until
+  AND ((coalesce(cardinality(@user_ids::bigint[]), 0) = 0 AND coalesce(cardinality(@actors::text[]), 0) = 0)
+       OR l.user_id = ANY (@user_ids::bigint[]) OR l.actor = ANY (@actors::text[]))
+  AND (sqlc.narg(group_id)::bigint IS NULL OR l.group_id = sqlc.narg(group_id))
+  AND (NOT @no_group::boolean OR l.group_id IS NULL)
+  AND l.action LIKE ANY (@patterns::text[])
+  AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
+ORDER BY l.at DESC, l.id DESC
+LIMIT @lim;
+
 -- name: ListSharedReadsForOwner :many
 -- A page of other users' reads of the owner's shared accounts in [since,
 -- until), newest first (#389): the entries whose via_owners holds the
 -- owner. details ? 'via_owners' repeats the partial index's predicate:
 -- without it the planner walks every partition through the pkey. No client
 -- address, user agent or API key name: the owner sees time, user, action
--- and message only.
+-- and message only. by_auditor (#393): the entry's user is an auditor, or,
+-- once that user was removed, the entry names a grant and is none of the
+-- grant changes, which only owners, admins and the command line write (a
+-- member's entries never name a grant; entries without a user are the
+-- command line's). Such entries, and every auditor.* entry, get
+-- auditorView instead of shareView. A user's role never changes. grant_id
+-- keeps only the entries of one grant.
 SELECT l.id, l.at, l.actor, l.user_id, l.user_name, l.action,
-       l.target_type, l.target_id, l.target_name, l.details
+       l.target_type, l.target_id, l.target_name, l.details,
+       (l.user_id IS NOT NULL
+        AND coalesce((SELECT u.is_auditor FROM users u WHERE u.id = l.user_id),
+                     l.details ? 'auditor_grant'
+                     AND l.action NOT IN ('auditor.grant', 'auditor.extend', 'auditor.revoke', 'auditor.grant_change')))::boolean AS by_auditor
 FROM audit_log l
 WHERE l.details ? 'via_owners'
   AND l.details -> 'via_owners' @> to_jsonb(@owner_id::bigint)
   AND l.user_id IS DISTINCT FROM @owner_id::bigint
   AND l.at >= @since AND l.at < @until
   AND l.action LIKE ANY (@patterns::text[])
+  AND (sqlc.narg(grant_id)::bigint IS NULL OR l.details -> 'auditor_grant' = to_jsonb(sqlc.narg(grant_id)::bigint))
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL OR (l.at, l.id) < (sqlc.narg(cursor_at), @cursor_id::bigint))
 ORDER BY l.at DESC, l.id DESC
 LIMIT @lim;

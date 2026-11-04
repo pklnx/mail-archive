@@ -67,7 +67,7 @@ func (s *Server) handleShareAccount(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrShareSelf):
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
-	case errors.Is(err, store.ErrShareSMTP), errors.Is(err, store.ErrStale):
+	case errors.Is(err, store.ErrShareSMTP), errors.Is(err, store.ErrStale), errors.Is(err, store.ErrShareAuditor):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
 		return
 	case errors.Is(err, store.ErrShareOtherGroup):
@@ -123,6 +123,13 @@ func (s *Server) handleUnshareAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("account unshared", "account", a.Name, "user", sh.User)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// isAuditor reports whether the request comes from an auditor's session
+// (#393).
+func isAuditor(r *http.Request) bool {
+	sess := currentSession(r)
+	return sess != nil && sess.IsAuditor
 }
 
 // setVia records which owners' shared accounts an entry is about:
@@ -203,8 +210,11 @@ func (s *Server) shareOnlyVia(r *http.Request, sc, full store.Scope, shas []stri
 // included (decision 17), gets every shared account through which it shows
 // at least one message the viewer sees only there, with that count n
 // (decision 13).
+//
+// An auditor's pages (#393) are all logged like those, also plain folder
+// listings and empty pages, even if the grant has no account left.
 func (s *Server) listEntry(w http.ResponseWriter, r *http.Request, sc, full store.Scope, shas []string) (*store.AuditEntry, bool) {
-	if !sc.HasShared() {
+	if !sc.HasShared() && !isAuditor(r) {
 		return s.searchEntry(r), true
 	}
 	q := r.URL.Query()
@@ -237,7 +247,7 @@ func (s *Server) listEntry(w http.ResponseWriter, r *http.Request, sc, full stor
 // when members other than the requested message are seen only through
 // their shared account; the requested message has its message.open.
 func (s *Server) conversationEntry(w http.ResponseWriter, r *http.Request, sc store.Scope, sha string, members []string) (*store.AuditEntry, bool) {
-	if !sc.HasShared() {
+	if !sc.HasShared() && !isAuditor(r) {
 		return nil, true
 	}
 	e := s.messageEntry(r, "message.conversation", sha)

@@ -34,6 +34,7 @@ func main() {
 		newAccountCmd(),
 		newUserCmd(),
 		newGroupCmd(),
+		newAuditorCmd(),
 		newSyncCmd(),
 		newStatusCmd(),
 		newReindexCmd(),

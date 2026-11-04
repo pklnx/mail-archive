@@ -170,7 +170,8 @@ func (s *Server) groupRefs(r *http.Request) (map[int64]groupRefJSON, error) {
 }
 
 // changeUserGroup is PATCH /api/users/{name} with {"group": id}: it moves
-// u and answers how many shares that ended.
+// u and answers how many shares that ended and how many auditor grants it
+// revoked (#393).
 func (s *Server) changeUserGroup(w http.ResponseWriter, r *http.Request, u *store.User, groupID int64) {
 	if groupID <= 0 {
 		s.fail(w, r, http.StatusBadRequest, store.ErrUnknownGroup.Error(), nil)
@@ -189,7 +190,7 @@ func (s *Server) changeUserGroup(w http.ResponseWriter, r *http.Request, u *stor
 	}
 	if c.Changed {
 		s.log.Info("user moved to another group", "user", u.Name, "from", c.From, "to", c.To, "sharesEnded", len(c.Ended),
-			"by", currentSession(r).UserName)
+			"grantsRevoked", len(c.GrantsRevoked), "by", currentSession(r).UserName)
 	}
-	s.writeJSON(w, http.StatusOK, map[string]int{"sharesEnded": len(c.Ended)})
+	s.writeJSON(w, http.StatusOK, map[string]int{"sharesEnded": len(c.Ended), "grantsRevoked": len(c.GrantsRevoked)})
 }
