@@ -428,11 +428,11 @@ fill` and `reindex`. At start (`archive.OpenAtRest`) it
 1. takes the **writers lock** shared (advisory lock class `0x6d77`, key 0)
    on a connection of its own outside the pool, with
    `idle_session_timeout = 0`, the `ForMigrations` keepalives and
-   connection check, and `application_name` `mail-archive writer
-   <command>`. While an encryption command holds it exclusively, the writer
+   connection check, and `application_name`
+   `mail-archive writer <command>`. While an encryption command holds it exclusively, the writer
    refuses and names the holder;
-2. reads the state. In a transitional state it refuses ("run `encryption
-   enable|disable|rekey` to finish it"). Without a row but with a keyring
+2. reads the state. In a transitional state it refuses ("run
+   `encryption enable|disable|rekey` to finish it"). Without a row but with a keyring
    file and an `.enc` file on disk (a dump from before `enable` restored
    next to newer files), it records `encrypting` with the file as the
    database copy, and refuses;
