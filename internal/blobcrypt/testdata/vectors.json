@@ -1,0 +1,54 @@
+[
+  {
+    "purpose": 1,
+    "plaintext_len": 0,
+    "binding_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ciphertext_hex": "4d412d454e43310a010110005eed000121f0fede69e726e9932d47e45de92bbf04d6e63e1bd8a918a63e68940e07c2b1000000000000000000000000000000003c0056e9c672685df5e6d2360f50c3bf",
+    "ciphertext_sha256": "bccb846bffb902b659005a4188c9fc0944f8946f2b4f83b0badee8dab7e9fd30"
+  },
+  {
+    "purpose": 1,
+    "plaintext_len": 1,
+    "binding_hex": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "ciphertext_hex": "4d412d454e43310a010110005eed00019314ff82ada94743faa28ff3b4add132cab746f884d0574de33c93c41094323200000000000000000000000000000000faf79a136b657e5c31b18c11d478b63f89",
+    "ciphertext_sha256": "571d49d0ecb7cad98a7fecb4e48a0b219d29f30ce491f7cd45ea6f2d741bfa89"
+  },
+  {
+    "purpose": 1,
+    "plaintext_len": 100,
+    "binding_hex": "bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52",
+    "ciphertext_hex": "4d412d454e43310a010110005eed0001e5e8111a1692565d4cf8fd827d0073e18217075eda2b3cc1bcb8a3b27e681ada000000000000000000000000000000002f417d9ddc75df77535d990e27b4e8e35f0ade1e23e59da05de67af71fe677db0202f8a14caf1d5b6735fae081e06dade64b4a079073787076f98b38f9b4990c6ad69095fd65caffa9b8e3645f82ba771e9da84578e76517299a348648fa42024cedc8e2efa65273f1a5c056ee81508014c4f396",
+    "ciphertext_sha256": "093746fa6275f8f4c88a95a7ec32a12e1286e1afd39cdb09b9f2b9f60c5c3bba"
+  },
+  {
+    "purpose": 1,
+    "plaintext_len": 65535,
+    "binding_hex": "dda402a2c028f0cbbdbc5c6ebae965eed9c75f71236e7022b0386d3455d5ae2f",
+    "ciphertext_sha256": "9b32e9e113c6462711323ef13d9e13bce5c77490a2e97dd4d0ec63012207f154"
+  },
+  {
+    "purpose": 1,
+    "plaintext_len": 65536,
+    "binding_hex": "4b640d85ab3ba30fd02c9fc9db4a8928f416322ad27022ea58a65aaee68a4df2",
+    "ciphertext_sha256": "04494409c988fd6701f6d18e7476d319eab742929ddf57fa384f689d20872aa6"
+  },
+  {
+    "purpose": 1,
+    "plaintext_len": 65537,
+    "binding_hex": "237356e18b503616912abb8ffaed3a72591e397d4ac294c4637917d48a3f529d",
+    "ciphertext_sha256": "e3bb24720ff7b11cc3fde01293ddd19ae78dd0bf4ea289feaeb6607846c1790b"
+  },
+  {
+    "purpose": 2,
+    "plaintext_len": 0,
+    "binding_hex": "",
+    "ciphertext_hex": "4d412d454e43310a010210005eed00016bbb1b148d2fd794d47fe403be65b59293a8d5db6d879bc07d3c687ad552f659000000000000000000000000000000001eb0bdd3b020ab602ace9bd55998ce2a",
+    "ciphertext_sha256": "7812856063f55c9e57f15cb7ec5cb689b6cefea06be6d724d80eed66427f8aba"
+  },
+  {
+    "purpose": 2,
+    "plaintext_len": 196615,
+    "binding_hex": "",
+    "ciphertext_sha256": "6438da694042e5267cebc3f56975462e61a23ea19998cfe80a0837be0a3941c1"
+  }
+]

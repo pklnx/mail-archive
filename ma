@@ -26,6 +26,32 @@ compose() {
 	docker compose --progress quiet "$@"
 }
 
+# encryption keygen runs in a container removed afterwards: a key written
+# anywhere but the keys directory (/keys) would be lost with it.
+if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
+	prev=
+	for arg in "$@"; do
+		case $prev in
+		--key-file) value=$arg ;;
+		*) value= ;;
+		esac
+		case $arg in
+		--key-file=*) value=${arg#--key-file=} ;;
+		esac
+		case $value in
+		*..*) value=bad ;;
+		esac
+		case $value in
+		'' | /keys/?*) ;;
+		*)
+			echo "error: --key-file must lie in /keys (ARCHIVE_KEY_DIR on the host); elsewhere the key is lost with the container" >&2
+			exit 2
+			;;
+		esac
+		prev=$arg
+	done
+fi
+
 compose up -d --wait postgres
 
 # The first start: Docker creates a missing data directory as root, but the
@@ -67,6 +93,20 @@ if [ "${1:-}" = backup ]; then
 	echo "wrote $dir/$name and $dir/BACKUP-NOTE.txt"
 	echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep MAIL_ARCHIVE_SECRET_KEY separately"
 	exit 0
+fi
+
+# encryption keygen writes the archive key into the keys directory
+# (ARCHIVE_KEY_DIR, default ./keys), which every other service mounts
+# read-only: a one-off container with it writable, run as root so that it
+# can write there and give the files to the container user. The data
+# directory is prepared first, as by migrate, so that the keyring in it does
+# not leave a fresh directory owned by root.
+if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
+	shift 2
+	compose run --rm --no-deps $build -T --user 0:0 mail-archive prepare-data ||
+		echo "warning: could not prepare the data directory (ARCHIVE_DIR in .env, default ./data)" >&2
+	exec docker compose --progress quiet run --rm --no-deps $build -T --user 0:0 \
+		-e MAIL_ARCHIVE_COMMAND=./ma mail-archive-keygen encryption keygen --chown 65532:65532 "$@"
 fi
 
 # Allocate a TTY only when attached to a terminal (not in cron or pipes),
