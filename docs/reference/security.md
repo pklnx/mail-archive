@@ -92,8 +92,15 @@ owner's group. An account's owner shares it only with a user of the same
 group, one user at a time, and only for reading. A share request answers the
 same `404` for a name that does not exist and for a user of another group,
 and the store and the database refuse a share across groups. Moving a user or
-an account to another group ends every share that would cross groups. An auditor login belongs to one customer group. An owner grants it read access only to their own accounts and only if it is in the same group; a grant request answers the same `404` for a name that does not exist, for a user who is not an auditor and for a user of another group, and the store and the database refuse a grant across groups. An account that moves to another owner leaves the grant. Moving the auditor or the owner to another group revokes the grant and ends the auditor's sessions on it at once. Users
-who are not admins never see names of users of other groups, except in older
+an account to another group ends every share that would cross groups. An
+auditor login belongs to one customer group. An owner grants it read access
+only to their own accounts and only if it is in the same group; a grant
+request answers the same `404` for a name that does not exist, for a user who
+is not an auditor and for a user of another group, and the store and the
+database refuse a grant across groups. An account that moves to another owner
+leaves the grant. Moving the auditor or the owner to another group revokes
+the grant and ends the auditor's sessions on it at once. Users who are not
+admins never see names of users of other groups, except in older
 Log entries from the time that user was still in the same group. Admins see every
 group's users, accounts, audit log, retention rules and holds, but no mail
 except their own and what was shared with them. Groups separate customers
@@ -115,7 +122,8 @@ in the shared account is the message that was opened. A legal hold on a shared
 account is never shown to the shared user, admins included.
 
 **Auditors** (tax advisors and tax auditors) are logins an admin creates
-(`./ma user add NAME --auditor`, or the Users page). The role never changes:
+(`./ma user add NAME --auditor`, or `POST /api/users` with
+`"auditor": true`; the Users page follows in a later release). The role never changes:
 an auditor is never an admin, owns no accounts, receives no shares and holds
 no API keys (a key of an auditor opens nothing). An auditor reads only
 through an auditor grant: one owner's accounts, all or some of their folders,
@@ -146,9 +154,13 @@ an optional message period and a validity window of at most 365 days.
   purged) account stays in its grants until it is purged: the auditor can
   still read its mail inside the grant's period. Locking the auditor or the
   owner suspends the grant; unlocking restores it.
-- **Every request of an auditor is recorded**, also plain folder listings and
-  empty pages, and fails closed (`503`, nothing sent) when the entry cannot be
-  written. The grant's owner sees the auditor's entries in their Log, with
+- **Every request of an auditor that reads archive data is recorded**: the
+  account list, every folder listing and search page (also empty ones), and
+  every opened message, HTML body, `.eml` download and attachment. Such a
+  read fails closed (`503`, nothing sent) when its entry cannot be written.
+  Every refused request (`auditor.denied`) and every grant choice is recorded
+  too. Reads of the auditor's own data are not recorded: the session, the
+  status, the own Log and the own grant list. The grant's owner sees the auditor's entries in their Log, with
   the search terms, without the auditor's address, browser or key name, and
   sees revocations by others with "operator" instead of the actor's name. See
   [Audit log](../guide/audit-log).

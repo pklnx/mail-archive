@@ -155,9 +155,13 @@ true}` in the API. An id that no group and no entry has is refused.
 
 An auditor (a tax advisor or tax auditor, see
 [Security](../reference/security#login)) reads an owner's mail only through
-an auditor grant. Every request of an auditor is recorded, also plain folder
-listings, empty pages and the account list (`account.list`), and a read
-fails closed when its entry cannot be written. Each entry of an auditor's
+an auditor grant. Every request of an auditor that reads archive data is
+recorded: the account list (`account.list`), every folder listing and search
+page, also empty ones, and every opened message, HTML body, download and
+attachment; such a read fails closed when its entry cannot be written. Every
+refused request (`auditor.denied`) and every grant choice
+(`auditor.select`) is recorded too. Reads of the auditor's own data are not:
+the session, the status, the own Log and the own grant list. Each entry of an auditor's
 session carries the grant (`auditor_grant`) and its owner (`via_owners`),
 which puts it into the owner's Log; while the session has no grant yet (an
 auditor with several grants before picking one), the login, its denials and

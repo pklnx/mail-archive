@@ -372,7 +372,7 @@ language, 2FA setup and passkeys, `GET /api/status` (an empty own view),
 own entries) and `GET /api/auditor-grants`. Every other endpoint answers
 `403 {"error": "not available to auditors"}` and writes `auditor.denied`.
 Auditors hold no API keys and must use 2FA, which they cannot switch off.
-Every request of an auditor is recorded and goes into the grant owner's Log;
+Every request of an auditor that reads archive data, and every refused one, is recorded and goes into the grant owner's Log (reads of the auditor's own session, status, Log and grants are not);
 see [Audit log](../guide/audit-log#auditors).
 
 - **Login:** without an active grant the login answers `403`. With one, the
