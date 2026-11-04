@@ -13,7 +13,7 @@ import (
 const countConversation = `-- name: CountConversation :one
 WITH me AS (
     SELECT x.sha256, x.message_id, x.in_reply_to, COALESCE(x.thread_id, x.sha256)::text AS thread_key
-    FROM messages x WHERE x.sha256 = $6
+    FROM messages x WHERE x.sha256 = $7
 )
 SELECT count(*)::bigint
 FROM messages m, me
@@ -25,14 +25,15 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[])
-        AND (f.account_id = ANY ($2::bigint[]) OR f.id = ANY ($3::bigint[])))
-  AND ($4::timestamptz IS NULL OR m.sort_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR m.sort_at < $5::timestamptz)
+        AND (f.account_id = ANY ($2::bigint[]) OR scope_folder_granted(f.account_id, f.id, $3::bigint[], $4::bigint[])))
+  AND ($5::timestamptz IS NULL OR m.sort_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR m.sort_at < $6::timestamptz)
 `
 
 type CountConversationParams struct {
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
@@ -43,6 +44,7 @@ func (q *Queries) CountConversation(ctx context.Context, arg CountConversationPa
 	row := q.db.QueryRow(ctx, countConversation,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.ScopeAfter,
 		arg.ScopeBefore,
@@ -57,7 +59,7 @@ const listConversation = `-- name: ListConversation :many
 
 WITH me AS (
     SELECT x.sha256, x.message_id, x.in_reply_to, COALESCE(x.thread_id, x.sha256)::text AS thread_key
-    FROM messages x WHERE x.sha256 = $7
+    FROM messages x WHERE x.sha256 = $8
 )
 SELECT m.sha256, m.subject, m.from_addr, m.sent_at, m.sort_at,
        (CASE
@@ -75,16 +77,17 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[])
-        AND (f.account_id = ANY ($2::bigint[]) OR f.id = ANY ($3::bigint[])))
-  AND ($4::timestamptz IS NULL OR m.sort_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR m.sort_at < $5::timestamptz)
+        AND (f.account_id = ANY ($2::bigint[]) OR scope_folder_granted(f.account_id, f.id, $3::bigint[], $4::bigint[])))
+  AND ($5::timestamptz IS NULL OR m.sort_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR m.sort_at < $6::timestamptz)
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $6
+LIMIT $7
 `
 
 type ListConversationParams struct {
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
@@ -112,6 +115,7 @@ func (q *Queries) ListConversation(ctx context.Context, arg ListConversationPara
 	rows, err := q.db.Query(ctx, listConversation,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.ScopeAfter,
 		arg.ScopeBefore,

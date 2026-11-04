@@ -164,6 +164,11 @@ func (sc Scope) filter(keep func(ScopeAccount) bool) Scope {
 // that account's folders as they are. Folder sets intersect. The later
 // after and the earlier before win; nil bounds change nothing. The result
 // has folder lists of its own: the scope's are never changed in place.
+//
+// Folder IDs are checked per account by every query (scope_folder_granted):
+// an ID that is not a folder of the account it is listed under matches
+// nothing, so it cannot widen the scope. Restrict cannot see which folders
+// an account has; Store.RestrictScope also drops such IDs.
 func (sc Scope) Restrict(folders map[int64][]int64, after, before *time.Time) Scope {
 	out := sc
 	out.Accounts = make([]ScopeAccount, 0, len(sc.Accounts))
@@ -200,6 +205,28 @@ func (sc Scope) Restrict(folders map[int64][]int64, after, before *time.Time) Sc
 	return out
 }
 
+// RestrictScope is Scope.Restrict with the folder IDs of each named
+// account first reduced to that account's own folders: an ID of another
+// account's folder is dropped, not carried along.
+func (s *Store) RestrictScope(ctx context.Context, sc Scope, folders map[int64][]int64, after, before *time.Time) (Scope, error) {
+	var own map[int64][]int64
+	if folders != nil {
+		own = make(map[int64][]int64, len(folders))
+		for id, want := range folders {
+			if want == nil {
+				own[id] = nil
+				continue
+			}
+			found, err := s.q.AccountFolderIDs(ctx, db.AccountFolderIDsParams{AccountID: id, Ids: want})
+			if err != nil {
+				return Scope{}, err
+			}
+			own[id] = append([]int64{}, found...)
+		}
+	}
+	return sc.Restrict(own, after, before), nil
+}
+
 // Period returns the scope's message period: sort_at in [after, before),
 // nil for no bound.
 func (sc Scope) Period() (after, before *time.Time) {
@@ -207,20 +234,26 @@ func (sc Scope) Period() (after, before *time.Time) {
 }
 
 // folderParams returns the folder predicate's parameters, never nil: the
-// accounts read with all their folders, and the union of the folders of
-// the others. A location matches if its folder's account is in the first
-// or the folder in the second, on top of the account predicate; a NULL
-// would match nothing (#393).
-func (sc Scope) folderParams() (allFolderAccounts, folders []int64) {
-	allFolderAccounts, folders = []int64{}, []int64{}
+// accounts read with all their folders, and the restricted accounts'
+// folders as pairs in two parallel arrays (account, folder). A location
+// matches if its folder's account is in the first, or (account, folder) is
+// one of the pairs (scope_folder_granted, 00036), on top of the account
+// predicate. Pairs, not a pooled list of folder IDs: a folder ID listed
+// under one account never opens a folder of another (#393). A NULL would
+// match nothing.
+func (sc Scope) folderParams() (allFolderAccounts, folderAccounts, folders []int64) {
+	allFolderAccounts, folderAccounts, folders = []int64{}, []int64{}, []int64{}
 	for _, a := range sc.Accounts {
 		if a.Folders == nil {
 			allFolderAccounts = append(allFolderAccounts, a.ID)
 			continue
 		}
-		folders = append(folders, a.Folders...)
+		for _, f := range a.Folders {
+			folderAccounts = append(folderAccounts, a.ID)
+			folders = append(folders, f)
+		}
 	}
-	return allFolderAccounts, folders
+	return allFolderAccounts, folderAccounts, folders
 }
 
 // clampPeriod narrows a requested date range to the scope's period.
@@ -274,10 +307,10 @@ func (s *Store) ListShareOnlyLocations(ctx context.Context, sc, full Scope, shas
 	if len(shared.Accounts) == 0 || len(shas) == 0 {
 		return []ShareOnlyLocation{}, nil
 	}
-	all, folders := shared.folderParams()
+	all, folderAccounts, folders := shared.folderParams()
 	rows, err := s.q.ListShareOnlyLocations(ctx, db.ListShareOnlyLocationsParams{
 		Shas: shas, SharedAccounts: shared.ids(), OwnAccounts: full.Own().ids(),
-		ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: shared.after, ScopeBefore: shared.before,
+		ScopeAllFolderAccounts: all, ScopeFolderAccounts: folderAccounts, ScopeFolders: folders, ScopeAfter: shared.after, ScopeBefore: shared.before,
 	})
 	if err != nil {
 		return nil, err

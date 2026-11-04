@@ -200,7 +200,7 @@ func (s *Store) attachmentMatches(ctx context.Context, p *db.SearchMessagesParam
 	}
 	shas, err := s.q.AttachmentMatches(ctx, db.AttachmentMatchesParams{
 		Query: *p.Query, Accounts: p.Accounts, RowLimit: int32(maxAttachmentMatches) + 1, //nolint:gosec // small
-		ScopeAllFolderAccounts: p.ScopeAllFolderAccounts, ScopeFolders: p.ScopeFolders, ScopeAfter: p.After, ScopeBefore: p.Before,
+		ScopeAllFolderAccounts: p.ScopeAllFolderAccounts, ScopeFolderAccounts: p.ScopeFolderAccounts, ScopeFolders: p.ScopeFolders, ScopeAfter: p.After, ScopeBefore: p.Before,
 	})
 	if err != nil {
 		return fmt.Errorf("attachment matches: %w", err)

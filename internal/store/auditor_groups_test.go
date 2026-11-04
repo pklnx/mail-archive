@@ -342,6 +342,94 @@ func TestGrantRaces(t *testing.T) {
 		}
 		f.checkNoCrossingGrants()
 	})
+	// #509 review A1: the owner revokes their own grant while an admin
+	// moves them. The foreign key of revoked_by locks the owner's row; the
+	// revocation must take it before the grant row, which the move revokes
+	// next while it holds the owner.
+	t.Run("revoke, move commits first", func(t *testing.T) {
+		f := newAuditorFixture(t)
+		g := f.grant(store.NewGrant{})
+		hold := begin(f, `SELECT 1 FROM customer_groups WHERE id = $1 FOR UPDATE`, f.b.ID)
+		moved := make(chan error, 1)
+		go func() { _, err := f.st.SetUserGroup(f.ctx, f.alice.ID, f.b.ID); moved <- err }()
+		watch := connect(t, f.url)
+		waitForLockWait(t, watch, moved)
+		revoked := make(chan error, 1)
+		go func() { revoked <- f.st.RevokeGrant(f.ctx, g, &f.alice.ID, &f.alice.ID) }()
+		waitForLockWaits(t, watch, revoked, 2)
+		if err := hold.Rollback(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		errMove, errRevoke := <-moved, <-revoked
+		noDeadlock(t, errMove)
+		noDeadlock(t, errRevoke)
+		if errMove != nil {
+			t.Fatalf("move: %v", errMove)
+		}
+		if !errors.Is(errRevoke, store.ErrGrantRevoked) {
+			t.Fatalf("revocation after the move: %v, want ErrGrantRevoked", errRevoke)
+		}
+		if r, _ := f.grantState(g); r != store.RevokeGroupChange {
+			t.Errorf("reason %q", r)
+		}
+		f.checkNoCrossingGrants()
+	})
+	t.Run("revoke, revocation commits first", func(t *testing.T) {
+		f := newAuditorFixture(t)
+		g := f.grant(store.NewGrant{})
+		hold := begin(f, `SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE`, f.alice.ID)
+		moved := make(chan error, 1)
+		var c store.GroupChange
+		go func() {
+			var err error
+			c, err = f.st.SetUserGroup(f.ctx, f.alice.ID, f.b.ID)
+			moved <- err
+		}()
+		waitForLockWait(t, connect(t, f.url), moved)
+		if err := f.st.RevokeGrant(f.ctx, g, &f.alice.ID, &f.alice.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := hold.Rollback(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-moved; err != nil {
+			t.Fatal(err)
+		}
+		if len(c.GrantsRevoked) != 0 {
+			t.Errorf("the move revoked %+v again", c.GrantsRevoked)
+		}
+		if r, _ := f.grantState(g); r != store.RevokeOwner {
+			t.Errorf("reason %q", r)
+		}
+		f.checkNoCrossingGrants()
+	})
+	// The acting admin is recorded in revoked_by: the move locks the
+	// admin's row before the grant rows, so a concurrent removal that
+	// locks every admin first (keepAnAdmin) and then the auditor waits
+	// instead of closing a cycle.
+	t.Run("move by an admin, removal locking the admins", func(t *testing.T) {
+		f := newAuditorFixture(t)
+		f.grant(store.NewGrant{})
+		hold := begin(f, `SELECT 1 FROM customer_groups WHERE id = $1 FOR UPDATE`, f.b.ID)
+		e := store.TargetedEntry(store.ActorSession, "user.group_change")
+		e.SetUser(f.root.ID, "root")
+		moved := make(chan error, 1)
+		go func() { _, err := f.st.SetUserGroup(store.WithAudit(f.ctx, e), f.auda.ID, f.b.ID); moved <- err }()
+		watch := connect(t, f.url)
+		waitForLockWait(t, watch, moved)
+		removed := make(chan error, 1)
+		go func() { removed <- f.st.DeleteUser(f.ctx, f.auda.ID) }()
+		waitForLockWaits(t, watch, removed, 2)
+		if err := hold.Rollback(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		errMove, errRemove := <-moved, <-removed
+		noDeadlock(t, errMove)
+		noDeadlock(t, errRemove)
+		if errMove != nil || errRemove != nil {
+			t.Fatalf("move: %v, removal: %v", errMove, errRemove)
+		}
+	})
 	t.Run("extend, extension before the removal", func(t *testing.T) {
 		f := newAuditorFixture(t)
 		g := f.grant(store.NewGrant{})
@@ -583,6 +671,41 @@ func TestAccountMoveNarrowsGrants(t *testing.T) {
 		t.Errorf("after the deletion: %q", r)
 	}
 	f.checkNoCrossingGrants()
+}
+
+// TestAccountMoveWaitsForRevocation (#509 review B2): an account move
+// waits for a revocation in flight instead of narrowing that grant: the
+// revoked grant keeps the account as history, and the move writes no
+// entry about it.
+func TestAccountMoveWaitsForRevocation(t *testing.T) {
+	f := newAuditorFixture(t)
+	g := f.grant(store.NewGrant{Accounts: []store.GrantAccount{{AccountID: f.a1}, {AccountID: f.a2}}})
+	revoke, err := f.conn.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = revoke.Rollback(f.ctx) }()
+	if _, err := revoke.Exec(f.ctx, `UPDATE auditor_grants SET revoked_at = now(), revoke_reason = 'owner' WHERE id = $1`, g); err != nil {
+		t.Fatal(err)
+	}
+	ref := f.account(f.a2).Ref()
+	done := make(chan error, 1)
+	go func() { done <- f.st.SetAccountOwner(f.ctx, ref, f.bob.ID, false) }()
+	waitForLockWait(t, connect(t, f.url), done)
+	if err := revoke.Commit(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(`SELECT count(*) FROM auditor_grant_accounts WHERE grant_id = $1`, g); n != 2 {
+		t.Errorf("the revoked grant keeps %d accounts, want both as history", n)
+	}
+	for _, action := range []string{"auditor.grant_change", "auditor.revoke"} {
+		if e := groupedEntries(t, f.conn, action); len(e) != 0 {
+			t.Errorf("the move wrote %s %+v", action, e)
+		}
+	}
 }
 
 // TestAuditorEntryGroups (group test 8): every auditor action is recorded

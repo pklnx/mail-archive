@@ -272,9 +272,24 @@ type GroupChange struct {
 func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupChange, error) {
 	var c GroupChange
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		// The user FOR UPDATE and the acting admin FOR SHARE (revoked_by of
+		// the grants revoked below references them), in id order, before
+		// any grant row.
+		actor := actorID(ctx)
+		other := actor != nil && *actor != userID
+		if other && *actor < userID {
+			if err := lockActor(ctx, q); err != nil {
+				return err
+			}
+		}
 		u, err := lockUser(ctx, q, userID)
 		if err != nil {
 			return err
+		}
+		if other && *actor > userID {
+			if err := lockActor(ctx, q); err != nil {
+				return err
+			}
 		}
 		from, err := q.GetGroupByID(ctx, u.GroupID)
 		if err != nil {

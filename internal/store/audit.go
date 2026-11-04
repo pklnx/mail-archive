@@ -767,9 +767,9 @@ func (s *Store) auditSubjects(ctx context.Context, viewer int64, recs []AuditRec
 	if err != nil {
 		return err
 	}
-	all, folders := sc.folderParams()
+	all, folderAccounts, folders := sc.folderParams()
 	rows, err := s.q.AuditSubjects(ctx, db.AuditSubjectsParams{
-		Shas: shas, Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+		Shas: shas, Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolderAccounts: folderAccounts, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
 	})
 	if err != nil {
 		return err

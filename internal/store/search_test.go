@@ -375,7 +375,7 @@ ANALYZE;`
 		for _, c := range cases {
 			t.Run(scope.name+"/"+c.name, func(t *testing.T) {
 				c.p.Accounts, c.p.EnvelopeAccounts, c.p.RowLimit = store.ScopeIDs(scope.sc), store.ScopeEnvelopeIDs(scope.sc), 51
-				c.p.ScopeAllFolderAccounts, c.p.ScopeFolders = store.ScopeFolderParams(scope.sc)
+				c.p.ScopeAllFolderAccounts, c.p.ScopeFolderAccounts, c.p.ScopeFolders = store.ScopeFolderParams(scope.sc)
 				var rec explainer
 				var err error
 				if c.threads {
@@ -435,7 +435,7 @@ ANALYZE;`
 			t.Fatal(err)
 		}
 		p := db.AttachmentMatchesParams{Query: word, Accounts: store.ScopeIDs(scopes[0].sc), RowLimit: 5001}
-		p.ScopeAllFolderAccounts, p.ScopeFolders = store.ScopeFolderParams(scopes[0].sc)
+		p.ScopeAllFolderAccounts, p.ScopeFolderAccounts, p.ScopeFolders = store.ScopeFolderParams(scopes[0].sc)
 		if _, err := db.New(&rec).AttachmentMatches(ctx, p); !errors.Is(err, errRecorded) {
 			t.Fatalf("record: %v", err)
 		}

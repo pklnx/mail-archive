@@ -34,7 +34,7 @@ WHERE m.sha256 = ANY ($1::bpchar[])
   AND EXISTS (SELECT 1 FROM message_locations ml
               JOIN folders f ON f.id = ml.folder_id
               WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY ($4::bigint[])
-                AND (f.account_id = ANY ($5::bigint[]) OR f.id = ANY ($6::bigint[])))
+                AND (f.account_id = ANY ($5::bigint[]) OR scope_folder_granted(f.account_id, f.id, $6::bigint[], $7::bigint[])))
 `
 
 type AuditSubjectsParams struct {
@@ -43,6 +43,7 @@ type AuditSubjectsParams struct {
 	ScopeBefore            *time.Time
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 }
 
@@ -61,6 +62,7 @@ func (q *Queries) AuditSubjects(ctx context.Context, arg AuditSubjectsParams) ([
 		arg.ScopeBefore,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 	)
 	if err != nil {

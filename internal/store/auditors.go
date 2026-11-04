@@ -154,6 +154,18 @@ func actorID(ctx context.Context) *int64 {
 	return nil
 }
 
+// lockActor locks the row of the pending entry's user (actorID) FOR SHARE
+// before a grant row is locked: revoked_by references it, and the foreign
+// key would otherwise lock it after the grant row, against the lock order
+// (accounts, users, grant rows).
+func lockActor(ctx context.Context, q *db.Queries) error {
+	if by := actorID(ctx); by != nil {
+		_, err := q.LockUserGroups(ctx, []int64{*by})
+		return err
+	}
+	return nil
+}
+
 // grantEvent writes one auditor.* entry about a grant in the transaction of
 // q, besides the pending entry: in the grant's group, with the grant and
 // its owner, so that it reaches the owner's Log (via_owners). The actor is
@@ -411,6 +423,14 @@ func (s *Store) ExtendGrant(ctx context.Context, id, ownerID int64, endsAt time.
 // (auditor.revoke) is recorded in the grant's group.
 func (s *Store) RevokeGrant(ctx context.Context, id int64, owner, by *int64) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
+		// The revoker's row first: the foreign key of revoked_by locks it,
+		// and after the grant row that would deadlock with a group move of
+		// that user, which holds the user and then revokes the grant.
+		if by != nil {
+			if _, err := q.LockUserGroups(ctx, []int64{*by}); err != nil {
+				return err
+			}
+		}
 		g, err := q.LockGrant(ctx, id)
 		if isNoRows(err) || err == nil && owner != nil && g.OwnerID != *owner {
 			return ErrNotFound
@@ -451,7 +471,8 @@ type RevokedGrant struct {
 // revokeCrossingGrants revokes the grants of a user who just changed group
 // that now cross groups, deletes their sessions (all sessions of a moved
 // auditor) and writes one auditor.revoke entry per grant in the group the
-// grant was in. The caller holds the user's row FOR UPDATE.
+// grant was in. The caller holds the user's row FOR UPDATE and the
+// revoker's (lockActor).
 func revokeCrossingGrants(ctx context.Context, q *db.Queries, user db.User) ([]RevokedGrant, error) {
 	rows, err := q.RevokeCrossingGrants(ctx, db.RevokeCrossingGrantsParams{RevokedBy: actorID(ctx), UserID: user.ID})
 	if err != nil {
@@ -476,7 +497,8 @@ func revokeCrossingGrants(ctx context.Context, q *db.Queries, user db.User) ([]R
 // revokeAuditorGrants revokes every unrevoked grant of an auditor who is
 // about to be removed (coordinator decision 27): one auditor.revoke entry
 // each, in the grant's group, and their sessions end. The caller holds the
-// auditor's row FOR UPDATE.
+// auditor's row FOR UPDATE, and the revoker's: an acting admin's row is
+// locked by keepAnAdmin.
 func revokeAuditorGrants(ctx context.Context, q *db.Queries, auditorID int64) ([]RevokedGrant, error) {
 	ids, err := q.UnrevokedGrantsOfAuditor(ctx, auditorID)
 	if err != nil {
@@ -514,7 +536,17 @@ type ChangedGrant struct {
 // gets an auditor.grant_change or auditor.revoke entry in its group. The
 // caller holds the account's row.
 func dropAccountFromGrants(ctx context.Context, q *db.Queries, accountID int64, reason string) ([]ChangedGrant, error) {
-	rows, err := q.DropAccountFromGrants(ctx, accountID)
+	// Users before grant rows: the revoker, whose row the foreign key of
+	// revoked_by locks, then the grants (an owner's revocation in flight
+	// is waited for, not overtaken).
+	if err := lockActor(ctx, q); err != nil {
+		return nil, err
+	}
+	ids, err := q.LockAccountGrants(ctx, accountID)
+	if err != nil || len(ids) == 0 {
+		return []ChangedGrant{}, err
+	}
+	rows, err := q.DropAccountFromGrants(ctx, db.DropAccountFromGrantsParams{AccountID: accountID, GrantIds: ids})
 	if err != nil {
 		return nil, err
 	}

@@ -168,4 +168,4 @@ WHERE m.sha256 = ANY (@shas::bpchar[])
   AND EXISTS (SELECT 1 FROM message_locations ml
               JOIN folders f ON f.id = ml.folder_id
               WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[])
-                AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[])));
+                AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])));

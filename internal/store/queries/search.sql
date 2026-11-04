@@ -22,7 +22,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts ga ON ga.id = gf.account_id
             WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
               AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-              AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
+              AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
             OFFSET 0)
         AND NOT EXISTS (
             SELECT 1 FROM message_locations p
@@ -30,7 +30,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-              AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap'
+              AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
        -- The message itself (subject, sender, body) matches the query, not
        -- only one of its attachments: exactly the query arm of the filters
@@ -72,7 +72,7 @@ WHERE
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = m.sha256
          AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
-         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
+         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(f.account_id, f.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
          AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -110,14 +110,14 @@ WHERE
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
          AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
+         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
+               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
        OR (m.sort_at, m.sha256) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_sha)::text))
@@ -149,7 +149,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts ga ON ga.id = gf.account_id
             WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
               AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-              AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
+              AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
             OFFSET 0)
         AND NOT EXISTS (
             SELECT 1 FROM message_locations p
@@ -157,7 +157,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-              AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap'
+              AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
        -- The message itself (subject, sender, body) matches the query, not
        -- only one of its attachments: exactly the query arm of the filters
@@ -200,7 +200,7 @@ WHERE
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = m.sha256
          AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
-         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
+         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(f.account_id, f.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
          AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -238,14 +238,14 @@ WHERE
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
          AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
+         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
+               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
   AND NOT EXISTS (
       SELECT 1 FROM messages n
@@ -280,7 +280,7 @@ WHERE
              JOIN folders f ON f.id = l.folder_id
              WHERE l.message_sha256 = n.sha256
                AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
-               AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
+               AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(f.account_id, f.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
                AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
         -- Filters on single fields. Recipients and attachment names are only
         -- found here, not by the full-text query.
@@ -318,14 +318,14 @@ WHERE
              JOIN accounts ga ON ga.id = gf.account_id
              WHERE g.gone_at IS NOT NULL
                AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-               AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
+               AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
                AND NOT EXISTS (
                    SELECT 1 FROM message_locations p
                    JOIN folders pf ON pf.id = p.folder_id
                    JOIN accounts pa ON pa.id = pf.account_id
                    WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                      AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-                     AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
+                     AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
         -- filters:end
   )
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
@@ -368,7 +368,7 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = t.sha256
          AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
-         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
+         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(f.account_id, f.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
          AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -406,14 +406,14 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
          AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
+         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
-               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
+               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
 GROUP BY 1;
 
@@ -430,7 +430,7 @@ WHERE m.sha256 = @sha256
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[])
-        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[])));
+        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])));
 
 -- name: ListLocations :many
 -- The locations of a message in the scope's accounts, current ones first.
@@ -471,7 +471,7 @@ LEFT JOIN smtp_fills sf ON sf.id = l.fill_id
 LEFT JOIN smtp_imports si ON si.id = l.import_id
 CROSS JOIN LATERAL (SELECT location_retain_until(l.folder_id, m.sent_at, l.internal_date, m.created_at) AS until) r
 WHERE l.message_sha256 = @sha256 AND f.account_id = ANY (@accounts::bigint[])
-  AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[]))
+  AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[]))
   AND (sqlc.narg(scope_after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(scope_after)::timestamptz)
   AND (sqlc.narg(scope_before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(scope_before)::timestamptz)
 ORDER BY superseded, a.name, u.name, a.id, f.name;
@@ -500,7 +500,7 @@ SELECT a.id, a.name AS account, u.id AS owner_id, u.name AS owner,
 FROM accounts a
 JOIN users u ON u.id = a.owner_id
 LEFT JOIN folders f ON f.account_id = a.id
-     AND (a.id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[]))
+     AND (a.id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[]))
 WHERE a.id = ANY (@accounts::bigint[])
 ORDER BY u.name, a.name, a.id, f.name;
 
@@ -529,7 +529,7 @@ CROSS JOIN LATERAL (
     JOIN folders f ON f.id = l.folder_id
     JOIN accounts a ON a.id = f.account_id
     WHERE l.message_sha256 = s.sha AND f.account_id = ANY (@shared_accounts::bigint[])
-      AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[]))
+      AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[]))
     OFFSET 0) x
 WHERE (sqlc.narg(scope_after)::timestamptz IS NULL AND sqlc.narg(scope_before)::timestamptz IS NULL
        OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = s.sha

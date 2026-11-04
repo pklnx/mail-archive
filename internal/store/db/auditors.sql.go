@@ -117,7 +117,7 @@ const dropAccountFromGrants = `-- name: DropAccountFromGrants :many
 WITH gone AS (
     DELETE FROM auditor_grant_accounts ga
     USING auditor_grants g
-    WHERE ga.grant_id = g.id AND ga.account_id = $1 AND g.revoked_at IS NULL
+    WHERE ga.grant_id = g.id AND ga.account_id = $1 AND g.id = ANY ($2::bigint[]) AND g.revoked_at IS NULL
     RETURNING ga.grant_id
 )
 SELECT g.id, g.label, g.owner_id, g.auditor_id, o.group_id AS owner_group,
@@ -130,6 +130,11 @@ JOIN users o ON o.id = g.owner_id
 ORDER BY g.id
 `
 
+type DropAccountFromGrantsParams struct {
+	AccountID int64
+	GrantIds  []int64
+}
+
 type DropAccountFromGrantsRow struct {
 	ID           int64
 	Label        string
@@ -140,11 +145,11 @@ type DropAccountFromGrantsRow struct {
 	AccountsLeft int64
 }
 
-// Takes an account out of every unrevoked grant (its rows of revoked
-// grants stay as history) and returns the grants with the accounts they
-// have left.
-func (q *Queries) DropAccountFromGrants(ctx context.Context, accountID int64) ([]DropAccountFromGrantsRow, error) {
-	rows, err := q.db.Query(ctx, dropAccountFromGrants, accountID)
+// Takes an account out of the given (locked, unrevoked) grants; rows of
+// revoked grants stay as history. Returns the grants with the accounts
+// they have left.
+func (q *Queries) DropAccountFromGrants(ctx context.Context, arg DropAccountFromGrantsParams) ([]DropAccountFromGrantsRow, error) {
+	rows, err := q.db.Query(ctx, dropAccountFromGrants, arg.AccountID, arg.GrantIds)
 	if err != nil {
 		return nil, err
 	}
@@ -569,6 +574,38 @@ func (q *Queries) ListOwnerGrants(ctx context.Context, ownerID int64) ([]ListOwn
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockAccountGrants = `-- name: LockAccountGrants :many
+SELECT g.id FROM auditor_grants g
+WHERE g.revoked_at IS NULL
+  AND EXISTS (SELECT 1 FROM auditor_grant_accounts ga WHERE ga.grant_id = g.id AND ga.account_id = $1)
+ORDER BY g.id
+FOR UPDATE
+`
+
+// The unrevoked grants that name an account, locked FOR UPDATE in id
+// order: the last step of the lock order (accounts, users, grant rows). A
+// revocation not committed yet makes this wait, and the grant it revoked
+// is then left out.
+func (q *Queries) LockAccountGrants(ctx context.Context, accountID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, lockAccountGrants, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

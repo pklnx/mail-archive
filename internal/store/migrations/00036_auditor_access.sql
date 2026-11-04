@@ -70,6 +70,17 @@ CREATE INDEX auditor_grant_folders_folder_idx ON auditor_grant_folders (folder_i
 ALTER TABLE sessions ADD COLUMN grant_id BIGINT REFERENCES auditor_grants (id) ON DELETE CASCADE;
 CREATE INDEX sessions_grant_idx ON sessions (grant_id) WHERE grant_id IS NOT NULL;
 
+-- The folder restriction of a scope (#393), per account: the folder is
+-- granted only if (its account, it) is one of the pairs given as two
+-- parallel arrays. A folder ID listed under another account opens
+-- nothing, so no narrowing can widen a scope by naming a folder under the
+-- wrong account. Accounts read with all their folders are matched apart
+-- (scope_all_folder_accounts). Inlined by the planner.
+CREATE FUNCTION scope_folder_granted(account_id bigint, folder_id bigint, accounts bigint[], folders bigint[])
+RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE
+RETURN EXISTS (SELECT 1 FROM unnest(accounts, folders) AS p (account_id, folder_id)
+               WHERE p.account_id = scope_folder_granted.account_id AND p.folder_id = scope_folder_granted.folder_id);
+
 -- The role never changes: a member never becomes an auditor (who then
 -- would read without a grant's limits) and an auditor never a member.
 -- +goose StatementBegin
@@ -266,6 +277,7 @@ DROP FUNCTION users_grants_same_group();
 DROP FUNCTION auditor_grant_accounts_owner();
 DROP FUNCTION auditor_grants_same_group();
 DROP FUNCTION users_auditor_fixed();
+DROP FUNCTION scope_folder_granted(bigint, bigint, bigint[], bigint[]);
 ALTER TABLE sessions DROP COLUMN grant_id;
 DROP TABLE auditor_grant_folders;
 DROP TABLE auditor_grant_accounts;

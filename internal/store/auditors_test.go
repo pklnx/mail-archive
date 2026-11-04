@@ -397,7 +397,9 @@ func TestAuditorFoldersPerAccount(t *testing.T) {
 
 // TestScopeRestrict (#393, B3): Restrict only narrows, a non-nil map drops
 // the accounts it does not name, and the original scope's folder lists
-// stay as they were.
+// stay as they were. The IDs are abstract, each folder ID of an account
+// (10-12 of account 1, 20 of account 2); a folder ID listed under another
+// account is TestRestrictForeignFolder's case.
 func TestScopeRestrict(t *testing.T) {
 	jan, feb, mar := ts("2022-01-01T00:00:00Z"), ts("2022-02-01T00:00:00Z"), ts("2022-03-01T00:00:00Z")
 	sc := store.Scope{Viewer: 9, Accounts: []store.ScopeAccount{{ID: 1, Folders: []int64{10, 11, 12}}, {ID: 2}, {ID: 3, Folders: []int64{}}}}
@@ -433,9 +435,61 @@ func TestScopeRestrict(t *testing.T) {
 	}
 }
 
+// TestRestrictForeignFolder (#509 review, A2 = B1): a folder ID listed
+// under an account it does not belong to opens nothing, neither in an
+// auditor's scope (a2 with all folders, restricted to a1's Private) nor in
+// an owner's scope (a1 and a2 restricted to each other's folders), and
+// RestrictScope drops such IDs.
+func TestRestrictForeignFolder(t *testing.T) {
+	f := newAuditorFixture(t)
+	g := f.grant(store.NewGrant{Accounts: []store.GrantAccount{{AccountID: f.a1, Folders: []int64{f.a1Inbox.ID}}, {AccountID: f.a2}}})
+	sc := f.scope(f.auda, g)
+	if got := f.locations(sc, '3'); got != nil {
+		t.Fatalf("message 3 before Restrict: %v", got)
+	}
+	r := sc.Restrict(map[int64][]int64{f.a1: nil, f.a2: {f.a1Private.ID}}, nil, nil)
+	if got := f.locations(r, '3'); got != nil {
+		t.Errorf("auditor: Restrict widened the scope, message 3 at %v", got)
+	}
+	if got := f.listed(r); !slices.Equal(got, []string{"1", "2", "4", "5", "6"}) {
+		t.Errorf("auditor lists %v, want a1/INBOX only", got)
+	}
+	if got := f.folders(r); !slices.Equal(got, []string{"a1", "a1/INBOX:5", "a2"}) {
+		t.Errorf("auditor's folders %v", got)
+	}
+	owner, err := f.st.OwnerScope(f.ctx, f.alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped := map[int64][]int64{f.a1: {f.a2Inbox.ID}, f.a2: {f.a1Private.ID}}
+	o := owner.Restrict(swapped, nil, nil)
+	if got := f.listed(o); len(got) != 0 {
+		t.Errorf("owner's swapped folders list %v", got)
+	}
+	for _, c := range []byte("37") {
+		if got := f.locations(o, c); got != nil {
+			t.Errorf("owner: message %c at %v", c, got)
+		}
+	}
+	rs, err := f.st.RestrictScope(f.ctx, owner, swapped, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Accounts) != 2 || len(rs.Accounts[0].Folders) != 0 || rs.Accounts[0].Folders == nil || len(rs.Accounts[1].Folders) != 0 {
+		t.Errorf("RestrictScope kept foreign folders: %+v", rs.Accounts)
+	}
+	rs, err = f.st.RestrictScope(f.ctx, owner, map[int64][]int64{f.a1: {f.a1Private.ID, f.a2Inbox.ID}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Accounts) != 1 || !slices.Equal(rs.Accounts[0].Folders, []int64{f.a1Private.ID}) || !slices.Equal(f.listed(rs), []string{"3", "4"}) {
+		t.Errorf("RestrictScope to a1/Private: %+v lists %v", rs.Accounts, f.listed(rs))
+	}
+}
+
 // TestScopeParamsInEveryQuery (#393, decision 17): every query of the
 // generated package that takes a scope's accounts also takes the folder
-// restriction and the period, so a new read query cannot forget them.
+// restriction (as account and folder pairs) and the period, so a new read query cannot forget them.
 // SearchMessages and its relatives take the period as After and Before,
 // which searchParams clamps to the scope's. A bare accounts parameter (a
 // query without Params struct) is refused.
@@ -474,7 +528,7 @@ func TestScopeParamsInEveryQuery(t *testing.T) {
 					}
 					checked++
 					period := fields["ScopeAfter"] && fields["ScopeBefore"] || fields["After"] && fields["Before"]
-					if !fields["ScopeAllFolderAccounts"] || !fields["ScopeFolders"] || !period {
+					if !fields["ScopeAllFolderAccounts"] || !fields["ScopeFolderAccounts"] || !fields["ScopeFolders"] || !period {
 						t.Errorf("%s (%s) takes a scope's accounts without its folders and period", ts.Name.Name, filepath.Base(p))
 					}
 				}

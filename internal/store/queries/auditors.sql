@@ -75,14 +75,25 @@ RETURNING g.id, g.label, g.owner_id, g.auditor_id, o.name AS owner_name, a.name 
 -- name: UnrevokedGrantsOfAuditor :many
 SELECT id FROM auditor_grants WHERE auditor_id = @auditor_id::bigint AND revoked_at IS NULL ORDER BY id;
 
+-- name: LockAccountGrants :many
+-- The unrevoked grants that name an account, locked FOR UPDATE in id
+-- order: the last step of the lock order (accounts, users, grant rows). A
+-- revocation not committed yet makes this wait, and the grant it revoked
+-- is then left out.
+SELECT g.id FROM auditor_grants g
+WHERE g.revoked_at IS NULL
+  AND EXISTS (SELECT 1 FROM auditor_grant_accounts ga WHERE ga.grant_id = g.id AND ga.account_id = @account_id)
+ORDER BY g.id
+FOR UPDATE;
+
 -- name: DropAccountFromGrants :many
--- Takes an account out of every unrevoked grant (its rows of revoked
--- grants stay as history) and returns the grants with the accounts they
--- have left.
+-- Takes an account out of the given (locked, unrevoked) grants; rows of
+-- revoked grants stay as history. Returns the grants with the accounts
+-- they have left.
 WITH gone AS (
     DELETE FROM auditor_grant_accounts ga
     USING auditor_grants g
-    WHERE ga.grant_id = g.id AND ga.account_id = @account_id AND g.revoked_at IS NULL
+    WHERE ga.grant_id = g.id AND ga.account_id = @account_id AND g.id = ANY (@grant_ids::bigint[]) AND g.revoked_at IS NULL
     RETURNING ga.grant_id
 )
 SELECT g.id, g.label, g.owner_id, g.auditor_id, o.group_id AS owner_group,

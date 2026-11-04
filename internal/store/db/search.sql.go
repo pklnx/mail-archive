@@ -44,52 +44,52 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY($1::text[])
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = t.sha256
          AND f.account_id = ANY ($6::bigint[])
-         AND (f.account_id = ANY ($7::bigint[]) OR f.id = ANY ($8::bigint[]))
-         AND ($9::text IS NULL OR f.name = $9::text))
+         AND (f.account_id = ANY ($7::bigint[]) OR scope_folder_granted(f.account_id, f.id, $8::bigint[], $9::bigint[]))
+         AND ($10::text IS NULL OR f.name = $10::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
-  AND ($10::text IS NULL OR t.from_addr ILIKE $10::text)
+  AND ($11::text IS NULL OR t.from_addr ILIKE $11::text)
   -- To or Cc of the message, or an envelope recipient (BCC included) of
   -- one of the viewer's own smtp locations. The envelope matches come as
   -- to_shas, found first by EnvelopeMatches, so that both arms use an
   -- index of messages. With too many of them, to_walk checks the envelopes
   -- of each message instead.
-  AND ($11::text IS NULL
-       OR (coalesce(t.to_addr, '') || E'\n' || coalesce(t.cc_addr, '')) ILIKE $11::text
-       OR t.sha256 = ANY ($12::bpchar[])
-       OR $13::boolean AND EXISTS (
+  AND ($12::text IS NULL
+       OR (coalesce(t.to_addr, '') || E'\n' || coalesce(t.cc_addr, '')) ILIKE $12::text
+       OR t.sha256 = ANY ($13::bpchar[])
+       OR $14::boolean AND EXISTS (
            SELECT 1 FROM message_locations rl
            JOIN envelopes re ON re.location_id = rl.id
            JOIN folders rf ON rf.id = rl.folder_id
            WHERE rl.message_sha256 = t.sha256
-             AND rf.account_id = ANY ($14::bigint[])
-             AND re.rcpt_text ILIKE $11::text
+             AND rf.account_id = ANY ($15::bigint[])
+             AND re.rcpt_text ILIKE $12::text
            -- OFFSET 0 keeps the planner from hashing all matching envelopes
            -- up front: the check runs for each message of the walk.
            OFFSET 0))
-  AND ($15::text IS NULL OR t.attachment_names ILIKE $15::text)
-  AND (NOT $16::boolean OR t.has_attachment)
-  AND ($17::text IS NULL OR COALESCE(t.thread_id, t.sha256) = $17::text)
-  AND ($18::timestamptz IS NULL OR t.sort_at >= $18::timestamptz)
-  AND ($19::timestamptz IS NULL OR t.sort_at < $19::timestamptz)
+  AND ($16::text IS NULL OR t.attachment_names ILIKE $16::text)
+  AND (NOT $17::boolean OR t.has_attachment)
+  AND ($18::text IS NULL OR COALESCE(t.thread_id, t.sha256) = $18::text)
+  AND ($19::timestamptz IS NULL OR t.sort_at >= $19::timestamptz)
+  AND ($20::timestamptz IS NULL OR t.sort_at < $20::timestamptz)
   -- Only in the archive: the scope's IMAP locations (narrowed to one
   -- account, if given) are all gone from the server. Import accounts say nothing about
   -- servers, and removed accounts are never reconciled, so they count as
   -- present. Starts from the few gone locations (message_locations_gone_idx).
-  AND (NOT $20::boolean OR t.sha256 IN (
+  AND (NOT $21::boolean OR t.sha256 IN (
        SELECT g.message_sha256 FROM message_locations g
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
          AND gf.account_id = ANY ($6::bigint[])
-         AND (gf.account_id = ANY ($7::bigint[]) OR gf.id = ANY ($8::bigint[])) AND ga.kind = 'imap'
+         AND (gf.account_id = ANY ($7::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, $8::bigint[], $9::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                AND pf.account_id = ANY ($6::bigint[])
-               AND (pf.account_id = ANY ($7::bigint[]) OR pf.id = ANY ($8::bigint[])) AND pa.kind = 'imap')))
+               AND (pf.account_id = ANY ($7::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, $8::bigint[], $9::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
 GROUP BY 1
 `
@@ -102,6 +102,7 @@ type CountThreadMatchesParams struct {
 	AttWalk                bool
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	Folder                 *string
 	FromPattern            *string
@@ -133,6 +134,7 @@ func (q *Queries) CountThreadMatches(ctx context.Context, arg CountThreadMatches
 		arg.AttWalk,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.Folder,
 		arg.FromPattern,
@@ -213,7 +215,7 @@ WHERE m.sha256 = $1
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($4::bigint[])
-        AND (f.account_id = ANY ($5::bigint[]) OR f.id = ANY ($6::bigint[])))
+        AND (f.account_id = ANY ($5::bigint[]) OR scope_folder_granted(f.account_id, f.id, $6::bigint[], $7::bigint[])))
 `
 
 type GetMessageSummaryParams struct {
@@ -222,6 +224,7 @@ type GetMessageSummaryParams struct {
 	ScopeBefore            *time.Time
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 }
 
@@ -247,6 +250,7 @@ func (q *Queries) GetMessageSummary(ctx context.Context, arg GetMessageSummaryPa
 		arg.ScopeBefore,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 	)
 	var i GetMessageSummaryRow
@@ -281,8 +285,8 @@ SELECT a.id, a.name AS account, u.id AS owner_id, u.name AS owner,
 FROM accounts a
 JOIN users u ON u.id = a.owner_id
 LEFT JOIN folders f ON f.account_id = a.id
-     AND (a.id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[]))
-WHERE a.id = ANY ($5::bigint[])
+     AND (a.id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[]))
+WHERE a.id = ANY ($6::bigint[])
 ORDER BY u.name, a.name, a.id, f.name
 `
 
@@ -290,6 +294,7 @@ type ListFolderCountsParams struct {
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	Accounts               []int64
 }
@@ -322,6 +327,7 @@ func (q *Queries) ListFolderCounts(ctx context.Context, arg ListFolderCountsPara
 		arg.ScopeAfter,
 		arg.ScopeBefore,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.Accounts,
 	)
@@ -388,9 +394,9 @@ LEFT JOIN smtp_fills sf ON sf.id = l.fill_id
 LEFT JOIN smtp_imports si ON si.id = l.import_id
 CROSS JOIN LATERAL (SELECT location_retain_until(l.folder_id, m.sent_at, l.internal_date, m.created_at) AS until) r
 WHERE l.message_sha256 = $2 AND f.account_id = ANY ($3::bigint[])
-  AND (f.account_id = ANY ($4::bigint[]) OR f.id = ANY ($5::bigint[]))
-  AND ($6::timestamptz IS NULL OR m.sort_at >= $6::timestamptz)
-  AND ($7::timestamptz IS NULL OR m.sort_at < $7::timestamptz)
+  AND (f.account_id = ANY ($4::bigint[]) OR scope_folder_granted(f.account_id, f.id, $5::bigint[], $6::bigint[]))
+  AND ($7::timestamptz IS NULL OR m.sort_at >= $7::timestamptz)
+  AND ($8::timestamptz IS NULL OR m.sort_at < $8::timestamptz)
 ORDER BY superseded, a.name, u.name, a.id, f.name
 `
 
@@ -399,6 +405,7 @@ type ListLocationsParams struct {
 	Sha256                 string
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
@@ -446,6 +453,7 @@ func (q *Queries) ListLocations(ctx context.Context, arg ListLocationsParams) ([
 		arg.Sha256,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.ScopeAfter,
 		arg.ScopeBefore,
@@ -504,16 +512,16 @@ CROSS JOIN LATERAL (
     JOIN folders f ON f.id = l.folder_id
     JOIN accounts a ON a.id = f.account_id
     WHERE l.message_sha256 = s.sha AND f.account_id = ANY ($2::bigint[])
-      AND (f.account_id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[]))
+      AND (f.account_id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[]))
     OFFSET 0) x
-WHERE ($5::timestamptz IS NULL AND $6::timestamptz IS NULL
+WHERE ($6::timestamptz IS NULL AND $7::timestamptz IS NULL
        OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = s.sha
-                    AND ($5::timestamptz IS NULL OR pm.sort_at >= $5::timestamptz)
-                    AND ($6::timestamptz IS NULL OR pm.sort_at < $6::timestamptz)))
+                    AND ($6::timestamptz IS NULL OR pm.sort_at >= $6::timestamptz)
+                    AND ($7::timestamptz IS NULL OR pm.sort_at < $7::timestamptz)))
   AND NOT EXISTS (
     SELECT 1 FROM message_locations o
     JOIN folders ofo ON ofo.id = o.folder_id
-    WHERE o.message_sha256 = s.sha AND ofo.account_id = ANY ($7::bigint[])
+    WHERE o.message_sha256 = s.sha AND ofo.account_id = ANY ($8::bigint[])
     OFFSET 0)
 ORDER BY 1, 2
 `
@@ -522,6 +530,7 @@ type ListShareOnlyLocationsParams struct {
 	Shas                   []string
 	SharedAccounts         []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
@@ -545,6 +554,7 @@ func (q *Queries) ListShareOnlyLocations(ctx context.Context, arg ListShareOnlyL
 		arg.Shas,
 		arg.SharedAccounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.ScopeAfter,
 		arg.ScopeBefore,
@@ -590,7 +600,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts ga ON ga.id = gf.account_id
             WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
               AND gf.account_id = ANY ($2::bigint[])
-              AND (gf.account_id = ANY ($3::bigint[]) OR gf.id = ANY ($4::bigint[])) AND ga.kind = 'imap'
+              AND (gf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, $4::bigint[], $5::bigint[])) AND ga.kind = 'imap'
             OFFSET 0)
         AND NOT EXISTS (
             SELECT 1 FROM message_locations p
@@ -598,7 +608,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY ($2::bigint[])
-              AND (pf.account_id = ANY ($3::bigint[]) OR pf.id = ANY ($4::bigint[])) AND pa.kind = 'imap'
+              AND (pf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, $4::bigint[], $5::bigint[])) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
        -- The message itself (subject, sender, body) matches the query, not
        -- only one of its attachments: exactly the query arm of the filters
@@ -608,8 +618,8 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                 OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
                                 websearch_to_tsquery('german', $1::text) ||
                                 websearch_to_tsquery('english', $1::text))
-                OR m.subject ILIKE $5::text
-                OR m.from_addr ILIKE $5::text, false)::boolean AS text_match
+                OR m.subject ILIKE $6::text
+                OR m.from_addr ILIKE $6::text, false)::boolean AS text_match
 FROM messages m
 WHERE
   -- filters:begin (keep all copies equal; TestSearchFilterCopies checks)
@@ -617,14 +627,14 @@ WHERE
    OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
                     websearch_to_tsquery('german', $1::text) ||
                     websearch_to_tsquery('english', $1::text))
-   OR m.subject ILIKE $5::text
-   OR m.from_addr ILIKE $5::text
+   OR m.subject ILIKE $6::text
+   OR m.from_addr ILIKE $6::text
    -- A match in the text of one attachment, found first by
    -- AttachmentMatches; with too many of them, att_walk checks the
    -- attachments of each message instead. All words must be in the
    -- message or all in one attachment.
-   OR m.sha256 = ANY ($6::bpchar[])
-   OR $7::boolean AND EXISTS (
+   OR m.sha256 = ANY ($7::bpchar[])
+   OR $8::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = m.sha256
          -- Only rows with text: an empty one would match any negation.
@@ -640,63 +650,64 @@ WHERE
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = m.sha256
          AND f.account_id = ANY ($2::bigint[])
-         AND (f.account_id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[]))
-         AND ($8::text IS NULL OR f.name = $8::text))
+         AND (f.account_id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[]))
+         AND ($9::text IS NULL OR f.name = $9::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
-  AND ($9::text IS NULL OR m.from_addr ILIKE $9::text)
+  AND ($10::text IS NULL OR m.from_addr ILIKE $10::text)
   -- To or Cc of the message, or an envelope recipient (BCC included) of
   -- one of the viewer's own smtp locations. The envelope matches come as
   -- to_shas, found first by EnvelopeMatches, so that both arms use an
   -- index of messages. With too many of them, to_walk checks the envelopes
   -- of each message instead.
-  AND ($10::text IS NULL
-       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $10::text
-       OR m.sha256 = ANY ($11::bpchar[])
-       OR $12::boolean AND EXISTS (
+  AND ($11::text IS NULL
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $11::text
+       OR m.sha256 = ANY ($12::bpchar[])
+       OR $13::boolean AND EXISTS (
            SELECT 1 FROM message_locations rl
            JOIN envelopes re ON re.location_id = rl.id
            JOIN folders rf ON rf.id = rl.folder_id
            WHERE rl.message_sha256 = m.sha256
-             AND rf.account_id = ANY ($13::bigint[])
-             AND re.rcpt_text ILIKE $10::text
+             AND rf.account_id = ANY ($14::bigint[])
+             AND re.rcpt_text ILIKE $11::text
            -- OFFSET 0 keeps the planner from hashing all matching envelopes
            -- up front: the check runs for each message of the walk.
            OFFSET 0))
-  AND ($14::text IS NULL OR m.attachment_names ILIKE $14::text)
-  AND (NOT $15::boolean OR m.has_attachment)
-  AND ($16::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $16::text)
-  AND ($17::timestamptz IS NULL OR m.sort_at >= $17::timestamptz)
-  AND ($18::timestamptz IS NULL OR m.sort_at < $18::timestamptz)
+  AND ($15::text IS NULL OR m.attachment_names ILIKE $15::text)
+  AND (NOT $16::boolean OR m.has_attachment)
+  AND ($17::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $17::text)
+  AND ($18::timestamptz IS NULL OR m.sort_at >= $18::timestamptz)
+  AND ($19::timestamptz IS NULL OR m.sort_at < $19::timestamptz)
   -- Only in the archive: the scope's IMAP locations (narrowed to one
   -- account, if given) are all gone from the server. Import accounts say nothing about
   -- servers, and removed accounts are never reconciled, so they count as
   -- present. Starts from the few gone locations (message_locations_gone_idx).
-  AND (NOT $19::boolean OR m.sha256 IN (
+  AND (NOT $20::boolean OR m.sha256 IN (
        SELECT g.message_sha256 FROM message_locations g
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
          AND gf.account_id = ANY ($2::bigint[])
-         AND (gf.account_id = ANY ($3::bigint[]) OR gf.id = ANY ($4::bigint[])) AND ga.kind = 'imap'
+         AND (gf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, $4::bigint[], $5::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                AND pf.account_id = ANY ($2::bigint[])
-               AND (pf.account_id = ANY ($3::bigint[]) OR pf.id = ANY ($4::bigint[])) AND pa.kind = 'imap')))
+               AND (pf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, $4::bigint[], $5::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
-  AND ($20::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($20::timestamptz, $21::text))
+  AND ($21::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($21::timestamptz, $22::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $22
+LIMIT $23
 `
 
 type SearchMessagesParams struct {
 	Query                  *string
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	Pattern                *string
 	AttShas                []string
@@ -738,6 +749,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 		arg.Query,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.Pattern,
 		arg.AttShas,
@@ -808,7 +820,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts ga ON ga.id = gf.account_id
             WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
               AND gf.account_id = ANY ($2::bigint[])
-              AND (gf.account_id = ANY ($3::bigint[]) OR gf.id = ANY ($4::bigint[])) AND ga.kind = 'imap'
+              AND (gf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, $4::bigint[], $5::bigint[])) AND ga.kind = 'imap'
             OFFSET 0)
         AND NOT EXISTS (
             SELECT 1 FROM message_locations p
@@ -816,7 +828,7 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
               AND pf.account_id = ANY ($2::bigint[])
-              AND (pf.account_id = ANY ($3::bigint[]) OR pf.id = ANY ($4::bigint[])) AND pa.kind = 'imap'
+              AND (pf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, $4::bigint[], $5::bigint[])) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
        -- The message itself (subject, sender, body) matches the query, not
        -- only one of its attachments: exactly the query arm of the filters
@@ -826,8 +838,8 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
                 OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
                                 websearch_to_tsquery('german', $1::text) ||
                                 websearch_to_tsquery('english', $1::text))
-                OR m.subject ILIKE $5::text
-                OR m.from_addr ILIKE $5::text, false)::boolean AS text_match,
+                OR m.subject ILIKE $6::text
+                OR m.from_addr ILIKE $6::text, false)::boolean AS text_match,
        COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE
@@ -836,14 +848,14 @@ WHERE
    OR m.search @@ (websearch_to_tsquery('simple', $1::text) ||
                     websearch_to_tsquery('german', $1::text) ||
                     websearch_to_tsquery('english', $1::text))
-   OR m.subject ILIKE $5::text
-   OR m.from_addr ILIKE $5::text
+   OR m.subject ILIKE $6::text
+   OR m.from_addr ILIKE $6::text
    -- A match in the text of one attachment, found first by
    -- AttachmentMatches; with too many of them, att_walk checks the
    -- attachments of each message instead. All words must be in the
    -- message or all in one attachment.
-   OR m.sha256 = ANY ($6::bpchar[])
-   OR $7::boolean AND EXISTS (
+   OR m.sha256 = ANY ($7::bpchar[])
+   OR $8::boolean AND EXISTS (
        SELECT 1 FROM attachment_texts ax
        WHERE ax.message_sha256 = m.sha256
          -- Only rows with text: an empty one would match any negation.
@@ -859,52 +871,52 @@ WHERE
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = m.sha256
          AND f.account_id = ANY ($2::bigint[])
-         AND (f.account_id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[]))
-         AND ($8::text IS NULL OR f.name = $8::text))
+         AND (f.account_id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[]))
+         AND ($9::text IS NULL OR f.name = $9::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
-  AND ($9::text IS NULL OR m.from_addr ILIKE $9::text)
+  AND ($10::text IS NULL OR m.from_addr ILIKE $10::text)
   -- To or Cc of the message, or an envelope recipient (BCC included) of
   -- one of the viewer's own smtp locations. The envelope matches come as
   -- to_shas, found first by EnvelopeMatches, so that both arms use an
   -- index of messages. With too many of them, to_walk checks the envelopes
   -- of each message instead.
-  AND ($10::text IS NULL
-       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $10::text
-       OR m.sha256 = ANY ($11::bpchar[])
-       OR $12::boolean AND EXISTS (
+  AND ($11::text IS NULL
+       OR (coalesce(m.to_addr, '') || E'\n' || coalesce(m.cc_addr, '')) ILIKE $11::text
+       OR m.sha256 = ANY ($12::bpchar[])
+       OR $13::boolean AND EXISTS (
            SELECT 1 FROM message_locations rl
            JOIN envelopes re ON re.location_id = rl.id
            JOIN folders rf ON rf.id = rl.folder_id
            WHERE rl.message_sha256 = m.sha256
-             AND rf.account_id = ANY ($13::bigint[])
-             AND re.rcpt_text ILIKE $10::text
+             AND rf.account_id = ANY ($14::bigint[])
+             AND re.rcpt_text ILIKE $11::text
            -- OFFSET 0 keeps the planner from hashing all matching envelopes
            -- up front: the check runs for each message of the walk.
            OFFSET 0))
-  AND ($14::text IS NULL OR m.attachment_names ILIKE $14::text)
-  AND (NOT $15::boolean OR m.has_attachment)
-  AND ($16::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $16::text)
-  AND ($17::timestamptz IS NULL OR m.sort_at >= $17::timestamptz)
-  AND ($18::timestamptz IS NULL OR m.sort_at < $18::timestamptz)
+  AND ($15::text IS NULL OR m.attachment_names ILIKE $15::text)
+  AND (NOT $16::boolean OR m.has_attachment)
+  AND ($17::text IS NULL OR COALESCE(m.thread_id, m.sha256) = $17::text)
+  AND ($18::timestamptz IS NULL OR m.sort_at >= $18::timestamptz)
+  AND ($19::timestamptz IS NULL OR m.sort_at < $19::timestamptz)
   -- Only in the archive: the scope's IMAP locations (narrowed to one
   -- account, if given) are all gone from the server. Import accounts say nothing about
   -- servers, and removed accounts are never reconciled, so they count as
   -- present. Starts from the few gone locations (message_locations_gone_idx).
-  AND (NOT $19::boolean OR m.sha256 IN (
+  AND (NOT $20::boolean OR m.sha256 IN (
        SELECT g.message_sha256 FROM message_locations g
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
          AND gf.account_id = ANY ($2::bigint[])
-         AND (gf.account_id = ANY ($3::bigint[]) OR gf.id = ANY ($4::bigint[])) AND ga.kind = 'imap'
+         AND (gf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, $4::bigint[], $5::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                AND pf.account_id = ANY ($2::bigint[])
-               AND (pf.account_id = ANY ($3::bigint[]) OR pf.id = ANY ($4::bigint[])) AND pa.kind = 'imap')))
+               AND (pf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, $4::bigint[], $5::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
   AND NOT EXISTS (
       SELECT 1 FROM messages n
@@ -916,14 +928,14 @@ WHERE
          OR n.search @@ (websearch_to_tsquery('simple', $1::text) ||
                           websearch_to_tsquery('german', $1::text) ||
                           websearch_to_tsquery('english', $1::text))
-         OR n.subject ILIKE $5::text
-         OR n.from_addr ILIKE $5::text
+         OR n.subject ILIKE $6::text
+         OR n.from_addr ILIKE $6::text
          -- A match in the text of one attachment, found first by
          -- AttachmentMatches; with too many of them, att_walk checks the
          -- attachments of each message instead. All words must be in the
          -- message or all in one attachment.
-         OR n.sha256 = ANY ($6::bpchar[])
-         OR $7::boolean AND EXISTS (
+         OR n.sha256 = ANY ($7::bpchar[])
+         OR $8::boolean AND EXISTS (
              SELECT 1 FROM attachment_texts ax
              WHERE ax.message_sha256 = n.sha256
                -- Only rows with text: an empty one would match any negation.
@@ -939,64 +951,65 @@ WHERE
              JOIN folders f ON f.id = l.folder_id
              WHERE l.message_sha256 = n.sha256
                AND f.account_id = ANY ($2::bigint[])
-               AND (f.account_id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[]))
-               AND ($8::text IS NULL OR f.name = $8::text))
+               AND (f.account_id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[]))
+               AND ($9::text IS NULL OR f.name = $9::text))
         -- Filters on single fields. Recipients and attachment names are only
         -- found here, not by the full-text query.
-        AND ($9::text IS NULL OR n.from_addr ILIKE $9::text)
+        AND ($10::text IS NULL OR n.from_addr ILIKE $10::text)
         -- To or Cc of the message, or an envelope recipient (BCC included) of
         -- one of the viewer's own smtp locations. The envelope matches come as
         -- to_shas, found first by EnvelopeMatches, so that both arms use an
         -- index of messages. With too many of them, to_walk checks the envelopes
         -- of each message instead.
-        AND ($10::text IS NULL
-             OR (coalesce(n.to_addr, '') || E'\n' || coalesce(n.cc_addr, '')) ILIKE $10::text
-             OR n.sha256 = ANY ($11::bpchar[])
-             OR $12::boolean AND EXISTS (
+        AND ($11::text IS NULL
+             OR (coalesce(n.to_addr, '') || E'\n' || coalesce(n.cc_addr, '')) ILIKE $11::text
+             OR n.sha256 = ANY ($12::bpchar[])
+             OR $13::boolean AND EXISTS (
                  SELECT 1 FROM message_locations rl
                  JOIN envelopes re ON re.location_id = rl.id
                  JOIN folders rf ON rf.id = rl.folder_id
                  WHERE rl.message_sha256 = n.sha256
-                   AND rf.account_id = ANY ($13::bigint[])
-                   AND re.rcpt_text ILIKE $10::text
+                   AND rf.account_id = ANY ($14::bigint[])
+                   AND re.rcpt_text ILIKE $11::text
                  -- OFFSET 0 keeps the planner from hashing all matching envelopes
                  -- up front: the check runs for each message of the walk.
                  OFFSET 0))
-        AND ($14::text IS NULL OR n.attachment_names ILIKE $14::text)
-        AND (NOT $15::boolean OR n.has_attachment)
-        AND ($16::text IS NULL OR COALESCE(n.thread_id, n.sha256) = $16::text)
-        AND ($17::timestamptz IS NULL OR n.sort_at >= $17::timestamptz)
-        AND ($18::timestamptz IS NULL OR n.sort_at < $18::timestamptz)
+        AND ($15::text IS NULL OR n.attachment_names ILIKE $15::text)
+        AND (NOT $16::boolean OR n.has_attachment)
+        AND ($17::text IS NULL OR COALESCE(n.thread_id, n.sha256) = $17::text)
+        AND ($18::timestamptz IS NULL OR n.sort_at >= $18::timestamptz)
+        AND ($19::timestamptz IS NULL OR n.sort_at < $19::timestamptz)
         -- Only in the archive: the scope's IMAP locations (narrowed to one
         -- account, if given) are all gone from the server. Import accounts say nothing about
         -- servers, and removed accounts are never reconciled, so they count as
         -- present. Starts from the few gone locations (message_locations_gone_idx).
-        AND (NOT $19::boolean OR n.sha256 IN (
+        AND (NOT $20::boolean OR n.sha256 IN (
              SELECT g.message_sha256 FROM message_locations g
              JOIN folders gf ON gf.id = g.folder_id
              JOIN accounts ga ON ga.id = gf.account_id
              WHERE g.gone_at IS NOT NULL
                AND gf.account_id = ANY ($2::bigint[])
-               AND (gf.account_id = ANY ($3::bigint[]) OR gf.id = ANY ($4::bigint[])) AND ga.kind = 'imap'
+               AND (gf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(gf.account_id, gf.id, $4::bigint[], $5::bigint[])) AND ga.kind = 'imap'
                AND NOT EXISTS (
                    SELECT 1 FROM message_locations p
                    JOIN folders pf ON pf.id = p.folder_id
                    JOIN accounts pa ON pa.id = pf.account_id
                    WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
                      AND pf.account_id = ANY ($2::bigint[])
-                     AND (pf.account_id = ANY ($3::bigint[]) OR pf.id = ANY ($4::bigint[])) AND pa.kind = 'imap')))
+                     AND (pf.account_id = ANY ($3::bigint[]) OR scope_folder_granted(pf.account_id, pf.id, $4::bigint[], $5::bigint[])) AND pa.kind = 'imap')))
         -- filters:end
   )
-  AND ($20::timestamptz IS NULL
-       OR (m.sort_at, m.sha256) < ($20::timestamptz, $21::text))
+  AND ($21::timestamptz IS NULL
+       OR (m.sort_at, m.sha256) < ($21::timestamptz, $22::text))
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $22
+LIMIT $23
 `
 
 type SearchThreadsParams struct {
 	Query                  *string
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	Pattern                *string
 	AttShas                []string
@@ -1041,6 +1054,7 @@ func (q *Queries) SearchThreads(ctx context.Context, arg SearchThreadsParams) ([
 		arg.Query,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.Pattern,
 		arg.AttShas,

@@ -27,7 +27,7 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[])
-        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[])))
+        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])))
   AND (sqlc.narg(scope_after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(scope_after)::timestamptz)
   AND (sqlc.narg(scope_before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(scope_before)::timestamptz)
 ORDER BY m.sort_at DESC, m.sha256 DESC
@@ -48,6 +48,6 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[])
-        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[])))
+        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])))
   AND (sqlc.narg(scope_after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(scope_after)::timestamptz)
   AND (sqlc.narg(scope_before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(scope_before)::timestamptz);

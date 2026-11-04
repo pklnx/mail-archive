@@ -36,19 +36,20 @@ WHERE a.body_text IS NOT NULL
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = a.message_sha256
         AND f.account_id = ANY ($2::bigint[])
-        AND (f.account_id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[])))
+        AND (f.account_id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[])))
   -- The scope's period (#393), checked only when it has one.
-  AND ($5::timestamptz IS NULL AND $6::timestamptz IS NULL
+  AND ($6::timestamptz IS NULL AND $7::timestamptz IS NULL
        OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = a.message_sha256
-                    AND ($5::timestamptz IS NULL OR pm.sort_at >= $5::timestamptz)
-                    AND ($6::timestamptz IS NULL OR pm.sort_at < $6::timestamptz)))
-LIMIT $7
+                    AND ($6::timestamptz IS NULL OR pm.sort_at >= $6::timestamptz)
+                    AND ($7::timestamptz IS NULL OR pm.sort_at < $7::timestamptz)))
+LIMIT $8
 `
 
 type AttachmentMatchesParams struct {
 	Query                  string
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
@@ -64,6 +65,7 @@ func (q *Queries) AttachmentMatches(ctx context.Context, arg AttachmentMatchesPa
 		arg.Query,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.ScopeAfter,
 		arg.ScopeBefore,
@@ -111,12 +113,12 @@ WHERE EXISTS (
     JOIN folders f ON f.id = l.folder_id
     WHERE l.message_sha256 = s.sha
       AND f.account_id = ANY ($3::bigint[])
-      AND (f.account_id = ANY ($4::bigint[]) OR f.id = ANY ($5::bigint[])))
+      AND (f.account_id = ANY ($4::bigint[]) OR scope_folder_granted(f.account_id, f.id, $5::bigint[], $6::bigint[])))
   -- The scope's period (#393), checked only when it has one.
-  AND ($6::timestamptz IS NULL AND $7::timestamptz IS NULL
+  AND ($7::timestamptz IS NULL AND $8::timestamptz IS NULL
        OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = s.sha
-                    AND ($6::timestamptz IS NULL OR pm.sort_at >= $6::timestamptz)
-                    AND ($7::timestamptz IS NULL OR pm.sort_at < $7::timestamptz)))
+                    AND ($7::timestamptz IS NULL OR pm.sort_at >= $7::timestamptz)
+                    AND ($8::timestamptz IS NULL OR pm.sort_at < $8::timestamptz)))
 ORDER BY 1
 `
 
@@ -125,6 +127,7 @@ type AttachmentSnippetsParams struct {
 	Shas                   []string
 	Accounts               []int64
 	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
 	ScopeFolders           []int64
 	ScopeAfter             *time.Time
 	ScopeBefore            *time.Time
@@ -148,6 +151,7 @@ func (q *Queries) AttachmentSnippets(ctx context.Context, arg AttachmentSnippets
 		arg.Shas,
 		arg.Accounts,
 		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
 		arg.ScopeFolders,
 		arg.ScopeAfter,
 		arg.ScopeBefore,
