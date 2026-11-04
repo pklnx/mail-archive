@@ -55,3 +55,17 @@ UPDATE blob_encryption
 SET state = 'off', generation = generation + 1, cursor = '', files_done = 0, files_corrupt = 0,
     finished_at = now(), updated_at = now()
 WHERE state <> 'off';
+
+-- name: SaveBlobConversionProgress :execrows
+-- The progress of an offline conversion after a batch (#392, part 3), only
+-- while the state and generation are still those the command set.
+UPDATE blob_encryption
+SET cursor = @cursor, files_done = @files_done, files_corrupt = @files_corrupt, updated_at = now()
+WHERE generation = @generation AND state IN ('encrypting', 'decrypting');
+
+-- name: FinishBlobEncryption :execrows
+-- The end of `encryption enable`: state on, the next generation; the
+-- counters stay as the record of the conversion.
+UPDATE blob_encryption
+SET state = 'on', generation = generation + 1, cursor = '', finished_at = now(), updated_at = now()
+WHERE generation = @generation AND state = 'encrypting';

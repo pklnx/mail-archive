@@ -1,0 +1,518 @@
+package archive
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/store"
+)
+
+// Batch limits of an offline conversion (#392, part 3): a batch ends after
+// this many files or bytes, whichever comes first. The extra disk space a
+// conversion needs is at most one batch.
+const (
+	ConvertBatchFiles = 200
+	ConvertBatchBytes = 256 << 20
+)
+
+// ConvertOptions configures Enable and Disable.
+type ConvertOptions struct {
+	DataDir string
+	KEK     []byte // the configured archive key
+	// Out receives the progress lines; nil discards them.
+	Out    io.Writer
+	Logger *slog.Logger
+	Now    func() time.Time // default time.Now
+
+	// BatchFiles and BatchBytes override the batch limits (tests).
+	BatchFiles int
+	BatchBytes int64
+	// AfterBatch, for tests, runs after each committed batch; an error
+	// ends the run as an interruption would.
+	AfterBatch func(batch int) error
+}
+
+// ConvertResult is what Enable or Disable did.
+type ConvertResult struct {
+	// State is the state at the end: store.BlobOn, store.BlobOff, or the
+	// transitional state of an unfinished run.
+	State string
+	// Unchanged is set when the state already was the target: nothing
+	// was converted.
+	Unchanged bool
+	Converted int64 // files converted by this run
+	// Corrupt lists the files of the last pass that could not be
+	// converted (relative paths).
+	Corrupt []string
+	// MovedAside lists the encrypted files Disable could not decrypt and
+	// moved from messages/ to orphans/<time>/.
+	MovedAside []string
+	// MovedTo is that orphans/<time> directory.
+	MovedTo string
+	// TempRemoved and TempKept count the files in tmp/ removed because
+	// they were older than StaleTempAge, and those kept.
+	TempRemoved, TempKept int
+	// Passes is the number of passes over the files this run made.
+	Passes int
+}
+
+// ErrBlobLockHeld means verify, a sweep, a purge or a retention run holds
+// the blob lock, so a conversion cannot start.
+var ErrBlobLockHeld = errors.New("verify, a retention sweep or a purge is running; start again when it has finished")
+
+// ErrRekeyInProgress means a rekey has not finished; a conversion cannot
+// start before it.
+var ErrRekeyInProgress = errors.New("a rekey is in progress; run `encryption rekey` to finish it first")
+
+// Enable turns encryption at rest on: it encrypts every message file in
+// messages/ and orphans/, in the foreground, and resumes an interrupted
+// run (#392, part 3; maintainer decision 5). It runs only while no
+// writer runs: it takes the writers lock exclusively and the blob lock
+// exclusively, without waiting, and refuses otherwise.
+//
+// Starting from off, it first writes the keyring file with a new
+// generation and records the state encrypting with that keyring as the
+// database copy, so that a database copy recorded off before can no
+// longer match the file. From decrypting it changes direction (the
+// cursor starts again). The state becomes on only after a complete pass
+// from the start that found nothing left to convert.
+func Enable(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts ConvertOptions) (*ConvertResult, error) {
+	return convertArchive(ctx, st, blobs, opts, true)
+}
+
+// Disable turns encryption at rest off: it decrypts every message file in
+// messages/ and orphans/, as Enable encrypts them. An encrypted file in
+// messages/ that cannot be decrypted (damaged, or under a data key the
+// keyring lacks) is moved to orphans/<time>/, so that no encrypted file
+// is left in messages/; without that, a later change of the keyring file
+// would make the next writer derive the state encrypting from it. The
+// state becomes off (store.ClearBlobEncryption) after a complete pass
+// from the start; the keyring file stays and matches the database copy,
+// so that writers do not walk the message files at start.
+func Disable(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts ConvertOptions) (*ConvertResult, error) {
+	return convertArchive(ctx, st, blobs, opts, false)
+}
+
+func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts ConvertOptions, encrypt bool) (*ConvertResult, error) {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Out == nil {
+		opts.Out = io.Discard
+	}
+	if opts.BatchFiles <= 0 {
+		opts.BatchFiles = ConvertBatchFiles
+	}
+	if opts.BatchBytes <= 0 {
+		opts.BatchBytes = ConvertBatchBytes
+	}
+	command := "disable"
+	if encrypt {
+		command = "enable"
+	}
+	lock, err := st.TryLockWritersExclusive(ctx, command)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Release()
+	// The blob lock on the writers lock's connection, released with it.
+	if ok, err := lock.TryBlobLock(ctx); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, ErrBlobLockHeld
+	}
+
+	row, err := st.BlobEncryption(ctx)
+	if err != nil {
+		return nil, err
+	}
+	state := store.BlobOff
+	if row != nil {
+		state = row.State
+	}
+	target, transit := store.BlobOff, store.BlobDecrypting
+	if encrypt {
+		target, transit = store.BlobOn, store.BlobEncrypting
+	}
+	switch state {
+	case target:
+		return &ConvertResult{State: state, Unchanged: true}, nil
+	case store.BlobRekeying:
+		return nil, ErrRekeyInProgress
+	}
+	if opts.KEK == nil {
+		return nil, fmt.Errorf("%w: `encryption %s` needs it", ErrNoArchiveKey, command)
+	}
+	atOpts := AtRestOptions{DataDir: opts.DataDir, KEK: opts.KEK, Logger: opts.Logger}
+
+	var ring *blobcrypt.Keyring
+	if state == store.BlobOff {
+		// Only Enable gets here (Disable returned above).
+		if ring, err = startEnable(ctx, st, row, atOpts, opts.Out); err != nil {
+			return nil, err
+		}
+	} else {
+		// A conversion in either direction, or on (Disable): the copies
+		// are reconciled as at a writer's start.
+		if ring, err = needKeyring(ctx, st, row, atOpts); err != nil {
+			return nil, err
+		}
+		if state != transit {
+			// on → decrypting, encrypting → decrypting or back: the
+			// cursor starts again.
+			if err := st.SetBlobEncryption(ctx, transit, store.KeyringCopy{}); err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(opts.Out, "encryption at rest: %s → %s\n", state, transit)
+		}
+	}
+	// No other encryption command changes the keyring while this runs.
+	unlockRing, err := blobcrypt.LockKeyring(opts.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockRing()
+	if row, err = st.BlobEncryption(ctx); err != nil {
+		return nil, err
+	}
+	if row == nil || row.State != transit {
+		now := store.BlobOff
+		if row != nil {
+			now = row.State
+		}
+		return nil, fmt.Errorf("encryption at rest changed during start-up (state %q, want %s); start again", now, transit)
+	}
+	if err := blobs.SetKeys(ring, encrypt); err != nil {
+		return nil, err
+	}
+	conv, err := blobs.NewConversion(encrypt)
+	if err != nil {
+		return nil, err
+	}
+	c := &converter{
+		ctx: ctx, st: st, blobs: blobs, conv: conv, opts: opts, encrypt: encrypt,
+		gen: row.Generation, cursor: row.Cursor, done: row.FilesDone, corrupt: row.FilesCorrupt,
+		res: &ConvertResult{State: transit},
+	}
+	if c.res.TempRemoved, c.res.TempKept, err = blobs.RemoveStaleTemp(opts.Now().Add(-StaleTempAge)); err != nil {
+		return nil, err
+	}
+	if c.res.TempKept > 0 {
+		fmt.Fprintf(opts.Out, "note: %d file(s) in tmp/ are younger than %s and stay; they are removed by a run after that\n",
+			c.res.TempKept, StaleTempAge)
+	}
+	if err := c.run(); err != nil {
+		return c.res, err
+	}
+	if encrypt {
+		err = st.FinishBlobEncryption(ctx, c.gen)
+	} else {
+		err = st.ClearBlobEncryption(ctx)
+	}
+	if err != nil {
+		return c.res, err
+	}
+	c.res.State = target
+	return c.res, nil
+}
+
+// startEnable is the step from off to encrypting: the keyring file gets a
+// new generation, written before the first file is encrypted, and the
+// state encrypting is recorded with it as the database copy (through
+// store.SetBlobEncryption, which continues the generation of an off row).
+// A database copy recorded off with the same archive id is merged in
+// (the data keys are the union).
+func startEnable(ctx context.Context, st *store.Store, row *store.BlobEncryption, opts AtRestOptions, out io.Writer) (*blobcrypt.Keyring, error) {
+	unlock, err := blobcrypt.LockKeyring(opts.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	path := blobcrypt.KeyringPath(opts.DataDir)
+	ring, err := blobcrypt.ReadKeyringFile(path)
+	if errors.Is(err, blobcrypt.ErrNoKeyring) {
+		return nil, fmt.Errorf("%w (create it with `encryption keygen` first)", err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := ring.Open(opts.KEK); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if row != nil && len(row.Keyring) > 0 {
+		if old, err := blobcrypt.ParseKeyring(row.Keyring); err == nil && old.ArchiveID() == ring.ArchiveID() && old.Open(opts.KEK) == nil {
+			if ring, err = blobcrypt.Reconcile(ring, old); err != nil {
+				return nil, err
+			}
+		} else {
+			opts.Logger.Warn("encryption at rest: the keyring copy recorded with state off is not this archive's or does not open; it is replaced")
+		}
+	}
+	if err := ring.NextGeneration(); err != nil {
+		return nil, err
+	}
+	if err := blobcrypt.WriteKeyringFile(path, ring); err != nil {
+		return nil, err
+	}
+	data, err := ring.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, store.KeyringCopy{
+		Keyring: data, ID: ring.ArchiveID(), Generation: int64(ring.Generation()), CurrentKey: ring.CurrentKey(), //nolint:gosec // generations stay far below 2^63
+	}); err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(out, "encryption at rest: off → encrypting (keyring generation %d, data key %08x)\n", ring.Generation(), ring.CurrentKey())
+	return ring, nil
+}
+
+// converter runs the passes of one Enable or Disable.
+type converter struct {
+	ctx     context.Context
+	st      *store.Store
+	blobs   *blobstore.Store
+	conv    *blobstore.Conversion
+	opts    ConvertOptions
+	encrypt bool
+	gen     int64
+
+	cursor        string // where the current pass resumes ("" its start)
+	done, corrupt int64  // recorded counters
+	res           *ConvertResult
+
+	// The current batch and pass.
+	batchFiles int
+	batchBytes int64
+	batches    int
+	passFound  int64 // files converted in this pass
+	last       string
+
+	// Progress of this run.
+	started   time.Time
+	startFrac float64
+	files     int64
+	lastPct   int
+}
+
+// cursorOrphans is the cursor once messages/ is done: the orphans/ phase.
+const cursorOrphans = blobstore.OrphansDir + "/"
+
+// run makes passes until one started from the beginning finds nothing
+// left to convert. A pass resumed from a cursor never ends the run: it is
+// followed by a pass from the start.
+func (c *converter) run() error {
+	c.started = c.opts.Now()
+	c.startFrac = c.fraction(c.cursor)
+	for {
+		clean := c.cursor == ""
+		if clean {
+			c.corrupt = 0
+			c.res.Corrupt = nil
+		}
+		c.passFound, c.lastPct = 0, -1
+		c.res.Passes++
+		verb := "decrypting"
+		if c.encrypt {
+			verb = "encrypting"
+		}
+		switch {
+		case !clean:
+			fmt.Fprintf(c.opts.Out, "%s: resuming after %s\n", verb, c.cursor)
+		case c.res.Passes > 1:
+			fmt.Fprintf(c.opts.Out, "checking that no file is left (a full pass) ...\n")
+			verb = "checking"
+		default:
+			fmt.Fprintf(c.opts.Out, "%s the message files ...\n", verb)
+		}
+		if err := c.pass(verb); err != nil {
+			return err
+		}
+		if clean && c.passFound == 0 {
+			fmt.Fprintf(c.opts.Out, "done: %d file(s) converted by this run, %d corrupt\n", c.res.Converted, c.corrupt)
+			return nil
+		}
+		c.cursor = ""
+	}
+}
+
+// pass walks messages/ and then orphans/ from c.cursor, in batches.
+func (c *converter) pass(verb string) error {
+	if !strings.HasPrefix(c.cursor, cursorOrphans) {
+		err := c.blobs.MessagesAfter(c.cursor, func(hash string, size int64) error {
+			if err := c.ctx.Err(); err != nil {
+				return err
+			}
+			out, err := c.conv.Message(hash)
+			if err != nil {
+				return err
+			}
+			if out == blobstore.ConvertCorrupt {
+				if err := c.messageCorrupt(hash); err != nil {
+					return err
+				}
+			}
+			return c.count(out, hash, size, verb)
+		})
+		if err != nil {
+			return err
+		}
+		c.cursor = cursorOrphans
+	}
+	after := "" // c.cursor is cursorOrphans, or a path below orphans/ when resumed
+	if c.cursor != cursorOrphans {
+		after = c.cursor
+	}
+	err := c.blobs.OrphansAfter(after, func(rel string, size int64) error {
+		if err := c.ctx.Err(); err != nil {
+			return err
+		}
+		out, err := c.conv.Orphan(rel)
+		if err != nil {
+			return err
+		}
+		if out == blobstore.ConvertCorrupt {
+			c.noteCorrupt(rel)
+			c.opts.Logger.Warn("encryption at rest: cannot convert a file in orphans/; it stays as it is", "path", rel)
+		}
+		return c.count(out, rel, size, verb)
+	})
+	if err != nil {
+		return err
+	}
+	// The pass is complete: the next one starts from the beginning.
+	return c.commit("", verb)
+}
+
+// messageCorrupt handles a message file that cannot be converted. A
+// plaintext one stays in place (decision 5: corrupt files are never
+// encrypted; verify reports it). An encrypted one is moved to
+// orphans/<time>/ by Disable.
+func (c *converter) messageCorrupt(hash string) error {
+	rel := blobstore.RelPath(hash)
+	if !c.encrypt {
+		rel = blobstore.EncPath(hash)
+		if c.res.MovedTo == "" {
+			c.res.MovedTo = blobstore.OrphansDir + "/" + c.opts.Now().UTC().Format("20060102T150405Z")
+		}
+		if err := c.blobs.MoveAside(rel, c.res.MovedTo); err != nil {
+			return fmt.Errorf("move %s aside: %w", rel, err)
+		}
+		c.res.MovedAside = append(c.res.MovedAside, rel)
+		c.opts.Logger.Warn("encryption at rest: cannot decrypt a message file; moved it aside", "path", rel, "to", c.res.MovedTo)
+		fmt.Fprintf(c.opts.Out, "cannot decrypt %s (damaged, or under a data key the keyring lacks): moved to %s\n", rel, c.res.MovedTo)
+	} else {
+		c.opts.Logger.Warn("encryption at rest: a message file does not match its hash; it stays plaintext", "path", rel)
+		fmt.Fprintf(c.opts.Out, "corrupt %s (its content does not match its name): left as it is, see verify\n", rel)
+	}
+	c.noteCorrupt(rel)
+	return nil
+}
+
+// maxCorruptListed bounds ConvertResult.Corrupt; the count is complete.
+const maxCorruptListed = 1000
+
+func (c *converter) noteCorrupt(rel string) {
+	if len(c.res.Corrupt) < maxCorruptListed {
+		c.res.Corrupt = append(c.res.Corrupt, rel)
+	}
+}
+
+// count adds a file to the batch and commits the batch when it is full.
+func (c *converter) count(out blobstore.ConvertOutcome, key string, size int64, verb string) error {
+	switch out {
+	case blobstore.ConvertDone:
+		c.passFound++
+		c.done++
+		c.res.Converted++
+	case blobstore.ConvertCorrupt:
+		c.corrupt++
+	}
+	c.files++
+	c.batchFiles++
+	c.batchBytes += size
+	c.last = key
+	if c.batchFiles >= c.opts.BatchFiles || c.batchBytes >= c.opts.BatchBytes {
+		return c.commit(key, verb)
+	}
+	return nil
+}
+
+// commit makes the batch durable, removes its redundant copies, and
+// records cursor (the last key of the batch; "" at the end of a pass).
+func (c *converter) commit(cursor, verb string) error {
+	if err := c.conv.Commit(); err != nil {
+		return err
+	}
+	if err := c.st.SaveBlobProgress(c.ctx, c.gen, cursor, c.done, c.corrupt); err != nil {
+		return err
+	}
+	c.cursor = cursor
+	c.batchFiles, c.batchBytes = 0, 0
+	c.batches++
+	c.progress(cursor, verb)
+	if c.opts.AfterBatch != nil {
+		return c.opts.AfterBatch(c.batches)
+	}
+	return nil
+}
+
+func (c *converter) fraction(cursor string) float64 { return ConversionFraction(cursor) }
+
+// ConversionFraction is how far through the archive a conversion with
+// this cursor is, from 0 to 1: the first four hex digits of the last hash
+// done ÷ 65536; 1 in orphans/; 0 at the start of a pass.
+func ConversionFraction(cursor string) float64 {
+	switch {
+	case cursor == "":
+		return 0
+	case strings.HasPrefix(cursor, cursorOrphans):
+		return 1
+	}
+	v, err := strconv.ParseUint(cursor[:4], 16, 32)
+	if err != nil {
+		return 0
+	}
+	return float64(v+1) / 65536
+}
+
+// progress prints a line when the percentage changed: percent, files per
+// second and the time left of this pass.
+func (c *converter) progress(cursor, verb string) {
+	frac := c.fraction(cursor)
+	if cursor == "" {
+		frac = 1
+	}
+	pct := int(frac * 100)
+	if pct == c.lastPct {
+		return
+	}
+	c.lastPct = pct
+	elapsed := c.opts.Now().Sub(c.started)
+	rate := 0.0
+	if s := elapsed.Seconds(); s > 0 {
+		rate = float64(c.files) / s
+	}
+	left := "-"
+	if moved := frac - c.startFrac; moved > 0 && frac < 1 {
+		left = (time.Duration(float64(elapsed) * (1 - frac) / moved)).Round(time.Second).String()
+	} else if frac >= 1 {
+		left = "0s"
+	}
+	fmt.Fprintf(c.opts.Out, "%s: %3d%%  %.0f files/s  %s left  (%d converted, %d corrupt)\n", verb, pct, rate, left, c.done, c.corrupt)
+	if frac >= 1 {
+		// The next pass measures its own time.
+		c.started, c.startFrac, c.files = c.opts.Now(), 0, 0
+	}
+}

@@ -47,8 +47,11 @@ Files are only added, with one exception: the files of messages deleted by
 it is complete; keep the period longer than the time between a dump and the
 copy of the data directory.
 
-The `.eml` files are **not** encrypted on disk, and neither are the dumps.
-Keep both on an encrypted volume; FileVault on macOS does this by default.
+Without [encryption at rest](#encryption-at-rest) the message files
+(`.eml`) are **not** encrypted on disk; with it they are (`.enc`), and the
+keyring in `data/keys/` is wrapped under the archive keys. The dumps are not
+encrypted yet. Keep both on an encrypted volume; FileVault on macOS does
+this by default.
 
 The files alone do not record where each message was found or which
 accounts exist, so back up both the files and the database.
@@ -129,6 +132,116 @@ UID 65532: `sudo chown -R "$USER" data/export/anna` makes them yours.
 Exports are **not encrypted**; the files are readable only by their owner.
 Delete them once imported. `verify` ignores the `export/` directory. Every
 export is in the [audit log](./audit-log) as `data.export`.
+
+## Encryption at rest
+
+With encryption at rest, every message file is stored encrypted
+(`messages/ab/cd/<sha256>.enc`) under an archive key the operator holds,
+apart from the data. What it protects, and what it does not, is in
+[Security](../reference/security#the-archive-key). The database stays
+unencrypted in this version.
+
+**Key custody is the operator's job, and these steps are mandatory.** The
+archive key and every recovery key are the only way to read the encrypted
+mail, backups included: nobody, not the app's developers either, can
+recover it without them.
+
+- Create the key with `./ma encryption keygen` and set
+  `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` (see [Getting started](./getting-started#the-archive-key)).
+- Keep the recovery key it prints offline, apart from the host and the
+  backups (a password manager, or paper in a safe). `encryption add-key`
+  adds another one.
+- Back up the key file apart from `data/` and its backups, and check after
+  every change that `./ma encryption status` shows the configured key
+  opening the keyring.
+
+### Turning it on
+
+A **new instance** turns it on before it archives anything:
+`./ma encryption enable` on the empty archive only records the state (see
+[Getting started](./getting-started#the-archive-key)).
+
+An **existing archive** is converted offline, in one maintenance window:
+nothing may write message files while it runs.
+
+1. Back up the database and the data directory ([Backups](#backups)).
+2. Create the key (above), if not done yet.
+3. Stop everything that writes: `docker compose stop web worker`, and pause
+   cron jobs that run `./ma sync`, `import`, `account fill`, `reindex`,
+   `verify` or the retention commands.
+4. Run `./ma encryption enable`. It prints the percentage, the files per
+   second and the time left.
+5. Start again: `docker compose up -d`.
+
+While it runs, the web UI, the IMAP syncs and the SMTP receiver are down.
+IMAP syncs catch up afterwards; mail servers retry an SMTP delivery for
+days, so journaled mail arrives once the receiver is back. On a shared
+instance this is **one maintenance window for all customers at once**:
+announce it to all of them. The window cannot be split: until the command
+has finished, the web server and the worker refuse to start.
+
+The command refuses to start while a writer runs and names it (for example
+`"mail-archive writer serve" (pid 812)`), and while verify, a retention
+sweep or a purge holds the blob lock. It needs a direct connection to
+PostgreSQL or a session-mode pool: a transaction-mode pooler (PgBouncer
+`pool_mode=transaction`) breaks the locks it and the writers rely on.
+
+**Interrupted** (Ctrl-C, a lost connection, a crash, a reboot), it resumes:
+run `./ma encryption enable` again. It records its position after every
+batch, and `./ma status`, from another terminal or after an interruption,
+shows the unfinished change, its progress and the command that finishes it.
+Running `./ma encryption disable` instead turns back.
+
+How it converts, in batches of 200 files or 256 MiB:
+
+- Each file of the batch is encrypted into `tmp/`, synchronized to disk,
+  read back in full and checked against its SHA-256, then linked under its
+  `.enc` name. Only after the batch's directories are synchronized are the
+  `.eml` files unlinked. A crash at any point leaves every message readable,
+  and the rerun completes the batch.
+- Files that verify moved to `orphans/` are encrypted too, so no plaintext
+  of a message is left in `data/`. A leftover temporary file in `tmp/` is
+  removed when it is older than one hour; a younger one stays and is
+  reported, and a later run removes it.
+- A plaintext file whose content does not match its name is never
+  encrypted: it stays as it is, the command lists it, and `verify` reports
+  it.
+- Encryption is on only after a full pass from the start has found nothing
+  left to convert; the end of a resumed run makes that pass too. It only
+  reads directories, so it is quick.
+
+**Downtime and budget.** Measured with the test `TestConvertGate` in
+`internal/archive` (50 KB files; the gate needs at least 50 files/s), on
+the development container limited to 2 cores, local SSD shared with other
+jobs:
+
+| Files | Downtime (measured rate) | Downtime (at the gate's 50 files/s) |
+|---|---|---|
+| 10,000 | about 15 s to 1 min | about 3.5 min |
+| 100,000 | about 2.5–9 min | about 35 min |
+| 1,000,000 | about 25–90 min | about 5.5 h |
+
+The rate was 186–733 files/s; the disk's `fsync` sets it, not the CPU.
+Network block storage is slower: plan 1–3 hours per 1,000,000 files there.
+Only distinct files count; mail that several accounts or customers received
+is stored once. The command uses at most one core (0.2–0.8 measured) and
+at most 32 MiB of memory (measured +4–6 MiB over its start), and needs
+free disk space for one batch, at most 256 MiB.
+
+### Turning it off
+
+`./ma encryption disable` decrypts every file back to `.eml`, under the
+same rules: writers stopped, resumable, and off only after a full pass.
+Run it before going back to a version below 1.5.0, which cannot read
+encrypted files. An encrypted file that cannot be decrypted (damaged, or
+under a data key the keyring lacks) is moved to `orphans/<time>/` and
+listed; its message then shows up as `missing` in `verify`. The keyring and
+the key stay; keep them as long as backups made with encryption on exist.
+
+**Old plaintext.** After turning it on, earlier plaintext can survive in
+free space of the disk, in older snapshots and in backups made before. For
+a clean state, restore onto a new volume and destroy the old one (see
+[Security](../reference/security#the-archive-key)).
 
 ## Upgrades
 

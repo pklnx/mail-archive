@@ -70,6 +70,22 @@ func (q *Queries) EnableBlobEncryption(ctx context.Context, arg EnableBlobEncryp
 	return result.RowsAffected(), nil
 }
 
+const finishBlobEncryption = `-- name: FinishBlobEncryption :execrows
+UPDATE blob_encryption
+SET state = 'on', generation = generation + 1, cursor = '', finished_at = now(), updated_at = now()
+WHERE generation = $1 AND state = 'encrypting'
+`
+
+// The end of `encryption enable`: state on, the next generation; the
+// counters stay as the record of the conversion.
+func (q *Queries) FinishBlobEncryption(ctx context.Context, generation int64) (int64, error) {
+	result, err := q.db.Exec(ctx, finishBlobEncryption, generation)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getBlobEncryption = `-- name: GetBlobEncryption :one
 SELECT id, state, generation, keyring, keyring_id, keyring_generation, current_key, cursor, files_done, files_corrupt, started_at, finished_at, updated_at FROM blob_encryption
 `
@@ -176,6 +192,34 @@ func (q *Queries) RecordBlobOff(ctx context.Context, arg RecordBlobOffParams) er
 		arg.CurrentKey,
 	)
 	return err
+}
+
+const saveBlobConversionProgress = `-- name: SaveBlobConversionProgress :execrows
+UPDATE blob_encryption
+SET cursor = $1, files_done = $2, files_corrupt = $3, updated_at = now()
+WHERE generation = $4 AND state IN ('encrypting', 'decrypting')
+`
+
+type SaveBlobConversionProgressParams struct {
+	Cursor       string
+	FilesDone    int64
+	FilesCorrupt int64
+	Generation   int64
+}
+
+// The progress of an offline conversion after a batch (#392, part 3), only
+// while the state and generation are still those the command set.
+func (q *Queries) SaveBlobConversionProgress(ctx context.Context, arg SaveBlobConversionProgressParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveBlobConversionProgress,
+		arg.Cursor,
+		arg.FilesDone,
+		arg.FilesCorrupt,
+		arg.Generation,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setBlobEncryptionState = `-- name: SetBlobEncryptionState :execrows

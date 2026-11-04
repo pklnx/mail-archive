@@ -36,10 +36,13 @@ func newEncryptionCmd() *cobra.Command {
 		Long: `Manage the archive key (KEK) and the keyring of encryption at rest.
 
 The keyring (<data dir>/keys/keyring) holds the data keys, wrapped under one
-slot per archive key or recovery key. These commands need no database. See
+slot per archive key or recovery key. keygen, add-key, remove-key and status
+need no database; enable and disable convert the archive offline. See
+docs/guide/operations.md, "Encryption at rest", and
 docs/development/architecture.md, "Encryption at rest".`,
 	}
-	cmd.AddCommand(newEncryptionKeygenCmd(), newEncryptionAddKeyCmd(), newEncryptionRemoveKeyCmd(), newEncryptionStatusCmd())
+	cmd.AddCommand(newEncryptionKeygenCmd(), newEncryptionAddKeyCmd(), newEncryptionRemoveKeyCmd(), newEncryptionStatusCmd(),
+		newEncryptionConvertCmd(true), newEncryptionConvertCmd(false))
 	return cmd
 }
 
