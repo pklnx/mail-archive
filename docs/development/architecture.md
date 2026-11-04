@@ -468,7 +468,7 @@ commands of part 3 take the writers lock exclusively with a try-lock
 (`Store.TryLockWritersExclusive`) and name the writers they find by
 `application_name`.
 
-Readers (`export`) need the key whenever a row exists; `verify` starts
+Readers (`export`, also `export --format gobd`) need the key whenever a row exists; `verify` starts
 without it, checks the attestations (database only) and then stops with the
 reason. With encryption off, a configured key that opens the keyring file
 still reads `.enc` files left over.
@@ -693,13 +693,15 @@ state file, then that it is one group, then against `--group` /
 `--without-group`: `ErrGroupChanged`, `ErrSelectionSpansGroups`,
 `ErrGroupClaimMismatch`), and built as a `store.Scope`: `OwnerScope` per
 owner, `RestrictScope` for named accounts and folders and for a grant,
-`MergeScopes`, then the period, so the export shares the read predicate
+`MergeScopes`, then the period (an account without an owner is narrowed
+to its named folders the same way), so the export shares the read predicate
 (`scope_folder_granted`) with every other read; an export by hold adds
 `location_holds`. The command line runs the same resolution in a short
 snapshot of its own before the audit entry. The passes are B (emls, keyset
-over `messages.seq`, 1000 rows a page, each file opened once; a missing,
-unreadable or wrongly sized file goes to the missing list before anything
-is written), A1 (`messages.csv`, the same keyset), A2 (`locations.csv`,
+over `messages.seq`, 1000 rows a page, each file opened once by its hash
+with `OpenMessage`, plaintext or encrypted at rest, never by the stored
+path; a missing, unreadable or wrongly sized file (the plaintext size)
+goes to the missing list before anything is written), A1 (`messages.csv`, the same keyset), A2 (`locations.csv`,
 keyset over `message_locations.id`) and C. After the transaction, one read
 committed query compares the selected users' and accounts' groups with the
 snapshot (`GoBDResult.Moved`, exit 3). No row or advisory lock is held

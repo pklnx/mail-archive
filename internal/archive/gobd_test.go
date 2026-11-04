@@ -7,7 +7,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -22,6 +21,8 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive/gobdtest"
 	"github.com/pklnx/mail-archive/internal/attest"
+	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/gobd"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/testwait"
@@ -288,6 +289,19 @@ func TestGoBDSelection(t *testing.T) {
 		t.Errorf("UTC: %v", files)
 	}
 
+	// A folder of an account without an owner is narrowed as an owned
+	// account's is: old-imap/Sent stays out (review A, #512).
+	sent := f.Add(t, "old-imap/Sent", "Gesendet", time.Date(2019, 7, 1, 9, 0, 0, 0, time.UTC))
+	out = export(newGoBDRun(f, next()).account(f.OldIMAP, f.Folders["old-imap/INBOX"]).claim(nil))
+	if files, locs := emls(t, out), csvRows(t, out, gobd.LocationsFile); len(files) != 1 || len(locs) != 1 ||
+		!strings.Contains(files[0], f.OldMsg) || strings.Contains(strings.Join(locs, "\n"), sent) {
+		t.Errorf("old-imap/INBOX: %v %v", files, locs)
+	}
+	out = export(newGoBDRun(f, next()).account(f.OldIMAP).claim(nil))
+	if locs := csvRows(t, out, gobd.LocationsFile); len(locs) != 2 {
+		t.Errorf("old-imap: %v", locs)
+	}
+
 	// A removed account is exported with its owner.
 	if _, err := f.Conn.Exec(f.Ctx, "UPDATE accounts SET removed_at = now(), enabled = false WHERE id = $1", f.BenWork.ID); err != nil {
 		t.Fatal(err)
@@ -546,13 +560,16 @@ func TestGoBDMissing(t *testing.T) {
 	}
 }
 
+// blobPath is the path of the message's file as it is on disk, in either
+// form (plaintext or encrypted at rest), relative to the data directory.
 func blobPath(t *testing.T, f *gobdtest.Fixture, sha string) string {
 	t.Helper()
-	var p string
-	if err := f.Conn.QueryRow(f.Ctx, "SELECT stored_path FROM messages WHERE sha256 = $1", sha).Scan(&p); err != nil {
+	m, err := f.Blobs.OpenMessage(sha)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return p
+	defer func() { _ = m.Close() }()
+	return m.Path()
 }
 
 // TestGoBDZIP: a ZIP passes verify; the same snapshot with the same clock
@@ -630,6 +647,178 @@ func TestGoBDDeterministicDir(t *testing.T) {
 	}
 }
 
+// TestGoBDEncryptedEqualsPlain: with the message files encrypted at rest
+// (#392), the export reads the plaintext by hash (OpenMessage): directory
+// and ZIP are byte for byte the exports of the same archive in plaintext,
+// and both verify. The stored paths still name the plaintext files, which
+// are gone, so a read by stored path finds nothing.
+func TestGoBDEncryptedEqualsPlain(t *testing.T) {
+	f := gobdtest.New(t)
+	dir := t.TempDir()
+	export := func(name string) string {
+		t.Helper()
+		r := newGoBDRun(f, filepath.Join(dir, name)).users(f.Anna, f.Ben)
+		if res := r.mustRun(t); len(res.Missing) != 0 {
+			t.Fatalf("%s: missing %v", name, res.Missing)
+		}
+		verifyExport(t, r.opts.Out, nil)
+		return r.opts.Out
+	}
+	plainDir, plainZIP := export("plain"), export("plain.zip")
+
+	// Encrypt every message file in place: Put with encryption on writes
+	// <hash>.enc and unlinks the plaintext form.
+	kek, err := blobcrypt.GenerateKEK()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, err := blobcrypt.NewKeyring(kek, "archive key", gobdClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Blobs.SetKeys(ring, true); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.Conn.Query(f.Ctx, "SELECT sha256 FROM messages ORDER BY sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shas, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil || len(shas) == 0 {
+		t.Fatalf("messages: %v %v", shas, err)
+	}
+	for _, sha := range shas {
+		m, err := f.Blobs.OpenMessage(sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := new(bytes.Buffer)
+		_, err = body.ReadFrom(m)
+		_ = m.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := f.Blobs.Put(body); err != nil {
+			t.Fatal(err)
+		}
+		if m, err := f.Blobs.OpenMessage(sha); err != nil || !m.Encrypted() || f.Blobs.HasPlaintext(sha) {
+			t.Fatalf("%s not encrypted in place: %v", sha, err)
+		} else {
+			_ = m.Close()
+		}
+	}
+
+	encDir, encZIP := export("enc"), export("enc.zip")
+	if diff := treeDiff(t, plainDir, encDir); diff != "" {
+		t.Errorf("directory of the encrypted archive: %s", diff)
+	}
+	if readFile(t, plainZIP) != readFile(t, encZIP) {
+		t.Error("ZIP of the encrypted archive differs")
+	}
+}
+
+// TestGoBDSnapshotGuard: a change committed after the first file of pass
+// B (a message's sent_at, and so its sort_at and path) is not seen by the
+// later passes: the export equals the one made before and verifies. Every
+// pass reads the one repeatable read snapshot.
+func TestGoBDSnapshotGuard(t *testing.T) {
+	f := gobdtest.New(t)
+	dir := t.TempDir()
+	before := newGoBDRun(f, filepath.Join(dir, "before")).users(f.Anna)
+	before.mustRun(t)
+	r := newGoBDRun(f, filepath.Join(dir, "during")).users(f.Anna)
+	changed := false
+	r.opts.Progress = func(done int64) error {
+		if done != 1 || changed {
+			return nil
+		}
+		changed = true
+		ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+		defer cancel()
+		tag, err := f.Conn.Exec(ctx, "UPDATE messages SET sent_at = '2023-01-01T09:00:00Z' WHERE sha256 = $1", f.Shared)
+		if err == nil && tag.RowsAffected() != 1 {
+			err = fmt.Errorf("%d rows changed", tag.RowsAffected())
+		}
+		return err
+	}
+	r.mustRun(t)
+	if !changed {
+		t.Fatal("the change never ran")
+	}
+	verifyExport(t, r.opts.Out, nil)
+	if diff := treeDiff(t, before.opts.Out, r.opts.Out); diff != "" {
+		t.Errorf("the change after the snapshot reached the export: %s", diff)
+	}
+}
+
+// TestGoBDDeletionBetweenPasses (plan section 7): a deletion run commits
+// after the first file of pass B and deletes a message whose file is not
+// copied yet. With a grace period the file is still there and the export
+// is complete as of its snapshot; with grace 0 and a sweep the file is
+// gone, and the message is listed as missing.
+func TestGoBDDeletionBetweenPasses(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		grace   time.Duration
+		missing int
+	}{{"grace", time.Hour, 0}, {"no grace and sweep", 0, 1}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := gobdtest.New(t)
+			// old-imap/INBOX: OldMsg (2019) first, then a recent message,
+			// then an expired one; a one-year rule makes both old ones
+			// candidates.
+			f.Add(t, "old-imap/INBOX", "Neu", time.Now().UTC().Add(-time.Hour).Truncate(time.Second))
+			late := f.Add(t, "old-imap/INBOX", "Alt 2018", time.Date(2018, 5, 1, 9, 0, 0, 0, time.UTC))
+			if _, err := f.St.AddRetentionRule(f.Ctx, store.NewRetentionRule{AccountID: f.OldIMAP.ID, Years: 1}); err != nil {
+				t.Fatal(err)
+			}
+			run, err := f.St.ProposeDeletion(f.Ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.St.ConfirmDeletionRun(f.Ctx, run.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			r := newGoBDRun(f, filepath.Join(t.TempDir(), "x")).account(f.OldIMAP).claim(nil)
+			deleted := false
+			r.opts.Progress = func(done int64) error {
+				if done != 1 || deleted {
+					return nil
+				}
+				deleted = true
+				ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+				defer cancel()
+				res, err := ExecuteDeletionRun(ctx, f.St, run.ID, DeletionOptions{Grace: c.grace, LockTimeout: testwait.Limit(t)})
+				if err != nil {
+					return err
+				}
+				if res.Deleted != 2 {
+					return fmt.Errorf("deleted %d, want 2", res.Deleted)
+				}
+				if c.grace == 0 {
+					if n, err := SweepBlobs(ctx, f.St, f.Blobs, SweepOptions{LockTimeout: testwait.Limit(t)}); err != nil || n != 2 {
+						return fmt.Errorf("sweep %d: %w", n, err)
+					}
+				}
+				return nil
+			}
+			res := r.mustRun(t)
+			if !deleted {
+				t.Fatal("the deletion never ran")
+			}
+			if len(res.Missing) != c.missing || c.missing == 1 && res.Missing[0].SHA256 != late {
+				t.Fatalf("missing %+v, want %d (%s)", res.Missing, c.missing, late)
+			}
+			if got := csvRows(t, r.opts.Out, gobd.LocationsFile); len(got) != 3-c.missing {
+				t.Errorf("locations %v", got)
+			}
+			if c.missing == 0 {
+				verifyExport(t, r.opts.Out, nil)
+			}
+		})
+	}
+}
+
 // treeDiff compares two directory trees file by file.
 func treeDiff(t *testing.T, a, b string) string {
 	t.Helper()
@@ -658,15 +847,13 @@ func treeDiff(t *testing.T, a, b string) string {
 
 // countingOpen counts how often each message file is opened.
 type countingOpen struct {
-	blobs interface {
-		Open(string) (*os.File, error)
-	}
+	blobs  *blobstore.Store
 	opened map[string]int
 }
 
-func (c *countingOpen) open(sha, rel string) (io.ReadCloser, error) {
+func (c *countingOpen) open(sha string) (*blobstore.Message, error) {
 	c.opened[sha]++
-	return c.blobs.Open(rel)
+	return c.blobs.OpenMessage(sha)
 }
 
 var errStop = errors.New("stopped by the test")

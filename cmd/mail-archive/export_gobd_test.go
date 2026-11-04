@@ -18,8 +18,10 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/archive/gobdtest"
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/gobd"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // gobdCLI is the fixture of internal/archive/gobdtest behind the command
@@ -256,7 +258,9 @@ func TestExportGoBDMoveDuringExport(t *testing.T) {
 			return nil
 		}
 		moved = true
-		_, err := f.St.SetUserGroup(context.Background(), f.Ben.ID, f.B.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+		defer cancel()
+		_, err := f.St.SetUserGroup(ctx, f.Ben.ID, f.B.ID)
 		return err
 	})
 	out := filepath.Join(dir, "during")
@@ -456,7 +460,9 @@ func TestExportGoBDUnownedGetsOwner(t *testing.T) {
 	f := gobdCLI(t)
 	fixedGoBD(t, func(done int64) error {
 		if done == 1 {
-			_, err := f.Conn.Exec(context.Background(), "UPDATE accounts SET owner_id = $1 WHERE id = $2", f.Kim.ID, f.OldIMAP.ID)
+			ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+			defer cancel()
+			_, err := f.Conn.Exec(ctx, "UPDATE accounts SET owner_id = $1 WHERE id = $2", f.Kim.ID, f.OldIMAP.ID)
 			return err
 		}
 		return nil
@@ -519,10 +525,12 @@ func TestExportGoBDDetails(t *testing.T) {
 	}
 
 	// A missing file: exit 1, listed on stderr.
-	var rel string
-	if err := f.Conn.QueryRow(f.Ctx, "SELECT stored_path FROM messages WHERE sha256 = $1", f.BenMsg).Scan(&rel); err != nil {
+	m, err := f.Blobs.OpenMessage(f.BenMsg) // the file as it is on disk, in either form
+	if err != nil {
 		t.Fatal(err)
 	}
+	rel := m.Path()
+	_ = m.Close()
 	if err := os.Remove(filepath.Join(f.DataDir, rel)); err != nil {
 		t.Fatal(err)
 	}
@@ -533,6 +541,58 @@ func TestExportGoBDDetails(t *testing.T) {
 	entries = exportEntries(t, f.St)
 	if d := details(t, entries[len(entries)-1]); d["complete"] != false || d["missing"] != float64(1) {
 		t.Errorf("done entry of an incomplete export: %v", d)
+	}
+}
+
+// TestExportGoBDUnownedFolder: --folder narrows an account without an
+// owner, so the files match what the signed statement names (review A,
+// #512).
+func TestExportGoBDUnownedFolder(t *testing.T) {
+	f := gobdCLI(t)
+	fixedGoBD(t, nil)
+	sent := f.Add(t, "old-imap/Sent", "Gesendet", time.Date(2019, 7, 1, 9, 0, 0, 0, time.UTC))
+	out := filepath.Join(t.TempDir(), "x")
+	if code, _, stderr := runExportGoBDCmd(t, "--out", out, "--account", "old-imap", "--folder", "INBOX", "--without-group"); code != 0 {
+		t.Fatalf("exit %d\n%s", code, stderr)
+	}
+	locs, err := os.ReadFile(filepath.Join(out, gobd.LocationsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := strings.Count(string(locs), "\r\n") - 1; rows != 1 || !strings.Contains(string(locs), f.OldMsg) || strings.Contains(string(locs), sent) {
+		t.Errorf("old-imap --folder INBOX:\n%s", locs)
+	}
+	if _, err := os.Stat(filepath.Join(out, "mail", "2019", "07", sent+".eml")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Sent's message was exported: %v", err)
+	}
+}
+
+// TestExportGoBDEncryptionNeedsKey: the GoBD export goes through the
+// readers' start-up rule of encryption at rest, as mbox and maildir do:
+// with encryption on and no archive key it refuses before the audit entry
+// and writes nothing; with the key it exports and the export verifies.
+func TestExportGoBDEncryptionNeedsKey(t *testing.T) {
+	f := gobdCLI(t)
+	fixedGoBD(t, nil)
+	kek := enableForTest(t, f.St, store.BlobOn)
+	dir := t.TempDir()
+	out := filepath.Join(dir, "nokey")
+	code, _, stderr := runExportGoBDCmd(t, "--out", out, "--user", "ben", "--group", "Meier GmbH")
+	if code == 0 || !strings.Contains(stderr, archive.ErrNoArchiveKey.Error()) {
+		t.Fatalf("without the key: exit %d\n%s", code, stderr)
+	}
+	absent(t, out)
+	if n := len(exportEntries(t, f.St)); n != 0 {
+		t.Errorf("without the key: %d audit entries", n)
+	}
+	t.Setenv(config.EnvArchiveKey, blobcrypt.EncodeKEK(kek))
+	out = filepath.Join(dir, "key")
+	if code, _, stderr := runExportGoBDCmd(t, "--out", out, "--user", "ben", "--group", "Meier GmbH"); code != 0 {
+		t.Fatalf("with the key: exit %d\n%s", code, stderr)
+	}
+	res, err := gobd.Verify(out, gobd.VerifyOptions{})
+	if err != nil || res.Problems() != 0 {
+		t.Fatalf("verify: %+v %v", res, err)
 	}
 }
 

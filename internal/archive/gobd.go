@@ -128,8 +128,10 @@ type GoBDOptions struct {
 	// output deterministic with them.
 	Now   func() time.Time
 	NewID func() string
-	// Open opens a message's file; nil reads blobs.
-	Open func(sha, storedPath string) (io.ReadCloser, error)
+	// Open opens a message by its hash and returns its plaintext; nil
+	// reads blobs.OpenMessage, which finds the file in either form
+	// (plaintext or encrypted at rest), never by the stored path.
+	Open func(sha string) (*blobstore.Message, error)
 	// FreeSpace returns the bytes free for an unprivileged user in dir; nil
 	// asks the file system.
 	FreeSpace func(dir string) (uint64, error)
@@ -223,7 +225,7 @@ func GoBDExport(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 		opts.NewID = newExportID
 	}
 	if opts.Open == nil {
-		opts.Open = func(_, rel string) (io.ReadCloser, error) { return blobs.Open(rel) }
+		opts.Open = blobs.OpenMessage
 	}
 	if opts.FreeSpace == nil {
 		opts.FreeSpace = freeSpace
@@ -443,8 +445,8 @@ func resolveSelection(ctx context.Context, snap *store.GoBDSnapshot, sel *GoBDSe
 	// (RestrictScope with the grant's period), never combined with other
 	// selections (the command line refuses that). Otherwise each owner's
 	// accounts (OwnerScope), each named account with its folders
-	// (RestrictScope), and the accounts without an owner, merged. Then the
-	// period.
+	// (RestrictScope), and the accounts without an owner, also narrowed to
+	// their named folders, merged. Then the period.
 	owners := map[string]bool{}
 	for _, m := range members {
 		if m.Kind == "user" {
@@ -472,6 +474,15 @@ func resolveSelection(ctx context.Context, snap *store.GoBDSnapshot, sel *GoBDSe
 		if len(accounts) > 0 {
 			owned, unowned, err := snap.SplitAccounts(ctx, r.accounts)
 			if err != nil {
+				return nil, err
+			}
+			// The accounts without an owner come with all their folders:
+			// narrow them to the named folders too, as an owned account is.
+			named := make(map[int64][]int64, len(unowned.Accounts))
+			for _, acc := range unowned.Accounts {
+				named[acc.ID] = accounts[acc.ID]
+			}
+			if unowned, err = snap.RestrictScope(ctx, unowned, named, nil, nil); err != nil {
 				return nil, err
 			}
 			scopes = append(scopes, unowned)
@@ -1009,7 +1020,7 @@ func (e *gobdExport) addFile(m *store.GoBDMessage) error {
 		e.res.Missing = append(e.res.Missing, gobd.Missing{SHA256: m.SHA256, SortAt: m.SortAt, Reason: reason})
 		return e.w.AddMissing(gobd.Missing{SHA256: m.SHA256, SortAt: m.SortAt, Reason: reason})
 	}
-	f, err := e.opts.Open(m.SHA256, m.StoredPath)
+	f, err := e.opts.Open(m.SHA256)
 	if errors.Is(err, fs.ErrNotExist) {
 		return miss("file missing")
 	}
@@ -1018,11 +1029,10 @@ func (e *gobdExport) addFile(m *store.GoBDMessage) error {
 	}
 	defer func() { _ = f.Close() }()
 	// A wrong size is found before anything is written, which a ZIP
-	// could not take back.
-	if st, ok := f.(interface{ Stat() (os.FileInfo, error) }); ok {
-		if fi, err := st.Stat(); err == nil && fi.Size() != m.Size {
-			return miss("file damaged (size differs)")
-		}
+	// could not take back. Size is the plaintext's, also of an encrypted
+	// file.
+	if f.Size() != m.Size {
+		return miss("file damaged (size differs)")
 	}
 	err = e.w.AddFile(msg, f)
 	switch {

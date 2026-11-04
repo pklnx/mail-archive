@@ -651,7 +651,10 @@ carry `auditor_grant`.
 The export is not encrypted. With Docker Compose, write it to `/export`,
 which is `EXPORT_DIR` on the host (default `./export`), outside the data
 directory; with encryption at rest on, an output inside the data directory
-gets a warning. Exit codes: `0` complete, `1` messages missing (listed on
+gets a warning. With encryption at rest on, the export needs the archive
+key, like `export` to mbox or Maildir, and refuses without it before the
+audit entry; it reads the messages decrypted, so its files are the same as
+those of the same archive in plaintext. Exit codes: `0` complete, `1` messages missing (listed on
 stderr and in `missing.csv`) or an error, `2` a usage error or a refused
 selection, `3` complete, but a selected user or account changed group after
 the snapshot.

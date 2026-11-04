@@ -128,10 +128,14 @@ func runExportGoBD(cmd *cobra.Command, f *gobdFlags) error {
 	if err != nil {
 		return gobdError(cmd, err)
 	}
-	blobs, err := openBlobs(a.cfg.DataDir)
+	// The start-up rule of encryption at rest for readers, as for mbox and
+	// maildir: with encryption on or being changed, the archive key must
+	// open the keyring, checked before the audit entry.
+	blobs, ar, err := openArchiveBlobs(ctx, a, "export", archive.RoleReader)
 	if err != nil {
 		return err
 	}
+	defer ar.Close()
 	opts.AttestDir = a.cfg.AttestDir()
 	if attestKeyExists(a.cfg) {
 		if opts.Signer, err = loadAttestKey(a.cfg); err != nil {
