@@ -153,6 +153,18 @@ func runExportGoBD(cmd *cobra.Command, f *gobdFlags) error {
 		return gobdRefusal(cmd, err)
 	}
 	warnPlaintext(cmd.ErrOrStderr(), a.cfg.DataDir, opts.Out)
+	// A grant's export is in its owner's Log and in the admin's view of
+	// the grant (#393, part 4), as the auditor's reads are: both entries
+	// carry the owner in via_owners. A grant's owner never changes
+	// (auditor_grants_same_group), so this read agrees with the check's.
+	var viaOwners []int64
+	if opts.Selection.GrantID != 0 {
+		owner, err := a.store.GrantOwner(ctx, opts.Selection.GrantID)
+		if err != nil {
+			return err
+		}
+		viaOwners = []int64{owner}
+	}
 
 	e := cliTargeted("data.export")
 	gobdTarget(e, opts, group, owners, cmd, a)
@@ -166,7 +178,8 @@ func runExportGoBD(cmd *cobra.Command, f *gobdFlags) error {
 		e.Detail("requested_by", f.requestedBy)
 	}
 	if opts.Selection.GrantID != 0 {
-		e.Detail("auditor_grant", opts.Selection.GrantID)
+		e.Detail(store.DetailAuditorGrant, opts.Selection.GrantID)
+		e.Detail(store.DetailViaOwners, viaOwners)
 	}
 	if err := auditNow(cmd, a, e); err != nil {
 		return err
@@ -177,6 +190,10 @@ func runExportGoBD(cmd *cobra.Command, f *gobdFlags) error {
 	done.TargetType, done.TargetID, done.TargetName = e.TargetType, e.TargetID, e.TargetName
 	done.Detail("format", "gobd")
 	done.Detail("out", opts.Out)
+	if opts.Selection.GrantID != 0 {
+		done.Detail(store.DetailAuditorGrant, opts.Selection.GrantID)
+		done.Detail(store.DetailViaOwners, viaOwners)
+	}
 	doneGroup := group
 	if runErr == nil {
 		doneGroup = res.Group
