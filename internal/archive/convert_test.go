@@ -687,3 +687,70 @@ func TestConversionStopsOnLockLoss(t *testing.T) {
 		t.Fatalf("plain %d encrypted %d", p, c)
 	}
 }
+
+// The documented recovery of a file disable moved aside: put the encrypted
+// file back into messages/ and run disable again. With the state off and
+// the keyring file matching the database copy, disable still walks
+// messages/, finds it and decrypts it (review round 2 of #513).
+func TestDisableDecryptsFilePutBack(t *testing.T) {
+	e := newArchiveEnv(t)
+	msgs := e.seed(3)
+	kek, _ := e.keygen()
+	if _, err := archive.Enable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil)); err != nil {
+		t.Fatal(err)
+	}
+	var h string
+	for h = range msgs {
+		break
+	}
+	enc, err := os.ReadFile(e.path(blobstore.EncPath(h)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.Disable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil)); err != nil {
+		t.Fatal(err)
+	}
+	// Only the encrypted file is there, as after moving it back.
+	if err := os.Remove(e.path(blobstore.RelPath(h))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.path(blobstore.EncPath(h)), enc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := archive.Disable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil))
+	if err != nil || res.Unchanged || res.State != store.BlobOff || res.Converted != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if p, c := e.forms(); p != 3 || c != 0 {
+		t.Fatalf("plain %d encrypted %d", p, c)
+	}
+	e.readAll(kek, msgs)
+}
+
+// The final step of disable is guarded by the generation the run worked
+// at: when the state changed after the last batch, the run fails and the
+// state stays as the other change left it (review round 2 of #513).
+func TestDisableFinishGuardedByGeneration(t *testing.T) {
+	e := newArchiveEnv(t)
+	e.seed(4)
+	kek, _ := e.keygen()
+	if _, err := archive.Enable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil)); err != nil {
+		t.Fatal(err)
+	}
+	opts := e.convertOpts(kek, nil)
+	// One batch per pass: the converting pass, then the clean pass; the
+	// state changes after the clean pass's progress was saved.
+	opts.AfterBatch = func(b int) error {
+		if b == 2 {
+			return e.st.SetBlobEncryption(e.ctx, store.BlobDecrypting, store.KeyringCopy{})
+		}
+		return nil
+	}
+	gen := e.row().Generation
+	if _, err := archive.Disable(e.ctx, e.st, e.newBlobs(), opts); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("disable after a state change: %v", err)
+	}
+	if r := e.row(); r.State != store.BlobDecrypting || r.Generation != gen+2 {
+		t.Fatalf("row %+v, generation before %d", r, gen)
+	}
+}

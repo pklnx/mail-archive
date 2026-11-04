@@ -343,7 +343,9 @@ encrypted files. An encrypted file that cannot be decrypted (damaged, or
 under a data key the keyring lacks) is moved to `orphans/<time>/` and
 listed; its message then shows up as `missing` in `verify`. To recover one
 once the keyring that opens it is back, move it to its place in `messages/`
-(the path below `orphans/<time>/`) and run `./ma encryption disable` again.
+(the path below `orphans/<time>/`) and run `./ma encryption disable` again;
+on an archive that is off, it first looks for encrypted files in
+`messages/`.
 Files left in `tmp/` are moved to `orphans/<time>/tmp/` and kept as they
 are. The keyring and the key stay; keep them as long as backups made with
 encryption on exist.

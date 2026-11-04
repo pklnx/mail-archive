@@ -181,10 +181,12 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 		return nil, err
 	}
 	if !encrypt && blobOff(row) {
-		// Off, as a writer start derives it: a dump recorded off restored
-		// next to files encrypted later shows up as encrypting (review
-		// round 1 of #513, follow-up 1).
-		if row, err = deriveFromFiles(ctx, st, blobs, row, atOpts); err != nil {
+		// Off, derived from the files as at a writer start, but always with
+		// a walk of messages/: a dump recorded off restored next to files
+		// encrypted later, or an encrypted file put back from orphans/,
+		// shows up as encrypting and is decrypted (review rounds 1 and 2
+		// of #513).
+		if row, err = deriveFromFiles(ctx, st, blobs, row, atOpts, true); err != nil {
 			return nil, err
 		}
 	}

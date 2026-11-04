@@ -539,7 +539,9 @@ the keyring lock for the rest of the run.
   taken before the state changes, and the terminal state is set only at
   the generation the run worked at (`FinishBlobEncryption`,
   `FinishBlobDecryption`). `disable` on a recorded off first derives the
-  state from the files, as a writer start does.
+  state from the files, as a writer start does, but always walks
+  `messages/`, also when the keyring file matches the database copy: an
+  encrypted file put back from `orphans/` is found and decrypted.
 - **Progress.** The percentage is the cursor's first four hex digits ÷
   65536 (100 % in `orphans/`); the command prints it with files per second
   and the time left of the pass, and `status` shows it from the row.
