@@ -145,6 +145,8 @@ type verifier struct {
 	chain   []attest.Entry // attest/attestations.jsonl, if it is valid
 	trusted attest.Keys    // nil: each key checks itself only
 
+	badEntry map[string]bool // ZIP entries already reported by readErr
+
 	copyRead    bool
 	copyEntries []attest.Entry
 	copyErr     error
@@ -159,6 +161,11 @@ type verifier struct {
 // It reports every finding and returns an error only when path cannot be
 // opened at all.
 //
+// A ZIP is read under one rule: every byte before the central directory
+// is accounted for exactly once, by a local header, a data descriptor or
+// compressed data that the decompressor consumes in full (prescanZIP and
+// openZIPEntry, the only way an entry is read).
+//
 // Memory: about 80 bytes per message for the table of message files, a
 // line of a table at a time (at most 1 MiB), the missing list (at most
 // MaxMissing), and for a ZIP what archive/zip keeps per entry, bounded by
@@ -167,7 +174,7 @@ func Verify(p string, opts VerifyOptions) (*VerifyResult, error) {
 	v := &verifier{
 		opts: opts, res: &VerifyResult{Findings: map[string]int{}},
 		fixed: map[string]*rawEntry{}, leaves: map[int64]*rawEntry{},
-		sums: map[string]string{}, missing: map[[32]byte]bool{}, owners: map[string]bool{},
+		sums: map[string]string{}, missing: map[[32]byte]bool{}, owners: map[string]bool{}, badEntry: map[string]bool{},
 	}
 	c, err := openContainer(p, v.find)
 	if err != nil {
@@ -203,6 +210,22 @@ func (v *verifier) find(kind, path, detail string) {
 }
 
 func (v *verifier) note(s string) { v.res.Notes = append(v.res.Notes, s) }
+
+// readErr reports an error from reading the file name: a ZIP entry whose
+// data does not hold what its records say is a name finding, once per
+// entry, as it makes the ZIP unsafe to unpack; any other error is a
+// finding of kind with prefix.
+func (v *verifier) readErr(kind, name, prefix string, err error) {
+	var ze *zipEntryError
+	if errors.As(err, &ze) {
+		if !v.badEntry[name] {
+			v.badEntry[name] = true
+			v.find(KindName, name, ze.Error())
+		}
+		return
+	}
+	v.find(kind, name, prefix+err.Error())
+}
 
 // requiredFiles must be in every export.
 var requiredFiles = []string{ReadmeFile, IndexFile, MessagesFile, LocationsFile, MissingFile}
@@ -397,14 +420,14 @@ func (v *verifier) readAll(name string, limit int64, kind string) ([]byte, bool)
 	}
 	r, err := v.c.open(e)
 	if err != nil {
-		v.find(kind, name, "cannot be read: "+err.Error())
+		v.readErr(kind, name, "cannot be read: ", err)
 		return nil, false
 	}
 	defer func() { _ = r.Close() }()
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	switch {
 	case err != nil:
-		v.find(kind, name, "cannot be read: "+err.Error())
+		v.readErr(kind, name, "cannot be read: ", err)
 		return nil, false
 	case int64(len(data)) > limit:
 		v.find(KindName, name, "larger than expected")
@@ -499,13 +522,13 @@ func (v *verifier) readSums() {
 	}
 	r, err := v.c.open(e)
 	if err != nil {
-		v.find(KindManifest, SumsFile, "cannot be read: "+err.Error())
+		v.readErr(KindManifest, SumsFile, "cannot be read: ", err)
 		return
 	}
 	defer func() { _ = r.Close() }()
 	digest, err := ParseSums(r, v.sumsLine)
 	if err != nil {
-		v.find(KindManifest, SumsFile, err.Error())
+		v.readErr(KindManifest, SumsFile, "", err)
 		return
 	}
 	v.sumsRead = true
@@ -586,7 +609,7 @@ func (v *verifier) readTable(name string, cols []column, fn func(line int, vals 
 	}
 	r, err := v.c.open(e)
 	if err != nil {
-		v.find(KindIndex, name, "cannot be read: "+err.Error())
+		v.readErr(KindIndex, name, "cannot be read: ", err)
 		return
 	}
 	defer func() { _ = r.Close() }()
@@ -595,7 +618,7 @@ func (v *verifier) readTable(name string, cols []column, fn func(line int, vals 
 		v.find(KindIndex, name, fmt.Sprintf("line %d: %s", line, why))
 	})
 	if err != nil {
-		v.find(KindIndex, name, "cannot be read: "+err.Error())
+		v.readErr(KindIndex, name, "cannot be read: ", err)
 		return
 	}
 	v.compareSum(name, hex.EncodeToString(h.Sum(nil)))
@@ -727,7 +750,7 @@ func (v *verifier) checkMessageFiles() {
 		}
 		r, err := v.c.open(&rawEntry{name: path, zf: m.zf})
 		if err != nil {
-			v.find(KindChanged, path, "cannot be read: "+err.Error())
+			v.readErr(KindChanged, path, "cannot be read: ", err)
 			continue
 		}
 		h := sha256.New()
@@ -736,7 +759,7 @@ func (v *verifier) checkMessageFiles() {
 		v.res.Messages++
 		switch {
 		case err != nil:
-			v.find(KindChanged, path, "cannot be read: "+err.Error())
+			v.readErr(KindChanged, path, "cannot be read: ", err)
 		case n != m.size:
 			v.find(KindChanged, path, fmt.Sprintf("%d bytes, %s says %d", n, MessagesFile, m.size))
 		case !bytes.Equal(h.Sum(nil), m.sha[:]):
@@ -766,14 +789,14 @@ func (v *verifier) checkSmallFiles() {
 		name := LeavesPath(seq)
 		r, err := v.c.open(v.leaves[seq])
 		if err != nil {
-			v.find(KindChain, name, "cannot be read: "+err.Error())
+			v.readErr(KindChain, name, "cannot be read: ", err)
 			continue
 		}
 		h := sha256.New()
 		_, err = io.Copy(h, r)
 		_ = r.Close()
 		if err != nil {
-			v.find(KindChain, name, "cannot be read: "+err.Error())
+			v.readErr(KindChain, name, "cannot be read: ", err)
 			continue
 		}
 		v.compareSum(name, hex.EncodeToString(h.Sum(nil)))
@@ -799,14 +822,14 @@ func (v *verifier) checkChain() {
 	}
 	r, err := v.c.open(e)
 	if err != nil {
-		v.find(KindChain, ChainFile, "cannot be read: "+err.Error())
+		v.readErr(KindChain, ChainFile, "cannot be read: ", err)
 		return
 	}
 	h := sha256.New()
 	entries, err := readChain(io.TeeReader(r, h), st)
 	_ = r.Close()
 	if err != nil {
-		v.find(KindChain, ChainFile, err.Error())
+		v.readErr(KindChain, ChainFile, "", err)
 		return
 	}
 	v.compareSum(ChainFile, hex.EncodeToString(h.Sum(nil)))
@@ -897,7 +920,7 @@ func (v *verifier) compareCopy(entries []attest.Entry) {
 	}
 	cp, err := v.readCopy()
 	if err != nil {
-		v.find(KindChain, v.opts.Attestations, "cannot be read: "+err.Error())
+		v.readErr(KindChain, v.opts.Attestations, "cannot be read: ", err)
 		return
 	}
 	for i := range entries {
@@ -1025,7 +1048,7 @@ func (v *verifier) checkLeaves() {
 				if errors.Is(err, fs.ErrNotExist) {
 					v.find(KindChain, p, "missing next to the copy")
 				} else {
-					v.find(KindChain, p, "cannot be read: "+err.Error())
+					v.readErr(KindChain, p, "cannot be read: ", err)
 				}
 				continue
 			}
@@ -1063,7 +1086,7 @@ func (v *verifier) scanLeaves(name string, r io.Reader, seq int64, e *attest.Ent
 		return nil
 	})
 	if err != nil {
-		v.find(KindChain, name, err.Error())
+		v.readErr(KindChain, name, "", err)
 		return
 	}
 	for ; next < len(msgs); next++ {

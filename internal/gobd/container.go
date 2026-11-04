@@ -4,14 +4,18 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/flate"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
 	"path"
 	"strings"
+	"sync"
 )
 
 // Limits for a ZIP that Verify reads. archive/zip keeps every central
@@ -73,7 +77,7 @@ func (c *container) close() {
 // open opens an entry for reading.
 func (c *container) open(e *rawEntry) (io.ReadCloser, error) {
 	if e.zf != nil {
-		return e.zf.Open()
+		return openZIPEntry(e.zf)
 	}
 	if c.root == nil {
 		return nil, fs.ErrNotExist
@@ -170,10 +174,9 @@ func zipEntry(zf *zip.File) *rawEntry {
 		e.problem = "declares an impossible size"
 	case zf.Flags&0x1 != 0:
 		e.problem = "is encrypted"
-	case zf.Method != zip.Store && zf.Method != zip.Deflate:
-		e.problem = fmt.Sprintf("uses compression method %d", zf.Method)
-	case zf.Method == zip.Store && zf.UncompressedSize64 != zf.CompressedSize64:
-		e.problem = "is stored with two different sizes"
+	case zf.Method != zip.Deflate:
+		// The export's writer uses only Deflate (ZipSink).
+		e.problem = fmt.Sprintf("uses compression method %d, not Deflate", zf.Method)
 	case zf.UncompressedSize64 > maxDeflateRatio*zf.CompressedSize64+1024:
 		// Deflate cannot expand more than about 1032 times; a larger
 		// declared size would only make verify read for a long time.
@@ -226,6 +229,14 @@ func allowedDir(name string) bool {
 // method, and with its data descriptor the record's CRC-32 and sizes.
 // This is the layout archive/zip's writer produces. It costs two small
 // reads per entry and no memory per entry.
+//
+// Together with openZIPEntry this keeps one rule: every byte before the
+// central directory is accounted for exactly once, by a local header, a
+// data descriptor, or compressed data that the decompressor consumes in
+// full. The prescan accounts for the headers and descriptors and the
+// extent of each entry's data; openZIPEntry, the only way verify reads an
+// entry, requires the Deflate stream to end exactly at the compressed
+// size, so nothing can hide behind the end of a stream.
 func prescanZIP(r io.ReaderAt, size int64) error {
 	dirOffset, err := zipDirectoryOffset(r, size)
 	if err != nil {
@@ -371,11 +382,16 @@ func checkLocal(r io.ReaderAt, pos, limit int64, c *central, buf *localBuf) (int
 			return 0, errors.New("the local header has another CRC-32 or size than the central directory")
 		}
 	} else {
+		// archive/zip's writer puts zeros in the local header when a data
+		// descriptor follows; some unpackers prefer non-zero local sizes.
+		if binary.LittleEndian.Uint32(lh[14:]) != 0 || binary.LittleEndian.Uint32(lh[18:]) != 0 || binary.LittleEndian.Uint32(lh[22:]) != 0 {
+			return 0, errors.New("the local header has a CRC-32 or sizes although a data descriptor follows")
+		}
 		// The data descriptor after the data: signature, CRC-32 and the
-		// two sizes, 8 bytes each when a size needs zip64 (as archive/zip
-		// writes it; a zip64 offset alone keeps 4-byte sizes).
+		// two sizes, 8 bytes each when a size is above 0xffffffff (as
+		// archive/zip writes it; a zip64 offset alone keeps 4-byte sizes).
 		dlen := int64(16)
-		if c.comp >= 0xffffffff || c.uncomp >= 0xffffffff {
+		if c.comp > 0xffffffff || c.uncomp > 0xffffffff {
 			dlen = 24
 		}
 		if end+dlen > limit {
@@ -498,4 +514,118 @@ func allDigits(s string) bool {
 
 func validMonth(s string) bool {
 	return len(s) == 2 && allDigits(s) && s >= "01" && s <= "12"
+}
+
+// zipEntryError is a ZIP entry whose data does not hold what its records
+// say. Verify reports it as a name finding.
+type zipEntryError struct{ detail string }
+
+func (e *zipEntryError) Error() string { return "ZIP entry " + e.detail }
+
+// Pools for openZIPEntry: one bufio reader and one decompressor per open
+// entry, reused, so reading 200,000 entries does not allocate 200,000 of
+// each.
+var (
+	bufPool   = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 32<<10) }}
+	flatePool sync.Pool
+)
+
+// openZIPEntry reads an entry's raw bytes (zf.OpenRaw, exactly
+// CompressedSize64 of them) and decompresses them itself, instead of
+// zf.Open, which stops at the end of the Deflate stream and never checks
+// that the stream filled the compressed size. At the end of the stream it
+// requires that every compressed byte was consumed, and it checks the
+// CRC-32 and the uncompressed size itself (OpenRaw skips both).
+func openZIPEntry(zf *zip.File) (io.ReadCloser, error) {
+	if zf.Method != zip.Deflate {
+		return nil, &zipEntryError{fmt.Sprintf("uses compression method %d, not Deflate", zf.Method)}
+	}
+	raw, err := zf.OpenRaw()
+	if err != nil {
+		return nil, err
+	}
+	br := bufPool.Get().(*bufio.Reader)
+	br.Reset(raw)
+	cr := &countingReader{r: br}
+	var fr io.ReadCloser
+	if v := flatePool.Get(); v != nil {
+		fr = v.(io.ReadCloser)
+		if err := fr.(flate.Resetter).Reset(cr, nil); err != nil {
+			return nil, err
+		}
+	} else {
+		fr = flate.NewReader(cr)
+	}
+	return &zipEntryReader{zf: zf, br: br, cr: cr, fr: fr, crc: crc32.NewIEEE()}, nil
+}
+
+// countingReader counts the bytes the decompressor consumes. It is an
+// io.ByteReader, so flate reads from it byte by byte and never ahead.
+type countingReader struct {
+	r *bufio.Reader
+	n uint64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += uint64(n) //nolint:gosec // n is not negative
+	return n, err
+}
+
+func (c *countingReader) ReadByte() (byte, error) {
+	b, err := c.r.ReadByte()
+	if err == nil {
+		c.n++
+	}
+	return b, err
+}
+
+type zipEntryReader struct {
+	zf   *zip.File
+	br   *bufio.Reader
+	cr   *countingReader
+	fr   io.ReadCloser
+	crc  hash.Hash32
+	n    uint64
+	done error
+}
+
+func (z *zipEntryReader) Read(p []byte) (int, error) {
+	if z.done != nil {
+		return 0, z.done
+	}
+	n, err := z.fr.Read(p)
+	_, _ = z.crc.Write(p[:n])
+	z.n += uint64(n) //nolint:gosec // n is not negative
+	switch {
+	case z.n > z.zf.UncompressedSize64:
+		z.done = &zipEntryError{"decompresses to more bytes than its records say"}
+	case errors.Is(err, io.EOF):
+		switch {
+		case z.cr.n != z.zf.CompressedSize64:
+			z.done = &zipEntryError{fmt.Sprintf("has %d bytes after the end of its Deflate stream (data hidden inside the entry)",
+				z.zf.CompressedSize64-z.cr.n)}
+		case z.n != z.zf.UncompressedSize64:
+			z.done = &zipEntryError{"decompresses to fewer bytes than its records say"}
+		case z.crc.Sum32() != z.zf.CRC32:
+			z.done = &zipEntryError{"does not match its CRC-32"}
+		default:
+			z.done = io.EOF
+		}
+	case err != nil:
+		z.done = &zipEntryError{"has damaged Deflate data: " + err.Error()}
+	}
+	return n, z.done
+}
+
+func (z *zipEntryReader) Close() error {
+	if z.fr == nil {
+		return nil
+	}
+	_ = z.fr.Close()
+	flatePool.Put(z.fr)
+	z.br.Reset(nil)
+	bufPool.Put(z.br)
+	z.fr, z.br = nil, nil
+	return nil
 }

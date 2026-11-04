@@ -497,7 +497,21 @@ headers, the prescan also requires the local entries to follow each other in
 the records' order from offset 0 up to the central directory without a gap,
 each with the record's name, flags and method and, in its data descriptor,
 CRC-32 and sizes (two small reads per entry and no memory per entry: 0.16 s
-and 7 KB allocated for 200,000 entries). It refuses
+and 7 KB allocated for 200,000 entries). The rule behind both checks is that
+**every byte before the central directory is accounted for exactly once**: by
+a local header, a data descriptor, or compressed data that the decompressor
+consumes in full. The prescan accounts for headers, descriptors and each
+entry's extent; verify reads every entry it checks through one path,
+`openZIPEntry`, which takes the raw bytes (`zip.File.OpenRaw`), inflates them
+through a byte-counting `io.ByteReader` (so flate never reads ahead), and at
+the end of the stream requires that the consumed bytes equal the compressed
+size, and checks the CRC-32 and the uncompressed size itself. Data after the
+end of a Deflate stream, which archive/zip's own reader never looks at, is
+refused that way. Only what archive/zip's writer produces is accepted:
+Deflate entries, and zeros in the local header's CRC and size fields when a
+data descriptor follows. The decompressors and buffers are pooled, so this
+costs nothing measurable over archive/zip's reader (200,000 entries: 2.75 s,
+767 MB allocated in all, against 2.9 s and 781 MB before). It refuses
 more than
 300,000 entries, more than 1 KiB of name, extra field and comment per entry or
 64 MiB in all, and data before the archive (which would make archive/zip read
