@@ -89,9 +89,6 @@ func printConvertResult(out io.Writer, res *archive.ConvertResult, encrypt bool)
 		}
 		return
 	}
-	if res.TempRemoved > 0 {
-		fmt.Fprintf(out, "removed %d leftover temporary file(s) from tmp/\n", res.TempRemoved)
-	}
 	if len(res.Corrupt) > 0 {
 		fmt.Fprintf(out, "%d file(s) could not be converted; run verify:\n", len(res.Corrupt))
 		for _, p := range res.Corrupt {

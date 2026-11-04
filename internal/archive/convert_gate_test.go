@@ -65,20 +65,47 @@ func TestConvertGate(t *testing.T) {
 	peak := procStatus(t, "VmHWM") - rssBefore
 	rate := float64(n) / wall.Seconds()
 	cores := cpu.Seconds() / wall.Seconds()
-	t.Logf("GATE files=%d size=50KB wall=%s rate=%.0f files/s cpu=%.2f cores peak=+%.1f MiB race=%v GOMAXPROCS=%d per100k=%s",
-		n, wall.Round(time.Millisecond), rate, cores, float64(peak)/(1<<20), raceEnabled, runtime.GOMAXPROCS(0),
-		(time.Duration(float64(wall) * 100_000 / float64(n))).Round(time.Second))
+	perFile := cpu / time.Duration(n)
+	line := fmt.Sprintf("GATE files=%d size=50KB wall=%s rate=%.0f files/s cpu=%.2f cores cpu/file=%s peak=+%.1f MiB race=%v GOMAXPROCS=%d per100k=%s",
+		n, wall.Round(time.Millisecond), rate, cores, perFile.Round(time.Microsecond), float64(peak)/(1<<20), raceEnabled,
+		runtime.GOMAXPROCS(0), (time.Duration(float64(wall) * 100_000 / float64(n))).Round(time.Second))
+	t.Log(line)
+	writeStepSummary(t, line)
 	if rate < 50 {
 		t.Errorf("%.0f files/s, want at least 50", rate)
 	}
-	// One goroutine converts; the garbage collector's background work and
-	// the race detector add a little on other threads.
-	if cores > 1.2 {
-		t.Errorf("%.2f cores, want at most one", cores)
+	// At most one core: one goroutine converts, so the conversion never
+	// runs on two cores at once. What is asserted is the CPU time per file,
+	// which does not depend on the speed of the disk: with a fast disk the
+	// garbage collector's threads beside the converting goroutine make the
+	// ratio to wall time pass 1 (review round 1 of #513, B). The bound is
+	// about 4.5 times the 1.1 ms measured with the race detector.
+	if perFile > maxCPUPerFile {
+		t.Errorf("%s of CPU per file, want at most %s", perFile, maxCPUPerFile)
 	}
 	if !raceEnabled && peak > 32<<20 {
 		t.Errorf("peak +%.1f MiB, want at most 32 MiB", float64(peak)/(1<<20))
 	}
+}
+
+// maxCPUPerFile bounds the CPU time per 50 KB file of TestConvertGate.
+const maxCPUPerFile = 5 * time.Millisecond
+
+// writeStepSummary appends line to the job summary of a GitHub Actions run
+// (GITHUB_STEP_SUMMARY), where it shows without go test -v; elsewhere it
+// does nothing.
+func writeStepSummary(t *testing.T, line string) {
+	p := os.Getenv("GITHUB_STEP_SUMMARY")
+	if p == "" {
+		return
+	}
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // the runner's summary file
+	if err != nil {
+		t.Logf("job summary: %v", err)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = fmt.Fprintf(f, "`%s`\n", line)
 }
 
 // seedFiles writes n distinct plaintext message files of about size bytes

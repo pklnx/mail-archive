@@ -527,8 +527,19 @@ the keyring lock for the rest of the run.
   directory: `<sha256>.eml` becomes `<sha256>.enc` and back, any other file
   (a leftover of `tmp/`) `<sha256 of its content>.enc`, so `decrypt` opens
   each by its name.
-- **`tmp/`.** At start, files older than `StaleTempAge` (one hour) are
-  removed; younger ones stay and are reported.
+- **`tmp/`.** Under the exclusive writers lock no `Put` can own a file
+  in `tmp/`, so at the start of every run, also one that finds the state
+  already final, every file there is moved to `orphans/<time>/tmp/`
+  (`Store.MoveTempAside`) and converted with the orphans; with the state
+  already `on`, `enable` encrypts just those. The `StaleTempAge` rule of
+  verify protects writes in progress and does not apply offline.
+- **Lock loss.** The run watches its writers lock connection as a writer
+  does (`WritersLock.Watch`); a failed check cancels the run, which stops
+  at the next file and returns `ErrWritersLockLost`. The keyring lock is
+  taken before the state changes, and the terminal state is set only at
+  the generation the run worked at (`FinishBlobEncryption`,
+  `FinishBlobDecryption`). `disable` on a recorded off first derives the
+  state from the files, as a writer start does.
 - **Progress.** The percentage is the cursor's first four hex digits ÷
   65536 (100 % in `orphans/`); the command prints it with files per second
   and the time left of the pass, and `status` shows it from the row.
@@ -539,7 +550,7 @@ target form back before it unlinks the source; after the unlink and before
 the cursor is saved, the rerun finds only the target form. **Cost**
 (`TestConvertGate`, 50 KB files, two cores): 186–733 files/s on the
 development container, bound by `fsync`; 0.2–0.8 of a core; the resident
-set grows by 4–6 MiB (one 64 KiB chunk buffer, the copy buffer, at most
+set grows by 3–7 MiB, up to 17 MiB on a very fast disk (one 64 KiB chunk buffer, the copy buffer, at most
 200 paths per batch); extra disk space at most one batch.
 
 ### Commands

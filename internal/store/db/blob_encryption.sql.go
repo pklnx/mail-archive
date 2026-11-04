@@ -70,6 +70,24 @@ func (q *Queries) EnableBlobEncryption(ctx context.Context, arg EnableBlobEncryp
 	return result.RowsAffected(), nil
 }
 
+const finishBlobDecryption = `-- name: FinishBlobDecryption :execrows
+UPDATE blob_encryption
+SET state = 'off', generation = generation + 1, cursor = '', files_done = 0, files_corrupt = 0,
+    finished_at = now(), updated_at = now()
+WHERE generation = $1 AND state = 'decrypting'
+`
+
+// The end of `encryption disable`: state off, the next generation, as
+// ClearBlobEncryption, but only from decrypting at the generation the
+// command worked at.
+func (q *Queries) FinishBlobDecryption(ctx context.Context, generation int64) (int64, error) {
+	result, err := q.db.Exec(ctx, finishBlobDecryption, generation)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const finishBlobEncryption = `-- name: FinishBlobEncryption :execrows
 UPDATE blob_encryption
 SET state = 'on', generation = generation + 1, cursor = '', finished_at = now(), updated_at = now()

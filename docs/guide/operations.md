@@ -200,12 +200,15 @@ How it converts, in batches of 200 files or 256 MiB:
   `.eml` files unlinked. A crash at any point leaves every message readable,
   and the rerun completes the batch.
 - Files that verify moved to `orphans/` are encrypted too, so no plaintext
-  of a message is left in `data/`. A leftover temporary file in `tmp/` is
-  removed when it is older than one hour; a younger one stays and is
-  reported, and a later run removes it.
+  of a message is left in `data/`. Nothing writes while the command runs,
+  so every file in `tmp/` is left by an interrupted write, whatever its
+  age: it is moved to `orphans/<time>/tmp/` and encrypted there. A later
+  `enable`, with encryption already on, does the same for files left in
+  `tmp/` since.
 - A plaintext file whose content does not match its name is never
-  encrypted: it stays as it is, the command lists it, and `verify` reports
-  it.
+  encrypted: it stays as it is, in `messages/` or in `orphans/`, the
+  command lists it, and `verify` reports the one in `messages/`. Restore a
+  good copy from a backup, or delete it once checked.
 - Encryption is on only after a full pass from the start has found nothing
   left to convert; the end of a resumed run makes that pass too. It only
   reads directories, so it is quick.
@@ -224,9 +227,11 @@ jobs:
 The rate was 186–733 files/s; the disk's `fsync` sets it, not the CPU.
 Network block storage is slower: plan 1–3 hours per 1,000,000 files there.
 Only distinct files count; mail that several accounts or customers received
-is stored once. The command uses at most one core (0.2–0.8 measured) and
-at most 32 MiB of memory (measured +4–6 MiB over its start), and needs
-free disk space for one batch, at most 256 MiB.
+is stored once. The command converts on one goroutine, so it uses at most
+one core (0.2–0.8 measured; the gate bounds the CPU time at 5 ms per 50 KB
+file, measured about 0.5 ms, 1.1 ms with the race detector), and at most
+32 MiB of memory (measured +3–7 MiB over its start, up to 17 MiB on a
+very fast disk); it needs free disk space for one batch, at most 256 MiB.
 
 ### Turning it off
 
@@ -235,8 +240,12 @@ same rules: writers stopped, resumable, and off only after a full pass.
 Run it before going back to a version below 1.5.0, which cannot read
 encrypted files. An encrypted file that cannot be decrypted (damaged, or
 under a data key the keyring lacks) is moved to `orphans/<time>/` and
-listed; its message then shows up as `missing` in `verify`. The keyring and
-the key stay; keep them as long as backups made with encryption on exist.
+listed; its message then shows up as `missing` in `verify`. To recover one
+once the keyring that opens it is back, move it to its place in `messages/`
+(the path below `orphans/<time>/`) and run `./ma encryption disable` again.
+Files left in `tmp/` are moved to `orphans/<time>/tmp/` and kept as they
+are. The keyring and the key stay; keep them as long as backups made with
+encryption on exist.
 
 **Old plaintext.** After turning it on, earlier plaintext can survive in
 free space of the disk, in older snapshots and in backups made before. For

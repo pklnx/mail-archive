@@ -235,3 +235,15 @@ func (s *Store) FinishBlobEncryption(ctx context.Context, generation int64) erro
 	}
 	return err
 }
+
+// FinishBlobDecryption ends `encryption disable`: state off and the next
+// generation, as ClearBlobEncryption, with the keyring copy kept. It fails
+// with ErrBlobStateChanged unless the state is still decrypting at
+// generation (review round 1 of #513, note 1).
+func (s *Store) FinishBlobDecryption(ctx context.Context, generation int64) error {
+	n, err := s.q.FinishBlobDecryption(ctx, generation)
+	if err == nil && n != 1 {
+		err = fmt.Errorf("%w: the conversion at generation %d is gone", ErrBlobStateChanged, generation)
+	}
+	return err
+}

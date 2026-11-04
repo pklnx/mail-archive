@@ -12,11 +12,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 const convertMarker = "Zaunkoenig-Marker-0815"
@@ -502,8 +506,8 @@ func TestConversionRefusals(t *testing.T) {
 
 // Leak test (#435): after enable, no byte of the data directory holds a
 // marker word: not the message files, not the files verify moved to
-// orphans/, not a stale temp file, not the keyring. A temp file younger
-// than StaleTempAge stays and is reported.
+// orphans/, not a file left in tmp/ (old or young: no writer runs, so it
+// is moved to orphans/ and encrypted there), not the keyring.
 func TestEnableLeavesNoPlaintext(t *testing.T) {
 	e := newArchiveEnv(t)
 	msgs := e.seed(12)
@@ -514,19 +518,27 @@ func TestEnableLeavesNoPlaintext(t *testing.T) {
 	e.write("orphans/20261101T000000Z/tmp/put-1", "partial "+convertMarker)
 	e.write("tmp/put-2", "stale "+convertMarker) // e.write ages it past StaleTempAge
 	young := e.path("tmp/put-3")
-	if err := os.WriteFile(young, []byte("young"), 0o600); err != nil {
+	if err := os.WriteFile(young, []byte("young "+convertMarker), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	res, err := archive.Enable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, &out))
-	if err != nil || res.State != store.BlobOn || res.TempRemoved != 1 || res.TempKept != 1 || res.Converted != 14 {
+	if err != nil || res.State != store.BlobOn || len(res.TempMoved) != 2 || res.Converted != 16 {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if !strings.Contains(out.String(), "younger than") {
+	if !strings.Contains(out.String(), "left in tmp/") {
 		t.Errorf("output: %s", out.String())
 	}
+	e.assertNoMarker()
+	e.readAll(kek, msgs)
+}
+
+// assertNoMarker reads every byte of the data directory for the marker.
+func (e *archiveEnv) assertNoMarker() {
+	e.t.Helper()
+	t := e.t
 	files := 0
-	err = filepath.WalkDir(e.data, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(e.data, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -546,5 +558,132 @@ func TestEnableLeavesNoPlaintext(t *testing.T) {
 	if files < 15 {
 		t.Fatalf("only %d files checked", files)
 	}
+}
+
+// A file left in tmp/ while encryption is already on (a writer killed
+// mid-write before the window) is moved and encrypted by the next enable,
+// which otherwise has nothing to do (review round 1 of #513, A1).
+func TestEnableWhenOnEncryptsTemp(t *testing.T) {
+	e := newArchiveEnv(t)
+	e.seed(12)
+	kek, _ := e.keygen()
+	if _, err := archive.Enable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.path("tmp/put-9"), []byte("young "+convertMarker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := archive.Enable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil))
+	if err != nil || !res.Unchanged || len(res.TempMoved) != 1 || res.Converted != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	e.assertNoMarker()
+}
+
+// The terminal state needs a pass that started from the beginning: a run
+// interrupted right after the batch that converted the last file resumes
+// with a pass that converts nothing, and that pass must not end the run.
+// A straggler behind the cursor shows it (review round 1 of #513, A2/B2).
+func TestEnableResumedPassDoesNotEnd(t *testing.T) {
+	e := newArchiveEnv(t)
+	e.seed(20)
+	kek, _ := e.keygen()
+	opts := e.convertOpts(kek, nil)
+	opts.BatchFiles, opts.AfterBatch = 10, interruptAfter(2)
+	if _, err := archive.Enable(e.ctx, e.st, e.newBlobs(), opts); !errors.Is(err, errInterrupt) {
+		t.Fatal(err)
+	}
+	if p, _ := e.forms(); p != 0 {
+		t.Fatalf("%d plaintext files left before the rerun", p)
+	}
+	h := e.plainBefore(e.row().Cursor)
+	opts.AfterBatch = nil
+	res, err := archive.Enable(e.ctx, e.st, e.newBlobs(), opts)
+	if err != nil || res.State != store.BlobOn {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if e.exists(blobstore.RelPath(h)) || !e.exists(blobstore.EncPath(h)) {
+		t.Fatal("the straggler stayed plaintext")
+	}
+}
+
+// disable on a recorded off derives the state from the files, as a writer
+// start does: a dump recorded off, restored next to files that enable
+// encrypted later, is decrypted instead of reported as already off
+// (review round 1 of #513, follow-up 1).
+func TestDisableDerivesFromFiles(t *testing.T) {
+	e := newArchiveEnv(t)
+	msgs := e.seed(5)
+	kek, ring := e.keygen()
+	dump := keyringCopy(t, ring)
+	if _, err := archive.Enable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.ClearBlobEncryption(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.RecordBlobOff(e.ctx, dump); err != nil {
+		t.Fatal(err)
+	}
+	res, err := archive.Disable(e.ctx, e.st, e.newBlobs(), e.convertOpts(kek, nil))
+	if err != nil || res.Unchanged || res.State != store.BlobOff || res.Converted != 5 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if p, c := e.forms(); p != 5 || c != 0 {
+		t.Fatalf("plain %d encrypted %d", p, c)
+	}
 	e.readAll(kek, msgs)
+}
+
+// A conversion whose writers lock connection fails stops like a writer
+// does: the run is cancelled at the next file, the state stays
+// transitional, and the rerun finishes (review round 1 of #513, note 1).
+func TestConversionStopsOnLockLoss(t *testing.T) {
+	e, url := newAtRestEnv(t)
+	e.seed(20)
+	kek, _ := e.keygen()
+	conn, err := pgx.Connect(e.ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(e.ctx) }()
+	tick := make(chan time.Time)
+	lostErr := make(chan error, 1)
+	opts := e.convertOpts(kek, nil)
+	opts.BatchFiles, opts.Tick = 5, tick
+	opts.OnLost = func(err error) { lostErr <- err }
+	opts.AfterBatch = func(b int) error {
+		if b != 1 {
+			return nil
+		}
+		var n int
+		if err := conn.QueryRow(e.ctx, `SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity
+			WHERE application_name = 'mail-archive encryption enable' AND datname = current_database()`).Scan(&n); err != nil || n != 1 {
+			t.Errorf("terminate: %d, %v", n, err)
+		}
+		select {
+		case tick <- time.Now():
+		case <-time.After(testwait.Limit(t)):
+			t.Error("the watch took no tick")
+		}
+		select {
+		case <-lostErr:
+		case <-time.After(testwait.Limit(t)):
+			t.Error("the conversion did not notice the lost lock")
+		}
+		return nil
+	}
+	if _, err := archive.Enable(e.ctx, e.st, e.newBlobs(), opts); !errors.Is(err, store.ErrWritersLockLost) {
+		t.Fatalf("after the lock loss: %v", err)
+	}
+	if r := e.row(); r.State != store.BlobEncrypting || r.FilesDone != 5 {
+		t.Fatalf("row %+v", r)
+	}
+	opts.AfterBatch, opts.OnLost = nil, nil
+	if res, err := archive.Enable(e.ctx, e.st, e.newBlobs(), opts); err != nil || res.State != store.BlobOn {
+		t.Fatalf("rerun: %+v %v", res, err)
+	}
+	if p, c := e.forms(); p != 0 || c != 20 {
+		t.Fatalf("plain %d encrypted %d", p, c)
+	}
 }

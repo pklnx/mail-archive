@@ -336,3 +336,33 @@ func TestBlobConversionProgress(t *testing.T) {
 		t.Fatalf("finish twice: %v", err)
 	}
 }
+
+// disable ends only from decrypting at the generation its command worked
+// at: off with the next generation and the keyring copy kept (review
+// round 1 of #513, note 1).
+func TestFinishBlobDecryption(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	if err := st.SetBlobEncryption(ctx, store.BlobDecrypting, testKeyring); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishBlobDecryption(ctx, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("another generation: %v", err)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, store.KeyringCopy{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishBlobDecryption(ctx, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("from encrypting: %v", err)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobDecrypting, store.KeyringCopy{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishBlobDecryption(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := st.BlobEncryption(ctx)
+	if row.State != store.BlobOff || row.Generation != 4 || string(row.Keyring) != string(testKeyring.Keyring) {
+		t.Fatalf("finished: %+v", row)
+	}
+}

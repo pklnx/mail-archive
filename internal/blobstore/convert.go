@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
 )
@@ -343,35 +342,35 @@ func (s *Store) MoveAside(rel, dir string) error {
 	return s.syncDir(filepath.Dir(src))
 }
 
-// RemoveStaleTemp removes the files in tmp/ last written before cutoff
-// (unfinished writes of crashed processes) and synchronizes tmp/. It
-// returns how many it removed and how many younger ones it kept.
-func (s *Store) RemoveStaleTemp(cutoff time.Time) (removed, kept int, err error) {
-	var stale []string
-	err = s.walkTemp(func(e Entry) error {
-		if e.Kind != EntryTemp {
-			return nil
-		}
-		if e.ModTime.Before(cutoff) {
-			stale = append(stale, e.Path)
-		} else {
-			kept++
+// MoveTempAside moves every file in tmp/ to dir/tmp/ (dir relative to the
+// store root, such as orphans/<time>), durably, and returns the new paths
+// relative to the root. `encryption enable` and `disable` call it under
+// the exclusive writers lock, when no writer and so no Put can own a file
+// in tmp/: what is there is left by a process that ended mid-write. Below
+// orphans/ the conversion encrypts it like every other orphan, so no
+// plaintext stays in tmp/ (review round 1 of #513).
+func (s *Store) MoveTempAside(dir string) ([]string, error) {
+	var temps []string
+	err := s.walkTemp(func(e Entry) error {
+		if e.Kind == EntryTemp {
+			temps = append(temps, e.Path)
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
-	for _, p := range stale {
-		if err := s.ops.unlink(s.abs(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return removed, kept, err
+	var moved []string
+	for _, rel := range temps {
+		if err := s.MoveAside(rel, dir); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return moved, err
 		}
-		removed++
+		moved = append(moved, dir+"/"+rel)
 	}
-	if removed > 0 {
-		err = s.syncDir(filepath.Join(s.phys, "tmp"))
-	}
-	return removed, kept, err
+	return moved, nil
 }
 
 // MessagesAfter calls fn for every hash with a file in messages/, in

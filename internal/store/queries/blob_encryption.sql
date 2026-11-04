@@ -69,3 +69,12 @@ WHERE generation = @generation AND state IN ('encrypting', 'decrypting');
 UPDATE blob_encryption
 SET state = 'on', generation = generation + 1, cursor = '', finished_at = now(), updated_at = now()
 WHERE generation = @generation AND state = 'encrypting';
+
+-- name: FinishBlobDecryption :execrows
+-- The end of `encryption disable`: state off, the next generation, as
+-- ClearBlobEncryption, but only from decrypting at the generation the
+-- command worked at.
+UPDATE blob_encryption
+SET state = 'off', generation = generation + 1, cursor = '', files_done = 0, files_corrupt = 0,
+    finished_at = now(), updated_at = now()
+WHERE generation = @generation AND state = 'decrypting';

@@ -38,6 +38,11 @@ type ConvertOptions struct {
 	// AfterBatch, for tests, runs after each committed batch; an error
 	// ends the run as an interruption would.
 	AfterBatch func(batch int) error
+	// Tick drives the check of the writers lock's connection (default:
+	// every store.WritersPing); OnLost, for tests, is called after a lost
+	// lock cancelled the run.
+	Tick   <-chan time.Time
+	OnLost func(error)
 }
 
 // ConvertResult is what Enable or Disable did.
@@ -57,9 +62,9 @@ type ConvertResult struct {
 	MovedAside []string
 	// MovedTo is that orphans/<time> directory.
 	MovedTo string
-	// TempRemoved and TempKept count the files in tmp/ removed because
-	// they were older than StaleTempAge, and those kept.
-	TempRemoved, TempKept int
+	// TempMoved lists the files moved from tmp/ to orphans/<time>/tmp/
+	// at the start (converted there with the orphans by Enable).
+	TempMoved []string
 	// Passes is the number of passes over the files this run made.
 	Passes int
 }
@@ -132,10 +137,56 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 	} else if !ok {
 		return nil, ErrBlobLockHeld
 	}
+	// A session lock ends with its session: when the lock connection
+	// fails, the run stops at the next file, as a writer stops (review
+	// round 1 of #513, note 1).
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	tick := opts.Tick
+	if tick == nil {
+		t := time.NewTicker(store.WritersPing)
+		defer t.Stop()
+		tick = t.C
+	}
+	lock.Watch(tick, func(err error) {
+		opts.Logger.Error("encryption at rest: the conversion stops", "err", err)
+		cancel(err)
+		if opts.OnLost != nil {
+			opts.OnLost(err)
+		}
+	})
+	// The keyring lock before any state change: no other encryption
+	// command changes the keyring while this runs.
+	unlockRing, err := blobcrypt.LockKeyring(opts.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockRing()
 
+	res := &ConvertResult{}
+	// No writer runs, so a file in tmp/ belongs to no write in progress:
+	// it goes to orphans/<time>/tmp/, where it is converted with the
+	// orphans (review round 1 of #513, A1).
+	orphanDir := blobstore.OrphansDir + "/" + opts.Now().UTC().Format("20060102T150405Z")
+	if res.TempMoved, err = blobs.MoveTempAside(orphanDir); err != nil {
+		return nil, err
+	}
+	if len(res.TempMoved) > 0 {
+		fmt.Fprintf(opts.Out, "moved %d file(s) left in tmp/ by an interrupted write to %s/tmp/\n", len(res.TempMoved), orphanDir)
+	}
+
+	atOpts := AtRestOptions{DataDir: opts.DataDir, KEK: opts.KEK, Logger: opts.Logger, keyringHeld: true}
 	row, err := st.BlobEncryption(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if !encrypt && blobOff(row) {
+		// Off, as a writer start derives it: a dump recorded off restored
+		// next to files encrypted later shows up as encrypting (review
+		// round 1 of #513, follow-up 1).
+		if row, err = deriveFromFiles(ctx, st, blobs, row, atOpts); err != nil {
+			return nil, err
+		}
 	}
 	state := store.BlobOff
 	if row != nil {
@@ -147,14 +198,20 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 	}
 	switch state {
 	case target:
-		return &ConvertResult{State: state, Unchanged: true}, nil
+		res.State, res.Unchanged = state, true
+		if encrypt && len(res.TempMoved) > 0 {
+			// Already on: the moved files are encrypted right away.
+			if err := encryptMoved(ctx, st, blobs, row, atOpts, res); err != nil {
+				return res, err
+			}
+		}
+		return res, nil
 	case store.BlobRekeying:
 		return nil, ErrRekeyInProgress
 	}
 	if opts.KEK == nil {
 		return nil, fmt.Errorf("%w: `encryption %s` needs it", ErrNoArchiveKey, command)
 	}
-	atOpts := AtRestOptions{DataDir: opts.DataDir, KEK: opts.KEK, Logger: opts.Logger}
 
 	var ring *blobcrypt.Keyring
 	if state == store.BlobOff {
@@ -177,12 +234,6 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 			fmt.Fprintf(opts.Out, "encryption at rest: %s → %s\n", state, transit)
 		}
 	}
-	// No other encryption command changes the keyring while this runs.
-	unlockRing, err := blobcrypt.LockKeyring(opts.DataDir)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockRing()
 	if row, err = st.BlobEncryption(ctx); err != nil {
 		return nil, err
 	}
@@ -200,31 +251,58 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 	if err != nil {
 		return nil, err
 	}
+	res.State = transit
 	c := &converter{
 		ctx: ctx, st: st, blobs: blobs, conv: conv, opts: opts, encrypt: encrypt,
 		gen: row.Generation, cursor: row.Cursor, done: row.FilesDone, corrupt: row.FilesCorrupt,
-		res: &ConvertResult{State: transit},
-	}
-	if c.res.TempRemoved, c.res.TempKept, err = blobs.RemoveStaleTemp(opts.Now().Add(-StaleTempAge)); err != nil {
-		return nil, err
-	}
-	if c.res.TempKept > 0 {
-		fmt.Fprintf(opts.Out, "note: %d file(s) in tmp/ are younger than %s and stay; they are removed by a run after that\n",
-			c.res.TempKept, StaleTempAge)
+		res: res, orphanDir: orphanDir,
 	}
 	if err := c.run(); err != nil {
-		return c.res, err
+		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+			err = cause
+		}
+		return res, err
 	}
+	// Both guarded by the generation the run worked at.
 	if encrypt {
 		err = st.FinishBlobEncryption(ctx, c.gen)
 	} else {
-		err = st.ClearBlobEncryption(ctx)
+		err = st.FinishBlobDecryption(ctx, c.gen)
 	}
 	if err != nil {
-		return c.res, err
+		return res, err
 	}
-	c.res.State = target
-	return c.res, nil
+	res.State = target
+	return res, nil
+}
+
+// encryptMoved encrypts the files MoveTempAside moved while the state is
+// already on, so that a later enable leaves no plaintext from tmp/.
+func encryptMoved(ctx context.Context, st *store.Store, blobs *blobstore.Store, row *store.BlobEncryption, opts AtRestOptions, res *ConvertResult) error {
+	if opts.KEK == nil {
+		return fmt.Errorf("%w: files moved from tmp/ cannot be encrypted", ErrNoArchiveKey)
+	}
+	ring, err := needKeyring(ctx, st, row, opts)
+	if err != nil {
+		return err
+	}
+	if err := blobs.SetKeys(ring, true); err != nil {
+		return err
+	}
+	conv, err := blobs.NewConversion(true)
+	if err != nil {
+		return err
+	}
+	for _, rel := range res.TempMoved {
+		out, err := conv.Orphan(rel)
+		if err != nil {
+			return err
+		}
+		if out == blobstore.ConvertDone {
+			res.Converted++
+		}
+	}
+	return conv.Commit()
 }
 
 // startEnable is the step from off to encrypting: the keyring file gets a
@@ -234,11 +312,7 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 // A database copy recorded off with the same archive id is merged in
 // (the data keys are the union).
 func startEnable(ctx context.Context, st *store.Store, row *store.BlobEncryption, opts AtRestOptions, out io.Writer) (*blobcrypt.Keyring, error) {
-	unlock, err := blobcrypt.LockKeyring(opts.DataDir)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
+	// The caller holds the keyring lock.
 	path := blobcrypt.KeyringPath(opts.DataDir)
 	ring, err := blobcrypt.ReadKeyringFile(path)
 	if errors.Is(err, blobcrypt.ErrNoKeyring) {
@@ -298,6 +372,8 @@ type converter struct {
 	batches    int
 	passFound  int64 // files converted in this pass
 	last       string
+
+	orphanDir string // orphans/<time> of this run, for MoveAside
 
 	// Progress of this run.
 	started   time.Time
@@ -403,9 +479,7 @@ func (c *converter) messageCorrupt(hash string) error {
 	rel := blobstore.RelPath(hash)
 	if !c.encrypt {
 		rel = blobstore.EncPath(hash)
-		if c.res.MovedTo == "" {
-			c.res.MovedTo = blobstore.OrphansDir + "/" + c.opts.Now().UTC().Format("20060102T150405Z")
-		}
+		c.res.MovedTo = c.orphanDir
 		if err := c.blobs.MoveAside(rel, c.res.MovedTo); err != nil {
 			return fmt.Errorf("move %s aside: %w", rel, err)
 		}

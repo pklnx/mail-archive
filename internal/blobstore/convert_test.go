@@ -384,12 +384,13 @@ func TestOrphansAfter(t *testing.T) {
 	}
 }
 
-// RemoveStaleTemp removes only files older than the cutoff.
-func TestRemoveStaleTemp(t *testing.T) {
-	s, _, root := newRecorded(t)
+// MoveTempAside moves every file in tmp/, whatever its age, below the
+// given directory and keeps nothing in tmp/.
+func TestMoveTempAside(t *testing.T) {
+	s, rec, root := newRecorded(t)
 	old, young := filepath.Join(root, "tmp", "put-old"), filepath.Join(root, "tmp", "put-young")
 	for _, p := range []string{old, young} {
-		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(p, []byte(marker), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -397,9 +398,25 @@ func TestRemoveStaleTemp(t *testing.T) {
 	if err := os.Chtimes(old, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	removed, kept, err := s.RemoveStaleTemp(now.Add(-time.Hour))
-	if err != nil || removed != 1 || kept != 1 || exists(old) || !exists(young) {
-		t.Fatalf("removed %d kept %d err %v; old %v young %v", removed, kept, err, exists(old), exists(young))
+	rec.take()
+	moved, err := s.MoveTempAside("orphans/T")
+	if err != nil || len(moved) != 2 {
+		t.Fatalf("moved %v, %v", moved, err)
+	}
+	assertNoTemp(t, root)
+	for _, rel := range []string{"orphans/T/tmp/put-old", "orphans/T/tmp/put-young"} {
+		if !slices.Contains(moved, rel) || !exists(s.abs(rel)) {
+			t.Errorf("%s not moved: %v", rel, moved)
+		}
+	}
+	// Each move synchronizes the new directory chain up to the root and
+	// the old directory.
+	ev := rec.take()
+	for _, d := range []string{filepath.Join(root, "orphans", "T", "tmp"), filepath.Join(root, "orphans", "T"),
+		filepath.Join(root, "orphans"), root, filepath.Join(root, "tmp")} {
+		if !slices.Contains(ev, "sync:"+d) {
+			t.Errorf("no barrier on %s: %v", d, ev)
+		}
 	}
 }
 
@@ -421,5 +438,60 @@ func TestMoveAside(t *testing.T) {
 	}
 	if err := s.MoveAside(rel, "orphans/T"); err == nil || errors.Is(err, syscall.ENOENT) {
 		t.Fatalf("an existing target: %v", err)
+	}
+}
+
+// The copy written to tmp/ is read back before it is published: damaged
+// after it was written (here as it is closed), it is refused, nothing is
+// linked, and the source stays the only copy (review round 1 of #513, B1).
+// Both directions.
+func TestConversionReadsBackTempCopy(t *testing.T) {
+	for _, encrypt := range []bool{true, false} {
+		t.Run(fmt.Sprintf("encrypt=%v", encrypt), func(t *testing.T) {
+			ring := testRing(t)
+			content := "Subject: Rueckleseprobe\r\n\r\nInhalt\r\n"
+			s, rec, root := newRecorded(t)
+			if encrypt {
+				if _, _, err := s.Put(strings.NewReader(content)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeForm(t, root, content, ring)
+			}
+			if err := s.SetKeys(ring, false); err != nil {
+				t.Fatal(err)
+			}
+			h := sha(content)
+			src, dst := s.abs(RelPath(h)), s.abs(EncPath(h))
+			if !encrypt {
+				src, dst = dst, src
+			}
+			rec.onBefore("close:TEMP", func(string) {
+				temps, _ := filepath.Glob(filepath.Join(root, "tmp", "convert-*"))
+				for _, p := range temps {
+					data, err := os.ReadFile(p)
+					if err != nil || len(data) <= blobcrypt.HeaderSize+2 && encrypt {
+						t.Errorf("temp copy %s: %d bytes, %v", p, len(data), err)
+						continue
+					}
+					i := min(blobcrypt.HeaderSize+2, len(data)-1)
+					data[i] ^= 1
+					if err := os.WriteFile(p, data, 0o600); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			c, err := s.NewConversion(encrypt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if o, err := c.Message(h); err == nil {
+				t.Fatalf("Message accepted a damaged temp copy: %v", o)
+			}
+			if exists(dst) || !exists(src) || c.Pending() != 0 {
+				t.Fatalf("target %v source %v pending %d", exists(dst), exists(src), c.Pending())
+			}
+			assertNoTemp(t, root)
+		})
 	}
 }

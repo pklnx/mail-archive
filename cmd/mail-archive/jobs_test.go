@@ -158,8 +158,15 @@ func TestJobsRetryCommand(t *testing.T) {
 				t.Error(err)
 			}
 		})
-		lines := strings.Split(strings.TrimSpace(out), "\n")
-		return lines[len(lines)-1]
+		// The jobs line; the encryption at rest line follows it (#392,
+		// part 3).
+		for line := range strings.SplitSeq(out, "\n") {
+			if strings.HasPrefix(line, "jobs: ") {
+				return line
+			}
+		}
+		t.Fatalf("status without a jobs line:\n%s", out)
+		return ""
 	}
 	if line := status(); line != "jobs: none" {
 		t.Errorf("status without jobs: %q", line)

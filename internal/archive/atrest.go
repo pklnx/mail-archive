@@ -47,6 +47,10 @@ type AtRestOptions struct {
 	// store.WritersPing).
 	Tick   <-chan time.Time
 	Logger *slog.Logger
+
+	// keyringHeld: the caller (an encryption command) holds the keyring
+	// lock, so a reconciliation writes the file without taking it.
+	keyringHeld bool
 }
 
 // AtRest is the state of encryption at rest a command started with.

@@ -592,6 +592,10 @@ hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
   The database is not encrypted (see the table above); its audit entries
   stay readable also later, because the log is append-only. Encrypting the
   database content is planned for 1.6.0.
+- **Corrupt files.** A plaintext message file whose content no longer
+  matches its name is never encrypted by `encryption enable`: it stays
+  plaintext, in `messages/` or in `orphans/`, until it is replaced from a
+  backup or deleted.
 - **Old plaintext.** After an existing archive is switched to encryption,
   its earlier plaintext can survive in unlinked files and free space of the
   disk, in older snapshots and in backups made before. For a clean state,
