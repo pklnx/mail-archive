@@ -558,10 +558,13 @@ summary:
 - `group`: with `--expect-group NAME`, the statement names another customer
   group (case is ignored; `none` for an export without a group).
 
-`--public-key FILE` (repeatable) trusts only the keys in the given PEM files,
-such as the copy of `signing.pub` kept off the archive's host. Without it the
-keys in the export's `attest/` directory are trusted, which shows only that
-the export is consistent; a note says so. `--attestations FILE` compares the
+`--public-key FILE` (repeatable) trusts only the keys in the given PEM files.
+Pass the copy of `signing.pub` kept off the archive's host, never
+`attest/signing.pub` from the export itself: whoever changed the export could
+have replaced that file too. Without the option the keys in the export's
+`attest/` directory are trusted, which shows only that the export is
+consistent; a note says so. Names from the export are printed quoted when
+they contain control characters. `--attestations FILE` compares the
 attestation with the off-host copy of `attestations.jsonl`; leaves files in a
 `leaves/` directory next to it are used to check every exported message when
 the export has none. Exit codes: `0` nothing found, `1` findings, `2` the

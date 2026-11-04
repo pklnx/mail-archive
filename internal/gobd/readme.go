@@ -86,9 +86,12 @@ Tabellen
   Kunden betreffen, werden nicht aufgeführt.
 
 Prüfen
-- Mit mail-archive:  mail-archive export verify <Export> --public-key signing.pub
-  (mit --attestations <Kopie von attestations.jsonl> gegen die eigene Kopie,
-  mit --expect-group "<Name>" gegen die erwartete Kundengruppe).
+- Mit mail-archive:  mail-archive export verify <Export> --public-key <Ihre Kopie von signing.pub>
+  Geben Sie die Kopie des öffentlichen Schlüssels an, die Sie außerhalb des
+  Archivservers aufbewahren, nicht attest/signing.pub aus diesem Export: wer
+  den Export verändert, kann auch diese Datei ersetzen.
+  (Mit --attestations <Ihre Kopie von attestations.jsonl> gegen die eigene
+  Kopie, mit --expect-group "<Name>" gegen die erwartete Kundengruppe.)
 - Ohne mail-archive:  sha256sum -c SHA256SUMS  (Linux, macOS: shasum -a 256 -c)
   oder in PowerShell: Get-FileHash -Algorithm SHA256 <Datei>.
   Das prüft die Dateien, nicht die Signatur der Erklärung.
@@ -152,9 +155,12 @@ Tables
   listed.
 
 Verifying
-- With mail-archive:  mail-archive export verify <export> --public-key signing.pub
-  (with --attestations <copy of attestations.jsonl> against your own copy,
-  with --expect-group "<name>" against the customer group you expect).
+- With mail-archive:  mail-archive export verify <export> --public-key <your copy of signing.pub>
+  Pass the copy of the public key that you keep off the archive's host,
+  not attest/signing.pub from this export: whoever changed the export could
+  have replaced that file too.
+  (With --attestations <your copy of attestations.jsonl> against your own
+  copy, with --expect-group "<name>" against the customer group you expect.)
 - Without it:  sha256sum -c SHA256SUMS  (macOS: shasum -a 256 -c), or in
   PowerShell: Get-FileHash -Algorithm SHA256 <file>. This checks the files,
   not the statement's signature.

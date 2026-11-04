@@ -471,8 +471,9 @@ give the same bytes), so what it returns is what the signature binds.
 database, configuration or key. In order: the entries (names, duplicates also
 after lowercasing and NFC, `..`, absolute paths, backslashes, directory,
 symlink, encrypted or oddly compressed entries), the statement and its
-signature (keys from `--public-key`, else the export's `attest/`, which shows
-only consistency), SHA256SUMS against the statement and the entries, the three
+signature (keys from `--public-key`, which must be the customer's copy kept
+off the archive's host, not the one shipped in the export; else the export's
+`attest/`, which shows only consistency), SHA256SUMS against the statement and the entries, the three
 tables line by line against their format, each other and the statement's
 counts, every message file against its name and size, index.xml against the
 tables, the attestation against the statement and `--attestations` (one entry:
@@ -490,7 +491,14 @@ written, about 190 MB resident with Go's default GC target. Verify keeps
 about 90 bytes per message file and one line of a table at a time (at most
 1 MiB): a 200,000-message ZIP took 3 s and about 200 MB resident, a
 50,000-message directory 1 s and 52 MB. Before archive/zip reads a ZIP, a
-prescan walks the central directory in constant memory and refuses more than
+prescan walks the central directory in constant memory. Because archive/zip
+reads only the central directory while streaming unpackers read the local
+headers, the prescan also requires the local entries to follow each other in
+the records' order from offset 0 up to the central directory without a gap,
+each with the record's name, flags and method and, in its data descriptor,
+CRC-32 and sizes (two small reads per entry and no memory per entry: 0.16 s
+and 7 KB allocated for 200,000 entries). It refuses
+more than
 300,000 entries, more than 1 KiB of name, extra field and comment per entry or
 64 MiB in all, and data before the archive (which would make archive/zip read
 other records than the prescan); a declared size that Deflate cannot reach

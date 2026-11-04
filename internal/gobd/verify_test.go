@@ -153,6 +153,35 @@ func TestVerifyKeysAndChain(t *testing.T) {
 		t.Fatalf("short copy: %v", kinds(fs))
 	}
 
+	// Review B1 of #507 (M16, M17): the shipped attestation must be the
+	// one the statement names, also when it is genuinely signed.
+	for name, c := range map[string]struct {
+		chain  []attest.Entry
+		detail string
+	}{
+		// More entries than the statement allows stop readChain itself
+		// ("more entries than the statement says"); fewer reach M16.
+		"M16 no entry for chain one": {nil, "attest/attestations.jsonl 0 entries, the statement says 1"},
+		"two entries for chain one":  {f.chain, "attest/attestations.jsonl more entries than the statement says (1)"},
+		"M17 another attestation":    {f.chain[:1], "attest/attestations.jsonl ends with attestation #1, the statement names #2 " + f.chain[1].Hash},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := readTree(t, src)
+			reseal(t, files, f.key, func(files map[string][]byte, _ *attest.Statement) {
+				var b []byte
+				for i := range c.chain {
+					line, _ := attest.MarshalLine(&c.chain[i])
+					b = append(b, line...)
+				}
+				files[ChainFile] = b
+			})
+			fs, _ := verify(t, writeTree(t, files), VerifyOptions{Trusted: f.trusted(), Attestations: f.copyFile(t, f.chain, false)})
+			if len(fs) != 1 || !hasFinding(fs, KindChain, c.detail) {
+				t.Fatalf("findings: %v", kinds(fs))
+			}
+		})
+	}
+
 	// A full chain that is not a prefix of the copy.
 	f.fullChain = true
 	full := filepath.Join(t.TempDir(), "full")
@@ -275,39 +304,101 @@ func TestVerifyResealedContent(t *testing.T) {
 		t.Fatalf("incomplete: %v", kinds(fs))
 	}
 	for name, c := range map[string]struct {
-		mutate func(files map[string][]byte, st *attest.Statement)
-		kind   string
-		part   string
+		mutate   func(files map[string][]byte, st *attest.Statement)
+		kind     string
+		part     string
+		withCopy bool
 	}{
-		"count": {func(_ map[string][]byte, st *attest.Statement) { st.Locations++ }, KindIndex, "the statement says"},
+		"count": {func(_ map[string][]byte, st *attest.Statement) { st.Locations++ }, KindIndex, "the statement says", false},
 		"formula": {func(files map[string][]byte, _ *attest.Statement) {
 			files[MessagesFile] = bytes.Replace(files[MessagesFile], []byte(`"'=SUM(A1)`), []byte(`"=SUM(A1)`), 1)
-		}, KindIndex, "unquoted formula"},
+		}, KindIndex, "unquoted formula", false},
 		"missing also exported": {func(files map[string][]byte, _ *attest.Statement) {
 			files[MissingFile] = bytes.Replace(files[MissingFile], []byte(shaOf([]byte("lost"))), []byte(f.msgs[0].m.SHA256), 2)
-		}, KindIndex, "also in missing.csv"},
+		}, KindIndex, "also in missing.csv", false},
 		"index columns": {func(files map[string][]byte, _ *attest.Statement) {
 			files[IndexFile] = bytes.Replace(files[IndexFile], []byte("<Name>subject</Name>"), []byte("<Name>betreff</Name>"), 1)
-		}, KindIndex, "columns"},
+		}, KindIndex, "columns", false},
 		"index encoding": {func(files map[string][]byte, _ *attest.Statement) {
 			files[IndexFile] = bytes.Replace(files[IndexFile], []byte(`encoding="UTF-8"`), []byte(`encoding="ISO-8859-1"`), 1)
-		}, KindIndex, "UTF-8"},
+		}, KindIndex, "UTF-8", false},
 		"unattested claim": {func(files map[string][]byte, _ *attest.Statement) {
 			files[MessagesFile] = bytes.Replace(files[MessagesFile], []byte(";4;2\r\n"), []byte(";4;\r\n"), 1)
-		}, KindIndex, "its attestation is empty"},
+		}, KindIndex, "its attestation is empty", false},
 		"location of nothing": {func(files map[string][]byte, _ *attest.Statement) {
 			files[LocationsFile] = append(files[LocationsFile], []byte(`"`+shaOf([]byte("nothing"))+`";"anna";"work";"imap";"INBOX";1;99;"";"";"2025-01-01T00:00:00Z";"2025-01-01T00:00:00Z";"";"";"";"";"";""`+"\r\n")...)
-		}, KindIndex, "refers to a message that is not in messages.csv"},
+		}, KindIndex, "refers to a message that is not in messages.csv", false},
+		// Review B1 of #507: one case per check that had none.
+		"M3 seq outside its attestation": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[MessagesFile] = bytes.Replace(files[MessagesFile], []byte(";4;2\r\n"), []byte(";4;1\r\n"), 1)
+		}, kind: KindChain, part: "archive_seq 4 is outside attestation #1 (1 to 3)", withCopy: true},
+		"M7 seq out of order": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[MessagesFile] = bytes.Replace(files[MessagesFile], []byte(";3;1\r\n"), []byte(";1;1\r\n"), 1)
+		}, kind: KindIndex, part: "messages.csv line 3: archive_seq is not in increasing order"},
+		"M8 attestation newer than the statement's": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[MessagesFile] = bytes.Replace(files[MessagesFile], []byte(";4;2\r\n"), []byte(";4;3\r\n"), 1)
+		}, kind: KindIndex, part: "messages.csv line 4: attestation 3 is newer than the statement's"},
+		"M9 file does not match the date": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[MessagesFile] = bytes.Replace(files[MessagesFile], []byte(";01.02.2025;"), []byte(";01.03.2025;"), 1)
+		}, kind: KindIndex, part: "messages.csv line 4: file does not match sha256 and date"},
+		"M10 missing path of another message": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[MissingFile] = bytes.Replace(files[MissingFile], []byte("/"+shaOf([]byte("lost"))+".eml"), []byte("/"+shaOf([]byte("x"))+".eml"), 1)
+		}, kind: KindIndex, part: "missing.csv line 2: file is not the message's path"},
+		"M11 place without owner": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[LocationsFile] = bytes.Replace(files[LocationsFile], []byte(`;"ben";`), []byte(`;"";`), 1)
+		}, kind: KindOwner, part: "locations.csv line 3: a place without owner in an export of a customer group"},
+		"M12 attestation file without attestation": {mutate: func(_ map[string][]byte, st *attest.Statement) {
+			st.AttestationSeq, st.AttestationHash = 0, ""
+		}, kind: KindName, part: ChainFile + " unexpected file (the statement names no attestation)"},
+		"M13 SHA256SUMS digest is not the name": {mutate: func(files map[string][]byte, _ *attest.Statement) {
+			files[SumsFile] = bytes.Replace(files[SumsFile], []byte(f.msgs[0].m.SHA256+"  mail/"), []byte(shaOf([]byte("x"))+"  mail/"), 1)
+		}, kind: KindManifest, part: "the digest in SHA256SUMS is not the file's name"},
+		"M18 message file without row": {mutate: func(files map[string][]byte, st *attest.Statement) {
+			files[MessagesFile] = removeRow(t, files[MessagesFile], f.msgs[3].m.SHA256)
+			st.Messages--
+			st.Bytes -= f.msgs[3].m.Size
+		}, kind: KindIndex, part: MessagePath(f.msgs[3].m.SHA256, f.msgs[3].m.SortAt, berlin(t)) + " not in messages.csv"},
+		"M19 message without place": {mutate: func(files map[string][]byte, st *attest.Statement) {
+			files[LocationsFile] = removeRow(t, files[LocationsFile], f.msgs[3].m.SHA256)
+			st.Locations--
+		}, kind: KindIndex, part: MessagePath(f.msgs[3].m.SHA256, f.msgs[3].m.SortAt, berlin(t)) + ": the message has no row in locations.csv"},
+		"M20 missing message twice": {mutate: func(files map[string][]byte, st *attest.Statement) {
+			lines := bytes.SplitAfter(files[MissingFile], []byte("\r\n"))
+			files[MissingFile] = append(files[MissingFile], lines[1]...)
+			st.Missing++
+		}, kind: KindIndex, part: "missing.csv line 3: the message is listed twice"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := readTree(t, src)
 			reseal(t, files, f.key, c.mutate)
-			fs, _ := verify(t, writeTree(t, files), VerifyOptions{Trusted: f.trusted()})
+			opts := VerifyOptions{Trusted: f.trusted()}
+			if c.withCopy {
+				opts.Attestations = f.copyFile(t, f.chain, false)
+			}
+			fs, _ := verify(t, writeTree(t, files), opts)
 			if !hasFinding(fs, c.kind, c.part) {
 				t.Fatalf("no %s %q finding: %v", c.kind, c.part, kinds(fs))
 			}
 		})
 	}
+}
+
+// removeRow removes the CSV row of sha.
+func removeRow(t *testing.T, table []byte, sha string) []byte {
+	t.Helper()
+	var out []byte
+	removed := false
+	for _, l := range bytes.SplitAfter(table, []byte("\r\n")) {
+		if bytes.HasPrefix(l, []byte(`"`+sha+`"`)) {
+			removed = true
+			continue
+		}
+		out = append(out, l...)
+	}
+	if !removed {
+		t.Fatalf("no row of %s", sha)
+	}
+	return out
 }
 
 // An unsigned statement: a note without --public-key, a finding with it.

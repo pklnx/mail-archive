@@ -102,6 +102,9 @@ func FuzzVerifyZIP(f *testing.F) {
 		_ = zw.Close()
 		f.Add(b.Bytes())
 	}
+	for _, c := range localHeaderZIPs(f) {
+		f.Add(c.data)
+	}
 	trusted := fx.trusted()
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p := filepath.Join(t.TempDir(), "in.zip")

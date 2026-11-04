@@ -3,6 +3,7 @@ package gobd
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -215,6 +216,16 @@ func allowedDir(name string) bool {
 // more name, extra and comment bytes than an export can have. It also
 // refuses data before the archive (archive/zip's base offset), so that
 // both read the same records.
+//
+// archive/zip reads only the central directory, while a streaming
+// unpacker reads the local headers. So the prescan also checks each
+// record's local entry, in the same walk: the local entries must follow
+// each other in the order of the records, from offset 0 up to the
+// central directory without a gap (no entry the directory does not
+// list), and each local header must have the record's name, flags and
+// method, and with its data descriptor the record's CRC-32 and sizes.
+// This is the layout archive/zip's writer produces. It costs two small
+// reads per entry and no memory per entry.
 func prescanZIP(r io.ReaderAt, size int64) error {
 	dirOffset, err := zipDirectoryOffset(r, size)
 	if err != nil {
@@ -222,18 +233,21 @@ func prescanZIP(r io.ReaderAt, size int64) error {
 	}
 	br := bufio.NewReader(io.NewSectionReader(r, dirOffset, size-dirOffset))
 	var hdr [46]byte
-	var n, data int64
+	var rec [maxZIPRecordData]byte
+	buf := new(localBuf) // reused for every entry
+	var n, data, pos int64
 	for {
 		if _, err := io.ReadFull(br, hdr[:]); err != nil {
-			return nil //nolint:nilerr // the end of the records; archive/zip stops here too
+			break // the end of the records; archive/zip stops here too
 		}
 		if binary.LittleEndian.Uint32(hdr[0:]) != 0x02014b50 {
-			return nil
+			break
 		}
-		v := int64(binary.LittleEndian.Uint16(hdr[28:])) + int64(binary.LittleEndian.Uint16(hdr[30:])) +
-			int64(binary.LittleEndian.Uint16(hdr[32:]))
+		nameLen := int(binary.LittleEndian.Uint16(hdr[28:]))
+		extraLen := int(binary.LittleEndian.Uint16(hdr[30:]))
+		v := nameLen + extraLen + int(binary.LittleEndian.Uint16(hdr[32:]))
 		n++
-		data += v
+		data += int64(v)
 		switch {
 		case n > maxZIPEntries:
 			return fmt.Errorf("more than %d entries", maxZIPEntries)
@@ -242,10 +256,156 @@ func prescanZIP(r io.ReaderAt, size int64) error {
 		case data > maxZIPDirData:
 			return errors.New("the central directory is larger than an export's")
 		}
-		if _, err := br.Discard(int(v)); err != nil {
-			return nil //nolint:nilerr // a truncated record; archive/zip stops here too
+		if _, err := io.ReadFull(br, rec[:v]); err != nil {
+			break // a truncated record; archive/zip stops here too
 		}
+		c, err := centralRecord(hdr[:], rec[:nameLen], rec[nameLen:nameLen+extraLen])
+		if err != nil {
+			return fmt.Errorf("entry %q: %w", rec[:nameLen], err)
+		}
+		end, err := checkLocal(r, pos, dirOffset, &c, buf)
+		if err != nil {
+			return fmt.Errorf("entry %q: %w", rec[:nameLen], err)
+		}
+		pos = end
 	}
+	if pos != dirOffset {
+		return errors.New("data between the last entry and the central directory (a local entry the directory does not list)")
+	}
+	return nil
+}
+
+// central is what checkLocal compares of a central directory record.
+type central struct {
+	name                 []byte
+	flags, method        uint16
+	crc                  uint32
+	comp, uncomp, offset uint64
+}
+
+func centralRecord(hdr, name, extra []byte) (central, error) {
+	c := central{
+		name:   name,
+		flags:  binary.LittleEndian.Uint16(hdr[8:]),
+		method: binary.LittleEndian.Uint16(hdr[10:]),
+		crc:    binary.LittleEndian.Uint32(hdr[16:]),
+		comp:   uint64(binary.LittleEndian.Uint32(hdr[20:])),
+		uncomp: uint64(binary.LittleEndian.Uint32(hdr[24:])),
+		offset: uint64(binary.LittleEndian.Uint32(hdr[42:])),
+	}
+	const max32 = 0xffffffff
+	if c.uncomp != max32 && c.comp != max32 && c.offset != max32 {
+		return c, nil
+	}
+	// The zip64 extra field (id 1) holds, in this order, each value whose
+	// 32-bit field is 0xffffffff.
+	for len(extra) >= 4 {
+		id, sz := binary.LittleEndian.Uint16(extra), int(binary.LittleEndian.Uint16(extra[2:]))
+		if sz > len(extra)-4 {
+			break
+		}
+		f := extra[4 : 4+sz]
+		extra = extra[4+sz:]
+		if id != 1 {
+			continue
+		}
+		for _, v := range []*uint64{&c.uncomp, &c.comp, &c.offset} {
+			if *v != max32 {
+				continue
+			}
+			if len(f) < 8 {
+				return c, errors.New("short zip64 extra field")
+			}
+			*v, f = binary.LittleEndian.Uint64(f), f[8:]
+		}
+		return c, nil
+	}
+	return c, errors.New("zip64 sizes without a zip64 extra field")
+}
+
+// localBuf holds what checkLocal reads; one for the whole walk, so the
+// walk allocates nothing per entry.
+type localBuf struct {
+	lh   [30]byte
+	name [maxZIPRecordData]byte
+	d    [24]byte
+}
+
+// checkLocal checks the local entry of c, which must start at pos, and
+// returns where it ends.
+func checkLocal(r io.ReaderAt, pos, limit int64, c *central, buf *localBuf) (int64, error) {
+	if c.offset != uint64(pos) { //nolint:gosec // pos is not negative
+		return 0, errors.New("its local header is not where the previous entry ends (data between entries, or entries out of order)")
+	}
+	lh := buf.lh[:]
+	if pos+30 > limit {
+		return 0, errors.New("its local header runs into the central directory")
+	}
+	if _, err := r.ReadAt(lh, pos); err != nil {
+		return 0, err
+	}
+	nameLen := int64(binary.LittleEndian.Uint16(lh[26:]))
+	extraLen := int64(binary.LittleEndian.Uint16(lh[28:]))
+	switch {
+	case binary.LittleEndian.Uint32(lh[0:]) != 0x04034b50:
+		return 0, errors.New("no local header at its offset")
+	case nameLen != int64(len(c.name)):
+		return 0, errors.New("the local header has another name than the central directory")
+	case binary.LittleEndian.Uint16(lh[6:]) != c.flags || binary.LittleEndian.Uint16(lh[8:]) != c.method:
+		return 0, errors.New("the local header has other flags or another method than the central directory")
+	}
+	name := buf.name[:nameLen]
+	if _, err := r.ReadAt(name, pos+30); err != nil {
+		return 0, err
+	}
+	if !bytes.Equal(name, c.name) {
+		return 0, errors.New("the local header has another name than the central directory")
+	}
+	if c.comp > uint64(limit) { //nolint:gosec // limit is not negative
+		return 0, errors.New("its data runs into the central directory")
+	}
+	end := pos + 30 + nameLen + extraLen + int64(c.comp) //nolint:gosec // bounded by limit above
+	if c.flags&0x8 == 0 {
+		// Sizes and CRC in the local header itself.
+		if binary.LittleEndian.Uint32(lh[14:]) != c.crc || !sameSize(lh[18:], c.comp) || !sameSize(lh[22:], c.uncomp) {
+			return 0, errors.New("the local header has another CRC-32 or size than the central directory")
+		}
+	} else {
+		// The data descriptor after the data: signature, CRC-32 and the
+		// two sizes, 8 bytes each when a size needs zip64 (as archive/zip
+		// writes it; a zip64 offset alone keeps 4-byte sizes).
+		dlen := int64(16)
+		if c.comp >= 0xffffffff || c.uncomp >= 0xffffffff {
+			dlen = 24
+		}
+		if end+dlen > limit {
+			return 0, errors.New("its data descriptor runs into the central directory")
+		}
+		d := buf.d[:]
+		if _, err := r.ReadAt(d[:dlen], end); err != nil {
+			return 0, err
+		}
+		comp, uncomp := uint64(binary.LittleEndian.Uint32(d[8:])), uint64(binary.LittleEndian.Uint32(d[12:]))
+		if dlen == 24 {
+			comp, uncomp = binary.LittleEndian.Uint64(d[8:]), binary.LittleEndian.Uint64(d[16:])
+		}
+		if binary.LittleEndian.Uint32(d[0:]) != 0x08074b50 || binary.LittleEndian.Uint32(d[4:]) != c.crc ||
+			comp != c.comp || uncomp != c.uncomp {
+			return 0, errors.New("its data descriptor differs from the central directory")
+		}
+		end += dlen
+	}
+	if end > limit {
+		return 0, errors.New("its data runs into the central directory")
+	}
+	return end, nil
+}
+
+// sameSize compares a 32-bit size field of a local header with a size; a
+// zip64 size is 0xffffffff there.
+func sameSize(b []byte, v uint64) bool {
+	f := uint64(binary.LittleEndian.Uint32(b))
+	return f == v || (f == 0xffffffff && v >= 0xffffffff)
 }
 
 // zipDirectoryOffset is readDirectoryEnd of archive/zip: the end record

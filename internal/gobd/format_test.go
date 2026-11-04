@@ -417,7 +417,8 @@ func TestWrittenTables(t *testing.T) {
 	}
 	readme := string(files[ReadmeFile])
 	for _, want := range []string{"Kundengruppe: Meier GmbH (Nr. 7)", "Customer group: Meier GmbH (no. 7)",
-		"Bcc", "instance", "Instanz", "sha256sum -c SHA256SUMS", "\r\n"} {
+		"Bcc", "instance", "Instanz", "sha256sum -c SHA256SUMS", "\r\n",
+		"nicht attest/signing.pub aus diesem Export", "not attest/signing.pub from this export"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README lacks %q", want)
 		}

@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -26,10 +29,11 @@ names that differ only in case or Unicode normalization), names outside the
 format, "..", absolute paths, backslashes, directory or symbolic link entries
 and entries larger than the tables say.
 
---public-key trusts only the keys in the given PEM files (repeatable), for
-example the copy of signing.pub kept off the archive's host. Without it, the
-keys in the export's attest/ directory are trusted, which shows only that the
-export is consistent.
+--public-key trusts only the keys in the given PEM files (repeatable): pass
+the copy of signing.pub kept off the archive's host, never the one in the
+export's attest/ directory, which anyone who changed the export could have
+replaced. Without it, the keys in attest/ are trusted, which shows only that
+the export is consistent.
 
 --attestations compares the attestation in the export with your off-host copy
 of attestations.jsonl (with a full chain: that it is a prefix of the copy).
@@ -73,6 +77,16 @@ usage error.`,
 	return cmd
 }
 
+// terminalSafe returns s as it is when every character is printable, and
+// else quoted with escapes: names in an export are untrusted, and a
+// control character (ESC) in one could rewrite what the terminal shows.
+func terminalSafe(s string) string {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return r != ' ' && !unicode.IsGraphic(r) }) {
+		return s
+	}
+	return strconv.QuoteToGraphic(s)
+}
+
 // usageError prints err and ends with exit code 2.
 func usageError(c *cobra.Command, err error) error {
 	fmt.Fprintln(c.ErrOrStderr(), "error:", err)
@@ -81,9 +95,9 @@ func usageError(c *cobra.Command, err error) error {
 
 func runExportVerify(path string, opts gobd.VerifyOptions, out io.Writer) (int, error) {
 	opts.OnFinding = func(f gobd.Finding) {
-		line := fmt.Sprintf("%-12s %s", f.Kind, f.Path)
+		line := fmt.Sprintf("%-12s %s", f.Kind, terminalSafe(f.Path))
 		if f.Detail != "" {
-			line += " (" + f.Detail + ")"
+			line += " (" + terminalSafe(f.Detail) + ")"
 		}
 		fmt.Fprintln(out, line)
 	}
@@ -92,13 +106,13 @@ func runExportVerify(path string, opts gobd.VerifyOptions, out io.Writer) (int, 
 		return 0, err
 	}
 	for _, n := range res.Notes {
-		fmt.Fprintln(out, "note:", n)
+		fmt.Fprintln(out, "note:", terminalSafe(n))
 	}
 	if st := res.Statement; st != nil {
 		fmt.Fprintf(out, "export %s of %s, created %s\n", st.ID, gobd.GroupLabel(st), st.Created.Format("2006-01-02 15:04:05 UTC"))
 		owners := "none"
 		if len(st.Owners) > 0 {
-			owners = strings.Join(st.Owners, ", ")
+			owners = terminalSafe(strings.Join(st.Owners, ", "))
 		}
 		fmt.Fprintf(out, "owners: %s\n", owners)
 	}

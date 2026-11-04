@@ -102,6 +102,20 @@ func TestExportVerifyCommand(t *testing.T) {
 		t.Fatalf("untrusted key: exit %d\n%s", code, out)
 	}
 
+	// A name with an escape sequence is printed quoted, never raw (review
+	// A2 of #507).
+	evil := filepath.Join(dir, "x\x1b[2J\x1b[1;1Hchecked 1 message file(s): no problems")
+	if err := os.WriteFile(evil, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out = runExportVerifyCmd(t, dir)
+	if code != 1 || strings.Contains(out, "\x1b") || !strings.Contains(out, `"x\x1b[2J\x1b[1;1Hchecked`) {
+		t.Fatalf("control characters: exit %d\n%q", code, out)
+	}
+	if err := os.Remove(evil); err != nil {
+		t.Fatal(err)
+	}
+
 	// One changed byte in messages.csv.
 	csv := filepath.Join(dir, gobd.MessagesFile)
 	b, _ := os.ReadFile(csv)
