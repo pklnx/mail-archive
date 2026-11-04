@@ -1,0 +1,15 @@
+{
+  "format": "mail-archive keyring 1",
+  "archive_id": "40127cb55d8b6287e54d6d835658b24a",
+  "generation": 1,
+  "current_key": 3218964750,
+  "slots": [
+    {
+      "fingerprint": "c0f544e9b4dbd611",
+      "label": "archive key",
+      "created": "2026-11-04T10:00:00Z",
+      "wrapped": "k5XFZzttazgtHtzypi4H5KUxwtMdaCvxSlFwp3dCDldIRo8DtxKxxo9eEAfI9zTtY7MQy/i9u/B4oUlM"
+    }
+  ],
+  "sealed": "gOUwx46dWPrdw653aYOxC+J4kdCyZNwGp4fOiv0YPxtA7AfYteBtVNrWVIgXXydVtuVRcwWcDm2RJGG6X5hBMg=="
+}

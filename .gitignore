@@ -56,3 +56,6 @@ go.work.sum
 
 # Local build output of `go build ./cmd/mail-archive`
 /mail-archive
+
+# Archive key files of encryption at rest (ARCHIVE_KEY_DIR)
+/keys/

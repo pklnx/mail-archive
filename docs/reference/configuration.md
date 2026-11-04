@@ -49,12 +49,31 @@ The SMTP server receives copies of every message from a mail server for
 | `MAIL_ARCHIVE_SMTP_HOSTNAME` | the host name | Name in the greeting. |
 | `MAIL_ARCHIVE_SMTP_TLS_CERT`, `MAIL_ARCHIVE_SMTP_TLS_KEY` | (none) | PEM certificate and key; both turn STARTTLS on. |
 
+## Encryption at rest
+
+The archive key (KEK) opens the keyring `MAIL_ARCHIVE_DATA_DIR/keys/keyring`,
+which holds the data keys. Create both with [`encryption keygen`](./cli#encryption).
+Storing files encrypted is not part of this version yet; a configured key is
+checked at every start of a command that reads the configuration.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` | (none) | File holding the archive key, 32 bytes base64 (Compose: `/keys/archive.key`, from `ARCHIVE_KEY_DIR`). Preferred; a systemd credential or a Docker secret works too if group and others have no permission on it. Refused when group or others have any permission on it (0400, 0600 or 0700 are fine; 0440 or 0644 are not), when it is not a regular file, when it lies inside the data directory (also through another path to it, such as a Compose `ARCHIVE_KEY_DIR` inside `ARCHIVE_DIR`), and when it equals `MAIL_ARCHIVE_SECRET_KEY`. The error names the reason, never the key. |
+| `MAIL_ARCHIVE_ARCHIVE_KEY` | (none) | The archive key itself, base64, for a secret manager that sets variables. Setting both is refused. A recovery key printed by `encryption keygen` or `add-key` can be given here to open the keyring when the key file is lost. |
+
+The archive key is separate from `MAIL_ARCHIVE_SECRET_KEY` on purpose:
+losing the secret key costs the stored IMAP passwords, losing the archive key
+and every recovery key costs all encrypted mail. A key file on the same disk
+as `data/` protects copies and backups of `data/`, not snapshots of that disk:
+move `ARCHIVE_KEY_DIR` to another disk or a secret store for real separation.
+
 ## Docker Compose only
 
 | Variable | Default | Description |
 |---|---|---|
 | `POSTGRES_PASSWORD` | (required) | Password of the bundled PostgreSQL. |
 | `ARCHIVE_DIR` | `./data` | Host directory mounted as `/data`. |
+| `ARCHIVE_KEY_DIR` | `./keys` | Host directory mounted read-only as `/keys` into the web server, the worker and the CLI, and writable only by `./ma encryption keygen`. Keep it out of `ARCHIVE_DIR`. |
 | `WEB_BIND` | `127.0.0.1` | Address the web UI is published on. `0.0.0.0` for all interfaces, or a LAN or Tailscale address. See [Network access](./security#network-access). |
 | `WEB_PORT` | `8080` | Port of the web UI. |
 | `POSTGRES_PORT` | `5432` | Port of PostgreSQL on `127.0.0.1`, for backups and development. |
@@ -76,7 +95,8 @@ variables to both the web server and the CLI (`./ma`), so `./ma sync` from
 cron reconciles and sends alerts too.
 
 Compose passes the two `MAIL_ARCHIVE_ATTEST_*` variables to both as well, so
-`./ma attest` uses the same key as the web server.
+`./ma attest` uses the same key as the web server, and the two
+`MAIL_ARCHIVE_ARCHIVE_KEY*` variables to the web server, the worker and the CLI.
 
 Compose passes the `MAIL_ARCHIVE_SMTP_*` variables to the CLI too, so that
 `./ma account add-smtp` can tell whether the web server receives mail.
