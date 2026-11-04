@@ -63,6 +63,7 @@ export default defineConfig({
           { text: "Backups and upgrades", link: "/guide/operations" },
           { text: "Tamper evidence", link: "/guide/tamper-evidence" },
           { text: "Retention and legal hold", link: "/guide/retention" },
+          { text: "GoBD export", link: "/guide/gobd-export" },
         ],
       },
       {

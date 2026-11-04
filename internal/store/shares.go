@@ -70,7 +70,7 @@ func (s *Store) OwnerScope(ctx context.Context, userID int64) (Scope, error) {
 }
 
 func (s *Store) scope(ctx context.Context, userID int64, shared bool) (Scope, error) {
-	rows, err := s.q.ListScopeAccounts(ctx, db.ListScopeAccountsParams{UserID: userID, IncludeShared: shared})
+	rows, err := s.qFor(ctx).ListScopeAccounts(ctx, db.ListScopeAccountsParams{UserID: userID, IncludeShared: shared})
 	if err != nil {
 		return Scope{}, err
 	}
@@ -217,7 +217,7 @@ func (s *Store) RestrictScope(ctx context.Context, sc Scope, folders map[int64][
 				own[id] = nil
 				continue
 			}
-			found, err := s.q.AccountFolderIDs(ctx, db.AccountFolderIDsParams{AccountID: id, Ids: want})
+			found, err := s.qFor(ctx).AccountFolderIDs(ctx, db.AccountFolderIDsParams{AccountID: id, Ids: want})
 			if err != nil {
 				return Scope{}, err
 			}

@@ -132,6 +132,16 @@ the procedure documentation (Verfahrensdokumentation), which should describe
 the key, the off-host copies, who holds them and who checks them; see the
 [template](./retention#procedure-documentation-verfahrensdokumentation).
 
+A [GoBD export](./gobd-export) ties into the chain: before it reads, an
+attestation is written if messages came since the newest one, and its
+signed `STATEMENT.txt` names that attestation (seq and hash), signed with
+the same key under its own header. The export holds that one entry, or the
+whole chain with `--with-chain`; `export verify --attestations` compares it
+with your off-host copy, and with the leaves files (in the export with
+`--with-leaves`, or next to the copy) checks each exported message against
+its attestation. The `attestation` column of `messages.csv` names the
+attestation that covers each message.
+
 ## Restore from a backup
 
 For the operator. A backup is the dump first, then the data directory, so after

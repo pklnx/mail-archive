@@ -5,7 +5,9 @@ import (
 	"cmp"
 	"compress/flate"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,26 +39,88 @@ type SinkFile interface {
 	Abort() error
 }
 
-// DirSink writes an export as a directory tree: directories with mode
-// 0700, files with 0600, each synced to disk when committed and the
-// directories when the sink is closed.
+// PartialSuffix names the directory a DirSink writes into until it is
+// closed: <out>.partial.
+const PartialSuffix = ".partial"
+
+// tempPrefix starts the name of a file being written. Such files never
+// end up in an export: Commit renames them, Abort removes them, and a
+// resumed export removes those an interrupted run left.
+const tempPrefix = ".tmp-"
+
+// DirSink writes an export as a directory tree into <out>.partial:
+// directories with mode 0700, files with 0600, each file written to a
+// temporary name and renamed when committed. Sync puts everything written
+// so far on disk (syncfs on Linux, else every file and directory synced
+// one by one); Close syncs, renames <out>.partial to out and syncs out's
+// parent, so out appears complete or not at all. An interrupted export
+// leaves <out>.partial, which ResumeDirSink continues.
 type DirSink struct {
-	dir  string
-	dirs map[string]bool
+	out, dir string
+	dirs     map[string]bool
+	drop     []string
 }
 
-// NewDirSink creates dir, which must not exist, and returns a sink into
-// it.
-func NewDirSink(dir string) (*DirSink, error) {
-	if err := os.Mkdir(dir, 0o700); err != nil {
+// NewDirSink starts an export into out. Neither out nor <out>.partial may
+// exist; out's parent must.
+func NewDirSink(out string) (*DirSink, error) {
+	if err := mustNotExist(out); err != nil {
 		return nil, err
 	}
-	return &DirSink{dir: dir, dirs: map[string]bool{dir: true}}, nil
+	dir := out + PartialSuffix
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%s exists: an interrupted export; resume it or remove it", dir)
+		}
+		return nil, err
+	}
+	return &DirSink{out: out, dir: dir, dirs: map[string]bool{dir: true}}, nil
 }
 
-// Create implements Sink.
+// ResumeDirSink continues an interrupted export into out: <out>.partial
+// must exist and out must not. Files already there stay until they are
+// written again or removed.
+func ResumeDirSink(out string) (*DirSink, error) {
+	if err := mustNotExist(out); err != nil {
+		return nil, err
+	}
+	dir := out + PartialSuffix
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s does not exist: there is no interrupted export to resume", dir)
+		}
+		return nil, err
+	}
+	if !fi.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	return &DirSink{out: out, dir: dir, dirs: map[string]bool{dir: true}}, nil
+}
+
+func mustNotExist(p string) error {
+	if _, err := os.Lstat(p); err == nil {
+		return fmt.Errorf("%s already exists", p)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// Dir is the directory being written, <out>.partial.
+func (s *DirSink) Dir() string { return s.dir }
+
+// DropOnClose names a file of the directory (not of the export, such as a
+// resume state file) that Close removes before it syncs and renames.
+func (s *DirSink) DropOnClose(path string) { s.drop = append(s.drop, path) }
+
+func (s *DirSink) full(path string) string { return filepath.Join(s.dir, filepath.FromSlash(path)) }
+
+// Create implements Sink. The file is written under a temporary name in
+// its directory and gets its name in Commit, replacing a file of that
+// name (from an interrupted run).
 func (s *DirSink) Create(path string) (SinkFile, error) {
-	full := filepath.Join(s.dir, filepath.FromSlash(path))
+	full := s.full(path)
 	parent := filepath.Dir(full)
 	if !s.dirs[parent] {
 		if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -66,40 +130,54 @@ func (s *DirSink) Create(path string) (SinkFile, error) {
 			s.dirs[d] = true
 		}
 	}
-	f, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // path built from format v1 names under the sink's directory
+	// CreateTemp: a new name, O_EXCL, mode 0600.
+	f, err := os.CreateTemp(parent, tempPrefix+filepath.Base(full)+"-*")
 	if err != nil {
 		return nil, err
 	}
-	return &dirFile{f: f}, nil
+	return &dirFile{f: f, final: full}, nil
 }
 
-// Close syncs every directory the sink created, deepest first, so that
-// the files' names are on disk too.
+// Existing opens a file already in the directory, for a resumed export.
+func (s *DirSink) Existing(path string) (io.ReadCloser, error) {
+	return os.Open(s.full(path)) //nolint:gosec // a format v1 path under the sink's directory
+}
+
+// Sync puts every file and directory written so far on disk.
+func (s *DirSink) Sync() error { return syncTree(s.dir) }
+
+// Close syncs the directory, renames it to out and syncs out's parent.
 func (s *DirSink) Close() error {
-	dirs := make([]string, 0, len(s.dirs))
-	for d := range s.dirs {
-		dirs = append(dirs, d)
-	}
-	// Deepest first: a directory's entry in its parent comes last.
-	slices.SortFunc(dirs, func(a, b string) int { return cmp.Or(cmp.Compare(len(b), len(a)), strings.Compare(a, b)) })
-	for _, d := range dirs {
-		if err := syncDir(d); err != nil {
+	for _, p := range s.drop {
+		if err := os.Remove(s.full(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
-	return syncDir(filepath.Dir(s.dir))
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	if err := mustNotExist(s.out); err != nil {
+		return err
+	}
+	if err := os.Rename(s.dir, s.out); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(s.out))
 }
 
-type dirFile struct{ f *os.File }
+type dirFile struct {
+	f     *os.File
+	final string
+}
 
 func (d *dirFile) Write(p []byte) (int, error) { return d.f.Write(p) }
 
 func (d *dirFile) Commit() error {
-	if err := d.f.Sync(); err != nil {
-		_ = d.f.Close()
+	if err := d.f.Close(); err != nil {
+		_ = os.Remove(d.f.Name())
 		return err
 	}
-	return d.f.Close()
+	return os.Rename(d.f.Name(), d.final)
 }
 
 func (d *dirFile) Abort() error {
@@ -107,8 +185,38 @@ func (d *dirFile) Abort() error {
 	return os.Remove(d.f.Name())
 }
 
-func syncDir(dir string) error {
-	f, err := os.Open(dir) //nolint:gosec // a directory the sink created
+// syncTreeByFile syncs every file and directory under dir, deepest
+// directories last within their parent: the fallback where syncfs is
+// missing or fails.
+func syncTreeByFile(dir string) error {
+	var dirs []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs = append(dirs, p)
+			return nil
+		}
+		return syncPath(p)
+	})
+	if err != nil {
+		return err
+	}
+	// Deepest first: a directory's entry in its parent comes last.
+	slices.SortFunc(dirs, func(a, b string) int { return cmp.Or(cmp.Compare(len(b), len(a)), strings.Compare(a, b)) })
+	for _, d := range dirs {
+		if err := syncPath(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func syncDir(dir string) error { return syncPath(dir) }
+
+func syncPath(p string) error {
+	f, err := os.Open(p) //nolint:gosec // a path the sink wrote
 	if err != nil {
 		return err
 	}
