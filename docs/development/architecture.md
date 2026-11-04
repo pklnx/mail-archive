@@ -413,7 +413,7 @@ other form is unlinked only after that. `created` is false in all these
 cases: the message was there.
 A crash between the publication and the unlink leaves both forms; readers
 prefer `.enc`, verify reports the `.eml` as `plaintext`, and the next `Put`
-of the message (or the conversion of part 3) removes it.
+of the message (or `encryption enable`) removes it.
 
 ### State and writers
 
@@ -464,9 +464,9 @@ for fills and journal imports, `ReceiveMessage` for SMTP) reads
 `blob_encryption.generation` first and fails with `ErrBlobStateChanged`
 on a difference (SMTP answers 451, sync records a failed run); the process
 then stops the same way (final plan review, point 1). The encryption
-commands of part 3 take the writers lock exclusively with a try-lock
-(`Store.TryLockWritersExclusive`) and name the writers they find by
-`application_name`.
+commands `enable` and `disable` take the writers lock exclusively with a
+try-lock (`Store.TryLockWritersExclusive`) and name the writers they find
+by `application_name`.
 
 Readers (`export`, also `export --format gobd`) need the key whenever a row exists; `verify` starts
 without it, checks the attestations (database only) and then stops with the
@@ -483,6 +483,77 @@ message. One extra query per inserting transaction reads the generation.
 At the archive's rates (one sync batch at a time per account, SMTP
 deliveries one by one) this stays far inside 4 GB and 2 cores; 100
 messages open at once in the web server hold about 7.5 MiB.
+
+### Offline conversion
+
+`encryption enable` and `disable` (`archive.Enable`, `archive.Disable`)
+convert the existing files in the foreground while no writer runs
+(maintainer decision 5). They take the writers lock exclusively and the
+blob lock exclusively, both with a try-lock, and refuse otherwise; then
+the keyring lock for the rest of the run.
+
+- **Start.** From off, `enable` writes the keyring file with a new
+  generation (`Keyring.NextGeneration`; a database copy recorded off with
+  the same archive id is merged in first) and only then records
+  `encrypting` with it as the database copy (`SetBlobEncryption`, which
+  continues the generation of the off row). So a dump recorded off,
+  restored next to files `enable` encrypted later, no longer matches the
+  keyring file, and the next writer walks `messages/` and derives
+  `encrypting`. In any other state the copies are reconciled as at a
+  writer's start; a change of direction (`on` or `encrypting` to
+  `decrypting`, `decrypting` to `encrypting`) sets the new state, which
+  increments the generation and resets the cursor.
+- **Passes.** A pass walks `messages/` in hash order
+  (`Store.MessagesAfter`, shard directories before the cursor unread) and
+  then `orphans/` in `WalkDir` order (`Store.OrphansAfter`). A batch ends
+  after 200 files or 256 MiB; `Conversion.Commit` then synchronizes the
+  touched directories, unlinks the sources, synchronizes them again, and
+  the cursor (the last hash, or a path below `orphans/`), `files_done` and
+  `files_corrupt` are saved, guarded by the generation. A run resumes from
+  the cursor; the terminal state (`FinishBlobEncryption` to `on`,
+  `ClearBlobEncryption` to `off`) is set only after a pass that started
+  from the beginning and converted nothing, so a resumed run always ends
+  with a full pass.
+- **One file** (`Conversion.Message`, `Orphan`): if the target form exists
+  and reads back to the hash, the source is queued for unlinking. Otherwise
+  the source is converted into `tmp/` while it is hashed (and decrypted
+  with its binding checked), synchronized, read back in full, and linked
+  under the target name (never replacing a file); a damaged target form is
+  replaced by an atomic `rename` instead. A source that fails its hash or
+  its authentication is `corrupt`: a plaintext one stays in place (never
+  encrypted, coordinator decision 5), an encrypted one is moved by
+  `disable` to `orphans/<time>/`, so that no `.enc` in `messages/` can make
+  a later start derive `encrypting`. Files below `orphans/` keep their
+  directory: `<sha256>.eml` becomes `<sha256>.enc` and back, any other file
+  (a leftover of `tmp/`) `<sha256 of its content>.enc`, so `decrypt` opens
+  each by its name.
+- **`tmp/`.** Under the exclusive writers lock no `Put` can own a file
+  in `tmp/`, so at the start of every run, also one that finds the state
+  already final, every file there is moved to `orphans/<time>/tmp/`
+  (`Store.MoveTempAside`) and converted with the orphans; with the state
+  already `on`, `enable` encrypts just those. The `StaleTempAge` rule of
+  verify protects writes in progress and does not apply offline.
+- **Lock loss.** The run watches its writers lock connection as a writer
+  does (`WritersLock.Watch`); a failed check cancels the run, which stops
+  at the next file and returns `ErrWritersLockLost`. The keyring lock is
+  taken before the state changes, and the terminal state is set only at
+  the generation the run worked at (`FinishBlobEncryption`,
+  `FinishBlobDecryption`). `disable` on a recorded off first derives the
+  state from the files, as a writer start does, but always walks
+  `messages/`, also when the keyring file matches the database copy: an
+  encrypted file put back from `orphans/` is found and decrypted.
+- **Progress.** The percentage is the cursor's first four hex digits ÷
+  65536 (100 % in `orphans/`); the command prints it with files per second
+  and the time left of the pass, and `status` shows it from the row.
+
+Crash safety: before a target form is linked, the source is untouched;
+between the link and the unlink both forms exist, and the rerun reads the
+target form back before it unlinks the source; after the unlink and before
+the cursor is saved, the rerun finds only the target form. **Cost**
+(`TestConvertGate`, 50 KB files, two cores): 186–733 files/s on the
+development container, bound by `fsync`; 0.2–0.8 of a core; the resident
+set grows by 3–7 MiB, up to 17 MiB on a very fast disk (one 64 KiB chunk buffer, the copy buffer, at most
+200 paths per batch); extra disk space at most one batch.
 
 ### Commands
 

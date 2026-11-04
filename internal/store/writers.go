@@ -230,3 +230,23 @@ func (w *WritersLock) Release() {
 // BackendPID is the PostgreSQL backend pid of the lock's connection, as
 // pg_stat_activity shows it.
 func (w *WritersLock) BackendPID() uint32 { return w.conn.PgConn().PID() }
+
+// TryBlobLock takes the blob lock exclusively on the writers lock's own
+// connection, without waiting, for an encryption command that holds the
+// writers lock exclusively (#392, part 3): verify, the sweep, purges and
+// retention then cannot run alongside it. It returns false while another
+// session holds the blob lock. Release releases it with the writers lock.
+// No pool connection is held for it, so the pool stays free for the
+// command's own queries.
+func (w *WritersLock) TryBlobLock(ctx context.Context) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return false, errors.New("the writers lock is released")
+	}
+	var ok bool
+	if err := w.conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, 0)", blobLockClass).Scan(&ok); err != nil {
+		return false, fmt.Errorf("take the blob lock: %w", err)
+	}
+	return ok, nil
+}

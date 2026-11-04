@@ -47,6 +47,10 @@ type AtRestOptions struct {
 	// store.WritersPing).
 	Tick   <-chan time.Time
 	Logger *slog.Logger
+
+	// keyringHeld: the caller (an encryption command) holds the keyring
+	// lock, so a reconciliation writes the file without taking it.
+	keyringHeld bool
 }
 
 // AtRest is the state of encryption at rest a command started with.
@@ -121,7 +125,7 @@ func OpenAtRest(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 		return nil, err
 	}
 	if blobOff(row) && opts.Role == RoleWriter {
-		if row, err = deriveFromFiles(ctx, st, blobs, row, opts); err != nil {
+		if row, err = deriveFromFiles(ctx, st, blobs, row, opts, false); err != nil {
 			return nil, err
 		}
 	}
@@ -217,8 +221,11 @@ func blobOff(row *store.BlobEncryption) bool {
 // returned without a walk (review round 1 of #510). Changing the keyring
 // file (a new generation) makes the next writer walk once more; part 3's
 // `enable` relies on that, so that a dump recorded off and restored next
-// to files encrypted later is still detected.
-func deriveFromFiles(ctx context.Context, st *store.Store, blobs *blobstore.Store, row *store.BlobEncryption, opts AtRestOptions) (*store.BlobEncryption, error) {
+// to files encrypted later is still detected. With always, it walks also
+// when the copy matches the file: `encryption disable` on a recorded off,
+// so that an encrypted file put back into messages/ is found (review round
+// 2 of #513).
+func deriveFromFiles(ctx context.Context, st *store.Store, blobs *blobstore.Store, row *store.BlobEncryption, opts AtRestOptions, always bool) (*store.BlobEncryption, error) {
 	data, err := readKeyringBytes(opts.DataDir)
 	if errors.Is(err, blobcrypt.ErrNoKeyring) {
 		return row, nil
@@ -230,7 +237,7 @@ func deriveFromFiles(ctx context.Context, st *store.Store, blobs *blobstore.Stor
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", blobcrypt.KeyringPath(opts.DataDir), err)
 	}
-	if row != nil && row.KeyringID == ring.ArchiveID() && row.KeyringGeneration == int64(ring.Generation()) { //nolint:gosec // generations stay far below 2^63
+	if !always && row != nil && row.KeyringID == ring.ArchiveID() && row.KeyringGeneration == int64(ring.Generation()) { //nolint:gosec // generations stay far below 2^63
 		return row, nil
 	}
 	opts.Logger.Info("encryption at rest: looking for encrypted files, since a keyring file exists and the database says off")

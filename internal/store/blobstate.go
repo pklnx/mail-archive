@@ -209,3 +209,41 @@ func (s *Store) checkBlobGeneration(ctx context.Context, q *db.Queries) error {
 	}
 	return fmt.Errorf("%w (generation %d, started with %d)", ErrBlobStateChanged, gen, p.generation)
 }
+
+// SaveBlobProgress records the progress of an offline conversion after a
+// batch (#392, part 3): the cursor (where the next run resumes), the files
+// converted and the files found corrupt. It fails with
+// ErrBlobStateChanged when the state is no longer a conversion at
+// generation, which only another encryption command can cause.
+func (s *Store) SaveBlobProgress(ctx context.Context, generation int64, cursor string, done, corrupt int64) error {
+	n, err := s.q.SaveBlobConversionProgress(ctx, db.SaveBlobConversionProgressParams{
+		Cursor: cursor, FilesDone: done, FilesCorrupt: corrupt, Generation: generation,
+	})
+	if err == nil && n != 1 {
+		err = fmt.Errorf("%w: the conversion at generation %d is gone", ErrBlobStateChanged, generation)
+	}
+	return err
+}
+
+// FinishBlobEncryption ends `encryption enable`: state on, the next
+// generation, the counters kept. It fails with ErrBlobStateChanged unless
+// the state is still encrypting at generation.
+func (s *Store) FinishBlobEncryption(ctx context.Context, generation int64) error {
+	n, err := s.q.FinishBlobEncryption(ctx, generation)
+	if err == nil && n != 1 {
+		err = fmt.Errorf("%w: the conversion at generation %d is gone", ErrBlobStateChanged, generation)
+	}
+	return err
+}
+
+// FinishBlobDecryption ends `encryption disable`: state off and the next
+// generation, as ClearBlobEncryption, with the keyring copy kept. It fails
+// with ErrBlobStateChanged unless the state is still decrypting at
+// generation (review round 1 of #513, note 1).
+func (s *Store) FinishBlobDecryption(ctx context.Context, generation int64) error {
+	n, err := s.q.FinishBlobDecryption(ctx, generation)
+	if err == nil && n != 1 {
+		err = fmt.Errorf("%w: the conversion at generation %d is gone", ErrBlobStateChanged, generation)
+	}
+	return err
+}

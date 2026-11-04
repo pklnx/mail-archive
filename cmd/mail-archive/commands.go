@@ -1214,9 +1214,11 @@ schedule syncs it next ("due" when that has passed). HEALTH is "ok",
 server's queue, so an account waiting there may show "stale" here while the
 web UI shows it as queued.
 
-The last line counts the background jobs per kind (such as attachment
-text): queued (with how long the oldest has been due), retrying, running
-and failed; "jobs retry KIND" queues failed ones again.`,
+A line counts the background jobs per kind (such as attachment text):
+queued (with how long the oldest has been due), retrying, running and
+failed; "jobs retry KIND" queues failed ones again. The last line shows
+encryption at rest: on, off, or an unfinished "encryption enable" or
+"disable" with its progress and the command that finishes it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a, err := openApp(cmd.Context())
@@ -1298,6 +1300,10 @@ and failed; "jobs retry KIND" queues failed ones again.`,
 			}
 			fmt.Println(line)
 			if line, err = jobsStatus(cmd.Context(), a); err != nil {
+				return err
+			}
+			fmt.Println(line)
+			if line, err = atRestStatus(cmd.Context(), a); err != nil {
 				return err
 			}
 			fmt.Println(line)

@@ -110,15 +110,17 @@ func reconcileKeyring(ctx context.Context, st *store.Store, row *store.BlobEncry
 // encryption command holds the lock, the file is left to it and to the
 // next start: the result is used from memory.
 func writeKeyringIfUnchanged(opts AtRestOptions, was []byte, k *blobcrypt.Keyring) error {
-	unlock, err := blobcrypt.LockKeyring(opts.DataDir)
-	if errors.Is(err, blobcrypt.ErrLocked) {
-		opts.Logger.Warn("encryption at rest: the keyring file is locked; it is reconciled at the next start")
-		return nil
+	if !opts.keyringHeld {
+		unlock, err := blobcrypt.LockKeyring(opts.DataDir)
+		if errors.Is(err, blobcrypt.ErrLocked) {
+			opts.Logger.Warn("encryption at rest: the keyring file is locked; it is reconciled at the next start")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer unlock()
 	}
-	if err != nil {
-		return err
-	}
-	defer unlock()
 	now, err := readKeyringBytes(opts.DataDir)
 	if errors.Is(err, blobcrypt.ErrNoKeyring) {
 		now, err = nil, nil

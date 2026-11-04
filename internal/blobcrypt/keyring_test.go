@@ -349,3 +349,28 @@ func TestParseKEK(t *testing.T) {
 		t.Error("fingerprint")
 	}
 }
+
+// NextGeneration only increases the generation: the keyring stays the same
+// otherwise and the new generation is authenticated. An unopened keyring
+// refuses.
+func TestKeyringNextGeneration(t *testing.T) {
+	k, kek := newTestKeyring(t)
+	before := k.Generation()
+	if err := k.NextGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	if k.Generation() != before+1 {
+		t.Fatalf("generation %d, want %d", k.Generation(), before+1)
+	}
+	p, _ := reparse(t, k)
+	if err := p.Open(kek); err != nil || p.Generation() != before+1 || p.CurrentKey() != k.CurrentKey() || len(p.Slots()) != len(k.Slots()) {
+		t.Fatalf("reparsed: %v, generation %d", err, p.Generation())
+	}
+	if err := p.NextGeneration(); err != nil {
+		t.Fatal(err)
+	}
+	q, _ := reparse(t, p)
+	if err := q.NextGeneration(); !errors.Is(err, ErrNotOpen) {
+		t.Errorf("unopened: %v", err)
+	}
+}

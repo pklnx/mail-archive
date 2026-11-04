@@ -306,8 +306,11 @@ that customer gets an individual instance (see
 - Imports of [mbox/Maildir/eml] from [source] on [date].
 
 ## 3. Storage and integrity
-- Each message is stored unchanged as an .eml file named by its SHA-256, plus
-  its metadata in PostgreSQL.
+- Each message is stored unchanged in a file named by the SHA-256 of its
+  content, plus its metadata in PostgreSQL. With encryption at rest the file
+  is encrypted (.enc); decrypted, it is the unchanged message.
+- [With encryption at rest:] the archive key is kept at [place] by [person],
+  the recovery key at [offline place].
 - `verify` checks every file weekly ([cron line]); findings go to [person].
 - Signed attestations every [24h]; copies of attestations.jsonl and
   signing.pub are kept at [off-host place], checked with `attest check`

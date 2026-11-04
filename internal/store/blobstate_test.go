@@ -296,3 +296,73 @@ func downBlobEncryptionMigration(t *testing.T, st *store.Store) {
 		t.Fatalf("down: %q %v", m, err)
 	}
 }
+
+// The progress of a conversion is saved only while the state is still the
+// conversion at the generation its command set, and enable finishes only
+// from encrypting at that generation; the counters stay with state on
+// (#392, part 3).
+func TestBlobConversionProgress(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	if err := st.SaveBlobProgress(ctx, 0, "ab", 1, 0); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("without a row: %v", err)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, testKeyring); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveBlobProgress(ctx, 1, strings.Repeat("7f", 32), 12, 2); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := st.BlobEncryption(ctx); row.Cursor != strings.Repeat("7f", 32) || row.FilesDone != 12 || row.FilesCorrupt != 2 {
+		t.Fatalf("progress: %+v", row)
+	}
+	if err := st.SaveBlobProgress(ctx, 2, "x", 13, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("another generation: %v", err)
+	}
+	if err := st.FinishBlobEncryption(ctx, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("finish at another generation: %v", err)
+	}
+	if err := st.FinishBlobEncryption(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := st.BlobEncryption(ctx)
+	if row.State != store.BlobOn || row.Generation != 2 || row.Cursor != "" || row.FilesDone != 12 || row.FinishedAt == nil {
+		t.Fatalf("finished: %+v", row)
+	}
+	if err := st.SaveBlobProgress(ctx, 2, "x", 1, 0); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("progress with state on: %v", err)
+	}
+	if err := st.FinishBlobEncryption(ctx, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("finish twice: %v", err)
+	}
+}
+
+// disable ends only from decrypting at the generation its command worked
+// at: off with the next generation and the keyring copy kept (review
+// round 1 of #513, note 1).
+func TestFinishBlobDecryption(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	if err := st.SetBlobEncryption(ctx, store.BlobDecrypting, testKeyring); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishBlobDecryption(ctx, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("another generation: %v", err)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, store.KeyringCopy{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishBlobDecryption(ctx, 2); !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("from encrypting: %v", err)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobDecrypting, store.KeyringCopy{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishBlobDecryption(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := st.BlobEncryption(ctx)
+	if row.State != store.BlobOff || row.Generation != 4 || string(row.Keyring) != string(testKeyring.Keyring) {
+		t.Fatalf("finished: %+v", row)
+	}
+}

@@ -165,9 +165,9 @@ needs a fix by hand; `./ma migrate` then prints a warning with the command:
 
 ### The archive key
 
-Encryption at rest uses an archive key that you hold, apart from the data.
-Storing mail encrypted is not part of this version yet; creating the key now
-prepares it. Create the key and its keyring once:
+Encryption at rest stores every message file encrypted, under an archive
+key that you hold apart from the data. New instances turn it on before they
+archive anything. Create the key and its keyring once:
 
 ```sh
 ./ma encryption keygen
@@ -184,6 +184,19 @@ outside `data/`) and the keyring `data/keys/keyring`, and prints a
 - Back up `keys/archive.key` apart from `data/` and its backups. On Linux it
   belongs to the container user: `sudo cp keys/archive.key /safe/place/`.
 - Check with `./ma encryption status`.
+
+Then turn it on. It runs only while the web server is stopped; on a new,
+empty archive it takes a moment:
+
+```sh
+docker compose stop web
+./ma encryption enable
+docker compose up -d web
+```
+
+For an archive that already holds mail, the same command encrypts every
+file and needs a maintenance window: see
+[Encryption at rest](./operations#encryption-at-rest).
 
 Without the archive key and every recovery key, encrypted mail cannot be
 recovered, backups included. See [Encryption](../reference/cli#encryption).

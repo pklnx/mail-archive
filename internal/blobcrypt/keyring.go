@@ -281,6 +281,18 @@ func (k *Keyring) bump() error {
 	return nil
 }
 
+// NextGeneration increases the generation without another change. The
+// keyring must be open. `encryption enable` writes the keyring file with a
+// new generation before it encrypts the first file, so that a database
+// copy recorded off before that no longer matches the file and the next
+// writer looks for encrypted files (#392, part 3).
+func (k *Keyring) NextGeneration() error {
+	if k.keys == nil {
+		return ErrNotOpen
+	}
+	return k.bump()
+}
+
 // AddSlot adds a slot for another KEK, such as a recovery key. The keyring
 // must be open; the generation increases.
 func (k *Keyring) AddSlot(kek []byte, label string, now time.Time) error {
