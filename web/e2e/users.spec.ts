@@ -27,11 +27,12 @@ test("add a user, copy the generated password, lock and unlock", async ({ page, 
   await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeVisible();
 
   // Add user opens a Modal with the name, the group (the demo has two, #470)
-  // and the admin choice. Without a group it sends nothing.
+  // and the role (User, Admin or Auditor, #393). Without a group it sends nothing.
   await main.getByRole("button", { name: "Add user" }).click();
   const add = page.getByRole("dialog", { name: "Add user" });
   await add.getByLabel("User name").fill(name);
-  await expect(add.getByRole("checkbox", { name: "Admin" })).not.toBeChecked();
+  await expect(add.getByRole("radio", { name: "User" })).toBeChecked();
+  await expect(add.getByRole("radio", { name: "Admin" })).not.toBeChecked();
   await add.getByRole("button", { name: "Add user" }).click();
   await expect(add.getByText("Choose a group.")).toBeVisible();
   await expect(add.getByLabel("Group")).toBeFocused();
@@ -223,7 +224,7 @@ test("add a group and a user in it, move a reader into it, and the owner's share
     await row.getByRole("button", { name: `Actions for ${reader}` }).click();
     await page.getByRole("menuitem", { name: "Change group" }).click();
     const move = page.getByRole("dialog", { name: `Change the group of “${reader}”` });
-    await expect(move).toContainText(`Shares between ${reader} and users of Default end.`);
+    await expect(move).toContainText(`Shares and auditor grants between ${reader} and users of Default end.`);
     await move.getByLabel("New group").selectOption({ label: group });
     await move.getByRole("button", { name: "Change group" }).click();
     await expect(move).toHaveCount(0);

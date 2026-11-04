@@ -456,8 +456,11 @@ func demoAuditor(ctx context.Context, st *store.Store, sealer *crypto.Sealer, ke
 			inbox = append(inbox, f.ID)
 		}
 	}
+	// Midnights in the screenshots' zone (Europe/Berlin, CET in winter), as
+	// an owner's browser there sends them.
+	cet := time.FixedZone("CET", 3600)
 	day := func(y int, m time.Month, d int) *time.Time {
-		t := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		t := time.Date(y, m, d, 0, 0, 0, 0, cet)
 		return &t
 	}
 	start := now.Add(-24 * time.Hour).Truncate(time.Hour)
