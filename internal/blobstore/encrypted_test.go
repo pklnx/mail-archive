@@ -260,9 +260,12 @@ func TestPutRepeatsUnlinkAfterCrash(t *testing.T) {
 	}
 }
 
-// The redundant copy goes only after the surviving one was read back: an
-// encrypted file that fails authentication keeps the plaintext one.
-func TestPutKeepsPlaintextWhenEncryptedCopyIsCorrupt(t *testing.T) {
+// The redundant copy goes only after the surviving one was read back. An
+// encrypted file with a valid header that fails authentication, next to
+// the plaintext one, is replaced by Put's own copy (read back first, then
+// renamed over it); the plaintext goes only after that, so the message
+// heals instead of failing on every retry (review round 1 of #510).
+func TestPutReplacesCorruptEncryptedCopy(t *testing.T) {
 	ring := testRing(t)
 	s, rec, root := newEncrypted(t, ring)
 	content := "Subject: keep\r\n\r\nbody\r\n"
@@ -281,12 +284,36 @@ func TestPutKeepsPlaintextWhenEncryptedCopyIsCorrupt(t *testing.T) {
 	if err := os.WriteFile(enc, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Put(strings.NewReader(content)); !errors.Is(err, blobcrypt.ErrCorrupt) {
-		t.Fatalf("put onto a corrupt encrypted copy: %v", err)
+	if !s.usableHeader(enc) {
+		t.Fatal("the header was spoiled too")
 	}
-	if !exists(eml) {
-		t.Fatal("the plaintext copy was unlinked although the encrypted one is corrupt")
+	rec.take()
+	blob, created, err := s.Put(strings.NewReader(content))
+	if err != nil || created {
+		t.Fatalf("put onto a corrupt encrypted copy: %v created=%v", err, created)
 	}
+	// The plaintext stays until the replacement is in place and durable.
+	ops := rec.take()
+	at := func(op string) int {
+		t.Helper()
+		for i, o := range ops {
+			if o == op {
+				return i
+			}
+		}
+		t.Fatalf("no %s in %v", op, ops)
+		return -1
+	}
+	if rename, unlink := at("rename:"+enc), at("unlink:"+eml); rename > unlink {
+		t.Fatalf("the plaintext was unlinked before the replacement: %v", ops)
+	}
+	if exists(eml) {
+		t.Fatal("the plaintext copy stays")
+	}
+	if got, m := readMessage(t, s, blob.SHA256); got != content || !m.Encrypted() {
+		t.Fatal("content after the replacement")
+	}
+	assertNoTemp(t, root)
 }
 
 // An encrypted file that Put cannot use (an unknown data key, as left by a

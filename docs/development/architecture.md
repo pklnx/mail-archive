@@ -407,19 +407,25 @@ left by a writer of an older keyring): such a file counts as absent. Its
 own copy is published, read back in full and hash-checked, and only then is
 the `.eml` (or, with encryption off, the `.enc`) unlinked; an unusable
 `.enc` is replaced by an atomic `rename` of the checked copy, followed by
-the shard barrier. `created` is false in both cases: the message was there.
+the shard barrier. So is an existing file that fails the read-back (an
+`.enc` with a valid header and a damaged body next to its `.eml`); the
+other form is unlinked only after that. `created` is false in all these
+cases: the message was there.
 A crash between the publication and the unlink leaves both forms; readers
 prefer `.enc`, verify reports the `.eml` as `plaintext`, and the next `Put`
 of the message (or the conversion of part 3) removes it.
 
 ### State and writers
 
-`blob_encryption` (migration 00037) has at most one row; no row is off.
-`state` is `on` or a transitional state of an offline conversion
-(`encrypting`, `decrypting`, `rekeying`; maintainer decision 5).
-`generation` increases with every state or current-key change. The row also
-holds the database copy of the keyring and the cursor and counters of a
-conversion. Its `Down` refuses while a row exists.
+`blob_encryption` (migration 00037) has at most one row; no row, or state
+`off`, is off. `state` is `off`, `on` or a transitional state of an offline
+conversion (`encrypting`, `decrypting`, `rekeying`; maintainer decision 5).
+`generation` increases with every state or current-key change and never
+repeats: turning encryption off keeps the row with state `off` and the next
+generation, so a writer that pinned a generation before a `disable` and an
+`enable` cannot match the new one. The row also holds the database copy of
+the keyring and the cursor and counters of a conversion. Its `Down` refuses
+while the state is not `off`.
 
 A **writer** is a process that can write message files: `serve` (with the
 SMTP receiver), `worker`, `sync`, `import` (also `--journal`), `account
@@ -432,10 +438,15 @@ fill` and `reindex`. At start (`archive.OpenAtRest`) it
    `mail-archive writer <command>`. While an encryption command holds it exclusively, the writer
    refuses and names the holder;
 2. reads the state. In a transitional state it refuses ("run
-   `encryption enable|disable|rekey` to finish it"). Without a row but with a keyring
-   file and an `.enc` file on disk (a dump from before `enable` restored
-   next to newer files), it records `encrypting` with the file as the
-   database copy, and refuses;
+   `encryption enable|disable|rekey` to finish it"). Off with a keyring
+   file, it looks for an `.enc` file on disk (a dump from before `enable`
+   restored next to newer files): if it finds one, it records `encrypting`
+   with the file as the database copy, and refuses; otherwise it records
+   `off` with the file as the copy. A later start walks again only when
+   the keyring file's id or generation differs from that copy (part 3's
+   `enable` therefore writes the keyring file with a new generation before
+   it encrypts the first file); with an unchanged keyring, a start reads
+   the small keyring file and no directory of `messages/`;
 3. with a row, needs the archive key, reconciles the keyring and, with
    `on`, makes its blob store encrypt;
 4. pins the generation (`Store.PinBlobGeneration`) and watches the lock

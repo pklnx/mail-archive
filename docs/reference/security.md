@@ -527,7 +527,8 @@ hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
   message file can be read, backups included.
 - **Start.** While encryption is on, every command that reads or writes
   message files refuses to start without a key that opens the keyring;
-  there is no locked mode. The key stays in the process's memory while it
+  `verify` starts, checks the attestations and then stops with the reason.
+  There is no locked mode. The key stays in the process's memory while it
   runs.
 - **What stays readable (accepted).** The SHA-256 of each message's
   plaintext is its identity in the database, the file names, the URLs and

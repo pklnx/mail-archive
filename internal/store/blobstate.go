@@ -12,7 +12,9 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
-// States of encryption at rest (#392). Off is no blob_encryption row.
+// States of encryption at rest (#392). Off is no blob_encryption row, or
+// the row with state 'off' (blobOffRow) that keeps the generation once
+// encryption was on or a writer derived the state from the files.
 const (
 	BlobOff        = ""
 	BlobOn         = "on"
@@ -20,6 +22,9 @@ const (
 	BlobDecrypting = "decrypting"
 	BlobRekeying   = "rekeying"
 )
+
+// blobOffRow is the database value of state for BlobOff.
+const blobOffRow = "off"
 
 // BlobTransitional reports whether state is an unfinished offline
 // conversion, during which no writer may start (maintainer decision 5).
@@ -55,15 +60,21 @@ type KeyringCopy struct {
 }
 
 func blobEncryptionOf(r db.BlobEncryption) *BlobEncryption {
+	state := r.State
+	if state == blobOffRow {
+		state = BlobOff
+	}
 	return &BlobEncryption{
-		State: r.State, Generation: r.Generation, Keyring: r.Keyring, KeyringID: r.KeyringID,
+		State: state, Generation: r.Generation, Keyring: r.Keyring, KeyringID: r.KeyringID,
 		KeyringGeneration: r.KeyringGeneration, CurrentKey: uint32(r.CurrentKey), //nolint:gosec // CHECK BETWEEN 1 AND 2^32-1
 		Cursor: r.Cursor, FilesDone: r.FilesDone, FilesCorrupt: r.FilesCorrupt,
 		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
 
-// BlobEncryption returns the state of encryption at rest, nil when off.
+// BlobEncryption returns the state of encryption at rest: nil without a
+// row, a row with State BlobOff when it is off but was recorded (its
+// generation and its last keyring copy stay).
 func (s *Store) BlobEncryption(ctx context.Context) (*BlobEncryption, error) {
 	r, err := s.q.GetBlobEncryption(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -76,16 +87,17 @@ func (s *Store) BlobEncryption(ctx context.Context) (*BlobEncryption, error) {
 }
 
 // SetBlobEncryption sets the state (on or a transitional one) and
-// increments the generation. Without a row it creates one with the
-// keyring copy k; with a row k is ignored and the progress is reset. The
-// offline conversion commands call it with the writers lock held
+// increments the generation, resetting the progress. Without a row it
+// creates one with the keyring copy k; from state off the row takes k as
+// its keyring copy and continues its generation; otherwise k is ignored.
+// The offline conversion commands call it with the writers lock held
 // exclusively (part 3).
 func (s *Store) SetBlobEncryption(ctx context.Context, state string, k KeyringCopy) error {
 	if state != BlobOn && !BlobTransitional(state) {
 		return fmt.Errorf("not a state of encryption at rest: %q", state)
 	}
 	return s.inTx(ctx, func(q *db.Queries) error {
-		_, err := q.GetBlobEncryptionForUpdate(ctx)
+		r, err := q.GetBlobEncryptionForUpdate(ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return q.InsertBlobEncryption(ctx, db.InsertBlobEncryptionParams{
 				State: state, Generation: 1, Keyring: k.Keyring, KeyringID: k.ID,
@@ -95,14 +107,34 @@ func (s *Store) SetBlobEncryption(ctx context.Context, state string, k KeyringCo
 		if err != nil {
 			return err
 		}
+		if r.State == blobOffRow {
+			return one(q.EnableBlobEncryption(ctx, db.EnableBlobEncryptionParams{
+				State: state, Keyring: k.Keyring, KeyringID: k.ID,
+				KeyringGeneration: k.Generation, CurrentKey: int64(k.CurrentKey),
+			}))
+		}
 		return one(q.SetBlobEncryptionState(ctx, state))
 	})
 }
 
-// ClearBlobEncryption turns encryption off: it deletes the row.
+// ClearBlobEncryption turns encryption off. The row stays, with state off
+// and the next generation, so the generation never repeats: a writer that
+// pinned a generation before a disable and an enable cannot match the new
+// one (review round 1 of #510). Without a row, or already off, it does
+// nothing.
 func (s *Store) ClearBlobEncryption(ctx context.Context) error {
-	_, err := s.q.DeleteBlobEncryption(ctx)
+	_, err := s.q.ClearBlobEncryption(ctx)
 	return err
+}
+
+// RecordBlobOff records state off with the keyring copy k: a writer that
+// found a keyring file but no row, and no encrypted file, so that later
+// starts do not walk the message files again. A row created meanwhile
+// stays; an off row only gets k as its copy.
+func (s *Store) RecordBlobOff(ctx context.Context, k KeyringCopy) error {
+	return s.q.RecordBlobOff(ctx, db.RecordBlobOffParams{
+		Keyring: k.Keyring, KeyringID: k.ID, KeyringGeneration: k.Generation, CurrentKey: int64(k.CurrentKey),
+	})
 }
 
 // ErrKeyringChanged means the database copy of the keyring changed while
@@ -111,12 +143,12 @@ var ErrKeyringChanged = errors.New("the database copy of the keyring changed mea
 
 // UpdateBlobKeyring replaces the database copy of the keyring with k, if
 // the copy is still the one read (generation expected). A new current
-// key increments the state's generation. Without a row it fails with
-// ErrNotFound.
+// key increments the state's generation. Without a row, or with state
+// off, it fails with ErrNotFound.
 func (s *Store) UpdateBlobKeyring(ctx context.Context, expected int64, k KeyringCopy) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		r, err := q.GetBlobEncryptionForUpdate(ctx)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && r.State == blobOffRow {
 			return ErrNotFound
 		}
 		if err != nil {
@@ -138,14 +170,14 @@ var ErrBlobStateChanged = errors.New("encryption at rest changed since this proc
 
 // blobPin is the generation a writer read at start.
 type blobPin struct {
-	generation int64 // 0: no row (off)
+	generation int64 // 0: no row (off, never recorded)
 	onChange   func()
 	once       sync.Once
 }
 
 // PinBlobGeneration makes every transaction that inserts messages
 // (SaveBatch, the fill and journal batches, ReceiveMessage) compare the
-// generation of encryption at rest with generation (0 for off) and fail
+// generation of encryption at rest with generation (0 without a row) and fail
 // with ErrBlobStateChanged on a difference; onChange then runs once, so
 // that the process stops. Writers call it once at start, with the
 // writers lock held.

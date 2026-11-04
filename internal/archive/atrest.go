@@ -91,7 +91,10 @@ var ErrNoArchiveKey = errors.New("no archive key configured")
 //   - With no row but a keyring file and encrypted files on disk (a dump
 //     from before `enable` restored next to newer files), a writer derives
 //     the state from the files: it records `encrypting` and refuses, so
-//     that `encryption enable` finishes the conversion.
+//     that `encryption enable` finishes the conversion. Without encrypted
+//     files it records off with the keyring file's copy, so later starts
+//     do not walk again; a recorded off row is derived again only when the
+//     keyring file differs from its copy (another id or generation).
 //   - While encryption is on or being changed, the archive key must open
 //     the keyring; the file copy and the database copy are reconciled
 //     (blobcrypt.Reconcile) and written back where they differ.
@@ -117,11 +120,12 @@ func OpenAtRest(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 	if err != nil {
 		return nil, err
 	}
-	if row == nil && opts.Role == RoleWriter {
-		if row, err = deriveFromFiles(ctx, st, blobs, opts); err != nil {
+	if blobOff(row) && opts.Role == RoleWriter {
+		if row, err = deriveFromFiles(ctx, st, blobs, row, opts); err != nil {
 			return nil, err
 		}
 	}
+	a.State = store.BlobOff
 	if row != nil {
 		a.State, a.Generation = row.State, row.Generation
 	}
@@ -130,7 +134,7 @@ func OpenAtRest(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 		return nil, fmt.Errorf("%w (state %s): run `encryption %s` to finish it, then start again", ErrConversionInProgress, a.State, cmd)
 	}
 
-	if row == nil {
+	if blobOff(row) {
 		// Off. A keyring the key opens still reads encrypted files left
 		// over (a reader such as verify or export).
 		a.Keyring = openFileKeyring(opts)
@@ -147,7 +151,7 @@ func OpenAtRest(ctx context.Context, st *store.Store, blobs *blobstore.Store, op
 		if row, err = st.BlobEncryption(ctx); err != nil {
 			return nil, err
 		}
-		if row == nil {
+		if blobOff(row) {
 			return nil, errors.New("encryption at rest was turned off during start-up; start again")
 		}
 		a.Generation = row.Generation
@@ -199,18 +203,37 @@ func openFileKeyring(opts AtRestOptions) *blobcrypt.Keyring {
 	return ring
 }
 
-// deriveFromFiles is the state of an archive without a blob_encryption
-// row: off, unless a keyring file exists and an encrypted file is found
+// blobOff reports whether row (nil: none) is encryption off.
+func blobOff(row *store.BlobEncryption) bool {
+	return row == nil || row.State == store.BlobOff
+}
+
+// deriveFromFiles is the state of an archive that is off (row nil or off):
+// off, unless a keyring file exists and an encrypted file is found
 // (revision 1, B2). Then the row is recorded as encrypting, with the file
-// as the database copy, and returned.
-func deriveFromFiles(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts AtRestOptions) (*store.BlobEncryption, error) {
-	ring, err := blobcrypt.ReadKeyringFile(blobcrypt.KeyringPath(opts.DataDir))
+// as the database copy, and returned. Without an encrypted file the state
+// is recorded as off with the file as the copy, so that later starts skip
+// the walk; an off row whose copy has the file's id and generation is
+// returned without a walk (review round 1 of #510). Changing the keyring
+// file (a new generation) makes the next writer walk once more; part 3's
+// `enable` relies on that, so that a dump recorded off and restored next
+// to files encrypted later is still detected.
+func deriveFromFiles(ctx context.Context, st *store.Store, blobs *blobstore.Store, row *store.BlobEncryption, opts AtRestOptions) (*store.BlobEncryption, error) {
+	data, err := readKeyringBytes(opts.DataDir)
 	if errors.Is(err, blobcrypt.ErrNoKeyring) {
-		return nil, nil
+		return row, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	ring, err := blobcrypt.ParseKeyring(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", blobcrypt.KeyringPath(opts.DataDir), err)
+	}
+	if row != nil && row.KeyringID == ring.ArchiveID() && row.KeyringGeneration == int64(ring.Generation()) { //nolint:gosec // generations stay far below 2^63
+		return row, nil
+	}
+	opts.Logger.Info("encryption at rest: looking for encrypted files, since a keyring file exists and the database says off")
 	errFound := errors.New("found")
 	found := ""
 	err = blobs.Walk(func(e blobstore.Entry) error {
@@ -223,17 +246,17 @@ func deriveFromFiles(ctx context.Context, st *store.Store, blobs *blobstore.Stor
 	if err != nil && !errors.Is(err, errFound) {
 		return nil, err
 	}
-	if found == "" {
-		return nil, nil
-	}
 	// The file as it is: unopened, it cannot be marshalled again.
-	data, err := readKeyringBytes(opts.DataDir)
-	if err != nil {
-		return nil, err
-	}
-	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, store.KeyringCopy{
+	k := store.KeyringCopy{
 		Keyring: data, ID: ring.ArchiveID(), Generation: int64(ring.Generation()), CurrentKey: ring.CurrentKey(), //nolint:gosec // generations stay far below 2^63
-	}); err != nil {
+	}
+	if found == "" {
+		if err := st.RecordBlobOff(ctx, k); err != nil {
+			return nil, err
+		}
+		return st.BlobEncryption(ctx)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, k); err != nil {
 		return nil, err
 	}
 	opts.Logger.Warn("encryption at rest: encrypted files found while the database says off (restored from an older dump?); recorded the state as encrypting",
@@ -258,7 +281,7 @@ func needKeyring(ctx context.Context, st *store.Store, row *store.BlobEncryption
 		if row, err = st.BlobEncryption(ctx); err != nil {
 			return nil, err
 		}
-		if row == nil {
+		if blobOff(row) {
 			return nil, errors.New("encryption at rest was turned off during start-up; start again")
 		}
 	}

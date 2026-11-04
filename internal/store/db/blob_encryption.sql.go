@@ -14,7 +14,7 @@ SELECT generation FROM blob_encryption
 `
 
 // The generation every inserting transaction compares (#392, part 2); no
-// row is encryption off.
+// row is encryption off, never enabled (generation 0).
 func (q *Queries) BlobGeneration(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, blobGeneration)
 	var generation int64
@@ -22,12 +22,48 @@ func (q *Queries) BlobGeneration(ctx context.Context) (int64, error) {
 	return generation, err
 }
 
-const deleteBlobEncryption = `-- name: DeleteBlobEncryption :execrows
-DELETE FROM blob_encryption
+const clearBlobEncryption = `-- name: ClearBlobEncryption :execrows
+UPDATE blob_encryption
+SET state = 'off', generation = generation + 1, cursor = '', files_done = 0, files_corrupt = 0,
+    finished_at = now(), updated_at = now()
+WHERE state <> 'off'
 `
 
-func (q *Queries) DeleteBlobEncryption(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteBlobEncryption)
+// Encryption off: the row stays, so the generation keeps increasing.
+func (q *Queries) ClearBlobEncryption(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, clearBlobEncryption)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const enableBlobEncryption = `-- name: EnableBlobEncryption :execrows
+UPDATE blob_encryption
+SET state = $1, generation = generation + 1, keyring = $2, keyring_id = $3,
+    keyring_generation = $4, current_key = $5,
+    cursor = '', files_done = 0, files_corrupt = 0, started_at = now(), finished_at = NULL, updated_at = now()
+WHERE state = 'off'
+`
+
+type EnableBlobEncryptionParams struct {
+	State             string
+	Keyring           []byte
+	KeyringID         string
+	KeyringGeneration int64
+	CurrentKey        int64
+}
+
+// Leaves state off: the new state, with the keyring copy of the enabling
+// command; the generation continues from the off row's.
+func (q *Queries) EnableBlobEncryption(ctx context.Context, arg EnableBlobEncryptionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enableBlobEncryption,
+		arg.State,
+		arg.Keyring,
+		arg.KeyringID,
+		arg.KeyringGeneration,
+		arg.CurrentKey,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -102,6 +138,37 @@ func (q *Queries) InsertBlobEncryption(ctx context.Context, arg InsertBlobEncryp
 	_, err := q.db.Exec(ctx, insertBlobEncryption,
 		arg.State,
 		arg.Generation,
+		arg.Keyring,
+		arg.KeyringID,
+		arg.KeyringGeneration,
+		arg.CurrentKey,
+	)
+	return err
+}
+
+const recordBlobOff = `-- name: RecordBlobOff :exec
+INSERT INTO blob_encryption (state, generation, keyring, keyring_id, keyring_generation, current_key)
+VALUES ('off', 1, $1, $2, $3, $4)
+ON CONFLICT (id) DO UPDATE
+SET keyring = EXCLUDED.keyring, keyring_id = EXCLUDED.keyring_id,
+    keyring_generation = EXCLUDED.keyring_generation, current_key = EXCLUDED.current_key, updated_at = now()
+WHERE blob_encryption.state = 'off'
+`
+
+type RecordBlobOffParams struct {
+	Keyring           []byte
+	KeyringID         string
+	KeyringGeneration int64
+	CurrentKey        int64
+}
+
+// The state derived from the files with no encrypted file found: off, with
+// the keyring file as the database copy. A row written meanwhile by
+// another writer or an encryption command stays (its generation decides);
+// an off row only gets the copy updated, without a new generation (the
+// form of new files does not change).
+func (q *Queries) RecordBlobOff(ctx context.Context, arg RecordBlobOffParams) error {
+	_, err := q.db.Exec(ctx, recordBlobOff,
 		arg.Keyring,
 		arg.KeyringID,
 		arg.KeyringGeneration,

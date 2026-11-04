@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -447,26 +449,7 @@ func TestAtRestReconcilesKeyring(t *testing.T) {
 func TestAtRestDerivesStateFromFiles(t *testing.T) {
 	e := newArchiveEnv(t)
 	kek, ring := e.keygen()
-	// No encrypted file: off, nothing recorded.
-	if a, err := e.atRest(archive.RoleWriter, kek, nil, nil); err != nil || a.State != store.BlobOff {
-		t.Fatalf("no encrypted file: %v", err)
-	} else {
-		a.Close()
-	}
-	if row, err := e.st.BlobEncryption(e.ctx); err != nil || row != nil {
-		t.Fatalf("row %+v %v", row, err)
-	}
-
-	enc, err := blobstore.New(e.data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := enc.SetKeys(ring, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := enc.Put(strings.NewReader(msg(1))); err != nil {
-		t.Fatal(err)
-	}
+	e.putEncrypted(ring, msg(1))
 	if _, err := e.atRest(archive.RoleWriter, kek, nil, nil); !errors.Is(err, archive.ErrConversionInProgress) {
 		t.Fatalf("writer with encrypted files: %v", err)
 	}
@@ -478,6 +461,100 @@ func TestAtRestDerivesStateFromFiles(t *testing.T) {
 	if err != nil || !bytes.Equal(file, row.Keyring) {
 		t.Fatalf("the database copy is not the file: %v", err)
 	}
+}
+
+// Without encrypted files the derived state is recorded as off with the
+// keyring file as the copy, so the next writer start does not walk
+// messages/ again; a keyring file that changed since (as part 3's enable
+// changes it) makes the next start walk once more (review round 1 of
+// #510).
+func TestAtRestDerivedOffSkipsTheWalk(t *testing.T) {
+	e := newArchiveEnv(t)
+	kek, ring := e.keygen()
+	e.save(e.folder, 1, msg(2)) // a plaintext file to walk over
+	start := func() (*archive.AtRest, int, error) {
+		t.Helper()
+		var log lockedBuffer
+		a, err := archive.OpenAtRest(e.ctx, e.st, e.blobs, archive.AtRestOptions{
+			DataDir: e.data, KEK: kek, Role: archive.RoleWriter, Command: "sync",
+			Tick: make(chan time.Time), Logger: slog.New(slog.NewTextHandler(&log, nil)),
+		})
+		if err == nil {
+			a.Close()
+		}
+		return a, strings.Count(log.String(), "looking for encrypted files"), err
+	}
+
+	a, walks, err := start()
+	if err != nil || a.State != store.BlobOff || walks != 1 {
+		t.Fatalf("first start: %v, walks %d", err, walks)
+	}
+	row, err := e.st.BlobEncryption(e.ctx)
+	if err != nil || row == nil || row.State != store.BlobOff || row.KeyringID != ring.ArchiveID() ||
+		row.KeyringGeneration != int64(ring.Generation()) || a.Generation != row.Generation { //nolint:gosec // a small test generation
+		t.Fatalf("recorded off: %+v %v, pinned %d", row, err, a.Generation)
+	}
+	if a, walks, err = start(); err != nil || a.State != store.BlobOff || walks != 0 {
+		t.Fatalf("second start: %v, walks %d", err, walks)
+	}
+
+	// The keyring file changes (a new generation) and files are encrypted:
+	// the next start walks and derives encrypting.
+	if err := ring.Open(kek); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := blobcrypt.GenerateKEK()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ring.AddSlot(recovery, "recovery", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(e.data), ring); err != nil {
+		t.Fatal(err)
+	}
+	e.putEncrypted(ring, msg(3))
+	if _, walks, err = start(); !errors.Is(err, archive.ErrConversionInProgress) || walks != 1 {
+		t.Fatalf("start after the keyring changed: %v, walks %d", err, walks)
+	}
+	if row, err = e.st.BlobEncryption(e.ctx); err != nil || row.State != store.BlobEncrypting ||
+		row.KeyringGeneration != int64(ring.Generation()) { //nolint:gosec // a small test generation
+		t.Fatalf("derived: %+v %v", row, err)
+	}
+}
+
+// putEncrypted stores raw as an encrypted file under ring, outside the
+// archive's own blob store (as another, newer process did).
+func (e *archiveEnv) putEncrypted(ring *blobcrypt.Keyring, raw string) {
+	e.t.Helper()
+	enc, err := blobstore.New(e.data)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if err := enc.SetKeys(ring, true); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, _, err := enc.Put(strings.NewReader(raw)); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// lockedBuffer is a bytes.Buffer safe for a logger's concurrent writes.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // With encryption off, a reader with the key still reads encrypted files

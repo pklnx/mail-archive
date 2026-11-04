@@ -218,7 +218,9 @@ const publishAttempts = 3
 // full and its hash matches (created is false then: the message was
 // there). An unusable encrypted file is replaced by this call's copy with
 // an atomic rename, after the copy was read back, and the directory is
-// synchronized.
+// synchronized. The same holds for an existing file that fails that
+// read-back (damaged) while the other form exists: it is replaced, and
+// then the other form unlinked.
 func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 	tmp, err := os.CreateTemp(filepath.Join(s.root, "tmp"), "put-*")
 	if err != nil {
@@ -290,7 +292,28 @@ func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 				if err := s.syncShard(hash); err != nil {
 					return Blob{}, false, err
 				}
-				return blob, false, s.dropOtherForm(final, other, hash)
+				err := s.dropOtherForm(final, other, hash)
+				if !damaged(err) {
+					return blob, false, err
+				}
+				// The existing file is damaged and the other form is
+				// still there (a crash between link and unlink, then a
+				// damaged file): replace it by this call's copy, read
+				// back first, as an unusable header is replaced. The
+				// other form stays until the replacement is read back.
+				if err := syncTemp(); err != nil {
+					return Blob{}, false, err
+				}
+				if err := s.readBack(tmpName, hash, s.encrypt); err != nil {
+					return Blob{}, false, err
+				}
+				if err := s.ops.rename(tmpName, final); err != nil {
+					return Blob{}, false, fmt.Errorf("replace damaged blob: %w", err)
+				}
+				if err := s.syncShard(hash); err != nil {
+					return Blob{}, false, err
+				}
+				return blob, false, s.unlinkOther(final, other)
 			}
 			// A removal (sweep, verify --fix-orphans) took the file away
 			// between the lookup and the open: publish this call's copy.
@@ -340,6 +363,12 @@ func (s *Store) dropOtherForm(final, other, hash string) error {
 	if err := s.readBack(final, hash, s.encrypt); err != nil {
 		return err
 	}
+	return s.unlinkOther(final, other)
+}
+
+// unlinkOther unlinks other, once final has been read back, and
+// synchronizes the shard directory.
+func (s *Store) unlinkOther(final, other string) error {
 	if err := s.ops.unlink(other); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

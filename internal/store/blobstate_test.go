@@ -59,14 +59,124 @@ func TestBlobEncryptionState(t *testing.T) {
 		t.Fatalf("new current key: %+v", row)
 	}
 
+	// Off keeps the row: the next generation, the last keyring copy.
 	if err := st.ClearBlobEncryption(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if row, err := st.BlobEncryption(ctx); err != nil || row != nil {
+	if row, err := st.BlobEncryption(ctx); err != nil || row == nil || row.State != store.BlobOff || row.Generation != 4 ||
+		row.KeyringGeneration != 3 || row.FinishedAt == nil {
 		t.Fatalf("off: %+v %v", row, err)
 	}
+	if err := st.ClearBlobEncryption(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := st.BlobEncryption(ctx); row.Generation != 4 {
+		t.Fatalf("off twice: %+v", row)
+	}
 	if err := st.UpdateBlobKeyring(ctx, 3, k); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("update without a row: %v", err)
+		t.Fatalf("update while off: %v", err)
+	}
+	// Enabling again takes the new keyring copy and continues the
+	// generation.
+	k2 := store.KeyringCopy{Keyring: []byte(`{"format":"z"}`), ID: strings.Repeat("cd", 16), Generation: 1, CurrentKey: 9}
+	if err := st.SetBlobEncryption(ctx, store.BlobEncrypting, k2); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := st.BlobEncryption(ctx); row.State != store.BlobEncrypting || row.Generation != 5 || row.KeyringID != k2.ID ||
+		string(row.Keyring) != `{"format":"z"}` || row.CurrentKey != 9 || row.FinishedAt != nil {
+		t.Fatalf("enabled again: %+v", row)
+	}
+}
+
+// RecordBlobOff (the state derived from the files, nothing encrypted)
+// creates an off row, updates only the copy of an off row, and leaves any
+// other row alone.
+func TestRecordBlobOff(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	if err := st.RecordBlobOff(ctx, testKeyring); err != nil {
+		t.Fatal(err)
+	}
+	row, err := st.BlobEncryption(ctx)
+	if err != nil || row == nil || row.State != store.BlobOff || row.Generation != 1 || row.KeyringID != testKeyring.ID {
+		t.Fatalf("recorded: %+v %v", row, err)
+	}
+	k := testKeyring
+	k.Generation = 2
+	if err := st.RecordBlobOff(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ = st.BlobEncryption(ctx); row.State != store.BlobOff || row.Generation != 1 || row.KeyringGeneration != 2 {
+		t.Fatalf("recorded again: %+v", row)
+	}
+	if err := st.SetBlobEncryption(ctx, store.BlobOn, testKeyring); err != nil {
+		t.Fatal(err)
+	}
+	k.Generation = 3
+	if err := st.RecordBlobOff(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ = st.BlobEncryption(ctx); row.State != store.BlobOn || row.Generation != 2 || row.KeyringGeneration != 1 {
+		t.Fatalf("on overwritten: %+v", row)
+	}
+}
+
+// The generation never repeats across off: a writer that pinned on before
+// a disable and an enable cannot insert after them, even though the
+// states are the same again (review round 1 of #510).
+func TestBlobGenerationMonotonicAcrossOff(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	u, err := st.CreateUser(ctx, "owner", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imap := &store.Account{Name: "imap", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &u.ID}
+	if err := st.CreateAccount(ctx, imap); err != nil {
+		t.Fatal(err)
+	}
+	folder, err := st.GetOrCreateFolder(ctx, imap.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := func(state string, k store.KeyringCopy) {
+		t.Helper()
+		if err := st.SetBlobEncryption(ctx, state, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(store.BlobEncrypting, testKeyring)
+	set(store.BlobOn, testKeyring)
+	row, err := st.BlobEncryption(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changes atomic.Int32
+	st.PinBlobGeneration(row.Generation, func() { changes.Add(1) })
+
+	// disable, then enable with another keyring.
+	set(store.BlobDecrypting, store.KeyringCopy{})
+	if err := st.ClearBlobEncryption(ctx); err != nil {
+		t.Fatal(err)
+	}
+	other := store.KeyringCopy{Keyring: []byte(`{"format":"new"}`), ID: strings.Repeat("ef", 16), Generation: 1, CurrentKey: 2}
+	set(store.BlobEncrypting, other)
+	set(store.BlobOn, other)
+	if now, _ := st.BlobEncryption(ctx); now.State != store.BlobOn || now.Generation <= row.Generation {
+		t.Fatalf("generation %d after disable and enable, pinned %d", now.Generation, row.Generation)
+	}
+
+	date := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err = st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{receivedMeta(1)},
+		[]store.Location{{FolderID: folder.ID, UID: 1, InternalDate: date}})
+	if !errors.Is(err, store.ErrBlobStateChanged) {
+		t.Fatalf("stale writer's insert after disable and enable: %v", err)
+	}
+	if ok, err := st.MessageExists(ctx, receivedMeta(1).SHA256); err != nil || ok {
+		t.Fatalf("committed: %v %v", ok, err)
+	}
+	if changes.Load() != 1 {
+		t.Fatal("onChange did not run")
 	}
 }
 
@@ -154,7 +264,7 @@ func TestBlobGenerationPin(t *testing.T) {
 }
 
 // 00037 Down refuses while encryption is on or being changed: older
-// versions cannot read encrypted files.
+// versions cannot read encrypted files. The off row does not block it.
 func TestBlobEncryptionMigrationDown(t *testing.T) {
 	st := storetest.New(t)
 	ctx := context.Background()
@@ -166,6 +276,9 @@ func TestBlobEncryptionMigrationDown(t *testing.T) {
 	}
 	if err := st.ClearBlobEncryption(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if row, err := st.BlobEncryption(ctx); err != nil || row == nil || row.State != store.BlobOff {
+		t.Fatalf("off row: %+v %v", row, err)
 	}
 	downBlobEncryptionMigration(t, st)
 	if _, err := st.Migrate(ctx); err != nil {

@@ -88,9 +88,19 @@ func (s *Store) readBack(path, hash string, encrypted bool) error {
 		return fmt.Errorf("read back %s: %w", path, err)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != hash {
-		return fmt.Errorf("read back %s: content hash %s, want %s", path, got, hash)
+		return fmt.Errorf("read back %s: %w: content hash %s, want %s", path, errMismatch, got, hash)
 	}
 	return nil
+}
+
+// errMismatch is a read-back whose plaintext hashes to another hash.
+var errMismatch = errors.New("content mismatch")
+
+// damaged reports whether err from readBack means the file's content is
+// damaged (an authentication failure or another hash), as opposed to an
+// I/O error.
+func damaged(err error) bool {
+	return errors.Is(err, blobcrypt.ErrCorrupt) || errors.Is(err, errMismatch)
 }
 
 // HasPlaintext reports whether the plaintext file of hash exists.
