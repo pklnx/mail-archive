@@ -163,6 +163,31 @@ needs a fix by hand; `./ma migrate` then prints a warning with the command:
 - Podman (untested): `podman unshare chown -R 65532:65532 data`
 :::
 
+### The archive key
+
+Encryption at rest uses an archive key that you hold, apart from the data.
+Storing mail encrypted is not part of this version yet; creating the key now
+prepares it. Create the key and its keyring once:
+
+```sh
+./ma encryption keygen
+```
+
+It writes `keys/archive.key` (`ARCHIVE_KEY_DIR` in `.env` moves it; keep it
+outside `data/`) and the keyring `data/keys/keyring`, and prints a
+**recovery key** once. Then:
+
+- Add `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key` to `.env`.
+- Keep the recovery key offline, apart from this host and from the backups
+  (a password manager, or paper in a safe). It opens the keyring when the
+  key file is lost: set it as `MAIL_ARCHIVE_ARCHIVE_KEY` instead.
+- Back up `keys/archive.key` apart from `data/` and its backups. On Linux it
+  belongs to the container user: `sudo cp keys/archive.key /safe/place/`.
+- Check with `./ma encryption status`.
+
+Without the archive key and every recovery key, encrypted mail cannot be
+recovered, backups included. See [Encryption](../reference/cli#encryption).
+
 ### After the install
 
 - The web server syncs every enabled account every 6 hours

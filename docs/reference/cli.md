@@ -7,8 +7,9 @@ users or accounts (`user …`, `account …`, including fills and purges),
 retention rules, holds and deletion runs, `jobs retry`, and `import`,
 `export`, `backup` and `audit` leave an entry in the
 [audit log](../guide/audit-log#the-fields); `migrate`, `reindex`,
-`attest` and `attest keygen`, `sync`, `verify`, `status`, `notify test` and
-the list commands do not.
+`attest` and `attest keygen`, the [`encryption`](#encryption) commands and
+`decrypt` (they need no database), `sync`, `verify`, `status`, `notify test`
+and the list commands do not.
 
 With Docker Compose, run every command through the wrapper, for example
 `./ma status`. The binary itself is called `mail-archive`. Every command has
@@ -52,6 +53,27 @@ the password upgrade) are not waited for: within those 10 seconds a new
 command can start next to such a statement. The web server is not covered:
 it neither waits for nor blocks a migration, so stop it before `./ma migrate`
 when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
+
+## Encryption
+
+The archive key and the keyring of encryption at rest. Storing message files
+and backups encrypted is not part of this version yet; these commands create
+and manage the keys it will use. They need no database and leave no audit log
+entry. Format and key hierarchy: [Architecture](../development/architecture#encryption-at-rest).
+
+| Command | Purpose |
+|---|---|
+| `encryption keygen [--key-file PATH] [--no-recovery]` | Create a new archive key in `--key-file` (default `MAIL_ARCHIVE_ARCHIVE_KEY_FILE`, mode 0400), the keyring `data/keys/keyring` with a new data key, and a recovery key, printed once. The key file must lie outside the data directory, also under another path to it; an existing key file or keyring is never replaced, also when two `keygen` run at once. On a failure nothing is left behind, so a rerun starts afresh. `./ma encryption keygen` runs it in a one-off container with the keys directory (`ARCHIVE_KEY_DIR`, default `./keys`) writable and writes `keys/archive.key`, owned by the container user; every other service mounts that directory read-only. With `./ma`, `--key-file` must lie in `/keys`, or the key would be lost with the container. Then set `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key` in `.env`. |
+| `encryption add-key [--label TEXT]` | Add a new key to the keyring and print it once, as another recovery key. The configured archive key must open the keyring. |
+| `encryption remove-key FINGERPRINT` | Remove a key's slot. The configured archive key and the last slot cannot be removed. A removed key still opens older copies of the keyring, such as those in backups, and through their keyring key also the current keyring: after a key leaked, a new keyring key and data key are needed, not only this. |
+| `encryption status` | Show the keyring (archive id, generation, data keys, slots with fingerprint, creation time and label) and whether the configured archive key opens it; exits non-zero when it does not. Never prints a key. |
+| `decrypt FILE [--out PATH] [--sha HASH] [--keyring PATH]` | Decrypt an encrypted message file or backup offline, with the archive key (or a recovery key in `MAIL_ARCHIVE_ARCHIVE_KEY`) and the keyring (default `data/keys/keyring`), to stdout or a new file `--out`. A message file is bound to its SHA-256, taken from the name `<sha256>.enc` or from `--sha`. Only authenticated data is written; on an error the command exits non-zero and `--out` is not created. |
+
+Without the archive key and every recovery key, nothing encrypted can be
+recovered, backups included. Keep the recovery key offline, apart from the
+host and the backups, and back up the key file apart from `data/`. Two
+commands that change the keyring at the same time do not both run: the
+second refuses until the first is done.
 
 ## Users
 

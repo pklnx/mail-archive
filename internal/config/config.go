@@ -83,6 +83,12 @@ const (
 	// process runs at a time: `serve` (0 = none, they run in a separate
 	// `worker`) or `worker`.
 	EnvJobWorkers = "MAIL_ARCHIVE_JOB_WORKERS"
+	// EnvArchiveKeyFile is the file holding the archive key (KEK) that
+	// opens the keyring of encryption at rest; preferred over
+	// EnvArchiveKey. Both set is refused.
+	EnvArchiveKeyFile = "MAIL_ARCHIVE_ARCHIVE_KEY_FILE"
+	// EnvArchiveKey is the archive key itself, base64.
+	EnvArchiveKey = "MAIL_ARCHIVE_ARCHIVE_KEY"
 )
 
 // DefaultJobWorkers is used when EnvJobWorkers is not set.
@@ -169,6 +175,11 @@ type Config struct {
 	RetentionFileGrace time.Duration
 	// JobWorkers is the size of the process's job pool; 0 runs no jobs.
 	JobWorkers int
+	// ArchiveKey is the archive key (KEK) of encryption at rest, nil if not
+	// configured. A secret: never log it.
+	ArchiveKey []byte
+	// ArchiveKeySource says where ArchiveKey came from, for messages.
+	ArchiveKeySource string
 }
 
 // AttestDir holds the attestation file, the leaves and the public keys:
@@ -285,6 +296,11 @@ func Load() (*Config, error) {
 			return nil, errors.New(EnvSecretKey + ": " + err.Error())
 		}
 		cfg.SecretKey = key
+	}
+	cfg.ArchiveKey, cfg.ArchiveKeySource, err = LoadArchiveKey(os.Getenv(EnvArchiveKeyFile), os.Getenv(EnvArchiveKey),
+		cfg.DataDir, cfg.SecretKey)
+	if err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
