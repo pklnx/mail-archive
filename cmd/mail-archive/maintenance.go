@@ -196,10 +196,11 @@ func findingCounts(findings map[string]int) string {
 }
 
 func newExportCmd() *cobra.Command {
-	var format, out, account, folder string
+	var format string
+	var g gobdFlags
 	cmd := &cobra.Command{
-		Use:   "export --format mbox|maildir --out DIR (--user USER | --account NAME [--folder NAME])",
-		Short: "Write archived mail as mbox files or Maildirs for a mail client",
+		Use:   "export --format mbox|maildir|gobd --out PATH (--user USER | --account NAME [--folder NAME] | ...)",
+		Short: "Write archived mail as mbox files or Maildirs, or a GoBD export",
 		Long: `Write the archived mail of one user, one account or one folder to DIR,
 as one mbox file (mboxrd) or one Maildir per folder:
 DIR/<account>/<folder>.mbox or DIR/<account>/<folder>/{cur,new,tmp}.
@@ -209,15 +210,33 @@ it appears when the export is complete. The files are not encrypted and are
 readable only by the user running the command.
 
 One export never mixes users: give --user, or --account (with --user when
-several users have an account with that name). Removed accounts are included.`,
+several users have an account with that name). Removed accounts are included.
+
+` + gobdHelp,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if account == "" && cmd.Flag("user").Value.String() == "" {
+			if format == "gobd" {
+				return runExportGoBD(cmd, &g)
+			}
+			if g.out == "" {
+				return errors.New("--out is required")
+			}
+			for _, name := range gobdOnlyFlags {
+				if cmd.Flags().Changed(name) {
+					return fmt.Errorf("--%s is only for --format gobd", name)
+				}
+			}
+			if len(g.users) > 1 || len(g.accounts) > 1 || len(g.folders) > 1 {
+				return errors.New("--user, --account and --folder take one value with mbox and maildir")
+			}
+			account, folder := first(g.accounts), first(g.folders)
+			if account == "" && len(g.users) == 0 {
 				return errors.New("choose what to export with --user or --account")
 			}
 			if folder != "" && account == "" {
 				return errors.New("--folder needs --account")
 			}
+			out := g.out
 			a, err := openApp(cmd.Context())
 			if err != nil {
 				return err
@@ -261,15 +280,22 @@ several users have an account with that name). Removed accounts are included.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "", "mbox or maildir (required)")
-	cmd.Flags().StringVar(&out, "out", "", "the directory to create (required; with Docker Compose under /data)")
-	cmd.Flags().String("user", "", "export this user's accounts, or pick the owner of --account")
-	cmd.Flags().StringVar(&account, "account", "", "only this account")
-	cmd.Flags().StringVar(&folder, "folder", "", "only this folder of --account")
+	cmd.Flags().StringVar(&format, "format", "", "mbox, maildir or gobd (required)")
+	cmd.Flags().StringVar(&g.out, "out", "", "the directory to create, for gobd also a .zip (required; with Docker Compose under /data, for gobd /export)")
+	cmd.Flags().StringArrayVar(&g.users, "user", nil, "export this user's accounts, or pick the owner of --account (gobd: repeatable)")
+	cmd.Flags().StringArrayVar(&g.accounts, "account", nil, "only this account (gobd: [OWNER/]NAME, repeatable)")
+	cmd.Flags().StringArrayVar(&g.folders, "folder", nil, "only this folder of --account (gobd: repeatable)")
+	addGoBDFlags(cmd, &g)
 	_ = cmd.MarkFlagRequired("format")
-	_ = cmd.MarkFlagRequired("out")
 	cmd.AddCommand(newExportVerifyCmd())
 	return cmd
+}
+
+func first(v []string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0]
 }
 
 // exportSelection resolves --user and --account to an owner and accounts.

@@ -206,6 +206,49 @@ func (w *Writer) AddFile(m Message, body io.Reader) error {
 	return nil
 }
 
+// Resumable is a Sink that can open a file it already holds: the
+// DirSink of a resumed export.
+type Resumable interface {
+	Existing(path string) (io.ReadCloser, error)
+}
+
+// KeepFile takes the message file of m that the sink already holds from
+// an interrupted run (pass B of a resumed export), if its bytes match
+// m.SHA256 and m.Size, and counts it as AddFile would. It returns false and
+// changes nothing when the file is missing, different or cannot be read:
+// the caller then writes it with AddFile, which replaces it. The archive's
+// copy of the message is not read for a kept file.
+func (w *Writer) KeepFile(m Message) (bool, error) {
+	if err := w.check(phaseFiles); err != nil {
+		return false, err
+	}
+	rs, ok := w.sink.(Resumable)
+	if !ok {
+		return false, nil
+	}
+	if !isSHA(m.SHA256) || m.Size < 0 {
+		return false, w.fail(fmt.Errorf("gobd: bad message %q", m.SHA256))
+	}
+	if w.opts.MaxMessages > 0 && w.files >= w.opts.MaxMessages {
+		return false, w.fail(fmt.Errorf("gobd: more than %d messages", w.opts.MaxMessages))
+	}
+	path := MessagePath(m.SHA256, m.SortAt, w.opts.Location)
+	f, err := rs.Existing(path)
+	if err != nil {
+		return false, nil
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, m.Size+1))
+	if err != nil || n != m.Size || hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
+		return false, nil
+	}
+	w.files++
+	w.bytes += m.Size
+	_, _ = io.WriteString(w.filesHash, path+"\n")
+	return true, nil
+}
+
 // AddMissing lists a message of the selection without a valid file. It
 // may be called until the first location row: a missing message appears
 // only in missing.csv, not in messages.csv or locations.csv.
@@ -358,6 +401,12 @@ func (w *Writer) Finish(f Final) (*Result, error) {
 	}
 	if err := w.writeBytes(IndexFile, IndexXML("mail-archive "+st.Software)); err != nil {
 		return nil, w.fail(err)
+	}
+	// Every file SHA256SUMS lists is on disk before it is written.
+	if sy, ok := w.sink.(interface{ Sync() error }); ok {
+		if err := sy.Sync(); err != nil {
+			return nil, w.fail(err)
+		}
 	}
 	sums, err := w.writeSums(f.Files)
 	if err != nil {
@@ -522,6 +571,10 @@ func (w *Writer) check(max phase) error {
 	}
 	return nil
 }
+
+// Err returns the error that broke the export, nil while it can go on.
+// AddFile's errors for one bad message file leave it nil.
+func (w *Writer) Err() error { return w.err }
 
 func (w *Writer) fail(err error) error {
 	if w.err == nil {

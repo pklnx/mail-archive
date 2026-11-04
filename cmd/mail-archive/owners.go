@@ -20,10 +20,18 @@ const userFlagHelp = "the user who owns the account (needed when several users h
 // flagUser resolves --user; nil when it is not set.
 func flagUser(cmd *cobra.Command, a *app) (*store.User, error) {
 	f := cmd.Flag("user")
-	if f == nil || f.Value.String() == "" {
+	if f == nil {
 		return nil, nil
 	}
-	name := auth.NormalizeUserName(f.Value.String())
+	value := f.Value.String()
+	if sv, ok := f.Value.(interface{ GetSlice() []string }); ok {
+		// export's --user is repeatable for gobd; mbox and maildir take one.
+		value = first(sv.GetSlice())
+	}
+	if value == "" {
+		return nil, nil
+	}
+	name := auth.NormalizeUserName(value)
 	u, err := a.store.GetUserByName(cmd.Context(), name)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("user %q not found", name)

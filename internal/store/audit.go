@@ -63,6 +63,12 @@ type AuditEntry struct {
 	// or changes group in the change's transaction, and for group actions;
 	// otherwise the group comes from the class (see AuditClass).
 	GroupID *int64
+	// NoGroup records a targeted entry without a group, whatever its
+	// target's group is when the entry is written: a GoBD export of
+	// accounts without an owner names its group as none at the snapshot
+	// (#394), and an owner the account gets later must not change that.
+	// GroupID must be nil with it.
+	NoGroup bool
 
 	class AuditClass
 }
@@ -174,6 +180,7 @@ var auditActionClasses = map[string][]AuditClass{
 	"account.list":         {AuditSelf},
 
 	"data.export":      {AuditTargeted},
+	"data.export_done": {AuditTargeted}, // GoBD export (#394): its group set explicitly
 	"data.import":      {AuditTargeted},
 	"data.fill":        {AuditTargeted},
 	"data.fill_change": {AuditTargeted},
@@ -219,6 +226,12 @@ func checkClass(e *AuditEntry) (user, account *int64, err error) {
 	}
 	if e.GroupID != nil && e.class != AuditTargeted {
 		return nil, nil, fmt.Errorf("%w: %q as %q with a group", ErrAuditClass, e.Action, e.class)
+	}
+	if e.NoGroup && (e.class != AuditTargeted || e.GroupID != nil) {
+		return nil, nil, fmt.Errorf("%w: %q as %q without a group", ErrAuditClass, e.Action, e.class)
+	}
+	if e.NoGroup {
+		return nil, nil, nil
 	}
 	switch e.class {
 	case AuditSelf:
