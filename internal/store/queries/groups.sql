@@ -46,7 +46,7 @@ UPDATE users SET group_id = @group_id WHERE id = @id;
 -- The groups of the given users, locked FOR SHARE so that no group change
 -- of theirs commits until the transaction ends. Ordered by id, so two
 -- transactions lock the same rows in the same order.
-SELECT id, group_id FROM users WHERE id = ANY(@ids::bigint[]) ORDER BY id FOR SHARE;
+SELECT id, group_id, is_auditor FROM users WHERE id = ANY(@ids::bigint[]) ORDER BY id FOR SHARE;
 
 -- name: DeleteCrossingShares :many
 -- The shares of a user that cross groups, as a group change of theirs

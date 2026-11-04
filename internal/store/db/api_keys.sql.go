@@ -110,6 +110,9 @@ WHERE k.key_hash = $1
   AND k.revoked_at IS NULL
   AND (k.expires_at IS NULL OR k.expires_at > now())
   AND u.locked_at IS NULL
+  -- Auditors hold no keys (#393); one inserted past the store still
+  -- opens nothing.
+  AND NOT u.is_auditor
 `
 
 type GetAPIKeyLoginRow struct {

@@ -69,7 +69,13 @@ WHERE a.body_text IS NOT NULL
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = a.message_sha256
-        AND f.account_id = ANY (@accounts::bigint[]))
+        AND f.account_id = ANY (@accounts::bigint[])
+        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])))
+  -- The scope's period (#393), checked only when it has one.
+  AND (sqlc.narg(scope_after)::timestamptz IS NULL AND sqlc.narg(scope_before)::timestamptz IS NULL
+       OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = a.message_sha256
+                    AND (sqlc.narg(scope_after)::timestamptz IS NULL OR pm.sort_at >= sqlc.narg(scope_after)::timestamptz)
+                    AND (sqlc.narg(scope_before)::timestamptz IS NULL OR pm.sort_at < sqlc.narg(scope_before)::timestamptz)))
 LIMIT @row_limit;
 
 -- name: AttachmentSnippets :many
@@ -100,7 +106,13 @@ WHERE EXISTS (
     SELECT 1 FROM message_locations l
     JOIN folders f ON f.id = l.folder_id
     WHERE l.message_sha256 = s.sha
-      AND f.account_id = ANY (@accounts::bigint[]))
+      AND f.account_id = ANY (@accounts::bigint[])
+      AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])))
+  -- The scope's period (#393), checked only when it has one.
+  AND (sqlc.narg(scope_after)::timestamptz IS NULL AND sqlc.narg(scope_before)::timestamptz IS NULL
+       OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = s.sha
+                    AND (sqlc.narg(scope_after)::timestamptz IS NULL OR pm.sort_at >= sqlc.narg(scope_after)::timestamptz)
+                    AND (sqlc.narg(scope_before)::timestamptz IS NULL OR pm.sort_at < sqlc.narg(scope_before)::timestamptz)))
 ORDER BY 1;
 
 -- name: CountFailedJobsWithCode :one

@@ -29,14 +29,22 @@ const auditSubjects = `-- name: AuditSubjects :many
 SELECT m.sha256::text AS sha256, m.subject
 FROM messages m
 WHERE m.sha256 = ANY ($1::bpchar[])
+  AND ($2::timestamptz IS NULL OR m.sort_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR m.sort_at < $3::timestamptz)
   AND EXISTS (SELECT 1 FROM message_locations ml
               JOIN folders f ON f.id = ml.folder_id
-              WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY ($2::bigint[]))
+              WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY ($4::bigint[])
+                AND (f.account_id = ANY ($5::bigint[]) OR scope_folder_granted(f.account_id, f.id, $6::bigint[], $7::bigint[])))
 `
 
 type AuditSubjectsParams struct {
-	Shas     []string
-	Accounts []int64
+	Shas                   []string
+	ScopeAfter             *time.Time
+	ScopeBefore            *time.Time
+	Accounts               []int64
+	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
+	ScopeFolders           []int64
 }
 
 type AuditSubjectsRow struct {
@@ -45,9 +53,18 @@ type AuditSubjectsRow struct {
 }
 
 // The subjects of the given messages that have a location in one of the
-// accounts: what the Log page shows of a message the viewer may read.
+// accounts, in a folder and the period of the scope (#393): what the Log
+// page shows of a message the viewer may read.
 func (q *Queries) AuditSubjects(ctx context.Context, arg AuditSubjectsParams) ([]AuditSubjectsRow, error) {
-	rows, err := q.db.Query(ctx, auditSubjects, arg.Shas, arg.Accounts)
+	rows, err := q.db.Query(ctx, auditSubjects,
+		arg.Shas,
+		arg.ScopeAfter,
+		arg.ScopeBefore,
+		arg.Accounts,
+		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
+		arg.ScopeFolders,
+	)
 	if err != nil {
 		return nil, err
 	}

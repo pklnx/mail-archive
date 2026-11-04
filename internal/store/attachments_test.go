@@ -375,9 +375,11 @@ func downGroupsMigration(t *testing.T, st *store.Store) {
 	}
 }
 
-// downGroupHoldsMigration rolls back 00035_group_holds.
+// downGroupHoldsMigration rolls back 00036_auditor_access and
+// 00035_group_holds.
 func downGroupHoldsMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downAuditorMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00035_group_holds") {
 		t.Fatalf("down: %q %v", m, err)
 	}

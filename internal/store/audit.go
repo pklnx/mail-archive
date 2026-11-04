@@ -162,6 +162,17 @@ var auditActionClasses = map[string][]AuditClass{
 
 	"sync.start": {AuditTargeted, AuditSelf}, // self: all of the actor's own accounts
 
+	// Auditor access (#393). Grant changes are about the auditor and are
+	// recorded in the grant's group, which the store sets explicitly; an
+	// auditor's own steps in the auditor's group (the grant's group).
+	"auditor.grant":        {AuditTargeted},
+	"auditor.extend":       {AuditTargeted},
+	"auditor.revoke":       {AuditTargeted},
+	"auditor.grant_change": {AuditTargeted},
+	"auditor.select":       {AuditSelf},
+	"auditor.denied":       {AuditSelf},
+	"account.list":         {AuditSelf},
+
 	"data.export":      {AuditTargeted},
 	"data.import":      {AuditTargeted},
 	"data.fill":        {AuditTargeted},
@@ -494,6 +505,7 @@ var auditGroups = map[string][]string{
 	"api_keys":  {"api_key.%"},
 	"sync":      {"sync.%"},
 	"retention": {"retention.%", "hold.%"},
+	"auditor":   {"auditor.%"},
 }
 
 var auditActionPattern = regexp.MustCompile(`^[a-z0-9_]+\.[a-z0-9_]+$`)
@@ -703,6 +715,13 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 			return nil, err
 		}
 		for _, r := range shared {
+			// Grant entries written by others (an admin's revocation, a
+			// group move) carry the owner in via_owners but need their own
+			// view (auditorView, #393 part 2), which also hides the actor's
+			// name; until then the owner's page leaves them out.
+			if strings.HasPrefix(r.Action, "auditor.") {
+				continue
+			}
 			details, err := shareView(r.Action, r.Details, p.Viewer)
 			if err != nil {
 				return nil, err
@@ -748,7 +767,10 @@ func (s *Store) auditSubjects(ctx context.Context, viewer int64, recs []AuditRec
 	if err != nil {
 		return err
 	}
-	rows, err := s.q.AuditSubjects(ctx, db.AuditSubjectsParams{Shas: shas, Accounts: sc.ids()})
+	all, folderAccounts, folders := sc.folderParams()
+	rows, err := s.q.AuditSubjects(ctx, db.AuditSubjectsParams{
+		Shas: shas, Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolderAccounts: folderAccounts, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	})
 	if err != nil {
 		return err
 	}

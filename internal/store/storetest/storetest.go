@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -162,4 +164,39 @@ func Viewer(t testing.TB, st *store.Store, userID int64) store.Scope {
 func OwnAccount(t testing.TB, st *store.Store, userID int64, name string) store.Scope {
 	t.Helper()
 	return Viewer(t, st, userID).OwnAccount(name)
+}
+
+// ShiftGrant moves an auditor grant's validity window by d (#393), for
+// tests of expired and future grants: activity is computed in SQL with
+// now(). The trigger that keeps a grant's start fixed is off for the
+// update only.
+func ShiftGrant(t testing.TB, dbURL string, grantID int64, d time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`ALTER TABLE auditor_grants DISABLE TRIGGER auditor_grants_same_group`, nil},
+		{`UPDATE auditor_grants SET starts_at = starts_at + $2::interval, ends_at = ends_at + $2::interval WHERE id = $1`,
+			[]any{grantID, fmt.Sprintf("%d microseconds", d.Microseconds())}},
+		{`ALTER TABLE auditor_grants ENABLE TRIGGER auditor_grants_same_group`, nil},
+	} {
+		if _, err := tx.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("shift grant %d: %v", grantID, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 }

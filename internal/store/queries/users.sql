@@ -1,6 +1,6 @@
 -- name: CreateUser :one
-INSERT INTO users (name, password_hash, is_admin, must_change_password, group_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO users (name, password_hash, is_admin, must_change_password, group_id, is_auditor)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
 -- name: GetUserByName :one
@@ -66,15 +66,20 @@ VALUES ($1, $2, $3, $4);
 
 -- name: GetSession :one
 -- A session is valid while it has not expired, was used after the idle
--- cutoff and its user is not locked.
+-- cutoff and its user is not locked. An auditor's session also needs an
+-- active grant (#393): the one it is bound to, or any while it has none
+-- yet. For members the NOT short-circuits the lookup.
 SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled,
-       u.language, u.locale, u.group_id
+       u.language, u.locale, u.group_id, u.is_auditor, s.grant_id
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1
   AND s.expires_at > now()
   AND s.last_seen_at > @idle_cutoff
-  AND u.locked_at IS NULL;
+  AND u.locked_at IS NULL
+  AND (NOT u.is_auditor OR EXISTS (
+      SELECT 1 FROM active_auditor_grants g
+      WHERE g.auditor_id = u.id AND (g.id = s.grant_id OR s.grant_id IS NULL)));
 
 -- name: TouchSession :exec
 UPDATE sessions SET last_seen_at = now() WHERE id = $1;

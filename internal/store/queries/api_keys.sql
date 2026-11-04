@@ -8,7 +8,10 @@ JOIN users u ON u.id = k.user_id
 WHERE k.key_hash = $1
   AND k.revoked_at IS NULL
   AND (k.expires_at IS NULL OR k.expires_at > now())
-  AND u.locked_at IS NULL;
+  AND u.locked_at IS NULL
+  -- Auditors hold no keys (#393); one inserted past the store still
+  -- opens nothing.
+  AND NOT u.is_auditor;
 
 -- name: GetAPIKeyByHash :one
 -- Only after GetAPIKeyLogin found nothing: names the key in the audit entry

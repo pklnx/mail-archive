@@ -13,7 +13,7 @@ import (
 const countConversation = `-- name: CountConversation :one
 WITH me AS (
     SELECT x.sha256, x.message_id, x.in_reply_to, COALESCE(x.thread_id, x.sha256)::text AS thread_key
-    FROM messages x WHERE x.sha256 = $2
+    FROM messages x WHERE x.sha256 = $7
 )
 SELECT count(*)::bigint
 FROM messages m, me
@@ -24,16 +24,32 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[]))
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[])
+        AND (f.account_id = ANY ($2::bigint[]) OR scope_folder_granted(f.account_id, f.id, $3::bigint[], $4::bigint[])))
+  AND ($5::timestamptz IS NULL OR m.sort_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR m.sort_at < $6::timestamptz)
 `
 
 type CountConversationParams struct {
-	Accounts []int64
-	Sha256   string
+	Accounts               []int64
+	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
+	ScopeFolders           []int64
+	ScopeAfter             *time.Time
+	ScopeBefore            *time.Time
+	Sha256                 string
 }
 
 func (q *Queries) CountConversation(ctx context.Context, arg CountConversationParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countConversation, arg.Accounts, arg.Sha256)
+	row := q.db.QueryRow(ctx, countConversation,
+		arg.Accounts,
+		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
+		arg.ScopeFolders,
+		arg.ScopeAfter,
+		arg.ScopeBefore,
+		arg.Sha256,
+	)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -43,7 +59,7 @@ const listConversation = `-- name: ListConversation :many
 
 WITH me AS (
     SELECT x.sha256, x.message_id, x.in_reply_to, COALESCE(x.thread_id, x.sha256)::text AS thread_key
-    FROM messages x WHERE x.sha256 = $3
+    FROM messages x WHERE x.sha256 = $8
 )
 SELECT m.sha256, m.subject, m.from_addr, m.sent_at, m.sort_at,
        (CASE
@@ -60,15 +76,23 @@ WHERE (COALESCE(m.thread_id, m.sha256) = me.thread_key
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[]))
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY ($1::bigint[])
+        AND (f.account_id = ANY ($2::bigint[]) OR scope_folder_granted(f.account_id, f.id, $3::bigint[], $4::bigint[])))
+  AND ($5::timestamptz IS NULL OR m.sort_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR m.sort_at < $6::timestamptz)
 ORDER BY m.sort_at DESC, m.sha256 DESC
-LIMIT $2
+LIMIT $7
 `
 
 type ListConversationParams struct {
-	Accounts []int64
-	RowLimit int32
-	Sha256   string
+	Accounts               []int64
+	ScopeAllFolderAccounts []int64
+	ScopeFolderAccounts    []int64
+	ScopeFolders           []int64
+	ScopeAfter             *time.Time
+	ScopeBefore            *time.Time
+	RowLimit               int32
+	Sha256                 string
 }
 
 type ListConversationRow struct {
@@ -84,10 +108,20 @@ type ListConversationRow struct {
 // hop of direct links that need no common thread ID: the parent (its
 // Message-ID is the message's In-Reply-To) and the replies (their
 // In-Reply-To or References name the message's Message-ID). Only messages
-// found in one of the scope's accounts (own or shared).
+// found in one of the scope's accounts (own or shared), in a folder and the
+// period of the scope (#393).
 // The newest row_limit members, newest first; the caller reverses them.
 func (q *Queries) ListConversation(ctx context.Context, arg ListConversationParams) ([]ListConversationRow, error) {
-	rows, err := q.db.Query(ctx, listConversation, arg.Accounts, arg.RowLimit, arg.Sha256)
+	rows, err := q.db.Query(ctx, listConversation,
+		arg.Accounts,
+		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolderAccounts,
+		arg.ScopeFolders,
+		arg.ScopeAfter,
+		arg.ScopeBefore,
+		arg.RowLimit,
+		arg.Sha256,
+	)
 	if err != nil {
 		return nil, err
 	}

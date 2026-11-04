@@ -251,13 +251,20 @@ type GroupChange struct {
 	Changed  bool
 	From, To string
 	Ended    []EndedShare
+	// GrantsRevoked are the auditor grants (#393) that the change revoked
+	// because they would cross groups.
+	GrantsRevoked []RevokedGrant
 }
 
 // SetUserGroup moves a user into another group. In the same transaction it
 // ends every share that would then cross groups: the user's accounts
 // shared with users of the old group and old-group accounts shared with
-// the user. The pending entry (user.group_change) gets from_group,
-// to_group and shares_ended, and is recorded under the new group.
+// the user. It also revokes every unrevoked auditor grant (#393) of the
+// user, as auditor or as owner, that would cross groups, and ends the
+// sessions bound to them (all sessions of a moved auditor), with one
+// auditor.revoke entry per grant in the old group. The pending entry
+// (user.group_change) gets from_group, to_group, shares_ended and
+// grants_revoked, and is recorded under the new group.
 //
 // An active legal hold that names the old group and covers an account the
 // user owns refuses the change with a HoldError (#470, part 4): in the new
@@ -265,9 +272,24 @@ type GroupChange struct {
 func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupChange, error) {
 	var c GroupChange
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		// The user FOR UPDATE and the acting admin FOR SHARE (revoked_by of
+		// the grants revoked below references them), in id order, before
+		// any grant row.
+		actor := actorID(ctx)
+		other := actor != nil && *actor != userID
+		if other && *actor < userID {
+			if err := lockActor(ctx, q); err != nil {
+				return err
+			}
+		}
 		u, err := lockUser(ctx, q, userID)
 		if err != nil {
 			return err
+		}
+		if other && *actor > userID {
+			if err := lockActor(ctx, q); err != nil {
+				return err
+			}
 		}
 		from, err := q.GetGroupByID(ctx, u.GroupID)
 		if err != nil {
@@ -280,7 +302,7 @@ func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupC
 		if err != nil {
 			return err
 		}
-		c = GroupChange{From: from.Name, To: to.Name, Ended: []EndedShare{}}
+		c = GroupChange{From: from.Name, To: to.Name, Ended: []EndedShare{}, GrantsRevoked: []RevokedGrant{}}
 		if u.GroupID == groupID {
 			skipAudit(ctx)
 			return nil
@@ -300,6 +322,10 @@ func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupC
 		if err != nil {
 			return err
 		}
+		// The user's row is locked FOR UPDATE above, before any grant row.
+		if c.GrantsRevoked, err = revokeCrossingGrants(ctx, q, u); err != nil {
+			return err
+		}
 		rows, err := q.DeleteCrossingShares(ctx, userID)
 		if err != nil {
 			return err
@@ -313,6 +339,7 @@ func (s *Store) SetUserGroup(ctx context.Context, userID, groupID int64) (GroupC
 			e.Detail("from_group", map[string]any{"id": from.ID, "name": from.Name})
 			e.Detail("to_group", map[string]any{"id": to.ID, "name": to.Name})
 			e.Detail("shares_ended", c.Ended)
+			e.Detail("grants_revoked", c.GrantsRevoked)
 		}
 		return nil
 	})

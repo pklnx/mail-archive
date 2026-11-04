@@ -718,6 +718,11 @@ func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, 
 		if err := keepAccountGroup(ctx, q, a.ID); err != nil {
 			return err
 		}
+		// Auditor grants (#393) lose the account; one left without
+		// accounts is revoked (account_purge).
+		if _, err := dropAccountFromGrants(ctx, q, a.ID, RevokeAccountPurge); err != nil {
+			return err
+		}
 		if err := one(q.DeleteAccount(ctx, a.ID)); err != nil {
 			return err
 		}

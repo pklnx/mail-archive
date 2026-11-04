@@ -158,10 +158,14 @@ LIMIT @lim;
 
 -- name: AuditSubjects :many
 -- The subjects of the given messages that have a location in one of the
--- accounts: what the Log page shows of a message the viewer may read.
+-- accounts, in a folder and the period of the scope (#393): what the Log
+-- page shows of a message the viewer may read.
 SELECT m.sha256::text AS sha256, m.subject
 FROM messages m
 WHERE m.sha256 = ANY (@shas::bpchar[])
+  AND (sqlc.narg(scope_after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(scope_after)::timestamptz)
+  AND (sqlc.narg(scope_before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(scope_before)::timestamptz)
   AND EXISTS (SELECT 1 FROM message_locations ml
               JOIN folders f ON f.id = ml.folder_id
-              WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[]));
+              WHERE ml.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[])
+                AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])));

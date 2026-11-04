@@ -44,9 +44,9 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (name, password_hash, is_admin, must_change_password, group_id)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id
+INSERT INTO users (name, password_hash, is_admin, must_change_password, group_id, is_auditor)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id, is_auditor
 `
 
 type CreateUserParams struct {
@@ -55,6 +55,7 @@ type CreateUserParams struct {
 	IsAdmin            bool
 	MustChangePassword bool
 	GroupID            int64
+	IsAuditor          bool
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -64,6 +65,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.IsAdmin,
 		arg.MustChangePassword,
 		arg.GroupID,
+		arg.IsAuditor,
 	)
 	var i User
 	err := row.Scan(
@@ -85,6 +87,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Language,
 		&i.Locale,
 		&i.GroupID,
+		&i.IsAuditor,
 	)
 	return i, err
 }
@@ -148,13 +151,16 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 
 const getSession = `-- name: GetSession :one
 SELECT s.id, s.last_seen_at, u.id AS user_id, u.name, u.is_admin, u.must_change_password, u.two_factor_enabled,
-       u.language, u.locale, u.group_id
+       u.language, u.locale, u.group_id, u.is_auditor, s.grant_id
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.id = $1
   AND s.expires_at > now()
   AND s.last_seen_at > $2
   AND u.locked_at IS NULL
+  AND (NOT u.is_auditor OR EXISTS (
+      SELECT 1 FROM active_auditor_grants g
+      WHERE g.auditor_id = u.id AND (g.id = s.grant_id OR s.grant_id IS NULL)))
 `
 
 type GetSessionParams struct {
@@ -173,10 +179,14 @@ type GetSessionRow struct {
 	Language           string
 	Locale             string
 	GroupID            int64
+	IsAuditor          bool
+	GrantID            *int64
 }
 
 // A session is valid while it has not expired, was used after the idle
-// cutoff and its user is not locked.
+// cutoff and its user is not locked. An auditor's session also needs an
+// active grant (#393): the one it is bound to, or any while it has none
+// yet. For members the NOT short-circuits the lookup.
 func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSessionRow, error) {
 	row := q.db.QueryRow(ctx, getSession, arg.ID, arg.IdleCutoff)
 	var i GetSessionRow
@@ -191,12 +201,14 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.Language,
 		&i.Locale,
 		&i.GroupID,
+		&i.IsAuditor,
+		&i.GrantID,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id FROM users WHERE id = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id, is_auditor FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -221,12 +233,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.Language,
 		&i.Locale,
 		&i.GroupID,
+		&i.IsAuditor,
 	)
 	return i, err
 }
 
 const getUserByName = `-- name: GetUserByName :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id FROM users WHERE name = $1
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id, is_auditor FROM users WHERE name = $1
 `
 
 func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) {
@@ -251,12 +264,13 @@ func (q *Queries) GetUserByName(ctx context.Context, name string) (User, error) 
 		&i.Language,
 		&i.Locale,
 		&i.GroupID,
+		&i.IsAuditor,
 	)
 	return i, err
 }
 
 const getUserByNameInGroup = `-- name: GetUserByNameInGroup :one
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id FROM users WHERE name = $1 AND group_id = $2
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id, is_auditor FROM users WHERE name = $1 AND group_id = $2
 `
 
 type GetUserByNameInGroupParams struct {
@@ -288,12 +302,13 @@ func (q *Queries) GetUserByNameInGroup(ctx context.Context, arg GetUserByNameInG
 		&i.Language,
 		&i.Locale,
 		&i.GroupID,
+		&i.IsAuditor,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id FROM users ORDER BY name
+SELECT id, name, password_hash, is_admin, locked_at, created_at, password_changed_at, last_login_at, must_change_password, two_factor_secret, two_factor_enabled, two_factor_pending_secret, two_factor_last_counter, two_factor_version, webauthn_handle, language, locale, group_id, is_auditor FROM users ORDER BY name
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -324,6 +339,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.Language,
 			&i.Locale,
 			&i.GroupID,
+			&i.IsAuditor,
 		); err != nil {
 			return nil, err
 		}
