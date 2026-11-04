@@ -70,6 +70,13 @@ const (
 	ownerPassword  = "pat-password" //nolint:gosec // public demo login
 	readerName     = "jo"
 	readerPassword = "jo-password" //nolint:gosec // public demo login
+	// An auditor (#393) in the admin's group, with a grant of the admin's
+	// work account: the docs screenshots show the Auditor access page, the
+	// auditor's role on the users page and the auditor's view. Auditors need
+	// 2FA, so it has a fixed TOTP secret of its own.
+	auditorName     = "stb-meyer"
+	auditorPassword = "stb-meyer-password"               //nolint:gosec // public demo login
+	auditorSecret   = "MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U" //nolint:gosec // public demo login
 )
 
 func main() {
@@ -253,6 +260,9 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	if err := demoGroups(ctx, st); err != nil {
 		return err
 	}
+	if err := demoAuditor(ctx, st, sealer, key, admin, now); err != nil {
+		return fmt.Errorf("auditor: %w", err)
+	}
 
 	if err := indexAttachments(ctx, st, blobs, log); err != nil {
 		return fmt.Errorf("attachment text: %w", err)
@@ -402,6 +412,75 @@ func demoGroups(ctx context.Context, st *store.Store) error {
 		}
 	}
 	return nil
+}
+
+// demoAuditor creates the auditor stb-meyer in the admin's group with 2FA
+// on, an active grant of the admin's work account (its INBOX, mail from the
+// start of last year on) and a grant the admin revoked, for the history.
+// The period and the window are dated from now, as the mail is, so the
+// screenshots keep their dates; when now lies so far back that the window
+// would be over, it starts today.
+func demoAuditor(ctx context.Context, st *store.Store, sealer *crypto.Sealer, key []byte, admin *store.User, now time.Time) error {
+	hash, err := auth.NewHasher(auth.DefaultParams).Hash(ctx, auditorPassword)
+	if err != nil {
+		return err
+	}
+	u, err := st.CreateUserInGroup(ctx, store.NewUser{Name: auditorName, PasswordHash: hash, GroupID: admin.GroupID, Auditor: true})
+	if err != nil {
+		return err
+	}
+	// Confirmed with a code from an hour ago, so every current time step is
+	// still unused for a login.
+	past := time.Now().Add(-time.Hour)
+	code, err := auth.GenerateTOTP(auditorSecret, past)
+	if err != nil {
+		return err
+	}
+	if err := st.BeginTwoFactorSetup(ctx, u.ID, auditorSecret, sealer); err != nil {
+		return err
+	}
+	if err := st.ConfirmTwoFactorSetup(ctx, u.ID, code, past, sealer, nil, key); err != nil {
+		return err
+	}
+	work, err := st.GetOwnedAccount(ctx, admin.ID, "work")
+	if err != nil {
+		return err
+	}
+	folders, err := st.ListFolderStates(ctx, work.ID)
+	if err != nil {
+		return err
+	}
+	var inbox []int64
+	for _, f := range folders {
+		if f.Name == "INBOX" {
+			inbox = append(inbox, f.ID)
+		}
+	}
+	day := func(y int, m time.Month, d int) *time.Time {
+		t := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		return &t
+	}
+	start := now.Add(-24 * time.Hour).Truncate(time.Hour)
+	if !start.AddDate(0, 0, 90).After(time.Now().Add(time.Hour)) {
+		start = time.Now()
+	}
+	year := now.Year()
+	grant := store.NewGrant{
+		OwnerID: admin.ID, AuditorID: u.ID, Label: fmt.Sprintf("Betriebsprüfung %d–%d", year-1, year),
+		Accounts:   []store.GrantAccount{{AccountID: work.ID, Folders: inbox}},
+		PeriodFrom: day(year-1, time.January, 1),
+		StartsAt:   &start, EndsAt: start.AddDate(0, 0, 90),
+	}
+	if _, err := st.CreateGrant(ctx, grant); err != nil {
+		return err
+	}
+	grant.Label, grant.PeriodFrom, grant.PeriodUntil = fmt.Sprintf("Umsatzsteuer-Sonderprüfung %d", year-1), day(year-1, time.January, 1), day(year, time.January, 1)
+	grant.Accounts = []store.GrantAccount{{AccountID: work.ID}}
+	ended, err := st.CreateGrant(ctx, grant)
+	if err != nil {
+		return err
+	}
+	return st.RevokeGrant(ctx, ended, &admin.ID, &admin.ID)
 }
 
 // journal creates an smtp account with copies the mail server delivered,

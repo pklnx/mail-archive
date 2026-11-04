@@ -23,7 +23,12 @@ const exactTimestamp = new RegExp(`^${timestamp.source.slice(1, -1)}$`);
 // Times after docsNow that are stable because they derive from a mail date,
 // as { path, key }. The path is the API path with ids as {id}; the key matches
 // at any depth of the answer (retainUntil is also in each locations[] entry).
-export const STABLE_TIMES = [{ path: "/api/messages/{id}", key: "retainUntil" }];
+export const STABLE_TIMES = [
+	{ path: "/api/messages/{id}", key: "retainUntil" },
+	// The demo dates its auditor grants from DOCS_NOW (#393, tools/demo).
+	{ path: "/api/auditor-grants", key: "endsAt" },
+	{ path: "/api/session", key: "endsAt" },
+];
 
 /** The API path with its ids as {id}, as STABLE_TIMES names it. */
 export function normalizePath(path) {

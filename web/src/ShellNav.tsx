@@ -1,6 +1,6 @@
 import { forwardRef, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import { SideNav, SideNavDivider, SideNavItems, SideNavLink } from "@carbon/react";
-import { Archive, Email, RecentlyViewed, Settings, Time, UserAvatar, UserMultiple } from "@carbon/icons-react";
+import { Archive, Email, RecentlyViewed, Settings, Time, UserAvatar, UserMultiple, UserIdentification } from "@carbon/icons-react";
 import { isPlainClick } from "./clicks";
 import { formatState, type ViewState } from "./urlState";
 import { t } from "./i18n";
@@ -9,6 +9,10 @@ interface Props {
   id: string;
   state: ViewState;
   admin: boolean;
+  /** An auditor (#393): mail, Log and profile only. */
+  auditor?: boolean;
+  /** The user owns accounts: Auditor access (#393) shows. */
+  owner?: boolean;
   /** Messages no longer on any server; the link shows while there are any (or while it is open). */
   gone: number;
   /** lg and up: Carbon's rail, which expands on hover and focus. */
@@ -27,7 +31,7 @@ const empty: ViewState = { q: "", account: "", folder: "", group: "", gone: "", 
  * The shell's side navigation: the fixed sections of the app. Accounts and
  * folders are page navigation, in the mail view's folder column.
  */
-export const ShellNav = forwardRef<HTMLElement, Props>(function ShellNav({ id, state, admin, gone, rail, expanded, onClose, go }, ref) {
+export const ShellNav = forwardRef<HTMLElement, Props>(function ShellNav({ id, state, admin, auditor, owner, gone, rail, expanded, onClose, go }, ref) {
   const mail = state.view === "";
   const goneOn = mail && state.gone === "1";
   const link = (patch: Partial<ViewState>, current: boolean, icon: ComponentType, label: ReactNode, title?: string) => (
@@ -76,7 +80,8 @@ export const ShellNav = forwardRef<HTMLElement, Props>(function ShellNav({ id, s
             t.onlyInArchiveHint,
           )}
         <SideNavDivider />
-        {link({ view: "accounts" }, state.view === "accounts", Settings, t.navAccounts)}
+        {!auditor && link({ view: "accounts" }, state.view === "accounts", Settings, t.navAccounts)}
+        {owner && !auditor && link({ view: "auditors" }, state.view === "auditors", UserIdentification, t.auditorAccess)}
         {admin && link({ view: "users" }, state.view === "users", UserMultiple, t.users)}
         {link({ view: "log" }, state.view === "log", RecentlyViewed, t.log)}
         {admin && link({ view: "retention" }, state.view === "retention", Time, t.retention)}
