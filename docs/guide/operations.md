@@ -3,7 +3,8 @@
 This page is for the operator, who runs the instance and its host. Users do
 not run any of these commands. What they see of it: an
 [export](#exporting-mail) they asked for, the [banner](./web-ui#sync-problems)
-in the web UI when an account keeps failing, and the
+in the web UI when an account keeps failing, the
+[GoBD export](#gobd-export) for a tax audit, and the
 [one-time steps](#one-time-steps) an upgrade may bring (for example
 attachment text of older mail that becomes searchable only after a while).
 
@@ -132,6 +133,106 @@ UID 65532: `sudo chown -R "$USER" data/export/anna` makes them yours.
 Exports are **not encrypted**; the files are readable only by their owner.
 Delete them once imported. `verify` ignores the `export/` directory. Every
 export is in the [audit log](./audit-log) as `data.export`.
+
+## GoBD export
+
+For a tax audit, a customer asks the operator for their records in a
+machine-readable form ("Datenüberlassung", GoBD Rz. 167). `export --format
+gobd` writes them: the original messages, CSV tables with an `index.xml`
+description, a checksum manifest and a statement signed with the
+attestation key. The format, the flags and the exit codes are in the
+[command line reference](../reference/cli#export-format-gobd); what the
+customer receives and checks is in [GoBD export](./gobd-export). The export
+runs only on the command line; there is no download in the web UI.
+
+**One export per customer.** Every export covers one customer group, and
+the operator names it: with two or more groups, `--group NAME` is required,
+and the export refuses a selection outside it. To find a customer's users,
+`./ma user list` shows each user's GROUP, `./ma group list` the groups.
+
+```sh
+# The whole customer, one year:
+./ma export --format gobd --group "Meier GmbH" --since 2025-01-01 --until 2025-12-31 \
+  --out /export/meier-2025 --requested-by "Huber (Steuerberater), mail of 2026-11-02"
+# Some users, as a ZIP:
+./ma export --format gobd --user anna --user ben --group "Meier GmbH" --out /export/meier-anna-ben.zip
+# What a legal hold for the audit covers:
+./ma export --format gobd --hold 3 --group "Meier GmbH" --out /export/meier-hold-3
+```
+
+- **A mixed selection is refused**, never filtered: `the selection spans
+  customer groups: anna (Meier GmbH), kim (Schulz KG); one export covers one
+  customer group`. Split the request into one export per customer.
+- **Name groups after the customer's legal entity** ("Meier GmbH"), never
+  with internal notes: the group's name and id are in the signed
+  `STATEMENT.txt` and in `README.txt`, which the customer and the tax office
+  read.
+- **A legal hold export** needs a hold that names a user, an account or a
+  group; a hold over every customer is refused. Only `--hold` exports fill
+  the `holds` column, and only with holds that name the customer's users,
+  accounts or group; holds that cover several customers are not listed.
+- **Exit 3** means a selected user or account moved to another group while
+  the export ran. The export is complete as of its snapshot, before the
+  move; check with the customer before handing it over.
+- **Interrupted?** Run the same command with `--resume`; the directory
+  `OUT.partial` keeps what was written. It refuses when the selection's
+  group changed since the export started: start a new export then. A
+  `.partial` left over without a resume blocks a new export to the same
+  path; remove it with `rm -r`.
+- **Files missing (exit 1):** the export lists them in `missing.csv`, says
+  `complete no`, and the missing messages are named on stderr. Run
+  [`verify`](#checking-the-archive) to see where they were.
+
+**Where it is written.** With Docker Compose, `/export` in the container is
+`EXPORT_DIR` on the host (default `./export`), outside the data directory,
+so the export never lands in backups of `data/` or under its encryption at
+rest. `./ma export` makes a fresh `EXPORT_DIR` writable for the container
+user, as `migrate` does for `data/`. On Linux the files belong to UID 65532:
+`sudo chown -R "$USER" export/meier-2025` makes them yours, for example to
+copy them onto a medium.
+
+**The hosted path, honestly.** The operator handles the customer's mail in
+plaintext while exporting: the export is not encrypted, and whoever runs
+the command can read it. So:
+
+- Export only on a request of the customer (its admin), and record who
+  asked with `--requested-by`. Both audit entries (`data.export`,
+  `data.export_done` with the SHA-256 of `SHA256SUMS`) are recorded under
+  the customer's group, so `./ma audit --group "Meier GmbH"` and the Log's
+  Group filter show the customer's exports.
+- Send the export only to the customer's admin (for `--grant`: the grant's
+  owner), over a channel you agreed with them: an encrypted archive with the
+  password on another channel, or a medium handed over in person. Give them
+  the `manifest_sha256` from the output (`SHA256SUMS ...`) separately, so
+  they can check what arrived.
+- Delete your copy when the customer confirms it arrived:
+  `rm -r export/meier-2025`.
+- The shell on the host is not a customer interface: customers never get
+  access to it or to the `export` directory.
+
+**While it runs** the export reads in one database snapshot. It takes no
+locks, so users, logins and group moves go on; but PostgreSQL's vacuum
+cannot clean up rows that changed after the snapshot began until the export
+ends, which matters only for exports of several hours on a busy instance.
+Mail archived during the export is not in it. Before writing, it checks the
+free space (the messages, about 1 KiB of tables per message, plus 2 %).
+
+**Budget on the 4 GB / 2 core target.** One process, one core, one database
+connection; the Go heap's soft limit is 256 MiB (`GOMEMLIMIT` overrides it).
+Measured with 4,000 messages of 50 KB (200 MB) on 2 cores, the files in the
+page cache:
+
+| Output | Messages per second | Mail per second | Peak memory (RSS) |
+|---|---|---|---|
+| Directory | about 3,700 | about 180 MB/s | 34 MB |
+| ZIP (Deflate) | about 1,700 | about 85 MB/s | 43 MB |
+
+Heap growth over 10,000 messages is about 1.5 MiB (a test checks it stays
+below 64 MiB). A ZIP keeps about 300 bytes per entry until it is closed, so
+it holds at most 200,000 messages (about 200 MB of memory then); larger
+selections go into a directory or are split by year. From disk instead of
+the page cache, and on network storage, expect 2 to 4 times slower: about
+5 to 15 minutes per 100,000 messages.
 
 ## Encryption at rest
 

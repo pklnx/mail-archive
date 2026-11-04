@@ -228,8 +228,11 @@ func TestWriterMismatch(t *testing.T) {
 	if !errors.Is(err, ErrMismatch) {
 		t.Fatalf("mismatch: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(MessagePath(m.m.SHA256, m.m.SortAt, berlin(t))))); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir+PartialSuffix, filepath.FromSlash(MessagePath(m.m.SHA256, m.m.SortAt, berlin(t))))); !os.IsNotExist(err) {
 		t.Fatalf("the bad file stayed: %v", err)
+	}
+	if left := tempFiles(t, dir+PartialSuffix); len(left) > 0 {
+		t.Fatalf("temporary files stayed: %v", left)
 	}
 	// A longer body than the size is a mismatch too, not a truncation.
 	if err := w.AddFile(m.m, bytes.NewReader(append(bytes.Clone(m.body), 'x'))); !errors.Is(err, ErrMismatch) {

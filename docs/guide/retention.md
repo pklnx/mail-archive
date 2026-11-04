@@ -312,7 +312,26 @@ that customer gets an individual instance (see
 
 ## 7. Changes
 - [date]: [what changed, who].
+
+## 8. Data access (Datenzugriff)
+- Z3, Datenüberlassung: on a request of the tax office, [person] asks the
+  operator for a GoBD export (`export --format gobd`) of [the whole
+  customer group / these users], period [..]. One export covers one
+  customer group; its STATEMENT.txt names the group and lists the owners,
+  which [person] compares with our users.
+- Before the audit, a legal hold for [the customer group / accounts] keeps
+  the period from deletion; the export can follow that hold (`--hold`).
+- An auditor who reads in the web UI gets an auditor grant from [owner] for
+  [accounts, folders, period, until]; its scope can also be exported
+  (`--grant`).
+- On receipt, [person] runs `export verify` with our copy of signing.pub
+  (and attestations.jsonl), or `sha256sum -c SHA256SUMS`, and compares the
+  SHA-256 of SHA256SUMS with the digest the operator sent separately and
+  with the `data.export_done` entry of the audit log.
+- The digest is kept at [place]; the export goes to the tax office on
+  [medium, agreed with the auditor]; our copies are deleted on [occasion],
+  the operator's when we confirm receipt.
 ```
 
 Keep the documentation with the other GoBD documents and update it when
-the setup changes.
+the setup changes. Section 8 follows [GoBD export](./gobd-export).
