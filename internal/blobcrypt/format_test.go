@@ -9,8 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	mrand "math/rand/v2"
+	"sync"
 	"testing"
 )
 
@@ -356,5 +359,101 @@ func TestReaderSingleBuffer(t *testing.T) {
 	one, many := allocs(100), allocs(64*ChunkSize)
 	if many > one+2 {
 		t.Errorf("%v allocations for 64 chunks, %v for one; the reader should reuse its buffer", many, one)
+	}
+}
+
+// TestReaderConcurrent: several goroutines share one Reader, as
+// http.ServeContent and part readers will: ReadAt at mixed offsets from
+// four of them, Seek and Read from a fifth, all against the plaintext.
+// Run under -race.
+func TestReaderConcurrent(t *testing.T) {
+	dk := randomKey(t)
+	plain := pattern(6*ChunkSize + 777)
+	ct := encrypt(t, 1, dk, PurposeMessage, plain, sum(plain))
+	r, err := openBytes(ct, testKeys{1: dk}, PurposeMessage, sum(plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 5)
+	var wg sync.WaitGroup
+	for g := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rng := mrand.New(mrand.NewPCG(uint64(g), 7))
+			buf := make([]byte, ChunkSize+100)
+			for range 300 {
+				off := rng.Int64N(int64(len(plain)))
+				n := 1 + rng.IntN(len(buf)-1)
+				got, err := r.ReadAt(buf[:n], off)
+				want := plain[off:min(off+int64(n), int64(len(plain)))]
+				if got != len(want) || !bytes.Equal(buf[:got], want) || (got == n && err != nil) {
+					errs <- fmt.Errorf("goroutine %d: ReadAt(%d, %d) = %d, %w", g, n, off, got, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		rng := mrand.New(mrand.NewPCG(99, 7))
+		buf := make([]byte, 5000)
+		for range 300 {
+			off := rng.Int64N(int64(len(plain)))
+			if _, err := r.Seek(off, io.SeekStart); err != nil {
+				errs <- err
+				return
+			}
+			got, err := r.Read(buf)
+			want := plain[off:min(off+int64(len(buf)), int64(len(plain)))]
+			if err != nil || got != len(want) || !bytes.Equal(buf[:got], want) {
+				errs <- fmt.Errorf("Read at %d = %d, %w", off, got, err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// TestEmptyFinalChunkRefused: a file that ends a full chunk with an
+// authentic empty final chunk is a second encoding of the same plaintext;
+// writers never produce it, and Open refuses it although every chunk
+// authenticates.
+func TestEmptyFinalChunkRefused(t *testing.T) {
+	dk := randomKey(t)
+	plain := pattern(ChunkSize)
+	binding := sum(plain)
+	h := Header{Purpose: PurposeMessage, KeyID: 3}
+	copy(h.Salt[:], pattern(SaltSize))
+	hdr := h.marshal()
+	aead, err := fileAEAD(dk, &h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n [nonceSize]byte
+	file := append([]byte(nil), hdr[:]...)
+	chunkNonce(&n, 0, false)
+	file = aead.Seal(file, n[:], plain, hdr[:])
+	chunkNonce(&n, 1, true)
+	file = aead.Seal(file, n[:], nil, append(hdr[:], binding...))
+	if _, err := openBytes(file, testKeys{3: dk}, PurposeMessage, binding); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("empty final chunk after a full one: %v, want ErrCorrupt", err)
+	}
+}
+
+// TestOpenImpossibleSize: a negative or overflowing size is refused, not a
+// panic.
+func TestOpenImpossibleSize(t *testing.T) {
+	dk := randomKey(t)
+	ct := encrypt(t, 1, dk, PurposeBackup, pattern(10), nil)
+	for _, size := range []int64{-1, math.MinInt64, math.MaxInt64, math.MaxInt64 - encChunkSize, maxFileSize + 1} {
+		if _, err := Open(bytes.NewReader(ct), size, testKeys{1: dk}, PurposeBackup, nil); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("size %d: %v, want ErrCorrupt", size, err)
+		}
 	}
 }

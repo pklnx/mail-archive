@@ -238,6 +238,12 @@ expect "$work/out" '^ *1$'
 echo "== encryption keygen"
 # A one-off container with the keys directory writable; afterwards every
 # service reads the key through its read-only mount.
+# A key file outside /keys would be lost with the one-off container.
+if ./ma encryption keygen --key-file /tmp/archive.key > "$work/out" 2>&1; then
+	echo "expected ./ma encryption keygen to refuse a key file outside /keys" >&2
+	exit 1
+fi
+expect "$work/out" 'must lie in /keys'
 ./ma encryption keygen | tee "$work/out"
 expect "$work/out" '^wrote archive key /keys/archive\.key \(fingerprint [0-9a-f]{16}\)$'
 expect "$work/out" '^  [A-Za-z0-9+/]{43}=$'

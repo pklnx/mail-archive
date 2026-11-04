@@ -96,7 +96,7 @@ func parseOwner(s string) (int, int, error) {
 }
 
 func encryptionKeygen(out io.Writer, dataDir, keyFile string, recovery bool, uid, gid int, now time.Time) (err error) {
-	inside, err := config.WithinDir(keyFile, dataDir)
+	inside, err := config.KeyInDataDir(keyFile, dataDir)
 	if err != nil {
 		return err
 	}
@@ -104,9 +104,7 @@ func encryptionKeygen(out io.Writer, dataDir, keyFile string, recovery bool, uid
 		return fmt.Errorf("%s is inside the data directory %s; keep the archive key apart from the data it protects", keyFile, dataDir)
 	}
 	ringPath := blobcrypt.KeyringPath(dataDir)
-	if _, err := os.Lstat(ringPath); err == nil {
-		return fmt.Errorf("a keyring exists at %s; keygen never replaces it (its archive key opens it; add keys with encryption add-key)", ringPath)
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	if err := refuseExistingKeyring(ringPath); err != nil {
 		return err
 	}
 	unlock, err := blobcrypt.LockKeyring(dataDir)
@@ -114,6 +112,11 @@ func encryptionKeygen(out io.Writer, dataDir, keyFile string, recovery bool, uid
 		return err
 	}
 	defer unlock()
+	keygenLocked()
+	// Again under the lock: another keygen may have written one meanwhile.
+	if err := refuseExistingKeyring(ringPath); err != nil {
+		return err
+	}
 
 	kek, err := blobcrypt.GenerateKEK()
 	if err != nil {
@@ -135,17 +138,23 @@ func encryptionKeygen(out io.Writer, dataDir, keyFile string, recovery bool, uid
 	if err := writeKeyFile(keyFile, kek, uid, gid); err != nil {
 		return err
 	}
+	wroteRing := false
 	defer func() {
+		// Nothing half-made stays: a rerun starts from scratch.
 		if err != nil {
 			_ = os.Remove(keyFile)
+			if wroteRing {
+				_ = os.Remove(ringPath)
+			}
 		}
 	}()
 	if err := blobcrypt.WriteKeyringFile(ringPath, ring); err != nil {
 		return err
 	}
+	wroteRing = true
 	if uid >= 0 {
 		for _, p := range []string{filepath.Dir(ringPath), ringPath, filepath.Join(filepath.Dir(ringPath), "keyring.lock")} {
-			if err := os.Lchown(p, uid, gid); err != nil {
+			if err := lchown(p, uid, gid); err != nil {
 				return fmt.Errorf("chown %s: %w", p, err)
 			}
 		}
@@ -163,6 +172,22 @@ func encryptionKeygen(out io.Writer, dataDir, keyFile string, recovery bool, uid
 	fmt.Fprintln(out, "Back up the archive key file too, apart from the data directory and its backups.")
 	fmt.Fprintln(out, keyLossWarning)
 	fmt.Fprintf(out, "\nSet %s=%s in .env (it is read by web, worker and ./ma).\n", config.EnvArchiveKeyFile, keyFile)
+	return nil
+}
+
+// Test hooks: keygenLocked runs right after keygen took the keyring lock;
+// lchown changes the owner of the keyring's files.
+var (
+	keygenLocked = func() {}
+	lchown       = os.Lchown
+)
+
+func refuseExistingKeyring(ringPath string) error {
+	if _, err := os.Lstat(ringPath); err == nil {
+		return fmt.Errorf("a keyring exists at %s; keygen never replaces it (its archive key opens it; add keys with encryption add-key)", ringPath)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 
@@ -291,8 +316,9 @@ func newEncryptionRemoveKeyCmd() *cobra.Command {
 		Short: "Remove a key's slot from the keyring",
 		Long: `Remove the slot of the key with this fingerprint (see encryption status).
 The configured archive key and the last slot cannot be removed. A removed key
-still opens older copies of the keyring, such as backups; after a key leaked,
-a new data key is needed, not only this.`,
+still opens older copies of the keyring, such as backups, and through their
+keyring key also the current one; after a key leaked, a new keyring key and
+a new data key are needed, not only this.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return encryptionRemoveKey(cmd.OutOrStdout(), config.DataDirFromEnv(), strings.ToLower(strings.TrimSpace(args[0])))

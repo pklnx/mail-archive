@@ -47,6 +47,9 @@ const (
 	// maxChunks keeps the chunk counter inside the 11 counter bytes of the
 	// nonce and offsets inside an int64.
 	maxChunks = (1<<63 - 1 - HeaderSize) / encChunkSize
+	// maxFileSize is the largest file Open accepts; its chunk arithmetic
+	// cannot overflow.
+	maxFileSize = HeaderSize + maxChunks*encChunkSize
 )
 
 // blobInfo is the HKDF info prefix of a file key; the purpose byte follows.
@@ -342,6 +345,10 @@ type Reader struct {
 // is the plaintext SHA-256 the file must be bound to for a message, nil
 // for a backup. Refusals wrap ErrNotEncrypted, ErrCorrupt or ErrUnknownKey.
 func Open(ra io.ReaderAt, fileSize int64, keys DataKeys, want Purpose, binding []byte) (*Reader, error) {
+	// No stat returns these; refuse them before any arithmetic on the size.
+	if fileSize < 0 || fileSize > maxFileSize {
+		return nil, corrupt("impossible file size %d", fileSize)
+	}
 	var raw [HeaderSize]byte
 	n, err := ra.ReadAt(raw[:min(fileSize, HeaderSize)], 0)
 	if err != nil && !errors.Is(err, io.EOF) {

@@ -348,8 +348,8 @@ and the binding are proven before the first read. Every other chunk is
 authenticated when it is read. Truncation, a dropped, reordered or appended
 chunk, trailing bytes, any flipped header bit, another data key and
 another binding are all refused (`ErrCorrupt`); a header naming a data key
-the keyring lacks is `ErrUnknownKey`. The reader gives `Read`, `Seek`,
-`ReadAt` and `Size` with one 64 KiB buffer.
+the keyring lacks is `ErrUnknownKey`. A negative or impossibly large size is refused before any arithmetic. The reader gives `Read`, `Seek`,
+`ReadAt` and `Size` with one 64 KiB buffer behind a mutex, so one reader can be shared between goroutines (`TestReaderConcurrent`).
 
 The known-answer vectors in `internal/blobcrypt/testdata` freeze the file
 and the keyring formats; their keys are derived from public labels in the

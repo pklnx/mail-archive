@@ -165,13 +165,15 @@ func TestKeyringTamper(t *testing.T) {
 	slot := func(m map[string]any, i int) map[string]any { return m["slots"].([]any)[i].(map[string]any) }
 
 	opens := map[string][]byte{
-		"generation":    edit(t, data, func(m map[string]any) { m["generation"] = 7 }),
-		"current key":   edit(t, data, func(m map[string]any) { m["current_key"] = 12345 }),
-		"archive id":    edit(t, data, func(m map[string]any) { m["archive_id"] = strings.Repeat("ab", 16) }),
-		"label":         edit(t, data, func(m map[string]any) { slot(m, 0)["label"] = "evil" }),
-		"created":       edit(t, data, func(m map[string]any) { slot(m, 0)["created"] = "2020-01-01T00:00:00Z" }),
-		"slot removed":  edit(t, data, func(m map[string]any) { m["slots"] = m["slots"].([]any)[:1] }),
-		"slots swapped": edit(t, data, func(m map[string]any) { s := m["slots"].([]any); s[0], s[1] = s[1], s[0] }),
+		"generation":  edit(t, data, func(m map[string]any) { m["generation"] = 7 }),
+		"current key": edit(t, data, func(m map[string]any) { m["current_key"] = 12345 }),
+		"archive id":  edit(t, data, func(m map[string]any) { m["archive_id"] = strings.Repeat("ab", 16) }),
+		"label":       edit(t, data, func(m map[string]any) { slot(m, 0)["label"] = "evil" }),
+		// Same length as "archive key": only the label bytes differ.
+		"label of the same length": edit(t, data, func(m map[string]any) { slot(m, 0)["label"] = "archive kez" }),
+		"created":                  edit(t, data, func(m map[string]any) { slot(m, 0)["created"] = "2020-01-01T00:00:00Z" }),
+		"slot removed":             edit(t, data, func(m map[string]any) { m["slots"] = m["slots"].([]any)[:1] }),
+		"slots swapped":            edit(t, data, func(m map[string]any) { s := m["slots"].([]any); s[0], s[1] = s[1], s[0] }),
 		"data keys of another keyring": edit(t, data, func(m map[string]any) {
 			var o map[string]any
 			_ = json.Unmarshal(otherData, &o)

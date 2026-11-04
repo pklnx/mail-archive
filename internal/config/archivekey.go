@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func ArchiveKeyFromEnv() (kek []byte, source string, err error) {
 }
 
 func readArchiveKeyFile(path, dataDir string) ([]byte, error) {
-	inside, err := WithinDir(path, dataDir)
+	inside, err := KeyInDataDir(path, dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +93,58 @@ func readArchiveKeyFile(path, dataDir string) ([]byte, error) {
 		return nil, fmt.Errorf("%s is too large for a key file", path)
 	}
 	return blobcrypt.ParseKEK(string(data))
+}
+
+// KeyInDataDir reports whether the key file lies in the data directory:
+// by its path (WithinDir), or because the key file's directory or one of
+// its ancestors is the data directory or one of its subdirectories reached
+// under another path. That is the Compose layout with ARCHIVE_KEY_DIR inside
+// ARCHIVE_DIR: /keys is then a bind mount of a directory below /data.
+func KeyInDataDir(keyFile, dataDir string) (bool, error) {
+	return keyInDataDir(keyFile, dataDir, os.Stat)
+}
+
+func keyInDataDir(keyFile, dataDir string, stat func(string) (fs.FileInfo, error)) (bool, error) {
+	if in, err := WithinDir(keyFile, dataDir); err != nil || in {
+		return in, err
+	}
+	data, err := stat(dataDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	targets := []fs.FileInfo{data}
+	entries, err := os.ReadDir(dataDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			if fi, err := stat(filepath.Join(dataDir, e.Name())); err == nil {
+				targets = append(targets, fi)
+			}
+		}
+	}
+	abs, err := resolve(keyFile)
+	if err != nil {
+		return false, err
+	}
+	for d := filepath.Dir(abs); ; {
+		if fi, err := stat(d); err == nil {
+			for _, t := range targets {
+				if os.SameFile(fi, t) {
+					return true, nil
+				}
+			}
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false, nil
+		}
+		d = parent
+	}
 }
 
 // WithinDir reports whether path is dir or lies below it, after making

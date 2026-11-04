@@ -125,3 +125,41 @@ func TestWithinDir(t *testing.T) {
 		}
 	}
 }
+
+// TestKeyInDataDirOtherPath: the Compose layout with ARCHIVE_KEY_DIR inside
+// ARCHIVE_DIR, where /keys is a bind mount of <data>/keys, is caught by
+// comparing directories, not paths. The second path is simulated by stat.
+func TestKeyInDataDirOtherPath(t *testing.T) {
+	dataDir := t.TempDir()
+	for _, d := range []string{"keys", "messages"} {
+		if err := os.Mkdir(filepath.Join(dataDir, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	elsewhere := t.TempDir()
+	mount := func(target string) func(string) (os.FileInfo, error) {
+		return func(p string) (os.FileInfo, error) {
+			if rest, ok := strings.CutPrefix(p, "/mnt-keys"); ok {
+				return os.Stat(target + rest)
+			}
+			return os.Stat(p)
+		}
+	}
+	for name, c := range map[string]struct {
+		target string
+		want   bool
+	}{
+		"mount of <data>/keys":     {filepath.Join(dataDir, "keys"), true},
+		"mount of <data>/messages": {filepath.Join(dataDir, "messages"), true},
+		"mount of the data dir":    {dataDir, true},
+		"mount of another dir":     {elsewhere, false},
+	} {
+		got, err := keyInDataDir("/mnt-keys/archive.key", dataDir, mount(c.target))
+		if err != nil || got != c.want {
+			t.Errorf("%s: %v, %v; want %v", name, got, err, c.want)
+		}
+	}
+	if got, err := KeyInDataDir(filepath.Join(elsewhere, "archive.key"), filepath.Join(dataDir, "missing")); err != nil || got {
+		t.Errorf("missing data dir: %v, %v", got, err)
+	}
+}

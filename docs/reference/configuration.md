@@ -58,7 +58,7 @@ checked at every start of a command that reads the configuration.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` | (none) | File holding the archive key, 32 bytes base64 (Compose: `/keys/archive.key`, from `ARCHIVE_KEY_DIR`). Preferred; a systemd credential or a Docker secret works too if its mode is 0400 or 0600. Refused when group or others may access it (only mode 0400 or 0600), when it is not a regular file, when it lies inside the data directory, and when it equals `MAIL_ARCHIVE_SECRET_KEY`. The error names the reason, never the key. |
+| `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` | (none) | File holding the archive key, 32 bytes base64 (Compose: `/keys/archive.key`, from `ARCHIVE_KEY_DIR`). Preferred; a systemd credential or a Docker secret works too if group and others have no permission on it. Refused when group or others have any permission on it (0400, 0600 or 0700 are fine; 0440 or 0644 are not), when it is not a regular file, when it lies inside the data directory (also through another path to it, such as a Compose `ARCHIVE_KEY_DIR` inside `ARCHIVE_DIR`), and when it equals `MAIL_ARCHIVE_SECRET_KEY`. The error names the reason, never the key. |
 | `MAIL_ARCHIVE_ARCHIVE_KEY` | (none) | The archive key itself, base64, for a secret manager that sets variables. Setting both is refused. A recovery key printed by `encryption keygen` or `add-key` can be given here to open the keyring when the key file is lost. |
 
 The archive key is separate from `MAIL_ARCHIVE_SECRET_KEY` on purpose:

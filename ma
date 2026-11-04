@@ -26,6 +26,32 @@ compose() {
 	docker compose --progress quiet "$@"
 }
 
+# encryption keygen runs in a container removed afterwards: a key written
+# anywhere but the keys directory (/keys) would be lost with it.
+if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
+	prev=
+	for arg in "$@"; do
+		case $prev in
+		--key-file) value=$arg ;;
+		*) value= ;;
+		esac
+		case $arg in
+		--key-file=*) value=${arg#--key-file=} ;;
+		esac
+		case $value in
+		*..*) value=bad ;;
+		esac
+		case $value in
+		'' | /keys/?*) ;;
+		*)
+			echo "error: --key-file must lie in /keys (ARCHIVE_KEY_DIR on the host); elsewhere the key is lost with the container" >&2
+			exit 2
+			;;
+		esac
+		prev=$arg
+	done
+fi
+
 compose up -d --wait postgres
 
 # The first start: Docker creates a missing data directory as root, but the

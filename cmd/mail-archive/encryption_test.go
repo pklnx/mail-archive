@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -281,5 +283,57 @@ func TestParseOwner(t *testing.T) {
 		if _, _, err := parseOwner(s); err == nil {
 			t.Errorf("parseOwner(%q) accepted", s)
 		}
+	}
+}
+
+// TestEncryptionKeygenRechecksUnderLock: a keyring that appears between
+// the first check and the lock (another keygen) is never replaced.
+func TestEncryptionKeygenRechecksUnderLock(t *testing.T) {
+	s := newEncSetup(t)
+	other, _ := blobcrypt.GenerateKEK()
+	ring, err := blobcrypt.NewKeyring(other, "archive key", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keygenLocked = func() {
+		if err := blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(s.dataDir), ring); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { keygenLocked = func() {} })
+	if _, err := runEnc(t, newEncryptionCmd(), "keygen", "--key-file", s.keyFile); err == nil || !strings.Contains(err.Error(), "keyring exists") {
+		t.Fatalf("keygen racing another: %v", err)
+	}
+	if _, err := os.Stat(s.keyFile); err == nil {
+		t.Error("key file written although the keyring was refused")
+	}
+	got, err := blobcrypt.ReadKeyringFile(blobcrypt.KeyringPath(s.dataDir))
+	if err != nil || got.ArchiveID() != ring.ArchiveID() {
+		t.Fatalf("the other keygen's keyring was replaced: %v", err)
+	}
+}
+
+// TestEncryptionKeygenCleansUp: a failure after the keyring was written
+// (chown) leaves neither the key file nor the keyring, so a rerun works.
+func TestEncryptionKeygenCleansUp(t *testing.T) {
+	s := newEncSetup(t)
+	owner := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	lchown = func(string, int, int) error { return errors.New("injected chown failure") }
+	_, err := runEnc(t, newEncryptionCmd(), "keygen", "--key-file", s.keyFile, "--chown", owner)
+	lchown = os.Lchown
+	if err == nil || !strings.Contains(err.Error(), "injected chown failure") {
+		t.Fatalf("keygen with a failing chown: %v", err)
+	}
+	for _, p := range []string{s.keyFile, blobcrypt.KeyringPath(s.dataDir)} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s left behind", p)
+		}
+	}
+	if out, err := runEnc(t, newEncryptionCmd(), "keygen", "--key-file", s.keyFile, "--chown", owner); err != nil {
+		t.Fatalf("rerun: %v\n%s", err, out)
+	}
+	t.Setenv(config.EnvArchiveKeyFile, s.keyFile)
+	if _, _, err := openKeyring(s.dataDir); err != nil {
+		t.Fatalf("after the rerun: %v", err)
 	}
 }

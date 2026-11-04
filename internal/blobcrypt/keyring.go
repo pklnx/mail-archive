@@ -155,9 +155,13 @@ func (k *Keyring) DataKeyIDs() []uint32 {
 }
 
 // DataKey implements DataKeys. It finds nothing until the keyring is open.
+// It returns a copy, so a caller cannot change the keyring.
 func (k *Keyring) DataKey(id uint32) ([]byte, bool) {
 	dk, ok := k.keys[id]
-	return dk, ok
+	if !ok {
+		return nil, false
+	}
+	return bytes.Clone(dk), true
 }
 
 // Current returns the current data key, for new files.
@@ -165,7 +169,7 @@ func (k *Keyring) Current() (uint32, []byte, error) {
 	if k.keys == nil {
 		return 0, nil, ErrNotOpen
 	}
-	return k.current, k.keys[k.current], nil
+	return k.current, bytes.Clone(k.keys[k.current]), nil
 }
 
 // HasSlot reports whether a slot with this fingerprint exists.
