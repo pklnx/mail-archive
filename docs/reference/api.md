@@ -21,7 +21,7 @@ answer `404`.
 | Endpoint | Description |
 |---|---|
 | `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true, "language": "auto", "locale": "auto"}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists, `passkeyOrigin` says where passkeys work (missing when they are off). |
-| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user, `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
+| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user and for an [auditor](#auditors) without an active grant (`"you have no active auditor access"`, only after a correct password and second factor), `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
 | `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge, `429` like the password step. |
 | `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` after 30 starts per minute from one address (IPv6: one `/64`). |
 | `POST /api/session/passkey/finish` | `{"token": "...", "credential": {...}}` with the browser's answer in JSON. Answers like `POST /api/session` and sets the cookie. `401` for a passkey that is not accepted or an expired token; for an unknown passkey also `"unknownCredential": true` with `credentialId` and `rpId`. `403` for a locked user. |
@@ -97,13 +97,13 @@ own group only on the command line or through another admin.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`, `group` (the user's [customer group](../guide/users#customer-groups), `{"id", "name"}`). |
-| `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. `"group"` is the id of the user's [customer group](../guide/users#customer-groups): needed while several groups exist (`400 "choose a group"`), otherwise the user joins the only one; an unknown id is `400 "unknown group"`. |
+| `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`, `group` (the user's [customer group](../guide/users#customer-groups), `{"id", "name"}`), `auditor`. |
+| `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. `"group"` is the id of the user's [customer group](../guide/users#customer-groups): needed while several groups exist (`400 "choose a group"`), otherwise the user joins the only one; an unknown id is `400 "unknown group"`. `"auditor": true` creates an [auditor](#auditors) (never with `admin`: `400`). |
 | `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed and their API keys revoked too, unless the body says `{"removePasskeys": false}` or `{"revokeApiKeys": false}`. |
-| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` and `locked` answer `204`; `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n}` (`0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id. Audited as `user.group_change`, with the ended shares. |
+| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` and `locked` answer `204`; `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n, "grantsRevoked": m}` (both `0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id; `grantsRevoked` counts the [auditor grants](#auditors) of the user, as auditor or as owner, that the move revoked. Audited as `user.group_change`, with the ended shares and revoked grants. `{"admin": true}` for an auditor is `409`. |
 | `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
 | `DELETE /api/users/{name}/passkeys` | Remove all passkeys of another user and end their sessions (`204`). |
-| `DELETE /api/users/{name}` | Remove a user, with their API keys. `409` while they own accounts, or for the last admin. |
+| `DELETE /api/users/{name}` | Remove a user, with their API keys (`204`). `409` while they own accounts, or for the last admin. Removing an [auditor](#auditors) first revokes their unrevoked grants and answers `200 {"grantsRevoked": [{"id", "label", "owner", "auditor"}]}`; the grants stay in their owners' lists without the auditor's name (`revokeReason: "user_removed"`). |
 | `GET /api/api-keys` | Every user's API keys, like `GET /api/profile/api-keys` plus `user`. Never the keys themselves. |
 | `DELETE /api/api-keys/{id}` | Revoke any user's key, also an own one (`204`). |
 | `GET /api/groups` | All [customer groups](../guide/users#customer-groups) by name: `{"groups": [{"id", "name", "users", "accounts", "createdAt"}]}`; `accounts` counts the accounts of the group's users, removed ones included. |
@@ -187,7 +187,7 @@ session is created. A logout always works.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details", "viaShare", "group": {"id", "name", "removed"}}], "nextCursor"}`. A user gets their own entries and other users' reads of the accounts they [shared](#shared-accounts), marked `"viaShare": true`; admins every user's. A `viaShare` entry keeps `actor` (`session` or `api_key`) but has no `clientIp`, `userAgent` or `apiKey`, and its details only `via_accounts` with the viewer's own accounts (`{"id", "owner", "key", "n"}`), plus the terms of a first page that named the account, or `search` (true or false) for further pages and for lists that did not name it; see [Audit log](../guide/audit-log#shared-accounts). `subject` is the subject of a target message, only if the viewer may read that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339; without `until`, a `since` after now gives an empty page; with both, `since` must be before `until` (`400`). Further parameters: `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`, or an action such as `message.open`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`), both repeatable, up to 100 `user` values; empty values and repeats are ignored. Several values form a union: an entry matches if its user is one of `user` or its actor is one of `actor`, so `user=alice&actor=cli` lists alice's entries and the command line's. Also admins only: `group`, a [customer group](../guide/users#customer-groups)'s id for its entries, or `none` for the entries without a group (from before 1.4.0, and instance-level ones); it intersects with `user` and `actor`. A removed group's id still selects the entries that carry it; a malformed value, or an id that neither a group nor an entry has, gives `400`. In an admin's page each entry with a group has `group`; a removed group has no `name` and `"removed": true`; see [Audit log](../guide/audit-log#customer-groups). Others never get `group`. From other users `403` for `user`, `actor` or `group`, before any value is checked. Sessions only, not with an API key. Reading the log writes no entry. |
+| `GET /api/audit` | The log, newest first: `{"entries": [{"id", "at", "actor", "user", "apiKey", "action", "target": {"type", "id", "name", "subject"}, "clientIp", "userAgent", "details", "viaShare", "group": {"id", "name", "removed"}}], "nextCursor"}`. A user gets their own entries and other users' reads of the accounts they [shared](#shared-accounts), marked `"viaShare": true`; admins every user's. A `viaShare` entry keeps `actor` (`session` or `api_key`) but has no `clientIp`, `userAgent` or `apiKey`, and its details only `via_accounts` with the viewer's own accounts (`{"id", "owner", "key", "n"}`), plus the terms of a first page that named the account, or `search` (true or false) for further pages and for lists that did not name it; see [Audit log](../guide/audit-log#shared-accounts). An entry of one of the viewer's auditor grants by the auditor or by someone else is also marked `"viaAuditor": true`: its details keep the grant (`auditor_grant`), the search terms, the login method and reason and what a grant change was, and a user who is neither the viewer nor the auditor (an admin, the command line) is shown as `"operator"`. `subject` is the subject of a target message, only if the viewer may read that message too. Parameters: `since` (default 30 days ago) and `until` (default now; a plain date includes that day) as `YYYY-MM-DD` or RFC 3339; without `until`, a `since` after now gives an empty page; with both, `since` must be before `until` (`400`). Further parameters: `action` (repeatable: a group `login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`, `auditor`, or an action such as `message.open`), `grant` (an [auditor grant](#auditors)'s id: only its entries; owners name their own grants, an unknown and another owner's id both give `404 "no such grant"`; admins any grant, an unknown id gives `400`), `cursor` (the `nextCursor` of the previous page), `limit` (1–500, default 100). Admins only: `user` (a user's name; `404` if there is none) and `actor` (`session`, `api_key` or `cli`), both repeatable, up to 100 `user` values; empty values and repeats are ignored. Several values form a union: an entry matches if its user is one of `user` or its actor is one of `actor`, so `user=alice&actor=cli` lists alice's entries and the command line's. Also admins only: `group`, a [customer group](../guide/users#customer-groups)'s id for its entries, or `none` for the entries without a group (from before 1.4.0, and instance-level ones); it intersects with `user` and `actor`. A removed group's id still selects the entries that carry it; a malformed value, or an id that neither a group nor an entry has, gives `400`. In an admin's page each entry with a group has `group`; a removed group has no `name` and `"removed": true`; see [Audit log](../guide/audit-log#customer-groups). Others never get `group`. From other users `403` for `user`, `actor` or `group`, before any value is checked. Sessions only, not with an API key. Reading the log writes no entry. |
 
 Account management and sync need `MAIL_ARCHIVE_SECRET_KEY` on the server;
 without it these endpoints answer `503` and `GET /api/accounts` reports
@@ -353,6 +353,52 @@ Reads of shared mail are recorded with `via_owners` and `via_accounts`, which
 put them into the owner's Log; lists, further pages and conversations that
 reach a shared account are recorded as well (`message.list`, `message.page`,
 `message.conversation`). See [Audit log](../guide/audit-log#shared-accounts).
+
+### Auditors
+
+An auditor (a tax advisor or tax auditor) is a user an admin creates with
+`"auditor": true` (or `./ma user add NAME --auditor`). An owner grants an
+auditor of their own [customer group](../guide/users#customer-groups) read
+access to some of their accounts: all or some folders, an optional message
+period (`[periodFrom, periodUntil)` on the message date) and a validity
+window (`startsAt`, default now, to `endsAt`, at most 365 days). smtp
+(journal) accounts cannot be granted. See [Security](./security#login) for
+the guarantees.
+
+An auditor's session may only call the endpoints marked `x-auditor: true` in
+the [OpenAPI description](./openapi): the login endpoints, the own password,
+language, 2FA setup and passkeys, `GET /api/status` (an empty own view),
+`GET /api/accounts`, the `GET /api/messages` endpoints, `GET /api/audit` (the
+own entries) and `GET /api/auditor-grants`. Every other endpoint answers
+`403 {"error": "not available to auditors"}` and writes `auditor.denied`.
+Auditors hold no API keys and must use 2FA, which they cannot switch off.
+Every request of an auditor is recorded and goes into the grant owner's Log;
+see [Audit log](../guide/audit-log#auditors).
+
+- **Login:** without an active grant the login answers `403`. With one, the
+  session is bound to it. With several, `GET /api/session` has
+  `"grantSelectionRequired": true` and `grants` (`[{"id", "label", "owner",
+  "periodFrom", "periodUntil", "startsAt", "endsAt"}]`), and every endpoint
+  but `PUT /api/session/grant` answers `403` with
+  `"grantSelectionRequired": true`. `user.auditor` is `true` and `grant` the
+  bound grant. The session ends with the grant at the latest.
+- **Reading:** `GET /api/accounts` answers `{"accounts": [], "shared":
+  [{"key", "name", "owner", "kind", "removed", "folders": [{"name",
+  "delimiter"}]}], "manage": false}`: the grant's accounts with the granted
+  folders, without counts, sync state or times (audited as `account.list`).
+  The message endpoints work as for [shared accounts](#shared-accounts)
+  (`account=owner/name`), limited to the granted folders and period; any
+  other message answers `404`. A removed account stays in its grants until
+  it is purged, so its mail inside the period stays readable until then.
+
+| Endpoint | Description |
+|---|---|
+| `PUT /api/session/grant` | An auditor picks the grant the session reads through: `{"id": 7}`. Answers like `GET /api/session`. `404 "no such grant"` for any ID that is not one of the auditor's active grants, and for a caller who is no auditor. An auditor may switch at any time. Audited as `auditor.select`. |
+| `GET /api/auditor-grants` | `{"grants": [{"id", "owner", "auditor", "label", "periodFrom", "periodUntil", "startsAt", "endsAt", "createdAt", "revokedAt", "revokeReason", "state", "accounts": [{"name", "folders"}]}]}`, newest first, with ended grants. For an owner (also an admin) their own grants; `auditor` is `null` once the auditor left the owner's group or was removed (`revokeReason` `group_change` or `user_removed`). For an auditor their grants of owners in their current group; an ended grant lists no accounts. `state` is `active`, `scheduled`, `expired`, `revoked` or `suspended` (the owner or the auditor is locked; unlocking restores it). `folders` is `null` for all folders. `revokeReason`: `owner`, `operator`, `group_change`, `account_move`, `account_purge` or `user_removed`. |
+| `POST /api/auditor-grants` | Create a grant: `{"auditor": "stb-meier", "label": "Betriebsprüfung 2023–2025", "accounts": [{"name": "office", "folders": ["INBOX"]}, {"name": "invoices"}], "periodFrom": "2023-01-01T00:00:00+01:00", "periodUntil": "2026-01-01T00:00:00+01:00", "endsAt": "…", "currentPassword": "…", "code": "…"}`. `folders` missing or `null` grants all folders, also later ones; `code` only with 2FA on. Answers `201` with the grant. `401` for a wrong password or code (counts like a failed login), `404 "no such auditor in your group"` for a name that is no auditor of the owner's group (the same for an unknown name, a member and a user of another group), `404 "no such account"` for a name that is not an own account, `400` for an unknown folder or an invalid label, period or window, `409` for an smtp account. The scope cannot be changed later. Sessions only. Audited as `auditor.grant`. |
+| `GET /api/auditor-grants/{id}` | One own grant. `404 "no such grant"` for an unknown ID and another owner's alike. |
+| `PATCH /api/auditor-grants/{id}` | Extend an own grant: `{"endsAt": "…", "currentPassword": "…", "code": "…"}`, later than the current end and at most 365 days from now. `409` for a revoked grant. Audited as `auditor.extend`. |
+| `DELETE /api/auditor-grants/{id}` | Revoke a grant (`204`): an owner their own, an admin any. The auditor's sessions on it end at once; a revocation is final (`409` the second time). Audited as `auditor.revoke`. |
 
 ### Fills
 

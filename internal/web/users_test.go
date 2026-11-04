@@ -308,7 +308,7 @@ func TestChangeUserGroupAPI(t *testing.T) {
 	}
 
 	status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"group": w.b.ID})
-	if status != http.StatusOK || string(out) != `{"sharesEnded":1}`+"\n" {
+	if status != http.StatusOK || string(out) != `{"grantsRevoked":0,"sharesEnded":1}`+"\n" {
 		t.Fatalf("move b: %d %q", status, out)
 	}
 	if u, err := w.st.GetUserByName(context.Background(), "b"); err != nil || u.GroupID != w.b.ID {
@@ -330,7 +330,7 @@ func TestChangeUserGroupAPI(t *testing.T) {
 	// Into the group the user is in already: nothing ends, nothing is logged.
 	m := len(auditLog(t, w.st))
 	if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"group": w.b.ID}); status != http.StatusOK ||
-		string(out) != `{"sharesEnded":0}`+"\n" {
+		string(out) != `{"grantsRevoked":0,"sharesEnded":0}`+"\n" {
 		t.Errorf("again: %d %q", status, out)
 	}
 	if got := newEntries(t, w.st, m); len(got) != 0 {

@@ -92,7 +92,7 @@ owner's group. An account's owner shares it only with a user of the same
 group, one user at a time, and only for reading. A share request answers the
 same `404` for a name that does not exist and for a user of another group,
 and the store and the database refuse a share across groups. Moving a user or
-an account to another group ends every share that would cross groups. Users
+an account to another group ends every share that would cross groups. An auditor login belongs to one customer group. An owner grants it read access only to their own accounts and only if it is in the same group; a grant request answers the same `404` for a name that does not exist, for a user who is not an auditor and for a user of another group, and the store and the database refuse a grant across groups. An account that moves to another owner leaves the grant. Moving the auditor or the owner to another group revokes the grant and ends the auditor's sessions on it at once. Users
 who are not admins never see names of users of other groups, except in older
 Log entries from the time that user was still in the same group. Admins see every
 group's users, accounts, audit log, retention rules and holds, but no mail
@@ -113,6 +113,45 @@ owner: a page of a list or search over all of the reader's mail, or a further
 page of a named one, whose messages the reader also has through own accounts, and a conversation whose only member
 in the shared account is the message that was opened. A legal hold on a shared
 account is never shown to the shared user, admins included.
+
+**Auditors** (tax advisors and tax auditors) are logins an admin creates
+(`./ma user add NAME --auditor`, or the Users page). The role never changes:
+an auditor is never an admin, owns no accounts, receives no shares and holds
+no API keys (a key of an auditor opens nothing). An auditor reads only
+through an auditor grant: one owner's accounts, all or some of their folders,
+an optional message period and a validity window of at most 365 days.
+
+- **Login:** the generated password must be changed at the first login, and
+  TOTP is mandatory and cannot be switched off (an admin resets it); passkeys
+  work in addition. Without an active grant the login is refused, only after
+  a correct password and second factor. A session is bound to one grant (with
+  several, the auditor picks one first) and ends with the grant at the latest.
+- **Read-only, deny by default:** an auditor's session may call only the
+  routes marked `x-auditor` in the [API description](./api): the login, the
+  own password, language, 2FA setup and passkeys, the own Log and grants, and
+  reading the grant's mail. Every other route answers `403` and is recorded
+  as `auditor.denied`. Messages outside the grant's accounts, folders and
+  period answer `404`, conversation members included; the account list shows
+  only the granted folders, without counts or sync times. Holds and envelopes
+  stay hidden.
+- **Granting** needs the owner's password and, with 2FA, a code. Only the
+  owner grants, and only their own accounts; smtp (journal) accounts cannot
+  be granted. The scope cannot be changed later; extending the end needs the
+  step-up again.
+- **Revocation:** the owner revokes their own grants, any admin and
+  `./ma auditor revoke ID` any grant; it ends the auditor's sessions on the
+  grant at once and is final. A grant is also revoked when its last account
+  moves to another owner or is purged, when the auditor or the owner moves to
+  another group, and before its auditor is removed. A removed (not yet
+  purged) account stays in its grants until it is purged: the auditor can
+  still read its mail inside the grant's period. Locking the auditor or the
+  owner suspends the grant; unlocking restores it.
+- **Every request of an auditor is recorded**, also plain folder listings and
+  empty pages, and fails closed (`503`, nothing sent) when the entry cannot be
+  written. The grant's owner sees the auditor's entries in their Log, with
+  the search terms, without the auditor's address, browser or key name, and
+  sees revocations by others with "operator" instead of the actor's name. See
+  [Audit log](../guide/audit-log).
 
 ## Network access
 

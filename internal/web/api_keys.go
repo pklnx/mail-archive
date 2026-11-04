@@ -66,7 +66,11 @@ func requiredScope(a access) string {
 
 // authenticateKey checks the key of a key request for a route with access
 // a. It answers the request and returns nil when the key is refused.
-func (s *Server) authenticateKey(w http.ResponseWriter, r *http.Request, key string, a access) *http.Request {
+//
+// A key of an auditor is refused like a route outside the allowlist
+// (#393): auditors hold no keys, and the store already finds none of
+// theirs, so this is defense in depth.
+func (s *Server) authenticateKey(w http.ResponseWriter, r *http.Request, key string, a access, pattern string) *http.Request {
 	addr := s.clientAddr(r)
 	if wait := s.badKeyRate.Blocked(addr); wait > 0 {
 		s.tooMany(w, wait)
@@ -90,6 +94,11 @@ func (s *Server) authenticateKey(w http.ResponseWriter, r *http.Request, key str
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return nil
 	}
+	if sess.IsAuditor {
+		ctx := context.WithValue(r.Context(), sessionKey{}, sess)
+		s.auditorDenied(w, r.WithContext(context.WithValue(ctx, apiKeyKey{}, k)), pattern)
+		return nil
+	}
 	if ok, wait := s.apiKeyRate.Allow("k" + strconv.FormatInt(k.ID, 10)); !ok {
 		s.tooMany(w, wait)
 		return nil
@@ -98,7 +107,7 @@ func (s *Server) authenticateKey(w http.ResponseWriter, r *http.Request, key str
 		s.writeJSON(w, http.StatusForbidden, passwordChangeJSON{Error: "the owner of this API key must choose their own password first", PasswordChangeRequired: true})
 		return nil
 	}
-	if s.twoFactorRequired(sess.IsAdmin) && !sess.TwoFactorEnabled {
+	if s.twoFactorRequired(sess.IsAdmin, sess.IsAuditor) && !sess.TwoFactorEnabled {
 		s.writeJSON(w, http.StatusForbidden, twoFactorSetupJSON{Error: "the owner of this API key must set up two-factor authentication first", TwoFactorSetupRequired: true})
 		return nil
 	}

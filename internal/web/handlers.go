@@ -198,7 +198,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		f.CursorAt, f.CursorSHA = &at, sha
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}
@@ -344,7 +344,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}
@@ -439,7 +439,7 @@ func (s *Server) handleConversation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}
@@ -501,7 +501,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}
@@ -585,7 +585,7 @@ func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}
@@ -629,7 +629,7 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, "invalid part index", nil)
 		return
 	}
-	sc, ok := s.viewerScope(w, r)
+	sc, ok := s.requestScope(w, r)
 	if !ok {
 		return
 	}
@@ -704,11 +704,23 @@ func (s *Server) messageEntry(r *http.Request, action, sha string) *store.AuditE
 	return e
 }
 
-// viewerScope returns the accounts the request's user may read: their own
-// and those shared with them (#389). On an error it answers and returns
-// false.
-func (s *Server) viewerScope(w http.ResponseWriter, r *http.Request) (store.Scope, bool) {
-	sc, err := s.store.ViewerScope(r.Context(), userID(r))
+// requestScope returns the accounts the request's user may read: their own
+// and those shared with them (#389); for an auditor (#393) only the
+// accounts, folders and period of the session's grant, all as shared
+// accounts, and nothing without an active grant (store.AuditorScope). On
+// an error it answers and returns false.
+func (s *Server) requestScope(w http.ResponseWriter, r *http.Request) (store.Scope, bool) {
+	var sc store.Scope
+	var err error
+	if sess := currentSession(r); sess != nil && sess.IsAuditor {
+		var grant int64 // 0 is no grant: an empty scope
+		if sess.GrantID != nil {
+			grant = *sess.GrantID
+		}
+		sc, err = s.store.AuditorScope(r.Context(), sess.UserID, grant)
+	} else {
+		sc, err = s.store.ViewerScope(r.Context(), userID(r))
+	}
 	if err != nil {
 		s.failStore(w, r, err)
 		return store.Scope{}, false

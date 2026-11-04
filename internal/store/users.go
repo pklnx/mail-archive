@@ -408,6 +408,9 @@ type Session struct {
 	// without one, any grant of theirs) is active.
 	IsAuditor bool
 	GrantID   *int64
+	// GrantOwnerID is the owner of the session's grant (#393 part 2): the
+	// auditor's entries go to that owner's Log. Nil without a grant.
+	GrantOwnerID *int64
 	// Language and Locale are the user's web UI settings. Sessions from
 	// APIKeyLogin leave them empty: only session routes read them, and API
 	// keys are refused there.
@@ -415,10 +418,16 @@ type Session struct {
 }
 
 // StartSession stores a new session after a password login and records the
-// login time, together with the audit entry of ctx.
+// login time, together with the audit entry of ctx. An auditor's login
+// needs an active grant (createLoginSession): without one it fails with a
+// NoGrantError.
 func (s *Store) StartSession(ctx context.Context, idHash []byte, userID int64, expiresAt time.Time, userAgent string) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.CreateSession(ctx, db.CreateSessionParams{ID: idHash, UserID: userID, ExpiresAt: expiresAt, UserAgent: userAgent}); err != nil {
+		auditor, err := q.UserIsAuditor(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if err := createLoginSession(ctx, q, userID, auditor, "", idHash, expiresAt, userAgent); err != nil {
 			return err
 		}
 		return q.RecordLogin(ctx, userID)
@@ -449,7 +458,7 @@ func (s *Store) GetSession(ctx context.Context, idHash []byte, idleCutoff time.T
 		return nil, err
 	}
 	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, LastSeenAt: r.LastSeenAt,
-		Language: r.Language, Locale: r.Locale, GroupID: r.GroupID, IsAuditor: r.IsAuditor, GrantID: r.GrantID,
+		Language: r.Language, Locale: r.Locale, GroupID: r.GroupID, IsAuditor: r.IsAuditor, GrantID: r.GrantID, GrantOwnerID: r.GrantOwnerID,
 	}, nil
 }
 

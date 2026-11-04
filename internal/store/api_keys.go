@@ -157,6 +157,7 @@ func (s *Store) APIKeyLogin(ctx context.Context, hash []byte) (*Session, *APIKey
 	sess := &Session{
 		UserID: r.UserID, UserName: r.UserName, IsAdmin: r.IsAdmin,
 		MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, GroupID: r.GroupID,
+		IsAuditor: r.IsAuditor,
 	}
 	key := &APIKey{ID: r.ID, UserID: r.UserID, UserName: r.UserName, Name: r.Name, Scopes: r.Scopes, LastUsedAt: r.LastUsedAt}
 	return sess, key, nil

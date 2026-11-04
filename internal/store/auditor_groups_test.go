@@ -780,8 +780,10 @@ func TestAuditorEntryGroups(t *testing.T) {
 	if len(by) != 2 || by[0] == nil || *by[0] != rootb.ID || by[1] != nil {
 		t.Errorf("revoked_by %v", by)
 	}
-	// The owner's Log leaves the grant entries of others out until part 2
-	// gives them their own view; alice's own grant entries stay.
+	// The owner's Log shows the grant entries of others through
+	// auditorView (part 2): the admin of another group and the command
+	// line as "operator", without address or browser; alice's own grant
+	// entries stay as they are.
 	recs, err := f.st.ListAudit(f.ctx, store.AuditPage{Viewer: f.alice.ID, Since: time.Now().Add(-time.Hour), Until: time.Now().Add(time.Hour), Limit: 50})
 	if err != nil {
 		t.Fatal(err)
@@ -789,9 +791,12 @@ func TestAuditorEntryGroups(t *testing.T) {
 	var seen []string
 	for _, r := range recs {
 		seen = append(seen, r.Action+"/"+r.UserName)
+		if r.UserName == store.AuditOperator && (r.UserID != nil || r.ClientIP != "" || r.UserAgent != "" || !r.ViaAuditor) {
+			t.Errorf("operator entry %+v", r)
+		}
 	}
 	slices.Sort(seen)
-	if !slices.Equal(seen, []string{"auditor.extend/alice", "auditor.grant/alice"}) {
+	if !slices.Equal(seen, []string{"auditor.extend/alice", "auditor.grant/alice", "auditor.revoke/operator", "auditor.revoke/operator"}) {
 		t.Errorf("alice's Log %v", seen)
 	}
 }
