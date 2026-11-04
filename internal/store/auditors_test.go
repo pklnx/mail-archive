@@ -471,6 +471,12 @@ func TestRestrictForeignFolder(t *testing.T) {
 			t.Errorf("owner: message %c at %v", c, got)
 		}
 	}
+	// A folder ID listed under two accounts is wrong for one of them; it
+	// opens neither.
+	twice := owner.Restrict(map[int64][]int64{f.a1: {f.a1Private.ID}, f.a2: {f.a1Private.ID, f.a2Inbox.ID}}, nil, nil)
+	if got := f.listed(twice); !slices.Equal(got, []string{"7"}) {
+		t.Errorf("a folder ID under two accounts: lists %v, want a2/INBOX's 7 only", got)
+	}
 	rs, err := f.st.RestrictScope(f.ctx, owner, swapped, nil, nil)
 	if err != nil {
 		t.Fatal(err)

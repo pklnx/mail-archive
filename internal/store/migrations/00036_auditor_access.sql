@@ -75,11 +75,14 @@ CREATE INDEX sessions_grant_idx ON sessions (grant_id) WHERE grant_id IS NOT NUL
 -- parallel arrays. A folder ID listed under another account opens
 -- nothing, so no narrowing can widen a scope by naming a folder under the
 -- wrong account. Accounts read with all their folders are matched apart
--- (scope_all_folder_accounts). Inlined by the planner.
+-- (scope_all_folder_accounts). The body is a plain expression without a
+-- subquery, so the planner inlines it (an EXISTS over unnest(...) would
+-- not be inlined and costs a function call per location). It looks up the
+-- first pair of the folder: store.Scope.folderParams lists each folder ID
+-- at most once, and drops one listed under two accounts.
 CREATE FUNCTION scope_folder_granted(account_id bigint, folder_id bigint, accounts bigint[], folders bigint[])
 RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE
-RETURN EXISTS (SELECT 1 FROM unnest(accounts, folders) AS p (account_id, folder_id)
-               WHERE p.account_id = scope_folder_granted.account_id AND p.folder_id = scope_folder_granted.folder_id);
+RETURN (accounts[array_position(folders, folder_id)] = account_id) IS TRUE;
 
 -- The role never changes: a member never becomes an auditor (who then
 -- would read without a grant's limits) and an auditor never a member.

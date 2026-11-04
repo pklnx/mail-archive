@@ -241,14 +241,34 @@ func (sc Scope) Period() (after, before *time.Time) {
 // predicate. Pairs, not a pooled list of folder IDs: a folder ID listed
 // under one account never opens a folder of another (#393). A NULL would
 // match nothing.
+//
+// Each folder ID is listed once (the SQL looks up its first pair). A
+// folder belongs to one account, so an ID listed under two accounts is
+// wrong for at least one of them; it is dropped for both, which only
+// narrows. AuditorScope and Store.RestrictScope never list one so.
 func (sc Scope) folderParams() (allFolderAccounts, folderAccounts, folders []int64) {
 	allFolderAccounts, folderAccounts, folders = []int64{}, []int64{}, []int64{}
+	owner := map[int64]int64{}
+	twice := map[int64]bool{}
+	for _, a := range sc.Accounts {
+		for _, f := range a.Folders {
+			if o, seen := owner[f]; seen && o != a.ID {
+				twice[f] = true
+			}
+			owner[f] = a.ID
+		}
+	}
+	listed := map[int64]bool{}
 	for _, a := range sc.Accounts {
 		if a.Folders == nil {
 			allFolderAccounts = append(allFolderAccounts, a.ID)
 			continue
 		}
 		for _, f := range a.Folders {
+			if twice[f] || listed[f] {
+				continue
+			}
+			listed[f] = true
 			folderAccounts = append(folderAccounts, a.ID)
 			folders = append(folders, f)
 		}
