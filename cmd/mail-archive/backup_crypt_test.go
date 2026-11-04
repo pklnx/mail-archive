@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -15,11 +16,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // Marker words in the test data: none may appear in an encrypted dump
@@ -592,6 +595,18 @@ func TestRestoreDumpRefusals(t *testing.T) {
 	}
 	lock.Release()
 
+	// verify, a sweep, a purge or a retention run holds the blob lock.
+	unlock, ok, err := s.st.TryLockBlobs(context.Background())
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	for _, args := range [][]string{{dumps[0]}, {"--hold"}, {"--reconcile-only"}} {
+		if _, err := runRestoreDump(t, args...); !errors.Is(err, archive.ErrBlobLockHeld) {
+			t.Errorf("%v with the blob lock held: %v", args, err)
+		}
+	}
+	unlock()
+
 	data, err := os.ReadFile(dumps[0])
 	if err != nil {
 		t.Fatal(err)
@@ -668,8 +683,126 @@ func TestRestoreDumpIntoNonEmptyDatabase(t *testing.T) {
 	if _, err := s.st.GetUserByName(context.Background(), "after-the-backup"); err != nil {
 		t.Errorf("the refused restore changed the database: %v", err)
 	}
-	// --preflight, which ./ma runs before its own pg_restore, refuses too.
-	if _, err := runRestoreDump(t, "--preflight"); err == nil || !strings.Contains(err.Error(), "not empty") {
-		t.Errorf("preflight on an existing database: %v", err)
+	// --hold, which ./ma runs around its own pg_restore, refuses too.
+	if _, err := runRestoreDump(t, "--hold"); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Errorf("--hold on an existing database: %v", err)
+	}
+}
+
+// startHold runs restore-dump --hold as ./ma does, with its input and
+// output as pipes, and waits for "ready".
+func startHold(t *testing.T) (in io.WriteCloser, out *bufio.Reader, done <-chan error) {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	cmd := newRestoreDumpCmd()
+	cmd.SetArgs([]string{"--hold"})
+	cmd.SetIn(inR)
+	cmd.SetOut(outW)
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	t.Cleanup(cancel)
+	ch := make(chan error, 1)
+	go func() {
+		err := cmd.ExecuteContext(ctx)
+		_ = outW.CloseWithError(io.EOF)
+		ch <- err
+	}()
+	out = bufio.NewReader(outR)
+	line, err := out.ReadString('\n')
+	if err != nil || line != holdReady+"\n" {
+		t.Fatalf("--hold said %q, %v; then %v", line, err, <-ch)
+	}
+	return inW, out, ch
+}
+
+// TestRestoreDumpHold: ./ma restore-dump keeps the writers lock from its
+// checks to the end of the reconciliation (review round 1 of #518, the
+// lock gap): while --hold waits for pg_restore, no writer starts; after
+// "restored" it reconciles, then releases the lock. Without "restored" it
+// reconciles nothing.
+func TestRestoreDumpHold(t *testing.T) {
+	_, ring, _ := restoreEnv(t)
+	st, _ := switchDatabase(t)
+	ctx := context.Background()
+
+	in, out, done := startHold(t)
+	if _, err := st.HoldWriters(ctx, "sync"); !errors.Is(err, store.ErrWritersExcluded) || !strings.Contains(err.Error(), "restore-dump") {
+		t.Fatalf("a writer during the restore: %v", err)
+	}
+	// What ./ma's pg_restore would do: the schema and the dump's state.
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	turnOn(t, st, ring)
+	if _, err := io.WriteString(in, holdRestored+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = in.Close()
+	rest, _ := io.ReadAll(out)
+	if err := <-done; err != nil {
+		t.Fatalf("--hold: %v\n%s", err, rest)
+	}
+	if !strings.Contains(string(rest), "state: on, as in the dump") {
+		t.Errorf("no reconciliation:\n%s", rest)
+	}
+	lock, err := st.HoldWriters(ctx, "sync")
+	if err != nil {
+		t.Fatalf("a writer after the restore: %v", err)
+	}
+	lock.Release()
+
+	// A failed restore: the input ends without "restored".
+	switchDatabase(t)
+	in, out, done = startHold(t)
+	_ = in.Close()
+	rest, _ = io.ReadAll(out)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "did not finish") || len(rest) != 0 {
+		t.Errorf("without restored: %v\n%s", err, rest)
+	}
+}
+
+// TestRestoreDumpForeignKeyring: a keyring copy of another archive than the
+// data directory's is refused before pg_restore runs, so the new database
+// stays empty (review round 1 of #518), on the Go path and in --hold.
+func TestRestoreDumpForeignKeyring(t *testing.T) {
+	s, _, kek := restoreEnv(t)
+	dir := filepath.Join(t.TempDir(), "backups")
+	captureStdout(t, func() {
+		if err := runCmd(t, newBackupCmd(), "", dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+	dumps, _ := filepath.Glob(filepath.Join(dir, "*.dump.enc"))
+	if len(dumps) != 1 {
+		t.Fatalf("dumps %v", dumps)
+	}
+	// The data directory now belongs to another archive (same key).
+	other, err := blobcrypt.NewKeyring(kek, labelArchiveKey, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(s.dataDir), other); err != nil {
+		t.Fatal(err)
+	}
+	_, conn := switchDatabase(t)
+	if _, err := runRestoreDump(t, dumps[0]); !errors.Is(err, blobcrypt.ErrOtherArchive) || !strings.Contains(err.Error(), "nothing was restored") {
+		t.Errorf("another archive's dump: %v", err)
+	}
+	var tables int
+	if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM pg_tables WHERE schemaname = 'public'`).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Errorf("the refused restore left %d tables", tables)
+	}
+
+	copyData, err := os.ReadFile(filepath.Join(dir, keyringCopyName(filepath.Base(dumps[0]))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envKeyringCopy, base64.StdEncoding.EncodeToString(copyData))
+	if _, err := runRestoreDump(t, "--hold"); !errors.Is(err, blobcrypt.ErrOtherArchive) {
+		t.Errorf("--hold with another archive's copy: %v", err)
 	}
 }

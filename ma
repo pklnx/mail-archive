@@ -139,10 +139,13 @@ if [ "${1:-}" = backup ]; then
 fi
 
 # restore-dump loads a dump written by backup into the database, which must
-# be empty, in one transaction, with pg_restore in the database container. An encrypted dump
-# (MA-ENC1 header) is decrypted by unseal-stream on its way there, with the
-# keyring copy next to it. Then restore-dump --reconcile-only reconciles the
-# keyring and the state of encryption at rest with the data directory and
+# be empty, in one transaction, with pg_restore in the database container.
+# An encrypted dump (MA-ENC1 header) is decrypted by unseal-stream on its way
+# there, with the keyring copy next to it. The whole time, a container with
+# `restore-dump --hold` holds the writers lock, so that no web server, worker
+# or cron sync starts: it checks the database and the keyring copy, says
+# "ready", waits while pg_restore runs, and when told "restored" reconciles
+# the keyring and the state of encryption at rest under the same lock and
 # prints what it changed.
 if [ "${1:-}" = restore-dump ]; then
 	if [ $# -ne 2 ] || [ -z "$2" ]; then
@@ -154,21 +157,42 @@ if [ "${1:-}" = restore-dump ]; then
 		echo "error: $file: no such file" >&2
 		exit 2
 	fi
-	# Refuses while the web server, the worker or another writer runs, and
-	# when the database is not empty.
-	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma mail-archive restore-dump --preflight || exit 1
+	sealed=
+	MAIL_ARCHIVE_KEYRING_COPY=
+	if [ "$(head -c 7 "$file")" = MA-ENC1 ]; then
+		sealed=1
+		ring=${file%.enc}
+		ring=${ring%.dump}.keyring
+		if [ -f "$ring" ]; then
+			MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
+		fi
+	fi
+	export MAIL_ARCHIVE_KEYRING_COPY
+	fifos=$(mktemp -d)
+	mkfifo "$fifos/to-holder" "$fifos/from-holder"
+	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_KEYRING_COPY mail-archive \
+		restore-dump --hold <"$fifos/to-holder" >"$fifos/from-holder" &
+	holder=$!
+	# Closing fd 3 without "restored" makes the holder give up (also when
+	# this script ends early); fd 4 carries its output.
+	exec 3>"$fifos/to-holder" 4<"$fifos/from-holder"
+	rm -rf "$fifos"
+	finish() { # finish <status>: let the holder end, then exit
+		exec 3>&-
+		cat <&4
+		wait "$holder" || [ "$1" -ne 0 ] || exit 1
+		exit "$1"
+	}
+	if ! IFS= read -r line <&4 || [ "$line" != ready ]; then
+		# The holder refused (writers running, database not empty, another
+		# archive's keyring) and said why on stderr.
+		finish 1
+	fi
 	restore() {
 		compose exec -T postgres pg_restore --no-owner --single-transaction --exit-on-error \
 			-U mailarchive -d mailarchive
 	}
-	if [ "$(head -c 7 "$file")" = MA-ENC1 ]; then
-		ring=${file%.enc}
-		ring=${ring%.dump}.keyring
-		MAIL_ARCHIVE_KEYRING_COPY=
-		if [ -f "$ring" ]; then
-			MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
-		fi
-		export MAIL_ARCHIVE_KEYRING_COPY
+	if [ -n "$sealed" ]; then
 		# unseal-stream stops before the end of its output on a damaged
 		# dump, so pg_restore fails and its transaction rolls back.
 		failed=$(mktemp)
@@ -176,16 +200,16 @@ if [ "${1:-}" = restore-dump ]; then
 			[ -s "$failed" ]; then
 			rm -f "$failed"
 			echo "error: the restore failed; the database is unchanged (pg_restore ran in one transaction)" >&2
-			exit 1
+			finish 1
 		fi
 		rm -f "$failed"
-		unset MAIL_ARCHIVE_KEYRING_COPY
 	elif ! restore <"$file"; then
 		echo "error: the restore failed; the database is unchanged (pg_restore ran in one transaction)" >&2
-		exit 1
+		finish 1
 	fi
 	echo "restored $file"
-	exec docker compose --progress quiet run --rm -T -e MAIL_ARCHIVE_COMMAND=./ma mail-archive restore-dump --reconcile-only
+	echo restored >&3
+	finish 0
 fi
 
 # encryption keygen writes the archive key into the keys directory

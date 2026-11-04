@@ -177,12 +177,49 @@ func TestStreamSingleBuffer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := io.Copy(io.Discard, s); err != nil {
-				t.Fatal(err)
+			// A fixed buffer: io.Discard's ReadFrom takes one from a
+			// sync.Pool, which drops items at random under -race.
+			buf := make([]byte, 4096)
+			for {
+				_, err := s.Read(buf)
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 		})
 	}
 	if few, many := allocs(2), allocs(40); many > few {
 		t.Errorf("%.0f allocations for 2 chunks, %.0f for 40", few, many)
+	}
+}
+
+// TestStreamEmptyFinalChunkRefused: a full chunk followed by an empty
+// final chunk authenticates, but writers never produce it; the stream
+// refuses it as Open does (TestEmptyFinalChunkRefused).
+func TestStreamEmptyFinalChunkRefused(t *testing.T) {
+	dk := randomKey(t)
+	plain := pattern(ChunkSize)
+	h := Header{Purpose: PurposeBackup, KeyID: 3}
+	copy(h.Salt[:], pattern(SaltSize))
+	hdr := h.marshal()
+	aead, err := fileAEAD(dk, &h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n [nonceSize]byte
+	file := append([]byte(nil), hdr[:]...)
+	chunkNonce(&n, 0, false)
+	file = aead.Seal(file, n[:], plain, hdr[:])
+	chunkNonce(&n, 1, true)
+	file = aead.Seal(file, n[:], nil, hdr[:])
+	got, err := streamAll(file, testKeys{3: dk}, PurposeBackup, nil)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("empty final chunk after a full one: %v, want ErrCorrupt", err)
+	}
+	if !bytes.HasPrefix(plain, got) {
+		t.Error("returned bytes that are not a prefix of the plaintext")
 	}
 }

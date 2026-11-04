@@ -146,7 +146,10 @@ the [command reference](../reference/cli#verify) for the findings.
    a restore over the old database would fail half-way or mix both. Without
    Docker Compose: `mail-archive restore-dump FILE`, with `pg_restore` in
    `PATH`, into a database made with `dropdb --force` and `createdb`. It
-   refuses while a writer runs.
+   refuses while a writer runs, and holds the writers lock until it has
+   reconciled: a web server, worker or cron `./ma sync` that starts
+   meanwhile refuses to start and is retried by Compose or the next cron
+   run.
 3. `./ma migrate`, then `./ma attest` if attestations are on (it imports
    the attestations written after the dump, before anything archives; see
    [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,
@@ -165,7 +168,11 @@ together and prints each step:
   copy: a recovery key added with `encryption add-key` after the backup is
   in the newer keyring file and stays. The data keys of both copies are
   kept, so files encrypted under a key only one copy knows stay readable.
-  A keyring of another archive is refused.
+  A keyring of another archive is refused: for an encrypted dump before
+  anything is restored, by the keyring copy next to it; for a dump without
+  encryption only after loading it, since its keyring copy is in the dump.
+  Restore that dump into a new database again with the right data
+  directory.
 - A dump that says off next to a data directory with encrypted files (a
   backup from before `encryption enable`) gives the state `encrypting`:
   run `./ma encryption enable` before anything else starts; it finishes in

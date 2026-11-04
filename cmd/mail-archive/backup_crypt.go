@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -283,7 +284,7 @@ nothing.`,
 
 func newRestoreDumpCmd() *cobra.Command {
 	var keyringPath string
-	var reconcileOnly, preflight bool
+	var reconcileOnly, hold bool
 	cmd := &cobra.Command{
 		Use:   "restore-dump FILE",
 		Short: "Load a backup's database dump, encrypted or not, and reconcile encryption at rest",
@@ -291,9 +292,11 @@ func newRestoreDumpCmd() *cobra.Command {
 new and empty, in one transaction: pg_restore --no-owner
 --single-transaction --exit-on-error. An encrypted dump (*.dump.enc) is decrypted on its way into
 pg_restore with the archive key and the keyring copy next to it
-(mailarchive-<time>.keyring, or --keyring), else the data directory's. If
-the dump is damaged or cut, pg_restore is stopped and the database stays
-as it was.
+(mailarchive-<time>.keyring, or --keyring), else the data directory's. A
+keyring copy of another archive than the data directory's is refused before
+anything is restored. If the dump is damaged or cut, pg_restore is stopped
+and the database stays as it was. The writers lock is held from the checks
+to the end of the reconciliation.
 
 Then the keyring and the state of encryption at rest are reconciled with
 the data directory, and what changed is printed: the newer of the keyring
@@ -310,7 +313,7 @@ partitions of the audit log). Needs pg_restore in PATH, at least the server's
 major version. The Docker image has none: with Docker Compose use
 "./ma restore-dump FILE", which runs pg_restore in the database container.`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if reconcileOnly || preflight {
+			if reconcileOnly || hold {
 				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
@@ -329,16 +332,23 @@ major version. The Docker image has none: with Docker Compose use
 				return err
 			}
 			defer lock.Release()
+			// The blob lock on the writers lock's connection, as encryption
+			// enable takes it: verify --fix-orphans, a sweep, a purge or a
+			// retention run must not move or remove files while the
+			// database is replaced and the files are walked.
+			if ok, err := lock.TryBlobLock(ctx); err != nil {
+				return err
+			} else if !ok {
+				return archive.ErrBlobLockHeld
+			}
+			out := cmd.OutOrStdout()
+			if hold {
+				return holdForRestore(ctx, a, cmd.InOrStdin(), out)
+			}
 			if !reconcileOnly {
 				if err := requireEmptyDatabase(ctx, a); err != nil {
 					return err
 				}
-			}
-			if preflight {
-				return nil
-			}
-			out := cmd.OutOrStdout()
-			if !reconcileOnly {
 				if err := restoreDump(ctx, a, out, args[0], keyringPath); err != nil {
 					return err
 				}
@@ -348,9 +358,9 @@ major version. The Docker image has none: with Docker Compose use
 	}
 	cmd.Flags().StringVar(&keyringPath, "keyring", "", "the keyring copy of an encrypted dump (default: the .keyring next to it)")
 	cmd.Flags().BoolVar(&reconcileOnly, "reconcile-only", false, "only reconcile the keyring and the state with the data directory")
-	cmd.Flags().BoolVar(&preflight, "preflight", false, "only check that no writer runs (used by ./ma restore-dump)")
-	_ = cmd.Flags().MarkHidden("preflight")
-	cmd.MarkFlagsMutuallyExclusive("reconcile-only", "preflight")
+	cmd.Flags().BoolVar(&hold, "hold", false, "hold the writers lock while ./ma restore-dump runs pg_restore, then reconcile (used by ./ma)")
+	_ = cmd.Flags().MarkHidden("hold")
+	cmd.MarkFlagsMutuallyExclusive("reconcile-only", "hold")
 	return cmd
 }
 
@@ -378,6 +388,84 @@ func requireEmptyDatabase(ctx context.Context, a *app) error {
 	}
 	return fmt.Errorf("the database %q is not empty (%d tables and other relations); a dump is restored only into a new, empty database: "+
 		"drop and create it (dropdb --force, createdb) or point %s at a new one", cfg.Database, n, config.EnvDatabaseURL)
+}
+
+// Lines of the --hold protocol between ./ma and restore-dump.
+const (
+	holdReady    = "ready"
+	holdRestored = "restored"
+)
+
+// holdForRestore is restore-dump --hold, for ./ma restore-dump, which runs
+// pg_restore in the database container: with the writers lock held by the
+// caller, it runs the checks of a restore (an empty database, and a keyring
+// copy of this archive), prints "ready", and keeps the lock while ./ma
+// restores. When ./ma then writes "restored", it reconciles under the same
+// lock and returns; at the end of its input without that line (the restore
+// failed, or ./ma was interrupted) it returns an error without
+// reconciling. So no writer can start from the checks to the end of the
+// reconciliation.
+func holdForRestore(ctx context.Context, a *app, in io.Reader, out io.Writer) error {
+	if err := requireEmptyDatabase(ctx, a); err != nil {
+		return err
+	}
+	if err := refuseForeignKeyring(a.cfg.DataDir, ""); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, holdReady)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if strings.TrimSpace(line) != holdRestored {
+		if err == nil || errors.Is(err, io.EOF) {
+			err = errors.New("the restore did not finish; nothing was reconciled")
+		}
+		return err
+	}
+	return reconcileRestored(ctx, a, out)
+}
+
+// refuseForeignKeyring refuses, before anything is restored, a keyring
+// copy of another archive than the data directory's keyring: the copy ./ma
+// passes in envKeyringCopy, and the file at path. The ids are read without
+// a key. A plaintext dump has no copy next to it; its keyring is only in
+// the dump and is checked by the reconciliation after the restore.
+func refuseForeignKeyring(dataDir, path string) error {
+	fileData, err := os.ReadFile(blobcrypt.KeyringPath(dataDir)) //nolint:gosec // the configured data directory
+	if errors.Is(err, os.ErrNotExist) {
+		return nil // rebuilt from the dump by the reconciliation
+	}
+	if err != nil {
+		return err
+	}
+	file, err := blobcrypt.ParseKeyring(fileData)
+	if err != nil {
+		return fmt.Errorf("%s: %w", blobcrypt.KeyringPath(dataDir), err)
+	}
+	var copies []keyringSource
+	if v := strings.TrimSpace(os.Getenv(envKeyringCopy)); v != "" {
+		data, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return fmt.Errorf("%s: %w", envKeyringCopy, err)
+		}
+		copies = append(copies, keyringSource{name: "the keyring copy next to the dump", data: data})
+	}
+	if path != "" {
+		data, err := os.ReadFile(path) //nolint:gosec // the operator's keyring copy
+		if err != nil {
+			return err
+		}
+		copies = append(copies, keyringSource{name: path, data: data})
+	}
+	for _, c := range copies {
+		ring, err := blobcrypt.ParseKeyring(c.data)
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.name, err)
+		}
+		if ring.ArchiveID() != file.ArchiveID() {
+			return fmt.Errorf("%w: %s has archive id %s, the data directory's keyring %s: the dump and the data directory are of different archives; "+
+				"nothing was restored", blobcrypt.ErrOtherArchive, c.name, ring.ArchiveID(), file.ArchiveID())
+		}
+	}
+	return nil
 }
 
 // isSealed reports whether the file starts like an encrypted file.
@@ -432,6 +520,9 @@ func restoreDump(ctx context.Context, a *app, out io.Writer, file, keyringPath s
 			if sibling := filepath.Join(filepath.Dir(file), keyringCopyName(filepath.Base(file))); fileExists(sibling) {
 				keyringPath = sibling
 			}
+		}
+		if err := refuseForeignKeyring(a.cfg.DataDir, keyringPath); err != nil {
+			return err
 		}
 		if in, err = openBackupStream(f, keyringPath); err != nil {
 			return fmt.Errorf("%s: %w", file, err)
