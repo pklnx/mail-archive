@@ -48,6 +48,18 @@ info:
 
     Unknown paths under `/api/`, and unknown methods on known paths, answer
     `404` with an `Error` (`401` without a login, `403` with an API key).
+
+    An auditor (a tax advisor or tax auditor, created by an admin) reads
+    only through an auditor grant of an owner of the same customer group:
+    some of the owner's accounts and folders, an optional message period,
+    for a limited time. An auditor may call only the operations marked
+    `x-auditor: true`; every other one answers `403` ("not available to
+    auditors") and is recorded as `auditor.denied`. Auditors hold no API
+    keys and must use two-factor authentication. With several active
+    grants, an auditor's session answers `403` with
+    `"grantSelectionRequired": true` until `PUT /api/session/grant` picks
+    one. Every request of an auditor is recorded and shown to the grant's
+    owner in their Log.
   license:
     name: MIT
     identifier: MIT
@@ -77,6 +89,8 @@ tags:
     description: Listing, searching and reading messages.
   - name: audit
     description: The audit log.
+  - name: auditors
+    description: Auditor grants, the auditor's grant choice.
   - name: retention
     description: Retention rules and legal holds, for admins only.
 
@@ -172,6 +186,7 @@ paths:
     get:
       tags: [session]
       operationId: getSession
+      x-auditor: true
       summary: The logged-in user
       security: []
       responses:
@@ -190,6 +205,7 @@ paths:
     post:
       tags: [session]
       operationId: login
+      x-auditor: true
       summary: Log in with a password
       description: |
         Sets the session cookie. For a user with 2FA it sets no cookie and
@@ -227,7 +243,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "403":
-          description: The user is locked.
+          description: |
+            The user is locked, or is an auditor without an active grant
+            ("you have no active auditor access", only after a correct
+            password and second factor).
           content:
             application/json:
               schema:
@@ -237,16 +256,56 @@ paths:
     delete:
       tags: [session]
       operationId: logout
+      x-auditor: true
       summary: Log out
       security: []
       responses:
         "204":
           description: Logged out; the cookie is cleared.
 
+  /api/session/grant:
+    put:
+      tags: [auditors]
+      operationId: selectSessionGrant
+      x-auditor: true
+      summary: Pick the grant an auditor's session reads through
+      description: |
+        Binds the auditor's session to one of their active grants (`grants`
+        of `GET /api/session`); the session then ends with the grant at the
+        latest. An auditor may switch to another active grant at any time.
+        Recorded as `auditor.select`. Any other ID, and a caller who is no
+        auditor, gets `404 no such grant`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              additionalProperties: false
+              properties:
+                id:
+                  type: integer
+                  format: int64
+      responses:
+        "200":
+          description: Bound; the session as `GET /api/session` answers it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NoSuchGrant"
+
   /api/session/2fa:
     post:
       tags: [session]
       operationId: loginTwoFactor
+      x-auditor: true
       summary: Second login step
       description: Finishes a login of a user with 2FA and sets the session cookie.
       security: []
@@ -287,6 +346,7 @@ paths:
     post:
       tags: [session]
       operationId: beginPasskeyLogin
+      x-auditor: true
       summary: Start a passkey login
       security: []
       responses:
@@ -305,6 +365,7 @@ paths:
     post:
       tags: [session]
       operationId: finishPasskeyLogin
+      x-auditor: true
       summary: Finish a passkey login
       description: Sets the session cookie.
       security: []
@@ -346,6 +407,7 @@ paths:
     patch:
       tags: [profile]
       operationId: updateProfile
+      x-auditor: true
       summary: Change the own web UI settings
       description: |
         Changes the language and the formats of dates and numbers. The
@@ -376,6 +438,7 @@ paths:
     put:
       tags: [profile]
       operationId: changeOwnPassword
+      x-auditor: true
       summary: Change the own password
       description: Other sessions of the user end.
       requestBody:
@@ -413,6 +476,7 @@ paths:
     get:
       tags: [profile]
       operationId: getTwoFactor
+      x-auditor: true
       summary: The own 2FA state
       responses:
         "200":
@@ -469,6 +533,7 @@ paths:
     post:
       tags: [profile]
       operationId: beginTwoFactorSetup
+      x-auditor: true
       summary: Start the 2FA setup
       description: Creates a new TOTP secret and returns it once.
       responses:
@@ -493,6 +558,7 @@ paths:
     post:
       tags: [profile]
       operationId: confirmTwoFactorSetup
+      x-auditor: true
       summary: Finish the 2FA setup
       requestBody:
         required: true
@@ -558,6 +624,7 @@ paths:
     get:
       tags: [profile]
       operationId: listPasskeys
+      x-auditor: true
       summary: The own passkeys
       responses:
         "200":
@@ -587,6 +654,7 @@ paths:
     post:
       tags: [profile]
       operationId: beginPasskeyRegistration
+      x-auditor: true
       summary: Start adding a passkey
       requestBody:
         required: true
@@ -636,6 +704,7 @@ paths:
     post:
       tags: [profile]
       operationId: finishPasskeyRegistration
+      x-auditor: true
       summary: Finish adding a passkey
       requestBody:
         required: true
@@ -682,6 +751,7 @@ paths:
     delete:
       tags: [profile]
       operationId: removePasskey
+      x-auditor: true
       summary: Remove an own passkey
       description: All other sessions of the user end.
       responses:
@@ -859,6 +929,13 @@ paths:
                     several groups exist (`400 choose a group`), otherwise
                     the user joins the only one. An unknown id is
                     `400 unknown group`.
+                auditor:
+                  type: boolean
+                  default: false
+                  description: |
+                    Create an auditor: a login that reads only through
+                    auditor grants of owners of its group. Never with
+                    `admin` (`400`). The role never changes.
       responses:
         "201":
           description: Added. The generated password is shown only here.
@@ -919,11 +996,14 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [sharesEnded]
+                required: [sharesEnded, grantsRevoked]
                 properties:
                   sharesEnded:
                     type: integer
                     description: How many shares the move ended.
+                  grantsRevoked:
+                    type: integer
+                    description: How many auditor grants the move revoked, of the user as auditor or as owner.
         "204":
           description: Changed (`admin`, `locked`).
         "400":
@@ -935,7 +1015,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The user is the last admin who can log in.
+          description: The user is the last admin who can log in, or `admin` for an auditor.
           content:
             application/json:
               schema:
@@ -944,9 +1024,36 @@ paths:
       tags: [users]
       operationId: deleteUser
       summary: Remove a user
+      description: |
+        Removing an auditor first revokes their unrevoked grants (`reason`
+        `user_removed`); the grants stay in their owners' lists as history,
+        without the auditor's name.
       responses:
+        "200":
+          description: An auditor removed, with the grants that revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grantsRevoked]
+                properties:
+                  grantsRevoked:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, label, owner, auditor]
+                      properties:
+                        id:
+                          type: integer
+                          format: int64
+                        label:
+                          type: string
+                        owner:
+                          type: string
+                        auditor:
+                          type: string
         "204":
-          description: Removed.
+          description: Removed (not an auditor).
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1625,10 +1732,228 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/auditor-grants:
+    get:
+      tags: [auditors]
+      operationId: listAuditorGrants
+      x-auditor: true
+      summary: The caller's auditor grants, with their history
+      description: |
+        For an owner (also an admin), their own grants, newest first. The
+        auditor's name is `null` once the auditor left the owner's group or
+        was removed (`revokeReason` `group_change` or `user_removed`). For an
+        auditor, their grants whose owner is in the auditor's current group;
+        only active grants list their accounts. Accounts are only those
+        the owner still owns; a removed account stays in its grants until
+        it is purged.
+      responses:
+        "200":
+          description: The grants.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grants]
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditorGrant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [auditors]
+      operationId: createAuditorGrant
+      summary: Grant an auditor read access to own accounts
+      description: |
+        Needs the owner's password and, with 2FA, a code. `auditor` is the
+        exact login name of an auditor of the owner's customer group: a
+        name that does not exist, a user who is not an auditor and a user of
+        another group all answer the same `404 no such auditor in your
+        group`. `accounts` names the owner's own accounts (`404 no such
+        account` otherwise), each with all folders (`folders` null, also
+        folders added later) or the named ones. smtp (journal) accounts
+        cannot be granted (`409`). The grant lasts from `startsAt` (default
+        now) to `endsAt`, at most 365 days. `periodFrom`/`periodUntil`
+        limit the messages by date (`[from, until)`). The scope cannot be
+        changed later: revoke and create a new grant. Recorded as
+        `auditor.grant` with the whole scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [auditor, label, accounts, endsAt, currentPassword]
+              additionalProperties: false
+              properties:
+                auditor:
+                  type: string
+                label:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  description: The audit case, such as "Betriebsprüfung 2021–2023".
+                accounts:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [name]
+                    additionalProperties: false
+                    properties:
+                      name:
+                        type: string
+                      folders:
+                        type: [array, "null"]
+                        items:
+                          type: string
+                periodFrom:
+                  type: [string, "null"]
+                  format: date-time
+                periodUntil:
+                  type: [string, "null"]
+                  format: date-time
+                startsAt:
+                  type: [string, "null"]
+                  format: date-time
+                endsAt:
+                  type: string
+                  format: date-time
+                currentPassword:
+                  type: string
+                code:
+                  type: string
+                  description: A TOTP or recovery code; needed when the owner has 2FA on.
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditorGrant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Not logged in, or the password or code is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: "`no such auditor in your group` or `no such account`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: An smtp account cannot be granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/auditor-grants/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      tags: [auditors]
+      operationId: getAuditorGrant
+      summary: One of the owner's grants
+      responses:
+        "200":
+          description: The grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditorGrant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NoSuchGrant"
+    patch:
+      tags: [auditors]
+      operationId: extendAuditorGrant
+      summary: Extend one of the owner's grants
+      description: |
+        Moves `endsAt` later, at most 365 days from now. Needs the owner's
+        password and, with 2FA, a code. A revoked grant cannot be extended
+        (`409`). Recorded as `auditor.extend`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endsAt, currentPassword]
+              additionalProperties: false
+              properties:
+                endsAt:
+                  type: string
+                  format: date-time
+                currentPassword:
+                  type: string
+                code:
+                  type: string
+      responses:
+        "200":
+          description: Extended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditorGrant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Not logged in, or the password or code is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NoSuchGrant"
+        "409":
+          description: The grant was revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    delete:
+      tags: [auditors]
+      operationId: revokeAuditorGrant
+      summary: Revoke a grant
+      description: |
+        Ends the grant and the auditor's sessions on it at once. An owner
+        revokes their own grants; an admin any grant. Recorded as
+        `auditor.revoke`. A revocation is final.
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NoSuchGrant"
+        "409":
+          description: The grant is revoked already.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/audit:
     get:
       tags: [audit]
       operationId: listAuditEntries
+      x-auditor: true
       summary: The audit log, newest first
       description: |
         A user gets their own entries and other users' reads of the
@@ -1655,7 +1980,7 @@ paths:
           in: query
           description: |
             A group (`login`, `search`, `read`, `export`, `accounts`, `users`,
-            `profile`, `api_keys`, `sync`, `retention`) or an exact action such as
+            `profile`, `api_keys`, `sync`, `retention`, `auditor`) or an exact action such as
             `message.open`. Repeatable; none means all.
           schema:
             type: array
@@ -1705,6 +2030,16 @@ paths:
                 minimum: 1
               - type: string
                 enum: [none]
+        - name: grant
+          in: query
+          description: |
+            An auditor grant's id: only the entries of that grant. Owners
+            name their own grants only; an unknown and another owner's id
+            both give `404 no such grant`. For admins any grant; an unknown
+            id gives `400`. Intersects with the other filters.
+          schema:
+            type: integer
+            minimum: 1
         - name: cursor
           in: query
           description: "`nextCursor` of the previous page."
@@ -1744,7 +2079,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "404":
-          description: "A `user` value names no user."
+          description: "A `user` value names no user, or `grant` no grant of the owner."
           content:
             application/json:
               schema:
@@ -1754,6 +2089,7 @@ paths:
     get:
       tags: [accounts]
       operationId: getStatus
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -1791,6 +2127,7 @@ paths:
     get:
       tags: [accounts]
       operationId: listAccounts
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -1800,13 +2137,19 @@ paths:
         the own accounts, with the users each is shared with. `shared` lists
         the accounts other users shared with the user, with their folders
         only. An API key gets what its owner's session gets.
+
+        An auditor gets `AuditorAccounts`: the accounts of the session's
+        grant in `shared`, with the granted folders only, without counts or
+        sync state. Recorded as `account.list`.
       responses:
         "200":
           description: The accounts.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Accounts"
+                oneOf:
+                  - $ref: "#/components/schemas/Accounts"
+                  - $ref: "#/components/schemas/AuditorAccounts"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -2512,6 +2855,7 @@ paths:
     get:
       tags: [messages]
       operationId: listMessages
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -2632,6 +2976,7 @@ paths:
     get:
       tags: [messages]
       operationId: getMessage
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -2661,6 +3006,7 @@ paths:
     get:
       tags: [messages]
       operationId: getConversation
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -2701,6 +3047,7 @@ paths:
     get:
       tags: [messages]
       operationId: getMessageHTML
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -2754,6 +3101,7 @@ paths:
     get:
       tags: [messages]
       operationId: getMessageRaw
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -2790,6 +3138,7 @@ paths:
     get:
       tags: [messages]
       operationId: getMessagePart
+      x-auditor: true
       security:
         - session: []
         - apiKey: [read]
@@ -2901,6 +3250,12 @@ components:
             $ref: "#/components/schemas/Error"
     NotFound:
       description: Not found, or not the user's.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoSuchGrant:
+      description: "`no such grant`: unknown, of another owner, or (an auditor's choice) not active; the same body for each."
       content:
         application/json:
           schema:
@@ -3030,6 +3385,11 @@ components:
         viaShare:
           type: boolean
           description: Another user's read of an account the viewer shared; only in a non-admin's page.
+        viaAuditor:
+          type: boolean
+          description: |
+            With `viaShare`: an entry of one of the viewer's auditor grants by
+            the auditor or by someone else, whose name is then `operator`.
         group:
           type: object
           description: |
@@ -3075,6 +3435,9 @@ components:
           $ref: "#/components/schemas/Language"
         locale:
           $ref: "#/components/schemas/Locale"
+        auditor:
+          type: boolean
+          description: The user is an auditor; missing for other users.
     Language:
       type: string
       maxLength: 35
@@ -3095,6 +3458,132 @@ components:
       properties:
         user:
           $ref: "#/components/schemas/User"
+        grant:
+          $ref: "#/components/schemas/SessionGrant"
+        grants:
+          type: array
+          description: An auditor's active grants to pick from; missing for other users.
+          items:
+            $ref: "#/components/schemas/SessionGrant"
+        grantSelectionRequired:
+          type: boolean
+          description: An auditor's session that must pick a grant first (`PUT /api/session/grant`).
+    SessionGrant:
+      type: object
+      description: An active grant as its auditor sees it; `grant` is missing until the session has one.
+      required: [id, label, owner, periodFrom, periodUntil, startsAt, endsAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        label:
+          type: string
+        owner:
+          type: string
+        periodFrom:
+          type: [string, "null"]
+          format: date-time
+        periodUntil:
+          type: [string, "null"]
+          format: date-time
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+    AuditorGrant:
+      type: object
+      required: [id, owner, auditor, label, periodFrom, periodUntil, startsAt, endsAt, createdAt, revokedAt, revokeReason, state, accounts]
+      properties:
+        id:
+          type: integer
+          format: int64
+        owner:
+          type: string
+        auditor:
+          type: [string, "null"]
+          description: Null once the auditor left the owner's group or was removed.
+        label:
+          type: string
+        periodFrom:
+          type: [string, "null"]
+          format: date-time
+        periodUntil:
+          type: [string, "null"]
+          format: date-time
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+        revokeReason:
+          type: [string, "null"]
+          enum: [owner, operator, group_change, account_move, account_purge, user_removed, null]
+        state:
+          type: string
+          enum: [active, scheduled, expired, revoked, suspended]
+          description: "`suspended`: inside its window, but the owner or the auditor is locked."
+        accounts:
+          type: array
+          items:
+            type: object
+            required: [name, folders]
+            properties:
+              name:
+                type: string
+              folders:
+                type: [array, "null"]
+                description: The granted folders; null for all folders.
+                items:
+                  type: string
+    AuditorAccounts:
+      type: object
+      description: "`GET /api/accounts` for an auditor."
+      required: [accounts, shared, manage]
+      properties:
+        accounts:
+          type: array
+          maxItems: 0
+          items:
+            $ref: "#/components/schemas/Account"
+        shared:
+          type: array
+          items:
+            type: object
+            required: [key, name, owner, kind, removed, folders]
+            properties:
+              key:
+                type: string
+                description: "`owner/name`, for `account=`."
+              name:
+                type: string
+              owner:
+                type: string
+              kind:
+                type: string
+              removed:
+                type: boolean
+              folders:
+                type: array
+                items:
+                  type: object
+                  required: [name, delimiter]
+                  properties:
+                    name:
+                      type: string
+                    delimiter:
+                      type: [string, "null"]
+        manage:
+          type: boolean
+          const: false
     NoSession:
       type: object
       required: [error, setupRequired]
@@ -3240,7 +3729,7 @@ components:
 
     AdminUser:
       type: object
-      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, apiKeys, accounts, failingAccounts, createdAt, lastLoginAt, self, group]
+      required: [name, admin, locked, mustChangePassword, twoFactorEnabled, passkeys, apiKeys, accounts, failingAccounts, createdAt, lastLoginAt, self, group, auditor]
       properties:
         name:
           type: string
@@ -3272,6 +3761,9 @@ components:
           description: The logged-in admin, whose own row cannot be changed here.
         group:
           $ref: "#/components/schemas/GroupRef"
+        auditor:
+          type: boolean
+          description: The user is an auditor, who reads only through auditor grants.
     GroupRef:
       type: object
       description: A customer group, by id and name.

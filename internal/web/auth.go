@@ -255,21 +255,30 @@ func (s *Server) sessionWithToken(r *http.Request) (*store.Session, string, erro
 // without a login. New endpoints are protected by default (accessSession
 // is the zero value). /healthz and the UI code (/, /assets/, the web app
 // manifest and its icons: ui.RootPaths) are public; they contain no data.
-func (s *Server) authenticate(mux *http.ServeMux, accessOf map[string]access) http.Handler {
+//
+// An auditor's session (#393) may call only the routes of the auditor
+// allowlist (route.auditor), checked right after the password and 2FA
+// gates: any other route answers 403 and writes auditor.denied. An
+// auditor with several active grants must then pick one first
+// (grantGateAllowed), once the password and 2FA setup are done. Every
+// refusal of an auditor's request by these gates writes auditor.denied
+// with its reason.
+func (s *Server) authenticate(mux *http.ServeMux, rules map[string]route) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			mux.ServeHTTP(w, r)
 			return
 		}
 		_, pattern := mux.Handler(r)
-		a := accessOf[pattern]
+		rule := rules[pattern]
+		a := rule.access
 		if a == accessPublic {
 			mux.ServeHTTP(w, r)
 			return
 		}
 		// A key request never falls back to the session cookie.
 		if key, ok := bearerKey(r); ok {
-			if r = s.authenticateKey(w, r, key, a); r != nil {
+			if r = s.authenticateKey(w, r, key, a, pattern); r != nil {
 				mux.ServeHTTP(w, r)
 			}
 			return
@@ -287,20 +296,39 @@ func (s *Server) authenticate(mux *http.ServeMux, accessOf map[string]access) ht
 			s.fail(w, r, http.StatusUnauthorized, "login required", nil)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionKey{}, sess)
+		r = r.WithContext(context.WithValue(ctx, sessionTokenKey{}, token))
 		// A generated password, and a required 2FA that is not set up yet,
 		// both restrict the session to finishing the setup: first the
-		// password, then 2FA.
+		// password, then 2FA. An auditor's refusal here is recorded like
+		// every other refusal of an auditor (auditorDenied).
+		setupPending := sess.MustChangePassword || (s.twoFactorRequired(sess.IsAdmin, sess.IsAuditor) && !sess.TwoFactorEnabled)
 		if sess.MustChangePassword && (r.Method != http.MethodPut || r.URL.Path != profilePasswordPath) {
+			s.auditorDeniedEntry(r, sess, pattern, reasonPasswordChangeRequired)
 			s.writeJSON(w, http.StatusForbidden, passwordChangeJSON{Error: "choose your own password first", PasswordChangeRequired: true})
 			return
 		}
-		if !sess.MustChangePassword && s.twoFactorRequired(sess.IsAdmin) && !sess.TwoFactorEnabled &&
-			!twoFactorSetupPathAllowed(r.Method, r.URL.Path) {
+		if !sess.MustChangePassword && setupPending && !twoFactorSetupPathAllowed(r.Method, r.URL.Path) {
+			s.auditorDeniedEntry(r, sess, pattern, reasonTwoFactorRequired)
 			s.writeJSON(w, http.StatusForbidden, twoFactorSetupJSON{Error: "set up two-factor authentication first", TwoFactorSetupRequired: true})
 			return
 		}
-		ctx := context.WithValue(r.Context(), sessionKey{}, sess)
-		mux.ServeHTTP(w, r.WithContext(context.WithValue(ctx, sessionTokenKey{}, token)))
+		if sess.IsAuditor {
+			if !rule.auditor {
+				s.auditorDenied(w, r, pattern)
+				return
+			}
+			// The grant gate comes only after the setup: while the password
+			// or 2FA setup is pending, the gates above let through nothing
+			// but the setup steps, and those need no grant. Every other
+			// route stays closed until all three gates pass.
+			if !setupPending && sess.GrantID == nil && !grantGateAllowed(r.Method, r.URL.Path) {
+				s.auditorDeniedEntry(r, sess, pattern, reasonGrantSelectionRequired)
+				s.writeJSON(w, http.StatusForbidden, grantSelectionJSON{Error: "choose an audit case first", GrantSelectionRequired: true})
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
 	})
 }
 
@@ -317,17 +345,63 @@ type userJSON struct {
 	// Language and Locale are the user's web UI settings, "auto" or a tag.
 	Language string `json:"language"`
 	Locale   string `json:"locale"`
+	// Auditor: the user reads only through auditor grants (#393).
+	Auditor bool `json:"auditor,omitempty"`
 }
 
 func (s *Server) userJSON(name string, admin, mustChange, twoFactor bool, language, locale string) userJSON {
 	return userJSON{
-		Name: name, Admin: admin, MustChangePassword: mustChange, TwoFactorEnabled: twoFactor, TwoFactorRequired: s.twoFactorRequired(admin),
+		Name: name, Admin: admin, MustChangePassword: mustChange, TwoFactorEnabled: twoFactor, TwoFactorRequired: s.twoFactorRequired(admin, false),
 		Language: language, Locale: locale,
 	}
 }
 
 type sessionJSON struct {
 	User userJSON `json:"user"`
+	// Auditor sessions only (#393): Grant is the grant the session reads
+	// through, null until the auditor picks one; Grants are the auditor's
+	// active grants to pick from; GrantSelectionRequired says that the
+	// session must pick one first (PUT /api/session/grant).
+	Grant                  *sessionGrantJSON  `json:"grant,omitempty"`
+	Grants                 []sessionGrantJSON `json:"grants,omitempty"`
+	GrantSelectionRequired bool               `json:"grantSelectionRequired,omitempty"`
+}
+
+// sessionBody is the answer of GET /api/session and of a completed login:
+// the user, and for an auditor the grants (#393).
+func (s *Server) sessionBody(ctx context.Context, sess *store.Session) (sessionJSON, error) {
+	u := s.userJSON(sess.UserName, sess.IsAdmin, sess.MustChangePassword, sess.TwoFactorEnabled, sess.Language, sess.Locale)
+	if !sess.IsAuditor {
+		return sessionJSON{User: u}, nil
+	}
+	u.Auditor, u.TwoFactorRequired = true, true
+	out := sessionJSON{User: u, Grants: []sessionGrantJSON{}, GrantSelectionRequired: sess.GrantID == nil}
+	grants, err := s.store.ActiveGrants(ctx, sess.UserID)
+	if err != nil {
+		return out, err
+	}
+	for _, g := range grants {
+		j := toSessionGrant(g)
+		out.Grants = append(out.Grants, j)
+		if sess.GrantID != nil && *sess.GrantID == g.ID {
+			out.Grant = &j
+		}
+	}
+	return out, nil
+}
+
+// loginBody is the answer of a completed login of u with the session
+// whose token hashes to hash. An auditor's session is read back for the
+// grant the login bound it to.
+func (s *Server) loginBody(ctx context.Context, u *store.User, hash []byte, twoFactor bool) (sessionJSON, error) {
+	if !u.IsAuditor {
+		return sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, twoFactor, u.Language, u.Locale)}, nil
+	}
+	sess, err := s.store.GetSession(ctx, hash, s.now().Add(-auth.IdleTimeout))
+	if err != nil {
+		return sessionJSON{}, err
+	}
+	return s.sessionBody(ctx, sess)
 }
 
 type noSessionJSON struct {
@@ -346,7 +420,12 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess != nil {
-		s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(sess.UserName, sess.IsAdmin, sess.MustChangePassword, sess.TwoFactorEnabled, sess.Language, sess.Locale)})
+		body, err := s.sessionBody(r.Context(), sess)
+		if err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, body)
 		return
 	}
 	n, err := s.store.CountUsers(r.Context())
@@ -445,12 +524,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	e.SetUser(u.ID, u.Name)
 	e.Detail("method", "password")
 	if err := s.store.StartSession(withAudit(r, e), hash, u.ID, s.currentTime().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent())); err != nil {
+		if s.refuseNoGrant(w, r, "password", err, u) {
+			return
+		}
+		s.failStore(w, r, err)
+		return
+	}
+	body, err := s.loginBody(r.Context(), u, hash, false)
+	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
 	s.log.Info("login", "user", u.Name, "addr", s.clientIP(r))
 	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(u.Name, u.IsAdmin, u.MustChangePassword, false, u.Language, u.Locale)})
+	s.writeJSON(w, http.StatusOK, body)
 }
 
 type retryJSON struct {
@@ -473,6 +560,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		if sess != nil && token == valid {
 			e := s.selfEntry(r, "auth.logout")
 			e.SetUser(sess.UserID, sess.UserName)
+			s.tagAuditor(r.Context(), e, sess)
 			ctx = withAudit(r, e)
 		}
 		err := s.store.EndSession(ctx, hash)

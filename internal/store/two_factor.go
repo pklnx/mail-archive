@@ -326,7 +326,8 @@ func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, 
 		if err := q.DeleteTwoFactorChallenge(ctx, challengeID); err != nil {
 			return err
 		}
-		if err := q.CreateSession(ctx, db.CreateSessionParams{ID: sessionHash, UserID: u.ID, ExpiresAt: expiresAt, UserAgent: userAgent}); err != nil {
+		// An auditor without an active grant: a NoGrantError (#393).
+		if err := createLoginSession(ctx, q, u.ID, u.IsAuditor, u.Name, sessionHash, expiresAt, userAgent); err != nil {
 			return err
 		}
 		if err := q.RecordLogin(ctx, u.ID); err != nil {

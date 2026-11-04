@@ -2,7 +2,8 @@
 -- A key works while it is not revoked or expired and its user is not
 -- locked. A removed user's keys are gone through the cascade.
 SELECT k.id, k.name, k.scopes, k.last_used_at,
-       u.id AS user_id, u.name AS user_name, u.is_admin, u.must_change_password, u.two_factor_enabled, u.group_id
+       u.id AS user_id, u.name AS user_name, u.is_admin, u.must_change_password, u.two_factor_enabled, u.group_id,
+       u.is_auditor
 FROM api_keys k
 JOIN users u ON u.id = k.user_id
 WHERE k.key_hash = $1

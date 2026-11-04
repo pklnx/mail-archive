@@ -97,9 +97,9 @@ characters and are prompted twice, or read once from stdin with
 
 | Command | Purpose |
 |---|---|
-| `user add NAME` | Create a user. `--admin` for an admin (admins manage users in the web UI; they do not see other users' mail, but they see everyone's [audit log](../guide/audit-log)). `--group GROUP` names the user's [customer group](#groups); needed while several groups exist, otherwise the user joins the only one. |
-| `user list` | List users with group, role, state (active, locked, must change password), number of accounts, passkeys and active API keys, and last login. |
-| `user set-group NAME GROUP` | Move the user, with the accounts they own, into another customer group. Ends every share that would cross groups and prints each one. |
+| `user add NAME` | Create a user. `--admin` for an admin (admins manage users in the web UI; they do not see other users' mail, but they see everyone's [audit log](../guide/audit-log)). `--group GROUP` names the user's [customer group](#groups); needed while several groups exist, otherwise the user joins the only one. `--auditor` creates an [auditor](#auditors) instead: its password is generated and printed once, to be changed at the first login (no `--password-stdin`); never with `--admin`, and never the first user. |
+| `user list` | List users with group, role (`user`, `admin` or `auditor`), state (active, locked, must change password), number of accounts, passkeys and active API keys, and last login. |
+| `user set-group NAME GROUP` | Move the user, with the accounts they own, into another customer group. Ends every share that would cross groups and revokes every [auditor grant](#auditors) of the user, as auditor or as owner, that would cross groups (the auditor's sessions on it end); prints each one. |
 | `user set-password NAME` | Set a new password. Ends the user's sessions. |
 | `user reset-password NAME` | Generate a password, print it once; the user must change it at the next login. Ends the user's sessions, removes their passkeys and revokes their [API keys](./api#api-keys) (`--keep-passkeys` and `--keep-api-keys` keep them). |
 | `user remove-passkeys NAME` | Remove all passkeys of a user, for example after a lost device. Ends the user's sessions. |
@@ -108,7 +108,7 @@ characters and are prompted twice, or read once from stdin with
 | `user reset-2fa NAME` | Turn off the user's 2FA, for example after a lost phone. Ends the user's sessions; admins set it up again at the next login. |
 | `user promote NAME`, `user demote NAME` | Grant or take away the admin role. |
 | `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
-| `user remove NAME` | Delete the user. Refused while the user owns accounts, also removed ones; hand them over with `account move` first. |
+| `user remove NAME` | Delete the user. Refused while the user owns accounts, also removed ones; hand them over with `account move` first. An auditor's unrevoked grants are revoked first and printed; they stay in their owners' lists as history. |
 
 The last admin who can log in cannot be locked, removed or demoted. Admins
 can do the same in the web UI; see [Users](../guide/users).
@@ -127,6 +127,20 @@ case; commands find a group by its name in any case.
 | `group rename NAME NEW-NAME` | Rename a group. |
 | `group remove NAME` | Remove a group. Refused while it has users, while a legal hold names it (also a released one), and for the last group. |
 
+### Auditors
+
+An auditor (a tax advisor or tax auditor) reads only what an owner of its
+customer group grants it: some of the owner's accounts and folders, an
+optional message period, for a limited time; see
+[Security](./security#login). Owners create and extend grants in the web UI;
+the command line lists and revokes them. A tax advisor who audits two
+customers gets one auditor login per group.
+
+| Command | Purpose |
+|---|---|
+| `auditor list` | List every grant, ended ones too, newest first: ID, the group, owner and auditor (`-` once the auditor was removed), label, start, end, and the state: `active`, `scheduled`, `expired`, `suspended` (the owner or the auditor is locked) or `revoked` with its reason. |
+| `auditor revoke ID` | Revoke a grant at once; the auditor's sessions on it end. Recorded as `auditor.revoke` with reason `operator`. A revocation is final. |
+
 ## Accounts
 
 | Command | Purpose |
@@ -144,7 +158,7 @@ case; commands find a group by its name in any case.
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. A disabled smtp account answers `451`: the mail server keeps the copies queued for `maximal_queue_lifetime` (5 days by default) and then drops them. |
 | `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced or imported into. Prints how to delete it completely with `account purge`. |
 | `account purge NAME` | Delete a removed account completely: its locations, folders and the account; the name is free again. Messages also in another account stay there; messages whose last location is in this account are deleted like a retention deletion (record, attestation entry, file removed after `MAIL_ARCHIVE_RETENTION_FILE_GRACE`). Refused, naming the reason, for an account that is not removed, has a retention rule, is named by a legal hold (also a released one) or has mail covered by an active hold, is being synced, filled or imported into, or while another purge is open. Shows the locations to remove, the messages to delete and those kept (by owner and account), then asks for the number of messages to delete; `--count N` gives it instead and must match, `--dry-run` stops after the preview. Runs in batches (`--lock-timeout`, default 10 minutes, per batch); an interrupted purge resumes with the same command or when the web server starts. `--cancel` cancels an open purge: what it deleted stays deleted, the account stays removed. See [Deleting a removed account completely](../guide/accounts#deleting-a-removed-account-completely). |
-| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. |
+| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. The account leaves the old owner's [auditor grants](#auditors); a grant left without accounts is revoked; each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. |
 
 Account changes work while the account is being synced and apply from the
 next sync; only `account remove` waits for the sync to finish. A command

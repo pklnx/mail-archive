@@ -152,8 +152,10 @@ func newUserSetGroupCmd() *cobra.Command {
 		Short: "Move a user into another customer group",
 		Long: `Move a user into another customer group, with the accounts they own. Every
 share that would then cross groups ends: the user's accounts shared with
-users of the old group, and old-group accounts shared with the user. The
-ended shares are printed and recorded in the audit log.`,
+users of the old group, and old-group accounts shared with the user. Every
+auditor grant of the user, as auditor or as owner, that would cross groups
+is revoked, and the auditor's sessions on it end. The ended shares and
+revoked grants are printed and recorded in the audit log.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, u, err := loadUser(cmd, args[0])
@@ -177,6 +179,9 @@ ended shares are printed and recorded in the audit log.`,
 			fmt.Fprintf(out, "%q moved from group %q to %q\n", u.Name, c.From, c.To)
 			for _, s := range c.Ended {
 				fmt.Fprintf(out, "share ended: %s/%s with %s\n", s.Owner, s.Account, s.User)
+			}
+			for _, g := range c.GrantsRevoked {
+				fmt.Fprintf(out, "auditor grant revoked: %d %q of %s to %s\n", g.ID, g.Label, g.Owner, g.Auditor)
 			}
 			return nil
 		},

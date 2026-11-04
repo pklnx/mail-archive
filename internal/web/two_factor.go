@@ -27,9 +27,10 @@ const twoFactorChallengeTTL = 5 * time.Minute
 
 const errInvalidSecondFactor = "invalid two-factor code"
 
-// twoFactorRequired reports whether the user must use 2FA.
-func (s *Server) twoFactorRequired(admin bool) bool {
-	return admin || s.require2FA
+// twoFactorRequired reports whether the user must use 2FA: admins and
+// auditors (#393) always.
+func (s *Server) twoFactorRequired(admin, auditor bool) bool {
+	return admin || auditor || s.require2FA
 }
 
 // twoFactorSetupPathAllowed lists what a user who must still set up 2FA may
@@ -83,7 +84,7 @@ func (s *Server) handleGetTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, twoFactorJSON{
-		Enabled: st.Enabled, Required: s.twoFactorRequired(st.IsAdmin), Admin: st.IsAdmin, SetupPending: st.SetupPending,
+		Enabled: st.Enabled, Required: s.twoFactorRequired(st.IsAdmin, currentSession(r).IsAuditor), Admin: st.IsAdmin, SetupPending: st.SetupPending,
 	})
 }
 
@@ -120,7 +121,7 @@ func (s *Server) handleBeginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, twoFactorJSON{
-		Required: s.twoFactorRequired(sess.IsAdmin), Admin: sess.IsAdmin, SetupPending: true,
+		Required: s.twoFactorRequired(sess.IsAdmin, sess.IsAuditor), Admin: sess.IsAdmin, SetupPending: true,
 		Secret: secret, OtpauthURI: uri, QRDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(code.PNG()),
 	})
 }
@@ -225,7 +226,14 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, store.ErrTwoFactorExpired):
 		s.fail(w, r, http.StatusUnauthorized, "the login has expired; log in again", nil)
 		return
+	case s.refuseNoGrant(w, r, "2fa", err, u):
+		return
 	case err != nil:
+		s.failStore(w, r, err)
+		return
+	}
+	body, err := s.loginBody(r.Context(), user, hash, true)
+	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
@@ -233,7 +241,7 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	s.limiter.Succeed(u.Name)
 	s.log.Info("login", "user", user.Name, "addr", s.clientIP(r), "2fa", true)
 	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
-	s.writeJSON(w, http.StatusOK, sessionJSON{User: s.userJSON(user.Name, user.IsAdmin, user.MustChangePassword, true, user.Language, user.Locale)})
+	s.writeJSON(w, http.StatusOK, body)
 }
 
 // truncateUserAgent makes a user agent storable for a session: valid UTF-8
@@ -273,7 +281,7 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sess := currentSession(r)
-	if s.twoFactorRequired(sess.IsAdmin) {
+	if s.twoFactorRequired(sess.IsAdmin, sess.IsAuditor) {
 		s.fail(w, r, http.StatusForbidden, "two-factor authentication is required for you", nil)
 		return
 	}

@@ -191,3 +191,18 @@ FROM active_auditor_grant_accounts ga
 JOIN accounts a ON a.id = ga.account_id
 WHERE ga.auditor_id = @auditor_id::bigint
 ORDER BY ga.grant_id, a.name, a.id;
+
+-- name: GrantOwner :one
+-- The owner of a grant, for an admin's grant filter of the Log.
+SELECT owner_id FROM auditor_grants WHERE id = @id;
+
+-- name: ListAllGrants :many
+-- Every grant with its history, newest first, for the command line.
+SELECT g.id, g.label, g.starts_at, g.ends_at, g.revoked_at, g.revoke_reason, g.created_at,
+       o.name AS owner_name, a.name AS auditor_name, cg.name AS group_name,
+       EXISTS (SELECT 1 FROM active_auditor_grants v WHERE v.id = g.id)::boolean AS active
+FROM auditor_grants g
+JOIN users o ON o.id = g.owner_id
+JOIN customer_groups cg ON cg.id = o.group_id
+LEFT JOIN users a ON a.id = g.auditor_id
+ORDER BY g.created_at DESC, g.id DESC;

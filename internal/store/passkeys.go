@@ -271,7 +271,8 @@ func (s *Store) CompletePasskeyLogin(ctx context.Context, token string, credenti
 		if err := q.UpdatePasskeyUse(ctx, db.UpdatePasskeyUseParams{ID: p.ID, Credential: cred}); err != nil {
 			return err
 		}
-		if err := q.CreateSession(ctx, db.CreateSessionParams{ID: sessionHash, UserID: u.ID, ExpiresAt: expiresAt, UserAgent: userAgent}); err != nil {
+		// An auditor without an active grant: a NoGrantError (#393).
+		if err := createLoginSession(ctx, q, u.ID, u.IsAuditor, u.Name, sessionHash, expiresAt, userAgent); err != nil {
 			return err
 		}
 		if err := q.RecordLogin(ctx, u.ID); err != nil {

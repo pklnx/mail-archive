@@ -73,7 +73,7 @@ func hashPassword(cmd *cobra.Command, pw string) (string, error) {
 }
 
 func newUserAddCmd() *cobra.Command {
-	var admin, passwordStdin bool
+	var admin, auditor, passwordStdin bool
 	var group string
 	cmd := &cobra.Command{
 		Use:   "add NAME [--group GROUP]",
@@ -86,12 +86,25 @@ while several groups exist, otherwise the user joins the only one. Names
 are unique across all groups, so prefix them per customer (meier.anna).
 
 Admins will manage users in the web UI. They do not see other users' mail,
-but they see everyone's audit log: searches, opened messages, logins.`,
+but they see everyone's audit log: searches, opened messages, logins.
+
+--auditor creates an auditor (a tax advisor or tax auditor): a login that
+reads only what an owner of its group grants it, read-only and for a
+limited time, and must set up two-factor authentication. Its password is
+generated and printed once; it must be changed at the first login. The
+role never changes; a tax advisor gets one auditor login per customer
+group.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := auth.NormalizeUserName(args[0])
 			if err := auth.ValidateUserName(name); err != nil {
 				return err
+			}
+			if admin && auditor {
+				return errors.New("an auditor cannot be an admin")
+			}
+			if auditor && passwordStdin {
+				return errors.New("an auditor's password is generated; leave out --password-stdin")
 			}
 			a, err := openApp(cmd.Context())
 			if err != nil {
@@ -113,7 +126,14 @@ but they see everyone's audit log: searches, opened messages, logins.`,
 			} else if len(n) > 1 {
 				return errors.New("several customer groups exist; choose one with --group (see: " + commandName() + " group list)")
 			}
-			pw, err := readNewPassword(passwordStdin, name)
+			// An auditor's password is generated (#393): the admin hands it
+			// over, and the auditor chooses their own at the first login.
+			var pw string
+			if auditor {
+				pw, err = auth.GeneratePassword()
+			} else {
+				pw, err = readNewPassword(passwordStdin, name)
+			}
 			if err != nil {
 				return err
 			}
@@ -124,21 +144,32 @@ but they see everyone's audit log: searches, opened messages, logins.`,
 			e := cliTargeted("user.add")
 			e.SetTarget(store.TargetUser, "", name) // the ID is set when it exists
 			e.Detail("admin", admin)
-			u, err := a.store.CreateUserInGroup(withCLIAudit(cmd, e), store.NewUser{Name: name, PasswordHash: hash, Admin: admin, GroupID: groupID})
+			u, err := a.store.CreateUserInGroup(withCLIAudit(cmd, e), store.NewUser{
+				Name: name, PasswordHash: hash, Admin: admin, GroupID: groupID, Auditor: auditor, Generated: auditor,
+			})
 			if err != nil {
 				switch {
 				case errors.Is(err, store.ErrConflict):
 					return fmt.Errorf("user %q already exists", name)
 				case errors.Is(err, store.ErrGroupRequired):
 					return errors.New("several customer groups exist; choose one with --group (see: " + commandName() + " group list)")
+				case errors.Is(err, store.ErrFirstUserAuditor):
+					return errors.New("the first user cannot be an auditor; create the first admin with: " + commandName() + " user add NAME --admin")
 				}
 				return err
 			}
 			role := "user"
-			if admin {
+			switch {
+			case admin:
 				role = "admin"
+			case auditor:
+				role = "auditor"
 			}
 			fmt.Printf("%s %q created\n", role, name)
+			if auditor {
+				fmt.Printf("password for %q (shown only now; to be changed at the first login):\n%s\n", name, pw)
+				return nil
+			}
 			// The first user gets the accounts added before any user existed.
 			if counts, err := a.store.CountOwnedAccounts(cmd.Context()); err == nil && counts[u.ID] > 0 {
 				fmt.Printf("%q owns the %d existing account(s)\n", name, counts[u.ID])
@@ -147,6 +178,7 @@ but they see everyone's audit log: searches, opened messages, logins.`,
 		},
 	}
 	cmd.Flags().BoolVar(&admin, "admin", false, "allow managing users")
+	cmd.Flags().BoolVar(&auditor, "auditor", false, "create an auditor, who reads only through grants (password generated)")
 	cmd.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from stdin")
 	cmd.Flags().StringVar(&group, "group", "", "the user's customer group (needed while several exist)")
 	return cmd
@@ -192,8 +224,11 @@ func newUserListCmd() *cobra.Command {
 			// STATE says "must change password" for generated passwords.
 			for _, u := range users {
 				role, state, last := "user", "active", "never"
-				if u.IsAdmin {
+				switch {
+				case u.IsAdmin:
 					role = "admin"
+				case u.IsAuditor:
+					role = "auditor"
 				}
 				switch {
 				case u.LockedAt != nil:
@@ -303,7 +338,8 @@ func newUserRemoveCmd() *cobra.Command {
 				return err
 			}
 			defer a.close()
-			if err := a.store.DeleteUser(withCLIAudit(cmd, cliUserTarget(cliTargeted("user.remove"), u)), u.ID); err != nil {
+			e := cliUserTarget(cliTargeted("user.remove"), u)
+			if err := a.store.DeleteUser(withCLIAudit(cmd, e), u.ID); err != nil {
 				if errors.Is(err, store.ErrOwnsAccounts) {
 					n := int64(0)
 					if counts, cerr := a.store.CountOwnedAccounts(cmd.Context()); cerr == nil {
@@ -315,6 +351,12 @@ func newUserRemoveCmd() *cobra.Command {
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("user %q removed\n", u.Name)
+			// An auditor's grants were revoked first and stay as history.
+			if revoked, ok := e.Details["grants_revoked"].([]store.RevokedGrant); ok {
+				for _, g := range revoked {
+					fmt.Printf("auditor grant %d (%q of %s) revoked\n", g.ID, g.Label, g.Owner)
+				}
+			}
 			return nil
 		},
 	}
