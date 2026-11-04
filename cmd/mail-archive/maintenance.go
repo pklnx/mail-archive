@@ -268,6 +268,7 @@ several users have an account with that name). Removed accounts are included.`,
 	cmd.Flags().StringVar(&folder, "folder", "", "only this folder of --account")
 	_ = cmd.MarkFlagRequired("format")
 	_ = cmd.MarkFlagRequired("out")
+	cmd.AddCommand(newExportVerifyCmd())
 	return cmd
 }
 

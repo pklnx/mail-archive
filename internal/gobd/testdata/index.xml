@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE DataSet SYSTEM "gdpdu-01-09-2004.dtd">
+<DataSet>
+  <Version>1.0</Version>
+  <DataSupplier>
+    <Name>mail-archive v1.5.0</Name>
+    <Location></Location>
+    <Comment>mail-archive GoBD export, format v1. The .eml files under mail/ are the documents; these tables are an aid.</Comment>
+  </DataSupplier>
+  <Media>
+    <Name>mail-archive export</Name>
+    <Table>
+      <URL>messages.csv</URL>
+      <Name>messages</Name>
+      <Description>one row per exported message</Description>
+      <UTF8/>
+      <DecimalSymbol>,</DecimalSymbol>
+      <DigitGroupingSymbol>.</DigitGroupingSymbol>
+      <Range>
+        <From>2</From>
+      </Range>
+      <VariableLength>
+        <ColumnDelimiter>;</ColumnDelimiter>
+        <RecordDelimiter>&#13;&#10;</RecordDelimiter>
+        <TextEncapsulator>&quot;</TextEncapsulator>
+        <VariablePrimaryKey>
+          <Name>sha256</Name>
+          <Description>SHA-256 of the .eml file (key)</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariableColumn>
+          <Name>file</Name>
+          <Description>path of the .eml file in this export</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>size</Name>
+          <Description>size of the .eml file in bytes</Description>
+          <Numeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>date</Name>
+          <Description>date of the message (Date header, else arrival) in the export time zone</Description>
+          <Date>
+            <Format>DD.MM.YYYY</Format>
+          </Date>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>time</Name>
+          <Description>time of the message, HH:MM:SS, in the export time zone</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>date_utc</Name>
+          <Description>date and time of the message in UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>from</Name>
+          <Description>From header</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>to</Name>
+          <Description>To header</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>cc</Name>
+          <Description>Cc header</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>subject</Name>
+          <Description>Subject header</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>message_id</Name>
+          <Description>Message-ID header</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>in_reply_to</Name>
+          <Description>In-Reply-To header</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>has_attachment</Name>
+          <Description>1 if the message has attachments, else 0</Description>
+          <Numeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>attachment_names</Name>
+          <Description>file names of the attachments, separated by |</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>archived_at</Name>
+          <Description>when the archive stored the message, UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>archive_seq</Name>
+          <Description>sequence number of the message in the archive (instance-wide)</Description>
+          <Numeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>attestation</Name>
+          <Description>seq of the attestation that covers the message; empty if none yet</Description>
+          <Numeric/>
+        </VariableColumn>
+      </VariableLength>
+    </Table>
+    <Table>
+      <URL>locations.csv</URL>
+      <Name>locations</Name>
+      <Description>one row per selected place of a message</Description>
+      <UTF8/>
+      <DecimalSymbol>,</DecimalSymbol>
+      <DigitGroupingSymbol>.</DigitGroupingSymbol>
+      <Range>
+        <From>2</From>
+      </Range>
+      <VariableLength>
+        <ColumnDelimiter>;</ColumnDelimiter>
+        <RecordDelimiter>&#13;&#10;</RecordDelimiter>
+        <TextEncapsulator>&quot;</TextEncapsulator>
+        <VariablePrimaryKey>
+          <Name>sha256</Name>
+          <Description>SHA-256 of the message (refers to messages)</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariablePrimaryKey>
+          <Name>owner</Name>
+          <Description>user name of the account&#39;s owner; empty for an account without owner</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariablePrimaryKey>
+          <Name>account</Name>
+          <Description>account name</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariablePrimaryKey>
+          <Name>account_kind</Name>
+          <Description>imap, smtp (journaling) or import</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariablePrimaryKey>
+          <Name>folder</Name>
+          <Description>folder name</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariablePrimaryKey>
+          <Name>uidvalidity</Name>
+          <Description>IMAP UIDVALIDITY of the folder</Description>
+          <Numeric/>
+        </VariablePrimaryKey>
+        <VariablePrimaryKey>
+          <Name>uid</Name>
+          <Description>IMAP UID of the message in the folder</Description>
+          <Numeric/>
+        </VariablePrimaryKey>
+        <VariableColumn>
+          <Name>flags</Name>
+          <Description>IMAP flags, separated by spaces</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>internal_date</Name>
+          <Description>IMAP INTERNALDATE, UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>first_seen</Name>
+          <Description>first seen in this place, UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>last_seen</Name>
+          <Description>last seen in this place, UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>gone_at</Name>
+          <Description>when the message left this place on the server, UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>envelope_from</Name>
+          <Description>SMTP MAIL FROM (journaling)</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>envelope_to</Name>
+          <Description>SMTP RCPT TO, separated by spaces (journaling; includes Bcc recipients)</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>received_at</Name>
+          <Description>SMTP delivery time, UTC, ISO 8601 (journaling)</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>retain_until</Name>
+          <Description>end of the retention period, UTC, ISO 8601</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>holds</Name>
+          <Description>ids of legal holds on this place, separated by spaces (only in exports by legal hold)</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <ForeignKey>
+          <Name>sha256</Name>
+          <References>messages</References>
+        </ForeignKey>
+      </VariableLength>
+    </Table>
+    <Table>
+      <URL>missing.csv</URL>
+      <Name>missing</Name>
+      <Description>messages of the selection without a valid file</Description>
+      <UTF8/>
+      <DecimalSymbol>,</DecimalSymbol>
+      <DigitGroupingSymbol>.</DigitGroupingSymbol>
+      <Range>
+        <From>2</From>
+      </Range>
+      <VariableLength>
+        <ColumnDelimiter>;</ColumnDelimiter>
+        <RecordDelimiter>&#13;&#10;</RecordDelimiter>
+        <TextEncapsulator>&quot;</TextEncapsulator>
+        <VariablePrimaryKey>
+          <Name>sha256</Name>
+          <Description>SHA-256 of the message whose file is missing or damaged</Description>
+          <AlphaNumeric/>
+        </VariablePrimaryKey>
+        <VariableColumn>
+          <Name>file</Name>
+          <Description>path the .eml file would have in this export</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+        <VariableColumn>
+          <Name>reason</Name>
+          <Description>why the file is not in the export</Description>
+          <AlphaNumeric/>
+        </VariableColumn>
+      </VariableLength>
+    </Table>
+  </Media>
+</DataSet>
