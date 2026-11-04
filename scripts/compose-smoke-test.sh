@@ -303,23 +303,33 @@ if grep -qF "$(grep MAIL_ARCHIVE_SECRET_KEY .env | cut -d= -f2-)" "$work/backups
 	echo "the backup note contains the secret key" >&2
 	exit 1
 fi
-# Leak test on the .dump.enc: the subjects, the account's user name and the
-# dump format's magic are in the decrypted dump (the control), never in the
-# file.
+# Leak test on the .dump.enc. pg_dump's custom format compresses the rows,
+# so two controls: the header and the schema (stored uncompressed) are bytes
+# of the decrypted dump, and the subjects and the account's user name are in
+# its rows (read back as SQL); none of them is in the encrypted file.
 ./ma unseal-stream < "$dump" > "$work/plain.dump"
-for marker in 'Smoke test' 'Work message' alice PGDMP; do
-	if ! grep -qaF "$marker" "$work/plain.dump"; then
-		echo "control: the decrypted dump lacks $marker" >&2
-		exit 1
-	fi
+docker compose --progress quiet exec -T postgres pg_restore -f - < "$work/plain.dump" > "$work/plain.sql"
+for marker in PGDMP 'CREATE TABLE public.messages' 'Smoke test' 'Work message' alice; do
 	if grep -qaF "$marker" "$dump"; then
 		echo "the encrypted dump contains $marker in plaintext" >&2
 		exit 1
 	fi
 done
+for marker in PGDMP 'CREATE TABLE public.messages'; do
+	if ! grep -qaF "$marker" "$work/plain.dump"; then
+		echo "control: the decrypted dump's bytes lack $marker" >&2
+		exit 1
+	fi
+done
+for marker in 'Smoke test' 'Work message' alice; do
+	if ! grep -qaF "$marker" "$work/plain.sql"; then
+		echo "control: the decrypted dump's rows lack $marker" >&2
+		exit 1
+	fi
+done
 docker compose --progress quiet exec -T postgres pg_restore --list < "$work/plain.dump" > "$work/out"
 expect "$work/out" 'TABLE public messages'
-rm -f "$work/plain.dump"
+rm -f "$work/plain.dump" "$work/plain.sql"
 
 echo "== restore-dump into a fresh database"
 # A recovery key added after the backup lives in the keyring file only; the

@@ -517,6 +517,21 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoMarkers(t, "the .dump.enc", data)
+	// The control: pg_dump compresses the rows, but its header and the
+	// schema are plaintext bytes of the dump; in the encrypted file they
+	// are not.
+	plain, err := unsealBytes(t, data, ring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"PGDMP", "CREATE TABLE public.users"} {
+		if !bytes.Contains(plain, []byte(m)) {
+			t.Errorf("control: the decrypted dump lacks %q", m)
+		}
+		if bytes.Contains(data, []byte(m)) {
+			t.Errorf("the .dump.enc contains %q in plaintext", m)
+		}
+	}
 
 	// After the backup: a recovery key, in the keyring file only.
 	out, err := runEncryption(t, "add-key")
