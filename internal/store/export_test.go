@@ -110,6 +110,10 @@ func (queryStartTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQuery
 func ScopeIDs(sc Scope) []int64         { return sc.ids() }
 func ScopeEnvelopeIDs(sc Scope) []int64 { return sc.envelopeIDs() }
 
+// ScopeFolderParams returns the folder predicate's parameters of a scope
+// (#393), for plan tests.
+func ScopeFolderParams(sc Scope) (allFolderAccounts, folders []int64) { return sc.folderParams() }
+
 // ShareView is shareView: what an owner sees of another user's read.
 var ShareView = shareView
 
@@ -129,5 +133,8 @@ func (s *Store) AttachmentSnippetsOf(ctx context.Context, sc Scope, query string
 	for i, sha := range shas {
 		rows[i].SHA256 = sha
 	}
-	return rows, s.attachmentSnippets(ctx, db.SearchMessagesParams{Query: &query, Accounts: sc.ids()}, shas, rows)
+	all, folders := sc.folderParams()
+	return rows, s.attachmentSnippets(ctx, db.SearchMessagesParams{
+		Query: &query, Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolders: folders,
+	}, shas, rows)
 }

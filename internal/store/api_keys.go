@@ -102,13 +102,17 @@ type NewAPIKey struct {
 
 // CreateAPIKey stores a key for a user, with the audit entry of ctx. It
 // fails with ErrAPIKeyLimit when the user has MaxAPIKeys active keys and
-// with ErrAPIKeyName when an active or expired key has the name.
+// with ErrAPIKeyName when an active or expired key has the name, and with
+// ErrAuditorKey for an auditor (#393).
 func (s *Store) CreateAPIKey(ctx context.Context, userID int64, k NewAPIKey) (*APIKey, error) {
 	var out *APIKey
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		u, err := lockUser(ctx, q, userID)
 		if err != nil {
 			return err
+		}
+		if u.IsAuditor {
+			return ErrAuditorKey
 		}
 		n, err := q.CountActiveAPIKeys(ctx, userID)
 		if err != nil {

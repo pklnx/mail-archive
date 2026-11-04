@@ -305,6 +305,17 @@ ANALYZE;`
 	if len(scopes[0].sc.Accounts) != 2 || len(scopes[1].sc.Accounts) != 2 || !scopes[1].sc.HasShared() {
 		t.Fatalf("scopes %+v", scopes)
 	}
+	// And with the reader's shared account restricted to its folder, as
+	// an auditor's scope is (#393).
+	var folder int64
+	if err := conn.QueryRow(ctx, `SELECT f.id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE a.name = 'a'`).Scan(&folder); err != nil {
+		t.Fatal(err)
+	}
+	shared := scopes[1].sc.Shared()
+	scopes = append(scopes, struct {
+		name string
+		sc   store.Scope
+	}{"restricted", shared.Restrict(map[int64][]int64{shared.Accounts[0].ID: {folder}}, nil, nil)})
 	str := func(s string) *string { return &s }
 
 	cases := []struct {
@@ -364,6 +375,7 @@ ANALYZE;`
 		for _, c := range cases {
 			t.Run(scope.name+"/"+c.name, func(t *testing.T) {
 				c.p.Accounts, c.p.EnvelopeAccounts, c.p.RowLimit = store.ScopeIDs(scope.sc), store.ScopeEnvelopeIDs(scope.sc), 51
+				c.p.ScopeAllFolderAccounts, c.p.ScopeFolders = store.ScopeFolderParams(scope.sc)
 				var rec explainer
 				var err error
 				if c.threads {
@@ -423,6 +435,7 @@ ANALYZE;`
 			t.Fatal(err)
 		}
 		p := db.AttachmentMatchesParams{Query: word, Accounts: store.ScopeIDs(scopes[0].sc), RowLimit: 5001}
+		p.ScopeAllFolderAccounts, p.ScopeFolders = store.ScopeFolderParams(scopes[0].sc)
 		if _, err := db.New(&rec).AttachmentMatches(ctx, p); !errors.Is(err, errRecorded) {
 			t.Fatalf("record: %v", err)
 		}

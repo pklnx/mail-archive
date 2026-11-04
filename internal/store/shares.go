@@ -36,6 +36,10 @@ type ScopeAccount struct {
 	Removed bool
 	// Own: the viewer owns the account; otherwise it is shared with them.
 	Own bool
+	// Folders restricts the account to these folder IDs (#393): nil means
+	// all its folders, an empty slice none. Code never turns an empty
+	// slice into nil.
+	Folders []int64
 }
 
 // Scope is what a read may see: the accounts of Accounts and nothing
@@ -47,6 +51,10 @@ type Scope struct {
 	// narrowed: a to: filter matches the envelopes of any of them, as it
 	// did before an account filter narrowed the listing.
 	envelopes []int64
+	// after and before restrict the scope to messages with sort_at in
+	// [after, before) (#393); nil is no bound. Only Restrict and
+	// AuditorScope set them, and every narrowing keeps them.
+	after, before *time.Time
 }
 
 // ViewerScope returns the accounts a user may read: their own and those
@@ -136,14 +144,95 @@ func (sc Scope) Account(id int64) (ScopeAccount, bool) {
 	return sc.Accounts[i], true
 }
 
+// filter starts from a copy of the scope, so that every restriction (the
+// accounts' folders, the period) carries over to Only, OwnAccount, Named,
+// Own and Shared (#393, B3).
 func (sc Scope) filter(keep func(ScopeAccount) bool) Scope {
-	out := Scope{Viewer: sc.Viewer, Accounts: []ScopeAccount{}, envelopes: sc.envelopes}
+	out := sc
+	out.Accounts = []ScopeAccount{}
 	for _, a := range sc.Accounts {
 		if keep(a) {
 			out.Accounts = append(out.Accounts, a)
 		}
 	}
 	return out
+}
+
+// Restrict narrows the scope and never widens it (#393). folders maps
+// account IDs to the folder IDs to keep: a nil map changes no account, a
+// non-nil one drops every account it does not name, and a nil value keeps
+// that account's folders as they are. Folder sets intersect. The later
+// after and the earlier before win; nil bounds change nothing. The result
+// has folder lists of its own: the scope's are never changed in place.
+func (sc Scope) Restrict(folders map[int64][]int64, after, before *time.Time) Scope {
+	out := sc
+	out.Accounts = make([]ScopeAccount, 0, len(sc.Accounts))
+	for _, a := range sc.Accounts {
+		want, named := folders[a.ID]
+		if folders != nil && !named {
+			continue
+		}
+		switch {
+		case want == nil && a.Folders == nil:
+		case want == nil:
+			a.Folders = slices.Clone(a.Folders)
+		case a.Folders == nil:
+			a.Folders = append([]int64{}, want...)
+		default:
+			keep := []int64{}
+			for _, id := range a.Folders {
+				if slices.Contains(want, id) {
+					keep = append(keep, id)
+				}
+			}
+			a.Folders = keep
+		}
+		out.Accounts = append(out.Accounts, a)
+	}
+	if after != nil && (out.after == nil || after.After(*out.after)) {
+		t := *after
+		out.after = &t
+	}
+	if before != nil && (out.before == nil || before.Before(*out.before)) {
+		t := *before
+		out.before = &t
+	}
+	return out
+}
+
+// Period returns the scope's message period: sort_at in [after, before),
+// nil for no bound.
+func (sc Scope) Period() (after, before *time.Time) {
+	return sc.after, sc.before
+}
+
+// folderParams returns the folder predicate's parameters, never nil: the
+// accounts read with all their folders, and the union of the folders of
+// the others. A location matches if its folder's account is in the first
+// or the folder in the second, on top of the account predicate; a NULL
+// would match nothing (#393).
+func (sc Scope) folderParams() (allFolderAccounts, folders []int64) {
+	allFolderAccounts, folders = []int64{}, []int64{}
+	for _, a := range sc.Accounts {
+		if a.Folders == nil {
+			allFolderAccounts = append(allFolderAccounts, a.ID)
+			continue
+		}
+		folders = append(folders, a.Folders...)
+	}
+	return allFolderAccounts, folders
+}
+
+// clampPeriod narrows a requested date range to the scope's period.
+// Disjoint ranges stay disjoint, and so match nothing.
+func (sc Scope) clampPeriod(after, before *time.Time) (*time.Time, *time.Time) {
+	if sc.after != nil && (after == nil || sc.after.After(*after)) {
+		after = sc.after
+	}
+	if sc.before != nil && (before == nil || sc.before.Before(*before)) {
+		before = sc.before
+	}
+	return after, before
 }
 
 // ids returns the scope's account IDs, never nil: the queries match an
@@ -185,8 +274,10 @@ func (s *Store) ListShareOnlyLocations(ctx context.Context, sc, full Scope, shas
 	if len(shared.Accounts) == 0 || len(shas) == 0 {
 		return []ShareOnlyLocation{}, nil
 	}
+	all, folders := shared.folderParams()
 	rows, err := s.q.ListShareOnlyLocations(ctx, db.ListShareOnlyLocationsParams{
 		Shas: shas, SharedAccounts: shared.ids(), OwnAccounts: full.Own().ids(),
+		ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: shared.after, ScopeBefore: shared.before,
 	})
 	if err != nil {
 		return nil, err
@@ -209,7 +300,8 @@ type AccountShare struct {
 // ref like UpdateAccount (ErrNotFound for a gone, removed or foreign
 // account, ErrStale), and fails with ErrNotFound for an unknown user, with
 // ErrShareSelf for the owner, with ErrShareSMTP for an smtp account and
-// with ErrShareOtherGroup for a user outside the owner's group (#470). The
+// with ErrShareOtherGroup for a user outside the owner's group (#470) and
+// with ErrShareAuditor for an auditor (#393). The
 // owner's and the user's rows stay locked FOR SHARE until the commit, so
 // neither can change group meanwhile (SetUserGroup). It reports false, and
 // changes nothing, if the share exists already.
@@ -233,8 +325,10 @@ func (s *Store) ShareAccount(ctx context.Context, ref AccountRef, userID int64) 
 			return err
 		}
 		groups := map[int64]int64{}
+		auditor := false
 		for _, u := range users {
 			groups[u.ID] = u.GroupID
+			auditor = auditor || u.ID == userID && u.IsAuditor
 		}
 		reader, ok := groups[userID]
 		if !ok {
@@ -242,6 +336,9 @@ func (s *Store) ShareAccount(ctx context.Context, ref AccountRef, userID int64) 
 		}
 		if reader != groups[*r.OwnerID] {
 			return ErrShareOtherGroup
+		}
+		if auditor {
+			return ErrShareAuditor
 		}
 		n, err := q.InsertAccountShare(ctx, db.InsertAccountShareParams{AccountID: r.ID, UserID: userID})
 		var pgErr *pgconn.PgError

@@ -69,6 +69,31 @@ type AccountSyncHealth struct {
 	NotifyLeaseUntil   *time.Time
 }
 
+type ActiveAuditorGrant struct {
+	ID           int64
+	AuditorID    *int64
+	OwnerID      int64
+	Label        string
+	PeriodFrom   *time.Time
+	PeriodUntil  *time.Time
+	StartsAt     time.Time
+	EndsAt       time.Time
+	RevokedAt    *time.Time
+	RevokedBy    *int64
+	RevokeReason *string
+	CreatedAt    time.Time
+}
+
+type ActiveAuditorGrantAccount struct {
+	GrantID     int64
+	AuditorID   *int64
+	OwnerID     int64
+	AccountID   int64
+	AllFolders  bool
+	PeriodFrom  *time.Time
+	PeriodUntil *time.Time
+}
+
 type ApiKey struct {
 	ID         int64
 	UserID     int64
@@ -135,6 +160,33 @@ type AuditLog struct {
 type AuditUserAgent struct {
 	ID        int64
 	UserAgent string
+}
+
+type AuditorGrant struct {
+	ID           int64
+	AuditorID    *int64
+	OwnerID      int64
+	Label        string
+	PeriodFrom   *time.Time
+	PeriodUntil  *time.Time
+	StartsAt     time.Time
+	EndsAt       time.Time
+	RevokedAt    *time.Time
+	RevokedBy    *int64
+	RevokeReason *string
+	CreatedAt    time.Time
+}
+
+type AuditorGrantAccount struct {
+	GrantID    int64
+	AccountID  int64
+	AllFolders bool
+}
+
+type AuditorGrantFolder struct {
+	GrantID   int64
+	AccountID int64
+	FolderID  int64
 }
 
 type BlobRemoval struct {
@@ -340,6 +392,7 @@ type Session struct {
 	LastSeenAt time.Time
 	ExpiresAt  time.Time
 	UserAgent  string
+	GrantID    *int64
 }
 
 type SmtpAddress struct {
@@ -462,6 +515,7 @@ type User struct {
 	Language               string
 	Locale                 string
 	GroupID                int64
+	IsAuditor              bool
 }
 
 type WebauthnCeremony struct {

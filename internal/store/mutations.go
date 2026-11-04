@@ -183,7 +183,11 @@ func nonNil(l []string) []string {
 // ErrOtherGroup unless allowOtherGroup: then every share of the account
 // ends, since all its readers are in the old group, and the pending entry
 // gets from_group, to_group and shares_ended and is recorded under the new
-// group. Both owners' rows stay locked FOR SHARE until the commit.
+// group. Both owners' rows stay locked FOR SHARE until the commit. An
+// auditor never owns accounts (ErrAuditorAccount). The account leaves
+// every unrevoked auditor grant of the old owner (#393, decision 9): a
+// grant left without accounts is revoked; the pending entry gets
+// grants_changed.
 func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64, allowOtherGroup bool) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		r, err := q.LockAccount(ctx, ref.ID)
@@ -207,6 +211,9 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		groups := map[int64]int64{}
 		for _, u := range users {
 			groups[u.ID] = u.GroupID
+			if u.ID == owner && u.IsAuditor {
+				return ErrAuditorAccount
+			}
 		}
 		to, ok := groups[owner]
 		if !ok {
@@ -234,6 +241,16 @@ func (s *Store) SetAccountOwner(ctx context.Context, ref AccountRef, owner int64
 		if otherGroup {
 			if ended, err = q.DeleteAllAccountShares(ctx, ref.ID); err != nil {
 				return err
+			}
+		}
+		// Account, then users (both locked above), then grant rows.
+		if r.OwnerID != nil && *r.OwnerID != owner {
+			changed, err := dropAccountFromGrants(ctx, q, ref.ID, RevokeAccountMove)
+			if err != nil {
+				return err
+			}
+			if e := auditFrom(ctx); e != nil {
+				e.Detail("grants_changed", changed)
 			}
 		}
 		err = one(q.SetAccountOwner(ctx, db.SetAccountOwnerParams{ID: ref.ID, OwnerID: &owner}))
@@ -330,6 +347,11 @@ func (s *Store) DeleteOrRemoveAccount(ctx context.Context, ref AccountRef) (Remo
 			e.Detail("result", string(result))
 		}
 		if err := keepAccountGroup(ctx, q, ref.ID); err != nil {
+			return err
+		}
+		// Auditor grants (#393) lose the account; one left without
+		// accounts is revoked.
+		if _, err := dropAccountFromGrants(ctx, q, ref.ID, RevokeAccountPurge); err != nil {
 			return err
 		}
 		if err := q.DeleteAccountFolders(ctx, ref.ID); err != nil {

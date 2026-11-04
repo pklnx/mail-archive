@@ -131,6 +131,7 @@ func (s *Store) SearchThreads(ctx context.Context, f SearchFilter) ([]MessageSum
 	}
 	counts, err := s.q.CountThreadMatches(ctx, db.CountThreadMatchesParams{
 		ThreadKeys: keys, Query: p.Query, Pattern: p.Pattern, Accounts: p.Accounts, Folder: p.Folder,
+		ScopeAllFolderAccounts: p.ScopeAllFolderAccounts, ScopeFolders: p.ScopeFolders,
 		FromPattern: p.FromPattern, ToPattern: p.ToPattern, ToShas: p.ToShas, ToWalk: p.ToWalk, EnvelopeAccounts: p.EnvelopeAccounts,
 		AttShas: p.AttShas, AttWalk: p.AttWalk,
 		AttachmentPattern: p.AttachmentPattern,
@@ -169,7 +170,10 @@ func (s *Store) attachmentSnippets(ctx context.Context, p db.SearchMessagesParam
 	if p.Query == nil || len(shas) == 0 {
 		return nil
 	}
-	found, err := s.q.AttachmentSnippets(ctx, db.AttachmentSnippetsParams{Query: *p.Query, Shas: shas, Accounts: p.Accounts})
+	found, err := s.q.AttachmentSnippets(ctx, db.AttachmentSnippetsParams{
+		Query: *p.Query, Shas: shas, Accounts: p.Accounts,
+		ScopeAllFolderAccounts: p.ScopeAllFolderAccounts, ScopeFolders: p.ScopeFolders, ScopeAfter: p.After, ScopeBefore: p.Before,
+	})
 	if err != nil {
 		return fmt.Errorf("attachment snippets: %w", err)
 	}
@@ -223,12 +227,17 @@ func (s *Store) searchParams(ctx context.Context, f SearchFilter) (db.SearchMess
 	return p, nil
 }
 
+// The scope's folders go into every location predicate, and its period
+// narrows After and Before (#393).
 func searchParams(f SearchFilter) db.SearchMessagesParams {
+	all, folders := f.Scope.folderParams()
+	after, before := f.Scope.clampPeriod(f.After, f.Before)
 	p := db.SearchMessagesParams{
 		Accounts: f.Scope.ids(), EnvelopeAccounts: f.Scope.envelopeIDs(), Folder: nonEmpty(f.Folder),
+		ScopeAllFolderAccounts: all, ScopeFolders: folders,
 		FromPattern: likePattern(f.From), ToPattern: likePattern(f.To), AttachmentPattern: likePattern(f.Attachment),
 		HasAttachment: f.HasAttachment || strings.TrimSpace(f.Attachment) != "",
-		Thread:        nonEmpty(f.Thread), After: f.After, Before: f.Before, Gone: f.Gone, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
+		Thread:        nonEmpty(f.Thread), After: after, Before: before, Gone: f.Gone, RowLimit: int32(min(max(f.Limit, 1), 500)), //nolint:gosec // clamped
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		pattern := "%" + escapeLike(q) + "%"
@@ -309,16 +318,23 @@ type MessageDetail struct {
 }
 
 // GetMessageDetail returns metadata and the locations of one message in
-// the scope's accounts. Messages found in none of them are ErrNotFound.
+// the scope's accounts. Messages found in none of them, or outside the
+// scope's folders or period, are ErrNotFound.
 func (s *Store) GetMessageDetail(ctx context.Context, sc Scope, sha256 string) (*MessageDetail, error) {
-	r, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Accounts: sc.ids()})
+	all, folders := sc.folderParams()
+	r, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{
+		Sha256: sha256, Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	locs, err := s.q.ListLocations(ctx, db.ListLocationsParams{Sha256: sha256, Accounts: sc.ids(), EnvelopeAccounts: sc.envelopeIDs()})
+	locs, err := s.q.ListLocations(ctx, db.ListLocationsParams{
+		Sha256: sha256, Accounts: sc.ids(), EnvelopeAccounts: sc.envelopeIDs(),
+		ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -391,16 +407,24 @@ const MaxConversation = 200
 // GetMessageDetail, a message outside the scope is ErrNotFound.
 func (s *Store) GetConversation(ctx context.Context, sc Scope, sha256 string) (*Conversation, error) {
 	ids := sc.ids()
-	if _, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{Sha256: sha256, Accounts: ids}); errors.Is(err, pgx.ErrNoRows) {
+	all, folders := sc.folderParams()
+	if _, err := s.q.GetMessageSummary(ctx, db.GetMessageSummaryParams{
+		Sha256: sha256, Accounts: ids, ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	}); errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, err
 	}
-	rows, err := s.q.ListConversation(ctx, db.ListConversationParams{Accounts: ids, Sha256: sha256, RowLimit: MaxConversation})
+	rows, err := s.q.ListConversation(ctx, db.ListConversationParams{
+		Accounts: ids, Sha256: sha256, RowLimit: MaxConversation,
+		ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	})
 	if err != nil {
 		return nil, err
 	}
-	total, err := s.q.CountConversation(ctx, db.CountConversationParams{Accounts: ids, Sha256: sha256})
+	total, err := s.q.CountConversation(ctx, db.CountConversationParams{
+		Accounts: ids, Sha256: sha256, ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -441,9 +465,13 @@ type AccountFolders struct {
 }
 
 // ListAccountFolders returns the scope's accounts with their folders and
-// counts, ordered by owner name, account name and ID.
+// counts, ordered by owner name, account name and ID: only the scope's
+// folders, and with a period only its messages (#393).
 func (s *Store) ListAccountFolders(ctx context.Context, sc Scope) ([]AccountFolders, error) {
-	rows, err := s.q.ListFolderCounts(ctx, sc.ids())
+	all, folders := sc.folderParams()
+	rows, err := s.q.ListFolderCounts(ctx, db.ListFolderCountsParams{
+		Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: sc.after, ScopeBefore: sc.before,
+	})
 	if err != nil {
 		return nil, err
 	}

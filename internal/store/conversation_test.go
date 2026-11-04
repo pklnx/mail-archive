@@ -274,8 +274,10 @@ func TestSearchFilterCopies(t *testing.T) {
 	}
 	_, filter, _ := strings.Cut(copies[0], "AND (NOT sqlc.arg(gone)::boolean")
 	want := scopeLines(filter)
-	if len(want) != 2 {
-		t.Fatalf("gone filter scope %q, want two predicates", want)
+	// The account and the folder predicate (#393) of the gone and of the
+	// present locations.
+	if len(want) != 4 {
+		t.Fatalf("gone filter scope %q, want four predicates", want)
 	}
 	flags := 0
 	for _, part := range strings.Split(string(src), "(EXISTS (\n")[1:] {
@@ -364,15 +366,31 @@ ANALYZE;`
 		}
 		return strings.Join(lines, "\n")
 	}
+	// A scope restricted to the folder and a period (#393), as an auditor's.
+	var folder int64
+	if err := conn.QueryRow(ctx, `SELECT f.id FROM folders f JOIN accounts a ON a.id = f.account_id WHERE a.name = 'a'`).Scan(&folder); err != nil {
+		t.Fatal(err)
+	}
+	from, until := time.Date(2020, 3, 1, 0, 0, 0, 0, time.UTC), time.Date(2020, 6, 1, 0, 0, 0, 0, time.UTC)
+	shared := scopes["shared user"].Shared()
+	scopes["restricted"] = shared.Restrict(map[int64][]int64{shared.Accounts[0].ID: {folder}}, &from, &until)
 	for scopeName, sc := range scopes {
 		ids := store.ScopeIDs(sc)
+		all, folders := store.ScopeFolderParams(sc)
+		after, before := sc.Period()
 		cases := map[string]func(q *db.Queries) error{
 			"grouped list": func(q *db.Queries) error {
-				_, err := q.SearchThreads(ctx, db.SearchThreadsParams{Accounts: ids, EnvelopeAccounts: store.ScopeEnvelopeIDs(sc), RowLimit: 51})
+				_, err := q.SearchThreads(ctx, db.SearchThreadsParams{
+					Accounts: ids, EnvelopeAccounts: store.ScopeEnvelopeIDs(sc), RowLimit: 51,
+					ScopeAllFolderAccounts: all, ScopeFolders: folders, After: after, Before: before,
+				})
 				return err
 			},
 			"conversation": func(q *db.Queries) error {
-				_, err := q.ListConversation(ctx, db.ListConversationParams{Accounts: ids, Sha256: sha, RowLimit: store.MaxConversation})
+				_, err := q.ListConversation(ctx, db.ListConversationParams{
+					Accounts: ids, Sha256: sha, RowLimit: store.MaxConversation,
+					ScopeAllFolderAccounts: all, ScopeFolders: folders, ScopeAfter: after, ScopeBefore: before,
+				})
 				return err
 			},
 		}
@@ -392,9 +410,11 @@ ANALYZE;`
 	// by the page's hashes, not by the shared account's locations.
 	t.Run("shared user/share-only locations", func(t *testing.T) {
 		sc := scopes["shared user"]
+		all, folders := store.ScopeFolderParams(sc.Shared())
 		plan := explain(t, func(q *db.Queries) error {
 			_, err := q.ListShareOnlyLocations(ctx, db.ListShareOnlyLocationsParams{
 				Shas: page, SharedAccounts: store.ScopeIDs(sc.Shared()), OwnAccounts: store.ScopeIDs(sc.Own()),
+				ScopeAllFolderAccounts: all, ScopeFolders: folders,
 			})
 			return err
 		})

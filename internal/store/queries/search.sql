@@ -21,14 +21,16 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN folders gf ON gf.id = g.folder_id
             JOIN accounts ga ON ga.id = gf.account_id
             WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
-              AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND ga.kind = 'imap'
+              AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+              AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
             OFFSET 0)
         AND NOT EXISTS (
             SELECT 1 FROM message_locations p
             JOIN folders pf ON pf.id = p.folder_id
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
-              AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap'
+              AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+              AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
        -- The message itself (subject, sender, body) matches the query, not
        -- only one of its attachments: exactly the query arm of the filters
@@ -64,11 +66,13 @@ WHERE
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
        OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
+  -- An auditor's scope also names the folders (#393).
   AND EXISTS (
        SELECT 1 FROM message_locations l
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = m.sha256
          AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
+         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
          AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -105,13 +109,15 @@ WHERE
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
-         AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND ga.kind = 'imap'
+         AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap')))
+               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
        OR (m.sort_at, m.sha256) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_sha)::text))
@@ -142,14 +148,16 @@ SELECT m.sha256, m.size, m.subject, m.from_addr, m.sent_at, m.sort_at, m.has_att
             JOIN folders gf ON gf.id = g.folder_id
             JOIN accounts ga ON ga.id = gf.account_id
             WHERE g.message_sha256 = m.sha256 AND g.gone_at IS NOT NULL
-              AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND ga.kind = 'imap'
+              AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+              AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
             OFFSET 0)
         AND NOT EXISTS (
             SELECT 1 FROM message_locations p
             JOIN folders pf ON pf.id = p.folder_id
             JOIN accounts pa ON pa.id = pf.account_id
             WHERE p.message_sha256 = m.sha256 AND p.gone_at IS NULL
-              AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap'
+              AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+              AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap'
             OFFSET 0))::boolean AS gone,
        -- The message itself (subject, sender, body) matches the query, not
        -- only one of its attachments: exactly the query arm of the filters
@@ -186,11 +194,13 @@ WHERE
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
        OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
+  -- An auditor's scope also names the folders (#393).
   AND EXISTS (
        SELECT 1 FROM message_locations l
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = m.sha256
          AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
+         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
          AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -227,13 +237,15 @@ WHERE
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
-         AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND ga.kind = 'imap'
+         AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap')))
+               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
   AND NOT EXISTS (
       SELECT 1 FROM messages n
@@ -262,11 +274,13 @@ WHERE
                                  websearch_to_tsquery('english', sqlc.narg(query)::text))
              OFFSET 0))
         -- Only messages found in one of the scope's accounts (own or shared).
+        -- An auditor's scope also names the folders (#393).
         AND EXISTS (
              SELECT 1 FROM message_locations l
              JOIN folders f ON f.id = l.folder_id
              WHERE l.message_sha256 = n.sha256
                AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
+               AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
                AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
         -- Filters on single fields. Recipients and attachment names are only
         -- found here, not by the full-text query.
@@ -303,13 +317,15 @@ WHERE
              JOIN folders gf ON gf.id = g.folder_id
              JOIN accounts ga ON ga.id = gf.account_id
              WHERE g.gone_at IS NOT NULL
-               AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND ga.kind = 'imap'
+               AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+               AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
                AND NOT EXISTS (
                    SELECT 1 FROM message_locations p
                    JOIN folders pf ON pf.id = p.folder_id
                    JOIN accounts pa ON pa.id = pf.account_id
                    WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-                     AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap')))
+                     AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+                     AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
         -- filters:end
   )
   AND (sqlc.narg(cursor_at)::timestamptz IS NULL
@@ -346,11 +362,13 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
        OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
+  -- An auditor's scope also names the folders (#393).
   AND EXISTS (
        SELECT 1 FROM message_locations l
        JOIN folders f ON f.id = l.folder_id
        WHERE l.message_sha256 = t.sha256
          AND f.account_id = ANY (sqlc.arg(accounts)::bigint[])
+         AND (f.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR f.id = ANY (sqlc.arg(scope_folders)::bigint[]))
          AND (sqlc.narg(folder)::text IS NULL OR f.name = sqlc.narg(folder)::text))
   -- Filters on single fields. Recipients and attachment names are only
   -- found here, not by the full-text query.
@@ -387,26 +405,32 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
        JOIN folders gf ON gf.id = g.folder_id
        JOIN accounts ga ON ga.id = gf.account_id
        WHERE g.gone_at IS NOT NULL
-         AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND ga.kind = 'imap'
+         AND gf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+         AND (gf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR gf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND ga.kind = 'imap'
          AND NOT EXISTS (
              SELECT 1 FROM message_locations p
              JOIN folders pf ON pf.id = p.folder_id
              JOIN accounts pa ON pa.id = pf.account_id
              WHERE p.message_sha256 = g.message_sha256 AND p.gone_at IS NULL
-               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[]) AND pa.kind = 'imap')))
+               AND pf.account_id = ANY (sqlc.arg(accounts)::bigint[])
+               AND (pf.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR pf.id = ANY (sqlc.arg(scope_folders)::bigint[])) AND pa.kind = 'imap')))
   -- filters:end
 GROUP BY 1;
 
 -- name: GetMessageSummary :one
--- Only if the message was found in one of the scope's accounts.
+-- Only if the message was found in one of the scope's accounts, in a
+-- folder and the period of the scope (#393).
 SELECT m.sha256, m.size, m.message_id, m.subject, m.from_addr, m.sent_at, m.sort_at, m.stored_path,
        m.in_reply_to, COALESCE(m.thread_id, m.sha256)::text AS thread_key
 FROM messages m
 WHERE m.sha256 = @sha256
+  AND (sqlc.narg(scope_after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(scope_after)::timestamptz)
+  AND (sqlc.narg(scope_before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(scope_before)::timestamptz)
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[]));
+      WHERE l.message_sha256 = m.sha256 AND f.account_id = ANY (@accounts::bigint[])
+        AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[])));
 
 -- name: ListLocations :many
 -- The locations of a message in the scope's accounts, current ones first.
@@ -414,7 +438,8 @@ WHERE m.sha256 = @sha256
 -- was stored: the server renumbered the folder, and the rescan added a new
 -- location for every message still there. Superseded locations stay as
 -- history. Envelopes come only from envelope_accounts, the viewer's own
--- smtp accounts.
+-- smtp accounts. Only locations in the scope's folders, of a message in its
+-- period (#393).
 SELECT a.id AS account_id, a.name AS account, u.id AS owner_id, u.name AS owner,
        f.name AS folder, l.uid, l.flags, l.internal_date,
        (l.uidvalidity <> f.uidvalidity)::boolean AS superseded, l.gone_at,
@@ -446,6 +471,9 @@ LEFT JOIN smtp_fills sf ON sf.id = l.fill_id
 LEFT JOIN smtp_imports si ON si.id = l.import_id
 CROSS JOIN LATERAL (SELECT location_retain_until(l.folder_id, m.sent_at, l.internal_date, m.created_at) AS until) r
 WHERE l.message_sha256 = @sha256 AND f.account_id = ANY (@accounts::bigint[])
+  AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[]))
+  AND (sqlc.narg(scope_after)::timestamptz IS NULL OR m.sort_at >= sqlc.narg(scope_after)::timestamptz)
+  AND (sqlc.narg(scope_before)::timestamptz IS NULL OR m.sort_at < sqlc.narg(scope_before)::timestamptz)
 ORDER BY superseded, a.name, u.name, a.id, f.name;
 
 -- name: ListFolderCounts :many
@@ -455,17 +483,24 @@ ORDER BY superseded, a.name, u.name, a.id, f.name;
 -- subquery per folder uses message_locations_folder_sha_idx; a
 -- count(DISTINCT) over the grouped join is about 20 times slower on large
 -- archives. Accounts are told apart by ID: two owners may both have an
--- account of the same name.
+-- account of the same name. Only the scope's folders, and with a period
+-- (#393) only its messages; without one the period check is skipped.
 SELECT a.id, a.name AS account, u.id AS owner_id, u.name AS owner,
        a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed, a.kind,
        f.name AS folder,
        (SELECT count(*) FROM (
-            SELECT DISTINCT l.message_sha256 FROM message_locations l WHERE l.folder_id = f.id) d
+            SELECT DISTINCT l.message_sha256 FROM message_locations l
+            WHERE l.folder_id = f.id
+              AND (sqlc.narg(scope_after)::timestamptz IS NULL AND sqlc.narg(scope_before)::timestamptz IS NULL
+                   OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = l.message_sha256
+                                AND (sqlc.narg(scope_after)::timestamptz IS NULL OR pm.sort_at >= sqlc.narg(scope_after)::timestamptz)
+                                AND (sqlc.narg(scope_before)::timestamptz IS NULL OR pm.sort_at < sqlc.narg(scope_before)::timestamptz)))) d
        )::bigint AS messages,
        f.last_synced_at, f.last_reconciled_at, f.delimiter
 FROM accounts a
 JOIN users u ON u.id = a.owner_id
 LEFT JOIN folders f ON f.account_id = a.id
+     AND (a.id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[]))
 WHERE a.id = ANY (@accounts::bigint[])
 ORDER BY u.name, a.name, a.id, f.name;
 
@@ -484,7 +519,8 @@ LIMIT @row_limit;
 -- sees each of them, for those the viewer finds in none of own_accounts:
 -- one row per (message, account). Each hash is looked up on its own
 -- through message_locations_sha_idx; OFFSET 0 keeps the planner from
--- reading the locations of the accounts instead.
+-- reading the locations of the accounts instead. The shared locations are
+-- those of the scope's folders, of a message in its period (#393).
 SELECT DISTINCT x.sha256::text AS sha256, x.account_id, x.owner_id
 FROM unnest(@shas::bpchar[]) AS s (sha)
 CROSS JOIN LATERAL (
@@ -493,8 +529,13 @@ CROSS JOIN LATERAL (
     JOIN folders f ON f.id = l.folder_id
     JOIN accounts a ON a.id = f.account_id
     WHERE l.message_sha256 = s.sha AND f.account_id = ANY (@shared_accounts::bigint[])
+      AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR f.id = ANY (@scope_folders::bigint[]))
     OFFSET 0) x
-WHERE NOT EXISTS (
+WHERE (sqlc.narg(scope_after)::timestamptz IS NULL AND sqlc.narg(scope_before)::timestamptz IS NULL
+       OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = s.sha
+                    AND (sqlc.narg(scope_after)::timestamptz IS NULL OR pm.sort_at >= sqlc.narg(scope_after)::timestamptz)
+                    AND (sqlc.narg(scope_before)::timestamptz IS NULL OR pm.sort_at < sqlc.narg(scope_before)::timestamptz)))
+  AND NOT EXISTS (
     SELECT 1 FROM message_locations o
     JOIN folders ofo ON ofo.id = o.folder_id
     WHERE o.message_sha256 = s.sha AND ofo.account_id = ANY (@own_accounts::bigint[])

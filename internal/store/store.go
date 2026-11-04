@@ -472,6 +472,15 @@ func createAccount(ctx context.Context, q *db.Queries, a *Account) error {
 	if a.PasswordEnc == nil {
 		a.PasswordEnc = []byte{}
 	}
+	// An auditor never owns accounts (#393); the role never changes, so no
+	// lock is needed. An unknown owner is left to the foreign key.
+	if a.OwnerID != nil {
+		if auditor, err := q.UserIsAuditor(ctx, *a.OwnerID); err == nil && auditor {
+			return ErrAuditorAccount
+		} else if err != nil && !isNoRows(err) {
+			return err
+		}
+	}
 	row, err := q.CreateAccount(ctx, db.CreateAccountParams{
 		Name:                a.Name,
 		Host:                a.Host,

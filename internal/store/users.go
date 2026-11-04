@@ -37,6 +37,9 @@ type User struct {
 	Language, Locale string
 	// GroupID is the user's customer group (#470).
 	GroupID int64
+	// IsAuditor: the user reads only through auditor grants (#393). The
+	// role is fixed at creation.
+	IsAuditor bool
 }
 
 func userFromDB(r db.User) *User {
@@ -44,7 +47,7 @@ func userFromDB(r db.User) *User {
 		ID: r.ID, Name: r.Name, PasswordHash: r.PasswordHash, IsAdmin: r.IsAdmin,
 		LockedAt: r.LockedAt, CreatedAt: r.CreatedAt, PasswordChangedAt: r.PasswordChangedAt,
 		LastLoginAt: r.LastLoginAt, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, TwoFactorVersion: r.TwoFactorVersion,
-		Language: r.Language, Locale: r.Locale, GroupID: r.GroupID,
+		Language: r.Language, Locale: r.Locale, GroupID: r.GroupID, IsAuditor: r.IsAuditor,
 	}
 }
 
@@ -73,11 +76,17 @@ type NewUser struct {
 	// GroupID is the customer group; 0 means the only one, and fails with
 	// ErrGroupRequired while several exist.
 	GroupID int64
+	// Auditor creates an auditor (#393): never an admin
+	// (ErrAuditorAdmin) and never the first user (ErrFirstUserAuditor).
+	Auditor bool
 }
 
 // CreateUserInGroup inserts a user, like CreateUser, into u.GroupID. An
 // unknown group is ErrUnknownGroup.
 func (s *Store) CreateUserInGroup(ctx context.Context, nu NewUser) (*User, error) {
+	if nu.Auditor && nu.Admin {
+		return nil, ErrAuditorAdmin
+	}
 	var u *User
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		group := nu.GroupID
@@ -97,6 +106,7 @@ func (s *Store) CreateUserInGroup(ctx context.Context, nu NewUser) (*User, error
 		}
 		r, err := q.CreateUser(ctx, db.CreateUserParams{
 			Name: nu.Name, PasswordHash: nu.PasswordHash, IsAdmin: nu.Admin, MustChangePassword: nu.Generated, GroupID: group,
+			IsAuditor: nu.Auditor,
 		})
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -110,11 +120,19 @@ func (s *Store) CreateUserInGroup(ctx context.Context, nu NewUser) (*User, error
 		}
 		u = userFromDB(r)
 		fillAuditTarget(ctx, TargetUser, u.ID)
+		if e := auditFrom(ctx); e != nil && nu.Auditor {
+			e.Detail("auditor", true)
+		}
 		n, err := q.CountUsers(ctx)
 		if err != nil {
 			return err
 		}
 		if n == 1 {
+			// The first user sets up the instance and gets the accounts
+			// added before; an auditor can do neither.
+			if nu.Auditor {
+				return ErrFirstUserAuditor
+			}
 			_, err = q.AdoptUnownedAccounts(ctx, &u.ID)
 		}
 		return err
@@ -233,9 +251,19 @@ func (s *Store) ChangeOwnPassword(ctx context.Context, id int64, passwordHash st
 }
 
 // SetUserAdmin grants or revokes the admin role. Revoking it fails with
-// ErrLastAdmin for the last unlocked admin.
+// ErrLastAdmin for the last unlocked admin, granting it to an auditor with
+// ErrAuditorAdmin.
 func (s *Store) SetUserAdmin(ctx context.Context, id int64, admin bool) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
+		if admin {
+			auditor, err := q.UserIsAuditor(ctx, id)
+			if err != nil && !isNoRows(err) {
+				return err
+			}
+			if auditor {
+				return ErrAuditorAdmin
+			}
+		}
 		if !admin {
 			if err := keepAnAdmin(ctx, q, id); err != nil {
 				return err
@@ -278,7 +306,10 @@ func (s *Store) SetUserLocked(ctx context.Context, id int64, locked bool) error 
 
 // DeleteUser deletes a user, their sessions and API keys. It fails with ErrLastAdmin
 // for the last unlocked admin and with ErrOwnsAccounts while the user owns
-// accounts (also removed ones, whose mail stays in the archive).
+// accounts (also removed ones, whose mail stays in the archive). An
+// auditor's unrevoked grants are revoked first (reason user_removed, one
+// auditor.revoke entry each, decision 27) and stay as history without
+// auditor; the pending entry (user.remove) gets grants_revoked.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		if err := keepAnAdmin(ctx, q, id); err != nil {
@@ -286,6 +317,21 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		}
 		if err := keepUsableAdmin(ctx, q, id); err != nil {
 			return err
+		}
+		// The user's row before any grant row (the lock order of
+		// auditors.go): a concurrent ExtendGrant waits for the removal.
+		u, err := lockUser(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		if u.IsAuditor {
+			revoked, err := revokeAuditorGrants(ctx, q, id)
+			if err != nil {
+				return err
+			}
+			if e := auditFrom(ctx); e != nil {
+				e.Detail("grants_revoked", revoked)
+			}
 		}
 		if owns, err := q.UserOwnsAccounts(ctx, &id); err != nil {
 			return err
@@ -356,6 +402,12 @@ type Session struct {
 	LastSeenAt         time.Time
 	// GroupID is the user's customer group (#470).
 	GroupID int64
+	// IsAuditor: the session's user is an auditor (#393); GrantID is the
+	// grant the session reads through, nil until the auditor picks one.
+	// GetSession only returns an auditor's session while that grant (or,
+	// without one, any grant of theirs) is active.
+	IsAuditor bool
+	GrantID   *int64
 	// Language and Locale are the user's web UI settings. Sessions from
 	// APIKeyLogin leave them empty: only session routes read them, and API
 	// keys are refused there.
@@ -386,7 +438,8 @@ func (s *Store) CreateSession(ctx context.Context, idHash []byte, userID int64, 
 }
 
 // GetSession returns a session that has not expired, was used after
-// idleCutoff and belongs to an unlocked user; otherwise ErrNotFound.
+// idleCutoff and belongs to an unlocked user, for an auditor only with an
+// active grant (#393); otherwise ErrNotFound.
 func (s *Store) GetSession(ctx context.Context, idHash []byte, idleCutoff time.Time) (*Session, error) {
 	r, err := s.q.GetSession(ctx, db.GetSessionParams{ID: idHash, IdleCutoff: idleCutoff})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -396,7 +449,7 @@ func (s *Store) GetSession(ctx context.Context, idHash []byte, idleCutoff time.T
 		return nil, err
 	}
 	return &Session{UserID: r.UserID, UserName: r.Name, IsAdmin: r.IsAdmin, MustChangePassword: r.MustChangePassword, TwoFactorEnabled: r.TwoFactorEnabled, LastSeenAt: r.LastSeenAt,
-		Language: r.Language, Locale: r.Locale, GroupID: r.GroupID,
+		Language: r.Language, Locale: r.Locale, GroupID: r.GroupID, IsAuditor: r.IsAuditor, GrantID: r.GrantID,
 	}, nil
 }
 

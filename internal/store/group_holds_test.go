@@ -436,6 +436,7 @@ func TestGroupHoldsMigration(t *testing.T) {
 	t.Run("refused with a group hold", func(t *testing.T) {
 		f := newGroupFixture(t)
 		f.hold(store.NewLegalHold{GroupID: &f.b.ID})
+		downAuditorMigration(t, f.st)
 		if _, err := f.st.MigrateDown(f.ctx); err == nil || !strings.Contains(err.Error(), "legal holds name customer groups") {
 			t.Fatalf("down with a group hold: %v", err)
 		}

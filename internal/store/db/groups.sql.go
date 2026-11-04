@@ -248,12 +248,13 @@ func (q *Queries) LockGroup(ctx context.Context, id int64) (CustomerGroup, error
 }
 
 const lockUserGroups = `-- name: LockUserGroups :many
-SELECT id, group_id FROM users WHERE id = ANY($1::bigint[]) ORDER BY id FOR SHARE
+SELECT id, group_id, is_auditor FROM users WHERE id = ANY($1::bigint[]) ORDER BY id FOR SHARE
 `
 
 type LockUserGroupsRow struct {
-	ID      int64
-	GroupID int64
+	ID        int64
+	GroupID   int64
+	IsAuditor bool
 }
 
 // The groups of the given users, locked FOR SHARE so that no group change
@@ -268,7 +269,7 @@ func (q *Queries) LockUserGroups(ctx context.Context, ids []int64) ([]LockUserGr
 	var items []LockUserGroupsRow
 	for rows.Next() {
 		var i LockUserGroupsRow
-		if err := rows.Scan(&i.ID, &i.GroupID); err != nil {
+		if err := rows.Scan(&i.ID, &i.GroupID, &i.IsAuditor); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

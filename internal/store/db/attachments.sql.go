@@ -35,14 +35,24 @@ WHERE a.body_text IS NOT NULL
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
       WHERE l.message_sha256 = a.message_sha256
-        AND f.account_id = ANY ($2::bigint[]))
-LIMIT $3
+        AND f.account_id = ANY ($2::bigint[])
+        AND (f.account_id = ANY ($3::bigint[]) OR f.id = ANY ($4::bigint[])))
+  -- The scope's period (#393), checked only when it has one.
+  AND ($5::timestamptz IS NULL AND $6::timestamptz IS NULL
+       OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = a.message_sha256
+                    AND ($5::timestamptz IS NULL OR pm.sort_at >= $5::timestamptz)
+                    AND ($6::timestamptz IS NULL OR pm.sort_at < $6::timestamptz)))
+LIMIT $7
 `
 
 type AttachmentMatchesParams struct {
-	Query    string
-	Accounts []int64
-	RowLimit int32
+	Query                  string
+	Accounts               []int64
+	ScopeAllFolderAccounts []int64
+	ScopeFolders           []int64
+	ScopeAfter             *time.Time
+	ScopeBefore            *time.Time
+	RowLimit               int32
 }
 
 // Messages with an attachment whose text matches the query, found in one
@@ -50,7 +60,15 @@ type AttachmentMatchesParams struct {
 // attachment_texts_search_idx.
 // Only rows with text: an empty one would match any negation (-draft).
 func (q *Queries) AttachmentMatches(ctx context.Context, arg AttachmentMatchesParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, attachmentMatches, arg.Query, arg.Accounts, arg.RowLimit)
+	rows, err := q.db.Query(ctx, attachmentMatches,
+		arg.Query,
+		arg.Accounts,
+		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolders,
+		arg.ScopeAfter,
+		arg.ScopeBefore,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -92,14 +110,24 @@ WHERE EXISTS (
     SELECT 1 FROM message_locations l
     JOIN folders f ON f.id = l.folder_id
     WHERE l.message_sha256 = s.sha
-      AND f.account_id = ANY ($3::bigint[]))
+      AND f.account_id = ANY ($3::bigint[])
+      AND (f.account_id = ANY ($4::bigint[]) OR f.id = ANY ($5::bigint[])))
+  -- The scope's period (#393), checked only when it has one.
+  AND ($6::timestamptz IS NULL AND $7::timestamptz IS NULL
+       OR EXISTS (SELECT 1 FROM messages pm WHERE pm.sha256 = s.sha
+                    AND ($6::timestamptz IS NULL OR pm.sort_at >= $6::timestamptz)
+                    AND ($7::timestamptz IS NULL OR pm.sort_at < $7::timestamptz)))
 ORDER BY 1
 `
 
 type AttachmentSnippetsParams struct {
-	Query    string
-	Shas     []string
-	Accounts []int64
+	Query                  string
+	Shas                   []string
+	Accounts               []int64
+	ScopeAllFolderAccounts []int64
+	ScopeFolders           []int64
+	ScopeAfter             *time.Time
+	ScopeBefore            *time.Time
 }
 
 type AttachmentSnippetsRow struct {
@@ -115,7 +143,15 @@ type AttachmentSnippetsRow struct {
 // the scope's accounts. Each hash is looked up on its own through the
 // primary key, and the snippet is made for one attachment per message.
 func (q *Queries) AttachmentSnippets(ctx context.Context, arg AttachmentSnippetsParams) ([]AttachmentSnippetsRow, error) {
-	rows, err := q.db.Query(ctx, attachmentSnippets, arg.Query, arg.Shas, arg.Accounts)
+	rows, err := q.db.Query(ctx, attachmentSnippets,
+		arg.Query,
+		arg.Shas,
+		arg.Accounts,
+		arg.ScopeAllFolderAccounts,
+		arg.ScopeFolders,
+		arg.ScopeAfter,
+		arg.ScopeBefore,
+	)
 	if err != nil {
 		return nil, err
 	}
