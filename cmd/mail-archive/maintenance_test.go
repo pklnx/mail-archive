@@ -284,7 +284,7 @@ func TestBackupNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.close()
-	note, err := backupNote(context.Background(), a, "mailarchive-x.dump", time.Date(2026, 10, 7, 19, 1, 2, 0, time.UTC))
+	note, err := backupNote(context.Background(), a, "mailarchive-x.dump", nil, time.Date(2026, 10, 7, 19, 1, 2, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

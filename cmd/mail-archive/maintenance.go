@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -271,6 +272,7 @@ several users have an account with that name). Removed accounts are included.
 			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
 			opts.Format, opts.Out, opts.Folder, opts.Logger = format, out, folder, log
+			warnPlaintext(cmd.ErrOrStderr(), a.cfg.DataDir, out)
 			if err := auditNow(cmd, a, e); err != nil {
 				return err
 			}
@@ -363,7 +365,7 @@ func exportTarget(cmd *cobra.Command, a *app, e *store.AuditEntry, account strin
 }
 
 func newBackupCmd() *cobra.Command {
-	var noteOnly bool
+	var noteOnly, keyringCopy bool
 	cmd := &cobra.Command{
 		Use:   "backup DIR",
 		Short: "Dump the database into DIR, next to a note on what else to back up",
@@ -371,10 +373,20 @@ func newBackupCmd() *cobra.Command {
 DIR/mailarchive-<time>.dump and write DIR/BACKUP-NOTE.txt, which says what
 else belongs to a complete backup and how to restore it.
 
+With encryption at rest on (or being changed), the dump is encrypted while
+pg_dump writes it, into DIR/mailarchive-<time>.dump.enc, under the current
+data key; the plaintext only passes through a pipe. Next to it,
+DIR/mailarchive-<time>.keyring is a copy of the keyring, wrapped under the
+archive keys like the one in the data directory. Without the archive key
+the backup refuses: a dump is never written in plaintext while encryption
+is on. The note names the fingerprints of the keys that open the keyring,
+never a key.
+
 A complete backup is the dump, then a copy of the data directory, in this
-order, and ` + config.EnvSecretKey + `, kept separately. The note never
-contains the key. With an attestation key, an attestation is written first,
-so that the dump holds the newest one.
+order, and ` + config.EnvSecretKey + ` (and the archive key), kept
+separately. The note never contains a key. With an attestation key, an
+attestation is written first, so that the dump holds the newest one.
+Restore with restore-dump.
 
 Needs pg_dump in PATH, at least the server's major version. The Docker image
 has none: with Docker Compose use "./ma backup DIR", which runs pg_dump in
@@ -382,6 +394,9 @@ the database container and writes DIR on the host.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if noteOnly {
 				return cobra.MaximumNArgs(1)(cmd, args)
+			}
+			if keyringCopy {
+				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
@@ -391,30 +406,52 @@ the database container and writes DIR on the host.`,
 				return err
 			}
 			defer a.close()
+			if keyringCopy {
+				// For ./ma backup: the keyring the dump is sealed with,
+				// written by ./ma next to the dump.
+				ring, err := backupKeyring(cmd.Context(), a)
+				if err != nil {
+					return err
+				}
+				if ring == nil {
+					return errors.New("encryption at rest is off: the dump is not encrypted and needs no keyring copy")
+				}
+				data, err := ring.Marshal()
+				if err != nil {
+					return err
+				}
+				_, err = cmd.OutOrStdout().Write(data)
+				return err
+			}
 			now := time.Now().UTC()
 			name := "mailarchive-" + now.Format("20060102T150405Z") + ".dump"
+			// Before the audit entry: a backup that cannot be sealed
+			// stops here, without a dump.
+			ring, err := backupKeyring(cmd.Context(), a)
+			if err != nil {
+				return err
+			}
 			// A dump is an export of everything. ./ma backup runs pg_dump
 			// itself, after this command with --note-only.
 			e := cliInstance("data.backup")
 			if noteOnly {
 				if len(args) == 1 {
-					e.Detail("dump", args[0])
+					name = args[0]
 				}
+				e.Detail("dump", sealedName(name, ring))
 			} else {
 				e.Detail("dir", args[0])
-				e.Detail("dump", name)
+				e.Detail("dump", sealedName(name, ring))
 			}
 			if err := auditNow(cmd, a, e); err != nil {
 				return err
 			}
 			if noteOnly {
 				// For ./ma backup: the dump is written by the database
-				// container, the note by this command.
-				if len(args) == 1 {
-					name = args[0]
-				}
+				// container, the note by this command. The note names the
+				// dump .dump.enc when it is to be sealed; ./ma reads that.
 				attestBeforeBackup(cmd.Context(), a, cmd.ErrOrStderr())
-				note, err := backupNote(cmd.Context(), a, name, now)
+				note, err := backupNote(cmd.Context(), a, name, ring, now)
 				if err != nil {
 					return err
 				}
@@ -430,16 +467,21 @@ the database container and writes DIR on the host.`,
 				return err
 			}
 			attestBeforeBackup(cmd.Context(), a, cmd.OutOrStdout())
-			note, err := backupNote(cmd.Context(), a, name, now)
+			note, err := backupNote(cmd.Context(), a, name, ring, now)
 			if err != nil {
 				return err
 			}
 			path, err := runBackup(cmd.Context(), backupJob{
 				PgDump: pgDump, DatabaseURL: a.cfg.DatabaseURL, Dir: args[0], Name: name,
-				ServerMajor: major, Note: note,
+				ServerMajor: major, Note: note, Seal: ring,
 			})
 			if err != nil {
 				return err
+			}
+			if ring != nil {
+				fmt.Printf("wrote %s (encrypted), %s and %s\n", path, filepath.Join(args[0], keyringCopyName(name)), filepath.Join(args[0], backupNoteName))
+				fmt.Printf("now copy the data directory (%s), and keep %s and the archive key separately\n", a.cfg.DataDir, config.EnvSecretKey)
+				return nil
 			}
 			fmt.Printf("wrote %s and %s\n", path, filepath.Join(args[0], backupNoteName))
 			fmt.Printf("now copy the data directory (%s), and keep %s separately\n", a.cfg.DataDir, config.EnvSecretKey)
@@ -448,6 +490,9 @@ the database container and writes DIR on the host.`,
 	}
 	cmd.Flags().BoolVar(&noteOnly, "note-only", false, "only print the backup note for the given dump name (used by ./ma backup)")
 	_ = cmd.Flags().MarkHidden("note-only")
+	cmd.Flags().BoolVar(&keyringCopy, "keyring-copy", false, "only print the keyring the dump is encrypted with (used by ./ma backup)")
+	_ = cmd.Flags().MarkHidden("keyring-copy")
+	cmd.MarkFlagsMutuallyExclusive("note-only", "keyring-copy")
 	return cmd
 }
 
@@ -460,11 +505,18 @@ type backupJob struct {
 	Name        string // file name of the dump
 	ServerMajor int
 	Note        string
+	// Seal, when set, is the opened keyring the dump is encrypted with
+	// (Name gets .enc); a copy of it is written next to the dump.
+	Seal *blobcrypt.Keyring
 }
 
 // runBackup checks the pg_dump version, dumps into Dir/Name.partial and
 // renames it when pg_dump succeeds, then writes the note. The connection is
 // passed in the environment, so the password is not in pg_dump's arguments.
+// With Seal, pg_dump's output is encrypted on its way to the file, which
+// is finished only after pg_dump succeeded: a failed pg_dump never leaves
+// a complete encrypted dump. The keyring copy is written before the dump
+// gets its name, so a dump never exists without it.
 func runBackup(ctx context.Context, job backupJob) (string, error) {
 	env, err := pgEnv(job.DatabaseURL)
 	if err != nil {
@@ -484,7 +536,7 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 	if err := os.MkdirAll(job.Dir, 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(job.Dir, job.Name)
+	path := filepath.Join(job.Dir, sealedName(job.Name, job.Seal))
 	partial := path + ".partial"
 	f, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the backup directory given by the operator
 	if err != nil {
@@ -498,10 +550,30 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 		}
 	}()
 	var stderr bytes.Buffer
+	var out io.Writer = f
+	var sealer *blobcrypt.Writer
+	if job.Seal != nil {
+		if sealer, err = newBackupSealer(f, job.Seal); err != nil {
+			return "", err
+		}
+		out = sealer
+	}
 	cmd := exec.CommandContext(ctx, job.PgDump, "--format=custom", "--no-password") //nolint:gosec // pg_dump from PATH
-	cmd.Env, cmd.Stdout, cmd.Stderr = env, f, &stderr
+	cmd.Env, cmd.Stdout, cmd.Stderr = env, out, &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("pg_dump: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if sealer != nil {
+		if err := sealer.Finish(nil); err != nil {
+			return "", err
+		}
+		data, err := job.Seal.Marshal()
+		if err != nil {
+			return "", err
+		}
+		if err := writeFileAtomic(filepath.Join(job.Dir, keyringCopyName(job.Name)), data); err != nil {
+			return "", err
+		}
 	}
 	if err := f.Sync(); err != nil {
 		return "", err
@@ -582,8 +654,9 @@ func pgDumpMajor(version string) (int, error) {
 	return strconv.Atoi(m[1])
 }
 
-// backupNote is the text of BACKUP-NOTE.txt. It never contains the key.
-func backupNote(ctx context.Context, a *app, dumpName string, now time.Time) (string, error) {
+// backupNote is the text of BACKUP-NOTE.txt. It never contains a key.
+// ring is the keyring the dump is sealed with, nil for a plaintext dump.
+func backupNote(ctx context.Context, a *app, dumpName string, ring *blobcrypt.Keyring, now time.Time) (string, error) {
 	statuses, err := a.store.MigrationStatus(ctx)
 	if err != nil {
 		return "", err
@@ -602,10 +675,19 @@ func backupNote(ctx context.Context, a *app, dumpName string, now time.Time) (st
 	if compose {
 		dataDir = "the directory mounted at /data (ARCHIVE_DIR in .env, by default ./data next to docker-compose.yml)"
 	}
-	return formatBackupNote(backupNoteData{
-		Time: now, Version: version, Migration: migration, Dump: dumpName, DataDir: dataDir, Compose: compose,
+	d := backupNoteData{
+		Time: now, Version: version, Migration: migration, Dump: sealedName(dumpName, ring), DataDir: dataDir, Compose: compose,
 		Attest: attestKeyExists(a.cfg),
-	}), nil
+	}
+	if ring != nil {
+		d.Keyring = keyringCopyName(dumpName)
+		d.Slots = ring.Slots()
+		d.ArchiveID, d.DataKey = ring.ArchiveID(), ring.CurrentKey()
+		if a.cfg.ArchiveKey != nil {
+			d.Configured = blobcrypt.Fingerprint(a.cfg.ArchiveKey)
+		}
+	}
+	return formatBackupNote(d), nil
 }
 
 // attestBeforeBackup writes an attestation before the dump when a key
@@ -634,6 +716,13 @@ type backupNoteData struct {
 	DataDir   string
 	Compose   bool
 	Attest    bool // attestations are on
+
+	// Set for an encrypted dump.
+	Keyring    string // file name of the keyring copy
+	ArchiveID  string
+	DataKey    uint32 // the data key the dump is encrypted with
+	Slots      []blobcrypt.Slot
+	Configured string // fingerprint of the configured archive key
 }
 
 func formatBackupNote(d backupNoteData) string {
@@ -641,32 +730,88 @@ func formatBackupNote(d backupNoteData) string {
 	fmt.Fprintf(&b, `mail-archive backup
 
 Database dump: %s
-Written:       %s
+`, d.Dump)
+	if d.Keyring != "" {
+		fmt.Fprintf(&b, `Keyring copy:  %s
+`, d.Keyring)
+	}
+	fmt.Fprintf(&b, `Written:       %s
 App version:   %s
 Last migration: %s
 
-A complete backup has three parts:
-1. this database dump,
+`, d.Time.UTC().Format(time.RFC3339), d.Version, d.Migration)
+	keyPart := ""
+	if d.Keyring != "" {
+		fmt.Fprintf(&b, `The dump is encrypted (encryption at rest is on): archive %s,
+data key %08x. It opens with the keyring copy next to it and one of the
+keys of these slots, the archive key or a recovery key:
+`, d.ArchiveID, d.DataKey)
+		for _, s := range d.Slots {
+			mark := ""
+			if s.Fingerprint == d.Configured {
+				mark = " (the configured archive key)"
+			}
+			fmt.Fprintf(&b, "  %s  %s%s\n", s.Fingerprint, s.Label, mark)
+		}
+		b.WriteString(`No key is in this note, in the dump or in the keyring copy. Without one of
+them, neither the dump nor the encrypted mail in the data directory can be
+read by anybody.
+
+`)
+		keyPart = `
+4. the archive key file (` + config.EnvArchiveKeyFile + `), or a recovery
+   key, kept apart from this backup and from the data directory.`
+	}
+	parts := "three"
+	dumpPart := "this database dump"
+	if d.Keyring != "" {
+		parts, dumpPart = "four", "this database dump and the keyring copy next to it"
+	}
+	fmt.Fprintf(&b, `A complete backup has %s parts:
+1. %s,
 2. a copy of the data directory, made after the dump:
    %s
 3. %s, kept separately (password manager). It is not
    in this note or in the dump. Without it the stored IMAP passwords and
-   two-factor secrets cannot be read.
+   two-factor secrets cannot be read.%s
 
 Restore:
-`, d.Dump, d.Time.UTC().Format(time.RFC3339), d.Version, d.Migration, d.DataDir, config.EnvSecretKey)
-	if d.Compose {
-		fmt.Fprintf(&b, `1. Put the key into .env, copy the data directory back, start PostgreSQL:
-   docker compose up -d --wait postgres
-2. Load the dump:
-   docker compose exec -T postgres pg_restore --clean --if-exists --no-owner -U mailarchive -d mailarchive < %s
-`, d.Dump)
-	} else {
-		fmt.Fprintf(&b, `1. Set the key, copy the data directory back, create an empty database.
-2. Load the dump:
-   pg_restore --clean --if-exists --no-owner -d "$DATABASE_URL" %s
-`, d.Dump)
+`, parts, dumpPart, d.DataDir, config.EnvSecretKey, keyPart)
+	keys := "the key into .env"
+	if d.Keyring != "" {
+		keys = "the key into .env and the archive key file into the keys directory"
 	}
+	if d.Compose {
+		fmt.Fprintf(&b, `1. Put %s, copy the data directory back, and stop the web server and
+   the worker (docker compose stop web worker).
+2. Load the dump, which replaces the database in one transaction:
+   ./ma restore-dump <this directory>/%s
+`, keys, d.Dump)
+	} else {
+		keys = config.EnvSecretKey
+		if d.Keyring != "" {
+			keys += " and " + config.EnvArchiveKeyFile
+		}
+		fmt.Fprintf(&b, `1. Set %s, copy the data directory back, create an empty database,
+   and stop the web server and the worker.
+2. Load the dump, which replaces the database in one transaction (needs
+   pg_restore in PATH):
+   mail-archive restore-dump %s
+`, keys, d.Dump)
+		if d.Keyring != "" {
+			fmt.Fprintf(&b, `   or by hand:
+   mail-archive unseal-stream --keyring %s < %s |
+     pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL"
+`, d.Keyring, d.Dump)
+		} else {
+			fmt.Fprintf(&b, `   or by hand:
+   pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL" %s
+`, d.Dump)
+		}
+	}
+	b.WriteString(`   restore-dump then reconciles the keyring and the state of encryption at
+   rest with the data directory and prints what it changed.
+`)
 	if d.Attest {
 		b.WriteString(`3. Run "migrate", then "attest" before anything archives: it imports the
    attestations written after the dump from the data directory. Then
@@ -688,6 +833,21 @@ and signing.pub. They are not part of this backup; keep updating them.
    aside with "verify --fix-orphans" only after checking them.
 `)
 	return b.String()
+}
+
+// sealedName is the file name of a dump: name, with .enc when it is
+// encrypted with ring.
+func sealedName(name string, ring *blobcrypt.Keyring) string {
+	if ring == nil {
+		return name
+	}
+	return name + ".enc"
+}
+
+// keyringCopyName is the name of the keyring copy next to the dump name
+// (mailarchive-<time>.dump → mailarchive-<time>.keyring).
+func keyringCopyName(dumpName string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(dumpName, ".enc"), ".dump") + ".keyring"
 }
 
 // writeFileAtomic writes a file with mode 0600 through a temporary file.

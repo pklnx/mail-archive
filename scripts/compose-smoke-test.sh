@@ -256,9 +256,30 @@ if [ "$(uname -s)" = Linux ]; then
 	expect "$work/out" '^65532:65532 400'
 fi
 
+echo "== encryption enable"
+# Offline: the web server started for the API checks above is stopped first.
+docker compose --progress quiet stop web
+./ma encryption enable | tee "$work/out"
+expect "$work/out" 'encryption at rest is on'
+count=$(in_data "find /data/messages -name '*.eml' | wc -l" | tr -d ' \r')
+if [ "$count" -ne 0 ]; then
+	echo "expected no .eml files after encryption enable, found $count" >&2
+	exit 1
+fi
+# Leak test: no subject is left in plaintext in the message files.
+if in_data "grep -rqa 'Smoke test' /data/messages"; then
+	echo "a message file holds a subject in plaintext" >&2
+	exit 1
+fi
+./ma verify | tee "$work/out"
+expect "$work/out" 'checked 7 message\(s\): no problems'
+
 echo "== export"
-./ma export --user smoke --format mbox --out /data/export/smoke | tee "$work/out"
+./ma export --user smoke --format mbox --out /data/export/smoke > "$work/out" 2>&1
+cat "$work/out"
 expect "$work/out" "exported 7 message\(s\)"
+# Inside the data directory with encryption at rest on: a warning.
+expect "$work/out" 'warning: the export is not encrypted'
 in_data 'test -s /data/export/smoke/test/INBOX.mbox && head -c 5 /data/export/smoke/test/INBOX.mbox' > "$work/out"
 expect "$work/out" '^From '
 # Exports are not taken for orphans.
@@ -267,15 +288,65 @@ expect "$work/out" 'no problems'
 
 echo "== backup"
 ./ma backup "$work/backups" | tee "$work/out"
-expect "$work/out" "wrote .*mailarchive-[0-9TZ]+\.dump"
-dump=$(ls "$work/backups"/mailarchive-*.dump)
-docker compose --progress quiet exec -T postgres pg_restore --list < "$dump" > "$work/out"
-expect "$work/out" 'TABLE public messages'
+expect "$work/out" "wrote .*mailarchive-[0-9TZ]+\.dump\.enc \(encrypted\)"
+dump=$(ls "$work/backups"/mailarchive-*.dump.enc)
+test -s "${dump%.dump.enc}.keyring"
+if [ "$(head -c 7 "$dump")" != MA-ENC1 ]; then
+	echo "the dump is not encrypted" >&2
+	exit 1
+fi
 expect "$work/backups/BACKUP-NOTE.txt" 'MAIL_ARCHIVE_SECRET_KEY'
+expect "$work/backups/BACKUP-NOTE.txt" "Database dump: $(basename "$dump")"
+expect "$work/backups/BACKUP-NOTE.txt" '[0-9a-f]{16}  archive key \(the configured archive key\)'
+expect "$work/backups/BACKUP-NOTE.txt" 'restore-dump'
 if grep -qF "$(grep MAIL_ARCHIVE_SECRET_KEY .env | cut -d= -f2-)" "$work/backups/BACKUP-NOTE.txt"; then
 	echo "the backup note contains the secret key" >&2
 	exit 1
 fi
+# Leak test on the .dump.enc: the subjects, the account's user name and the
+# dump format's magic are in the decrypted dump (the control), never in the
+# file.
+./ma unseal-stream < "$dump" > "$work/plain.dump"
+for marker in 'Smoke test' 'Work message' alice PGDMP; do
+	if ! grep -qaF "$marker" "$work/plain.dump"; then
+		echo "control: the decrypted dump lacks $marker" >&2
+		exit 1
+	fi
+	if grep -qaF "$marker" "$dump"; then
+		echo "the encrypted dump contains $marker in plaintext" >&2
+		exit 1
+	fi
+done
+docker compose --progress quiet exec -T postgres pg_restore --list < "$work/plain.dump" > "$work/out"
+expect "$work/out" 'TABLE public messages'
+rm -f "$work/plain.dump"
+
+echo "== restore-dump into a fresh database"
+# A recovery key added after the backup lives in the keyring file only; the
+# restore must keep it (the newer generation wins).
+./ma encryption add-key | tee "$work/out"
+docker compose --progress quiet exec -T postgres psql -q -U mailarchive -d postgres \
+	-c 'DROP DATABASE mailarchive WITH (FORCE)' -c 'CREATE DATABASE mailarchive'
+./ma restore-dump "$dump" | tee "$work/out"
+expect "$work/out" "restored $dump"
+expect "$work/out" 'restored database: encryption at rest on, keyring copy generation [0-9]+'
+expect "$work/out" 'state: on, as in the dump'
+expect "$work/out" 'keyring: the keyring file is newer than the dump.s copy'
+./ma status | tee "$work/out"
+expect "$work/out" "unique messages in archive: 7"
+expect "$work/out" 'encryption at rest: on'
+./ma verify | tee "$work/out"
+expect "$work/out" 'checked 7 message\(s\): no problems'
+# A damaged dump is refused and changes nothing.
+cut=$work/backups/cut.dump.enc
+head -c "$(($(wc -c < "$dump") - 1))" "$dump" > "$cut"
+if ./ma restore-dump "$cut" > "$work/out" 2>&1; then
+	echo "expected ./ma restore-dump to refuse a cut dump" >&2
+	exit 1
+fi
+expect "$work/out" 'the database is unchanged'
+./ma status > "$work/out"
+expect "$work/out" "unique messages in archive: 7"
 
 echo "== audit"
 # Every step above that reads, imports, exports or changes was recorded,

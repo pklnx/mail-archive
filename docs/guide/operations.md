@@ -18,9 +18,12 @@ A complete backup has three parts, made in this order:
    ```
    This writes `backups/mailarchive-<time>.dump` (made with `pg_dump` inside
    the database container, so it always matches the server version) and
-   `backups/BACKUP-NOTE.txt` with the restore steps. Without Docker Compose,
-   `mail-archive backup DIR` does the same with the `pg_dump` in `PATH`.
-2. **The archive directory** (`data/`, or `ARCHIVE_DIR`): the `.eml` files.
+   `backups/BACKUP-NOTE.txt` with the restore steps. With
+   [encryption at rest](#encryption-at-rest) on, the dump is encrypted
+   instead, see [Encrypted backups](#encrypted-backups). Without Docker
+   Compose, `mail-archive backup DIR` does the same with the `pg_dump` in
+   `PATH`.
+2. **The archive directory** (`data/`, or `ARCHIVE_DIR`): the message files.
    Copy it **after** the dump. Files are only added, so a copy made later
    covers every message in the dump.
 3. **The secret key** from `.env` (`MAIL_ARCHIVE_SECRET_KEY`), kept
@@ -49,10 +52,10 @@ it is complete; keep the period longer than the time between a dump and the
 copy of the data directory.
 
 Without [encryption at rest](#encryption-at-rest) the message files
-(`.eml`) are **not** encrypted on disk; with it they are (`.enc`), and the
-keyring in `data/keys/` is wrapped under the archive keys. The dumps are not
-encrypted yet. Keep both on an encrypted volume; FileVault on macOS does
-this by default.
+(`.eml`) and the dumps are **not** encrypted on disk: keep both on an
+encrypted volume; FileVault on macOS does this by default. With it, both
+are encrypted (`.enc`, `.dump.enc`), and the keyring in `data/keys/` is
+wrapped under the archive keys.
 
 The files alone do not record where each message was found or which
 accounts exist, so back up both the files and the database.
@@ -61,12 +64,41 @@ A nightly backup with cron, which also deletes dumps older than 30 days and
 checks the archive once a week:
 
 ```sh
-30 2 * * * cd /path/to/mail-archive && ./ma backup ./backups && rsync -a --delete ./data/ /backup/mail-archive-data/ && find ./backups -name 'mailarchive-*.dump' -mtime +30 -delete
+30 2 * * * cd /path/to/mail-archive && ./ma backup ./backups && rsync -a --delete ./data/ /backup/mail-archive-data/ && find ./backups -name 'mailarchive-*' -mtime +30 -delete
 0 4 * * 0 cd /path/to/mail-archive && ./ma verify > /tmp/mail-archive-verify.log 2>&1 || echo "mail-archive verify: see /tmp/mail-archive-verify.log"
 ```
 
 On Linux the files in `data/` belong to UID 65532 (the container user), so
 copy them as root or with `sudo`.
+
+### Encrypted backups
+
+While encryption at rest is on (or an `encryption` change is unfinished),
+`./ma backup` encrypts the dump while `pg_dump` writes it; the plaintext
+dump only passes through a pipe and never reaches a disk. It writes:
+
+- `mailarchive-<time>.dump.enc`, in the format of the message files, under
+  the keyring's current data key;
+- `mailarchive-<time>.keyring`, a copy of the keyring the dump opens with,
+  wrapped under the archive keys like the one in `data/keys/`: safe to keep
+  with the backup, useless without a key;
+- `BACKUP-NOTE.txt`, which names the dump, the keyring copy and the
+  fingerprints of the keys that open it (archive key and recovery keys),
+  never a key.
+
+Without the archive key, `backup` refuses: a dump is never written in
+plaintext while encryption is on. If `pg_dump` fails, nothing is written.
+To read a dump the **archive key that was current when it was made**, or a
+recovery key of that time, is needed: a key removed later still opens it,
+and a key added later does not. Keep the old keys as long as such backups
+exist (see [Key custody](#encryption-at-rest)).
+
+By hand, without `restore-dump`, an encrypted dump is read with
+`mail-archive unseal-stream --keyring mailarchive-<time>.keyring <
+mailarchive-<time>.dump.enc`, which writes the plaintext dump to standard
+output, for example into `pg_restore --list`. Exports are not encrypted; an
+export written inside the data directory gets a warning, see
+[Exporting mail](#exporting-mail).
 
 ### Checking the archive
 
@@ -92,16 +124,23 @@ the [command reference](../reference/cli#verify) for the findings.
 
 ### Restore
 
-1. Put `MAIL_ARCHIVE_SECRET_KEY` back into `.env` and copy the data directory
-   back to `data/` (or `ARCHIVE_DIR`). On Linux the files must belong to UID
-   65532 again: `sudo chown -R 65532:65532 data` (for rootless Docker, see
-   [Linux hosts](./getting-started#linux-hosts)).
+1. Put `MAIL_ARCHIVE_SECRET_KEY` back into `.env` and, with encryption at
+   rest, the archive key file into the keys directory
+   (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`). Copy the data directory back to `data/`
+   (or `ARCHIVE_DIR`). On Linux the files must belong to UID 65532 again:
+   `sudo chown -R 65532:65532 data` (for rootless Docker, see
+   [Linux hosts](./getting-started#linux-hosts)). Stop the web server and
+   the worker: `docker compose stop web worker`.
 2. Load the dump into the database, which replaces what is there:
    ```sh
-   docker compose up -d --wait postgres
-   docker compose exec -T postgres pg_restore --clean --if-exists --no-owner \
-     -U mailarchive -d mailarchive < backups/mailarchive-<time>.dump
+   ./ma restore-dump backups/mailarchive-<time>.dump.enc
    ```
+   (or the `.dump` of an archive without encryption). It runs `pg_restore`
+   in the database container in one transaction; an encrypted dump is
+   decrypted on its way there with the keyring copy next to it. A damaged or
+   cut dump is refused, and the database stays as it was. Without Docker
+   Compose: `mail-archive restore-dump FILE`, with `pg_restore` in `PATH`.
+   It refuses while a writer runs.
 3. `./ma migrate`, then `./ma attest` if attestations are on (it imports
    the attestations written after the dump, before anything archives; see
    [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,
@@ -110,6 +149,26 @@ the [command reference](../reference/cli#verify) for the findings.
 Files newer than the dump show up as orphans. The sync adopts those still on
 the server. Others came from mail deleted on the server since the dump: they
 are the only copy, so look at them before `--fix-orphans` moves them aside.
+
+**What `restore-dump` reconciles.** The dump and the data directory each
+hold a copy of the keyring, the dump also the state of encryption at rest,
+and the two can be of different ages. After loading the dump, `restore-dump` brings them
+together and prints each step:
+
+- The newer keyring (by its generation) wins and is written to the other
+  copy: a recovery key added with `encryption add-key` after the backup is
+  in the newer keyring file and stays. The data keys of both copies are
+  kept, so files encrypted under a key only one copy knows stay readable.
+  A keyring of another archive is refused.
+- A dump that says off next to a data directory with encrypted files (a
+  backup from before `encryption enable`) gives the state `encrypting`:
+  run `./ma encryption enable` before anything else starts; it finishes in
+  one quick pass.
+- A missing keyring file is rebuilt from the dump.
+
+For a dump older than the schema of this version, it says to run
+`./ma migrate` and then `./ma restore-dump --reconcile-only`; the web
+server does the same reconciliation at its start.
 
 ## Exporting mail
 
@@ -131,7 +190,10 @@ UID 65532: `sudo chown -R "$USER" data/export/anna` makes them yours.
 | `maildir` | One Maildir per folder with read, answered and flagged marks | Mail servers (Dovecot) and clients such as mutt or NeoMutt. |
 
 Exports are **not encrypted**; the files are readable only by their owner.
-Delete them once imported. `verify` ignores the `export/` directory. Every
+Delete them once imported. With encryption at rest on, an export inside the
+data directory would put plaintext where everything else is encrypted, so
+`export` warns about it; write it to `/export` instead (`EXPORT_DIR` on the
+host, default `./export`). `verify` ignores the `export/` directory. Every
 export is in the [audit log](./audit-log) as `data.export`.
 
 ## GoBD export
