@@ -47,8 +47,9 @@ const (
 	// maxChunks keeps the chunk counter inside the 11 counter bytes of the
 	// nonce and offsets inside an int64.
 	maxChunks = (1<<63 - 1 - HeaderSize) / encChunkSize
-	// maxFileSize is the largest file Open accepts; its chunk arithmetic
-	// cannot overflow.
+	// maxFileSize is the largest file Open accepts: the largest whole number
+	// of chunks after the header that fits an int64. Open's chunk arithmetic
+	// cannot overflow up to it (TestOpenImpossibleSize).
 	maxFileSize = HeaderSize + maxChunks*encChunkSize
 )
 
@@ -368,7 +369,12 @@ func Open(ra io.ReaderAt, fileSize int64, keys DataKeys, want Purpose, binding [
 	if enc < TagSize {
 		return nil, corrupt("truncated: no final chunk")
 	}
-	chunks := (enc + encChunkSize - 1) / encChunkSize
+	// Rounded up without enc + encChunkSize - 1, which overflows near
+	// maxFileSize.
+	chunks := enc / encChunkSize
+	if enc%encChunkSize != 0 {
+		chunks++
+	}
 	lastEnc := enc - (chunks-1)*encChunkSize
 	// Writers never produce an empty final chunk after a full one.
 	if chunks > 1 && lastEnc <= TagSize {

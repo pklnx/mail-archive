@@ -456,4 +456,24 @@ func TestOpenImpossibleSize(t *testing.T) {
 			t.Errorf("size %d: %v, want ErrCorrupt", size, err)
 		}
 	}
+	// The largest accepted sizes and those just below them: a valid header,
+	// then zeros, without allocating the file. Open must get as far as the
+	// final chunk and refuse it, never overflow.
+	f := headerThenZeros{header: ct[:HeaderSize]}
+	for _, size := range []int64{maxFileSize, maxFileSize - 1, maxFileSize - encChunkSize/2, maxFileSize - encChunkSize, maxFileSize - encChunkSize - TagSize - 1} {
+		if _, err := Open(f, size, testKeys{1: dk}, PurposeBackup, nil); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("size %d: %v, want ErrCorrupt", size, err)
+		}
+	}
+}
+
+// headerThenZeros is a ReaderAt of any length: a header, then zero bytes.
+type headerThenZeros struct{ header []byte }
+
+func (h headerThenZeros) ReadAt(p []byte, off int64) (int, error) {
+	clear(p)
+	if off < int64(len(h.header)) {
+		copy(p, h.header[off:])
+	}
+	return len(p), nil
 }
