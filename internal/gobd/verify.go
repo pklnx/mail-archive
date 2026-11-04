@@ -139,7 +139,7 @@ type verifier struct {
 	sumsRead bool
 	sums     map[string]string // every listed file but the message files
 	missing  map[[32]byte]bool
-	rowOrder []int32 // indexes into emls in messages.csv order
+	rowOrder []int // indexes into emls in messages.csv order
 	owners   map[string]bool
 
 	chain   []attest.Entry // attest/attestations.jsonl, if it is valid
@@ -300,9 +300,16 @@ func parseEMLPath(name string) (eml, bool) {
 	}
 	var m eml
 	_, _ = hex.Decode(m.sha[:], []byte(name[13:77]))
-	y, _ := strconv.Atoi(name[5:9])
-	mo, _ := strconv.Atoi(name[10:12])
-	m.year, m.month = uint16(y), uint8(mo) //nolint:gosec // four and two digits
+	// ParseUint with the bit size of the field: the bound is in the parse.
+	y, err := strconv.ParseUint(name[5:9], 10, 16)
+	if err != nil {
+		return eml{}, false
+	}
+	mo, err := strconv.ParseUint(name[10:12], 10, 8)
+	if err != nil {
+		return eml{}, false
+	}
+	m.year, m.month = uint16(y), uint8(mo)
 	return m, true
 }
 
@@ -671,7 +678,7 @@ func (v *verifier) messageRow(line int, vals []string, lastSeq *int64) {
 	}
 	e.flags |= fRow
 	e.size, e.seq, e.att = size, seq, att
-	v.rowOrder = append(v.rowOrder, int32(idx)) //nolint:gosec // fewer than 2^31 messages
+	v.rowOrder = append(v.rowOrder, idx)
 }
 
 func (v *verifier) locationRow(line int, vals []string) {
@@ -803,11 +810,14 @@ func (v *verifier) checkChain() {
 		return
 	}
 	v.compareSum(ChainFile, hex.EncodeToString(h.Sum(nil)))
-	want := 1
+	want := int64(1)
 	if st.FullChain {
-		want = int(min(st.AttestationSeq, maxChainLength))
+		want = st.AttestationSeq
+		if want > maxChainLength {
+			want = maxChainLength
+		}
 	}
-	if len(entries) != want {
+	if int64(len(entries)) != want {
 		v.find(KindChain, ChainFile, fmt.Sprintf("%d entries, the statement says %d", len(entries), want))
 		return
 	}
@@ -953,7 +963,7 @@ func (v *verifier) checkLeaves() {
 			}
 		}
 	}
-	byAtt := map[int64][]int32{}
+	byAtt := map[int64][]int{}
 	newest := known[st.AttestationSeq]
 	for _, i := range v.rowOrder {
 		m := &v.emls[i]
@@ -1033,8 +1043,8 @@ func (v *verifier) checkLeaves() {
 // with the same SHA-256.
 // e is nil when the attestation is not known; then the digest is not
 // compared.
-func (v *verifier) scanLeaves(name string, r io.Reader, seq int64, e *attest.Entry, msgs []int32) {
-	slices.SortFunc(msgs, func(a, b int32) int { return cmp.Compare(v.emls[a].seq, v.emls[b].seq) })
+func (v *verifier) scanLeaves(name string, r io.Reader, seq int64, e *attest.Entry, msgs []int) {
+	slices.SortFunc(msgs, func(a, b int) int { return cmp.Compare(v.emls[a].seq, v.emls[b].seq) })
 	next := 0
 	report := func(m *eml, why string) {
 		v.find(KindChain, m.path(), fmt.Sprintf("archive_seq %d: %s in leaves file #%d", m.seq, why, seq))

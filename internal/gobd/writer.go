@@ -386,11 +386,11 @@ func (w *Writer) checkChain(chain []attest.Entry) error {
 		}
 		return nil
 	}
-	want := 1
+	want := int64(1)
 	if st.FullChain {
-		want = int(st.AttestationSeq)
+		want = st.AttestationSeq
 	}
-	if len(chain) != want {
+	if int64(len(chain)) != want {
 		return fmt.Errorf("gobd: the chain has %d entries, the statement needs %d", len(chain), want)
 	}
 	last := chain[len(chain)-1]
