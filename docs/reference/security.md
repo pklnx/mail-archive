@@ -7,7 +7,7 @@
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail (message files) | With [encryption at rest](#the-archive-key) on, every message file is stored encrypted with AES-256-GCM (`<sha256>.enc`) and written encrypted from the first byte, so no plaintext of it reaches the disk; the key is kept apart from the data. A key file on the same disk as the data protects copies and backups of the data directory, not snapshots of that disk. Without encryption at rest, plain `.eml` files, **not encrypted**: use an encrypted disk. |
 | Archived mail (database) | PostgreSQL rows **are not encrypted**, also with encryption at rest: subjects, addresses, body text, the text extracted from attachments for search, attachment names, Message-IDs, envelopes, folder names, account and user names, the audit log and legal holds. Use an encrypted disk; a hosted instance must keep PostgreSQL on an encrypted volume whose key is kept away from its snapshots. |
-| Exports and backups | `export` and `backup` write unencrypted files with mode 0600 in directories with mode 0700, also with encryption at rest (an export is meant for a mail client: delete it once used). `BACKUP-NOTE.txt` names the secret key but never contains it, and `pg_dump` gets the database password in its environment, not on the command line. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. |
+| Exports and backups | `export` and `backup` write unencrypted files with mode 0600 in directories with mode 0700, also with encryption at rest (an export is meant for a mail client: delete it once used). `BACKUP-NOTE.txt` names the secret key but never contains it, and `pg_dump` gets the database password in its environment, not on the command line. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
 | Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
@@ -107,7 +107,11 @@ group's users, accounts, audit log, retention rules and holds, but no mail
 except their own and what was shared with them. Groups separate customers
 inside one instance: they share one database, one archive directory, one
 secret key and one backup, and a message that several groups received is
-stored once and shown to each only through its own accounts.
+stored once and shown to each only through its own accounts. One GoBD
+export never spans customer groups: a selection whose users and accounts are
+not all in one group is refused, never filtered, and the signed statement
+names the group and its owners; places of a message in another group's
+accounts are never part of it.
 
 A shared user may search, read and download. Managing, syncing, retention
 and removal stay with the owner; the shared user gets `404` (`403` for the admin-only purge

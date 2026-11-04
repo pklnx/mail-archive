@@ -62,6 +62,15 @@ if [ "${1:-}" = migrate ]; then
 		echo "warning: could not prepare the data directory (ARCHIVE_DIR in .env, default ./data)" >&2
 fi
 
+# export writes GoBD exports to /export (EXPORT_DIR, default ./export),
+# which Docker creates as root on first use: make it writable for the
+# container user as for the data directory. Only warns; the export then
+# reports what it cannot write.
+if [ "${1:-}" = export ] && [ "${2:-}" != verify ]; then
+	compose run --rm --no-deps $build -T --user 0:0 -e MAIL_ARCHIVE_DATA_DIR=/export mail-archive prepare-data >/dev/null 2>&1 ||
+		echo "warning: could not prepare the export directory (EXPORT_DIR in .env, default ./export)" >&2
+fi
+
 # Who runs the command, for the audit log (not verified).
 operator=$(id -un 2>/dev/null || echo unknown)
 

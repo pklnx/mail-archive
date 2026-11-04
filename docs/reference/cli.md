@@ -7,9 +7,9 @@ users or accounts (`user …`, `account …`, including fills and purges),
 retention rules, holds and deletion runs, `jobs retry`, and `import`,
 `export`, `backup` and `audit` leave an entry in the
 [audit log](../guide/audit-log#the-fields); `migrate`, `reindex`,
-`attest` and `attest keygen`, the [`encryption`](#encryption) commands and
-`decrypt` (they need no database), `sync`, `verify`, `status`, `notify test`
-and the list commands do not.
+`attest` and `attest keygen`, the [`encryption`](#encryption) commands,
+`decrypt` and `export verify` (they need no database), `sync`, `verify`,
+`status`, `notify test` and the list commands do not.
 
 With Docker Compose, run every command through the wrapper, for example
 `./ma status`. The binary itself is called `mail-archive`. Every command has
@@ -288,6 +288,7 @@ retention has usually ended too, so the next deletion run lists it.
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Then it extracts the text of PDF and text attachments of every message that has none yet, in the foreground, newest first, until none is left, and prints `updated N message(s), extracted text of M attachment(s)`; `MAIL_ARCHIVE_JOB_WORKERS` (default 1; `0`, as set for a web server that leaves jobs to the worker, counts as 1 here) sets how many messages run at a time, PDFs one at a time. The web server or the worker does the same in the background; installations that run only `sync` or `import` from cron get attachment text only from `reindex`, so run it after them, for example in the same cron job. Messages that another process is extracting, or that wait for a retry, are left to it, and it says how many. Safe to interrupt and rerun, and to run alongside the web server, the worker and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: the attestations, every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
+| `export --format gobd --out PATH` | Write a GoBD export of one customer group for a tax audit: the original messages, CSV tables, a checksum manifest and a signed statement, as a directory or a ZIP. See [export --format gobd](#export-format-gobd). |
 | `export verify PATH` | Check a GoBD export (a directory or a ZIP) offline, without a database or configuration. See [export verify](#export-verify). |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
 | `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `DATE` is `YYYY-MM-DD`, a day in UTC, or RFC 3339 with an offset for another zone (`2026-10-01T00:00:00+02:00`). `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, `--group NAME` (the entries of a [customer group](#groups)), `--group-id N` (by the group's id, also of a removed group) or `--without-group` (those without one: before 1.4.0, or instance-level), and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
@@ -304,7 +305,8 @@ retention has usually ended too, so the next deletion run lists it.
 
 Commands that change users or accounts, `jobs retry`, and `import`, `export`, `backup`
 and `audit`, write an entry to the [audit log](../guide/audit-log) first;
-if it cannot be written they do nothing. `sync`, `status`, `verify` and the
+if it cannot be written they do nothing. A GoBD export also records its end
+(`data.export_done`). `sync`, `status`, `verify`, `export verify` and the
 list commands are not recorded.
 
 ### import
@@ -567,6 +569,95 @@ when several users have an account with that name). With Docker Compose,
 `DIR` must be under `/data`, which is `./data` on the host. Exits `1` if
 messages were skipped because their file is missing or corrupt (run `verify`).
 See [Exporting mail](../guide/operations#exporting-mail).
+
+### export --format gobd
+
+```sh
+./ma export --format gobd --group "Meier GmbH" --out /export/meier-2025 \
+  --since 2025-01-01 --until 2025-12-31 --requested-by "Steuerberater Huber, Ticket 4711"
+./ma export --format gobd --user anna --user ben --group "Meier GmbH" --out /export/meier-anna-ben.zip
+./ma export --format gobd --hold 3 --group "Meier GmbH" --out /export/hold-3
+```
+
+Writes a GoBD export ([format v1](../development/architecture#gobd-export-format-v1))
+of one customer group for a tax audit ("Datenüberlassung"): every selected
+message's original `.eml`, `messages.csv`, `locations.csv`, `missing.csv` and
+`index.xml`, `SHA256SUMS` and the signed `STATEMENT.txt`. A path ending in
+`.zip` gives a ZIP of the same files (at most 200,000 messages: `use a
+directory or split by year`), any other path a directory. Check it with
+[export verify](#export-verify). See [GoBD export](../guide/gobd-export) for
+the customer's side and [Operations](../guide/operations#gobd-export) for the
+operator's.
+
+What it covers, combined with `--since DATE` and `--until DATE` (the date of
+the message; a plain date is a day in `--time-zone`, default
+`Europe/Berlin`, and `--until` includes that day):
+
+- `--user USER` (repeatable): every account of these users, removed ones
+  included; `--account [OWNER/]NAME` (repeatable): these accounts, `NAME`
+  alone for a name only one account has (also one without an owner);
+  `--folder NAME` (repeatable) only with exactly one `--account`. The two
+  combine.
+- `--hold ID`: the places a legal hold covers. The hold must name a user, an
+  account or a customer group; a hold over every customer is refused
+  (`name the users with --user`).
+- `--grant ID`: the accounts, folders and period of an auditor grant, also
+  of one that has ended; a revoked grant is refused.
+- `--group NAME` alone: every user of the group as the export's snapshot
+  sees them, with all their accounts.
+
+One export covers **one customer group**. A selection whose users and
+accounts are not all in one group, or all without a group (accounts without
+an owner), is refused with exit code 2 and names each and its group:
+`the selection spans customer groups: anna (Meier GmbH), kim (Schulz KG);
+one export covers one customer group`. Nothing is left out silently. With
+two or more groups, `--group NAME` or `--without-group` is required and
+checked (`the selection is in Schulz KG, not Meier GmbH`); with one group
+both are optional. `--without-group` alone is refused (`name the accounts
+with --account`).
+
+Everything is read in one database snapshot, which holds no locks: users,
+the Users page and group moves are not delayed. A user or account that
+changes group after the snapshot is named on stderr, the export stays
+complete as of the snapshot, and the command exits 3. A rename of the group
+does not count; the statement keeps the name the snapshot saw.
+
+With an attestation key, an attestation is written first if messages came
+since the newest one (it waits for one being written), and `STATEMENT.txt`
+is signed; `--no-attest` skips the attestation. Without a key the statement
+is unsigned (`sig none`) and the export still runs. `attest/` holds the
+newest attestation only; `--with-chain` adds the whole chain,
+`--with-leaves` the leaves files of the attestations the messages name
+(both hold hashes and counts of other customers' mail).
+
+A directory is written into `PATH.partial` (directories 0700, files 0600,
+each file under a temporary name until it is complete), synced to disk and
+renamed to `PATH` at the end. If the export is interrupted, run the same
+command with `--resume`: it keeps the files that are already right, writes
+the others and removes those no longer selected, with the same selection
+and cutoff; it is refused (exit 2, `the selection's group changed since the
+export started; start a new export`) when a selected user or account
+changed group meanwhile. Without `--resume`, an existing `PATH.partial` is
+refused. Before writing, it checks that the selection fits into the free
+space (plus 2 %). A ZIP is not resumed; an interrupted one is removed.
+
+`--requested-by TEXT` records who asked for the export. Both audit entries,
+`data.export` (before anything is read) and `data.export_done` (with the
+counts and the SHA-256 of `SHA256SUMS` and of `STATEMENT.txt`), are
+recorded under the export's customer group; see
+[the audit log](../guide/audit-log#what-is-recorded). With `--grant`, they
+carry `auditor_grant`.
+
+The export is not encrypted. With Docker Compose, write it to `/export`,
+which is `EXPORT_DIR` on the host (default `./export`), outside the data
+directory; with encryption at rest on, an output inside the data directory
+gets a warning. With encryption at rest on, the export needs the archive
+key, like `export` to mbox or Maildir, and refuses without it before the
+audit entry; it reads the messages decrypted, so its files are the same as
+those of the same archive in plaintext. Exit codes: `0` complete, `1` messages missing (listed on
+stderr and in `missing.csv`) or an error, `2` a usage error or a refused
+selection, `3` complete, but a selected user or account changed group after
+the snapshot.
 
 ### export verify
 

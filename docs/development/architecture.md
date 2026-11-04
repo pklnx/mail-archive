@@ -468,7 +468,7 @@ commands of part 3 take the writers lock exclusively with a try-lock
 (`Store.TryLockWritersExclusive`) and name the writers they find by
 `application_name`.
 
-Readers (`export`) need the key whenever a row exists; `verify` starts
+Readers (`export`, also `export --format gobd`) need the key whenever a row exists; `verify` starts
 without it, checks the attestations (database only) and then stops with the
 reason. With encryption off, a configured key that opens the keyring file
 still reads `.enc` files left over.
@@ -650,7 +650,7 @@ difference stops the run.
 
 The GoBD export (#394) hands one customer group's mail to a tax audit
 ("Datenüberlassung", GoBD Rz. 167). `internal/gobd` writes and verifies the
-format; the selection from the archive is part 2 (#444). An export is a
+format; `archive.GoBDExport` selects from the archive (part 2, #444). An export is a
 directory, or the same tree as a ZIP. Paths are ASCII and never derived from
 folder or group names:
 
@@ -680,6 +680,47 @@ files the same way. Missing messages appear only in `missing.csv`, never in
 the other tables. A ZIP entry cannot be taken back, so a message file that
 fails its check while being copied into a ZIP breaks the export
 (`ErrCannotUndo`); a directory sink removes it.
+
+**From the archive** (`internal/archive/gobd.go`, `internal/store/gobd.go`).
+One export runs on one dedicated connection. First, outside any
+transaction, it waits for an attestation being written (a blocking
+`pg_advisory_lock` on the writer lock, bounded by the command's context)
+or, with a key and new messages, writes one; then it opens one read-only
+`REPEATABLE READ` transaction, so the snapshot holds the attestation the
+statement names. In it, the selection is resolved (hold, grant, the users
+of a whole group), its customer group checked (on resume first against the
+state file, then that it is one group, then against `--group` /
+`--without-group`: `ErrGroupChanged`, `ErrSelectionSpansGroups`,
+`ErrGroupClaimMismatch`), and built as a `store.Scope`: `OwnerScope` per
+owner, `RestrictScope` for named accounts and folders and for a grant,
+`MergeScopes`, then the period (an account without an owner is narrowed
+to its named folders the same way), so the export shares the read predicate
+(`scope_folder_granted`) with every other read; an export by hold adds
+`location_holds`. The command line runs the same resolution in a short
+snapshot of its own before the audit entry. The passes are B (emls, keyset
+over `messages.seq`, 1000 rows a page, each file opened once by its hash
+with `OpenMessage`, plaintext or encrypted at rest, never by the stored
+path; a missing, unreadable or wrongly sized file (the plaintext size)
+goes to the missing list before anything is written), A1 (`messages.csv`, the same keyset), A2 (`locations.csv`,
+keyset over `message_locations.id`) and C. After the transaction, one read
+committed query compares the selected users' and accounts' groups with the
+snapshot (`GoBDResult.Moved`, exit 3). No row or advisory lock is held
+while the export runs.
+
+**Sinks.** `gobd.DirSink` writes into `<out>.partial`: directories 0700,
+files 0600, each file under a temporary name (`.tmp-…`) renamed on commit.
+Before SHA256SUMS the writer syncs everything (`syncfs` on Linux; where it
+is not available, every file and directory one by one), and `Close`
+removes the resume state, syncs again, renames the directory to `<out>`
+and syncs its parent. A resumed export (`ResumeDirSink`) reads
+`.export-state.json` (id, selection, time zone, the location cutoff
+`max_location_id`, the group, the chain and leaves options), removes
+everything but the emls, removes the emls that are no longer selected or
+not at their path, keeps those whose size and SHA-256 are right
+(`Writer.KeepFile`, without reading the archive's copy) and writes the
+rest. A ZIP is written to `<out>.partial`, synced and renamed; it is never
+resumed and removed on failure. The ZIP limit (200,000 messages) and a
+free-space estimate are checked in the snapshot before the first file.
 
 **CSV.** UTF-8 without BOM, CRLF, `;`, every text value in `"`, integers and
 the `date` column (`DD.MM.YYYY`) without quotes, a header row. Inside a value,
