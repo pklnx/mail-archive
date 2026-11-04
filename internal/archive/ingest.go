@@ -31,7 +31,7 @@ func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blo
 			return meta, nil // metadata is already stored; ON CONFLICT ignores this row
 		}
 	}
-	h, idx, err := extract(blobs, blob.Path)
+	h, idx, err := extract(blobs, blob.SHA256)
 	if err != nil {
 		return meta, err
 	}
@@ -41,8 +41,8 @@ func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blo
 }
 
 // extract parses the headers and the body of a stored message.
-func extract(blobs *blobstore.Store, path string) (Headers, mime.Indexed, error) {
-	f, err := blobs.Open(path)
+func extract(blobs *blobstore.Store, sha string) (Headers, mime.Indexed, error) {
+	f, err := blobs.OpenMessage(sha)
 	if err != nil {
 		return Headers{}, mime.Indexed{}, err
 	}

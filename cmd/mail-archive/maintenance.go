@@ -97,10 +97,12 @@ func runVerify(ctx context.Context, opts archive.VerifyOptions, publicKeys []str
 		return 0, err
 	}
 	defer a.close()
-	blobs, err := openBlobs(a.cfg.DataDir)
+	blobs, ar, err := openArchiveBlobs(ctx, a, "verify", archive.RoleVerify)
 	if err != nil {
 		return 0, err
 	}
+	defer ar.Close()
+	opts.Encryption, opts.KeyMissing = ar.State, ar.KeyMissing
 	if opts.Attest, err = attestCheckOptions(a.cfg, publicKeys, ""); err != nil {
 		return 0, err
 	}
@@ -109,6 +111,13 @@ func runVerify(ctx context.Context, opts archive.VerifyOptions, publicKeys []str
 	opts.Progress = func(n int) { fmt.Fprintf(stderr, "checked %d messages\n", n) }
 	res, err := archive.Verify(ctx, a.store, blobs, opts)
 	if err != nil {
+		if res != nil && opts.KeyMissing != nil {
+			// The attestation check ran; its result is still shown.
+			for _, n := range res.Notes {
+				fmt.Fprintln(stdout, "note:", n)
+			}
+			fmt.Fprintf(stdout, "attestations checked: %d\n", res.Attestations)
+		}
 		return 0, err
 	}
 	for _, n := range res.Notes {
@@ -255,10 +264,11 @@ several users have an account with that name). Removed accounts are included.
 			if err := exportTarget(cmd, a, e, account, opts); err != nil {
 				return err
 			}
-			blobs, err := openBlobs(a.cfg.DataDir)
+			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "export", archive.RoleReader)
 			if err != nil {
 				return err
 			}
+			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
 			opts.Format, opts.Out, opts.Folder, opts.Logger = format, out, folder, log
 			if err := auditNow(cmd, a, e); err != nil {

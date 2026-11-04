@@ -282,6 +282,9 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 	var res ReceiveResult
 	err := s.inWriteTx(ctx, true, func(q *db.Queries) error {
 		res = ReceiveResult{}
+		if err := s.checkBlobGeneration(ctx, q); err != nil {
+			return err
+		}
 		if !fileExists() {
 			return ErrBlobGone
 		}

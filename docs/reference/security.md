@@ -5,8 +5,9 @@
 | Asset | Protection |
 |---|---|
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
-| Archived mail | Plain `.eml` files and PostgreSQL rows, including the text extracted from attachments for search, **not encrypted**. Use an encrypted disk. |
-| Exports and backups | `export` and `backup` write unencrypted files with mode 0600 in directories with mode 0700. `BACKUP-NOTE.txt` names the secret key but never contains it, and `pg_dump` gets the database password in its environment, not on the command line. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
+| Archived mail (message files) | With [encryption at rest](#the-archive-key) on, every message file is stored encrypted with AES-256-GCM (`<sha256>.enc`) and written encrypted from the first byte, so no plaintext of it reaches the disk; the key is kept apart from the data. A key file on the same disk as the data protects copies and backups of the data directory, not snapshots of that disk. Without encryption at rest, plain `.eml` files, **not encrypted**: use an encrypted disk. |
+| Archived mail (database) | PostgreSQL rows **are not encrypted**, also with encryption at rest: subjects, addresses, body text, the text extracted from attachments for search, attachment names, Message-IDs, envelopes, folder names, account and user names, the audit log and legal holds. Use an encrypted disk; a hosted instance must keep PostgreSQL on an encrypted volume whose key is kept away from its snapshots. |
+| Exports and backups | `export` and `backup` write unencrypted files with mode 0600 in directories with mode 0700, also with encryption at rest (an export is meant for a mail client: delete it once used). `BACKUP-NOTE.txt` names the secret key but never contains it, and `pg_dump` gets the database password in its environment, not on the command line. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
 | Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
@@ -560,6 +561,45 @@ archive backup's location or protect both equally. If it is lost, archived
 mail stays readable, but every account needs its password again. If it
 leaks together with the database, the IMAP passwords are exposed: change them
 at the providers.
+
+## The archive key
+
+Encryption at rest protects the message files on disks, volume snapshots
+and copies of the data directory, while the archive key is kept apart from
+them. It does not protect against anyone who controls the running
+instance: root on the host, the process memory, a modified binary, and the
+operator of a hosted instance, who holds the key. The format and the key
+hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
+
+- **Hierarchy.** The archive key (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`, 32 random
+  bytes) and every recovery key open the keyring; the keyring holds the data
+  keys, and each file is encrypted under a key derived from a data key and a
+  random salt. The keyring is kept twice, as `data/keys/keyring` and in the
+  database, both copies wrapped under the archive and recovery keys, so
+  either one is safe in a backup and enough, with a key, to recover.
+- **Custody.** The operator holds one archive key per instance. The app
+  never stores it and refuses it inside the data directory, when the group
+  or others can read its file, and when it equals `MAIL_ARCHIVE_SECRET_KEY`.
+  Keep the key file and the recovery key that `encryption keygen` prints
+  apart from the data directory, its snapshots and its backups.
+- **Loss.** Without the archive key and every recovery key, no encrypted
+  message file can be read, backups included.
+- **Start.** While encryption is on, every command that reads or writes
+  message files refuses to start without a key that opens the keyring;
+  `verify` starts, checks the attestations and then stops with the reason.
+  There is no locked mode. The key stays in the process's memory while it
+  runs.
+- **What stays readable (accepted).** The SHA-256 of each message's
+  plaintext is its identity in the database, the file names, the URLs and
+  the attestation leaves: someone who holds an exact copy of a message can
+  confirm that the archive holds it too. File sizes and dates stay visible.
+  The database is not encrypted (see the table above); its audit entries
+  stay readable also later, because the log is append-only. Encrypting the
+  database content is planned for 1.6.0.
+- **Old plaintext.** After an existing archive is switched to encryption,
+  its earlier plaintext can survive in unlinked files and free space of the
+  disk, in older snapshots and in backups made before. For a clean state,
+  restore an encrypted backup onto a new volume and destroy the old one.
 
 ## The attestation key
 

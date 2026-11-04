@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/mailbox"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -280,7 +281,7 @@ func (e *exporter) message(ctx context.Context, s sink, loc store.ExportLocation
 	if !blobstore.IsHash(loc.SHA256) {
 		return "invalid hash", nil
 	}
-	f, err := e.blobs.Open(blobstore.RelPath(loc.SHA256))
+	f, err := e.blobs.OpenMessage(loc.SHA256)
 	if errors.Is(err, fs.ErrNotExist) {
 		// A row without its file after restoring a dump older than a
 		// deletion run.
@@ -288,6 +289,9 @@ func (e *exporter) message(ctx context.Context, s sink, loc store.ExportLocation
 			return "deleted by retention", nil
 		}
 		return "file missing", nil
+	}
+	if errors.Is(err, blobcrypt.ErrCorrupt) || errors.Is(err, blobcrypt.ErrUnknownKey) {
+		return "file corrupt (" + err.Error() + ")", nil
 	}
 	if err != nil {
 		return "", err

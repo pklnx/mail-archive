@@ -134,10 +134,11 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 	if err != nil {
 		return err
 	}
-	blobs, err := openBlobs(a.cfg.DataDir)
+	blobs, ar, err := openArchiveBlobs(ctx, a, "import", archive.RoleWriter)
 	if err != nil {
 		return err
 	}
+	defer ar.Close()
 	log := newLogger(a.cfg.LogLevel).With("account", acc.Name)
 	logSkipped(log, skipped)
 	names, err := userNames(cmd, a)
@@ -212,10 +213,11 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "into %s of smtp account %q\n", store.SMTPFolder, acc.Name)
 		return nil
 	}
-	blobs, err := openBlobs(a.cfg.DataDir)
+	blobs, ar, err := openArchiveBlobs(ctx, a, "import", archive.RoleWriter)
 	if err != nil {
 		return err
 	}
+	defer ar.Close()
 	log := newLogger(a.cfg.LogLevel).With("account", acc.Name)
 	logSkipped(log, skipped)
 	names, err := userNames(cmd, a)

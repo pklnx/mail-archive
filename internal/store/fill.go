@@ -490,6 +490,9 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 	)
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
 		res, present = SaveResult{}, 0
+		if err := s.checkBlobGeneration(ctx, q); err != nil {
+			return err
+		}
 		folder, err := q.LockFolderByID(ctx, folderID)
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)

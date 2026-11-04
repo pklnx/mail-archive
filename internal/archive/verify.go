@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -34,6 +35,11 @@ const (
 	FindingStaleTemp  = "stale-temp" // a file left in tmp/ by an unfinished write
 	FindingUnexpected = "unexpected" // anything else in messages/ or tmp/
 	FindingIOError    = "io-error"   // a file that could not be checked
+	// FindingPlaintext is a plaintext file (.eml) of a message while
+	// encryption at rest is on (#392, part 2), also next to its encrypted
+	// file. While an encryption is still in progress such files are only
+	// counted (VerifyResult.Plaintext).
+	FindingPlaintext = "plaintext"
 	// FindingDeleted is the file of a message deleted (by retention or an
 	// account purge) that is not scheduled for removal (#55, #155). Files waiting out their grace
 	// period are no finding.
@@ -63,8 +69,15 @@ type VerifyOptions struct {
 	Attest    *AttestCheckOptions
 	OnFinding func(Finding)
 	Progress  func(checked int) // every 10,000 messages
-	Logger    *slog.Logger
-	Now       func() time.Time
+	// Encryption is the state of encryption at rest (store.BlobOff,
+	// store.BlobOn or a transitional state): with on, a plaintext file is
+	// a finding; while encrypting it is counted.
+	Encryption string
+	// KeyMissing, if set, is why encrypted files cannot be read: Verify
+	// checks the attestations (database only) and then fails with it.
+	KeyMissing error
+	Logger     *slog.Logger
+	Now        func() time.Time
 
 	beforeMove func() // for tests: runs between the check and the move
 }
@@ -88,6 +101,9 @@ type VerifyResult struct {
 	// their signatures were not checked.
 	AttestationsUnchecked bool
 	Notes                 []string // from the attestation check
+	// Plaintext counts plaintext message files while encryption is in
+	// progress (state encrypting); they are no finding then.
+	Plaintext int
 }
 
 // Problems is the number of findings, without I/O errors.
@@ -141,6 +157,9 @@ func Verify(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts V
 			return v.res, err
 		}
 	}
+	if opts.KeyMissing != nil {
+		return v.res, fmt.Errorf("verify needs the archive key to read the encrypted message files: %w", opts.KeyMissing)
+	}
 	if err := v.checkRows(ctx); err != nil {
 		return v.res, err
 	}
@@ -163,6 +182,11 @@ type verifier struct {
 }
 
 func (v *verifier) report(f Finding) {
+	if f.Kind == FindingPlaintext && v.opts.Encryption != store.BlobOn {
+		// Expected while the conversion runs.
+		v.res.Plaintext++
+		return
+	}
 	v.res.Findings[f.Kind]++
 	if v.opts.OnFinding != nil {
 		v.opts.OnFinding(f)
@@ -238,27 +262,40 @@ func (v *verifier) checkRows(ctx context.Context) error {
 	}
 }
 
-// checkRow checks one row. Files are opened only by the path the hash
-// gives, never by the stored path.
+// checkRow checks one row. Files are opened only by the paths the hash
+// gives, never by the stored path, in either form (OpenMessage); an
+// encrypted file is decrypted and its plaintext hashed.
 func (v *verifier) checkRow(m store.StoredMessage) []Finding {
 	if !blobstore.IsHash(m.SHA256) {
 		return []Finding{{Kind: FindingBadPath, SHA256: m.SHA256, Path: m.StoredPath, Detail: "the hash is not 64 lowercase hex digits"}}
 	}
 	var out []Finding
-	rel := blobstore.RelPath(m.SHA256)
-	if m.StoredPath != rel {
-		out = append(out, Finding{Kind: FindingBadPath, SHA256: m.SHA256, Path: m.StoredPath, Detail: "expected " + rel})
+	plain, enc := blobstore.RelPath(m.SHA256), blobstore.EncPath(m.SHA256)
+	if m.StoredPath != plain && m.StoredPath != enc {
+		out = append(out, Finding{Kind: FindingBadPath, SHA256: m.SHA256, Path: m.StoredPath, Detail: "expected " + plain + " or " + enc})
 	}
-	f, err := v.blobs.Open(rel)
+	expected := plain
+	if v.opts.Encryption != store.BlobOff {
+		expected = enc
+	}
+	f, err := v.blobs.OpenMessage(m.SHA256)
 	if errors.Is(err, fs.ErrNotExist) {
-		return append(out, Finding{Kind: FindingMissing, SHA256: m.SHA256, Path: rel, Size: m.Size})
+		return append(out, Finding{Kind: FindingMissing, SHA256: m.SHA256, Path: expected, Size: m.Size})
+	}
+	if errors.Is(err, blobcrypt.ErrCorrupt) || errors.Is(err, blobcrypt.ErrUnknownKey) {
+		return append(out, Finding{Kind: FindingCorrupt, SHA256: m.SHA256, Path: enc, Detail: err.Error()})
 	}
 	if err != nil {
-		return append(out, Finding{Kind: FindingIOError, SHA256: m.SHA256, Path: rel, Detail: err.Error()})
+		return append(out, Finding{Kind: FindingIOError, SHA256: m.SHA256, Path: expected, Detail: err.Error()})
 	}
 	defer func() { _ = f.Close() }()
+	rel := f.Path()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
+	if errors.Is(err, blobcrypt.ErrCorrupt) {
+		// A chunk that fails authentication.
+		return append(out, Finding{Kind: FindingCorrupt, SHA256: m.SHA256, Path: rel, Detail: err.Error()})
+	}
 	if err != nil {
 		return append(out, Finding{Kind: FindingIOError, SHA256: m.SHA256, Path: rel, Detail: err.Error()})
 	}
@@ -268,6 +305,12 @@ func (v *verifier) checkRow(m store.StoredMessage) []Finding {
 			detail = fmt.Sprintf("content hash %s, size %d (want %d)", got, n, m.Size)
 		}
 		out = append(out, Finding{Kind: FindingCorrupt, SHA256: m.SHA256, Path: rel, Size: n, Detail: detail})
+	}
+	if v.opts.Encryption == store.BlobOn || v.opts.Encryption == store.BlobEncrypting {
+		if !f.Encrypted() || v.blobs.HasPlaintext(m.SHA256) {
+			out = append(out, Finding{Kind: FindingPlaintext, SHA256: m.SHA256, Path: plain, Size: m.Size,
+				Detail: "a plaintext file while encryption at rest is " + v.opts.Encryption})
+		}
 	}
 	return out
 }

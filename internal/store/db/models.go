@@ -189,6 +189,22 @@ type AuditorGrantFolder struct {
 	FolderID  int64
 }
 
+type BlobEncryption struct {
+	ID                bool
+	State             string
+	Generation        int64
+	Keyring           []byte
+	KeyringID         string
+	KeyringGeneration int64
+	CurrentKey        int64
+	Cursor            string
+	FilesDone         int64
+	FilesCorrupt      int64
+	StartedAt         time.Time
+	FinishedAt        *time.Time
+	UpdatedAt         time.Time
+}
+
 type BlobRemoval struct {
 	Sha256 string
 	DueAt  time.Time

@@ -23,7 +23,8 @@ can check them without the host; see step 3.
 ## What it proves, and what not
 
 Each attestation covers the messages archived since the previous one, lists
-their SHA-256 in a leaves file, and is chained to the previous attestation
+their SHA-256 in a leaves file (the hash of the original bytes, also when
+the file is stored encrypted), and is chained to the previous attestation
 and signed with an Ed25519 key. From that:
 
 - **Proven:** every message archived up to an attestation was in the archive

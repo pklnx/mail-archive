@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,6 +231,17 @@ func TestReindexAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	const total = 2500
+	// Readers open a message by its hash: every seeded row gets a hard
+	// link to the one file.
+	for i := 1; i <= total+1; i++ {
+		dst := filepath.Join(blobs.Root(), filepath.FromSlash(blobstore.RelPath(fmt.Sprintf("%064x", i))))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(filepath.Join(blobs.Root(), filepath.FromSlash(blob.Path)), dst); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := conn.Exec(ctx, `INSERT INTO messages (sha256, size, stored_path, sent_at, has_attachment, index_version)
 		SELECT lpad(to_hex(i), 64, '0'), 100, $1, timestamptz '2020-01-01' - i * interval '1 minute', true, $2
 		FROM generate_series(1, $3::int + 1) i`, blobstore.RelPath(blob.SHA256), store.IndexVersion, total); err != nil {
