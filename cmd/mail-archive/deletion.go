@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/csvsafe"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -142,7 +143,7 @@ func writeCandidatesCSV(out io.Writer, candidates []store.DeletionCandidate) err
 			sent = c.SentAt.UTC().Format(time.RFC3339)
 		}
 		_ = w.Write([]string{c.SHA256, c.State, strconv.FormatInt(c.Size, 10), c.RetainUntil.UTC().Format(time.RFC3339),
-			sent, csvSafe(c.From), csvSafe(c.Subject), csvSafe(strings.Join(c.Places, "; "))})
+			sent, csvsafe.Cell(c.From), csvsafe.Cell(c.Subject), csvsafe.Cell(strings.Join(c.Places, "; "))})
 	}
 	w.Flush()
 	return w.Error()
