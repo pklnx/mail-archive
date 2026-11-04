@@ -47,7 +47,12 @@ account or the contact you agreed on, and say:
   exports come as a directory, or one ZIP per year.
 
 If you set a [legal hold](./retention#legal-holds) for the audit (or asked
-for one), the operator can export exactly what the hold covers.
+for one), the operator can export exactly what the hold covers. If you gave
+the auditor [access](./users#auditor-access), the operator can export
+exactly that grant's scope: its accounts, folders and message period,
+nothing else of yours; name the case. This also works before the access
+starts and after it ended, not for a revoked grant. The export is then in
+your [Log](./audit-log#auditors), shown as the operator's, with the grant.
 
 **One export covers one customer.** An export never mixes companies: if you
 ask for users of two companies (customer groups) of the same operator, you

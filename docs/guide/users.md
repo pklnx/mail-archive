@@ -376,6 +376,12 @@ the auditor's open sessions; it cannot be undone.
 Granting is also possible with
 [`/api/auditor-grants`](../reference/api#auditors).
 
+For the Datenüberlassung (Z3) of the same case, ask the operator for a
+[GoBD export](./gobd-export) of the grant: `./ma export --format gobd
+--grant ID` exports exactly its accounts, folders and message period, also
+before the access starts or after it ended, but not once it is revoked. The
+export is in your Log as the operator's, with the grant.
+
 ## API keys
 
 Scripts, cron jobs and other tools use an API key instead of your login.

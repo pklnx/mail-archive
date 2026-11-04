@@ -765,8 +765,9 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 			}
 			// Chosen by the source row (#393): an auditor's own entry, or
 			// a grant entry written by someone else (an admin's
-			// revocation, a group move).
-			if r.ByAuditor || strings.HasPrefix(r.Action, "auditor.") {
+			// revocation, a group move, the operator's export of the
+			// grant's scope, which names the grant: part 4).
+			if r.ByAuditor || strings.HasPrefix(r.Action, "auditor.") || namesGrant(r.Details) {
 				if err := auditorView(&rec, r.ByAuditor, r.Details, p.Viewer); err != nil {
 					return nil, err
 				}
@@ -789,6 +790,16 @@ func (s *Store) ListAudit(ctx context.Context, p AuditPage) ([]AuditRecord, erro
 		return nil, err
 	}
 	return out, nil
+}
+
+// namesGrant says whether an entry's details name an auditor grant. A
+// member's entries never do (ListSharedReadsForOwner), so an entry that
+// does and reaches an owner is about one of the owner's grants.
+func namesGrant(details []byte) bool {
+	var d struct {
+		Grant json.RawMessage `json:"auditor_grant"`
+	}
+	return json.Unmarshal(details, &d) == nil && len(d.Grant) > 0 && string(d.Grant) != "null"
 }
 
 // auditSubjects fills in the subjects of message entries still without
