@@ -245,5 +245,13 @@ services:
       - ${ARCHIVE_DIR:-./data}:/data
       - ${ARCHIVE_KEY_DIR:-./keys}:/keys
 
+  # One-shot `./ma encryption rotate-key`: the CLI service with the keys
+  # directory writable, so that the new archive key lands there. It runs as
+  # the container user, who owns the keys directory since keygen.
+  mail-archive-keys:
+    extends: mail-archive
+    volumes:
+      - ${ARCHIVE_KEY_DIR:-./keys}:/keys
+
 volumes:
   pgdata:

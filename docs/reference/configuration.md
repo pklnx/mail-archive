@@ -82,7 +82,7 @@ transaction mode (PgBouncer `pool_mode=transaction`) breaks session locks.
 |---|---|---|
 | `POSTGRES_PASSWORD` | (required) | Password of the bundled PostgreSQL. |
 | `ARCHIVE_DIR` | `./data` | Host directory mounted as `/data`. |
-| `ARCHIVE_KEY_DIR` | `./keys` | Host directory mounted read-only as `/keys` into the web server, the worker and the CLI, and writable only by `./ma encryption keygen`. Keep it out of `ARCHIVE_DIR`. |
+| `ARCHIVE_KEY_DIR` | `./keys` | Host directory mounted read-only as `/keys` into the web server, the worker and the CLI, and writable only by `./ma encryption keygen` and `./ma encryption rotate-key`. The default lies in the Compose project directory, next to `./data` on the same disk; keep it out of `ARCHIVE_DIR`, and move it to another disk or a secret store for real separation. |
 | `WEB_BIND` | `127.0.0.1` | Address the web UI is published on. `0.0.0.0` for all interfaces, or a LAN or Tailscale address. See [Network access](./security#network-access). |
 | `WEB_PORT` | `8080` | Port of the web UI. |
 | `POSTGRES_PORT` | `5432` | Port of PostgreSQL on `127.0.0.1`, for backups and development. |

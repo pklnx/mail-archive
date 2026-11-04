@@ -57,11 +57,11 @@ SET state = 'off', generation = generation + 1, cursor = '', files_done = 0, fil
 WHERE state <> 'off';
 
 -- name: SaveBlobConversionProgress :execrows
--- The progress of an offline conversion after a batch (#392, part 3), only
+-- The progress of an offline conversion after a batch (#392, parts 3 and 5), only
 -- while the state and generation are still those the command set.
 UPDATE blob_encryption
 SET cursor = @cursor, files_done = @files_done, files_corrupt = @files_corrupt, updated_at = now()
-WHERE generation = @generation AND state IN ('encrypting', 'decrypting');
+WHERE generation = @generation AND state IN ('encrypting', 'decrypting', 'rekeying');
 
 -- name: FinishBlobEncryption :execrows
 -- The end of `encryption enable`: state on, the next generation; the
@@ -78,3 +78,25 @@ UPDATE blob_encryption
 SET state = 'off', generation = generation + 1, cursor = '', files_done = 0, files_corrupt = 0,
     finished_at = now(), updated_at = now()
 WHERE generation = @generation AND state = 'decrypting';
+
+-- name: StartBlobRekey :execrows
+-- The start of `encryption rekey` (#392, part 5): state rekeying, the next
+-- generation, and the new keyring (new current data key, new keyring key)
+-- as the database copy, in one statement; only from on and only while the
+-- copy is still the one the command reconciled.
+UPDATE blob_encryption
+SET state = 'rekeying', generation = generation + 1, keyring = @keyring, keyring_id = @keyring_id,
+    keyring_generation = @keyring_generation, current_key = @current_key,
+    cursor = '', files_done = 0, files_corrupt = 0, started_at = now(), finished_at = NULL, updated_at = now()
+WHERE state = 'on' AND keyring_generation = @expected_keyring_generation;
+
+-- name: FinishBlobRekey :execrows
+-- The end of `encryption rekey`: state on, the next generation, and the
+-- keyring without the data keys no file names any more; only from rekeying
+-- at the generation the command worked at, and only while the copy is still
+-- the one it read.
+UPDATE blob_encryption
+SET state = 'on', generation = generation + 1, keyring = @keyring, keyring_id = @keyring_id,
+    keyring_generation = @keyring_generation, current_key = @current_key,
+    cursor = '', finished_at = now(), updated_at = now()
+WHERE generation = @generation AND state = 'rekeying' AND keyring_generation = @expected_keyring_generation;

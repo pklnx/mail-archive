@@ -251,7 +251,7 @@ recover it without them.
   `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` (see [Getting started](./getting-started#the-archive-key)).
 - Keep the recovery key it prints offline, apart from the host and the
   backups (a password manager, or paper in a safe). `encryption add-key`
-  adds another one.
+  adds another one; [Changing keys](#changing-keys) covers replacing them.
 - Back up the key file apart from `data/` and its backups, and check after
   every change that `./ma encryption status` shows the configured key
   opening the keyring.
@@ -354,6 +354,88 @@ encryption on exist.
 free space of the disk, in older snapshots and in backups made before. For
 a clean state, restore onto a new volume and destroy the old one (see
 [Security](../reference/security#the-archive-key)).
+
+### Where the key lives
+
+`./ma encryption keygen` writes the archive key to `keys/archive.key`. The
+default keys directory (`ARCHIVE_KEY_DIR`, `./keys`) lies in the Compose
+project directory, next to `./data` and on the same disk: it protects copies
+and backups of `data/`, not snapshots or a theft of that disk. For real
+separation, move `ARCHIVE_KEY_DIR` to another disk, or feed
+`MAIL_ARCHIVE_ARCHIVE_KEY_FILE` from a secret store (see
+[Configuration](../reference/configuration)).
+
+### Changing keys
+
+| Task | Command | Downtime |
+|---|---|---|
+| Add a recovery key | `./ma encryption add-key` | none |
+| Remove a key that is no longer needed | `./ma encryption remove-key FINGERPRINT` | none |
+| Replace the archive key (routine) | `./ma encryption rotate-key --new-key-file /keys/archive-2.key` | a restart |
+| A key leaked | remove or replace it, then `./ma encryption rekey` | as for `enable` |
+
+`./ma encryption status` lists the slots with their fingerprints. The
+commands that change the keyring first reconcile `data/keys/keyring` with
+its copy in the database, so they need the database, and a key added to a
+keyring file restored from a backup keeps its slot. `add-key`, `remove-key`
+and `rotate-key` may run while the web server and the worker run; they
+refuse while `enable`, `disable` or `rekey` runs.
+
+**rotate-key** writes a new archive key and a new keyring key; no message
+file is touched. Then set `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key`
+in `.env` and restart (`docker compose up -d`); with the old key the
+services would not start again. A new keyring key can only be wrapped for
+keys at hand, so it drops every slot whose key you do not give it: it adds
+a new recovery key (printed once; `--no-recovery` skips it), and keeps an
+existing recovery key with `--keep-key-file`. To give one with `./ma`, write
+it to a file in the keys directory that only the container user can read,
+pass the file, and delete it afterwards:
+
+```sh
+sudo install -m 0400 -o 65532 -g 65532 /dev/stdin keys/recovery.key  # paste the key, then Ctrl-D
+./ma encryption rotate-key --new-key-file /keys/archive-2.key --keep-key-file /keys/recovery.key
+sudo rm keys/recovery.key
+```
+
+**rotate-key does not help after a key leaked.** The old key, together with
+any older copy of the keyring (every backup and every copy of `data/` holds
+one), still opens the data keys of that time, and so every file encrypted
+with them. After a leak:
+
+1. Remove the leaked key's slot: for a recovery key
+   `./ma encryption remove-key FINGERPRINT`; for the archive key
+   `./ma encryption rotate-key --new-key-file /keys/archive-2.key`, and set
+   `.env` as above.
+2. Stop everything that writes, as for `enable`
+   (`docker compose stop web worker`), and run `./ma encryption rekey`.
+3. Start again: `docker compose up -d`.
+
+`rekey` creates a new data key and a new keyring key, then re-encrypts
+every message file under the new data key. Afterwards the leaked key opens
+neither the keyring nor the new data key, whatever older copy of the
+keyring it is used with. **Backups made before stay readable with the
+leaked key**: they hold the keyring and the data keys of their time.
+Replace them by new backups and destroy the old ones, and old snapshots,
+where that matters.
+
+`rekey` follows the rules of `enable`: writers stopped, the progress
+printed, resumable by running it again, and done only after a full pass
+from the start. Each file is decrypted and re-encrypted into `tmp/`,
+synchronized, read back and checked against its SHA-256, and then replaces
+the old file by an atomic `rename`; the directory is synchronized before
+the position is recorded. The old data key stays in the keyring until a
+full pass from the start finds no file naming it, so a crash at any point
+leaves every message readable. A file that cannot be decrypted (damaged)
+stays as it is and is listed, and its data key stays too; restore a good
+copy from a backup, or delete the file once checked. The downtime is about
+that of `enable` (table above): each file is read, decrypted, encrypted,
+written and read back once, on one core, with at most 32 MiB of memory and
+one batch of extra disk space.
+
+**Old backups need the keys of their time.** A backup opens with the
+archive key or a recovery key that had a slot when it was made, and with
+the keyring it contains. Keep a replaced or removed key, offline, as long
+as backups made before its removal exist.
 
 ## Upgrades
 
