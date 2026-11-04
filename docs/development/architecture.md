@@ -28,7 +28,9 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/attachtext` | Text of attachments for search: plain text, CSV, TSV, Markdown, HTML, and PDFs through PDFium compiled to WebAssembly in wazero (no file system, network or environment; one PDF at a time per process; a new instance per document). No database. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. `migrate` and `migrate down` hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command on a connection of its own outside the pool; goose's session lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations, from a short-lived pool of its own (one extra connection per call) whose teardown frees a lock left on a given-up connection (#269). Both commands open the store with `ForMigrations` (`client_connection_check_interval` and TCP keepalives), so the server frees a killed command's locks. What an operator sees of this (two runs wait for each other, the holder message, the time limits, what `migrate status`, `backup` and `serve` do) is in the CLI reference under [`migrate`](../reference/cli#migrate). |
-| `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files. No database. |
+| `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files, and the signed statement of a GoBD export (`statement.go`). No database. |
+| `internal/gobd` | The GoBD export, [format v1](#gobd-export-format-v1): the writer with its directory and ZIP sinks, README.txt, index.xml, SHA256SUMS, and the offline `export verify`. No database. |
+| `internal/csvsafe` | The leading `'` that keeps spreadsheets from reading a CSV cell as a formula; used by the audit CSV, the deletion preview and the GoBD export. |
 | `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
 | `internal/jobs` | Background jobs on the queue in the `jobs` table: the registry of kinds and the bounded pool that `serve` and `worker` run (see [Background jobs](#background-jobs)). |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
@@ -403,6 +405,98 @@ line appended to `attest/attestations.jsonl` with `fsync`. Before writing,
 only in the database (a crash after the commit) are appended, with their
 leaves rebuilt from the database (`ListAttestedRange`); any other
 difference stops the run.
+
+## GoBD export format v1
+
+The GoBD export (#394) hands one customer group's mail to a tax audit
+("Datenüberlassung", GoBD Rz. 167). `internal/gobd` writes and verifies the
+format; the selection from the archive is part 2 (#444). An export is a
+directory, or the same tree as a ZIP. Paths are ASCII and never derived from
+folder or group names:
+
+```
+README.txt                 German, then English (CRLF): contents, customer group, columns, how to verify, limits
+index.xml                  description standard of the GoBD annex (UTF-8 declared): tables messages, locations, missing
+messages.csv               one row per exported message (primary key sha256)
+locations.csv              one row per selected place of a message (foreign key sha256 to messages)
+missing.csv                messages of the selection without a valid file (sha256;file;reason), at most 100,000
+mail/YYYY/MM/<sha256>.eml  original bytes; YYYY/MM is the month of sort_at in the export time zone
+attest/attestations.jsonl  the attestation the statement names; the whole chain with "chain full"
+attest/signing.pub, attest/retired-keys.pem
+attest/leaves/<seq>.txt    only with "leaves yes"
+SHA256SUMS                 GNU coreutils format ("<sha256>  <path>") for every file above
+STATEMENT.txt              the signed export statement
+```
+
+**Pass order.** The writer (`gobd.Writer`) takes the files in one order, the
+same for both sinks, so a ZIP needs no spool: the message files (`AddFile`,
+which checks each file's bytes against its SHA-256 and size while copying),
+then `messages.csv` (`AddMessageRow`, in the same order), `locations.csv`,
+and in `Finish` `missing.csv`, `attest/`, README.txt, index.xml, SHA256SUMS
+and STATEMENT.txt. It keeps no list per message: `Finish` gets the message
+paths again from the caller (`Final.Files`) and compares them with a running
+digest of `AddFile`, and the rows of `messages.csv` are checked against the
+files the same way. Missing messages appear only in `missing.csv`, never in
+the other tables. A ZIP entry cannot be taken back, so a message file that
+fails its check while being copied into a ZIP breaks the export
+(`ErrCannotUndo`); a directory sink removes it.
+
+**CSV.** UTF-8 without BOM, CRLF, `;`, every text value in `"`, integers and
+the `date` column (`DD.MM.YYYY`) without quotes, a header row. Inside a value,
+`"` becomes `'` (GoBD annex, item 4), CR, LF, TAB, other control characters
+and U+2028/U+2029 become a space, so each record is one line; a value longer
+than 32,768 bytes is cut at a character boundary; a value starting with
+`= + - @` gets a leading `'` (`internal/csvsafe`). The `.eml` stays
+authoritative. The primary key columns lead (the description standard's DTD
+lists `VariablePrimaryKey` before `VariableColumn`): `sha256` in messages and
+missing, `sha256` to `uid` in locations. index.xml follows the structure of the
+2004 DTD; it was not validated against the DTD from CaseWare, which is
+available only on request.
+
+**Statement** (`attest.Statement`). One field per line, starting with
+`mail-archive export v1`: `id`, `created` (UTC), `software`, `selection`
+(compact JSON), `time-zone`, `group-id N` and `group "<name>"` (JSON-quoted,
+so any name stays on one line) or `group none`, `owners [...]` (sorted JSON
+array of user names), `messages`, `locations`, `missing`, `bytes`,
+`complete yes|no`, `resumed yes|no`, `chain one|full`, `leaves yes|no`,
+`sha256sums <hex>`, `attestation <seq> <hash>` or `attestation none`,
+`key <base64>` or `key none`, and last `sig <base64>` or `sig none`. The
+Ed25519 signature, made with the attestation key, covers every line before
+`sig`. The first line differs from an attestation's
+(`mail-archive attestation v1`), so neither signature passes for the other.
+`ParseStatement` accepts only the canonical form (the fields written again
+give the same bytes), so what it returns is what the signature binds.
+
+**Verify** (`gobd.Verify`, `mail-archive export verify`). Offline, without a
+database, configuration or key. In order: the entries (names, duplicates also
+after lowercasing and NFC, `..`, absolute paths, backslashes, directory,
+symlink, encrypted or oddly compressed entries), the statement and its
+signature (keys from `--public-key`, else the export's `attest/`, which shows
+only consistency), SHA256SUMS against the statement and the entries, the three
+tables line by line against their format, each other and the statement's
+counts, every message file against its name and size, index.xml against the
+tables, the attestation against the statement and `--attestations` (one entry:
+in the copy; a full chain: a prefix of it), each message against the leaves
+file of its attestation (from the export or next to the copy), the
+`locations.csv` owners against `owners`, and `--expect-group`. Directories
+are read through `os.Root`, so a symbolic link cannot lead outside.
+
+Memory on 4 GB / 2 cores: the directory writer stays at a few MB whatever
+the number of messages (one table line, the missing list, the digests of the
+few fixed files). archive/zip keeps about 290 bytes per entry until the end,
+which is why a ZIP holds at most 200,000 messages (`MaxZIPMessages`): measured
+at 200,000 small messages, 56 MB of live heap before the central directory is
+written, about 190 MB resident with Go's default GC target. Verify keeps
+about 90 bytes per message file and one line of a table at a time (at most
+1 MiB): a 200,000-message ZIP took 3 s and about 200 MB resident, a
+50,000-message directory 1 s and 52 MB. Before archive/zip reads a ZIP, a
+prescan walks the central directory in constant memory and refuses more than
+300,000 entries, more than 1 KiB of name, extra field and comment per entry or
+64 MiB in all, and data before the archive (which would make archive/zip read
+other records than the prescan); a declared size that Deflate cannot reach
+from the compressed size is refused too. A crafted ZIP therefore costs verify
+at most about 150 MB of live heap, and reading time in proportion to its
+size. Both are single-threaded (one core); SHA-256 and Deflate set the speed.
 
 ## Reconcile
 

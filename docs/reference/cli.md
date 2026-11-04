@@ -239,6 +239,7 @@ retention has usually ended too, so the next deletion run lists it.
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Then it extracts the text of PDF and text attachments of every message that has none yet, in the foreground, newest first, until none is left, and prints `updated N message(s), extracted text of M attachment(s)`; `MAIL_ARCHIVE_JOB_WORKERS` (default 1; `0`, as set for a web server that leaves jobs to the worker, counts as 1 here) sets how many messages run at a time, PDFs one at a time. The web server or the worker does the same in the background; installations that run only `sync` or `import` from cron get attachment text only from `reindex`, so run it after them, for example in the same cron job. Messages that another process is extracting, or that wait for a retry, are left to it, and it says how many. Safe to interrupt and rerun, and to run alongside the web server, the worker and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: the attestations, every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
+| `export verify PATH` | Check a GoBD export (a directory or a ZIP) offline, without a database or configuration. See [export verify](#export-verify). |
 | `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
 | `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `DATE` is `YYYY-MM-DD`, a day in UTC, or RFC 3339 with an offset for another zone (`2026-10-01T00:00:00+02:00`). `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, `--group NAME` (the entries of a [customer group](#groups)), `--group-id N` (by the group's id, also of a removed group) or `--without-group` (those without one: before 1.4.0, or instance-level), and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `attest` | Write a signed attestation over the archived messages now. See below. |
@@ -515,4 +516,55 @@ when several users have an account with that name). With Docker Compose,
 `DIR` must be under `/data`, which is `./data` on the host. Exits `1` if
 messages were skipped because their file is missing or corrupt (run `verify`).
 See [Exporting mail](../guide/operations#exporting-mail).
+
+### export verify
+
+```sh
+mail-archive export verify ./export-2026-11 --public-key signing.pub
+mail-archive export verify export.zip --public-key signing.pub \
+  --attestations attestations.jsonl --expect-group "Meier GmbH"
+```
+
+Checks a GoBD export ([format v1](../development/architecture#gobd-export-format-v1)),
+a directory or a ZIP, offline: it needs no database, configuration or key, so
+the customer or an auditor can run it on their own computer. It reports every
+finding, one per line, then the export's customer group and owners and a
+summary:
+
+- `manifest`: `SHA256SUMS` is missing or malformed, lists a path twice or one
+  outside the format, or is not the file whose digest `STATEMENT.txt` names.
+- `changed`: a file's bytes differ from `SHA256SUMS`, or a message file's from
+  its name (its SHA-256) or its size in `messages.csv`.
+- `missing-file`, `extra-file`: a file that `SHA256SUMS` or a table names is
+  not there; a file of the format that `SHA256SUMS` does not list.
+- `name`: an entry an export cannot have: a name outside the format, a
+  duplicate (also one that differs only in case or Unicode normalization),
+  `..`, an absolute path, a backslash, a directory or symbolic link entry, an
+  entry larger than the tables say, or a ZIP that is not readable or larger in
+  entries than an export can be.
+- `index`: a table that is not in the format (header, quoting, an unneutralized
+  formula, a date), or tables that disagree with each other or with the counts
+  in the statement; `index.xml` that does not describe the tables.
+- `statement`: `STATEMENT.txt` is missing, not in the format, badly signed, or
+  signed with a key that `--public-key` does not trust; unsigned with
+  `--public-key`.
+- `chain`: the attestation in `attest/` does not match the statement, is not
+  in `--attestations` (with a full chain: not a prefix of it), or a message is
+  not in the leaves file of its attestation.
+- `incomplete`: the statement says `complete no`; `missing.csv` lists messages
+  without a valid file.
+- `owner`: a row of `locations.csv` names an owner that is not in the
+  statement's `owners`.
+- `group`: with `--expect-group NAME`, the statement names another customer
+  group (case is ignored; `none` for an export without a group).
+
+`--public-key FILE` (repeatable) trusts only the keys in the given PEM files,
+such as the copy of `signing.pub` kept off the archive's host. Without it the
+keys in the export's `attest/` directory are trusted, which shows only that
+the export is consistent; a note says so. `--attestations FILE` compares the
+attestation with the off-host copy of `attestations.jsonl`; leaves files in a
+`leaves/` directory next to it are used to check every exported message when
+the export has none. Exit codes: `0` nothing found, `1` findings, `2` the
+export cannot be opened or a usage error. Without the tool,
+`sha256sum -c SHA256SUMS` in the export checks the files, not the signature.
 

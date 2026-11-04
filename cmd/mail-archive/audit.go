@@ -19,6 +19,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/pklnx/mail-archive/internal/csvsafe"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -327,7 +328,7 @@ func writeAudit(ctx context.Context, st *store.Store, f store.AuditFilter, forma
 		row := []string{r.At.UTC().Format(time.RFC3339Nano), r.Actor, userID, r.UserName, r.APIKeyName, r.Action,
 			r.TargetType, r.TargetID, r.TargetName, r.ClientIP, r.UserAgent, string(r.Details), groupID}
 		for i, c := range row {
-			row[i] = csvSafe(c)
+			row[i] = csvsafe.Cell(c)
 		}
 		return cw.Write(row)
 	})
@@ -343,14 +344,6 @@ func btoi(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-// csvSafe keeps a spreadsheet from reading a cell as a formula.
-func csvSafe(c string) string {
-	if c != "" && strings.ContainsRune("=+-@\t\r", rune(c[0])) {
-		return "'" + c
-	}
-	return c
 }
 
 // writeNewFile writes path, which must not exist, through a temporary file
