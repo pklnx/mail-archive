@@ -292,8 +292,18 @@ func TestAtRestLockCheckPasses(t *testing.T) {
 	if _, err := e.atRest(archive.RoleWriter, nil, tick, l); err != nil {
 		t.Fatal(err)
 	}
-	tick <- time.Now()
-	tick <- time.Now() // the first check has finished when the second tick is taken
+	// The first check has finished when the second tick is taken; a check
+	// that reported a loss has ended the watch, so the second tick waits
+	// for ever: either way the loss arrives instead.
+	for range 2 {
+		select {
+		case tick <- time.Now():
+		case err := <-l.errs:
+			t.Fatalf("a live lock reported lost: %v", err)
+		case <-time.After(testwait.Limit(t)):
+			t.Fatal("the watch took no tick")
+		}
+	}
 	select {
 	case err := <-l.errs:
 		t.Fatalf("a live lock reported lost: %v", err)
