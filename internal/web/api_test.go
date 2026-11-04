@@ -109,12 +109,19 @@ type apiFixture struct {
 	raw    map[string]string
 }
 
-func newAPIFixture(t *testing.T) *apiFixture {
+func newAPIFixture(t *testing.T) *apiFixture { return newAPIFixtureWith(t, nil) }
+
+// newAPIFixtureWith is newAPIFixture; prepare, if set, configures the blob
+// store before the messages are stored (encryption at rest).
+func newAPIFixtureWith(t *testing.T, prepare func(*blobstore.Store)) *apiFixture {
 	t.Helper()
 	st, dbURL := storetest.NewWithURL(t)
 	blobs, err := blobstore.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if prepare != nil {
+		prepare(blobs)
 	}
 	ctx := context.Background()
 	f := &apiFixture{t: t, st: st, blobs: blobs, dbURL: dbURL, ids: map[string]string{}, raw: map[string]string{

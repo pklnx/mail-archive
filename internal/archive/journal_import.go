@@ -223,7 +223,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 
 // blobHeaders parses the headers of a stored message.
 func (im *Importer) blobHeaders(blob blobstore.Blob) (Headers, error) {
-	f, err := im.Blobs.Open(blob.Path)
+	f, err := im.Blobs.OpenMessage(blob.SHA256)
 	if err != nil {
 		return Headers{}, err
 	}

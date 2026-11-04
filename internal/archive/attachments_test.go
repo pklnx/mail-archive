@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -115,8 +117,9 @@ func withPDF(subject, text string) string {
 		"Content-Transfer-Encoding: base64\r\n\r\n%s\r\n--b--\r\n", subject, base64.StdEncoding.EncodeToString(pdftest.Text(text)))
 }
 
-// seed inserts n messages with attachments that all point to the blob of
-// raw, with sort_at from at(i), as an older archive.
+// seed inserts n messages with attachments whose files are all hard links
+// to the blob of raw (readers open a message by its hash), with sort_at
+// from at(i), as an older archive.
 func (e *reindexEnv) seed(raw string, n int, at func(i int) time.Time) []string {
 	e.t.Helper()
 	blob, _, err := e.blobs.Put(strings.NewReader(raw))
@@ -128,6 +131,13 @@ func (e *reindexEnv) seed(raw string, n int, at func(i int) time.Time) []string 
 	for i := range n {
 		shas[i] = fmt.Sprintf("%064x", i+1)
 		times[i] = at(i)
+		dst := filepath.Join(e.blobs.Root(), filepath.FromSlash(blobstore.RelPath(shas[i])))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			e.t.Fatal(err)
+		}
+		if err := os.Link(filepath.Join(e.blobs.Root(), filepath.FromSlash(blob.Path)), dst); err != nil {
+			e.t.Fatal(err)
+		}
 	}
 	_, err = e.conn.Exec(e.ctx, `INSERT INTO messages (sha256, size, stored_path, subject, sent_at, has_attachment, index_version)
 		SELECT s, 100, $3, 'seeded', t, true, 3 FROM unnest($1::text[], $2::timestamptz[]) AS x (s, t)`, shas, times, blobstore.RelPath(blob.SHA256))

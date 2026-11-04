@@ -44,7 +44,7 @@ func Reindex(ctx context.Context, st *store.Store, blobs *blobstore.Store, log *
 			if err := ctx.Err(); err != nil {
 				return total, err
 			}
-			h, idx, err := extract(blobs, m.StoredPath)
+			h, idx, err := extract(blobs, m.SHA256)
 			if err != nil {
 				// Keep going: mark it as indexed with empty values so a
 				// missing or unreadable file does not block the rest forever.

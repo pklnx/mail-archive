@@ -447,7 +447,7 @@ func (im *Importer) headerDate(meta store.MessageMeta, blob blobstore.Blob, fall
 	if meta.SentAt != nil {
 		return *meta.SentAt, nil
 	}
-	f, err := im.Blobs.Open(blob.Path)
+	f, err := im.Blobs.OpenMessage(blob.SHA256)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -497,7 +497,7 @@ func (im *Importer) readMaildir(dir string, log *slog.Logger, fn func(mailbox.Ma
 
 // statusFlags reads the Status and X-Status headers of a stored message.
 func (im *Importer) statusFlags(blob blobstore.Blob) ([]string, error) {
-	f, err := im.Blobs.Open(blob.Path)
+	f, err := im.Blobs.OpenMessage(blob.SHA256)
 	if err != nil {
 		return nil, err
 	}

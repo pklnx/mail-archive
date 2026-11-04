@@ -858,6 +858,7 @@ func TestAuditorMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	downBlobEncryptionMigration(t, st)
 	if _, err := st.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "auditor users exist") {
 		t.Fatalf("down with an auditor: %v", err)
 	}

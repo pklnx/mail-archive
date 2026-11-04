@@ -192,10 +192,11 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 	if err != nil {
 		return err
 	}
-	blobs, err := openBlobs(a.cfg.DataDir)
+	blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "fill", archive.RoleWriter)
 	if err != nil {
 		return err
 	}
+	defer ar.Close()
 	out := cmd.ErrOrStderr()
 	if err := printFirstReceived(cmd, a, acc); err != nil {
 		return err
@@ -337,10 +338,11 @@ func resumeFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) er
 	if err != nil {
 		return err
 	}
-	blobs, err := openBlobs(a.cfg.DataDir)
+	blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "fill", archive.RoleWriter)
 	if err != nil {
 		return err
 	}
+	defer ar.Close()
 	unlock, ok, err := a.store.TryLockSyncForWrite(ctx, acc.ID)
 	if err != nil {
 		return err
@@ -393,10 +395,11 @@ func keepFillRunning(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlag
 	if err != nil {
 		return err
 	}
-	blobs, err := openBlobs(a.cfg.DataDir)
+	blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "fill", archive.RoleWriter)
 	if err != nil {
 		return err
 	}
+	defer ar.Close()
 	interval, err := parseFillInterval(scheduleOf(a.cfg), fl.interval, nil)
 	if err != nil {
 		return err

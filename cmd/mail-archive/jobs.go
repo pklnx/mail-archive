@@ -120,10 +120,11 @@ and hands running jobs back to the queue. See docs/guide/operations.md,
 			if a.cfg.JobWorkers == 0 {
 				return errors.New(config.EnvJobWorkers + "=0: the worker would run no jobs; set it from 1 to 8")
 			}
-			blobs, err := openBlobs(a.cfg.DataDir)
+			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "worker", archive.RoleWriter)
 			if err != nil {
 				return err
 			}
+			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
 			kinds, err := jobRegistry(attachmentIndexer(a, blobs, log))
 			if err != nil {

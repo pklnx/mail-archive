@@ -13,7 +13,9 @@ For each selected folder:
    prevents duplicate files.
 3. Messages with a UID above the last archived one are fetched with
    `BODY.PEEK[]`, which does not set the `\Seen` flag.
-4. Each message is stored as `data/messages/ab/cd/<sha256>.eml`. If a file
+4. Each message is stored as `data/messages/ab/cd/<sha256>.eml`, or
+   encrypted as `<sha256>.enc` with [encryption at rest](../reference/security#the-archive-key)
+   on; the hash is always that of the original bytes. If a file
    with the same content exists, only a new *location* (account, folder, UID)
    is recorded.
 5. Headers and body text are indexed for search. Batches of 100 messages are
