@@ -311,6 +311,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	group := q.Get("group")
 	grantText := q.Get("grant")
 	if !sess.IsAdmin && (len(userNames) > 0 || len(actors) > 0 || group != "") {
+		s.auditorDeniedEntry(r, sess, "GET /api/audit", reasonAdminOnly)
 		s.fail(w, r, http.StatusForbidden, "only admins can see other users' entries", nil)
 		return
 	}

@@ -260,7 +260,9 @@ func (s *Server) sessionWithToken(r *http.Request) (*store.Session, string, erro
 // allowlist (route.auditor), checked right after the password and 2FA
 // gates: any other route answers 403 and writes auditor.denied. An
 // auditor with several active grants must then pick one first
-// (grantGateAllowed).
+// (grantGateAllowed), once the password and 2FA setup are done. Every
+// refusal of an auditor's request by these gates writes auditor.denied
+// with its reason.
 func (s *Server) authenticate(mux *http.ServeMux, rules map[string]route) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
@@ -294,26 +296,34 @@ func (s *Server) authenticate(mux *http.ServeMux, rules map[string]route) http.H
 			s.fail(w, r, http.StatusUnauthorized, "login required", nil)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionKey{}, sess)
+		r = r.WithContext(context.WithValue(ctx, sessionTokenKey{}, token))
 		// A generated password, and a required 2FA that is not set up yet,
 		// both restrict the session to finishing the setup: first the
-		// password, then 2FA.
+		// password, then 2FA. An auditor's refusal here is recorded like
+		// every other refusal of an auditor (auditorDenied).
+		setupPending := sess.MustChangePassword || (s.twoFactorRequired(sess.IsAdmin, sess.IsAuditor) && !sess.TwoFactorEnabled)
 		if sess.MustChangePassword && (r.Method != http.MethodPut || r.URL.Path != profilePasswordPath) {
+			s.auditorDeniedEntry(r, sess, pattern, reasonPasswordChangeRequired)
 			s.writeJSON(w, http.StatusForbidden, passwordChangeJSON{Error: "choose your own password first", PasswordChangeRequired: true})
 			return
 		}
-		if !sess.MustChangePassword && s.twoFactorRequired(sess.IsAdmin, sess.IsAuditor) && !sess.TwoFactorEnabled &&
-			!twoFactorSetupPathAllowed(r.Method, r.URL.Path) {
+		if !sess.MustChangePassword && setupPending && !twoFactorSetupPathAllowed(r.Method, r.URL.Path) {
+			s.auditorDeniedEntry(r, sess, pattern, reasonTwoFactorRequired)
 			s.writeJSON(w, http.StatusForbidden, twoFactorSetupJSON{Error: "set up two-factor authentication first", TwoFactorSetupRequired: true})
 			return
 		}
-		ctx := context.WithValue(r.Context(), sessionKey{}, sess)
-		r = r.WithContext(context.WithValue(ctx, sessionTokenKey{}, token))
 		if sess.IsAuditor {
 			if !rule.auditor {
 				s.auditorDenied(w, r, pattern)
 				return
 			}
-			if sess.GrantID == nil && !grantGateAllowed(r.Method, r.URL.Path) {
+			// The grant gate comes only after the setup: while the password
+			// or 2FA setup is pending, the gates above let through nothing
+			// but the setup steps, and those need no grant. Every other
+			// route stays closed until all three gates pass.
+			if !setupPending && sess.GrantID == nil && !grantGateAllowed(r.Method, r.URL.Path) {
+				s.auditorDeniedEntry(r, sess, pattern, reasonGrantSelectionRequired)
 				s.writeJSON(w, http.StatusForbidden, grantSelectionJSON{Error: "choose an audit case first", GrantSelectionRequired: true})
 				return
 			}

@@ -51,7 +51,7 @@ Each event writes exactly one entry.
 | `user.add`, `user.change`, `user.remove`, `user.password_reset`, `user.password_set`, `user.2fa_reset`, `user.passkeys_removed` | User administration. |
 | `user.group_change` | A user moved into another [customer group](./users#customer-groups): `from_group` and `to_group` (`id`, `name`), and `shares_ended`, each with `account`, `owner` and `user`; `grants_revoked` lists the [auditor grants](#auditors) the move revoked (`id`, `label`, `owner`, `auditor`). |
 | `auditor.grant`, `auditor.extend`, `auditor.revoke`, `auditor.grant_change` | An [auditor grant](#auditors) was created (`label`, the `accounts` with `all_folders` or `folders`, `period_from`, `period_until`, `starts_at`, `ends_at`), extended (`from`, `to`), revoked (`reason`: `owner`, `operator`, `group_change`, `account_move`, `account_purge` or `user_removed`) or lost an account to a move (`reason: account_move`, `account`). The target is the auditor; every entry has `auditor_grant` and is recorded under the grant's group. Group `auditor`. |
-| `auditor.select`, `auditor.denied`, `account.list` | An auditor picked the grant their session reads through (`auditor_grant`, `label`), called a route that auditors may not use (`method`, `route`; nothing was done), or listed the granted accounts (`accounts`, the number). |
+| `auditor.select`, `auditor.denied`, `account.list` | An auditor picked the grant their session reads through (`auditor_grant`, `label`), had a request refused (`method`, `route`, `reason`: `not_allowed` outside the allowlist, `password_change_required`, `two_factor_required`, `grant_selection_required` before the setup or the grant choice is done, `admin_only` for a Log filter only admins may use; nothing was done), or listed the granted accounts (`accounts`, the number). |
 | `group.add`, `group.rename`, `group.remove` | A customer group was created, renamed (`from`) or removed; `group_id` and `group`. Group `users`, with the `user.*` actions. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login: password, 2FA and passkeys. |
 | `profile.change` | A user changed their own web UI settings. `fields` names them (`language`, `locale`), each with its old and new value (`from`, `to`). Saving an unchanged value records nothing. |
@@ -159,7 +159,8 @@ an auditor grant. Every request of an auditor that reads archive data is
 recorded: the account list (`account.list`), every folder listing and search
 page, also empty ones, and every opened message, HTML body, download and
 attachment; such a read fails closed when its entry cannot be written. Every
-refused request (`auditor.denied`) and every grant choice
+refused request (`auditor.denied`, best effort: the request stays refused
+whether or not its entry is written) and every grant choice
 (`auditor.select`) is recorded too. Reads of the auditor's own data are not:
 the session, the status, the own Log and the own grant list. Each entry of an auditor's
 session carries the grant (`auditor_grant`) and its owner (`via_owners`),

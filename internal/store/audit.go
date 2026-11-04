@@ -63,6 +63,11 @@ type AuditEntry struct {
 	// or changes group in the change's transaction, and for group actions;
 	// otherwise the group comes from the class (see AuditClass).
 	GroupID *int64
+	// Unwritable, when set, keeps the entry from being written: the caller
+	// could not fill a detail the entry must carry (an auditor's grant
+	// owners, #393). Writing it fails with this error, so a change or read
+	// that needs the entry fails closed.
+	Unwritable error
 
 	class AuditClass
 }
@@ -349,6 +354,9 @@ func (s *Store) auditUserAgent(ctx context.Context, e *AuditEntry) (*int64, erro
 // insertAudit writes e with the user agent id ua through q, which may be a
 // transaction's: it never uses the pool itself.
 func insertAudit(ctx context.Context, q *db.Queries, e *AuditEntry, ua *int64) error {
+	if e.Unwritable != nil {
+		return e.Unwritable
+	}
 	groupUser, groupAccount, err := checkClass(e)
 	if err != nil {
 		return err

@@ -127,7 +127,8 @@ account is never shown to the shared user, admins included.
 an auditor is never an admin, owns no accounts, receives no shares and holds
 no API keys (a key of an auditor opens nothing). An auditor reads only
 through an auditor grant: one owner's accounts, all or some of their folders,
-an optional message period and a validity window of at most 365 days.
+an optional message period and a validity window that ends at most 365 days
+after its start or after its latest extension.
 
 - **Login:** the generated password must be changed at the first login, and
   TOTP is mandatory and cannot be switched off (an admin resets it); passkeys
@@ -158,8 +159,11 @@ an optional message period and a validity window of at most 365 days.
   account list, every folder listing and search page (also empty ones), and
   every opened message, HTML body, `.eml` download and attachment. Such a
   read fails closed (`503`, nothing sent) when its entry cannot be written.
-  Every refused request (`auditor.denied`) and every grant choice is recorded
-  too. Reads of the auditor's own data are not recorded: the session, the
+  Every refused request (`auditor.denied`, with the reason: a route outside
+  the allowlist, the password change or 2FA setup still pending, no grant
+  chosen yet, or a filter only admins may use) and every grant choice is
+  recorded too; a refusal is recorded best effort, and the request stays
+  refused whether or not its entry is written. Reads of the auditor's own data are not recorded: the session, the
   status, the own Log and the own grant list. The grant's owner sees the auditor's entries in their Log, with
   the search terms, without the auditor's address, browser or key name, and
   sees revocations by others with "operator" instead of the actor's name. See

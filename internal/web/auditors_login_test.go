@@ -211,6 +211,157 @@ func TestAuditorPasskeyLogin(t *testing.T) {
 	}
 }
 
+// expectDenied checks that the newest entries since n are exactly one
+// auditor.denied with reason for route, in the Log of the owners via.
+func (f *authFixture) expectDenied(n int, route, reason string, via []int64) {
+	f.t.Helper()
+	got := newEntries(f.t, f.st, n)
+	if len(got) != 1 || got[0].Action != store.ActionAuditorDenied {
+		f.t.Errorf("%s (%s): entries %+v, want one auditor.denied", route, reason, got)
+		return
+	}
+	if d := details(f.t, got[0]); d["reason"] != reason || d["route"] != route {
+		f.t.Errorf("%s: denial details %v, want reason %s", route, d, reason)
+	}
+	if v := viaOwners(f.t, got[0]); !slices.Equal(v, via) {
+		f.t.Errorf("%s: denial via_owners %v, want %v", route, v, via)
+	}
+}
+
+// auditorSetupThenChoice walks an unbound auditor session (several
+// grants) whose 2FA is not set up, and whose password is generated when
+// mustChange, through the setup to the first read (#511, review A1): the
+// setup steps work without a grant, every other route stays closed with
+// the gate's refusal recorded, and the grant gate applies once the setup
+// is done.
+func (f *authFixture) auditorSetupThenChoice(password string, mustChange bool, grant int64, via []int64) {
+	f.t.Helper()
+	n := len(auditLog(f.t, f.st))
+	if mustChange {
+		if out := f.expect("PUT", "/api/session/grant", map[string]any{"id": grant}, http.StatusForbidden); out["passwordChangeRequired"] != true {
+			f.t.Errorf("grant choice before the password: %v", out)
+		}
+		f.expectDenied(n, "PUT /api/session/grant", reasonPasswordChangeRequired, via)
+		n = len(auditLog(f.t, f.st))
+		if out := f.expect("GET", "/api/accounts", nil, http.StatusForbidden); out["passwordChangeRequired"] != true {
+			f.t.Errorf("read before the password: %v", out)
+		}
+		f.expectDenied(n, "GET /api/accounts", reasonPasswordChangeRequired, via)
+		f.expect("PUT", "/api/profile/password", map[string]string{"current": password, "new": "the auditor's own passphrase"}, 204)
+	}
+	n = len(auditLog(f.t, f.st))
+	if out := f.expect("PUT", "/api/session/grant", map[string]any{"id": grant}, http.StatusForbidden); out["twoFactorSetupRequired"] != true {
+		f.t.Errorf("grant choice before 2FA: %v", out)
+	}
+	f.expectDenied(n, "PUT /api/session/grant", reasonTwoFactorRequired, via)
+	n = len(auditLog(f.t, f.st))
+	if out := f.expect("GET", "/api/messages", nil, http.StatusForbidden); out["twoFactorSetupRequired"] != true {
+		f.t.Errorf("read before 2FA: %v", out)
+	}
+	f.expectDenied(n, "GET /api/messages", reasonTwoFactorRequired, via)
+	f.expect("GET", "/api/profile/2fa", nil, 200)
+	setup := f.expect("POST", "/api/profile/2fa/setup", nil, 200)
+	f.expect("POST", "/api/profile/2fa/confirm", map[string]string{"code": f.code(setup["secret"].(string))}, 200)
+	n = len(auditLog(f.t, f.st))
+	if out := f.expect("GET", "/api/accounts", nil, http.StatusForbidden); out["grantSelectionRequired"] != true {
+		f.t.Errorf("read before the grant choice: %v", out)
+	}
+	f.expectDenied(n, "GET /api/accounts", reasonGrantSelectionRequired, via)
+	if out := f.expect("PUT", "/api/session/grant", map[string]any{"id": grant}, 200); out["grantSelectionRequired"] != nil {
+		f.t.Errorf("grant choice: %v", out)
+	}
+	accounts := f.expect("GET", "/api/accounts", nil, 200)
+	if shared, _ := accounts["shared"].([]any); len(shared) != 1 {
+		f.t.Errorf("accounts after the choice %v", accounts)
+	}
+}
+
+// TestAuditorSetupWithSeveralGrants (#511, review A1): a new auditor with
+// a generated password, no 2FA and two grants can change the password,
+// set up TOTP, pick a grant and read; so can one whose 2FA an admin reset.
+// Before the fix, the grant gate refused the setup steps and the setup
+// gates refused the grant choice.
+func TestAuditorSetupWithSeveralGrants(t *testing.T) {
+	f := newAuthFixture(t)
+	aud := f.addAuditor("stb-meier", "generated passphrase 1")
+	g1 := f.ownerGrant("anna", aud, time.Now().AddDate(0, 0, 3))
+	f.ownerGrant("bert", aud, time.Now().AddDate(0, 0, 5))
+	anna, _ := f.st.GetUserByName(context.Background(), "anna")
+	bert, _ := f.st.GetUserByName(context.Background(), "bert")
+	via := []int64{anna.ID, bert.ID}
+	out := f.expect("POST", "/api/session", map[string]string{"username": "stb-meier", "password": "generated passphrase 1"}, 200)
+	if out["grantSelectionRequired"] != true {
+		t.Fatalf("login %v", out)
+	}
+	f.auditorSetupThenChoice("generated passphrase 1", true, g1, via)
+
+	// An admin resets the auditor's 2FA: the next login is unbound again
+	// and must set up 2FA before the grant choice.
+	if err := f.st.ResetTwoFactor(context.Background(), aud.ID); err != nil {
+		t.Fatal(err)
+	}
+	out = f.expect("POST", "/api/session", map[string]string{"username": "stb-meier", "password": "the auditor's own passphrase"}, 200)
+	if out["grantSelectionRequired"] != true {
+		t.Fatalf("login after the reset %v", out)
+	}
+	f.auditorSetupThenChoice("the auditor's own passphrase", false, g1, via)
+}
+
+// TestAuditorAdminOnlyFilterDenied: an auditor's GET /api/audit?user=
+// is refused like any non-admin's and recorded as auditor.denied.
+func TestAuditorAdminOnlyFilterDenied(t *testing.T) {
+	f := newAuthFixture(t)
+	aud := f.addAuditor("aud", "auditor passphrase 1")
+	if err := f.st.SetUserPassword(context.Background(), aud.ID, mustHash(t, "auditor passphrase 1"), store.PasswordReset{}); err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := f.enableTOTP(aud)
+	f.ownerGrant("anna", aud, time.Now().AddDate(0, 0, 3))
+	anna, _ := f.st.GetUserByName(context.Background(), "anna")
+	f.secondStep(f.passwordStep("aud", "auditor passphrase 1"), f.code(secret), 200)
+	n := len(auditLog(t, f.st))
+	f.expect("GET", "/api/audit?user=anna", nil, http.StatusForbidden)
+	f.expectDenied(n, "GET /api/audit", reasonAdminOnly, []int64{anna.ID})
+	n = len(auditLog(t, f.st))
+	f.expect("GET", "/api/audit", nil, 200)
+	if got := newEntries(t, f.st, n); len(got) != 0 {
+		t.Errorf("the own Log is logged: %+v", got)
+	}
+}
+
+// TestAuditorTagFailsClosed (#511, review A note): when the owners of an
+// unbound auditor session's grants cannot be read, its entry is not
+// written at all rather than written without via_owners.
+func TestAuditorTagFailsClosed(t *testing.T) {
+	f := newAuthFixture(t)
+	aud := f.addAuditor("aud", "auditor passphrase 1")
+	f.ownerGrant("anna", aud, time.Now().AddDate(0, 0, 3))
+	f.ownerGrant("bert", aud, time.Now().AddDate(0, 0, 5))
+	sess := &store.Session{UserID: aud.ID, UserName: aud.Name, IsAuditor: true}
+	broken, cancel := context.WithCancel(context.Background())
+	cancel()
+	e := store.SelfEntry(store.ActorSession, store.ActionAuditorDenied)
+	e.SetUser(aud.ID, aud.Name)
+	f.server.tagAuditor(broken, e, sess)
+	n := len(auditLog(t, f.st))
+	if err := f.st.Audit(context.Background(), *e); err == nil {
+		t.Error("an entry without its owners was written")
+	}
+	if got := newEntries(t, f.st, n); len(got) != 0 {
+		t.Errorf("entries %+v", got)
+	}
+	// With the grants readable, the same entry carries both owners.
+	e = store.SelfEntry(store.ActorSession, store.ActionAuditorDenied)
+	e.SetUser(aud.ID, aud.Name)
+	f.server.tagAuditor(context.Background(), e, sess)
+	if err := f.st.Audit(context.Background(), *e); err != nil {
+		t.Fatal(err)
+	}
+	if got := newEntries(t, f.st, n); len(got) != 1 || len(viaOwners(t, got[0])) != 2 {
+		t.Errorf("entries %+v", got)
+	}
+}
+
 func mustHash(t *testing.T, pw string) string {
 	t.Helper()
 	h, err := cheapHasher.Hash(context.Background(), pw)

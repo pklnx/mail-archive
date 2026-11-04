@@ -361,7 +361,8 @@ An auditor (a tax advisor or tax auditor) is a user an admin creates with
 auditor of their own [customer group](../guide/users#customer-groups) read
 access to some of their accounts: all or some folders, an optional message
 period (`[periodFrom, periodUntil)` on the message date) and a validity
-window (`startsAt`, default now, to `endsAt`, at most 365 days). smtp
+window (`startsAt`, default now, to `endsAt`, at most 365 days after the
+start or after the latest extension). smtp
 (journal) accounts cannot be granted. See [Security](./security#login) for
 the guarantees.
 
@@ -372,15 +373,16 @@ language, 2FA setup and passkeys, `GET /api/status` (an empty own view),
 own entries) and `GET /api/auditor-grants`. Every other endpoint answers
 `403 {"error": "not available to auditors"}` and writes `auditor.denied`.
 Auditors hold no API keys and must use 2FA, which they cannot switch off.
-Every request of an auditor that reads archive data, and every refused one, is recorded and goes into the grant owner's Log (reads of the auditor's own session, status, Log and grants are not);
+Every request of an auditor that reads archive data is recorded and fails closed (`503`) when its entry cannot be written. Every refused one is recorded as `auditor.denied` with a `reason` (`not_allowed`, `password_change_required`, `two_factor_required`, `grant_selection_required`, `admin_only`), best effort: it stays refused either way. Both go into the grant owner's Log (reads of the auditor's own session, status, Log and grants are not);
 see [Audit log](../guide/audit-log#auditors).
 
 - **Login:** without an active grant the login answers `403`. With one, the
   session is bound to it. With several, `GET /api/session` has
   `"grantSelectionRequired": true` and `grants` (`[{"id", "label", "owner",
-  "periodFrom", "periodUntil", "startsAt", "endsAt"}]`), and every endpoint
-  but `PUT /api/session/grant` answers `403` with
-  `"grantSelectionRequired": true`. `user.auditor` is `true` and `grant` the
+  "periodFrom", "periodUntil", "startsAt", "endsAt"}]`). Once the own
+  password and 2FA are set up, every endpoint but `PUT /api/session/grant`
+  answers `403` with `"grantSelectionRequired": true`; before that, only the
+  setup steps work, as for every user, and need no grant. `user.auditor` is `true` and `grant` the
   bound grant. The session ends with the grant at the latest.
 - **Reading:** `GET /api/accounts` answers `{"accounts": [], "shared":
   [{"key", "name", "owner", "kind", "removed", "folders": [{"name",

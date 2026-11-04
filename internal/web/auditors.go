@@ -61,21 +61,47 @@ func grantGateAllowed(method, path string) bool {
 	return method == http.MethodPut && path == "/api/session/grant"
 }
 
+// Reasons of auditor.denied: the route is outside the allowlist, or a
+// gate refused it (the password and 2FA setup, the grant choice), or the
+// request asked for what only admins may see.
+const (
+	reasonNotAllowed             = "not_allowed"
+	reasonPasswordChangeRequired = "password_change_required"
+	reasonTwoFactorRequired      = "two_factor_required"
+	reasonGrantSelectionRequired = "grant_selection_required"
+	reasonAdminOnly              = "admin_only"
+)
+
 // auditorDenied answers an auditor's request to a route outside the
-// allowlist with 403 and records it (best effort: nothing was done) in
-// the auditor's and the grant owners' Log.
+// allowlist with 403 and records it.
 func (s *Server) auditorDenied(w http.ResponseWriter, r *http.Request, pattern string) {
+	s.auditorDeniedEntry(r, currentSession(r), pattern, reasonNotAllowed)
+	s.fail(w, r, http.StatusForbidden, errNotForAuditors, nil)
+}
+
+// auditorDeniedEntry records a refused request of an auditor's session
+// in the auditor's and the grant owners' Log, with the method, the route
+// pattern and why. Sessions of other users write nothing. It is best
+// effort: the request is refused whether or not the entry is written, and
+// no data was read.
+func (s *Server) auditorDeniedEntry(r *http.Request, sess *store.Session, pattern, reason string) {
+	if sess == nil || !sess.IsAuditor {
+		return
+	}
 	e := s.selfEntry(r, store.ActionAuditorDenied)
 	e.Detail("method", r.Method)
 	e.Detail("route", pattern)
+	e.Detail("reason", reason)
 	s.auditBestEffort(r, e)
-	s.fail(w, r, http.StatusForbidden, errNotForAuditors, nil)
 }
 
 // tagAuditor adds to an entry of an auditor's session the grant and its
 // owner (via_owners), which put the entry into that owner's Log; while
 // the session has no grant yet, the owners of all the auditor's active
-// grants. Entries of other users are left as they are.
+// grants. Entries of other users are left as they are. If those grants
+// cannot be read, the entry is marked so that it is never written
+// (store.AuditEntry.Unwritable): an entry without its owners would miss
+// their Log, so a read that needs it fails closed.
 func (s *Server) tagAuditor(ctx context.Context, e *store.AuditEntry, sess *store.Session) {
 	if !sess.IsAuditor {
 		return
@@ -88,6 +114,7 @@ func (s *Server) tagAuditor(ctx context.Context, e *store.AuditEntry, sess *stor
 	grants, err := s.store.ActiveGrants(ctx, sess.UserID)
 	if err != nil {
 		s.log.Warn("list the auditor's grants for an entry", "user", sess.UserName, "err", err)
+		e.Unwritable = fmt.Errorf("the owners of the auditor's grants: %w", err)
 		return
 	}
 	if len(grants) > 0 {
