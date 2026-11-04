@@ -124,6 +124,14 @@ describe("entry texts", () => {
     expect(auditAction("data.fill_cancel")).toBe("Stopped or cancelled import from IMAP");
     expect(auditAction("future.thing")).toBe("future.thing");
   });
+  it("words both GoBD export actions in every language (#393, part 4: owners see them)", () => {
+    for (const a of ["data.export", "data.export_done"]) {
+      expect(auditAction(a)).not.toBe(a);
+      expect(auditAction(a, "de")).not.toBe(a);
+    }
+    expect(auditAction("data.export_done")).toBe("Finished export");
+    expect(auditAction("data.export_done", "de")).toBe("Export beendet");
+  });
   it("words the customer group actions in every language (#470)", () => {
     for (const a of ["user.group_change", "group.add", "group.rename", "group.remove"]) {
       expect(auditAction(a)).not.toBe(a);
