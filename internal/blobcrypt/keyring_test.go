@@ -333,8 +333,9 @@ func TestParseKEK(t *testing.T) {
 			t.Errorf("ParseKEK: %v", err)
 		}
 	}
-	secret := "c2VjcmV0LXZhbHVlLXRoYXQtaXMtdG9vLXNob3J0"
-	for _, s := range []string{"", "!!!", secret} {
+	// A key of the wrong length, built at run time: 31 random bytes.
+	short := EncodeKEK(randomKey(t)[:KeySize-1])
+	for _, s := range []string{"", "!!!", short} {
 		_, err := ParseKEK(s)
 		if err == nil {
 			t.Errorf("ParseKEK(%q) accepted", s)
