@@ -15,7 +15,7 @@ are named on the guide pages: the default sync interval
 |---|---|---|
 | `MAIL_ARCHIVE_DATABASE_URL` | (required) | PostgreSQL connection URL. Compose sets it from `POSTGRES_PASSWORD`. |
 | `MAIL_ARCHIVE_SECRET_KEY` | (required to add accounts and sync) | 32 bytes, base64. Encrypts IMAP passwords. Create with `openssl rand -base64 32` or `./ma keygen`. Without it the web UI is browse-only. |
-| `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for the `.eml` files. |
+| `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for the message files (`.eml`, or `.enc` with encryption at rest) and the keyring. |
 | `MAIL_ARCHIVE_SYNC_INTERVAL` | `6h` | How often the web server syncs each enabled account without its own interval, and runs each [recurring fill](../guide/journaling#keep-importing-recurring-fill) without its own. A Go duration like `30m` or `12h`; at least `5m` and at least `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`; `0` turns the schedule off for every account and every recurring fill (a fill just switched on, resumed or interrupted still finishes its current run). See [The schedule](../guide/syncing#the-schedule). |
 | `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` | `5m` | The shortest interval the schedule syncs any account at, or runs a recurring fill at, also one with a shorter own interval. From `5m` to `720h`. |
 | `MAIL_ARCHIVE_RECONCILE_INTERVAL` | `24h` | How often a sync compares each folder with the server, to mark messages deleted there and update flags. Used by the web server's schedule and by `sync`. At least `1h`; `0` reconciles only with the **Check server** button or `sync --reconcile`. See [Reconcile](../guide/syncing#reconcile). |
@@ -53,8 +53,10 @@ The SMTP server receives copies of every message from a mail server for
 
 The archive key (KEK) opens the keyring `MAIL_ARCHIVE_DATA_DIR/keys/keyring`,
 which holds the data keys. Create both with [`encryption keygen`](./cli#encryption).
-Storing files encrypted is not part of this version yet; a configured key is
-checked at every start of a command that reads the configuration.
+A configured key is checked at every start of a command that reads the
+configuration. While encryption at rest is on, every command that reads or
+writes message files needs a key that opens the keyring; see [The archive
+key](./security#the-archive-key).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -66,6 +68,13 @@ losing the secret key costs the stored IMAP passwords, losing the archive key
 and every recovery key costs all encrypted mail. A key file on the same disk
 as `data/` protects copies and backups of `data/`, not snapshots of that disk:
 move `ARCHIVE_KEY_DIR` to another disk or a secret store for real separation.
+
+The processes that write message files (`serve`, `worker`, `sync`, `import`,
+`account fill`, `reindex`) hold a session advisory lock on a database
+connection of their own, so that the offline encryption commands run only
+while none of them does. Connect them, and the encryption commands, to
+PostgreSQL directly or through a pooler in session mode: a pooler in
+transaction mode (PgBouncer `pool_mode=transaction`) breaks session locks.
 
 ## Docker Compose only
 

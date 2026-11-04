@@ -110,7 +110,18 @@ func (r *recorder) ops() fsops {
 			}
 			return os.Remove(name)
 		},
+		rename: func(oldname, newname string) error {
+			if err := r.do("rename", newname); err != nil {
+				return err
+			}
+			return os.Rename(oldname, newname)
+		},
 	}
+}
+
+// unlinks is the events of Remove unlinking both forms of a blob.
+func unlinks(s *Store, hash string) []string {
+	return []string{"unlink:" + s.abs(RelPath(hash)), "unlink:" + s.abs(EncPath(hash))}
 }
 
 // barrier is the events of a successful directory barrier.
@@ -257,7 +268,7 @@ func TestNewResolvesSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	ev = rec.take()
-	equal(t, "remove barrier", ev[1:], barrier(leaf))
+	equal(t, "remove barrier", ev[2:], barrier(leaf))
 }
 
 // newRecorded opens a store whose operations are recorded, with the
@@ -541,7 +552,7 @@ func TestRemoveDurable(t *testing.T) {
 			t.Fatal(err)
 		}
 		dirs := shardDirs(root, hash)
-		equal(t, "remove", rec.take(), append([]string{"unlink:" + s.abs(RelPath(hash))}, barrier(dirs[0])...))
+		equal(t, "remove", rec.take(), append(unlinks(s, hash), barrier(dirs[0])...))
 		if s.Exists(hash) {
 			t.Error("file still there")
 		}
@@ -556,7 +567,7 @@ func TestRemoveDurable(t *testing.T) {
 		if err := s.Remove(hash); err != nil {
 			t.Fatal(err)
 		}
-		equal(t, "remove", rec.take(), append([]string{"unlink:" + s.abs(RelPath(hash))}, barrier(shardDirs(root, hash)[0])...))
+		equal(t, "remove", rec.take(), append(unlinks(s, hash), barrier(shardDirs(root, hash)[0])...))
 	})
 	t.Run("missing leaf shard", func(t *testing.T) {
 		s, rec, root := newRecorded(t)
@@ -569,7 +580,7 @@ func TestRemoveDurable(t *testing.T) {
 		if err := s.Remove(hash); err != nil {
 			t.Fatal(err)
 		}
-		equal(t, "remove", rec.take(), append([]string{"unlink:" + s.abs(RelPath(hash)), "open:" + dirs[0]},
+		equal(t, "remove", rec.take(), append(append(unlinks(s, hash), "open:"+dirs[0]),
 			barrier(dirs[1], dirs[2], root)...))
 		if _, err := os.Stat(dirs[0]); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("Remove created the shard: %v", err)
@@ -586,7 +597,7 @@ func TestRemoveDurable(t *testing.T) {
 		if err := s.Remove(hash); err != nil {
 			t.Fatal(err)
 		}
-		equal(t, "remove", rec.take(), append([]string{"unlink:" + s.abs(RelPath(hash)), "open:" + dirs[0], "open:" + dirs[1]},
+		equal(t, "remove", rec.take(), append(append(unlinks(s, hash), "open:"+dirs[0], "open:"+dirs[1]),
 			barrier(dirs[2], root)...))
 	})
 	t.Run("unrelated failures", func(t *testing.T) {
@@ -606,7 +617,7 @@ func TestRemoveDurable(t *testing.T) {
 		if err := s.Remove(hash); !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("open failure: %v", err)
 		}
-		equal(t, "no walk up", rec.take(), []string{"unlink:" + final, "open:" + shardDirs(root, hash)[0]})
+		equal(t, "no walk up", rec.take(), append(unlinks(s, hash), "open:"+shardDirs(root, hash)[0]))
 	})
 	t.Run("sync failure after unlink", func(t *testing.T) {
 		s, rec, root := newRecorded(t)
@@ -624,6 +635,6 @@ func TestRemoveDurable(t *testing.T) {
 		if err := s.Remove(hash); err != nil {
 			t.Fatal(err)
 		}
-		equal(t, "retry", rec.take(), append([]string{"unlink:" + s.abs(RelPath(hash))}, barrier(leaf)...))
+		equal(t, "retry", rec.take(), append(unlinks(s, hash), barrier(leaf)...))
 	})
 }

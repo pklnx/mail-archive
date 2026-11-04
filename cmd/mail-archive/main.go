@@ -17,8 +17,13 @@ import (
 var version = "dev"
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sig, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// A writer that must stop (lost writers lock, encryption at rest
+	// changed) cancels this with a cause and exits non-zero (#392).
+	ctx, cancel := context.WithCancelCause(sig)
+	defer cancel(nil)
+	stopProcess = cancel
 
 	root := &cobra.Command{
 		Use:           "mail-archive",
@@ -52,14 +57,32 @@ func main() {
 		newEncryptionCmd(),
 		newDecryptCmd(),
 	)
-	if err := root.ExecuteContext(ctx); err != nil {
-		var exitErr *exitError
-		if !errors.As(err, &exitErr) {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
-		}
-		os.Exit(exitErr.exitCode())
+	code, msg := exitStatus(ctx, root.ExecuteContext(ctx))
+	if msg != "" {
+		fmt.Fprintln(os.Stderr, "error:", msg)
 	}
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// exitStatus is the exit code of a command that returned err, and the
+// message to print. A writer stopped through the root context (#392) exits
+// 1 also when its command returned no error, as serve does on a cancelled
+// context.
+func exitStatus(ctx context.Context, err error) (int, string) {
+	var stopped *writerStopped
+	if errors.As(context.Cause(ctx), &stopped) {
+		return 1, stopped.Error()
+	}
+	if err == nil {
+		return 0, ""
+	}
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) {
+		return 1, err.Error()
+	}
+	return exitErr.exitCode(), ""
 }
 
 // exitError signals a failure that was already reported to the user. The

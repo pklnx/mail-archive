@@ -24,7 +24,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/archive` | Sync of accounts and folders, deduplication, header parsing, the background `Runner` with its schedule, `reindex`, `verify` and `export`. |
 | `internal/mailbox` | mbox and Maildir writers for `export`; readers and source walkers (Thunderbird, Apple Mail, Maildir++) for `import`. |
 | `internal/imapsync` | Read-only IMAP client on top of go-imap v2. |
-| `internal/blobstore` | Content-addressed `.eml` storage: files are named by their SHA-256 and published and removed durably (see [Blob durability](#blob-durability)). |
+| `internal/blobstore` | Content-addressed `.eml` storage, or `.enc` with encryption at rest: files are named by their SHA-256 and published and removed durably (see [Blob durability](#blob-durability)). |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/attachtext` | Text of attachments for search: plain text, CSV, TSV, Markdown, HTML, and PDFs through PDFium compiled to WebAssembly in wazero (no file system, network or environment; one PDF at a time per process; a new instance per document). No database. |
 | `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. `migrate` and `migrate down` hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command on a connection of its own outside the pool; goose's session lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations, from a short-lived pool of its own (one extra connection per call) whose teardown frees a lock left on a given-up connection (#269). Both commands open the store with `ForMigrations` (`client_connection_check_interval` and TCP keepalives), so the server frees a killed command's locks. What an operator sees of this (two runs wait for each other, the holder message, the time limits, what `migrate status`, `backup` and `serve` do) is in the CLI reference under [`migrate`](../reference/cli#migrate). |
@@ -205,7 +205,8 @@ counts as a failure, and the retry completes it. A file being visible,
   a relative root, the working directory must not change while the process
   runs.
 - **Put** writes into `tmp/put-*`, synchronizes and closes the file, and
-  publishes it with a hard link under `messages/ab/cd/<sha256>.eml`. A link
+  publishes it with a hard link under `messages/ab/cd/<sha256>.eml` (`.enc`
+  with encryption at rest, see [Message files](#message-files)). A link
   never replaces an existing name, so of identical concurrent writers, also
   in other processes, exactly one publishes (`created`), and nobody replaces
   the file another writer is still synchronizing. Then it synchronizes
@@ -255,8 +256,9 @@ is still there.
 ## Encryption at rest
 
 `internal/blobcrypt` holds the file format, the keyring and the archive key
-of encryption at rest (#392). Storing message files and backups in this
-format follows in later steps; this section specifies what is fixed now.
+of encryption at rest (#392); `internal/blobstore` stores message files in
+this format, and `internal/archive` (`atrest.go`) holds the start-up checks.
+Encrypted backups follow in a later step.
 Only the Go standard library is used (`crypto/aes`, `crypto/cipher` GCM,
 `crypto/hkdf`, `crypto/hmac`, `crypto/rand`).
 
@@ -315,8 +317,24 @@ KEK has opened the keyring. Every change increments the generation and
 replaces the file atomically (temporary file in `keys/`, `fsync`, `rename`,
 `fsync` of the directory); a leftover temporary file is ignored. The
 commands that change it hold an exclusive `flock` on `keys/keyring.lock`
-and refuse while another holds it. The copy in the database and the
-reconciliation of the two copies follow with the blob store.
+and refuse while another holds it.
+
+The **database copy** is `blob_encryption.keyring` (below). Every command
+that reads or writes message files reconciles the two copies at start, while
+encryption is on or being changed (`blobcrypt.Reconcile`, revision 1, B2 and
+revision 4 of the plan): both must open with the archive key and have the
+same archive id; the copy with the newer generation decides the current
+data key and the slots, and the data keys are the **union** of both, so a
+data directory from before a rekey next to a database from after it (or the
+other way round) keeps every file readable. The same data key id with other
+key material in the two copies is refused. A result that differs from a
+copy is written back to it: the database under a row lock, compared with the
+keyring generation it read, the file under the keyring `flock`, only if it
+is still the file that was read (otherwise the reconciliation starts again).
+A missing file is rebuilt from the database. A copy that does not open with
+the key is replaced only by a newer copy that does; a corrupt copy, the
+keyring of another archive, or a key that opens neither copy refuse the
+start.
 
 ### File format (STREAM-AES-256-GCM)
 
@@ -366,6 +384,93 @@ SHA-256 at the same time, as a writer does, runs at about 1.2–1.35 GB/s,
 0.06 ms for a 75 KB message; decrypting at the same speed. Each open stream
 holds about 75 KiB (one chunk buffer plus the cipher state), independent of
 the file size, well inside the 4 GB / 2 core budget.
+
+### Message files
+
+The identity of a message stays the SHA-256 of its plaintext (database,
+URLs, API, audit log, attestations); only the file name changes. With
+encryption on, `blobstore.Put` encrypts while it hashes, under the
+keyring's current data key, into `tmp/` (only ciphertext there), and binds
+the final chunk to the hash; the file is `messages/ab/cd/<sha256>.enc`.
+`stored_path` is informational and not rewritten; no reader opens a file by
+it. Every reader opens a message by its hash through
+`blobstore.OpenMessage`, which tries `.enc`, `.eml`, then `.enc` again (a
+conversion between two lookups) and returns the plaintext as an
+`io.ReadSeeker` and `io.ReaderAt` with its size, so `http.ServeContent`
+serves byte ranges of `/raw` from an encrypted file. `Exists` and `Remove`
+handle both forms (`Remove` unlinks both, with the same barriers); `Walk`
+reports `Entry.Encrypted`.
+
+`Put` never deduplicates onto a file of the other form, or onto an `.enc`
+whose header is invalid or names a data key the keyring lacks (such as one
+left by a writer of an older keyring): such a file counts as absent. Its
+own copy is published, read back in full and hash-checked, and only then is
+the `.eml` (or, with encryption off, the `.enc`) unlinked; an unusable
+`.enc` is replaced by an atomic `rename` of the checked copy, followed by
+the shard barrier. `created` is false in both cases: the message was there.
+A crash between the publication and the unlink leaves both forms; readers
+prefer `.enc`, verify reports the `.eml` as `plaintext`, and the next `Put`
+of the message (or the conversion of part 3) removes it.
+
+### State and writers
+
+`blob_encryption` (migration 00037) has at most one row; no row is off.
+`state` is `on` or a transitional state of an offline conversion
+(`encrypting`, `decrypting`, `rekeying`; maintainer decision 5).
+`generation` increases with every state or current-key change. The row also
+holds the database copy of the keyring and the cursor and counters of a
+conversion. Its `Down` refuses while a row exists.
+
+A **writer** is a process that can write message files: `serve` (with the
+SMTP receiver), `worker`, `sync`, `import` (also `--journal`), `account
+fill` and `reindex`. At start (`archive.OpenAtRest`) it
+
+1. takes the **writers lock** shared (advisory lock class `0x6d77`, key 0)
+   on a connection of its own outside the pool, with
+   `idle_session_timeout = 0`, the `ForMigrations` keepalives and
+   connection check, and `application_name` `mail-archive writer
+   <command>`. While an encryption command holds it exclusively, the writer
+   refuses and names the holder;
+2. reads the state. In a transitional state it refuses ("run `encryption
+   enable|disable|rekey` to finish it"). Without a row but with a keyring
+   file and an `.enc` file on disk (a dump from before `enable` restored
+   next to newer files), it records `encrypting` with the file as the
+   database copy, and refuses;
+3. with a row, needs the archive key, reconciles the keyring and, with
+   `on`, makes its blob store encrypt;
+4. pins the generation (`Store.PinBlobGeneration`) and watches the lock
+   connection (a check every 10 s that the session still holds the lock).
+
+A session advisory lock ends with its session, not with its process
+(postgres restart, `pg_terminate_backend`, a network blip, a pooler
+recycling its connection), so the writer must not outlive it: when the
+check fails, the root context is cancelled with a cause and the process
+exits non-zero, and Compose restarts it under the start-up rules. The
+window until the next check is closed by the generation: every transaction
+that inserts messages (`saveBatch` for sync and import, `saveIntoJournal`
+for fills and journal imports, `ReceiveMessage` for SMTP) reads
+`blob_encryption.generation` first and fails with `ErrBlobStateChanged`
+on a difference (SMTP answers 451, sync records a failed run); the process
+then stops the same way (final plan review, point 1). The encryption
+commands of part 3 take the writers lock exclusively with a try-lock
+(`Store.TryLockWritersExclusive`) and name the writers they find by
+`application_name`.
+
+Readers (`export`) need the key whenever a row exists; `verify` starts
+without it, checks the attestations (database only) and then stops with the
+reason. With encryption off, a configured key that opens the keyring file
+still reads `.enc` files left over.
+
+**Cost** (`go test -bench . -cpu 2 ./internal/blobstore/`, 75 KB
+messages, on the development container's Xeon and disk, limited to two
+cores as on the target hardware): a `Put` takes 1.27 ms encrypted
+against 0.95 ms plaintext, fsync barriers included, and holds 78 KiB
+instead of 4 KiB while it runs (one chunk buffer); reading a message
+through `OpenMessage` takes 34 µs against 8 µs and holds 76 KiB per open
+message. One extra query per inserting transaction reads the generation.
+At the archive's rates (one sync batch at a time per account, SMTP
+deliveries one by one) this stays far inside 4 GB and 2 cores; 100
+messages open at once in the web server hold about 7.5 MiB.
 
 ### Commands
 

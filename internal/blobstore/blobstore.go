@@ -1,5 +1,7 @@
 // Package blobstore stores raw messages on disk, addressed by the SHA-256
-// hash of their content. Identical messages are stored exactly once.
+// hash of their content. Identical messages are stored exactly once. With
+// encryption at rest (#392) a message is stored encrypted as
+// <hash>.enc; its identity stays the SHA-256 of the plaintext.
 package blobstore
 
 import (
@@ -13,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pklnx/mail-archive/internal/blobcrypt"
 )
 
 // Store is a content-addressed file store rooted at a directory.
@@ -30,6 +34,16 @@ type Store struct {
 	// synchronized, not the lexical parents of a symlink.
 	phys string
 	ops  fsops
+
+	// Encryption at rest (SetKeys): keys opens encrypted blobs; with
+	// encrypt, Put writes them under the data key (keyID, dk).
+	keys    blobcrypt.DataKeys
+	encrypt bool
+	keyID   uint32
+	dk      []byte
+
+	// beforeOpen, for tests, runs before a message file is opened.
+	beforeOpen func(path string)
 }
 
 // syncCloser is an open file or directory that can be synchronized.
@@ -52,6 +66,8 @@ type fsops struct {
 	link func(oldname, newname string) error
 	// unlink removes a name.
 	unlink func(name string) error
+	// rename replaces newname with oldname atomically.
+	rename func(oldname, newname string) error
 }
 
 var osOps = fsops{
@@ -59,6 +75,7 @@ var osOps = fsops{
 	temp:   func(f *os.File) syncCloser { return f },
 	link:   os.Link,
 	unlink: os.Remove,
+	rename: os.Rename,
 }
 
 // Blob describes a stored object.
@@ -152,10 +169,23 @@ func syncClose(f syncCloser, what string) error {
 	return nil
 }
 
-// RelPath returns the relative path for a hash: messages/ab/cd/<hash>.eml.
+// RelPath returns the relative path of a plaintext blob:
+// messages/ab/cd/<hash>.eml.
 func RelPath(hash string) string {
-	return "messages/" + hash[0:2] + "/" + hash[2:4] + "/" + hash + ".eml"
+	return "messages/" + hash[0:2] + "/" + hash[2:4] + "/" + hash + plainExt
 }
+
+// EncPath returns the relative path of an encrypted blob:
+// messages/ab/cd/<hash>.enc.
+func EncPath(hash string) string {
+	return "messages/" + hash[0:2] + "/" + hash[2:4] + "/" + hash + encExt
+}
+
+// File name extensions of the two forms of a blob.
+const (
+	plainExt = ".eml"
+	encExt   = ".enc"
+)
 
 // publishAttempts bounds how often Put switches between publishing its
 // own file and synchronizing an existing one, when another writer
@@ -163,7 +193,13 @@ func RelPath(hash string) string {
 const publishAttempts = 3
 
 // Put streams r to disk while hashing it. If a blob with the same hash
-// already exists, the new copy is discarded and created is false.
+// already exists in the form this store writes, the new copy is discarded
+// and created is false.
+//
+// With encryption on (SetKeys), the bytes are encrypted while they are
+// hashed, under the keyring's current data key, and the blob is
+// messages/ab/cd/<hash>.enc; tmp/ only ever holds ciphertext then.
+// Otherwise it is the plaintext messages/ab/cd/<hash>.eml.
 //
 // The bytes go to a temporary file in tmp/, which is synchronized and
 // closed, then hard-linked under its final name, which never replaces an
@@ -174,6 +210,15 @@ const publishAttempts = 3
 // completes what the failed call left. After an error the final file may
 // exist; it stays for the retry. Files are readable only by the owner
 // (mode 0600, from os.CreateTemp).
+//
+// Put never deduplicates onto a file of the other form, or onto an
+// encrypted file whose header is invalid or names a data key the keyring
+// does not hold (#392, part 2): such a file counts as absent. A file of
+// the other form is unlinked once this call's file has been read back in
+// full and its hash matches (created is false then: the message was
+// there). An unusable encrypted file is replaced by this call's copy with
+// an atomic rename, after the copy was read back, and the directory is
+// synchronized.
 func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 	tmp, err := os.CreateTemp(filepath.Join(s.root, "tmp"), "put-*")
 	if err != nil {
@@ -192,24 +237,60 @@ func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 	}()
 
 	h := sha256.New()
-	size, err := io.Copy(io.MultiWriter(tmp, h), r)
+	var size int64
+	if s.encrypt {
+		size, err = s.writeEncrypted(tmp, h, r)
+	} else {
+		size, err = io.Copy(io.MultiWriter(tmp, h), r)
+	}
 	if err != nil {
 		return Blob{}, false, fmt.Errorf("write temp file: %w", err)
 	}
 	hash := hex.EncodeToString(h.Sum(nil))
-	blob = Blob{SHA256: hash, Size: size, Path: RelPath(hash)}
-	final := s.abs(blob.Path)
+	path, otherPath := RelPath(hash), EncPath(hash)
+	if s.encrypt {
+		path, otherPath = otherPath, path
+	}
+	blob = Blob{SHA256: hash, Size: size, Path: path}
+	final, other := s.abs(path), s.abs(otherPath)
 
 	synced := false
+	syncTemp := func() error {
+		if synced {
+			return nil
+		}
+		open = false
+		if err := syncClose(s.ops.temp(tmp), "sync temp file"); err != nil {
+			return err
+		}
+		synced = true
+		return nil
+	}
 	for attempt := 1; ; attempt++ {
 		_, err := os.Lstat(final)
+		if err == nil && s.encrypt && !s.usableHeader(final) {
+			// Unreadable header or unknown data key: never dedup onto it.
+			if err := syncTemp(); err != nil {
+				return Blob{}, false, err
+			}
+			if err := s.readBack(tmpName, hash, true); err != nil {
+				return Blob{}, false, err
+			}
+			if err := s.ops.rename(tmpName, final); err != nil {
+				return Blob{}, false, fmt.Errorf("replace blob: %w", err)
+			}
+			if err := s.syncShard(hash); err != nil {
+				return Blob{}, false, err
+			}
+			return blob, false, s.dropOtherForm(final, other, hash)
+		}
 		if err == nil {
 			err = s.syncFile(final)
 			if err == nil {
 				if err := s.syncShard(hash); err != nil {
 					return Blob{}, false, err
 				}
-				return blob, false, nil
+				return blob, false, s.dropOtherForm(final, other, hash)
 			}
 			// A removal (sweep, verify --fix-orphans) took the file away
 			// between the lookup and the open: publish this call's copy.
@@ -220,12 +301,8 @@ func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 			return Blob{}, false, err
 		}
 
-		if !synced {
-			open = false
-			if err := syncClose(s.ops.temp(tmp), "sync temp file"); err != nil {
-				return Blob{}, false, err
-			}
-			synced = true
+		if err := syncTemp(); err != nil {
+			return Blob{}, false, err
 		}
 		if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 			return Blob{}, false, err
@@ -235,6 +312,10 @@ func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 			if err := s.syncShard(hash); err != nil {
 				return Blob{}, false, err
 			}
+			if _, err := os.Lstat(other); err == nil {
+				// The message was there in the other form.
+				return blob, false, s.dropOtherForm(final, other, hash)
+			}
 			return blob, true, nil
 		}
 		// Another writer published the same content first: synchronize
@@ -243,6 +324,26 @@ func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 			return Blob{}, false, fmt.Errorf("publish blob: %w", err)
 		}
 	}
+}
+
+// dropOtherForm unlinks other, the blob's file in the form this store
+// does not write, if it exists: only after final has been read back in
+// full and its hash matches, and durably (the shard directory is
+// synchronized). A final file that fails the read-back is reported and
+// both files stay.
+func (s *Store) dropOtherForm(final, other, hash string) error {
+	if _, err := os.Lstat(other); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := s.readBack(final, hash, s.encrypt); err != nil {
+		return err
+	}
+	if err := s.ops.unlink(other); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return s.syncDir(filepath.Dir(final))
 }
 
 // syncFile synchronizes an existing file.
@@ -269,18 +370,25 @@ func (s *Store) syncShard(hash string) error {
 	return nil
 }
 
-// Open opens a stored blob by its relative path.
+// Open opens a stored file by its relative path, as it is on disk: an
+// encrypted blob is returned encrypted. Readers of messages use
+// OpenMessage.
 func (s *Store) Open(relPath string) (*os.File, error) {
 	return os.Open(s.abs(relPath))
 }
 
-// Exists reports whether the blob for hash is present on disk.
+// Exists reports whether the blob for hash is present on disk, in either
+// form.
 func (s *Store) Exists(hash string) bool {
-	_, err := os.Stat(s.abs(RelPath(hash)))
-	return err == nil
+	for _, p := range []string{RelPath(hash), EncPath(hash)} {
+		if _, err := os.Stat(s.abs(p)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
-// Remove deletes the blob for hash and makes the removal durable before
+// Remove deletes the blob for hash, both forms, and makes the removal durable before
 // it returns nil: it synchronizes the containing directory, also when the
 // file was already gone, since an earlier call may have unlinked it and
 // failed before its barrier. If shard directories are missing, the
@@ -291,8 +399,10 @@ func (s *Store) Remove(hash string) error {
 	if !IsHash(hash) {
 		return fmt.Errorf("not a SHA-256: %q", hash)
 	}
-	if err := s.ops.unlink(s.abs(RelPath(hash))); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	for _, p := range []string{RelPath(hash), EncPath(hash)} {
+		if err := s.ops.unlink(s.abs(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	dir := filepath.Join(s.phys, "messages", hash[0:2], hash[2:4])
 	err := s.syncDir(dir)
@@ -351,8 +461,10 @@ type Entry struct {
 	Kind   EntryKind
 	Path   string // relative to the store root, slash separated
 	SHA256 string // for EntryBlob
-	Size   int64  // for regular files
-	Reason string // for EntryUnexpected
+	// Encrypted is set for an EntryBlob in the encrypted form (.enc).
+	Encrypted bool
+	Size      int64  // for regular files
+	Reason    string // for EntryUnexpected
 	// ModTime is the last write of a file in tmp/, for EntryTemp.
 	ModTime time.Time
 }
@@ -380,7 +492,7 @@ func (s *Store) walkMessages(fn func(Entry) error) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		parts := strings.Split(rel, "/") // messages, ab, cd, <hash>.eml
+		parts := strings.Split(rel, "/") // messages, ab, cd, <hash>.eml or .enc
 		unexpected := func(reason string) error {
 			if err := fn(Entry{Kind: EntryUnexpected, Path: rel, Reason: reason}); err != nil {
 				return err
@@ -403,7 +515,12 @@ func (s *Store) walkMessages(fn func(Entry) error) error {
 		if !d.Type().IsRegular() {
 			return unexpected("not a regular file")
 		}
-		hash, ok := strings.CutSuffix(parts[depth], ".eml")
+		hash, ok := strings.CutSuffix(parts[depth], plainExt)
+		encrypted := false
+		if !ok {
+			hash, ok = strings.CutSuffix(parts[depth], encExt)
+			encrypted = ok
+		}
 		if depth != 3 || !ok || !isHex(hash, 64) || hash[0:2] != parts[1] || hash[2:4] != parts[2] {
 			return unexpected("unexpected file name or place")
 		}
@@ -411,7 +528,7 @@ func (s *Store) walkMessages(fn func(Entry) error) error {
 		if err != nil {
 			return err
 		}
-		return fn(Entry{Kind: EntryBlob, Path: rel, SHA256: hash, Size: info.Size()})
+		return fn(Entry{Kind: EntryBlob, Path: rel, SHA256: hash, Encrypted: encrypted, Size: info.Size()})
 	})
 }
 

@@ -873,10 +873,11 @@ failing, and their recovery, are sent at the end.`,
 			if err != nil {
 				return err
 			}
-			blobs, err := openBlobs(a.cfg.DataDir)
+			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "sync", archive.RoleWriter)
 			if err != nil {
 				return err
 			}
+			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
 			syncer := &archive.Syncer{
 				Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
@@ -991,10 +992,11 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				return err
 			}
 			defer a.close()
-			blobs, err := openBlobs(a.cfg.DataDir)
+			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "serve", archive.RoleWriter)
 			if err != nil {
 				return err
 			}
+			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
 			opts := web.Options{
 				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
@@ -1126,10 +1128,11 @@ the worker and syncs run.`,
 				return err
 			}
 			defer a.close()
-			blobs, err := openBlobs(a.cfg.DataDir)
+			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "reindex", archive.RoleWriter)
 			if err != nil {
 				return err
 			}
+			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
 			n, err := archive.Reindex(cmd.Context(), a.store, blobs, log)
 			if errors.Is(err, archive.ErrReindexRunning) {

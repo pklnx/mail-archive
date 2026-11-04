@@ -104,7 +104,7 @@ func (x *AttachmentIndexer) extractMessage(ctx context.Context, j jobs.Job) erro
 		return err
 	}
 	start := time.Now()
-	f, err := x.Blobs.Open(m.StoredPath)
+	f, err := x.Blobs.OpenMessage(m.SHA256)
 	if err != nil {
 		// Done without text, so that the backfill does not queue it again;
 		// as reindex does for bodies.

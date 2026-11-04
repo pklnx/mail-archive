@@ -48,6 +48,9 @@ type Store struct {
 	// gooseLockWait is called when Migrate or MigrateDown has to wait
 	// for goose's lock (see SetGooseLockWait).
 	gooseLockWait func(GooseLockHolder)
+	// blobPin is the generation of encryption at rest a writer started
+	// with (PinBlobGeneration).
+	blobPin atomic.Pointer[blobPin]
 }
 
 // Option configures Open.
@@ -677,6 +680,9 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 	var res SaveResult
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
 		res = SaveResult{}
+		if err := s.checkBlobGeneration(ctx, q); err != nil {
+			return err
+		}
 		skip, err := skipDeleted(ctx, q, folderID, metas, locs)
 		if err != nil {
 			return err

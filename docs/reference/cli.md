@@ -56,9 +56,9 @@ when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
 
 ## Encryption
 
-The archive key and the keyring of encryption at rest. Storing message files
-and backups encrypted is not part of this version yet; these commands create
-and manage the keys it will use. They need no database and leave no audit log
+The archive key and the keyring of encryption at rest. With encryption on,
+every new message file is stored encrypted as `<sha256>.enc`; backups follow
+in a later version. These commands need no database and leave no audit log
 entry. Format and key hierarchy: [Architecture](../development/architecture#encryption-at-rest).
 
 | Command | Purpose |
@@ -74,6 +74,19 @@ recovered, backups included. Keep the recovery key offline, apart from the
 host and the backups, and back up the key file apart from `data/`. Two
 commands that change the keyring at the same time do not both run: the
 second refuses until the first is done.
+
+While encryption is on, `serve`, `worker`, `sync`, `import`, `account fill`,
+`reindex` and `export` refuse to start without a key that opens the keyring,
+and `verify` checks the attestations and then stops with the reason;
+`migrate`, `status`, the user, group and account commands and `attest` work
+without it. While an encryption change is unfinished, the commands that
+write message files refuse to start and say which `encryption` command
+finishes it. A process that writes message files stops with an error (and
+Compose restarts it) when the database connection holding its writers lock
+fails or the encryption state changes under it; an SMTP delivery in that
+moment gets `451`. At start they also reconcile the keyring file with its
+copy in the database: a missing file is rebuilt, the newer copy is written
+to the older one, and the data keys of both are kept.
 
 ## Users
 
@@ -314,7 +327,8 @@ anything but an existing smtp account is, and nothing is created. See
 ### verify
 
 `verify` first checks the [attestations](#attest), then reads every
-archived message from disk and hashes it again, then checks every file in
+archived message from disk (decrypting an encrypted one) and hashes it
+again, then checks every file in
 the data directory's `messages/` and `tmp/` against the database. It
 changes no database row and no archived file. Without an attestation key
 and without attestations it prints `note: tamper evidence off` and works as
@@ -323,8 +337,9 @@ before.
 | Finding | Meaning |
 |---|---|
 | `missing` | The database has the message, the file is gone. Listed with user, account, folder and UID. |
-| `corrupt` | The file's content or size no longer matches its SHA-256. Listed like `missing`. |
-| `bad-path` | The database points to a different path than the hash gives. |
+| `corrupt` | The file's content or size no longer matches its SHA-256, or an encrypted file fails authentication (modified, truncated, renamed from another message, or under a data key the keyring lacks). Listed like `missing`. |
+| `bad-path` | The database points to a different path than the hash gives (`<sha256>.eml` and `<sha256>.enc` are both fine). |
+| `plaintext` | With encryption at rest on: a message's file is still plaintext (`.eml`), also next to its encrypted file. During an unfinished `encryption enable` they are only counted. |
 | `orphan` | A message file without a database row, for example after an interrupted sync or a restore from an older dump. |
 | `stale-temp` | A file in `tmp/` left by an interrupted sync, untouched for an hour. Younger files may belong to a delivery in progress and are skipped. |
 | `unexpected` | Anything else in `messages/` or `tmp/`: symlinks, other names. Never moved. |

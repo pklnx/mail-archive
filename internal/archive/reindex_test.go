@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -177,7 +178,7 @@ func TestReindexSurvivesMissingFile(t *testing.T) {
 	e := newReindexEnv(t)
 	gone := e.store(legacyRaw)
 	e.legacy(gone)
-	if _, err := e.conn.Exec(e.ctx, `UPDATE messages SET stored_path = 'missing.eml' WHERE sha256 = $1`, gone); err != nil {
+	if err := os.Remove(filepath.Join(e.blobs.Root(), filepath.FromSlash(blobstore.RelPath(gone)))); err != nil {
 		t.Fatal(err)
 	}
 	other := e.store("Subject: x\r\nTo: zweiter@example.com\r\n\r\nx\r\n")

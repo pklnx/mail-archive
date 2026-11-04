@@ -358,7 +358,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if !s.audit(w, r, open) {
 		return
 	}
-	m, err := s.parseStored(d.StoredPath)
+	m, err := s.parseStored(sha)
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "cannot read message", err)
 		return
@@ -510,7 +510,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	m, err := s.parseStored(d.StoredPath)
+	m, err := s.parseStored(sha)
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "cannot read message", err)
 		return
@@ -519,7 +519,7 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusNotFound, "message has no HTML body", nil)
 		return
 	}
-	body, inl, err := servedMailHTML(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.Open(d.StoredPath) }, s.mailHosts(r))
+	body, inl, err := servedMailHTML(m.HTML, m.Parts, func() (io.ReadCloser, error) { return s.blobs.OpenMessage(sha) }, s.mailHosts(r))
 	if err != nil {
 		s.log.Warn("inline images not read; shown as empty images", "message", sha, "err", err)
 	}
@@ -594,7 +594,7 @@ func (s *Server) handleMessageRaw(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	f, err := s.blobs.Open(d.StoredPath)
+	f, err := s.blobs.OpenMessage(sha)
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "cannot read message", err)
 		return
@@ -638,7 +638,7 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	f, err := s.blobs.Open(d.StoredPath)
+	f, err := s.blobs.OpenMessage(sha)
 	if err != nil {
 		s.fail(w, r, http.StatusInternalServerError, "cannot read message", err)
 		return
@@ -680,8 +680,8 @@ func (s *Server) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data) //nolint:gosec // see comment above
 }
 
-func (s *Server) parseStored(path string) (*mime.Message, error) {
-	f, err := s.blobs.Open(path)
+func (s *Server) parseStored(sha string) (*mime.Message, error) {
+	f, err := s.blobs.OpenMessage(sha)
 	if err != nil {
 		return nil, err
 	}
