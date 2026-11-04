@@ -129,8 +129,10 @@ func (s *Store) ClearBlobEncryption(ctx context.Context) error {
 
 // RecordBlobOff records state off with the keyring copy k: a writer that
 // found a keyring file but no row, and no encrypted file, so that later
-// starts do not walk the message files again. A row created meanwhile
-// stays; an off row only gets k as its copy.
+// starts do not walk the message files again. A new row has generation 0,
+// the generation of no row: writers that pinned 0 keep running (review
+// round 2 of #510). A row created meanwhile stays; an off row only gets k
+// as its copy.
 func (s *Store) RecordBlobOff(ctx context.Context, k KeyringCopy) error {
 	return s.q.RecordBlobOff(ctx, db.RecordBlobOffParams{
 		Keyring: k.Keyring, KeyringID: k.ID, KeyringGeneration: k.Generation, CurrentKey: int64(k.CurrentKey),

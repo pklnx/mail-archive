@@ -269,24 +269,7 @@ func TestPutReplacesCorruptEncryptedCopy(t *testing.T) {
 	ring := testRing(t)
 	s, rec, root := newEncrypted(t, ring)
 	content := "Subject: keep\r\n\r\nbody\r\n"
-	eml := writeForm(t, root, content, nil)
-	hash := sha(content)
-	rec.failOnce("unlink:"+eml, errInjected) // leave both
-	if _, _, err := s.Put(strings.NewReader(content)); !errors.Is(err, errInjected) {
-		t.Fatal(err)
-	}
-	enc := s.abs(EncPath(hash))
-	raw, err := os.ReadFile(enc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw[blobcrypt.HeaderSize+1] ^= 1 // a ciphertext bit, the header stays valid
-	if err := os.WriteFile(enc, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !s.usableHeader(enc) {
-		t.Fatal("the header was spoiled too")
-	}
+	eml, enc, _ := damagedEncNextToPlain(t, s, rec, root, content)
 	rec.take()
 	blob, created, err := s.Put(strings.NewReader(content))
 	if err != nil || created {
@@ -312,6 +295,107 @@ func TestPutReplacesCorruptEncryptedCopy(t *testing.T) {
 	}
 	if got, m := readMessage(t, s, blob.SHA256); got != content || !m.Encrypted() {
 		t.Fatal("content after the replacement")
+	}
+	assertNoTemp(t, root)
+}
+
+// damagedEncNextToPlain leaves content in both forms, as a crash between
+// link and unlink does, and then flips a ciphertext bit of the .enc (its
+// header stays valid). It returns both paths and the damaged bytes.
+func damagedEncNextToPlain(t *testing.T, s *Store, rec *recorder, root, content string) (eml, enc string, damaged []byte) {
+	t.Helper()
+	eml = writeForm(t, root, content, nil)
+	rec.failOnce("unlink:"+eml, errInjected) // leave both
+	if _, _, err := s.Put(strings.NewReader(content)); !errors.Is(err, errInjected) {
+		t.Fatal(err)
+	}
+	enc = s.abs(EncPath(sha(content)))
+	raw, err := os.ReadFile(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[blobcrypt.HeaderSize+1] ^= 1
+	if err := os.WriteFile(enc, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !s.usableHeader(enc) {
+		t.Fatal("the header was spoiled too")
+	}
+	return eml, enc, raw
+}
+
+// The replacement of a damaged copy reads its own temp copy back before
+// anything changes: a temp copy that is damaged too (here spoiled after it
+// was written and closed) fails Put, and both the plaintext and the
+// damaged encrypted file stay (review round 2 of #510).
+func TestPutDamagedReplacementReadsBackFirst(t *testing.T) {
+	ring := testRing(t)
+	s, rec, root := newEncrypted(t, ring)
+	content := "Subject: keep too\r\n\r\nbody\r\n"
+	eml, enc, damaged := damagedEncNextToPlain(t, s, rec, root, content)
+	rec.onBefore("close:TEMP", func(string) {
+		temps, err := filepath.Glob(filepath.Join(root, "tmp", "put-*"))
+		if err != nil || len(temps) != 1 {
+			t.Errorf("temp files %v: %v", temps, err)
+			return
+		}
+		raw, err := os.ReadFile(temps[0])
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		raw[blobcrypt.HeaderSize+2] ^= 1
+		if err := os.WriteFile(temps[0], raw, 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+	rec.take()
+	if _, _, err := s.Put(strings.NewReader(content)); !errors.Is(err, blobcrypt.ErrCorrupt) {
+		t.Fatalf("put with a damaged temp copy: %v", err)
+	}
+	for _, ev := range rec.take() {
+		if ev == "rename:"+enc || ev == "unlink:"+eml {
+			t.Fatalf("%s although the temp copy did not read back", ev)
+		}
+	}
+	if got, err := os.ReadFile(eml); err != nil || string(got) != content {
+		t.Fatalf("the plaintext copy: %q %v", got, err)
+	}
+	if got, err := os.ReadFile(enc); err != nil || !bytes.Equal(got, damaged) {
+		t.Fatalf("the damaged encrypted copy was changed: %v", err)
+	}
+	assertNoTemp(t, root)
+}
+
+// With encryption off, a damaged plaintext file (another hash) next to an
+// intact encrypted one is replaced by Put's checked copy, and only then is
+// the encrypted file unlinked (review round 2 of #510).
+func TestPutReplacesDamagedPlaintextCopy(t *testing.T) {
+	ring := testRing(t)
+	root := t.TempDir()
+	content := "Subject: plain again\r\n\r\nbody\r\n"
+	enc := writeForm(t, root, content, ring)
+	hash := sha(content)
+	eml := filepath.Join(root, filepath.FromSlash(RelPath(hash)))
+	if err := os.WriteFile(eml, []byte(strings.Replace(content, "body", "bodY", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetKeys(ring, false); err != nil {
+		t.Fatal(err)
+	}
+	blob, created, err := s.Put(strings.NewReader(content))
+	if err != nil || created || blob.Path != RelPath(hash) {
+		t.Fatalf("put onto a damaged plaintext copy: %+v %v created=%v", blob, err, created)
+	}
+	if exists(enc) {
+		t.Fatal("the encrypted copy stays")
+	}
+	if got, err := os.ReadFile(eml); err != nil || string(got) != content {
+		t.Fatalf("the plaintext copy: %q %v", got, err)
 	}
 	assertNoTemp(t, root)
 }

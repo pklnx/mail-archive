@@ -98,7 +98,7 @@ func TestRecordBlobOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	row, err := st.BlobEncryption(ctx)
-	if err != nil || row == nil || row.State != store.BlobOff || row.Generation != 1 || row.KeyringID != testKeyring.ID {
+	if err != nil || row == nil || row.State != store.BlobOff || row.Generation != 0 || row.KeyringID != testKeyring.ID {
 		t.Fatalf("recorded: %+v %v", row, err)
 	}
 	k := testKeyring
@@ -106,7 +106,7 @@ func TestRecordBlobOff(t *testing.T) {
 	if err := st.RecordBlobOff(ctx, k); err != nil {
 		t.Fatal(err)
 	}
-	if row, _ = st.BlobEncryption(ctx); row.State != store.BlobOff || row.Generation != 1 || row.KeyringGeneration != 2 {
+	if row, _ = st.BlobEncryption(ctx); row.State != store.BlobOff || row.Generation != 0 || row.KeyringGeneration != 2 {
 		t.Fatalf("recorded again: %+v", row)
 	}
 	if err := st.SetBlobEncryption(ctx, store.BlobOn, testKeyring); err != nil {
@@ -116,7 +116,7 @@ func TestRecordBlobOff(t *testing.T) {
 	if err := st.RecordBlobOff(ctx, k); err != nil {
 		t.Fatal(err)
 	}
-	if row, _ = st.BlobEncryption(ctx); row.State != store.BlobOn || row.Generation != 2 || row.KeyringGeneration != 1 {
+	if row, _ = st.BlobEncryption(ctx); row.State != store.BlobOn || row.Generation != 1 || row.KeyringGeneration != 1 {
 		t.Fatalf("on overwritten: %+v", row)
 	}
 }

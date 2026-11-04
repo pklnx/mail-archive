@@ -523,6 +523,55 @@ func TestAtRestDerivedOffSkipsTheWalk(t *testing.T) {
 	}
 }
 
+// Recording off is no change of the state: a writer that runs since before
+// `keygen` (pinned to no row, generation 0) keeps inserting after another
+// writer start recorded off with the new keyring file (review round 2 of
+// #510).
+func TestAtRestRecordedOffKeepsRunningWriters(t *testing.T) {
+	e, url := newAtRestEnv(t)
+	l := newLost()
+	a, err := e.atRest(archive.RoleWriter, nil, nil, l)
+	if err != nil || a.Generation != 0 {
+		t.Fatalf("first writer: %v, generation %d", err, a.Generation)
+	}
+	kek, _ := e.keygen()
+
+	st2, err := store.Open(e.ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	blobs2, err := blobstore.New(e.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := archive.OpenAtRest(e.ctx, st2, blobs2, archive.AtRestOptions{
+		DataDir: e.data, KEK: kek, Role: archive.RoleWriter, Command: "sync", Tick: make(chan time.Time), Logger: quiet,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2.Close()
+	if row, err := e.st.BlobEncryption(e.ctx); err != nil || row == nil || row.State != store.BlobOff {
+		t.Fatalf("second writer did not record off: %+v %v", row, err)
+	}
+
+	b, _, err := e.blobs.Put(strings.NewReader(msg(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := store.Location{FolderID: e.folder.ID, UIDValidity: e.folder.UIDValidity, UID: 1, InternalDate: t0}
+	if _, err := e.st.SaveBatch(e.ctx, e.folder.ID, 1, []store.MessageMeta{{SHA256: b.SHA256, Size: b.Size, StoredPath: b.Path}},
+		[]store.Location{loc}); err != nil {
+		t.Fatalf("the running writer's insert after off was recorded: %v", err)
+	}
+	select {
+	case err := <-l.errs:
+		t.Fatalf("the running writer was stopped: %v", err)
+	default:
+	}
+}
+
 // putEncrypted stores raw as an encrypted file under ring, outside the
 // archive's own blob store (as another, newer process did).
 func (e *archiveEnv) putEncrypted(ring *blobcrypt.Keyring, raw string) {

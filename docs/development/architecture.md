@@ -442,7 +442,8 @@ fill` and `reindex`. At start (`archive.OpenAtRest`) it
    file, it looks for an `.enc` file on disk (a dump from before `enable`
    restored next to newer files): if it finds one, it records `encrypting`
    with the file as the database copy, and refuses; otherwise it records
-   `off` with the file as the copy. A later start walks again only when
+   `off` with the file as the copy, at generation 0 like no row, so that
+   writers already running keep going. A later start walks again only when
    the keyring file's id or generation differs from that copy (part 3's
    `enable` therefore writes the keyring file with a new generation before
    it encrypts the first file); with an unchanged keyring, a start reads

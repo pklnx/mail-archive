@@ -148,7 +148,7 @@ func (q *Queries) InsertBlobEncryption(ctx context.Context, arg InsertBlobEncryp
 
 const recordBlobOff = `-- name: RecordBlobOff :exec
 INSERT INTO blob_encryption (state, generation, keyring, keyring_id, keyring_generation, current_key)
-VALUES ('off', 1, $1, $2, $3, $4)
+VALUES ('off', 0, $1, $2, $3, $4)
 ON CONFLICT (id) DO UPDATE
 SET keyring = EXCLUDED.keyring, keyring_id = EXCLUDED.keyring_id,
     keyring_generation = EXCLUDED.keyring_generation, current_key = EXCLUDED.current_key, updated_at = now()
@@ -163,10 +163,11 @@ type RecordBlobOffParams struct {
 }
 
 // The state derived from the files with no encrypted file found: off, with
-// the keyring file as the database copy. A row written meanwhile by
-// another writer or an encryption command stays (its generation decides);
-// an off row only gets the copy updated, without a new generation (the
-// form of new files does not change).
+// the keyring file as the database copy, at generation 0 like no row, so
+// that writers running since before it do not stop (the form of new files
+// does not change). A row written meanwhile by another writer or an
+// encryption command stays (its generation decides); an off row only gets
+// the copy updated, without a new generation.
 func (q *Queries) RecordBlobOff(ctx context.Context, arg RecordBlobOffParams) error {
 	_, err := q.db.Exec(ctx, recordBlobOff,
 		arg.Keyring,

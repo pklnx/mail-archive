@@ -15,7 +15,9 @@
 -- A writer that finds no row but a keyring file derives the state from the
 -- files (part 2, revision 1, B2) and records the result, 'off' with the
 -- file as the database copy when no encrypted file exists, so later starts
--- do not walk messages/ again. With state 'off' the keyring columns hold
+-- do not walk messages/ again. That off row has generation 0, the
+-- generation of "no row": recording it changes nothing for running
+-- writers, and the first real change gives 1. With state 'off' the keyring columns hold
 -- the copy last recorded; a keyring file that differs from it (id or
 -- generation) makes the next writer derive again.
 --
@@ -32,7 +34,7 @@
 CREATE TABLE blob_encryption (
     id                 BOOLEAN     PRIMARY KEY DEFAULT TRUE CHECK (id),
     state              TEXT        NOT NULL CHECK (state IN ('off', 'encrypting', 'on', 'decrypting', 'rekeying')),
-    generation         BIGINT      NOT NULL CHECK (generation > 0),
+    generation         BIGINT      NOT NULL CHECK (generation >= 0),
     keyring            BYTEA       NOT NULL,
     keyring_id         CHAR(32)    NOT NULL,
     keyring_generation BIGINT      NOT NULL CHECK (keyring_generation > 0),
