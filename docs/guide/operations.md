@@ -239,6 +239,8 @@ and the export refuses a selection outside it. To find a customer's users,
 ./ma export --format gobd --user anna --user ben --group "Meier GmbH" --out /export/meier-anna-ben.zip
 # What a legal hold for the audit covers:
 ./ma export --format gobd --hold 3 --group "Meier GmbH" --out /export/meier-hold-3
+# Exactly what an auditor grant covers (the ID from ./ma auditor list):
+./ma export --format gobd --grant 12 --group "Meier GmbH" --out /export/meier-grant-12
 ```
 
 - **A mixed selection is refused**, never filtered: `the selection spans
@@ -252,6 +254,10 @@ and the export refuses a selection outside it. To find a customer's users,
   group; a hold over every customer is refused. Only `--hold` exports fill
   the `holds` column, and only with holds that name the customer's users,
   accounts or group; holds that cover several customers are not listed.
+- **An auditor grant export** covers exactly the grant's accounts, folders
+  and message period, also of a grant that has not started or has ended;
+  a revoked one is refused. Both audit entries carry the grant and its
+  owner, so the owner sees the export in their Log, as the operator's.
 - **Exit 3** means a selected user or account moved to another group while
   the export ran. The export is complete as of its snapshot, before the
   move; check with the customer before handing it over.

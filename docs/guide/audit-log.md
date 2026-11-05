@@ -58,8 +58,8 @@ Each event writes exactly one entry.
 | `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. A hold's entries have the account or the user it names as target (`hold.release` from 1.4.0 on); a hold that names only a [customer group](./retention#holds-per-customer-group) has `group_id` and `group` in its details and is recorded under that group. Group `retention`. |
 | `retention.preview`, `retention.confirm`, `retention.cancel`, `retention.batch`, `retention.finish`, `retention.sweep` | A [deletion run](../reference/cli#deletion): proposed (candidates, bytes), confirmed, cancelled, each batch (`deleted`, `kept`), its end with the totals, and removed files. The deleted messages themselves are recorded per message in the deletion records, not here. Runs resumed by the web server are written with actor `cli` and `by: web server`. |
 | `api_key.create`, `api_key.revoke` | An API key was created (`key_name`, `scopes`, `expires_at`) or revoked (`key_id`, `key_name`, `reason`: `user`, `admin` or `cli`). The target is the key's owner. `user.password_reset` and `user.remove` say how many keys went with them (`api_keys_revoked`, `api_keys_removed`); `user.remove` also counts the shares of other users' accounts with the user (`shares_removed`), and for an auditor lists the grants revoked before the removal (`grants_revoked`). |
-| `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. `data.import` has `format`, `source` and `folders`; with [`--journal`](./importing#into-an-smtp-account) also `into: "JOURNAL"`, `label` and `import`, the ID of the run the imported locations name. A [GoBD export](./gobd-export) (`format: gobd`) has `selection` (users, accounts, folders, hold, grant, period and time zone as given, never a group name), `out`, `resume`, `requested_by` when given, `auditor_grant` with `--grant`, and `owners` when it covers several users. |
-| `data.export_done` | The end of a GoBD export, also of one that stopped: `id`, the counts (`messages`, `locations`, `missing`, `bytes`), `complete`, `manifest_sha256` (the SHA-256 of `SHA256SUMS`) and `statement_sha256` (of `STATEMENT.txt`), with which a customer's copy can be checked later; `aborted` with the reason when it stopped, and `group_moved_after_snapshot` with the names of the selected users and accounts that changed group while it ran. |
+| `data.import`, `data.export`, `data.backup` | `import`, `export` and `backup` on the command line, before they read or write mail. `data.import` has `format`, `source` and `folders`; with [`--journal`](./importing#into-an-smtp-account) also `into: "JOURNAL"`, `label` and `import`, the ID of the run the imported locations name. A [GoBD export](./gobd-export) (`format: gobd`) has `selection` (users, accounts, folders, hold, grant, period and time zone as given, never a group name), `out`, `resume`, `requested_by` when given, `auditor_grant` and `via_owners` (the grant's owner) with `--grant`, and `owners` when it covers several users. |
+| `data.export_done` | The end of a GoBD export, also of one that stopped: `id`, the counts (`messages`, `locations`, `missing`, `bytes`), `complete`, `manifest_sha256` (the SHA-256 of `SHA256SUMS`) and `statement_sha256` (of `STATEMENT.txt`), with which a customer's copy can be checked later; `aborted` with the reason when it stopped, and `group_moved_after_snapshot` with the names of the selected users and accounts that changed group while it ran. With `--grant` also `auditor_grant` and `via_owners`. |
 | `data.fill`, `data.fill_change`, `data.fill_resume`, `data.fill_cancel`, `data.fill_done` | A [fill](./journaling#bring-in-the-mail-from-before-journaling) of an smtp account from IMAP: started (`fill`, `host`, `username`, `folders`, and `before`, or for a [recurring fill](./journaling#keep-importing-recurring-fill) `keep_running` and `interval`; `prefix` for fills from before fills wrote into `JOURNAL`), changed (`fill_change`: switched to recurring with `keep_running` and `interval` as `{"from", "to"}`, or a new `interval`), resumed, cancelled or stopped, and the end of a one-time fill with `status` and the counts. The runs of a recurring fill are not logged, like scheduled syncs. A fill the web server ran ends without a user, with `"by": "web server"`. The password is never recorded. The Log page lists them under the Export filter, with the other `data.*` actions. |
 | `jobs.retry` | `./ma jobs retry KIND` queued failed [background jobs](./operations#background-jobs) again: `kind` and the number of `jobs`. |
 | `audit.export` | `./ma audit` itself. |
@@ -176,7 +176,9 @@ the session, the status, the own Log and the own grant list. Each entry of an au
 session carries the grant (`auditor_grant`) and its owner (`via_owners`),
 which puts it into the owner's Log; while the session has no grant yet (an
 auditor with several grants before picking one), the login, its denials and
-password changes carry the owners of all the auditor's active grants.
+password changes carry the owners of all the auditor's active grants. A
+[GoBD export](./gobd-export) of a grant's scope (`--grant`) carries the
+grant and its owner too, on `data.export` and `data.export_done`.
 
 | Entry | Recorded under |
 |---|---|
@@ -185,8 +187,8 @@ password changes carry the owners of all the auditor's active grants.
 
 Who sees what:
 
-- **The owner** sees their own grant entries, and the auditor's entries and
-  others' changes of their grants, marked as another user's read: the
+- **The owner** sees their own grant entries, and the auditor's entries,
+  others' changes of their grants and the operator's exports of them, marked as another user's read: the
   action, the target, the search terms (also of searches over all granted
   mail), the login method and reason, and the grant. Never the address,
   browser or API key name, and no other owner's accounts. An actor who is

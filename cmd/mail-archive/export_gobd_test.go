@@ -600,3 +600,222 @@ func shaHex(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
 }
+
+// grantPage is one page of ListAudit over the last hour, cut down to the
+// GoBD export's entries.
+func grantPage(t *testing.T, f *gobdtest.Fixture, p store.AuditPage) []store.AuditRecord {
+	t.Helper()
+	p.Since, p.Until, p.Limit = time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 500
+	recs, err := f.St.ListAudit(f.Ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []store.AuditRecord
+	for _, r := range recs {
+		if r.Action == "data.export" || r.Action == "data.export_done" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestExportGoBDGrant (#393, part 4): --grant exports exactly the grant's
+// accounts, folders and period. The owner's account the grant does not
+// name is dropped (Restrict, #439), so are the folder it does not name,
+// the messages outside its period and the other owner's place of a shared
+// message. Both entries are targeted at the owner, recorded in the owner's
+// group and carry auditor_grant and via_owners: the export is in the
+// owner's Log, as the operator's with only the grant, and in the admin's
+// view of the grant; a member of the group and a user of another group
+// see it in neither.
+func TestExportGoBDGrant(t *testing.T) {
+	f := gobdCLI(t)
+	fixedGoBD(t, nil)
+	day := func(y, m, d int) time.Time { return time.Date(y, time.Month(m), d, 9, 0, 0, 0, time.UTC) }
+	f.Account(t, f.Anna, "privat")
+	private := f.Add(t, "anna/privat/INBOX", "Privat", day(2024, 5, 1))
+	archived := f.Add(t, "anna/work/Archiv", "Nur Archiv", day(2024, 4, 1))
+	before := f.Add(t, "anna/work/INBOX", "Vorjahr", day(2023, 6, 1))
+	after := f.Add(t, "anna/work/INBOX", "Neujahr", day(2025, 1, 1))
+	aud, err := f.St.CreateUserInGroup(f.Ctx, store.NewUser{Name: "pruefer", PasswordHash: "h", GroupID: f.A.ID, Auditor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, until := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	grant, err := f.St.CreateGrant(f.Ctx, store.NewGrant{OwnerID: f.Anna.ID, AuditorID: aud.ID, Label: "Betriebsprüfung 2024",
+		Accounts:   []store.GrantAccount{{AccountID: f.AnnaWork.ID, Folders: []int64{f.Folders["anna/work/INBOX"]}}},
+		PeriodFrom: &from, PeriodUntil: &until, EndsAt: time.Now().Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "grant")
+	code, stdout, stderr := runExportGoBDCmd(t, "--out", out, "--grant", fmt.Sprint(grant), "--group", "Meier GmbH")
+	if code != 0 || !strings.Contains(stdout, "exported 2 message(s), 2 location(s)") {
+		t.Fatalf("exit %d\n%s%s", code, stdout, stderr)
+	}
+	msgs, err := os.ReadFile(filepath.Join(out, gobd.MessagesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs, err := os.ReadFile(filepath.Join(out, gobd.LocationsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sha := range []string{f.Shared, f.AnnaMsg} {
+		if !strings.Contains(string(msgs), sha) {
+			t.Errorf("granted message %s not exported", sha)
+		}
+	}
+	for name, sha := range map[string]string{"the ungranted account": private, "the ungranted folder": archived,
+		"before the period": before, "after the period": after, "ben's": f.BenMsg, "kim's": f.KimMsg, "old-imap's": f.OldMsg} {
+		if strings.Contains(string(msgs), sha) || strings.Contains(string(locs), sha) {
+			t.Errorf("message %s exported", name)
+		}
+	}
+	rows := strings.Split(strings.TrimSuffix(string(locs), "\r\n"), "\r\n")[1:]
+	for _, row := range rows {
+		if !strings.Contains(row, `;"anna";"work";`) || !strings.Contains(row, `;"INBOX";`) {
+			t.Errorf("location outside the grant: %s", row)
+		}
+	}
+	if len(rows) != 2 {
+		t.Errorf("locations:\n%s", locs)
+	}
+	if vcode, vout := runExportVerifyCmd(t, out, "--expect-group", "meier gmbh"); vcode != 0 || !strings.Contains(vout, "owners: anna\n") {
+		t.Errorf("verify: exit %d\n%s", vcode, vout)
+	}
+
+	// Both entries: the owner, the owner's group, the grant and its owner.
+	entries := exportEntries(t, f.St)
+	if len(entries) != 2 {
+		t.Fatalf("entries: %v", entries)
+	}
+	for _, e := range entries {
+		d := details(t, e)
+		via, _ := d[store.DetailViaOwners].([]any)
+		if e.TargetType != "user" || e.TargetID != fmt.Sprint(f.Anna.ID) || !sameGroup(e.GroupID, gid(f.A)) ||
+			d[store.DetailAuditorGrant] != float64(grant) || len(via) != 1 || via[0] != float64(f.Anna.ID) {
+			t.Errorf("%s: target %s %s, group %v, details %v", e.Action, e.TargetType, e.TargetID, e.GroupID, d)
+		}
+	}
+
+	// The owner's Log: both, as the operator's, with the grant only.
+	own := grantPage(t, f, store.AuditPage{Viewer: f.Anna.ID})
+	if len(own) != 2 {
+		t.Fatalf("owner's Log: %v", own)
+	}
+	for _, r := range own {
+		if !r.ViaShare || !r.ViaAuditor || r.UserName != store.AuditOperator || string(r.Details) != fmt.Sprintf(`{"auditor_grant":%d}`, grant) {
+			t.Errorf("owner's Log %s: via share %v, via auditor %v, user %q, details %s", r.Action, r.ViaShare, r.ViaAuditor, r.UserName, r.Details)
+		}
+	}
+	if mine := grantPage(t, f, store.AuditPage{Viewer: f.Anna.ID, GrantID: &grant}); len(mine) != 2 {
+		t.Errorf("owner's Log of the grant: %v", mine)
+	}
+	// The admin's view of the grant: both, in full.
+	admin := grantPage(t, f, store.AuditPage{Viewer: f.Anna.ID, All: true, GrantID: &grant, GrantOwner: f.Anna.ID})
+	if len(admin) != 2 || details(t, admin[0])["out"] != out {
+		t.Errorf("admin's view of the grant: %v", admin)
+	}
+	// Nobody else.
+	for _, u := range []*store.User{f.Ben, f.Kim, aud} {
+		if got := grantPage(t, f, store.AuditPage{Viewer: u.ID}); len(got) != 0 {
+			t.Errorf("%s's Log: %v", u.Name, got)
+		}
+		if got := grantPage(t, f, store.AuditPage{Viewer: u.ID, GrantID: &grant}); len(got) != 0 {
+			t.Errorf("%s's Log of the grant: %v", u.Name, got)
+		}
+	}
+}
+
+// TestExportGoBDGrantStates (#393, part 4, I6): a grant that has not
+// started and one that has ended are exported (the operator exports on the
+// owner's request); a revoked grant, also one revoked by a group move, is
+// refused with exit 2 before any file or entry; a grant's export is in its
+// owner's group, so claiming another group is refused.
+func TestExportGoBDGrantStates(t *testing.T) {
+	f := gobdCLI(t)
+	fixedGoBD(t, nil)
+	aud, err := f.St.CreateUserInGroup(f.Ctx, store.NewUser{Name: "pruefer", PasswordHash: "h", GroupID: f.A.ID, Auditor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	newGrant := func(starts time.Time) int64 {
+		t.Helper()
+		id, err := f.St.CreateGrant(f.Ctx, store.NewGrant{OwnerID: f.Anna.ID, AuditorID: aud.ID, Label: "Prüfung",
+			Accounts: []store.GrantAccount{{AccountID: f.AnnaWork.ID}}, StartsAt: &starts, EndsAt: starts.Add(48 * time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	scheduled := newGrant(now.Add(24 * time.Hour))
+	expired := newGrant(now.Add(-24 * time.Hour))
+	if _, err := f.Conn.Exec(f.Ctx, "UPDATE auditor_grants SET ends_at = now() - interval '1 hour' WHERE id = $1", expired); err != nil {
+		t.Fatal(err)
+	}
+	revoked := newGrant(now.Add(-time.Hour))
+	if err := f.St.RevokeGrant(f.Ctx, revoked, &f.Anna.ID, &f.Anna.ID); err != nil {
+		t.Fatal(err)
+	}
+	all, err := f.St.AllGrants(f.Ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range all {
+		if g.Active {
+			t.Fatalf("grant %d (%s) is active", g.ID, g.Label)
+		}
+	}
+
+	dir := t.TempDir()
+	for name, id := range map[string]int64{"scheduled": scheduled, "expired": expired} {
+		code, stdout, stderr := runExportGoBDCmd(t, "--out", filepath.Join(dir, name), "--grant", fmt.Sprint(id), "--group", "Meier GmbH")
+		if code != 0 || !strings.Contains(stdout, "exported 2 message(s), 3 location(s)") {
+			t.Errorf("%s grant: exit %d\n%s%s", name, code, stdout, stderr)
+		}
+	}
+	exported := len(exportEntries(t, f.St))
+	if exported != 4 {
+		t.Errorf("entries of two exports: %d", exported)
+	}
+
+	refused := func(name string, id int64, group, want string) {
+		t.Helper()
+		out := filepath.Join(dir, name)
+		code, _, stderr := runExportGoBDCmd(t, "--out", out, "--grant", fmt.Sprint(id), "--group", group)
+		if code != 2 || !strings.Contains(stderr, want) {
+			t.Errorf("%s: exit %d, want %q\n%s", name, code, want, stderr)
+		}
+		absent(t, out)
+		if n := len(exportEntries(t, f.St)); n != exported {
+			t.Errorf("%s: %d entries, want %d", name, n, exported)
+		}
+	}
+	refused("revoked", revoked, "Meier GmbH", fmt.Sprintf("grant %d was revoked", revoked))
+	// Moving the auditor to another group revokes the grant.
+	if _, err := f.St.SetUserGroup(f.Ctx, aud.ID, f.B.ID); err != nil {
+		t.Fatal(err)
+	}
+	refused("moved", scheduled, "Meier GmbH", fmt.Sprintf("grant %d was revoked", scheduled))
+	other := newGrantOf(t, f, f.Kim, f.KimMail)
+	refused("other group", other, "Meier GmbH", "the selection is in Schulz KG, not Meier GmbH")
+}
+
+// newGrantOf creates an active grant of owner's account to a new auditor
+// of the owner's group.
+func newGrantOf(t *testing.T, f *gobdtest.Fixture, owner *store.User, acc *store.Account) int64 {
+	t.Helper()
+	aud, err := f.St.CreateUserInGroup(f.Ctx, store.NewUser{Name: owner.Name + ".pruefer", PasswordHash: "h", GroupID: owner.GroupID, Auditor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.St.CreateGrant(f.Ctx, store.NewGrant{OwnerID: owner.ID, AuditorID: aud.ID, Label: "Prüfung",
+		Accounts: []store.GrantAccount{{AccountID: acc.ID}}, EndsAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}

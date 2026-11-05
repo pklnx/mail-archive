@@ -266,9 +266,12 @@ it is enough in your case is a question for your tax adviser.
 - **Z2, mittelbarer Datenzugriff:** the owner or their tax advisor searches
   as the auditor asks, and shows the results. This needs nothing extra; the
   searches are in the Log as the owner's own.
-- **Z3, Datenträgerüberlassung:** the data on a storage medium. Auditors do
-  not export in the web UI; the owner asks the operator for an export on the
-  command line (see [Exporting mail](./operations#exporting-mail)).
+- **Z3, Datenüberlassung (formerly Datenträgerüberlassung):** the data
+  handed over in a machine-readable form. Auditors do not export in the web
+  UI; the owner asks the operator for a [GoBD export](./gobd-export) on the
+  command line. `./ma export --format gobd --grant ID` exports exactly a
+  grant's scope: its accounts, folders and message period, so the data
+  handed over matches what the auditor reads.
 
 **Before the audit, ask the operator for a [legal hold](#legal-holds)** over
 the period, by account, owner or [customer group](#holds-per-customer-group).

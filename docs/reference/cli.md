@@ -588,6 +588,7 @@ See [Exporting mail](../guide/operations#exporting-mail).
   --since 2025-01-01 --until 2025-12-31 --requested-by "Steuerberater Huber, Ticket 4711"
 ./ma export --format gobd --user anna --user ben --group "Meier GmbH" --out /export/meier-anna-ben.zip
 ./ma export --format gobd --hold 3 --group "Meier GmbH" --out /export/hold-3
+./ma export --format gobd --grant 12 --group "Meier GmbH" --out /export/meier-grant-12
 ```
 
 Writes a GoBD export ([format v1](../development/architecture#gobd-export-format-v1))
@@ -612,8 +613,13 @@ the message; a plain date is a day in `--time-zone`, default
 - `--hold ID`: the places a legal hold covers. The hold must name a user, an
   account or a customer group; a hold over every customer is refused
   (`name the users with --user`).
-- `--grant ID`: the accounts, folders and period of an auditor grant, also
-  of one that has ended; a revoked grant is refused.
+- `--grant ID` (see `auditor list`): exactly the accounts, folders and
+  message period of an [auditor grant](#auditors); the owner's other
+  accounts and folders and mail outside the period are left out. Also a
+  grant that has not started or has ended; a revoked grant, also one a
+  group move revoked, is refused with exit code 2 (`auditor grant 12 was
+  revoked`). The grant's owner is the export's one owner, so it is in the
+  owner's customer group.
 - `--group NAME` alone: every user of the group as the export's snapshot
   sees them, with all their accounts.
 
@@ -656,8 +662,10 @@ space (plus 2 %). A ZIP is not resumed; an interrupted one is removed.
 `data.export` (before anything is read) and `data.export_done` (with the
 counts and the SHA-256 of `SHA256SUMS` and of `STATEMENT.txt`), are
 recorded under the export's customer group; see
-[the audit log](../guide/audit-log#what-is-recorded). With `--grant`, they
-carry `auditor_grant`.
+[the audit log](../guide/audit-log#what-is-recorded). With `--grant`, both
+are targeted at the grant's owner and carry `auditor_grant` and the owner in
+`via_owners`, so the export is in the owner's Log (as the operator's) and in
+the admin's view of the grant.
 
 The export is not encrypted. With Docker Compose, write it to `/export`,
 which is `EXPORT_DIR` on the host (default `./export`), outside the data

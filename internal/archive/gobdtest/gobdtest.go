@@ -45,6 +45,7 @@ type Fixture struct {
 	BenMsg, KimMsg  string
 	OldMsg          string
 	uids            map[int64]uint32
+	extra           map[string]*store.Account // "owner/name" → an account of Account
 }
 
 // New builds the fixture; the test is skipped without TEST_DATABASE_URL.
@@ -63,7 +64,7 @@ func New(t *testing.T) *Fixture {
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	f := &Fixture{St: st, URL: url, Conn: conn, Blobs: blobs, DataDir: dataDir, Ctx: ctx,
-		Folders: map[string]int64{}, uids: map[int64]uint32{}}
+		Folders: map[string]int64{}, uids: map[int64]uint32{}, extra: map[string]*store.Account{}}
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -102,6 +103,16 @@ func New(t *testing.T) *Fixture {
 	return f
 }
 
+// Account adds an IMAP account of owner to the archive, for a test that
+// needs one more than the fixture has; Folder and Add then take
+// "owner/name/folder".
+func (f *Fixture) Account(t *testing.T, owner *store.User, name string) *store.Account {
+	t.Helper()
+	acc := f.account(t, owner, name)
+	f.extra[owner.Name+"/"+name] = acc
+	return acc
+}
+
 func (f *Fixture) account(t *testing.T, owner *store.User, name string) *store.Account {
 	t.Helper()
 	acc := &store.Account{Name: name, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &owner.ID}
@@ -130,7 +141,9 @@ func (f *Fixture) Folder(t *testing.T, key string) int64 {
 	case "old-imap":
 		acc = f.OldIMAP
 	default:
-		t.Fatalf("unknown account in %q", key)
+		if acc = f.extra[strings.Join(parts[:len(parts)-1], "/")]; acc == nil {
+			t.Fatalf("unknown account in %q", key)
+		}
 	}
 	fo, err := f.St.GetOrCreateFolder(f.Ctx, acc.ID, parts[len(parts)-1])
 	if err != nil {
