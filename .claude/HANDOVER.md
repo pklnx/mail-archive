@@ -13,7 +13,7 @@ Current state only. At session end replace these sections; never append. History
 - Earlier: v1.4.0 (main 774a2a0), customer groups (#470); release test #504 passed.
 
 ## Open PRs
-- None.
+- Dependabot #491 (go.yaml.in/yaml/v3 3.0.5 → 3.0.6, `dependencies`, based on an old main 9b12a50): not reviewed yet. It needs a rebase onto main (`@dependabot rebase`), green CI and one review; it can go into 1.5.1 or 1.6.0.
 
 ## Open tickets
 - **1.6.0:** these are `ready`:
@@ -21,7 +21,7 @@ Current state only. At session end replace these sections; never append. History
   - #396 start without CLI (#451–#453). Part 3 (#453) runs `encryption.EnableAtSetup` from #392.
   - #398 WebKit e2e with #343.
 - **1.6.0, in `plan`:** #397 operator/quotas/mail alerts (#446–#450), with the quota per customer group and alerts to admins only.
-- **Not planned yet:** #432 database encryption.
+- **Not planned yet:** #432 database encryption, #418 OCR for scanned PDFs.
 - **1.7.0 (Microsoft and Google):** #391 OAuth2 (`ready`, #426–#430); #475 journaling from Microsoft 365 (after #430, not planned).
 - **Follow-up:** #516, the demo auditor's grant window after `DOCS_NOW` + 90 days (before late January 2027).
 - **Device checks:** #372 round 2, Android parts open; #520 is the 1.5.0 release test.
@@ -39,7 +39,8 @@ Current state only. At session end replace these sections; never append. History
   - Auditors belong to one group, and grants stay inside it. Exports never span groups.
 - **Encryption at rest** (#392):
   - New instances start with it on (maintainer decision 6); existing ones switch offline with `encryption enable`.
-  - `rekey` creates a new keyring key. `rotate-key` keeps the keyring key and replaces one slot: `--replace` names the slot, and without it the command refuses when the configured key is not the archive key (coordinator, #437).
+  - `rekey` creates a new keyring key. `rotate-key` keeps the keyring key and replaces one slot: `--replace` names the slot, and without it the command refuses when the configured key is not the archive key (coordinator, #437 and #519 review rounds 2 and 3).
+  - `rekey` drops every slot whose key is not at hand. It keeps the configured key, the keys given with `--keep-key-file` and a new recovery key, and it prints the new recovery key before the conversion. `add-key` and `remove-key` need the database.
   - The database stays plaintext until #432.
 - **Merge mechanics:** the merge tool pins with `expectedHeadSha`, not `sha`. A branch behind main is refused for required checks; bring main in with a merge commit.
 - **GitHub operations without an MCP tool** (maintainer, 2026-11-01): agents do them themselves, using the REST fallback in `.claude/github-operations.md`. In this cloud session the classifier refused `curl` with the token (Auto-Mode Bypass), so milestones stayed undone.
@@ -58,6 +59,7 @@ Current state only. At session end replace these sections; never append. History
 ## Maintainer actions
 - Close milestone 1.5.0 (Milestones → 1.5.0 → Close). Every issue in it is closed.
 - #520 release test of 1.5.0.
+- Manual checks from #519, which no test covers: `./ma encryption rotate-key --new-key-file /keys/archive-2.key` through Compose (service `mail-archive-keys`: the new file owned by 65532 with mode 0400, then `.env` switched and `docker compose up -d`), and `./ma encryption rekey` on a real instance, including `--keep-key-file`.
 - On the shared instance:
   - Back up, then run `./ma migrate` (00036, 00037).
   - Encryption at rest is optional: `./ma encryption keygen`, keep the archive key and the recovery key off the server, then `./ma encryption enable` with web and worker stopped (operations.md, "Encryption at rest").
