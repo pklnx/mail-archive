@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,12 +37,15 @@ func newEncryptionRotateKeyCmd() *cobra.Command {
 		Long: `Create a new archive key in --new-key-file (mode 0400, never replacing a
 file) and replace one slot with a slot for it, labelled "archive key": by
 default the configured archive key's, or the slot named by --replace
-FINGERPRINT (see encryption status). Only that slot goes; every other slot
+FINGERPRINT (see encryption status). Without --replace it refuses, and
+changes nothing, when the configured key's slot is not labelled "archive
+key" (a recovery key is configured): pass --replace to choose, also with the
+configured key's own fingerprint. Only that slot goes; every other slot
 stays, the configured key's included when another slot is replaced, and so
 do the keyring key and the data keys: no message file is re-encrypted, and
 the web server and the worker may keep running. Afterwards set
 ` + config.EnvArchiveKeyFile + ` to the new file. The command prints the slots
-that now exist.
+that now exist, and says so when no recovery key remains.
 
 For a routine rotation (the default), and for a lost archive key: configure
 a recovery key (` + config.EnvArchiveKey + `), then run rotate-key with --replace and
@@ -106,14 +110,23 @@ func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile, replace
 	var replaced, configured blobcrypt.Slot
 	err = changeKeyring(ctx, "rotate-key", func(a *app, ring *blobcrypt.Keyring) error {
 		configuredFP = blobcrypt.Fingerprint(a.cfg.ArchiveKey)
+		configured, _ = ring.Slot(configuredFP)
 		if oldFP == "" {
+			// Only an unambiguous change without --replace: the configured
+			// key must be an archive key. A configured recovery key means
+			// the archive key is lost, and replacing the recovery key's
+			// slot would be the wrong choice (review round 3 of #519).
+			if configured.Label != labelArchiveKey {
+				return fmt.Errorf("%w: the configured key %s is labelled %q, not %q. "+
+					"Pass --replace FINGERPRINT with the slot to replace (for a lost archive key, its fingerprint; to replace the configured key itself, %s). "+
+					"The keyring's slots: %s", errRotateAmbiguous, configuredFP, configured.Label, labelArchiveKey, configuredFP, slotList(ring))
+			}
 			oldFP = configuredFP
 		}
 		var ok bool
 		if replaced, ok = ring.Slot(oldFP); !ok {
 			return fmt.Errorf("--replace: no slot with fingerprint %s in the keyring (see encryption status)", oldFP)
 		}
-		configured, _ = ring.Slot(configuredFP)
 		// The key file before the keyring: a crash in between leaves a key
 		// that opens nothing, never a keyring no key file opens.
 		if err := writeKeyFile(newKeyFile, nk, -1, -1); err != nil {
@@ -143,6 +156,9 @@ func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile, replace
 		for _, sl := range ring.Slots() {
 			fmt.Fprintf(out, "  %s  %s\n", sl.Fingerprint, sl.Label)
 		}
+		if !slices.ContainsFunc(ring.Slots(), func(sl blobcrypt.Slot) bool { return sl.Label == labelRecoveryKey }) {
+			fmt.Fprintf(out, "warning: no recovery key remains: run `%s encryption add-key`\n", commandName())
+		}
 		fmt.Fprintf(out, "\nSet %s=%s in .env now (and remove %s if a recovery key is set there).\n", config.EnvArchiveKeyFile, newKeyFile, config.EnvArchiveKey)
 		fmt.Fprintln(out, "The running web server and worker keep working;")
 		fmt.Fprintln(out, "after the change they start with the new key; the replaced key no longer opens the keyring.")
@@ -154,6 +170,19 @@ func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile, replace
 		_ = os.Remove(newKeyFile)
 	}
 	return err
+}
+
+// errRotateAmbiguous: rotate-key without --replace while the configured key
+// is not an archive key; it changes nothing (review round 3 of #519).
+var errRotateAmbiguous = errors.New("refusing to choose the slot to replace")
+
+// slotList is the keyring's slots as "fingerprint (label)", for messages.
+func slotList(ring *blobcrypt.Keyring) string {
+	var parts []string
+	for _, sl := range ring.Slots() {
+		parts = append(parts, fmt.Sprintf("%s (%s)", sl.Fingerprint, sl.Label))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // rotateKeyRewrapped, for tests, runs after rotate-key replaced the slot

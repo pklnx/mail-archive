@@ -93,7 +93,8 @@ func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 		t.Fatalf("rotate-key: %v\n%s", err, out)
 	}
 	if printedKey.MatchString(out) || !strings.Contains(out, config.EnvArchiveKeyFile+"="+newKey) || !strings.Contains(out, "encryption rekey") ||
-		!strings.Contains(out, "replaces the slot of key "+blobcrypt.Fingerprint(oldKEK)) || strings.Contains(out, "warning:") {
+		!strings.Contains(out, "replaces the slot of key "+blobcrypt.Fingerprint(oldKEK)) || strings.Contains(out, "warning:") ||
+		strings.Contains(out, "no recovery key remains") {
 		t.Fatalf("rotate-key output:\n%s", out)
 	}
 	if info, err := os.Stat(newKey); err != nil || info.Mode().Perm() != 0o400 {
@@ -329,12 +330,37 @@ func TestEncryptionRotateKeyLostArchiveKey(t *testing.T) {
 	t.Setenv(config.EnvArchiveKeyFile, "")
 	t.Setenv(config.EnvArchiveKey, recovery)
 	newKey := filepath.Join(filepath.Dir(s.keyFile), "archive-2.key")
+
+	// --replace forgotten: the configured key is a recovery key, so the
+	// slot to replace is ambiguous; rotate-key refuses, names the slots,
+	// writes no key file and changes neither copy (review round 3 of #519).
+	// Counter-proof: the former warn-only behaviour replaces R's slot.
+	fileBefore, _ := os.ReadFile(blobcrypt.KeyringPath(s.dataDir))
+	rowBefore, _ := st.BlobEncryption(context.Background())
+	_, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey)
+	if !errors.Is(err, errRotateAmbiguous) || !strings.Contains(err.Error(), "--replace") ||
+		!strings.Contains(err.Error(), blobcrypt.Fingerprint(lost)+" (archive key)") || !strings.Contains(err.Error(), blobcrypt.Fingerprint(rk)+" (recovery key)") {
+		t.Fatalf("rotate-key without --replace: %v", err)
+	}
+	if _, err := os.Stat(newKey); err == nil {
+		t.Fatal("the refused rotate-key left a key file")
+	}
+	if fileAfter, _ := os.ReadFile(blobcrypt.KeyringPath(s.dataDir)); !bytes.Equal(fileAfter, fileBefore) {
+		t.Fatal("the refused rotate-key changed the keyring file")
+	}
+	if rowAfter, _ := st.BlobEncryption(context.Background()); !bytes.Equal(rowAfter.Keyring, rowBefore.Keyring) || rowAfter.Generation != rowBefore.Generation {
+		t.Fatal("the refused rotate-key changed the database copy")
+	}
+
 	out, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey, "--replace", blobcrypt.Fingerprint(lost))
 	if err != nil {
 		t.Fatalf("rotate-key: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "warning:") || !strings.Contains(out, "the configured key "+blobcrypt.Fingerprint(rk)+" (recovery key) keeps its slot") {
 		t.Errorf("output lacks the warning:\n%s", out)
+	}
+	if strings.Contains(out, "no recovery key remains") {
+		t.Errorf("the recovery key remains, but the output says otherwise:\n%s", out)
 	}
 	t.Setenv(config.EnvArchiveKey, "")
 	t.Setenv(config.EnvArchiveKeyFile, newKey)
@@ -366,5 +392,36 @@ func TestEncryptionRotateKeyLostArchiveKey(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err == nil {
 		t.Error("a refused rotate-key left a key file")
+	}
+}
+
+// --replace with the configured key's own fingerprint chooses explicitly:
+// a configured recovery key's slot is replaced, the warning says so, and
+// since no slot labelled "recovery key" remains, the output says to add
+// one (review round 3 of #519). Counter-proof: without the note, the
+// output does not say that no recovery key remains.
+func TestEncryptionRotateKeyReplacesRecoverySlotExplicitly(t *testing.T) {
+	s := newEncSetup(t)
+	st := s.withDB(t)
+	recovery := s.keygen(t)
+	rk, _ := blobcrypt.ParseKEK(recovery)
+	if out, err := runEnc(t, newEncryptionCmd(), "enable"); err != nil {
+		t.Fatalf("enable: %v\n%s", err, out)
+	}
+	t.Setenv(config.EnvArchiveKeyFile, "")
+	t.Setenv(config.EnvArchiveKey, recovery)
+	newKey := filepath.Join(filepath.Dir(s.keyFile), "archive-2.key")
+	out, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey, "--replace", blobcrypt.Fingerprint(rk))
+	if err != nil {
+		t.Fatalf("rotate-key: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `warning: the replaced slot was labelled "recovery key"`) ||
+		!strings.Contains(out, "no recovery key remains: run `"+commandName()+" encryption add-key`") {
+		t.Fatalf("output:\n%s", out)
+	}
+	for i, k := range bothCopies(t, st, s.dataDir) {
+		if err := k.Open(rk); !errors.Is(err, blobcrypt.ErrNoSlot) {
+			t.Errorf("copy %d: the replaced recovery key: %v", i, err)
+		}
 	}
 }

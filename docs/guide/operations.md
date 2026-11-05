@@ -471,9 +471,13 @@ refuse while `enable`, `disable` or `rekey` runs.
 
 **rotate-key** writes a new archive key and replaces exactly one slot with
 a slot for it, labelled `archive key`: by default the configured key's, or
-the one named by `--replace FINGERPRINT`. Only that slot goes; every other
-slot stays, and no message file is touched. The command prints the slots
-that exist afterwards. Then set
+the one named by `--replace FINGERPRINT`. Without `--replace` it refuses,
+and changes nothing, when the configured key is not labelled
+`archive key` (a recovery key is configured): it names the slots, and you
+pass `--replace` to choose, also with the configured key's own fingerprint.
+Only that slot goes; every other slot stays, and no message file is
+touched. The command prints the slots that exist afterwards, and if no
+recovery key remains, it says to add one with `./ma encryption add-key`. Then set
 `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key` in `.env` and restart
 (`docker compose up -d`); the replaced key no longer opens the keyring.
 
@@ -486,10 +490,8 @@ instead:
    `.env` (and remove `MAIL_ARCHIVE_ARCHIVE_KEY_FILE`).
 3. Run, with the lost key's fingerprint:
    `./ma encryption rotate-key --new-key-file /keys/archive-2.key --replace FINGERPRINT`.
-   Without
-   `--replace` it would replace the configured key's slot, here the
-   recovery key's; the command warns whenever the replaced slot is not an
-   archive key's or the configured key is a recovery key.
+   Without `--replace` it refuses, since the configured key is a recovery
+   key.
 4. Set `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key`, remove
    `MAIL_ARCHIVE_ARCHIVE_KEY` again, and restart.
 
