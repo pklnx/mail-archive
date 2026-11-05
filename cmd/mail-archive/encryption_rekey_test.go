@@ -290,3 +290,21 @@ func TestEncryptionRekeyShowsRecoveryKeyFirst(t *testing.T) {
 		t.Fatalf("the shown key: %v", err)
 	}
 }
+
+// restore-dump refuses while a rekey runs (it holds the writers lock
+// exclusively) and names it; archive.TestRekeyAndRestoreDumpExclude covers
+// the other direction. Counter-proof: restore-dump taking the writers lock
+// shared fails with ErrWritersExcluded instead.
+func TestRestoreDumpRefusesDuringRekey(t *testing.T) {
+	s := newEncSetup(t)
+	st := s.withDB(t)
+	lock, err := st.TryLockWritersExclusive(context.Background(), "rekey")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	if _, err := runEnc(t, newRestoreDumpCmd(), "--reconcile-only"); !errors.Is(err, store.ErrWritersRunning) ||
+		!strings.Contains(err.Error(), "mail-archive encryption rekey") {
+		t.Fatalf("restore-dump during rekey: %v", err)
+	}
+}

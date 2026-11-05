@@ -17,6 +17,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 func (e *archiveEnv) rekeyOpts(kek []byte, out *bytes.Buffer) archive.RekeyOptions {
@@ -560,5 +561,101 @@ func TestRekeyShowsRecoveryKeyBeforeFirstBatch(t *testing.T) {
 	}
 	if !bytes.Equal(shown, res.RecoveryKey) {
 		t.Fatal("the shown key is not the result's recovery key")
+	}
+}
+
+// Plan revision 1, B2, first case (#436's note on #437): a dump taken
+// before a rekey, restored into a fresh database after it. The keyring file
+// (after the rekey) is newer and wins the current key and the slots; the
+// data keys are the union, so the old key the rekey deleted comes back
+// into both copies (the report says "merged both copies", since the result
+// differs from either). That is harmless and intended: it is sealed under the
+// new keyring key, which a slot dropped by the rekey cannot open, and the
+// dump and its keyring copy hold it anyway; the next rekey deletes it
+// again. Every file reads. Counter-proof (the note's): ReconcileRestored
+// opening the keyring file alone, without needKeyring, leaves the database
+// copy without the new key.
+func TestRekeyThenRestoreOlderDump(t *testing.T) {
+	e := newArchiveEnv(t)
+	msgs, kek, ring := e.enabled(4)
+	oldKey := ring.CurrentKey()
+	dumped := e.row() // what a backup before the rekey holds
+	res, err := archive.Rekey(e.ctx, e.st, e.newBlobs(), e.rekeyOpts(kek, nil))
+	if err != nil || !slices.Equal(res.Deleted, []uint32{oldKey}) {
+		t.Fatalf("rekey: %+v %v", res, err)
+	}
+
+	// The dump restored into a fresh database.
+	restored := storetest.New(t)
+	if err := restored.SetBlobEncryption(e.ctx, store.BlobOn, store.KeyringCopy{
+		Keyring: dumped.Keyring, ID: dumped.KeyringID, Generation: dumped.KeyringGeneration, CurrentKey: dumped.CurrentKey,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := archive.ReconcileRestored(e.ctx, restored, e.newBlobs(), archive.RestoreOptions{DataDir: e.data, KEK: kek, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file is newer, but the union adds the old key, so the result is
+	// a third generation, written to both copies.
+	if text := reportText(rep); !rep.DBWritten || !rep.FileWritten || rep.FileBefore.Generation <= rep.DBBefore.Generation ||
+		rep.DBAfter.Generation <= rep.FileBefore.Generation || !strings.Contains(text, "merged both copies") {
+		t.Fatalf("report %+v\n%s", rep, text)
+	}
+	if rep.CurrentKey != res.NewKey || !slices.Equal(rep.DataKeys, sortedIDs(oldKey, res.NewKey)) {
+		t.Fatalf("reconciled keyring: current %08x, data keys %v", rep.CurrentKey, rep.DataKeys)
+	}
+	e.st = restored
+	if !e.hasKey(kek, res.NewKey) || !e.hasKey(kek, oldKey) {
+		t.Fatal("the copies do not hold the old and the new data key")
+	}
+	file, _ := e.copies(kek)
+	if file.CurrentKey() != res.NewKey {
+		t.Fatalf("current key %08x, want %08x", file.CurrentKey(), res.NewKey)
+	}
+	e.readAll(kek, msgs)
+	if a := e.writerStart(kek); a.Keyring.CurrentKey() != res.NewKey {
+		t.Fatal("a writer after the restore does not encrypt under the new key")
+	}
+}
+
+func sortedIDs(ids ...uint32) []uint32 { slices.Sort(ids); return ids }
+
+// rekey and restore-dump exclude each other: both take the writers lock
+// exclusively (restore-dump in cmd/mail-archive with the same call), so
+// one refuses while the other runs, and names it. Counter-proof: rekey
+// taking the writers lock shared (as a writer) refuses with
+// ErrWritersExcluded instead and runs no exclusive section.
+func TestRekeyAndRestoreDumpExclude(t *testing.T) {
+	e := newArchiveEnv(t)
+	_, kek, _ := e.enabled(6)
+	restore, err := e.st.TryLockWritersExclusive(e.ctx, "restore-dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = archive.Rekey(e.ctx, e.st, e.newBlobs(), e.rekeyOpts(kek, nil))
+	restore.Release()
+	if !errors.Is(err, store.ErrWritersRunning) || !strings.Contains(err.Error(), "mail-archive encryption restore-dump") {
+		t.Fatalf("rekey during restore-dump: %v", err)
+	}
+	opts := e.rekeyOpts(kek, nil)
+	opts.BatchFiles = 2
+	var during error
+	opts.AfterBatch = func(b int) error {
+		if b == 1 {
+			l, err := e.st.TryLockWritersExclusive(e.ctx, "restore-dump")
+			if err == nil {
+				l.Release()
+				return errors.New("restore-dump took the writers lock during a rekey")
+			}
+			during = err
+		}
+		return nil
+	}
+	if _, err := archive.Rekey(e.ctx, e.st, e.newBlobs(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(during, store.ErrWritersRunning) || !strings.Contains(during.Error(), "mail-archive encryption rekey") {
+		t.Fatalf("restore-dump during rekey: %v", during)
 	}
 }

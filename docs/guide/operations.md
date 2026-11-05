@@ -539,6 +539,15 @@ archive key or a recovery key that had a slot when it was made, and with
 the keyring it contains. Keep a replaced or removed key, offline, as long
 as backups made before its removal exist.
 
+**Restoring a dump from before a rekey** (`./ma restore-dump`, see
+[Encrypted backups](#encrypted-backups)) next to the data directory after
+it keeps the newer keyring: its current data key and its slots win, so a
+key whose slot the rekey dropped still opens nothing. The data keys are the
+union of both copies, so the old data key that the rekey deleted comes back
+into the keyring, which `restore-dump` reports as "merged both copies".
+That is harmless: it is sealed under the new keyring key, and the dump with
+its keyring copy holds it anyway. The next `rekey` deletes it again.
+
 ## Upgrades
 
 Back up first (see [Backups](#backups)) and read the release notes of every
