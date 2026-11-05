@@ -3,27 +3,61 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- v1.4.0 (2026-11-03, main 774a2a0, release run 41624111137, digest sha256:4868f415…): customer groups (#470 parts #500, #502, #501, #503; closes #476), full entries in the Log filter menus (#486, #494), header icons (#488, #495). Migrations 00034 and 00035. Milestone 1.4.0 is closed. Release test #504 (Mac Safari, iPhone, iPad, VoiceOver) after the release; a failure goes into 1.4.1.
-- v1.3.2 (main 1e3cc72): #487. v1.3.1 (main 16cd143): #468, #479, #478.
+- **v1.5.0** (2026-11-05, main 7482e83, release run 42013698896, digest sha256:de611eb4…):
+  - encryption at rest (#392: #508, #510, #513, #518, #519);
+  - auditor access for tax advisors and auditors (#393: #509, #511, #515, #517);
+  - GoBD export on the command line (#394: #507, #512).
+- Migrations 00036 (auditor) and 00037 (blob_encryption).
+- Milestone 1.5.0: every issue is closed, but the milestone itself is still open (see Maintainer actions).
+- Release test #520 (Mac Safari, iPhone, iPad, VoiceOver) runs after the release; a failure goes into 1.5.1.
+- Earlier: v1.4.0 (main 774a2a0), customer groups (#470); release test #504 passed.
 
 ## Open PRs
 - None.
 
 ## Open tickets
-- 1.5.0: #392 encryption (#433–#437), #393 auditor (#439–#442), #394 GoBD export CLI (#443, #444), all `ready`, but #393 and #394 must first be revised for customer groups (maintainer 2026-11-02: an auditor belongs to a group and grants stay inside it; exports never span groups). #392 stays here (maintainer).
-- 1.6.0: #395 SMTP AUTH/TLS (#454–#456), #396 start without CLI (#451–#453), #398 WebKit e2e with #343 are `ready`. #397 operator/quotas/mail alerts (#446–#450) is in `plan`: quota per customer group (`customer_groups.quota_bytes`, instance quota as upper bound), alerts to admins only. #432 (database encryption) is not planned yet.
-- 1.7.0 (Microsoft and Google): #391 OAuth2 (`ready`, #426–#430), #475 journaling from Microsoft 365 (after #430, not planned).
-- #372 device checks round 2: Android parts open.
+- **1.6.0:** these are `ready`:
+  - #395 SMTP AUTH/TLS (#454–#456);
+  - #396 start without CLI (#451–#453). Part 3 (#453) runs `encryption.EnableAtSetup` from #392.
+  - #398 WebKit e2e with #343.
+- **1.6.0, in `plan`:** #397 operator/quotas/mail alerts (#446–#450), with the quota per customer group and alerts to admins only.
+- **Not planned yet:** #432 database encryption.
+- **1.7.0 (Microsoft and Google):** #391 OAuth2 (`ready`, #426–#430); #475 journaling from Microsoft 365 (after #430, not planned).
+- **Follow-up:** #516, the demo auditor's grant window after `DOCS_NOW` + 90 days (before late January 2027).
+- **Device checks:** #372 round 2, Android parts open; #520 is the 1.5.0 release test.
 
 ## Active decisions
-- **Operating model** (maintainer, 2026-11-01): one shared instance in full-service mode; the operator is its admin and manages the customers' users and accounts; individual instances for single customers on request. Customer groups shipped in 1.4.0 (#470).
-- **Coordinator autonomy** (maintainer, 2026-10-31): the coordinator decides alone on UI wording, technical trade-offs, small product details inside an approved goal, and tightening security, and records them. It always asks about new goals and milestone scope, releases, and anything that widens access or weakens security or privacy (including `security.md` guarantees). It reports at milestones and blockers only.
-- **Customer groups** (maintainer 2026-11-02/03): one shared instance, groups separate customers logically; no group admin; sharing by exact name inside the group; group UI hidden with one group, the first extra group is created on the CLI; older Log entries keep the names they had (security.md) and the group of their time (audit-log.md).
-- **GitHub operations without an MCP tool** (maintainer, 2026-11-01): agents do them themselves (milestones via the REST fallback in `.claude/github-operations.md`), not the maintainer.
+- **Operating model** (maintainer, 2026-11-01): one shared instance in full-service mode, where the operator is its admin and manages the customers' users and accounts. Individual instances for single customers on request. Customer groups shipped in 1.4.0.
+- **Coordinator autonomy** (maintainer, 2026-10-31):
+  - The coordinator decides alone on UI wording, technical trade-offs, small product details inside an approved goal, and tightening security, and records these decisions.
+  - It always asks about new goals and milestone scope, releases, and anything that widens access or weakens security or privacy (including `security.md` guarantees).
+  - It reports at milestones and blockers only.
+- **Customer groups** (maintainer, 2026-11-02/03):
+  - One shared instance, with groups separating customers logically.
+  - No group admin. Sharing works by exact name inside the group.
+  - The group UI is hidden while there is only one group; the first extra group is created on the CLI.
+  - Auditors belong to one group, and grants stay inside it. Exports never span groups.
+- **Encryption at rest** (#392):
+  - New instances start with it on (maintainer decision 6); existing ones switch offline with `encryption enable`.
+  - `rekey` creates a new keyring key. `rotate-key` keeps the keyring key and replaces one slot: `--replace` names the slot, and without it the command refuses when the configured key is not the archive key (coordinator, #437).
+  - The database stays plaintext until #432.
+- **Merge mechanics:** the merge tool pins with `expectedHeadSha`, not `sha`. A branch behind main is refused for required checks; bring main in with a merge commit.
+- **GitHub operations without an MCP tool** (maintainer, 2026-11-01): agents do them themselves, using the REST fallback in `.claude/github-operations.md`. In this cloud session the classifier refused `curl` with the token (Auto-Mode Bypass), so milestones stayed undone.
+- **Disk:** the shared Go build cache fills the sandbox. Trimming it (`find /root/.cache/go-build -type f -mmin +180 -delete`) needs the maintainer to switch to "Accept edits" first.
 - **Target hardware:** plans state memory and CPU cost on 4 GB RAM / 2 cores and stay within it.
-- #459 (Safari): the server rewrites links in served HTML mail; navigations to `/api` with `Sec-Fetch-Site` `cross-site`/`same-site` get 403. Stored mail, `/raw`, parts and exports stay byte-identical.
-- Target group: individuals and small businesses. #321: Disable stays usable while a sync runs; only Remove is blocked. German term for the deletion grace period: "Karenzzeit" (#339). Releases: no backports, only the newest line; old tags and images stay. Patch releases carry only `bug`/`docs` PRs. Avoid "fix #N" and other closing keywords in PR bodies for issues that stay open (#477 closed #476 by accident).
+- #459 (Safari): the server rewrites links in served HTML mail, and navigations to `/api` with `Sec-Fetch-Site` `cross-site` or `same-site` get 403. Stored mail, `/raw`, parts and exports stay byte-identical.
+- **Product details:**
+  - Target group: individuals and small businesses.
+  - #321: Disable stays usable while a sync runs; only Remove is blocked.
+  - German term for the deletion grace period: "Karenzzeit" (#339).
+- **Releases and PR bodies:**
+  - No backports, only the newest line; old tags and images stay.
+  - Patch releases carry only `bug`/`docs` PRs.
+  - Avoid "fix #N" and other closing keywords in PR bodies for issues that stay open. Conversely, check that "Closes #N" really closed the issue: #435 stayed open after #513.
 
 ## Maintainer actions
-- #504 release test of 1.4.0 (setup with the fixed Caddyfile is in the issue).
-- On the shared instance: back up, `./ma migrate`, then one `./ma group add NAME` per customer and `./ma user set-group`; after the first extra group everything works on the Users page.
+- Close milestone 1.5.0 (Milestones → 1.5.0 → Close). Every issue in it is closed.
+- #520 release test of 1.5.0.
+- On the shared instance:
+  - Back up, then run `./ma migrate` (00036, 00037).
+  - Encryption at rest is optional: `./ma encryption keygen`, keep the archive key and the recovery key off the server, then `./ma encryption enable` with web and worker stopped (operations.md, "Encryption at rest").
