@@ -5,6 +5,7 @@
 #   ./ma account add private --host imap.mail.de --username me@mail.de
 #   ./ma sync
 #   ./ma backup ./backups
+#   ./ma restore-dump ./backups/mailarchive-<time>.dump.enc
 #
 # Starts PostgreSQL if needed, rebuilds the image when the code changed (fast
 # when cached) and hides Docker Compose's progress output. In a release
@@ -75,7 +76,10 @@ fi
 operator=$(id -un 2>/dev/null || echo unknown)
 
 # backup runs pg_dump in the database container, so the dump always matches
-# the server version and lands on the host; the image has no pg_dump.
+# the server version and lands on the host; the image has no pg_dump. With
+# encryption at rest on, pg_dump's output is piped through seal-stream into
+# DIR/<name>.dump.enc, next to the keyring copy DIR/<name>.keyring: the
+# plaintext dump only passes through the pipe.
 if [ "${1:-}" = backup ]; then
 	if [ $# -ne 2 ] || [ -z "$2" ]; then
 		echo "usage: ./ma backup DIR" >&2
@@ -84,13 +88,43 @@ if [ "${1:-}" = backup ]; then
 	dir=$2
 	umask 077
 	mkdir -p "$dir"
-	name=mailarchive-$(date -u +%Y%m%dT%H%M%SZ).dump
+	base=mailarchive-$(date -u +%Y%m%dT%H%M%SZ)
+	name=$base.dump
 	# The note first: it also writes an attestation, which the dump then holds.
 	if ! compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive \
 		backup --note-only "$name" >"$dir/BACKUP-NOTE.txt.partial"; then
 		rm -f "$dir/BACKUP-NOTE.txt.partial"
 		echo "error: could not write BACKUP-NOTE.txt; no dump was written" >&2
 		exit 1
+	fi
+	# The note names the dump .dump.enc when encryption at rest is on.
+	if grep -qxF "Database dump: $name.enc" "$dir/BACKUP-NOTE.txt.partial"; then
+		ring=$dir/$base.keyring
+		if ! compose run --rm -T mail-archive backup --keyring-copy >"$ring.partial"; then
+			rm -f "$ring.partial" "$dir/BACKUP-NOTE.txt.partial"
+			echo "error: could not copy the keyring; no dump was written" >&2
+			exit 1
+		fi
+		# pg_dump's exit status, which the pipe would hide: seal-stream
+		# cannot tell the end of a failed dump from the end of a good one.
+		failed=$dir/$name.failed
+		rm -f "$failed"
+		MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring.partial" | tr -d '\n')
+		export MAIL_ARCHIVE_KEYRING_COPY
+		if ! { compose exec -T postgres pg_dump --format=custom -U mailarchive -d mailarchive || echo pg_dump >"$failed"; } |
+			compose run --rm -T -e MAIL_ARCHIVE_KEYRING_COPY mail-archive seal-stream >"$dir/$name.enc.partial" ||
+			[ -e "$failed" ]; then
+			rm -f "$failed" "$dir/$name.enc.partial" "$ring.partial" "$dir/BACKUP-NOTE.txt.partial"
+			echo "error: pg_dump or its encryption failed; no dump was written" >&2
+			exit 1
+		fi
+		unset MAIL_ARCHIVE_KEYRING_COPY
+		mv "$ring.partial" "$ring"
+		mv "$dir/$name.enc.partial" "$dir/$name.enc"
+		mv "$dir/BACKUP-NOTE.txt.partial" "$dir/BACKUP-NOTE.txt"
+		echo "wrote $dir/$name.enc (encrypted), $ring and $dir/BACKUP-NOTE.txt"
+		echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep MAIL_ARCHIVE_SECRET_KEY and the archive key separately"
+		exit 0
 	fi
 	if ! compose exec -T postgres pg_dump --format=custom -U mailarchive -d mailarchive >"$dir/$name.partial"; then
 		rm -f "$dir/$name.partial" "$dir/BACKUP-NOTE.txt.partial"
@@ -102,6 +136,98 @@ if [ "${1:-}" = backup ]; then
 	echo "wrote $dir/$name and $dir/BACKUP-NOTE.txt"
 	echo "now copy the data directory (ARCHIVE_DIR in .env, default ./data), and keep MAIL_ARCHIVE_SECRET_KEY separately"
 	exit 0
+fi
+
+# restore-dump loads a dump written by backup into the database, which must
+# be empty, in one transaction, with pg_restore in the database container.
+# An encrypted dump (MA-ENC1 header) is decrypted by unseal-stream on its way
+# there, with the keyring copy next to it. The whole time, a container with
+# `restore-dump --hold` holds the writers lock, so that no web server, worker
+# or cron sync starts: it checks the database and the keyring copy, says
+# "ready", waits while pg_restore runs, and when told "restored" reconciles
+# the keyring and the state of encryption at rest under the same lock and
+# prints what it changed.
+# `restore-dump --reconcile-only` (and --help) restores nothing: it goes
+# to the plain command below, which takes its locks itself.
+if [ "${1:-}" = restore-dump ] && case ${2:-} in -*) false ;; *) true ;; esac; then
+	if [ $# -ne 2 ] || [ -z "$2" ]; then
+		echo "usage: ./ma restore-dump FILE   (or ./ma restore-dump --reconcile-only)" >&2
+		exit 2
+	fi
+	file=$2
+	if [ ! -f "$file" ]; then
+		echo "error: $file: no such file" >&2
+		exit 2
+	fi
+	sealed=
+	MAIL_ARCHIVE_KEYRING_COPY=
+	if [ "$(head -c 7 "$file")" = MA-ENC1 ]; then
+		sealed=1
+		ring=${file%.enc}
+		ring=${ring%.dump}.keyring
+		if [ -f "$ring" ]; then
+			MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
+		fi
+	fi
+	export MAIL_ARCHIVE_KEYRING_COPY
+	fifos=$(mktemp -d)
+	mkfifo "$fifos/to-holder" "$fifos/from-holder"
+	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_KEYRING_COPY mail-archive \
+		restore-dump --hold <"$fifos/to-holder" >"$fifos/from-holder" &
+	holder=$!
+	# Any line but "restored", or the end of fd 3 (also when this script
+	# ends early), makes the holder give up; fd 4 carries its output.
+	exec 3>"$fifos/to-holder" 4<"$fifos/from-holder"
+	rm -rf "$fifos"
+	finish() { # finish <status>: let the holder end, then exit
+		if [ "$1" -ne 0 ]; then
+			# Explicitly, so the holder does not depend on the end of its
+			# input reaching it; in a subshell, so a holder that is gone
+			# cannot end this script by SIGPIPE.
+			(echo failed >&3) 2>/dev/null || true
+		fi
+		exec 3>&-
+		cat <&4
+		wait "$holder" || [ "$1" -ne 0 ] || exit 1
+		exit "$1"
+	}
+	if ! IFS= read -r line <&4 || [ "$line" != ready ]; then
+		# The holder refused (writers running, database not empty, another
+		# archive's keyring) and said why on stderr.
+		finish 1
+	fi
+	if ! kill -0 "$holder" 2>/dev/null; then
+		echo "error: the lock holder ended before the restore; nothing was restored: run ./ma restore-dump $file again" >&2
+		finish 1
+	fi
+	restore() {
+		compose exec -T postgres pg_restore --no-owner --single-transaction --exit-on-error \
+			-U mailarchive -d mailarchive
+	}
+	if [ -n "$sealed" ]; then
+		# unseal-stream stops before the end of its output on a damaged
+		# dump, so pg_restore fails and its transaction rolls back.
+		failed=$(mktemp)
+		if ! { compose run --rm -T -e MAIL_ARCHIVE_KEYRING_COPY mail-archive unseal-stream <"$file" || echo unseal >"$failed"; } | restore ||
+			[ -s "$failed" ]; then
+			rm -f "$failed"
+			echo "error: the restore failed; the database is unchanged (pg_restore ran in one transaction)" >&2
+			finish 1
+		fi
+		rm -f "$failed"
+	elif ! restore <"$file"; then
+		echo "error: the restore failed; the database is unchanged (pg_restore ran in one transaction)" >&2
+		finish 1
+	fi
+	echo "restored $file"
+	# The holder must still be there to reconcile; writing to its FIFO
+	# without it would end this script by SIGPIPE.
+	if ! kill -0 "$holder" 2>/dev/null || ! (echo restored >&3) 2>/dev/null; then
+		echo "error: the lock holder ended during the restore, so the restore ran without the writers lock and nothing was reconciled:" \
+			"stop anything that started meanwhile (docker compose stop web worker), then run ./ma restore-dump --reconcile-only" >&2
+		finish 1
+	fi
+	finish 0
 fi
 
 # encryption keygen writes the archive key into the keys directory

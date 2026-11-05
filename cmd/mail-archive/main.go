@@ -47,6 +47,7 @@ func main() {
 		newExportCmd(),
 		newImportCmd(),
 		newBackupCmd(),
+		newRestoreDumpCmd(),
 		newAttestCmd(),
 		newRetentionCmd(),
 		newHoldCmd(),
@@ -57,6 +58,8 @@ func main() {
 		newJobsCmd(),
 		newEncryptionCmd(),
 		newDecryptCmd(),
+		newSealStreamCmd(),
+		newUnsealStreamCmd(),
 	)
 	code, msg := exitStatus(ctx, root.ExecuteContext(ctx))
 	if msg != "" {
