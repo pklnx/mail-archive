@@ -579,6 +579,12 @@ func TestRekeyThenRestoreOlderDump(t *testing.T) {
 	e := newArchiveEnv(t)
 	msgs, kek, ring := e.enabled(4)
 	oldKey := ring.CurrentKey()
+	// A recovery key the rekey is not given: its slot is dropped.
+	dropped, _ := blobcrypt.GenerateKEK()
+	if _, err := archive.ChangeKeyring(e.ctx, e.st, archive.KeyringChangeOptions{DataDir: e.data, KEK: kek, Command: "add-key", Logger: quiet},
+		func(k *blobcrypt.Keyring) error { return k.AddSlot(dropped, "recovery key", t0) }); err != nil {
+		t.Fatal(err)
+	}
 	dumped := e.row() // what a backup before the rekey holds
 	res, err := archive.Rekey(e.ctx, e.st, e.newBlobs(), e.rekeyOpts(kek, nil))
 	if err != nil || !slices.Equal(res.Deleted, []uint32{oldKey}) {
@@ -602,10 +608,19 @@ func TestRekeyThenRestoreOlderDump(t *testing.T) {
 		rep.DBAfter.Generation <= rep.FileBefore.Generation || !strings.Contains(text, "merged both copies") {
 		t.Fatalf("report %+v\n%s", rep, text)
 	}
+	e.st = restored
+	// The slot the rekey dropped stays dropped although the dump still has
+	// it: the newer copy decides the slots and the keyring key (A's note
+	// in review round 2 of #519). Counter-proof: Reconcile taking the
+	// older copy's slots and keyring key lets the dropped key open both.
+	for _, k := range []*blobcrypt.Keyring{mustParse(t, must(os.ReadFile(blobcrypt.KeyringPath(e.data)))), mustParse(t, e.row().Keyring)} {
+		if err := k.Open(dropped); !errors.Is(err, blobcrypt.ErrNoSlot) {
+			t.Errorf("the dropped key after the restore: %v", err)
+		}
+	}
 	if rep.CurrentKey != res.NewKey || !slices.Equal(rep.DataKeys, sortedIDs(oldKey, res.NewKey)) {
 		t.Fatalf("reconciled keyring: current %08x, data keys %v", rep.CurrentKey, rep.DataKeys)
 	}
-	e.st = restored
 	if !e.hasKey(kek, res.NewKey) || !e.hasKey(kek, oldKey) {
 		t.Fatal("the copies do not hold the old and the new data key")
 	}
@@ -658,4 +673,13 @@ func TestRekeyAndRestoreDumpExclude(t *testing.T) {
 	if !errors.Is(during, store.ErrWritersRunning) || !strings.Contains(during.Error(), "mail-archive encryption rekey") {
 		t.Fatalf("restore-dump during rekey: %v", during)
 	}
+}
+
+func mustParse(t *testing.T, data []byte) *blobcrypt.Keyring {
+	t.Helper()
+	k, err := blobcrypt.ParseKeyring(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }

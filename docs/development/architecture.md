@@ -578,9 +578,12 @@ backup would lose its slot to the newer database copy at the next start
 the generation, which running writers pinned, stays.
 
 `rotate-key` writes a new KEK (key file first, then the keyring) and
-replaces the configured KEK's slot with one for it (`Keyring.ReplaceSlot`),
-under the **existing** keyring key; every other slot and the data keys stay,
-so no file changes (coordinator decision on #437, 6640615690). A new
+replaces one slot with one for it (`Keyring.ReplaceSlot`), under the
+**existing** keyring key: the configured KEK's, or the one `--replace`
+names (a lost archive key's, while a recovery key is configured). The new
+slot is always labelled `archive key`, never inheriting the replaced
+label; every other slot and the data keys stay, so no file changes
+(coordinator decision on #437, 6640615690; review round 2 of #519). A new
 keyring key there would protect nothing: `rotate-key` adds no data key, so
 a replaced KEK with an older keyring copy can only reach data keys the
 current keyring holds anyway. It does not help after a leak; `rekey` does.

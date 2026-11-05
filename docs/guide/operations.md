@@ -459,6 +459,7 @@ separation, move `ARCHIVE_KEY_DIR` to another disk, or feed
 | Add a recovery key | `./ma encryption add-key` | none |
 | Remove a key that is no longer needed | `./ma encryption remove-key FINGERPRINT` | none |
 | Replace the archive key (routine) | `./ma encryption rotate-key --new-key-file /keys/archive-2.key` | a restart |
+| The archive key file is lost | configure a recovery key, then `./ma encryption rotate-key --new-key-file /keys/archive-2.key --replace FINGERPRINT` (below) | a restart |
 | A key leaked | remove or replace it, then `./ma encryption rekey` | as for `enable` |
 
 `./ma encryption status` lists the slots with their fingerprints. The
@@ -468,13 +469,33 @@ keyring file restored from a backup keeps its slot. `add-key`, `remove-key`
 and `rotate-key` may run while the web server and the worker run; they
 refuse while `enable`, `disable` or `rekey` runs.
 
-**rotate-key** is for a routine rotation and for an archive key that is
-lost or retired. It writes a new archive key and replaces the configured
-key's slot with one for it; every other slot stays, recovery keys included,
-and no message file is touched. Then set
+**rotate-key** writes a new archive key and replaces exactly one slot with
+a slot for it, labelled `archive key`: by default the configured key's, or
+the one named by `--replace FINGERPRINT`. Only that slot goes; every other
+slot stays, and no message file is touched. The command prints the slots
+that exist afterwards. Then set
 `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key` in `.env` and restart
-(`docker compose up -d`); with the old key the services would not start
-again.
+(`docker compose up -d`); the replaced key no longer opens the keyring.
+
+**The archive key file is lost.** A recovery key opens the keyring
+instead:
+
+1. Look up the lost key's fingerprint: `./ma encryption status` lists the
+   slots, the lost one labelled `archive key`.
+2. Configure the recovery key: put it in `MAIL_ARCHIVE_ARCHIVE_KEY` in
+   `.env` (and remove `MAIL_ARCHIVE_ARCHIVE_KEY_FILE`).
+3. Run, with the lost key's fingerprint:
+   `./ma encryption rotate-key --new-key-file /keys/archive-2.key --replace FINGERPRINT`.
+   Without
+   `--replace` it would replace the configured key's slot, here the
+   recovery key's; the command warns whenever the replaced slot is not an
+   archive key's or the configured key is a recovery key.
+4. Set `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key`, remove
+   `MAIL_ARCHIVE_ARCHIVE_KEY` again, and restart.
+
+The recovery key keeps its slot. If the lost key may have been stolen
+rather than misplaced, run `./ma encryption rekey` afterwards, as after a
+leak (below).
 
 **rotate-key alone does not help after a key leaked.** The old key,
 together with any older copy of the keyring (every backup and every copy
@@ -483,8 +504,9 @@ file encrypted with them. After a leak of any key:
 
 1. Remove the leaked key's slot: for a recovery key
    `./ma encryption remove-key FINGERPRINT`; for the archive key
-   `./ma encryption rotate-key --new-key-file /keys/archive-2.key`, which
-   removes the replaced key's slot, and set `.env` as above.
+   `./ma encryption rotate-key --new-key-file /keys/archive-2.key` (with
+   `--replace FINGERPRINT` if the archive key is not the configured one),
+   which removes the replaced key's slot, and set `.env` as above.
 2. Stop everything that writes, as for `enable`
    (`docker compose stop web worker`), and run `./ma encryption rekey`
    (see below for the recovery keys it keeps).

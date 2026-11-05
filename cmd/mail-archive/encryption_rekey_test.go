@@ -93,7 +93,7 @@ func TestEncryptionRotateKeyAndRekey(t *testing.T) {
 		t.Fatalf("rotate-key: %v\n%s", err, out)
 	}
 	if printedKey.MatchString(out) || !strings.Contains(out, config.EnvArchiveKeyFile+"="+newKey) || !strings.Contains(out, "encryption rekey") ||
-		!strings.Contains(out, "replaces key "+blobcrypt.Fingerprint(oldKEK)) {
+		!strings.Contains(out, "replaces the slot of key "+blobcrypt.Fingerprint(oldKEK)) || strings.Contains(out, "warning:") {
 		t.Fatalf("rotate-key output:\n%s", out)
 	}
 	if info, err := os.Stat(newKey); err != nil || info.Mode().Perm() != 0o400 {
@@ -306,5 +306,65 @@ func TestRestoreDumpRefusesDuringRekey(t *testing.T) {
 	if _, err := runEnc(t, newRestoreDumpCmd(), "--reconcile-only"); !errors.Is(err, store.ErrWritersRunning) ||
 		!strings.Contains(err.Error(), "mail-archive encryption rekey") {
 		t.Fatalf("restore-dump during rekey: %v", err)
+	}
+}
+
+// The lost-key procedure (review round 2 of #519): with the archive key O
+// lost, the operator configures the recovery key R and runs rotate-key
+// --replace with O's fingerprint. R and the new key N open both copies, O
+// opens neither, N's slot is labelled "archive key", R keeps its slot and
+// label, and a warning lists the slots because the configured key is a
+// recovery key. Counter-proof: ignoring --replace (replacing the
+// configured key's slot) drops R and keeps O.
+func TestEncryptionRotateKeyLostArchiveKey(t *testing.T) {
+	s := newEncSetup(t)
+	st := s.withDB(t)
+	recovery := s.keygen(t)
+	rk, _ := blobcrypt.ParseKEK(recovery)
+	lost, _, _ := config.ArchiveKeyFromEnv()
+	if out, err := runEnc(t, newEncryptionCmd(), "enable"); err != nil {
+		t.Fatalf("enable: %v\n%s", err, out)
+	}
+	// The key file is lost: the recovery key is configured instead.
+	t.Setenv(config.EnvArchiveKeyFile, "")
+	t.Setenv(config.EnvArchiveKey, recovery)
+	newKey := filepath.Join(filepath.Dir(s.keyFile), "archive-2.key")
+	out, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", newKey, "--replace", blobcrypt.Fingerprint(lost))
+	if err != nil {
+		t.Fatalf("rotate-key: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "warning:") || !strings.Contains(out, "the configured key "+blobcrypt.Fingerprint(rk)+" (recovery key) keeps its slot") {
+		t.Errorf("output lacks the warning:\n%s", out)
+	}
+	t.Setenv(config.EnvArchiveKey, "")
+	t.Setenv(config.EnvArchiveKeyFile, newKey)
+	nk, _, err := config.ArchiveKeyFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, k := range bothCopies(t, st, s.dataDir) {
+		if err := k.Open(lost); !errors.Is(err, blobcrypt.ErrNoSlot) {
+			t.Errorf("copy %d: the lost key: %v", i, err)
+		}
+		for _, key := range [][]byte{nk, rk} {
+			if err := k.Open(key); err != nil {
+				t.Errorf("copy %d: key %s: %v", i, blobcrypt.Fingerprint(key), err)
+			}
+		}
+		if sl, ok := k.Slot(blobcrypt.Fingerprint(nk)); !ok || sl.Label != labelArchiveKey {
+			t.Errorf("copy %d: the new key's slot label %q", i, sl.Label)
+		}
+		if sl, ok := k.Slot(blobcrypt.Fingerprint(rk)); !ok || sl.Label != labelRecoveryKey {
+			t.Errorf("copy %d: the recovery key's slot label %q", i, sl.Label)
+		}
+	}
+	// An unknown fingerprint is refused, and no key file is left.
+	other := filepath.Join(filepath.Dir(s.keyFile), "archive-3.key")
+	if _, err := runEnc(t, newEncryptionCmd(), "rotate-key", "--new-key-file", other, "--replace", "0123456789abcdef"); err == nil ||
+		!strings.Contains(err.Error(), "no slot with fingerprint") {
+		t.Errorf("--replace with an unknown fingerprint: %v", err)
+	}
+	if _, err := os.Stat(other); err == nil {
+		t.Error("a refused rotate-key left a key file")
 	}
 }

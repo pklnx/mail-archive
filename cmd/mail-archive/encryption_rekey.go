@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,29 +29,35 @@ and drops every other slot, recovery keys included. It lists the slots it
 drops.`
 
 func newEncryptionRotateKeyCmd() *cobra.Command {
-	var newKeyFile string
+	var newKeyFile, replace string
 	cmd := &cobra.Command{
 		Use:   "rotate-key",
-		Short: "Replace the archive key (no file is re-encrypted)",
+		Short: "Replace an archive key's slot with a new archive key (no file is re-encrypted)",
 		Long: `Create a new archive key in --new-key-file (mode 0400, never replacing a
-file) and replace the configured archive key's slot with a slot for it.
-Every other slot stays, recovery keys included, and so do the keyring key
-and the data keys: no message file is re-encrypted, and the web server and
-the worker may keep running. Afterwards set ` + config.EnvArchiveKeyFile + ` to
-the new file; the old key no longer opens the keyring.
+file) and replace one slot with a slot for it, labelled "archive key": by
+default the configured archive key's, or the slot named by --replace
+FINGERPRINT (see encryption status). Only that slot goes; every other slot
+stays, the configured key's included when another slot is replaced, and so
+do the keyring key and the data keys: no message file is re-encrypted, and
+the web server and the worker may keep running. Afterwards set
+` + config.EnvArchiveKeyFile + ` to the new file. The command prints the slots
+that now exist.
 
-For a routine rotation, or an archive key that is lost or retired.
-rotate-key alone does not help after a key leaked: the old key, with an
-older copy of the keyring such as a backup, still opens the data keys. After
-a leak, run encryption rekey afterwards. Backups made before keep needing
-the key of their time. ./ma runs it with the keys directory (ARCHIVE_KEY_DIR,
+For a routine rotation (the default), and for a lost archive key: configure
+a recovery key (` + config.EnvArchiveKey + `), then run rotate-key with --replace and
+the lost key's fingerprint; the recovery key keeps its slot. rotate-key
+alone does not help after a key leaked or may have been stolen: the old key,
+with an older copy of the keyring such as a backup, still opens the data
+keys. Run encryption rekey afterwards. Backups made before keep needing the
+key of their time. ./ma runs it with the keys directory (ARCHIVE_KEY_DIR,
 default ./keys) writable; the new key file must lie in /keys there.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return encryptionRotateKey(cmd.Context(), cmd.OutOrStdout(), newKeyFile, time.Now())
+			return encryptionRotateKey(cmd.Context(), cmd.OutOrStdout(), newKeyFile, strings.ToLower(strings.TrimSpace(replace)), time.Now())
 		},
 	}
 	cmd.Flags().StringVar(&newKeyFile, "new-key-file", "", "where to write the new archive key (required)")
+	cmd.Flags().StringVar(&replace, "replace", "", "the fingerprint of the slot to replace (default: the configured archive key's)")
 	return cmd
 }
 
@@ -75,9 +82,12 @@ func loadKeepKeys(paths []string, cfg *config.Config) ([][]byte, error) {
 	return keys, nil
 }
 
-func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile string, now time.Time) (err error) {
+func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile, replace string, now time.Time) (err error) {
 	if newKeyFile == "" {
 		return errors.New("where to write the new archive key: pass --new-key-file")
+	}
+	if replace != "" && !fingerprintRe.MatchString(replace) {
+		return fmt.Errorf("--replace: want a fingerprint of 16 hex digits as shown by encryption status, got %q", replace)
 	}
 	dataDir := config.DataDirFromEnv()
 	inside, err := config.KeyInDataDir(newKeyFile, dataDir)
@@ -92,16 +102,25 @@ func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile string, 
 		return err
 	}
 	wrote, changed := false, false
-	oldFP := ""
+	oldFP, configuredFP := replace, ""
+	var replaced, configured blobcrypt.Slot
 	err = changeKeyring(ctx, "rotate-key", func(a *app, ring *blobcrypt.Keyring) error {
-		oldFP = blobcrypt.Fingerprint(a.cfg.ArchiveKey)
+		configuredFP = blobcrypt.Fingerprint(a.cfg.ArchiveKey)
+		if oldFP == "" {
+			oldFP = configuredFP
+		}
+		var ok bool
+		if replaced, ok = ring.Slot(oldFP); !ok {
+			return fmt.Errorf("--replace: no slot with fingerprint %s in the keyring (see encryption status)", oldFP)
+		}
+		configured, _ = ring.Slot(configuredFP)
 		// The key file before the keyring: a crash in between leaves a key
 		// that opens nothing, never a keyring no key file opens.
 		if err := writeKeyFile(newKeyFile, nk, -1, -1); err != nil {
 			return err
 		}
 		wrote = true
-		err := ring.ReplaceSlot(oldFP, nk, now)
+		err := ring.ReplaceSlot(oldFP, nk, labelArchiveKey, now)
 		if err == nil {
 			rotateKeyRewrapped()
 		}
@@ -110,11 +129,23 @@ func encryptionRotateKey(ctx context.Context, out io.Writer, newKeyFile string, 
 		// The change took effect: the new key file stays, also when the
 		// keyring file could not be written.
 		changed = true
-		fmt.Fprintf(out, "wrote archive key %s (fingerprint %s); it replaces key %s in the keyring, generation %d\n",
-			newKeyFile, blobcrypt.Fingerprint(nk), oldFP, ring.Generation())
-		fmt.Fprintln(out, "Every other slot stays, recovery keys included.")
-		fmt.Fprintf(out, "\nSet %s=%s in .env now. The running web server and worker keep working;\n", config.EnvArchiveKeyFile, newKeyFile)
-		fmt.Fprintln(out, "after the change they start with the new key, and with the old one they would not start.")
+		fmt.Fprintf(out, "wrote archive key %s (fingerprint %s); it replaces the slot of key %s (%s) in the keyring, generation %d\n",
+			newKeyFile, blobcrypt.Fingerprint(nk), oldFP, replaced.Label, ring.Generation())
+		if replaced.Label != labelArchiveKey || (oldFP != configuredFP && configured.Label == labelRecoveryKey) {
+			fmt.Fprintf(out, "warning: the replaced slot was labelled %q", replaced.Label)
+			if oldFP != configuredFP {
+				fmt.Fprintf(out, "; the configured key %s (%s) keeps its slot", configuredFP, configured.Label)
+			}
+			fmt.Fprintln(out, ". Check that these are the slots you want:")
+		} else {
+			fmt.Fprintln(out, "Only that slot was replaced; the keyring now has these slots:")
+		}
+		for _, sl := range ring.Slots() {
+			fmt.Fprintf(out, "  %s  %s\n", sl.Fingerprint, sl.Label)
+		}
+		fmt.Fprintf(out, "\nSet %s=%s in .env now (and remove %s if a recovery key is set there).\n", config.EnvArchiveKeyFile, newKeyFile, config.EnvArchiveKey)
+		fmt.Fprintln(out, "The running web server and worker keep working;")
+		fmt.Fprintln(out, "after the change they start with the new key; the replaced key no longer opens the keyring.")
 		fmt.Fprintln(out, "Back up the new key file apart from the data directory and its backups. Keep the old key as")
 		fmt.Fprintln(out, "long as backups made before now exist: they open only with the keys of their time.")
 		fmt.Fprintln(out, "This does not help after a key leaked: run `"+commandName()+" encryption rekey` afterwards for that.")

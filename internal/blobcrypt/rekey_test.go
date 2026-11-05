@@ -180,20 +180,20 @@ func TestReplaceSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	ringKey, ids, gen := append([]byte(nil), k.ringKey...), k.DataKeyIDs(), k.Generation()
-	if err := k.ReplaceSlot(Fingerprint(rk), rk, t0); err == nil {
+	if err := k.ReplaceSlot(Fingerprint(rk), rk, "archive key", t0); err == nil {
 		t.Error("replacing a key by itself accepted")
 	}
-	if err := k.ReplaceSlot("0123456789abcdef", nk, t0); err == nil {
+	if err := k.ReplaceSlot("0123456789abcdef", nk, "archive key", t0); err == nil {
 		t.Error("replacing an absent slot accepted")
 	}
-	if err := k.ReplaceSlot(Fingerprint(kek), rk, t0); err == nil {
+	if err := k.ReplaceSlot(Fingerprint(kek), rk, "archive key", t0); err == nil {
 		t.Error("a key that already has a slot accepted")
 	}
 	if k.Generation() != gen {
 		t.Fatalf("a refused ReplaceSlot changed the generation to %d", k.Generation())
 	}
 	later := t0.Add(time.Hour)
-	if err := k.ReplaceSlot(Fingerprint(kek), nk, later); err != nil {
+	if err := k.ReplaceSlot(Fingerprint(kek), nk, "archive key", later); err != nil {
 		t.Fatal(err)
 	}
 	if k.Generation() != gen+1 || len(k.Slots()) != 2 {
@@ -214,5 +214,30 @@ func TestReplaceSlot(t *testing.T) {
 	}
 	if s, ok := k.Slot(Fingerprint(nk)); !ok || s.Label != "archive key" || !s.Created.Equal(later) {
 		t.Errorf("new slot %s %q %v", s.Fingerprint, s.Label, s.Created)
+	}
+}
+
+// The new slot takes the label it is given, never the replaced slot's:
+// replacing a recovery key's slot (rotate-key --replace while a recovery
+// key is configured, the lost-key case) yields an "archive key" slot
+// (review round 2 of #519). Counter-proof: inheriting the old label
+// leaves the new key labelled "recovery key".
+func TestReplaceSlotLabel(t *testing.T) {
+	k, kek := newTestKeyring(t)
+	rk, nk := randomKey(t), randomKey(t)
+	if err := k.AddSlot(rk, "recovery key", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ReplaceSlot(Fingerprint(rk), nk, "archive key", t0); err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := k.Slot(Fingerprint(nk)); !ok || s.Label != "archive key" {
+		t.Errorf("new slot label %q", s.Label)
+	}
+	if s, ok := k.Slot(Fingerprint(kek)); !ok || s.Label != "archive key" {
+		t.Errorf("untouched slot label %q", s.Label)
+	}
+	if k.HasSlot(Fingerprint(rk)) {
+		t.Error("the replaced slot is still there")
 	}
 }
