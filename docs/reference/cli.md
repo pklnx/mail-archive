@@ -8,8 +8,8 @@ retention rules, holds and deletion runs, `jobs retry`, and `import`,
 `export`, `backup` and `audit` leave an entry in the
 [audit log](../guide/audit-log#the-fields); `migrate`, `reindex`,
 `attest` and `attest keygen`, the [`encryption`](#encryption) commands,
-`decrypt` and `export verify`, `sync`, `verify`, `status`, `notify test` and
-the list commands do not.
+`decrypt`, `seal-stream`, `unseal-stream`, `restore-dump` and `export verify`,
+`sync`, `verify`, `status`, `notify test` and the list commands do not.
 
 With Docker Compose, run every command through the wrapper, for example
 `./ma status`. The binary itself is called `mail-archive`. Every command has
@@ -58,9 +58,9 @@ when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
 
 The archive key, the keyring, and turning encryption at rest on and off.
 With encryption on, every message file is stored encrypted as
-`<sha256>.enc`; backups follow in a later version. `keygen`, `status` and
-`decrypt` need no database; the other commands do. None of them leaves an
-audit log entry. How to switch an archive: [Encryption at rest](../guide/operations#encryption-at-rest).
+`<sha256>.enc`, and [`backup`](#archive) encrypts the database dump
+(`*.dump.enc`). `keygen`, `status` and `decrypt` need no database; the other
+commands do. None of them leaves an audit log entry. How to switch an archive: [Encryption at rest](../guide/operations#encryption-at-rest).
 Format and key hierarchy: [Architecture](../development/architecture#encryption-at-rest).
 
 | Command | Purpose |
@@ -73,6 +73,8 @@ Format and key hierarchy: [Architecture](../development/architecture#encryption-
 | `encryption enable` | Encrypt every message file (also those in `orphans/`) and turn encryption at rest on; afterwards every new file is stored encrypted. Needs the keyring and the archive key. Runs in the foreground and only while nothing writes message files: it refuses, naming what runs, while `serve`, `worker`, `sync`, `import`, `account fill` or `reindex` runs, and while verify, a retention sweep or a purge holds the blob lock. Prints the percentage, files per second and the time left. Interrupted, it resumes when run again; until it has finished, the commands that write message files refuse to start. On an empty archive it only turns encryption on. Plaintext files whose content does not match their name stay as they are and are listed. |
 | `encryption disable` | Decrypt every message file and turn encryption at rest off, under the same rules as `enable`; run while `enable` is unfinished, it turns back. Encrypted files that cannot be decrypted are moved to `orphans/<time>/` and listed. The keyring stays. Needed before going back to a version below 1.5.0. |
 | `encryption status` | Show the keyring (archive id, generation, data keys, slots with fingerprint, creation time and label) and whether the configured archive key opens it; exits non-zero when it does not. Never prints a key. |
+| `seal-stream [--keyring PATH]` | Encrypt standard input to standard output in the format of encrypted backups, under the current data key of the keyring (default `data/keys/keyring`), with the archive key. `./ma backup` pipes `pg_dump` through it. Refuses empty input. Its output is complete only when it succeeds; it cannot tell a failed producer's end from a good one, so discard its output when the producer fails. |
+| `unseal-stream [--keyring PATH]` | Decrypt an encrypted backup from standard input to standard output, with the archive key; the data key is looked up in `--keyring` (the keyring copy next to the dump), then in `data/keys/keyring`. Only authenticated data is written: a damaged or cut backup stops it with an error before the end of its output, so that `pg_restore --single-transaction --exit-on-error` behind it fails and changes nothing. `restore-dump` uses it. |
 | `decrypt FILE [--out PATH] [--sha HASH] [--keyring PATH]` | Decrypt an encrypted message file or backup offline, with the archive key (or a recovery key in `MAIL_ARCHIVE_ARCHIVE_KEY`) and the keyring (default `data/keys/keyring`), to stdout or a new file `--out`. A message file is bound to its SHA-256, taken from the name `<sha256>.enc` or from `--sha`. Only authenticated data is written; on an error the command exits non-zero and `--out` is not created. |
 
 Without the archive key and every recovery key, nothing encrypted can be
@@ -82,7 +84,8 @@ commands that change the keyring at the same time do not both run: the
 second refuses until the first is done.
 
 While encryption is on, `serve`, `worker`, `sync`, `import`, `account fill`,
-`reindex` and `export` refuse to start without a key that opens the keyring,
+`reindex`, `export` and `backup` refuse to start without a key that opens
+the keyring (a dump is never written in plaintext while encryption is on),
 and `verify` checks the attestations and then stops with the reason;
 `migrate`, `status`, the user, group, auditor and account commands and
 `attest` work without it. While an encryption change is unfinished, the commands that
@@ -296,7 +299,8 @@ retention has usually ended too, so the next deletion run lists it.
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `export --format gobd --out PATH` | Write a GoBD export of one customer group for a tax audit: the original messages, CSV tables, a checksum manifest and a signed statement, as a directory or a ZIP. See [export --format gobd](#export-format-gobd). |
 | `export verify PATH` | Check a GoBD export (a directory or a ZIP) offline, without a database or configuration. See [export verify](#export-verify). |
-| `backup DIR` | Dump the database into `DIR` with `pg_dump`, next to `BACKUP-NOTE.txt`. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
+| `backup DIR` | Dump the database into `DIR` with `pg_dump` (`mailarchive-<time>.dump`), next to `BACKUP-NOTE.txt`. With [encryption at rest](#encryption) on, the dump is encrypted while it is written (`mailarchive-<time>.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring (`mailarchive-<time>.keyring`, wrapped under the archive keys); the note names the fingerprints of the keys that open it, never a key. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
+| `restore-dump FILE [--keyring PATH]` | Load a dump written by `backup` into a new, empty database, in one transaction (`pg_restore --no-owner --single-transaction --exit-on-error`); it refuses a database that holds anything, since `pg_restore --clean` cannot replace this schema (the partitions of the audit log); an encrypted dump is decrypted on its way, with the keyring copy next to it (or `--keyring`). A damaged or cut dump leaves the database as it was. Then it reconciles the keyring and the state of encryption at rest with the data directory and prints what it changed: the newer of the dump's keyring and the keyring file wins and is written to the other (a recovery key added after the backup stays), the data keys of both are kept, copies of different archives are refused (for an encrypted dump before anything is restored, by its keyring copy), and encrypted files next to a dump that says off make the state `encrypting`, finished by `encryption enable`. `--reconcile-only` does only the second step, for example after `migrate` on a dump older than the schema. Refuses while a writer runs, and holds the writers lock until the reconciliation is done, also under `./ma`, so that no writer starts during the restore. With Docker Compose: `./ma restore-dump FILE`. See [Restore](../guide/operations#restore). |
 | `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `DATE` is `YYYY-MM-DD`, a day in UTC, or RFC 3339 with an offset for another zone (`2026-10-01T00:00:00+02:00`). `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, `--group NAME` (the entries of a [customer group](#groups)), `--group-id N` (by the group's id, also of a removed group) or `--without-group` (those without one: before 1.4.0, or instance-level), and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `attest` | Write a signed attestation over the archived messages now. See below. |
 | `attest keygen [--rotate]` | Create the key that signs attestations, or replace it. See below. |
@@ -572,7 +576,9 @@ cannot be part of a file name (`/`, `\`, `%`, control characters, a leading
 
 One export never mixes users: give `--user`, or `--account` (with `--user`
 when several users have an account with that name). With Docker Compose,
-`DIR` must be under `/data`, which is `./data` on the host. Exits `1` if
+`DIR` must be under `/data`, which is `./data` on the host. The export is
+not encrypted: while encryption at rest is on, an export inside the data
+directory gets a warning on stderr; delete it once it is used. Exits `1` if
 messages were skipped because their file is missing or corrupt (run `verify`).
 See [Exporting mail](../guide/operations#exporting-mail).
 

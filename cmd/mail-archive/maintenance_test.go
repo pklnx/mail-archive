@@ -284,7 +284,7 @@ func TestBackupNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.close()
-	note, err := backupNote(context.Background(), a, "mailarchive-x.dump", time.Date(2026, 10, 7, 19, 1, 2, 0, time.UTC))
+	note, err := backupNote(context.Background(), a, "mailarchive-x.dump", nil, time.Date(2026, 10, 7, 19, 1, 2, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestBackupNote(t *testing.T) {
 	if !regexpMatch(`Last migration: \d{5}_\w+\.sql\n`, note) {
 		t.Errorf("note lacks the last migration:\n%s", note)
 	}
-	for _, want := range []string{"mailarchive-x.dump", "2026-10-07T19:01:02Z", "/srv/archive", "MAIL_ARCHIVE_SECRET_KEY", "pg_restore --clean --if-exists"} {
+	for _, want := range []string{"mailarchive-x.dump", "2026-10-07T19:01:02Z", "/srv/archive", "MAIL_ARCHIVE_SECRET_KEY", "pg_restore --no-owner --single-transaction --exit-on-error", "create an empty database"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note lacks %q:\n%s", want, note)
 		}

@@ -258,7 +258,14 @@ is still there.
 `internal/blobcrypt` holds the file format, the keyring and the archive key
 of encryption at rest (#392); `internal/blobstore` stores message files in
 this format, and `internal/archive` (`atrest.go`) holds the start-up checks.
-Encrypted backups follow in a later step.
+Encrypted backups use the same format with purpose 2 (backup, no binding):
+`backup` and `seal-stream` write it through `blobcrypt.Writer`;
+`unseal-stream` and `restore-dump` read it with `blobcrypt.StreamReader`,
+which needs no size or random access, holds one chunk, reads one byte ahead
+to tell the final chunk, and returns each chunk only after authenticating
+it, so a cut stream fails before its end instead of ending cleanly.
+`restore-dump` then calls `archive.ReconcileRestored` (`restore.go`), which
+reuses the start-up reconciliation of the keyring and `deriveFromFiles`.
 Only the Go standard library is used (`crypto/aes`, `crypto/cipher` GCM,
 `crypto/hkdf`, `crypto/hmac`, `crypto/rand`).
 
