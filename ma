@@ -27,17 +27,25 @@ compose() {
 	docker compose --progress quiet "$@"
 }
 
-# encryption keygen runs in a container removed afterwards: a key written
-# anywhere but the keys directory (/keys) would be lost with it.
-if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
+# encryption keygen and rotate-key run in a container removed afterwards: a
+# key written anywhere but the keys directory (/keys) would be lost with it.
+keyflag=
+if [ "${1:-}" = encryption ]; then
+	case ${2:-} in
+	keygen) keyflag=--key-file ;;
+	rotate-key) keyflag=--new-key-file ;;
+	esac
+fi
+if [ -n "$keyflag" ]; then
 	prev=
 	for arg in "$@"; do
-		case $prev in
-		--key-file) value=$arg ;;
-		*) value= ;;
-		esac
+		if [ "$prev" = "$keyflag" ]; then
+			value=$arg
+		else
+			value=
+		fi
 		case $arg in
-		--key-file=*) value=${arg#--key-file=} ;;
+		"$keyflag"=*) value=${arg#"$keyflag"=} ;;
 		esac
 		case $value in
 		*..*) value=bad ;;
@@ -45,7 +53,7 @@ if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
 		case $value in
 		'' | /keys/?*) ;;
 		*)
-			echo "error: --key-file must lie in /keys (ARCHIVE_KEY_DIR on the host); elsewhere the key is lost with the container" >&2
+			echo "error: $keyflag must lie in /keys (ARCHIVE_KEY_DIR on the host); elsewhere the key is lost with the container" >&2
 			exit 2
 			;;
 		esac
@@ -242,6 +250,14 @@ if [ "${1:-}" = encryption ] && [ "${2:-}" = keygen ]; then
 		echo "warning: could not prepare the data directory (ARCHIVE_DIR in .env, default ./data)" >&2
 	exec docker compose --progress quiet run --rm --no-deps $build -T --user 0:0 \
 		-e MAIL_ARCHIVE_COMMAND=./ma mail-archive-keygen encryption keygen --chown 65532:65532 "$@"
+fi
+
+# encryption rotate-key writes the new archive key into the keys directory,
+# which the CLI service mounts read-only: the same service with it writable
+# (mail-archive-keys), as the container user, who owns it since keygen.
+if [ "${1:-}" = encryption ] && [ "${2:-}" = rotate-key ]; then
+	exec docker compose --progress quiet run --rm $build -T \
+		-e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_OPERATOR="$operator" mail-archive-keys "$@"
 fi
 
 # Allocate a TTY only when attached to a terminal (not in cron or pipes),

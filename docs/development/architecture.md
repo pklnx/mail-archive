@@ -296,8 +296,9 @@ So the archive id is in every slot's associated data and the generation,
 current key and slot list are in the data keys' associated data: none of
 them can change without a KEK. The keyring key lets a slot be added or
 removed without the other KEKs, as with LUKS keyslots. A removed KEK still
-opens older copies of the keyring (backups), so after a KEK leak a new
-keyring key and data key are needed, not only `remove-key`.
+opens older copies of the keyring (backups) and so the keyring key, so after
+a KEK leak a new keyring key and data key are needed, not only `remove-key`:
+`encryption rekey` (below).
 
 ### Keyring file
 
@@ -562,10 +563,69 @@ development container, bound by `fsync`; 0.2–0.8 of a core; the resident
 set grows by 3–7 MiB, up to 17 MiB on a very fast disk (one 64 KiB chunk buffer, the copy buffer, at most
 200 paths per batch); extra disk space at most one batch.
 
+### Key changes and rekey (part 5)
+
+`encryption add-key`, `remove-key` and `rotate-key` (`archive.ChangeKeyring`)
+hold the writers lock **shared**, so no offline conversion runs meanwhile
+while writers may keep running, and the keyring `flock`. Before the change
+they reconcile the file with the database copy as a writer does at start
+(off: the file merged with the copy an off row recorded, which is not
+written, so that the next writer still compares it with the file); then
+they write the database copy (compare-and-swap on its keyring generation)
+and the file. Without that, a key added to a file restored from an older
+backup would lose its slot to the newer database copy at the next start
+(coordinator note on #437). None of them changes the current data key, so
+the generation, which running writers pinned, stays.
+
+`rotate-key` writes a new KEK (key file first, then the keyring) and
+replaces one slot with one for it (`Keyring.ReplaceSlot`), under the
+**existing** keyring key: the configured KEK's, or the one `--replace`
+names (a lost archive key's, while a recovery key is configured). The new
+slot is always labelled `archive key`, never inheriting the replaced
+label; every other slot and the data keys stay, so no file changes
+(coordinator decision on #437, 6640615690; review round 2 of #519). A new
+keyring key there would protect nothing: `rotate-key` adds no data key, so
+a replaced KEK with an older keyring copy can only reach data keys the
+current keyring holds anyway. It does not help after a leak; `rekey` does.
+
+A new **keyring key** (`Keyring.Rewrap`, `rekey` only) is wrapped for the
+keys at hand only: the slots kept must be proven by their KEK (it unwraps
+the slot to the current keyring key), so every other slot is dropped.
+
+`encryption rekey` (`archive.Rekey`) runs offline like `enable`, with the
+same locks, cursor, batches, generation guard and clean-pass rule:
+
+1. From `on`, after reconciling the copies, it adds a new current data key
+   and a new keyring key for the configured KEK, the kept keys and a new
+   recovery key, and records the database copy with the state `rekeying`
+   in one statement (`StartBlobRekey`, compare-and-swap on the keyring
+   generation). The new recovery key is shown right then
+   (`RekeyOptions.ShowRecoveryKey`), before the file is written and before
+   any file is converted: the old recovery slots are already gone, so a run
+   killed later must not leave the operator without one. Then it writes the
+   file. A resumed run lists the slots and points to `add-key`. A KEK whose slot was removed before
+   opens neither the new keyring nor its new data key, whatever older copy
+   it has (coordinator decision on #437).
+2. Each file whose header names another data key is decrypted and
+   re-encrypted into `tmp/`, synchronized, read back with its hash checked,
+   and renamed over the old file (`blobstore.NewRekey`); the directory is
+   synchronized at the end of the batch, before the cursor moves on. There
+   is never an unlink followed by a link, and the old key stays in the
+   keyring, so a crash leaves a readable file and the rerun completes it.
+   A plaintext straggler is encrypted as by `enable`. A file that cannot be
+   decrypted stays and keeps its key named.
+3. After a pass from the start that converted nothing, the data keys that
+   no header in that pass named are deleted (`DeleteDataKeys`): first from
+   the file, then from the database copy together with the state `on`
+   (`FinishBlobRekey`). Interrupted in between, the state stays `rekeying`;
+   the rerun's reconciliation brings the key back (union) and the next
+   clean pass deletes it again. The other order would leave the state `on`
+   with the key in the file, and the union would keep it for good.
+
 ### Commands
 
-`encryption keygen`, `add-key`, `remove-key` and `status`, and `decrypt`,
-need no database (see the [command line](../reference/cli#encryption)).
+`encryption keygen` and `status`, and `decrypt`, need no database (see the
+[command line](../reference/cli#encryption)).
 `decrypt` recovers a file with the KEK and the keyring alone, from a copy of
 `data/` or a backup.
 

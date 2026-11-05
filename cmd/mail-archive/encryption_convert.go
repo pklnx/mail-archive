@@ -28,18 +28,7 @@ rest on; every new message file is then stored encrypted. Needs the keyring
 encryption on. A plaintext file whose content does not match its name stays
 as it is and is listed (verify reports it).`
 	}
-	long += `
-
-Runs in the foreground and only while nothing else writes message files:
-stop the web server and the worker first (docker compose stop web worker);
-sync, import, fill, reindex, verify, retention and purge must not run either.
-It refuses and names what is running otherwise. Until it has finished, those
-commands refuse to start.
-
-Interrupted (Ctrl-C, a crash, a reboot), it resumes where it stopped: run the
-same command again. Running the other command instead changes direction. It
-prints the percentage, files per second and the time left. The state becomes
-final only after a full pass that found nothing left to convert.`
+	long += offlineHelp(use)
 	return &cobra.Command{
 		Use:   use,
 		Short: short,
@@ -49,6 +38,27 @@ final only after a full pass that found nothing left to convert.`
 			return encryptionConvert(cmd.Context(), cmd.OutOrStdout(), encrypt)
 		},
 	}
+}
+
+// offlineHelp is the help text shared by the offline commands enable,
+// disable and rekey.
+func offlineHelp(use string) string {
+	direction := " Running the other command instead changes direction."
+	if use == "rekey" {
+		direction = ""
+	}
+	return `
+
+Runs in the foreground and only while nothing else writes message files:
+stop the web server and the worker first (docker compose stop web worker);
+sync, import, fill, reindex, verify, retention and purge must not run either.
+It refuses and names what is running otherwise. Until it has finished, those
+commands refuse to start.
+
+Interrupted (Ctrl-C, a crash, a reboot), it resumes where it stopped: run the
+same command again.` + direction + ` It prints the percentage, files per
+second and the time left. The state becomes final only after a full pass that
+found nothing left to convert.`
 }
 
 func encryptionConvert(ctx context.Context, out io.Writer, encrypt bool) error {

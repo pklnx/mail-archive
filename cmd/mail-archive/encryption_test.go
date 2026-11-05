@@ -17,6 +17,8 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
 type encSetup struct {
@@ -42,6 +44,33 @@ func runEnc(t *testing.T, cmd *cobra.Command, args ...string) (string, error) {
 	cmd.SetErr(&out)
 	err := runCmd(t, cmd, "", args...)
 	return out.String(), err
+}
+
+// withDB gives the setup a database: the keyring commands that change
+// the keyring reconcile it with its database copy (#392, part 5).
+func (s *encSetup) withDB(t *testing.T) *store.Store {
+	t.Helper()
+	st, url := storetest.NewWithURL(t)
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvLogLevel, "error")
+	return st
+}
+
+// openTestKeyring opens the keyring file of dataDir with the configured key.
+func openTestKeyring(t *testing.T, dataDir string) *blobcrypt.Keyring {
+	t.Helper()
+	kek, _, err := config.ArchiveKeyFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, err := blobcrypt.ReadKeyringFile(blobcrypt.KeyringPath(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ring.Open(kek); err != nil {
+		t.Fatal(err)
+	}
+	return ring
 }
 
 var printedKey = regexp.MustCompile(`(?m)^  ([A-Za-z0-9+/]{43}=)$`)
@@ -130,6 +159,7 @@ func TestEncryptionKeygenNoRecovery(t *testing.T) {
 
 func TestEncryptionSlots(t *testing.T) {
 	s := newEncSetup(t)
+	s.withDB(t)
 	recovery := s.keygen(t)
 	rk, _ := blobcrypt.ParseKEK(recovery)
 
@@ -203,10 +233,7 @@ func TestEncryptionStatusNoKeyring(t *testing.T) {
 func TestDecrypt(t *testing.T) {
 	s := newEncSetup(t)
 	s.keygen(t)
-	ring, _, err := openKeyring(s.dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ring := openTestKeyring(t, s.dataDir)
 	id, dk, _ := ring.Current()
 	plain := bytes.Repeat([]byte("Subject: hello\r\n\r\nbody\r\n"), 5000)
 	h := sha256.Sum256(plain)
@@ -333,7 +360,5 @@ func TestEncryptionKeygenCleansUp(t *testing.T) {
 		t.Fatalf("rerun: %v\n%s", err, out)
 	}
 	t.Setenv(config.EnvArchiveKeyFile, s.keyFile)
-	if _, _, err := openKeyring(s.dataDir); err != nil {
-		t.Fatalf("after the rerun: %v", err)
-	}
+	openTestKeyring(t, s.dataDir)
 }

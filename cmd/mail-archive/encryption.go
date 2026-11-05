@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
 	"github.com/pklnx/mail-archive/internal/config"
 )
@@ -36,13 +38,14 @@ func newEncryptionCmd() *cobra.Command {
 		Long: `Manage the archive key (KEK) and the keyring of encryption at rest.
 
 The keyring (<data dir>/keys/keyring) holds the data keys, wrapped under one
-slot per archive key or recovery key. keygen, add-key, remove-key and status
-need no database; enable and disable convert the archive offline. See
-docs/guide/operations.md, "Encryption at rest", and
+slot per archive key or recovery key. keygen and status need no database;
+add-key, remove-key and rotate-key first reconcile the keyring file with its
+copy in the database; enable, disable and rekey convert the archive offline.
+See docs/guide/operations.md, "Encryption at rest", and
 docs/development/architecture.md, "Encryption at rest".`,
 	}
 	cmd.AddCommand(newEncryptionKeygenCmd(), newEncryptionAddKeyCmd(), newEncryptionRemoveKeyCmd(), newEncryptionStatusCmd(),
-		newEncryptionConvertCmd(true), newEncryptionConvertCmd(false))
+		newEncryptionConvertCmd(true), newEncryptionConvertCmd(false), newEncryptionRotateKeyCmd(), newEncryptionRekeyCmd())
 	return cmd
 }
 
@@ -243,27 +246,28 @@ func writeKeyFile(path string, kek []byte, uid, gid int) error {
 	return nil
 }
 
-// openKeyring loads the configured archive key and opens the keyring of
-// dataDir with it.
-func openKeyring(dataDir string) (*blobcrypt.Keyring, []byte, error) {
-	kek, _, err := config.ArchiveKeyFromEnv()
+// changeKeyring runs a keyring change of command (add-key, remove-key,
+// rotate-key) through archive.ChangeKeyring: the file is reconciled with
+// the database copy first (#392, part 5). After the change took effect,
+// the keyring is returned, also with an error wrapping
+// archive.ErrKeyringFileNotWritten; done then reports what was changed
+// (new keys must be shown) before the error is returned.
+func changeKeyring(ctx context.Context, command string, change func(a *app, ring *blobcrypt.Keyring) error, done func(*blobcrypt.Keyring)) error {
+	a, err := openApp(ctx)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	if kek == nil {
-		return nil, nil, fmt.Errorf("no archive key: set %s (or %s)", config.EnvArchiveKeyFile, config.EnvArchiveKey)
+	defer a.close()
+	ring, err := archive.ChangeKeyring(ctx, a.store, archive.KeyringChangeOptions{
+		DataDir: a.cfg.DataDir, KEK: a.cfg.ArchiveKey, Command: command, Logger: newLogger(a.cfg.LogLevel),
+	}, func(ring *blobcrypt.Keyring) error { return change(a, ring) })
+	if ring != nil {
+		done(ring)
 	}
-	ring, err := blobcrypt.ReadKeyringFile(blobcrypt.KeyringPath(dataDir))
-	if err != nil {
-		if errors.Is(err, blobcrypt.ErrNoKeyring) {
-			return nil, nil, fmt.Errorf("%w (create one with `%s encryption keygen`)", err, commandName())
-		}
-		return nil, nil, err
+	if errors.Is(err, blobcrypt.ErrNoKeyring) {
+		return fmt.Errorf("%w (create one with `%s encryption keygen`)", err, commandName())
 	}
-	if err := ring.Open(kek); err != nil {
-		return nil, nil, err
-	}
-	return ring, kek, nil
+	return err
 }
 
 func newEncryptionAddKeyCmd() *cobra.Command {
@@ -274,41 +278,29 @@ func newEncryptionAddKeyCmd() *cobra.Command {
 		Long: `Create a new key, add a slot for it to the keyring and print it once. It
 opens the keyring like the archive key does: keep it offline, apart from the
 host and the backups. The configured archive key must open the keyring.
-No file is re-encrypted.`,
+No file is re-encrypted. Needs the database (the keyring file is reconciled
+with its copy there first); the web server and the worker may keep running.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return encryptionAddKey(cmd.OutOrStdout(), config.DataDirFromEnv(), label, time.Now())
+			return encryptionAddKey(cmd.Context(), cmd.OutOrStdout(), label, time.Now())
 		},
 	}
 	cmd.Flags().StringVar(&label, "label", labelRecoveryKey, "a name for the slot, shown by encryption status")
 	return cmd
 }
 
-func encryptionAddKey(out io.Writer, dataDir, label string, now time.Time) error {
-	unlock, err := blobcrypt.LockKeyring(dataDir)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	ring, _, err := openKeyring(dataDir)
-	if err != nil {
-		return err
-	}
+func encryptionAddKey(ctx context.Context, out io.Writer, label string, now time.Time) error {
 	nk, err := blobcrypt.GenerateKEK()
 	if err != nil {
 		return err
 	}
-	if err := ring.AddSlot(nk, label, now); err != nil {
-		return err
-	}
-	if err := blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(dataDir), ring); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "added key %s (%s) to the keyring, generation %d; shown only now:\n\n  %s\n\n",
-		blobcrypt.Fingerprint(nk), label, ring.Generation(), blobcrypt.EncodeKEK(nk))
-	fmt.Fprintln(out, "Keep it offline, apart from this host and from the backups.")
-	fmt.Fprintln(out, "Backups made before now do not know this key; they open with the keys of their time.")
-	return nil
+	return changeKeyring(ctx, "add-key", func(_ *app, ring *blobcrypt.Keyring) error { return ring.AddSlot(nk, label, now) },
+		func(ring *blobcrypt.Keyring) {
+			fmt.Fprintf(out, "added key %s (%s) to the keyring, generation %d; shown only now:\n\n  %s\n\n",
+				blobcrypt.Fingerprint(nk), label, ring.Generation(), blobcrypt.EncodeKEK(nk))
+			fmt.Fprintln(out, "Keep it offline, apart from this host and from the backups.")
+			fmt.Fprintln(out, "Backups made before now do not know this key; they open with the keys of their time.")
+		})
 }
 
 var fingerprintRe = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -320,39 +312,29 @@ func newEncryptionRemoveKeyCmd() *cobra.Command {
 		Long: `Remove the slot of the key with this fingerprint (see encryption status).
 The configured archive key and the last slot cannot be removed. A removed key
 still opens older copies of the keyring, such as backups, and through their
-keyring key also the current one; after a key leaked, a new keyring key and
-a new data key are needed, not only this.`,
+keyring key also the current one; after a key leaked, run encryption rekey
+afterwards, which replaces the keyring key and the data key. Needs the
+database, like add-key.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return encryptionRemoveKey(cmd.OutOrStdout(), config.DataDirFromEnv(), strings.ToLower(strings.TrimSpace(args[0])))
+			return encryptionRemoveKey(cmd.Context(), cmd.OutOrStdout(), strings.ToLower(strings.TrimSpace(args[0])))
 		},
 	}
 }
 
-func encryptionRemoveKey(out io.Writer, dataDir, fp string) error {
+func encryptionRemoveKey(ctx context.Context, out io.Writer, fp string) error {
 	if !fingerprintRe.MatchString(fp) {
 		return fmt.Errorf("want a fingerprint of 16 hex digits as shown by encryption status, got %q", fp)
 	}
-	unlock, err := blobcrypt.LockKeyring(dataDir)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	ring, kek, err := openKeyring(dataDir)
-	if err != nil {
-		return err
-	}
-	if fp == blobcrypt.Fingerprint(kek) {
-		return errors.New("refusing to remove the configured archive key's slot: the next start could not open the keyring; configure another key first")
-	}
-	if err := ring.RemoveSlot(fp); err != nil {
-		return err
-	}
-	if err := blobcrypt.WriteKeyringFile(blobcrypt.KeyringPath(dataDir), ring); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "removed key %s from the keyring, generation %d\n", fp, ring.Generation())
-	return nil
+	return changeKeyring(ctx, "remove-key", func(a *app, ring *blobcrypt.Keyring) error {
+		if fp == blobcrypt.Fingerprint(a.cfg.ArchiveKey) {
+			return fmt.Errorf("refusing to remove the configured archive key's slot: the next start could not open the keyring; replace it with `%s encryption rotate-key` instead", commandName())
+		}
+		return ring.RemoveSlot(fp)
+	}, func(ring *blobcrypt.Keyring) {
+		fmt.Fprintf(out, "removed key %s from the keyring, generation %d\n", fp, ring.Generation())
+		fmt.Fprintf(out, "If the key leaked, run `%s encryption rekey` now: the removed key still opens older copies of the keyring (backups), and through them the current data keys.\n", commandName())
+	})
 }
 
 func newEncryptionStatusCmd() *cobra.Command {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -54,8 +55,12 @@ const (
 type Conversion struct {
 	s       *Store
 	encrypt bool
-	dirs    map[string]struct{} // absolute directories to synchronize
-	unlink  []string            // absolute paths of sources, for Commit
+	// rekey: re-encrypt files under another data key with the current one
+	// (NewRekey); named collects the data keys the headers name.
+	rekey  bool
+	named  map[uint32]struct{}
+	dirs   map[string]struct{} // absolute directories to synchronize
+	unlink []string            // absolute paths of sources, for Commit
 }
 
 // NewConversion starts a conversion to the encrypted form (encrypt) or to
@@ -67,6 +72,39 @@ func (s *Store) NewConversion(encrypt bool) (*Conversion, error) {
 	}
 	return &Conversion{s: s, encrypt: encrypt, dirs: map[string]struct{}{}}, nil
 }
+
+// NewRekey starts a rekey conversion (#392, part 5): every encrypted file
+// whose header names a data key other than the current one (SetKeys) is
+// re-encrypted under the current key. The new copy is written to tmp/,
+// synchronized, read back in full with its hash checked, and then replaces
+// the old file under the same name by one atomic rename; Commit
+// synchronizes the directory. There is never an unlink followed by a link,
+// and the old key stays in the keyring until the caller retires it, so a
+// crash at any point leaves a readable file and a repeat completes it.
+// Plaintext files met on the way (stragglers) are encrypted as by
+// NewConversion(true).
+func (s *Store) NewRekey() (*Conversion, error) {
+	if s.keys == nil || !s.encrypt {
+		return nil, ErrNoKeys
+	}
+	return &Conversion{s: s, encrypt: true, rekey: true, named: map[uint32]struct{}{}, dirs: map[string]struct{}{}}, nil
+}
+
+// NamedKeys lists, in ascending order, the data keys named by the headers
+// of the encrypted files a rekey conversion met since it started or since
+// ResetNamed: the current key for each file it re-encrypted or found
+// current, the old key for each file it could not re-encrypt.
+func (c *Conversion) NamedKeys() []uint32 {
+	ids := make([]uint32, 0, len(c.named))
+	for id := range c.named {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// ResetNamed starts a new NamedKeys list, at the start of a pass.
+func (c *Conversion) ResetNamed() { clear(c.named) }
 
 // Pending is the number of sources the next Commit unlinks.
 func (c *Conversion) Pending() int { return len(c.unlink) }
@@ -80,7 +118,21 @@ func (c *Conversion) Message(hash string) (ConvertOutcome, error) {
 	if !c.encrypt {
 		src, dst = dst, src
 	}
-	return c.convert(src, hash, func(string) string { return dst })
+	if !c.rekey {
+		return c.convert(src, hash, func(string) string { return dst })
+	}
+	// Rekey: the encrypted file first, so that a plaintext straggler next
+	// to it is dropped against the copy under the current key (or replaces
+	// an encrypted copy that cannot be re-encrypted).
+	out, err := c.rekeyFile(dst, hash)
+	if err != nil {
+		return out, err
+	}
+	plain, err := c.convert(src, hash, func(string) string { return dst })
+	if err != nil || plain != ConvertNone {
+		return plain, err
+	}
+	return out, nil
 }
 
 var (
@@ -107,6 +159,14 @@ func (c *Conversion) Orphan(rel string) (ConvertOutcome, error) {
 		return ConvertNone, nil
 	}
 	dir, base := filepath.Dir(abs), filepath.Base(abs)
+	if c.rekey && strings.HasSuffix(base, encExt) {
+		if m := encNameRe.FindStringSubmatch(base); m != nil {
+			return c.rekeyFile(abs, m[1])
+		}
+		// No hash in the name: it cannot be opened, so it cannot be
+		// re-encrypted; its key still counts as named.
+		return c.rekeyUnbound(abs)
+	}
 	if !c.encrypt {
 		m := encNameRe.FindStringSubmatch(base)
 		if m == nil {
@@ -195,6 +255,131 @@ func (c *Conversion) targetUsable(dst, hash string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// headerKey reads the data key id from the header of the encrypted file at
+// path. A missing file wraps fs.ErrNotExist; an invalid header is
+// errSourceCorrupt.
+func (c *Conversion) headerKey(path string) (uint32, error) {
+	f, err := os.Open(path) //nolint:gosec // a file of the store
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	var raw [blobcrypt.HeaderSize]byte
+	n, err := io.ReadFull(f, raw[:])
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return 0, err
+	}
+	h, err := blobcrypt.ParseHeader(raw[:n])
+	if err != nil || h.Purpose != blobcrypt.PurposeMessage {
+		return 0, errSourceCorrupt
+	}
+	return h.KeyID, nil
+}
+
+// rekeyUnbound is a rekey of an encrypted file whose name carries no hash:
+// one under the current key needs nothing, any other is corrupt (it stays,
+// and so does its key).
+func (c *Conversion) rekeyUnbound(path string) (ConvertOutcome, error) {
+	id, err := c.headerKey(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ConvertNone, nil
+	case errors.Is(err, errSourceCorrupt):
+		return ConvertCorrupt, nil
+	case err != nil:
+		return ConvertNone, err
+	}
+	c.named[id] = struct{}{}
+	if id == c.s.keyID {
+		return ConvertNone, nil
+	}
+	return ConvertCorrupt, nil
+}
+
+// rekeyFile re-encrypts the encrypted file at path, bound to hash, under
+// the current data key, unless its header already names that key. A file
+// that cannot be decrypted (damaged, or under a key the keyring lacks)
+// stays as it is: ConvertCorrupt, and its key counts as named.
+func (c *Conversion) rekeyFile(path, hash string) (ConvertOutcome, error) {
+	id, err := c.headerKey(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ConvertNone, nil
+	case errors.Is(err, errSourceCorrupt):
+		return ConvertCorrupt, nil
+	case err != nil:
+		return ConvertNone, err
+	}
+	if id == c.s.keyID {
+		c.named[id] = struct{}{}
+		return ConvertNone, nil
+	}
+	tmp, err := c.reencrypt(path, hash)
+	if errors.Is(err, errSourceCorrupt) {
+		c.named[id] = struct{}{}
+		return ConvertCorrupt, nil
+	}
+	if err != nil {
+		return ConvertNone, err
+	}
+	defer func() { _ = os.Remove(tmp) }()
+	if err := c.s.ops.rename(tmp, path); err != nil {
+		// The old file is untouched and still names its key.
+		c.named[id] = struct{}{}
+		return ConvertNone, fmt.Errorf("replace %s: %w", path, err)
+	}
+	c.named[c.s.keyID] = struct{}{}
+	c.dirs[filepath.Dir(path)] = struct{}{}
+	return ConvertDone, nil
+}
+
+// reencrypt decrypts the file at path, bound to hash, and encrypts it
+// under the current data key into a new file in tmp/, while hashing the
+// plaintext; it synchronizes the new file and reads it back. Another hash
+// or a decryption failure is errSourceCorrupt.
+func (c *Conversion) reencrypt(path, hash string) (tmpPath string, err error) {
+	m, err := c.s.openFile(path, hash, true)
+	if err != nil {
+		if sourceCorrupt(err) {
+			return "", errSourceCorrupt
+		}
+		return "", err
+	}
+	defer func() { _ = m.Close() }()
+	tmp, err := os.CreateTemp(filepath.Join(c.s.root, "tmp"), "rekey-*")
+	if err != nil {
+		return "", err
+	}
+	name := tmp.Name()
+	open := true
+	defer func() {
+		if open {
+			_ = tmp.Close()
+		}
+		if err != nil {
+			_ = os.Remove(name)
+		}
+	}()
+	h := sha256.New()
+	if _, err = c.s.writeEncrypted(tmp, h, m); err != nil {
+		if sourceCorrupt(err) {
+			return "", errSourceCorrupt
+		}
+		return "", fmt.Errorf("re-encrypt %s: %w", path, err)
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != hash {
+		return "", errSourceCorrupt
+	}
+	open = false
+	if err = syncClose(c.s.ops.temp(tmp), "sync temp file"); err != nil {
+		return "", err
+	}
+	if err = c.s.readBack(name, hash, true); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 // errSourceCorrupt is a source that cannot be converted: another hash, an

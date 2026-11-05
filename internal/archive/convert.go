@@ -106,7 +106,8 @@ func Disable(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts 
 	return convertArchive(ctx, st, blobs, opts, false)
 }
 
-func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts ConvertOptions, encrypt bool) (*ConvertResult, error) {
+// defaults fills in the unset options.
+func (opts *ConvertOptions) defaults() {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -122,17 +123,38 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 	if opts.BatchBytes <= 0 {
 		opts.BatchBytes = ConvertBatchBytes
 	}
-	command := "disable"
-	if encrypt {
-		command = "enable"
-	}
-	lock, err := st.TryLockWritersExclusive(ctx, command)
-	if err != nil {
+}
+
+// offline is the set of locks an offline command (`encryption enable`,
+// `disable`, `rekey`) holds for its whole run.
+type offline struct {
+	// ctx ends when the writers lock's connection fails; its cause is the
+	// lost lock.
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	lock    *store.WritersLock
+	ticker  *time.Ticker
+	unlock  func() // the keyring lock
+	orphans string // orphans/<time> of this run
+}
+
+// beginOffline takes the locks of an offline command: the writers lock
+// and the blob lock exclusively, without waiting (refused while a writer,
+// verify, a sweep or a purge runs), a watch of the lock's connection, and
+// the keyring lock. Then it moves the files left in tmp/ aside into
+// res.TempMoved. The caller calls close.
+func beginOffline(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts ConvertOptions, command string, res *ConvertResult) (_ *offline, err error) {
+	o := &offline{}
+	defer func() {
+		if err != nil {
+			o.close()
+		}
+	}()
+	if o.lock, err = st.TryLockWritersExclusive(ctx, command); err != nil {
 		return nil, err
 	}
-	defer lock.Release()
 	// The blob lock on the writers lock's connection, released with it.
-	if ok, err := lock.TryBlobLock(ctx); err != nil {
+	if ok, err := o.lock.TryBlobLock(ctx); err != nil {
 		return nil, err
 	} else if !ok {
 		return nil, ErrBlobLockHeld
@@ -140,40 +162,75 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 	// A session lock ends with its session: when the lock connection
 	// fails, the run stops at the next file, as a writer stops (review
 	// round 1 of #513, note 1).
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
+	o.ctx, o.cancel = context.WithCancelCause(ctx)
 	tick := opts.Tick
 	if tick == nil {
-		t := time.NewTicker(store.WritersPing)
-		defer t.Stop()
-		tick = t.C
+		o.ticker = time.NewTicker(store.WritersPing)
+		tick = o.ticker.C
 	}
-	lock.Watch(tick, func(err error) {
+	o.lock.Watch(tick, func(err error) {
 		opts.Logger.Error("encryption at rest: the conversion stops", "err", err)
-		cancel(err)
+		o.cancel(err)
 		if opts.OnLost != nil {
 			opts.OnLost(err)
 		}
 	})
 	// The keyring lock before any state change: no other encryption
 	// command changes the keyring while this runs.
-	unlockRing, err := blobcrypt.LockKeyring(opts.DataDir)
-	if err != nil {
+	if o.unlock, err = blobcrypt.LockKeyring(opts.DataDir); err != nil {
 		return nil, err
 	}
-	defer unlockRing()
-
-	res := &ConvertResult{}
 	// No writer runs, so a file in tmp/ belongs to no write in progress:
 	// it goes to orphans/<time>/tmp/, where it is converted with the
 	// orphans (review round 1 of #513, A1).
-	orphanDir := blobstore.OrphansDir + "/" + opts.Now().UTC().Format("20060102T150405Z")
-	if res.TempMoved, err = blobs.MoveTempAside(orphanDir); err != nil {
+	o.orphans = blobstore.OrphansDir + "/" + opts.Now().UTC().Format("20060102T150405Z")
+	if res.TempMoved, err = blobs.MoveTempAside(o.orphans); err != nil {
 		return nil, err
 	}
 	if len(res.TempMoved) > 0 {
-		fmt.Fprintf(opts.Out, "moved %d file(s) left in tmp/ by an interrupted write to %s/tmp/\n", len(res.TempMoved), orphanDir)
+		fmt.Fprintf(opts.Out, "moved %d file(s) left in tmp/ by an interrupted write to %s/tmp/\n", len(res.TempMoved), o.orphans)
 	}
+	return o, nil
+}
+
+// close releases the locks.
+func (o *offline) close() {
+	if o.unlock != nil {
+		o.unlock()
+	}
+	if o.cancel != nil {
+		o.cancel(nil)
+	}
+	if o.ticker != nil {
+		o.ticker.Stop()
+	}
+	if o.lock != nil {
+		o.lock.Release()
+	}
+}
+
+// runErr is err of a run in o, or the lost lock that ended it.
+func (o *offline) runErr(err error) error {
+	if cause := context.Cause(o.ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
+	return err
+}
+
+func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store, opts ConvertOptions, encrypt bool) (*ConvertResult, error) {
+	opts.defaults()
+	command := "disable"
+	if encrypt {
+		command = "enable"
+	}
+	res := &ConvertResult{}
+	off, err := beginOffline(ctx, st, blobs, opts, command, res)
+	if err != nil {
+		return nil, err
+	}
+	defer off.close()
+	ctx = off.ctx
+	orphanDir := off.orphans
 
 	atOpts := AtRestOptions{DataDir: opts.DataDir, KEK: opts.KEK, Logger: opts.Logger, keyringHeld: true}
 	row, err := st.BlobEncryption(ctx)
@@ -260,10 +317,7 @@ func convertArchive(ctx context.Context, st *store.Store, blobs *blobstore.Store
 		res: res, orphanDir: orphanDir,
 	}
 	if err := c.run(); err != nil {
-		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
-			err = cause
-		}
-		return res, err
+		return res, off.runErr(err)
 	}
 	// Both guarded by the generation the run worked at.
 	if encrypt {
@@ -316,24 +370,9 @@ func encryptMoved(ctx context.Context, st *store.Store, blobs *blobstore.Store, 
 func startEnable(ctx context.Context, st *store.Store, row *store.BlobEncryption, opts AtRestOptions, out io.Writer) (*blobcrypt.Keyring, error) {
 	// The caller holds the keyring lock.
 	path := blobcrypt.KeyringPath(opts.DataDir)
-	ring, err := blobcrypt.ReadKeyringFile(path)
-	if errors.Is(err, blobcrypt.ErrNoKeyring) {
-		return nil, fmt.Errorf("%w (create it with `encryption keygen` first)", err)
-	}
+	ring, err := offKeyring(row, opts)
 	if err != nil {
 		return nil, err
-	}
-	if err := ring.Open(opts.KEK); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	if row != nil && len(row.Keyring) > 0 {
-		if old, err := blobcrypt.ParseKeyring(row.Keyring); err == nil && old.ArchiveID() == ring.ArchiveID() && old.Open(opts.KEK) == nil {
-			if ring, err = blobcrypt.Reconcile(ring, old); err != nil {
-				return nil, err
-			}
-		} else {
-			opts.Logger.Warn("encryption at rest: the keyring copy recorded with state off is not this archive's or does not open; it is replaced")
-		}
 	}
 	if err := ring.NextGeneration(); err != nil {
 		return nil, err
@@ -362,7 +401,10 @@ type converter struct {
 	conv    *blobstore.Conversion
 	opts    ConvertOptions
 	encrypt bool
-	gen     int64
+	// rekey re-encrypts under the current data key (Rekey); conv is a
+	// rekey conversion then, and encrypt is set for plaintext stragglers.
+	rekey bool
+	gen   int64
 
 	cursor        string // where the current pass resumes ("" its start)
 	done, corrupt int64  // recorded counters
@@ -398,11 +440,19 @@ func (c *converter) run() error {
 		if clean {
 			c.corrupt = 0
 			c.res.Corrupt = nil
+			if c.rekey {
+				// The keys a clean pass finds named decide which old data
+				// keys stay.
+				c.conv.ResetNamed()
+			}
 		}
 		c.passFound, c.lastPct = 0, -1
 		c.res.Passes++
 		verb := "decrypting"
-		if c.encrypt {
+		switch {
+		case c.rekey:
+			verb = "re-encrypting"
+		case c.encrypt:
 			verb = "encrypting"
 		}
 		switch {
@@ -479,6 +529,14 @@ func (c *converter) pass(verb string) error {
 // orphans/<time>/ by Disable.
 func (c *converter) messageCorrupt(hash string) error {
 	rel := blobstore.RelPath(hash)
+	if c.rekey {
+		// It stays where it is, and its data key stays in the keyring.
+		rel = blobstore.EncPath(hash)
+		c.opts.Logger.Warn("encryption at rest: cannot re-encrypt a message file; it stays as it is", "path", rel)
+		fmt.Fprintf(c.opts.Out, "cannot re-encrypt %s (damaged, or under a data key the keyring lacks): left as it is, see verify\n", rel)
+		c.noteCorrupt(rel)
+		return nil
+	}
 	if !c.encrypt {
 		rel = blobstore.EncPath(hash)
 		c.res.MovedTo = c.orphanDir

@@ -104,6 +104,42 @@ func (q *Queries) FinishBlobEncryption(ctx context.Context, generation int64) (i
 	return result.RowsAffected(), nil
 }
 
+const finishBlobRekey = `-- name: FinishBlobRekey :execrows
+UPDATE blob_encryption
+SET state = 'on', generation = generation + 1, keyring = $1, keyring_id = $2,
+    keyring_generation = $3, current_key = $4,
+    cursor = '', finished_at = now(), updated_at = now()
+WHERE generation = $5 AND state = 'rekeying' AND keyring_generation = $6
+`
+
+type FinishBlobRekeyParams struct {
+	Keyring                   []byte
+	KeyringID                 string
+	KeyringGeneration         int64
+	CurrentKey                int64
+	Generation                int64
+	ExpectedKeyringGeneration int64
+}
+
+// The end of `encryption rekey`: state on, the next generation, and the
+// keyring without the data keys no file names any more; only from rekeying
+// at the generation the command worked at, and only while the copy is still
+// the one it read.
+func (q *Queries) FinishBlobRekey(ctx context.Context, arg FinishBlobRekeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishBlobRekey,
+		arg.Keyring,
+		arg.KeyringID,
+		arg.KeyringGeneration,
+		arg.CurrentKey,
+		arg.Generation,
+		arg.ExpectedKeyringGeneration,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getBlobEncryption = `-- name: GetBlobEncryption :one
 SELECT id, state, generation, keyring, keyring_id, keyring_generation, current_key, cursor, files_done, files_corrupt, started_at, finished_at, updated_at FROM blob_encryption
 `
@@ -215,7 +251,7 @@ func (q *Queries) RecordBlobOff(ctx context.Context, arg RecordBlobOffParams) er
 const saveBlobConversionProgress = `-- name: SaveBlobConversionProgress :execrows
 UPDATE blob_encryption
 SET cursor = $1, files_done = $2, files_corrupt = $3, updated_at = now()
-WHERE generation = $4 AND state IN ('encrypting', 'decrypting')
+WHERE generation = $4 AND state IN ('encrypting', 'decrypting', 'rekeying')
 `
 
 type SaveBlobConversionProgressParams struct {
@@ -225,7 +261,7 @@ type SaveBlobConversionProgressParams struct {
 	Generation   int64
 }
 
-// The progress of an offline conversion after a batch (#392, part 3), only
+// The progress of an offline conversion after a batch (#392, parts 3 and 5), only
 // while the state and generation are still those the command set.
 func (q *Queries) SaveBlobConversionProgress(ctx context.Context, arg SaveBlobConversionProgressParams) (int64, error) {
 	result, err := q.db.Exec(ctx, saveBlobConversionProgress,
@@ -248,6 +284,40 @@ SET state = $1, generation = generation + 1, cursor = '', files_done = 0, files_
 
 func (q *Queries) SetBlobEncryptionState(ctx context.Context, state string) (int64, error) {
 	result, err := q.db.Exec(ctx, setBlobEncryptionState, state)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const startBlobRekey = `-- name: StartBlobRekey :execrows
+UPDATE blob_encryption
+SET state = 'rekeying', generation = generation + 1, keyring = $1, keyring_id = $2,
+    keyring_generation = $3, current_key = $4,
+    cursor = '', files_done = 0, files_corrupt = 0, started_at = now(), finished_at = NULL, updated_at = now()
+WHERE state = 'on' AND keyring_generation = $5
+`
+
+type StartBlobRekeyParams struct {
+	Keyring                   []byte
+	KeyringID                 string
+	KeyringGeneration         int64
+	CurrentKey                int64
+	ExpectedKeyringGeneration int64
+}
+
+// The start of `encryption rekey` (#392, part 5): state rekeying, the next
+// generation, and the new keyring (new current data key, new keyring key)
+// as the database copy, in one statement; only from on and only while the
+// copy is still the one the command reconciled.
+func (q *Queries) StartBlobRekey(ctx context.Context, arg StartBlobRekeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, startBlobRekey,
+		arg.Keyring,
+		arg.KeyringID,
+		arg.KeyringGeneration,
+		arg.CurrentKey,
+		arg.ExpectedKeyringGeneration,
+	)
 	if err != nil {
 		return 0, err
 	}

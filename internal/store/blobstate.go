@@ -247,3 +247,39 @@ func (s *Store) FinishBlobDecryption(ctx context.Context, generation int64) erro
 	}
 	return err
 }
+
+// ErrRekeyStartChanged means `encryption rekey` could not record its start:
+// the state is no longer on, or the database copy of the keyring changed
+// since the command reconciled it.
+var ErrRekeyStartChanged = errors.New("encryption at rest or its keyring changed meanwhile; start again")
+
+// StartBlobRekey starts `encryption rekey` (#392, part 5): state rekeying,
+// the next generation and k, the keyring with the new current data key, as
+// the database copy, all at once. It fails with ErrRekeyStartChanged unless
+// the state is on and the copy is still at keyring generation expected.
+// The caller holds the writers lock exclusively.
+func (s *Store) StartBlobRekey(ctx context.Context, expected int64, k KeyringCopy) error {
+	n, err := s.q.StartBlobRekey(ctx, db.StartBlobRekeyParams{
+		Keyring: k.Keyring, KeyringID: k.ID, KeyringGeneration: k.Generation, CurrentKey: int64(k.CurrentKey),
+		ExpectedKeyringGeneration: expected,
+	})
+	if err == nil && n != 1 {
+		err = ErrRekeyStartChanged
+	}
+	return err
+}
+
+// FinishBlobRekey ends `encryption rekey`: state on, the next generation,
+// and k, the keyring without the retired data keys, as the database copy.
+// It fails with ErrBlobStateChanged unless the state is still rekeying at
+// generation and the copy at keyring generation expected.
+func (s *Store) FinishBlobRekey(ctx context.Context, generation, expected int64, k KeyringCopy) error {
+	n, err := s.q.FinishBlobRekey(ctx, db.FinishBlobRekeyParams{
+		Keyring: k.Keyring, KeyringID: k.ID, KeyringGeneration: k.Generation, CurrentKey: int64(k.CurrentKey),
+		Generation: generation, ExpectedKeyringGeneration: expected,
+	})
+	if err == nil && n != 1 {
+		err = fmt.Errorf("%w: the rekey at generation %d (keyring generation %d) is gone", ErrBlobStateChanged, generation, expected)
+	}
+	return err
+}
