@@ -467,6 +467,9 @@ func ParseIMAPLimits(getenv func(string) string) (IMAPLimits, error) {
 		return l, err
 	}
 	l.FillMaxFolderMessages, l.ReconcileMaxMessages = fill, reconcile
+	if folders > MaxIMAPMaxFolders { // parseCount checked it; repeated so the int conversion is visibly bounded
+		return l, fmt.Errorf("%s: want at most %d", EnvIMAPMaxFolders, MaxIMAPMaxFolders)
+	}
 	l.MaxFolders = int(folders)
 	l.IdleTimeout = DefaultIMAPIdleTimeout
 	if v := strings.TrimSpace(getenv(EnvIMAPIdleTimeout)); v != "" {
