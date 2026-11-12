@@ -324,9 +324,9 @@ mailbox message out of the archive by sending a forged message with its
   changed, for example an `[EXTERNAL]` tag added to the `Subject`; and mail
   journaled by an older version that stored one of these values differently.
 - **Still left out:** a message that matches on all four counts as the same
-  message even if its body differs. A sender who knows the exact
-  `Message-ID`, `Date`, `From` and `Subject` of a mailbox message can still
-  keep it out.
+  message even if its body differs. Anyone who has a copy of a mailbox
+  message (its sender or another recipient) and so knows its exact
+  `Message-ID`, `Date`, `From` and `Subject` can still keep it out.
 
 **After upgrading to 1.5.2.** Fills and imports that ran before are not
 checked again by themselves: nothing reads a mailbox again unasked, and an

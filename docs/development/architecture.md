@@ -640,7 +640,7 @@ An smtp account has one folder, `store.SMTPFolder` (`JOURNAL`).
 `Store.ReceiveMessage` stores what arrives over SMTP there, with an
 envelope; a fill (`archive.Filler`) imports from IMAP into the same folder,
 without one. The envelope is what tells them apart: `filled` in the message
-view, `FindReceivedLocation`, `FirstReceived` and `JournaledMessageIDs` only
+view, `FindReceivedLocation`, `FirstReceived` and `JournaledMatchCandidates` only
 count locations with an envelope.
 
 Both write into one folder at the same time (deliveries take no sync lock),
