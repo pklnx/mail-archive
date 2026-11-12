@@ -800,7 +800,7 @@ func (f *apiFixture) remoteImagesRefused(name string) bool {
 // A mail with inline SVG or MathML gets no remote image with images=1,
 // whatever its CSS: x/net/html can build a different tree than the browser
 // there, so the parse check alone could miss CSS the browser applies. The
-// two parser divergences of found in review (a <template> in an
+// two parser divergences found in review (a <template> in an
 // integration point, a duplicate attribute with the value "/") are served
 // with CSS that the check does not see, and are refused all the same, as is
 // every SVG and MathML <style> survivor. A mail without SVG or MathML that
