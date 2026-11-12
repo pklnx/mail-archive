@@ -11,6 +11,7 @@ import { PurgeReview } from "./AccountPurge";
 import { dialogOpen } from "./dialogs";
 import { fill } from "./fillFixture";
 import { applySettings, messagesFor, t } from "./i18n";
+import { imapTextFor } from "./imapText";
 import { settingsText, settingsTextFor } from "./settingsText";
 import { expectLoaded, expectLoading } from "./test/loading";
 
@@ -769,7 +770,7 @@ describe("the account's page", () => {
     show("/?view=accounts&id=work", data([account("work")]));
     fireEvent.click(section(t.folders).getByRole("button", { name: t.edit }));
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: t.folders }));
-    const message = await section(t.folders).findByText(t.failed(t.imapCheck.imap_login));
+    const message = await section(t.folders).findByText(t.failed(imapTextFor("en").imap_login));
     expect(message.className).toContain("app-text-error");
     expect(section(t.folders).queryByRole("button", { name: t.saveFolders })).toBeNull();
     fireEvent.click(section(t.folders).getByRole("button", { name: t.cancel }));

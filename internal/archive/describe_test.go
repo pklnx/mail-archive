@@ -212,3 +212,35 @@ func TestFillErrorHidesServerText(t *testing.T) {
 		t.Errorf("the server log lacks the server's text:\n%s", f.logs)
 	}
 }
+
+// A fill whose login fails stores the sentence; the "fill ended" log line
+// has the server's text, which no other line logs.
+func TestFillLoginErrorHidesServerText(t *testing.T) {
+	s := imaptest.StartScript(t, func(c *imaptest.ScriptConn) error {
+		if err := c.Send("* OK [CAPABILITY IMAP4rev1] ready"); err != nil {
+			return err
+		}
+		tag, err := c.Expect("LOGIN")
+		if err != nil {
+			return err
+		}
+		return c.Send(tag + " NO [AUTHENTICATIONFAILED] " + upstream)
+	})
+	f := newFixture(t)
+	acc := f.smtpAccount()
+	fill := &store.Fill{AccountID: acc.ID, Host: s.Host, Port: s.Port, TLSMode: store.TLSModeNone, Username: "u", Cutoff: &fillCutoff}
+	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(f.sealer, id, "pw") }
+	if err := f.store.CreateFill(f.ctx, fill, seal); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.filler().Run(f.ctx, fill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != store.FillFailed || got.Error != "the IMAP server refused the login" {
+		t.Errorf("fill %s, error %q", got.Status, got.Error)
+	}
+	if !strings.Contains(f.logs.String(), upstream) {
+		t.Errorf("the server log lacks the server's text:\n%s", f.logs)
+	}
+}

@@ -58,14 +58,16 @@ func DescribeError(err error) string {
 
 // describe is DescribeError for an err that holds an imapsync.Error.
 func describe(err error) string {
-	if e, ok := err.(*imapsync.Error); ok {
+	// Each level of the chain on its own: a wrapper's text is not the
+	// wrapped error's.
+	if e, ok := err.(*imapsync.Error); ok { //nolint:errorlint // this level only
 		return describeIMAP(e)
 	}
-	if stuck, ok := err.(*StuckError); ok {
+	if stuck, ok := err.(*StuckError); ok { //nolint:errorlint // this level only
 		return stuck.Error() // the archive's own sentence, without the server's
 	}
 	var inner []error
-	switch u := err.(type) {
+	switch u := err.(type) { //nolint:errorlint // this level's wrapped errors
 	case interface{ Unwrap() []error }:
 		inner = u.Unwrap()
 	case interface{ Unwrap() error }:

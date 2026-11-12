@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, imapCheckText, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey } from "./api";
-import { applySettings, messagesFor, t } from "./i18n";
+import { ApiError, UNAUTHORIZED_EVENT, accountsApi, folderQuestion, listAccounts, listMessages, passkeyApi, profileApi, retentionApi, retryAfter, sessionApi, unknownPasskey } from "./api";
 import { auditQuery } from "./auditApi";
 
 describe("folderQuestion", () => {
@@ -219,57 +218,5 @@ describe("auditQuery", () => {
     expect(p.getAll("user")).toEqual(["alice", "cli", "a&b c"]);
     expect(p.getAll("actor")).toEqual(["cli", "api_key"]);
     expect(p.get("cursor")).toBe("next");
-  });
-});
-
-describe("IMAP login checks", () => {
-  const codes = ["imap_connect", "imap_tls", "imap_login", "imap_timeout", "imap_server", "imap_protocol", "imap_limit"] as const;
-  const reply = (status: number, body: unknown) =>
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }),
-    );
-  afterEach(() => {
-    vi.restoreAllMocks();
-    applySettings({ language: "en", locale: "en" });
-  });
-
-  it("has a text for every category, in English and German", () => {
-    for (const lang of ["en", "de"] as const) {
-      const m = messagesFor(lang);
-      const texts = codes.map((c) => m.imapCheck[c]);
-      expect(texts.every((s) => s.length > 0)).toBe(true);
-      expect(new Set(texts).size).toBe(codes.length);
-    }
-    expect(messagesFor("de").imapCheck.imap_login).not.toBe(messagesFor("en").imapCheck.imap_login);
-  });
-
-  it("shows the text of the code, never the server's", async () => {
-    for (const code of codes) {
-      reply(422, { error: "the IMAP server failed SERVER-TEXT", code });
-      const err = await accountsApi.create({ name: "x", host: "h", port: 993, tls: "tls", username: "u", password: "p" }).catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(ApiError);
-      expect((err as ApiError).message).toBe(t.imapCheck[code]);
-      expect((err as ApiError).message).not.toContain("SERVER-TEXT");
-    }
-  });
-
-  it("follows the UI language", () => {
-    applySettings({ language: "de", locale: "de" });
-    expect(imapCheckText(422, { code: "imap_tls" })).toBe(messagesFor("de").imapCheck.imap_tls);
-    expect(imapCheckText(429, { code: "too_many_checks", retryAfter: 15 })).toBe(messagesFor("de").tooManyChecks(15));
-  });
-
-  it("says how long a refused check waits", async () => {
-    reply(429, { error: "too many server checks; try again later", code: "too_many_checks", retryAfter: 15 });
-    const err = await accountsApi.fillFolders("j", { host: "h", port: 993, tls: "tls", username: "u", password: "p" }).catch((e: unknown) => e);
-    expect((err as ApiError).message).toBe(t.tooManyChecks(15));
-    expect(t.tooManyChecks(15)).toContain("15");
-  });
-
-  it("keeps the server's text for other answers", () => {
-    expect(imapCheckText(409, { error: "x", code: "conflict" })).toBeNull();
-    expect(imapCheckText(422, { error: "x" })).toBeNull();
-    expect(imapCheckText(422, { code: "toString" })).toBeNull();
-    expect(imapCheckText(400, { code: "too_many_checks" })).toBeNull();
   });
 });

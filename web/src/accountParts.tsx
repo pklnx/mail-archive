@@ -25,6 +25,7 @@ import { accountsApi, folderQuestion, type Account, type AccountInput, type Acco
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
+import { errorMessage } from "./imapText";
 import { postfixSetup } from "./journalSetup";
 import { Loading } from "./lazyView";
 
@@ -324,7 +325,7 @@ export function AccountForm({ account, section = false, locked, onCancel, onSave
     } catch (err) {
       const folders = folderQuestion(err);
       if (folders) setQuestion(folders);
-      else setError(err instanceof Error ? err.message : String(err));
+      else setError(errorMessage(err));
       setBusy(false);
     }
   };
@@ -638,7 +639,7 @@ export function PostfixPanel({ addresses, inSection = false }: { addresses: stri
 /** The result of a section's save, for its status line: an explicit state, never a comparison of texts (#310). */
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
-const failure = (err: unknown): SaveResult => ({ ok: false, error: t.failed(err instanceof Error ? err.message : String(err)) });
+const failure = (err: unknown): SaveResult => ({ ok: false, error: t.failed(errorMessage(err)) });
 
 /**
  * Sets how often the schedule syncs the account. It sends only a changed
