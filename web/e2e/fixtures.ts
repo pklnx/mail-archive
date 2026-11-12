@@ -155,7 +155,7 @@ export interface Guards {
 
 export const test = base.extend<{ guards: Guards }>({
   guards: [
-    async ({ context }, use, testInfo) => {
+    async ({ context, browserName }, use, testInfo) => {
       const problems: string[] = [];
       const frameEvents: FrameEvent[] = [];
       const record = (kind: FrameEvent["kind"], f: Frame) => {
@@ -222,6 +222,96 @@ export const test = base.extend<{ guards: Guards }>({
         );
       });
       context.on("weberror", (err) => problems.push(`page error: ${err.error().stack ?? err.error().message}`));
+      // DIAG #398 (temporary, WebKit only): where style-attribute CSP violations and page errors come from.
+      if (browserName === "webkit") {
+        context.on("weberror", (err) => {
+          const e = err.error();
+          console.log(`[diag ${testInfo.title}] weberror name=${e.name} message=${JSON.stringify(e.message)} string=${JSON.stringify(String(e))} stack=${JSON.stringify(e.stack ?? "")}`);
+        });
+        context.on("console", (msg) => {
+          if (msg.text().startsWith("diag-")) console.log(`[diag ${testInfo.title}] ${msg.text()}`);
+        });
+        await context.addInitScript(() => {
+          const stack = () => (new Error().stack ?? "").split("\n").slice(2, 7).join(" | ");
+          const log = (what: string, detail: string) => console.warn(`diag-style ${what} ${detail} @ ${stack()}`);
+          const hasStyle = (v: unknown) => typeof v === "string" && /style\s*=/i.test(v);
+          const setAttribute = Element.prototype.setAttribute;
+          Element.prototype.setAttribute = function (this: Element, n: string, v: string) {
+            if (String(n).toLowerCase() === "style") log("setAttribute", `${this.nodeName} ${JSON.stringify(String(v).slice(0, 160))}`);
+            return setAttribute.call(this, n, v);
+          };
+          const setAttributeNS = Element.prototype.setAttributeNS;
+          Element.prototype.setAttributeNS = function (this: Element, ns: string | null, n: string, v: string) {
+            if (/(^|:)style$/i.test(String(n))) log("setAttributeNS", `${this.nodeName} ${JSON.stringify(String(v).slice(0, 160))}`);
+            return setAttributeNS.call(this, ns, n, v);
+          };
+          for (const [proto, prop] of [
+            [Element.prototype, "innerHTML"],
+            [Element.prototype, "outerHTML"],
+            [ShadowRoot.prototype, "innerHTML"],
+          ] as const) {
+            const d = Object.getOwnPropertyDescriptor(proto, prop);
+            if (!d?.set) continue;
+            const set = d.set;
+            Object.defineProperty(proto, prop, {
+              ...d,
+              set(this: Element, v: string) {
+                if (hasStyle(v)) log(prop, `${this.nodeName} ${JSON.stringify(String(v).slice(0, 200))}`);
+                set.call(this, v);
+              },
+            });
+          }
+          const insertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+          Element.prototype.insertAdjacentHTML = function (this: Element, w: InsertPosition, h: string) {
+            if (hasStyle(h)) log("insertAdjacentHTML", JSON.stringify(String(h).slice(0, 200)));
+            return insertAdjacentHTML.call(this, w, h);
+          };
+          const fragment = Range.prototype.createContextualFragment;
+          Range.prototype.createContextualFragment = function (this: Range, h: string) {
+            if (hasStyle(h)) log("createContextualFragment", JSON.stringify(String(h).slice(0, 200)));
+            return fragment.call(this, h);
+          };
+          const parse = DOMParser.prototype.parseFromString;
+          DOMParser.prototype.parseFromString = function (this: DOMParser, h: string, t: DOMParserSupportedType) {
+            if (hasStyle(h)) log("parseFromString", JSON.stringify(String(h).slice(0, 200)));
+            return parse.call(this, h, t);
+          };
+          const attrValue = Object.getOwnPropertyDescriptor(Attr.prototype, "value");
+          if (attrValue?.set) {
+            const set = attrValue.set;
+            Object.defineProperty(Attr.prototype, "value", {
+              ...attrValue,
+              set(this: Attr, v: string) {
+                if (this.name.toLowerCase() === "style") log("Attr.value", JSON.stringify(String(v).slice(0, 160)));
+                set.call(this, v);
+              },
+            });
+          }
+          const cssText = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "cssText");
+          if (cssText?.set) {
+            const set = cssText.set;
+            Object.defineProperty(CSSStyleDeclaration.prototype, "cssText", {
+              ...cssText,
+              set(this: CSSStyleDeclaration, v: string) {
+                log("cssText", JSON.stringify(String(v).slice(0, 160)));
+                set.call(this, v);
+              },
+            });
+          }
+          document.addEventListener(
+            "securitypolicyviolation",
+            (e) => {
+              const t = e.target as Element | null;
+              console.warn(
+                `diag-csp ${e.violatedDirective}/${e.effectiveDirective} ${e.disposition} ${e.sourceFile}:${e.lineNumber}:${e.columnNumber} blocked=${e.blockedURI} sample=${JSON.stringify(e.sample)} target=${t?.nodeName} ${JSON.stringify(t && "outerHTML" in t ? t.outerHTML.slice(0, 240) : "")} @ ${stack()}`,
+              );
+            },
+            true,
+          );
+          window.addEventListener("error", (e) => console.warn(`diag-window-error ${JSON.stringify(e.message)} ${e.filename}:${e.lineno}:${e.colno} error=${String(e.error)} ${e.error?.stack ?? ""}`));
+          window.addEventListener("unhandledrejection", (e) => console.warn(`diag-rejection ${String(e.reason)} ${e.reason?.stack ?? ""}`));
+        });
+      }
       await use({
         allowHTTPError: (path, status) => allowed.push({ path, status }),
         expectConsoleError: (text, count = 1) => void expected.push({ text, count, seen: 0 }),

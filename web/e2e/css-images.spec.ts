@@ -115,6 +115,8 @@ async function checkCSSImages(page: Page, context: BrowserContext) {
     const mask = server.requested("/css-control-mask");
     await addToMail(page, `background-image:url(${referrerOrigin}/css-control-bg)`);
     await addToMail(page, `mask-image:url(${referrerOrigin}/css-control-mask)`);
+    // DIAG #398 (temporary): the controls' headers as the recorder got them.
+    console.log(`[diag css-images] bg=${JSON.stringify(await bg)} mask=${JSON.stringify(await mask)} frame-referrer=${await page.getByRole("article").locator("iframe").evaluate((f: HTMLIFrameElement) => f.contentDocument?.referrer + " policy=" + (f.contentDocument?.querySelector("meta[name=referrer]")?.getAttribute("content") ?? "none"))}`);
     expect((await bg).referer, "Referer of the control background").toBe(`${origin}/`);
     expect((await mask).origin, "Origin of the control mask").toBe(origin);
     expect(await leaks(requests, server.headers), "the mail's CSS images, checked after the controls").toEqual([]);

@@ -29,6 +29,12 @@ const userSelect = (el: Locator) =>
     const s = getComputedStyle(e);
     return s.getPropertyValue("user-select") || s.getPropertyValue("-webkit-user-select");
   });
+// DIAG #398 (temporary): both user-select values as the engine reports them.
+const diagUserSelect = (el: Locator) =>
+  el.evaluate((e) => {
+    const s = getComputedStyle(e);
+    return `${e.nodeName}.${e.className} user-select=${JSON.stringify(s.getPropertyValue("user-select"))} -webkit-user-select=${JSON.stringify(s.getPropertyValue("-webkit-user-select"))} userSelect=${JSON.stringify((s as unknown as Record<string, string>).userSelect)} webkitUserSelect=${JSON.stringify((s as unknown as Record<string, string>).webkitUserSelect)}`;
+  });
 
 /** The computed font size in pixels. */
 async function fontSize(el: Locator): Promise<number> {
@@ -178,6 +184,7 @@ test.describe("desktop", () => {
       page.locator(".cds--btn").first(),
       page.locator(".mail-row").first(),
     ];
+    for (const el of chrome) console.log(`[diag user-select] ${await diagUserSelect(el)}`);
     for (const el of chrome) expect(await userSelect(el)).toBe("none");
     // The user actions in the header bar (#488).
     for (const name of ["Profile (demo)", "Keyboard shortcuts", "Log out"]) {
