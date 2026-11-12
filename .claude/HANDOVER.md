@@ -3,19 +3,13 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- **v1.5.0** (2026-11-05, main 7482e83, release run 42013698896, digest sha256:de611eb4…):
-  - encryption at rest (#392: #508, #510, #513, #518, #519);
-  - auditor access for tax advisors and auditors (#393: #509, #511, #515, #517);
-  - GoBD export on the command line (#394: #507, #512).
-- Migrations 00036 (auditor) and 00037 (blob_encryption).
-- Milestone 1.5.0 is closed.
-- **1.5.1 pending** (milestone 1.5.1, maintainer OK 2026-11-12): #524 is merged as #525 (main a3609fd). It moves the Go toolchain to 1.27.4 (GO-2026-6859, net/http) and golang.org/x/net to 0.62.0 (GO-2026-6860 = CVE-2026-78661 from the image scan, GO-2026-6866). None of these is reachable in practice: only `html.NewTokenizer` is used, and there is no `MaxBytesReader`. But `vulncheck` on 1.27.3 has failed every run since 2026-11-11. The release needs the maintainer (see Maintainer actions).
-- Release test #520 (Mac Safari, iPhone, iPad, VoiceOver) runs after the release; a failure goes into 1.5.1.
+- **v1.5.1** (2026-11-12, main f88e9d6, release run 43178182705, dry run 43177166920): Go toolchain 1.27.4 (GO-2026-6859, net/http) and golang.org/x/net 0.62.0 (GO-2026-6860 = CVE-2026-78661, GO-2026-6866), #524 / #525. Milestone 1.5.1 is closed. The maintainer waived the image rescan.
+- **v1.5.0** (2026-11-05, main 7482e83): encryption at rest (#392), auditor access (#393), GoBD export on the command line (#394). Migrations 00036 and 00037. Milestone 1.5.0 is closed. Release test #520 is open.
 - Earlier: v1.4.0 (main 774a2a0), customer groups (#470); release test #504 passed.
 
 ## Open PRs
-- Dependabot #527 (go-dependencies, based on a3609fd; it replaces #523 and #491): fxamacker/cbor/v2 2.9.6 → 2.10.0, go-pdfium 1.21.3 → 1.21.4 (PDFium engine 8057 → 8111), go.yaml.in/yaml/v3 3.0.5 → 3.0.6. Milestone 1.6.0; merge only **after the 1.5.1 release**. Neither the new PDFium nor the cbor minor has an advisory, so they are not patch material (coordinator, 2026-11-12). It needs green CI and one review. Check two things: the PDF text extraction (`internal/attachtext`), and cbor, which is direct only in `internal/web/passkeys_test.go` but which go-webauthn uses for passkeys. It gets `second-review` (auth).
-- Dependabot #522 (vitepress alpha.20 → alpha.21, docs site only): milestone 1.6.0, after the 1.5.1 release. It is behind main and needs `@dependabot rebase`, green CI and one review.
+- Dependabot #527 (go-dependencies, based on a3609fd; it replaces #523 and #491): fxamacker/cbor/v2 2.9.6 → 2.10.0, go-pdfium 1.21.3 → 1.21.4 (PDFium engine 8057 → 8111), go.yaml.in/yaml/v3 3.0.5 → 3.0.6. Milestone 1.6.0. Neither the new PDFium nor the cbor minor has an advisory, so they are not patch material (coordinator, 2026-11-12). It needs green CI and one review. Check two things: the PDF text extraction (`internal/attachtext`), and cbor, which is direct only in `internal/web/passkeys_test.go` but which go-webauthn uses for passkeys. It gets `second-review` (auth).
+- Dependabot #522 (vitepress alpha.20 → alpha.21, docs site only): milestone 1.6.0. It is behind main and needs `@dependabot rebase`, green CI and one review.
 
 ## Open tickets
 - **1.6.0:** these are `ready`:
@@ -59,7 +53,6 @@ Current state only. At session end replace these sections; never append. History
   - Avoid "fix #N" and other closing keywords in PR bodies for issues that stay open. Conversely, check that "Closes #N" really closed the issue: #435 stayed open after #513.
 
 ## Maintainer actions
-- **Release 1.5.1:** Actions → Release → Run workflow, from main a3609fd or later, dry run first. Then rescan `ghcr.io/pklnx/mail-archive:1.5.1`: CVE-2026-78661 must be gone (#524, last Done-when item). After the release the coordinator closes milestone 1.5.1.
 - #520 release test of 1.5.0.
 - Manual checks from #519, which no test covers: `./ma encryption rotate-key --new-key-file /keys/archive-2.key` through Compose (service `mail-archive-keys`: the new file owned by 65532 with mode 0400, then `.env` switched and `docker compose up -d`), and `./ma encryption rekey` on a real instance, including `--keep-key-file`.
 - On the shared instance:
