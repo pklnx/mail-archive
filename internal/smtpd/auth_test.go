@@ -778,13 +778,26 @@ func TestAuthOff(t *testing.T) {
 // Serve refuses Auth without TLS, and no allowlist without Auth.
 func TestServeAuthSettings(t *testing.T) {
 	for _, s := range []*Server{{Auth: true}, {Auth: false}} {
+		s.Logger = slog.New(slog.NewTextHandler(&syncBuffer{}, nil))
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := s.Serve(context.Background(), l); err == nil {
-			t.Errorf("Auth %v: served", s.Auth)
+		done := make(chan error, 1)
+		go func() { done <- s.Serve(context.Background(), l) }()
+		// A refusal returns at once; a hang guard ends a Serve that started.
+		guard := time.NewTimer(testwait.Limit(t))
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("Auth %v: served", s.Auth)
+			}
+		case <-guard.C:
+			_ = l.Close()
+			t.Errorf("Auth %v: serving", s.Auth)
+			<-done
 		}
+		guard.Stop()
 	}
 }
 
