@@ -99,7 +99,7 @@ installed Chromium, or run `pnpm exec playwright install chromium` once in
 Playwright brings (`pnpm exec playwright --version` names the Playwright
 release; its release notes name the Chromium). Older builds word console
 messages differently, and the guards match some of them by their text. CI
-uses Playwright's own headless shell (`--only-shell`). A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
+runs the suite in Playwright's own headless shell. A single test: `cd web && pnpm e2e -g "phone"`. A failed test keeps a
 trace in `web/test-results/` (`pnpm exec playwright show-trace <file>`); the
 trace has no DOM snapshots and no network log, because Playwright's DOM
 snapshotter makes the browser log blocked script in sandboxed frames, which
@@ -112,9 +112,10 @@ Names a test creates are unique per run, and no test depends on another.
 CI runs the suite in the `web-e2e` job. The suite itself (`pnpm e2e`, about
 170 tests on one worker) takes about six minutes there; the device checks of
 [#367](https://github.com/pklnx/mail-archive/issues/367) added about 40
-seconds of it, measured locally. The job installs only Playwright's headless
-Chromium, without apt, and checks its libraries (`scripts/ci-playwright-chromium.sh`): the runner image
-has them. If one is missing, the run shows a warning and installs them with
+seconds of it, measured locally. The job installs Playwright's headless
+shell and its full Chromium (for the resource hint test below), without
+apt, and checks their libraries (`scripts/ci-playwright-chromium.sh`): the
+runner image has them. If one is missing, the run shows a warning and installs them with
 apt, which can take 8 to 13 minutes when the runner's apt mirror is slow. The
 job's timeout is 20 minutes so that this fallback fits.
 
@@ -126,6 +127,29 @@ skipped job counts as passing for a required check, while a workflow that never
 starts would leave it pending for ever. The filter fails closed: a failed
 detection, an empty diff or any other changed file runs the suite, and so does
 every push to `main`. `web-e2e` is a required check.
+
+`web/e2e/hints.spec.ts` checks that resource hints in an HTML mail
+(`<link rel=prerender>`, `preconnect`, `dns-prefetch`) and frame sources
+(`<iframe src>`, which Chromium connects to before the CSP blocks it) send
+nothing. It
+launches its own browser: Playwright's **full** Chromium
+(`channel: "chromium"`), because the headless shell never sends a hint,
+with a persistent profile, because the full Chromium sends a preconnect or
+DNS prefetch only there, and with background networking on. So it needs
+the full Chromium: run `pnpm exec playwright install chromium` in `web/`
+(it installs the headless shell too), or point `CHROMIUM_PATH` to a full
+Chromium. It keeps that browser off the network with
+`--host-resolver-rules` (every name outside `localhost` and `*.localhost`,
+IP addresses included, fails to resolve) and checks Chromium's net log for
+it at the end; the only other address it accepts is the UDP `connect()` of
+Chromium's IPv6 reachability check (2001:4860:4860::8888, which sends no
+packet and which no flag turns off), identified by its socket. Its
+listeners use ports 18184 to 18187 on 127.0.0.1 and
+`[::1]`; `web/e2e/referrer.spec.ts` uses 127.0.0.2:18183. A positive control
+(hints the test adds to the mail's document) shows that hints fire in that
+browser; a hint of the mail fails the test at once, and no control fails it
+at the timeout. The rest of the suite keeps Playwright's default launch, in
+which this cannot be seen.
 
 One spec also runs in Playwright's WebKit until
 [#398](https://github.com/pklnx/mail-archive/issues/398) runs the suite there:

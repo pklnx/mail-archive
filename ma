@@ -6,6 +6,7 @@
 #   ./ma sync
 #   ./ma backup ./backups
 #   ./ma restore-dump ./backups/mailarchive-<time>.dump.enc
+#   ./ma restore-dump --plaintext ./backups/mailarchive-<time>.dump
 #
 # Starts PostgreSQL if needed, rebuilds the image when the code changed (fast
 # when cached) and hides Docker Compose's progress output. In a release
@@ -151,37 +152,67 @@ fi
 # An encrypted dump (MA-ENC1 header) is decrypted by unseal-stream on its way
 # there, with the keyring copy next to it. The whole time, a container with
 # `restore-dump --hold` holds the writers lock, so that no web server, worker
-# or cron sync starts: it checks the database and the keyring copy, says
-# "ready", waits while pg_restore runs, and when told "restored" reconciles
-# the keyring and the state of encryption at rest under the same lock and
-# prints what it changed.
-# `restore-dump --reconcile-only` (and --help) restores nothing: it goes
-# to the plain command below, which takes its locks itself.
-if [ "${1:-}" = restore-dump ] && case ${2:-} in -*) false ;; *) true ;; esac; then
-	if [ $# -ne 2 ] || [ -z "$2" ]; then
-		echo "usage: ./ma restore-dump FILE   (or ./ma restore-dump --reconcile-only)" >&2
+# or cron sync starts: it checks the database, the dump and the keyring copy,
+# says "ready", waits while pg_restore runs, and when told "restored"
+# reconciles the keyring and the state of encryption at rest under the same
+# lock and prints what it changed.
+# This script reads the dump's header only to choose the pipe. It passes the
+# header, the dump's name, a keyring copy next to it and --plaintext to the
+# holder, which decides whether a dump without encryption may be restored
+# (on an archive with signs of encryption at rest only with --plaintext);
+# it needs the image of the same release.
+# `restore-dump --reconcile-only` (and --help, and any other option) restores
+# nothing here: it goes to the plain command below, which takes its locks
+# itself.
+restore_dump=
+if [ "${1:-}" = restore-dump ]; then
+	restore_dump=1
+	file=
+	nfiles=0
+	plaintext=
+	skip=1
+	for arg in "$@"; do
+		if [ -n "$skip" ]; then
+			skip=
+			continue
+		fi
+		case $arg in
+		--plaintext) plaintext=--plaintext ;;
+		-*) restore_dump= ;;
+		*)
+			file=$arg
+			nfiles=$((nfiles + 1))
+			;;
+		esac
+	done
+fi
+if [ -n "$restore_dump" ]; then
+	if [ "$nfiles" -ne 1 ] || [ -z "$file" ]; then
+		echo "usage: ./ma restore-dump [--plaintext] FILE   (or ./ma restore-dump --reconcile-only)" >&2
 		exit 2
 	fi
-	file=$2
 	if [ ! -f "$file" ]; then
 		echo "error: $file: no such file" >&2
 		exit 2
 	fi
-	sealed=
-	MAIL_ARCHIVE_KEYRING_COPY=
+	header=plain
 	if [ "$(head -c 7 "$file")" = MA-ENC1 ]; then
-		sealed=1
-		ring=${file%.enc}
-		ring=${ring%.dump}.keyring
-		if [ -f "$ring" ]; then
-			MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
-		fi
+		header=sealed
+	fi
+	# The keyring copy next to the dump, for a dump without encryption
+	# too: the holder counts it as a sign of encryption at rest and refuses
+	# one of another archive.
+	MAIL_ARCHIVE_KEYRING_COPY=
+	ring=${file%.enc}
+	ring=${ring%.dump}.keyring
+	if [ -f "$ring" ]; then
+		MAIL_ARCHIVE_KEYRING_COPY=$(base64 <"$ring" | tr -d '\n')
 	fi
 	export MAIL_ARCHIVE_KEYRING_COPY
 	fifos=$(mktemp -d)
 	mkfifo "$fifos/to-holder" "$fifos/from-holder"
 	compose run --rm $build -T -e MAIL_ARCHIVE_COMMAND=./ma -e MAIL_ARCHIVE_KEYRING_COPY mail-archive \
-		restore-dump --hold <"$fifos/to-holder" >"$fifos/from-holder" &
+		restore-dump --hold --dump-name="${file##*/}" --dump-header="$header" $plaintext <"$fifos/to-holder" >"$fifos/from-holder" &
 	holder=$!
 	# Any line but "restored", or the end of fd 3 (also when this script
 	# ends early), makes the holder give up; fd 4 carries its output.
@@ -200,19 +231,20 @@ if [ "${1:-}" = restore-dump ] && case ${2:-} in -*) false ;; *) true ;; esac; t
 		exit "$1"
 	}
 	if ! IFS= read -r line <&4 || [ "$line" != ready ]; then
-		# The holder refused (writers running, database not empty, another
-		# archive's keyring) and said why on stderr.
+		# The holder refused (writers running, database not empty, a dump
+		# without encryption on an encrypted archive, another archive's
+		# keyring) and said why on stderr.
 		finish 1
 	fi
 	if ! kill -0 "$holder" 2>/dev/null; then
-		echo "error: the lock holder ended before the restore; nothing was restored: run ./ma restore-dump $file again" >&2
+		echo "error: the lock holder ended before the restore; nothing was restored: run ./ma restore-dump $plaintext${plaintext:+ }$file again" >&2
 		finish 1
 	fi
 	restore() {
 		compose exec -T postgres pg_restore --no-owner --single-transaction --exit-on-error \
 			-U mailarchive -d mailarchive
 	}
-	if [ -n "$sealed" ]; then
+	if [ "$header" = sealed ]; then
 		# unseal-stream stops before the end of its output on a damaged
 		# dump, so pg_restore fails and its transaction rolls back.
 		failed=$(mktemp)

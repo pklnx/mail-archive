@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
@@ -345,31 +343,31 @@ func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sess := currentSession(r)
-	addr := s.clientAddr(r)
-	if wait := s.limiter.Blocked(sess.UserName, addr); wait > 0 {
-		secs := int(math.Ceil(wait.Seconds()))
-		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: secs})
+	a := s.beginAttempt(w, r, sess.UserName, errTooManyAttempts)
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	u, err := s.store.GetUserByName(r.Context(), sess.UserName)
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return
 	}
 	ok := false
 	if len(in.Current) <= auth.MaxPasswordLength {
-		if ok, _, err = s.hasher.Verify(r.Context(), u.PasswordHash, in.Current); err != nil {
+		if ok, _, err = s.verifyPassword(r.Context(), u.PasswordHash, in.Current); err != nil {
+			a.Release()
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
 	}
 	if !ok {
-		s.limiter.Fail(sess.UserName, addr)
+		a.Fail()
 		s.fail(w, r, http.StatusUnauthorized, "the current password is wrong", nil)
 		return
 	}
-	s.limiter.Succeed(sess.UserName)
+	a.Succeed()
 	if err := auth.ValidatePassword(in.New); err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return

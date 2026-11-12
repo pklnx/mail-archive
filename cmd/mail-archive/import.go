@@ -46,7 +46,8 @@ interrupted import can simply be run again.
 
 With --journal, NAME is an existing smtp account, and the messages go into
 its JOURNAL folder like a fill's: without an envelope, and without the
-messages whose Message-ID the account received over SMTP. All source folders
+messages the account received over SMTP (the same Message-ID, Date, From
+addresses and Subject). All source folders
 are merged into JOURNAL, so --folder is not allowed. --label names the origin
 in the message view (default: the --from path). Nothing is created.
 

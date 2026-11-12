@@ -71,20 +71,29 @@ func requiredScope(a access) string {
 // (#393): auditors hold no keys, and the store already finds none of
 // theirs, so this is defense in depth.
 func (s *Server) authenticateKey(w http.ResponseWriter, r *http.Request, key string, a access, pattern string) *http.Request {
-	addr := s.clientAddr(r)
-	if wait := s.badKeyRate.Blocked(addr); wait > 0 {
-		s.tooMany(w, wait)
+	// Every lookup holds a place in the invalid-key limit while it runs;
+	// only an invalid key is counted, a valid one releases its place.
+	ka, wait, err := s.badKeyRate.Begin(r.Context(), s.clientAddr(r))
+	if s.attemptRefused(w, r, wait, err, "too many attempts; try again later") {
 		return nil
 	}
+	defer ka.Release()
 	hash := auth.HashAPIKey(key)
 	var sess *store.Session
 	var k *store.APIKey
-	err := store.ErrNotFound
+	err = store.ErrNotFound
 	if auth.ValidAPIKeyFormat(key) {
+		if s.beforeKeyLookup != nil {
+			s.beforeKeyLookup()
+		}
 		sess, k, err = s.store.APIKeyLogin(r.Context(), hash)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		s.badKeyRate.Allow(addr)
+		ka.Fail()
+	} else {
+		ka.Release()
+	}
+	if errors.Is(err, store.ErrNotFound) {
 		s.auditRefusedKey(r, hash)
 		w.Header().Set("WWW-Authenticate", `Bearer realm="mail-archive", error="invalid_token"`)
 		s.fail(w, r, http.StatusUnauthorized, "invalid API key", nil)

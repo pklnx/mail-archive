@@ -237,12 +237,14 @@ func TestImportJournalCommand(t *testing.T) {
 	if err := st.CreateAccount(ctx, &store.Account{Name: "server", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", OwnerID: &anna.ID}); err != nil {
 		t.Fatal(err)
 	}
-	// tb2 of the fixture was journaled, with other bytes.
+	// tb2 of the fixture was journaled, with other bytes (the same
+	// Message-ID, From, Subject and Date).
 	blobs, err := openBlobs(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, created, err := blobs.Put(strings.NewReader("Received: by mx\r\nMessage-ID: <tb2@example.com>\r\nSubject: Second message\r\n\r\nx\r\n"))
+	blob, created, err := blobs.Put(strings.NewReader("Received: by mx\r\nMessage-ID: <tb2@example.com>\r\nFrom: Ben <ben@example.com>\r\n" +
+		"Subject: Second message\r\nDate: Tue, 6 Jan 2026 09:59:00 +0100\r\n\r\nx\r\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -372,23 +372,28 @@ func ListFlags(conn *Conn, handle func(uid uint32, flags []imap.Flag)) error {
 	return nil
 }
 
-// Header is a message's UID, INTERNALDATE and its Message-ID header field
-// as the server sent it ("Message-ID: <...>\r\n\r\n"), for the caller to
+// Header is a message's UID, INTERNALDATE and size, and its Message-ID,
+// Date, From and Subject header fields as the server sent them
+// ("Message-ID: <...>\r\nDate: ...\r\n...\r\n\r\n"), for the caller to
 // parse.
 type Header struct {
 	UID          uint32
 	InternalDate time.Time
 	// Size is the message's RFC822.SIZE.
-	Size      int64
-	MessageID []byte
+	Size   int64
+	Fields []byte
 }
+
+// HeaderFields are the header fields ListHeaders fetches: what a fill
+// compares with the messages received over SMTP.
+var HeaderFields = []string{"Message-ID", "Date", "From", "Subject"}
 
 // maxHeaderField bounds the bytes read of a header section.
 const maxHeaderField = 64 << 10
 
 // ListHeaders sends UID FETCH after+1:* (UID INTERNALDATE RFC822.SIZE
-// BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]) in the examined folder and calls
-// handle for each message. It reads no bodies, and it skips the last
+// BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM SUBJECT)]) in the examined
+// folder and calls handle for each message. It reads no bodies, and it skips the last
 // message that "n:*" returns even if its UID is lower. An empty folder
 // sends nothing: some servers reject "1:*" there.
 func ListHeaders(conn *Conn, after uint32, handle func(Header) error) error {
@@ -397,7 +402,7 @@ func ListHeaders(conn *Conn, after uint32, handle func(Header) error) error {
 	}
 	var set imap.UIDSet
 	set.AddRange(imap.UID(after+1), 0) // after+1:*
-	section := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, HeaderFields: []string{"Message-ID"}, Peek: true}
+	section := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, HeaderFields: HeaderFields, Peek: true}
 	cmd := conn.c.Fetch(set, &imap.FetchOptions{UID: true, InternalDate: true, RFC822Size: true, BodySection: []*imap.FetchItemBodySection{section}})
 	var handleErr error
 	for {
@@ -425,7 +430,7 @@ func ListHeaders(conn *Conn, after uint32, handle func(Header) error) error {
 					if err != nil && handleErr == nil {
 						handleErr = fmt.Errorf("read header: %w", err)
 					}
-					h.MessageID = b
+					h.Fields = b
 				}
 			}
 		}

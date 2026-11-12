@@ -14,6 +14,24 @@ export const origin = `http://localhost:${port}`;
  * of the demo's hosts (127.0.0.1 is), so the link stays a link.
  */
 export const redirectOrigin = "http://127.0.0.2:18182";
+/**
+ * The site of the demo's referrer checks (tools/demo, hintCheck and
+ * referrerCheck): their links and images point here, and referrer.spec.ts
+ * runs a server here that records each request's headers. Like
+ * redirectOrigin, not one of the demo's hosts, so the links stay links.
+ */
+export const referrerOrigin = "http://127.0.0.2:18183";
+/**
+ * The listeners of hints.spec.ts, on 127.0.0.1 and [::1] (the demo's
+ * hintCheck points its resource hints and frames at *.localhost names on
+ * the first two): two TCP listeners for the mail, on which any connection
+ * is a hint that got through, and for the test's positive controls an HTTP
+ * server (prerender) and a TCP listener (preconnect).
+ */
+export const hintHTTPPort = 18184;
+export const hintConnectPort = 18185;
+export const controlHTTPPort = 18186;
+export const controlConnectPort = 18187;
 
 /** The demo admin. Admins need 2FA; globalSetup logs it in once. */
 export const admin = { name: "demo", password: "demo-password", totpSecret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" };

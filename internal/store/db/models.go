@@ -503,6 +503,7 @@ type TwoFactorChallenge struct {
 	TwoFactorVersion int64
 	CreatedAt        time.Time
 	ExpiresAt        time.Time
+	Attempts         int16
 }
 
 type TwoFactorRecoveryCode struct {

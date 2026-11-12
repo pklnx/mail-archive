@@ -264,6 +264,11 @@ Encrypted backups use the same format with purpose 2 (backup, no binding):
 which needs no size or random access, holds one chunk, reads one byte ahead
 to tell the final chunk, and returns each chunk only after authenticating
 it, so a cut stream fails before its end instead of ending cleanly.
+A dump without the header is unauthenticated: `checkDumpKind`
+(`cmd/mail-archive/backup_crypt.go`) refuses it before `pg_restore` starts
+wherever the archive shows a sign of encryption at rest, unless the
+operator passes `--plaintext`; under `./ma` the holder (`--hold`) makes
+this decision from the facts `./ma` passes (`--dump-name`, `--dump-header`).
 `restore-dump` then calls `archive.ReconcileRestored` (`restore.go`), which
 reuses the start-up reconciliation of the keyring and `deriveFromFiles`.
 Only the Go standard library is used (`crypto/aes`, `crypto/cipher` GCM,
@@ -702,7 +707,8 @@ After each run, `AfterRun` wakes the notifier.
 calls `StartFillRun`. A recurring fill whose account is disabled or removed
 is skipped without a change (`ErrFillSkipped`, also in `RunLocked` for a run
 already started), so it neither fails nor changes its health. One `now` per run decides by INTERNALDATE: journaled
-(Message-ID with an envelope in the account) first, then younger than
+(a message with an envelope in the account and the same `journalKey`, see
+below) first, then younger than
 `RecurringGrace` (two hours) waits, anything else is imported, also without a
 Message-ID; a date more than a day in the future counts as old. The headers
 are sorted by UID, and a folder's `last_uid` moves only over decided UIDs up
@@ -714,6 +720,24 @@ renamed folders and rescans after a `UIDVALIDITY` change cheap. Identical
 bytes without a Message-ID are caught by `LocationInFolder`, before the
 fetch and again under the folder lock. Moves and deletions in the mailbox
 are not reconciled.
+
+**The journaled check** (fills and `import --journal`, advisory
+GHSA-w6jg-ffvw-q4f5). `journalKey` (`internal/archive/journalkey.go`) is the
+only comparison: the Message-ID, the Date as Unix seconds, and a SHA-256
+over the From addresses (lowercased, without display names; the `<…>` parts
+when the decoded value no longer parses) and the Subject in NFC, all taken
+from what `ParseHeaders` returns. The mailbox side parses the four fields
+`ListHeaders` fetches (`BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM
+SUBJECT)]`; a fill keeps only the key per listed message, `fillHeader`) or
+the file's header. The journaled side uses the stored columns `message_id`,
+`sent_at`, `from_addr` and `subject`, which `BuildMeta` filled from
+`ParseHeaders` (NULL is empty), so no file is read and no migration was
+needed. `JournaledMatchCandidates` pre-selects rows with an envelope in the
+account by Message-ID (`messages_message_id_idx`) and
+`date_trunc('second', sent_at)`, at most ten per message of the batch; a cut
+can only cause duplicates. A message without a Message-ID, a Date that
+parses or a From never counts as journaled. `import --journal` schedules a
+file for removal only for a message the check matched.
 
 New IMAP folders are picked up through the fill's folder filters. A folder
 the server marks `\Trash` or `\Junk` is filled only if it already has a

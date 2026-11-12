@@ -68,6 +68,11 @@ type Server struct {
 	// purgeGrace is how long the retention job keeps the files of deleted
 	// messages; nil without the job.
 	purgeGrace *time.Duration
+	// beforeVerify, for tests, runs before every password check
+	// (verifyPassword, verifyDummy).
+	beforeVerify func()
+	// beforeKeyLookup, for tests, runs before an API key is looked up.
+	beforeKeyLookup func()
 	// beforeConfirmPurge, for tests, runs after a purge's account was
 	// loaded and before it is confirmed.
 	beforeConfirmPurge func()

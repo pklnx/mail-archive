@@ -334,7 +334,11 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Wrong code, or the challenge expired.
+          description: >-
+            Wrong code, or the challenge expired. A challenge accepts at most
+            3 codes; the wrong code that uses the last one, and every request
+            after it, answer `too many wrong codes; the login has expired, log
+            in again`.
           content:
             application/json:
               schema:
@@ -2582,8 +2586,10 @@ paths:
         envelope, and their location names the fill (`fill`). A message
         filed in several IMAP folders is stored once. A message is copied when
         its INTERNALDATE is before the cut-off (`before`) plus one hour,
-        unless the account received a message with the same Message-ID over
-        SMTP. Such a fill runs once.
+        unless the account received the same message over SMTP: the same
+        Message-ID, Date (as an instant, to the second), From addresses
+        (ignoring case and display name) and decoded Subject. Such a fill
+        runs once.
 
         With `"keepRunning": true` the fill is recurring: it has no cut-off
         and copies a message once its INTERNALDATE is two hours old, unless
@@ -4554,7 +4560,9 @@ components:
           description: Left to journaling (from an hour after the cut-off on).
         journaled:
           type: integer
-          description: Skipped; the account received the same Message-ID over SMTP.
+          description: >-
+            Skipped; the account received the same message over SMTP (the
+            same Message-ID, Date, From and Subject).
         present:
           type: integer
           description: >-

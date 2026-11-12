@@ -7,7 +7,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/pklnx/mail-archive/internal/auth"
+	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // passwordStep logs in with the password and returns the 2FA challenge.
@@ -221,4 +224,95 @@ func (f *authFixture) listedTwoFactor() map[string]bool {
 		on[name], _ = m["twoFactorEnabled"].(bool)
 	}
 	return on
+}
+
+// secondStepAnswer sends a code and checks the status and the error text.
+func (f *authFixture) secondStepAnswer(challenge, code string, want int, msg string) {
+	f.t.Helper()
+	if out := f.secondStep(challenge, code, want); out["error"] != msg {
+		f.t.Fatalf("second step: error %q, want %q", out["error"], msg)
+	}
+}
+
+// A login challenge accepts 3 codes (GHSA-w6jg-ffvw-q4f5, #6). The 3rd
+// wrong code answers "log in again" at once, counts for the limits and the
+// audit log, and ends the challenge: the right code no longer works on it,
+// but a new login does.
+func TestTwoFactorChallengeTakesThreeCodes(t *testing.T) {
+	f := newAuthFixture(t)
+	u := f.addUser("alice", "correct horse battery", false)
+	secret, _ := f.enableTOTP(u)
+
+	challenge := f.passwordStep("alice", "correct horse battery")
+	f.secondStepAnswer(challenge, "000000", 401, errInvalidSecondFactor)
+	f.secondStepAnswer(challenge, "000000", 401, errInvalidSecondFactor)
+	n := len(auditLog(t, f.st))
+	f.secondStepAnswer(challenge, "000000", 401, errTwoFactorExhausted)
+	if got := newEntries(t, f.st, n); len(got) != 1 || got[0].Action != "auth.login_failed" || details(t, got[0])["reason"] != "second_factor" {
+		t.Fatalf("audit of the last wrong code: %+v", got)
+	}
+	f.secondStepAnswer(challenge, f.code(secret), 401, "the login has expired; log in again")
+
+	// The 3rd wrong code counted: with 2 more the name is blocked.
+	other := f.passwordStep("alice", "correct horse battery")
+	f.secondStepAnswer(other, "000000", 401, errInvalidSecondFactor)
+	f.secondStepAnswer(other, "000000", 401, errInvalidSecondFactor)
+	resp, _ := f.do("POST", "/api/session", map[string]string{"username": "alice", "password": "correct horse battery"})
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("password after 5 wrong codes: %d", resp.StatusCode)
+	}
+}
+
+// After 3 wrong codes, logging in again works.
+func TestTwoFactorLoginAgainAfterThreeWrongCodes(t *testing.T) {
+	f := newAuthFixture(t)
+	u := f.addUser("alice", "correct horse battery", false)
+	secret, _ := f.enableTOTP(u)
+	challenge := f.passwordStep("alice", "correct horse battery")
+	for range 2 {
+		f.secondStepAnswer(challenge, "000000", 401, errInvalidSecondFactor)
+	}
+	f.secondStepAnswer(challenge, "000000", 401, errTwoFactorExhausted)
+	f.secondStep(f.passwordStep("alice", "correct horse battery"), f.code(secret), 200)
+	f.expect("GET", "/api/status", nil, 200)
+}
+
+// Two wrong codes leave the right one its attempt.
+func TestTwoFactorTwoWrongCodesThenRight(t *testing.T) {
+	f := newAuthFixture(t)
+	u := f.addUser("alice", "correct horse battery", false)
+	secret, _ := f.enableTOTP(u)
+	challenge := f.passwordStep("alice", "correct horse battery")
+	f.secondStepAnswer(challenge, "000000", 401, errInvalidSecondFactor)
+	f.secondStepAnswer(challenge, "000000", 401, errInvalidSecondFactor)
+	f.secondStep(challenge, f.code(secret), 200)
+	f.expect("GET", "/api/status", nil, 200)
+}
+
+// A request on a challenge without attempts left checks no code, also not
+// the right one, and does not count as a failure: only codes that were
+// checked count.
+func TestTwoFactorChallengeWithoutAttempts(t *testing.T) {
+	f := newAuthFixture(t)
+	u := f.addUser("alice", "correct horse battery", false)
+	secret, _ := f.enableTOTP(u)
+	challenge := f.passwordStep("alice", "correct horse battery")
+	conn, err := pgx.Connect(context.Background(), f.dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	if _, err := conn.Exec(context.Background(), `UPDATE two_factor_challenges SET attempts = $1`, store.MaxTwoFactorAttempts); err != nil {
+		t.Fatal(err)
+	}
+	n := len(auditLog(t, f.st))
+	f.secondStepAnswer(challenge, f.code(secret), 401, errTwoFactorExhausted)
+	for range 5 {
+		f.secondStepAnswer(challenge, "000000", 401, errTwoFactorExhausted)
+	}
+	if got := newEntries(t, f.st, n); len(got) != 0 {
+		t.Fatalf("audit entries for unchecked codes: %+v", got)
+	}
+	// Six refused requests, none counted: the name is not blocked.
+	f.secondStep(f.passwordStep("alice", "correct horse battery"), f.code(secret), 200)
 }

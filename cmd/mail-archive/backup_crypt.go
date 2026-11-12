@@ -283,8 +283,8 @@ nothing.`,
 }
 
 func newRestoreDumpCmd() *cobra.Command {
-	var keyringPath string
-	var reconcileOnly, hold bool
+	var keyringPath, dumpName, dumpHeader string
+	var reconcileOnly, hold, plaintext bool
 	cmd := &cobra.Command{
 		Use:   "restore-dump FILE",
 		Short: "Load a backup's database dump, encrypted or not, and reconcile encryption at rest",
@@ -294,9 +294,20 @@ new and empty, in one transaction: pg_restore --no-owner
 pg_restore with the archive key and the keyring copy next to it
 (mailarchive-<time>.keyring, or --keyring), else the data directory's. A
 keyring copy of another archive than the data directory's is refused before
-anything is restored. If the dump is damaged or cut, pg_restore is stopped
-and the database stays as it was. The writers lock is held from the checks
-to the end of the reconciliation.
+anything is restored, for a dump without encryption too. If the dump is
+damaged or cut, pg_restore is stopped and the database stays as it was. The
+writers lock is held from the checks to the end of the reconciliation.
+
+Only an encrypted dump is authenticated. A dump without encryption is
+refused, before anything is restored, when the archive shows any sign of
+encryption at rest: an archive key is configured, the data directory has a
+keyring, the file name ends in .enc, or a keyring copy lies next to the
+dump (or --keyring is given). Such a dump can be a backup from before
+encryption enable or after encryption disable, or one that somebody who
+can write the backup location put there. Check where it came from, then
+restore it with --plaintext. --plaintext on an encrypted dump is refused.
+On an archive without any of these signs, a dump without encryption is
+restored as it is: protect the backup location like the database.
 
 Then the keyring and the state of encryption at rest are reconciled with
 the data directory, and what changed is printed: the newer of the keyring
@@ -320,6 +331,15 @@ major version. The Docker image has none: with Docker Compose use
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+			// Flags that would do nothing in this mode are refused before
+			// any lock or database work.
+			if err := checkRestoreDumpFlags(restoreDumpFlags{
+				Keyring: keyringPath, DumpHeader: dumpHeader,
+				ReconcileOnly: reconcileOnly, Hold: hold, Plaintext: plaintext,
+				DumpNameSet: cmd.Flags().Changed("dump-name"), DumpHeaderSet: cmd.Flags().Changed("dump-header"),
+			}); err != nil {
+				return err
+			}
 			// Neither the index rebuild check nor the audit partitions: the
 			// database may be empty, or about to be replaced.
 			a, err := openAppForMigrate(ctx)
@@ -343,13 +363,19 @@ major version. The Docker image has none: with Docker Compose use
 			}
 			out := cmd.OutOrStdout()
 			if hold {
-				return holdForRestore(ctx, a, cmd.InOrStdin(), out)
+				facts := dumpFacts{
+					Name:           dumpName,
+					Sealed:         dumpHeader == dumpHeaderSealed,
+					SiblingKeyring: strings.TrimSpace(os.Getenv(envKeyringCopy)) != "",
+					Plaintext:      plaintext,
+				}
+				return holdForRestore(ctx, a, facts, cmd.InOrStdin(), out, cmd.ErrOrStderr())
 			}
 			if !reconcileOnly {
 				if err := requireEmptyDatabase(ctx, a); err != nil {
 					return err
 				}
-				if err := restoreDump(ctx, a, out, args[0], keyringPath); err != nil {
+				if err := restoreDump(ctx, a, out, args[0], keyringPath, plaintext); err != nil {
 					return err
 				}
 			}
@@ -358,8 +384,13 @@ major version. The Docker image has none: with Docker Compose use
 	}
 	cmd.Flags().StringVar(&keyringPath, "keyring", "", "the keyring copy of an encrypted dump (default: the .keyring next to it)")
 	cmd.Flags().BoolVar(&reconcileOnly, "reconcile-only", false, "only reconcile the keyring and the state with the data directory")
+	cmd.Flags().BoolVar(&plaintext, "plaintext", false, "restore a dump without encryption on an archive with signs of encryption at rest (check where it came from first)")
 	cmd.Flags().BoolVar(&hold, "hold", false, "hold the writers lock while ./ma restore-dump runs pg_restore, then reconcile (used by ./ma)")
 	_ = cmd.Flags().MarkHidden("hold")
+	cmd.Flags().StringVar(&dumpName, "dump-name", "", "with --hold: the base name of the dump ./ma restores (used by ./ma)")
+	_ = cmd.Flags().MarkHidden("dump-name")
+	cmd.Flags().StringVar(&dumpHeader, "dump-header", "", "with --hold: sealed or plain, as ./ma read the dump's header (used by ./ma)")
+	_ = cmd.Flags().MarkHidden("dump-header")
 	cmd.MarkFlagsMutuallyExclusive("reconcile-only", "hold")
 	return cmd
 }
@@ -401,20 +432,30 @@ const (
 
 // holdForRestore is restore-dump --hold, for ./ma restore-dump, which runs
 // pg_restore in the database container: with the writers lock held by the
-// caller, it runs the checks of a restore (an empty database, and a keyring
+// caller, it runs the checks of a restore (an empty database, a dump
+// without encryption only where checkDumpKind allows it, and a keyring
 // copy of this archive), prints "ready", and keeps the lock while ./ma
-// restores. When ./ma then writes "restored", it reconciles under the same
+// restores. ./ma reads the header and the name of the dump and passes them
+// as facts; the decision is made here. Its standard output carries only
+// the protocol: the --plaintext note goes to errOut. When ./ma then writes "restored", it reconciles under the same
 // lock and returns; on any other line ("failed", which ./ma writes when the
 // restore failed) or at the end of its input (./ma was interrupted) it
 // returns an error without reconciling. It reads one line only, so it does
 // not depend on the end of its input reaching it through docker. So no writer can start from the checks to the end of the
 // reconciliation.
-func holdForRestore(ctx context.Context, a *app, in io.Reader, out io.Writer) error {
+func holdForRestore(ctx context.Context, a *app, facts dumpFacts, in io.Reader, out, errOut io.Writer) error {
 	if err := requireEmptyDatabase(ctx, a); err != nil {
+		return err
+	}
+	note, err := checkDumpKind(facts, a.cfg.DataDir, a.cfg.ArchiveKey)
+	if err != nil {
 		return err
 	}
 	if err := refuseForeignKeyring(a.cfg.DataDir, ""); err != nil {
 		return err
+	}
+	if note != "" {
+		fmt.Fprintln(errOut, note)
 	}
 	fmt.Fprintln(out, holdReady)
 	line, err := bufio.NewReader(in).ReadString('\n')
@@ -430,8 +471,9 @@ func holdForRestore(ctx context.Context, a *app, in io.Reader, out io.Writer) er
 // refuseForeignKeyring refuses, before anything is restored, a keyring
 // copy of another archive than the data directory's keyring: the copy ./ma
 // passes in envKeyringCopy, and the file at path. The ids are read without
-// a key. A plaintext dump has no copy next to it; its keyring is only in
-// the dump and is checked by the reconciliation after the restore.
+// a key. A dump without encryption usually has no copy next to it; its
+// keyring is only in the dump and is checked by the reconciliation after
+// the restore.
 func refuseForeignKeyring(dataDir, path string) error {
 	fileData, err := os.ReadFile(blobcrypt.KeyringPath(dataDir)) //nolint:gosec // the configured data directory
 	if errors.Is(err, os.ErrNotExist) {
@@ -498,17 +540,11 @@ func (r *readErrs) Read(p []byte) (int, error) {
 }
 
 // restoreDump pipes the dump, decrypted when it is encrypted, into
-// pg_restore. On a damaged dump pg_restore is killed before it sees the
-// end of its input, so its single transaction rolls back.
-func restoreDump(ctx context.Context, a *app, out io.Writer, file, keyringPath string) error {
-	pgRestore, err := exec.LookPath("pg_restore")
-	if err != nil {
-		return errors.New("pg_restore not found; install the PostgreSQL client tools, or with Docker Compose use ./ma restore-dump FILE")
-	}
-	major, err := a.store.ServerMajorVersion(ctx)
-	if err != nil {
-		return err
-	}
+// pg_restore. A dump without encryption is refused where checkDumpKind
+// says so, before pg_restore starts. On a damaged dump pg_restore is
+// killed before it sees the end of its input, so its single transaction
+// rolls back.
+func restoreDump(ctx context.Context, a *app, out io.Writer, file, keyringPath string, plaintext bool) error {
 	f, err := os.Open(file) //nolint:gosec // the operator's dump
 	if err != nil {
 		return err
@@ -518,21 +554,137 @@ func restoreDump(ctx context.Context, a *app, out io.Writer, file, keyringPath s
 	if err != nil {
 		return err
 	}
+	if keyringPath == "" {
+		if sibling := filepath.Join(filepath.Dir(file), keyringCopyName(filepath.Base(file))); fileExists(sibling) {
+			keyringPath = sibling
+		}
+	}
+	note, err := checkDumpKind(dumpFacts{Name: filepath.Base(file), Sealed: sealed, SiblingKeyring: keyringPath != "", Plaintext: plaintext},
+		a.cfg.DataDir, a.cfg.ArchiveKey)
+	if err != nil {
+		return err
+	}
+	if err := refuseForeignKeyring(a.cfg.DataDir, keyringPath); err != nil {
+		return err
+	}
+	pgRestore, err := exec.LookPath("pg_restore")
+	if err != nil {
+		return errors.New("pg_restore not found; install the PostgreSQL client tools, or with Docker Compose use ./ma restore-dump FILE")
+	}
+	major, err := a.store.ServerMajorVersion(ctx)
+	if err != nil {
+		return err
+	}
 	var in io.Reader = f
 	if sealed {
-		if keyringPath == "" {
-			if sibling := filepath.Join(filepath.Dir(file), keyringCopyName(filepath.Base(file))); fileExists(sibling) {
-				keyringPath = sibling
-			}
-		}
-		if err := refuseForeignKeyring(a.cfg.DataDir, keyringPath); err != nil {
-			return err
-		}
 		if in, err = openBackupStream(f, keyringPath); err != nil {
 			return fmt.Errorf("%s: %w", file, err)
 		}
 	}
+	if note != "" {
+		fmt.Fprintln(out, note)
+	}
 	return runRestore(ctx, restoreJob{PgRestore: pgRestore, DatabaseURL: a.cfg.DatabaseURL, ServerMajor: major, In: in, Name: file, Sealed: sealed}, out)
+}
+
+// errPlaintextDump: a dump without encryption on an archive that shows
+// signs of encryption at rest, without --plaintext (GHSA-w6jg-ffvw-q4f5).
+var errPlaintextDump = errors.New("the dump is not encrypted, but this archive uses encryption at rest")
+
+// dumpFacts is what is known about a dump before it is restored.
+type dumpFacts struct {
+	Name           string // base name of the file
+	Sealed         bool   // starts with MA-ENC1
+	SiblingKeyring bool   // a keyring copy lies next to it (or --keyring)
+	Plaintext      bool   // the operator passed --plaintext
+}
+
+// checkDumpKind refuses a dump without encryption, which is not
+// authenticated, unless the operator said --plaintext, wherever the
+// archive shows a sign of encryption at rest: an archive key is
+// configured, the data directory has a keyring, the name ends in .enc, or
+// a keyring copy lies next to the dump. Signs only tighten; nothing in the
+// backup location or the data directory can waive the check. With
+// --plaintext and signs present it returns a note to print before the
+// restore. --plaintext on an encrypted dump is refused, so the flag is an
+// expectation that is checked.
+func checkDumpKind(f dumpFacts, dataDir string, archiveKey []byte) (note string, err error) {
+	if f.Sealed {
+		if f.Plaintext {
+			return "", fmt.Errorf("%s is encrypted; drop --plaintext", f.Name)
+		}
+		return "", nil
+	}
+	var signs []string
+	if archiveKey != nil {
+		signs = append(signs, "an archive key is configured ("+config.EnvArchiveKeyFile+" or "+config.EnvArchiveKey+")")
+	}
+	ringPath := blobcrypt.KeyringPath(dataDir)
+	if _, err := os.Stat(ringPath); err == nil {
+		signs = append(signs, "the data directory has a keyring ("+ringPath+")")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if strings.HasSuffix(f.Name, ".enc") {
+		signs = append(signs, "the file name ends in .enc")
+	}
+	if f.SiblingKeyring {
+		signs = append(signs, "a keyring copy lies next to the dump")
+	}
+	if len(signs) == 0 {
+		return "", nil
+	}
+	if !f.Plaintext {
+		return "", fmt.Errorf("%w: %s has no encryption header, and %s; nothing was restored. "+
+			"A dump without encryption is not authenticated: whoever can write the backup location decides what it holds. "+
+			"If it is a backup of this archive from before encryption enable or after encryption disable, check where it came from first, "+
+			"then restore it with %s restore-dump --plaintext",
+			errPlaintextDump, f.Name, strings.Join(signs, "; "), commandName())
+	}
+	return "restoring an unencrypted dump (--plaintext): its content is not authenticated; signs of encryption at rest: " +
+		strings.Join(signs, "; "), nil
+}
+
+// Values of restore-dump --dump-header, which ./ma passes with --hold.
+const (
+	dumpHeaderSealed = "sealed"
+	dumpHeaderPlain  = "plain"
+)
+
+type restoreDumpFlags struct {
+	Keyring, DumpHeader            string
+	ReconcileOnly, Hold, Plaintext bool
+	DumpNameSet, DumpHeaderSet     bool
+}
+
+// checkRestoreDumpFlags refuses flags that would do nothing in the mode
+// given, and --hold without the facts ./ma passes since 1.5.2.
+func checkRestoreDumpFlags(f restoreDumpFlags) error {
+	if f.ReconcileOnly {
+		switch {
+		case f.Plaintext:
+			return errors.New("--plaintext has no effect with --reconcile-only, which restores nothing")
+		case f.DumpNameSet || f.DumpHeaderSet:
+			return errors.New("--dump-name and --dump-header are only for --hold (used by ./ma)")
+		}
+		return nil
+	}
+	if !f.Hold {
+		if f.DumpNameSet || f.DumpHeaderSet {
+			return errors.New("--dump-name and --dump-header are only for --hold (used by ./ma)")
+		}
+		return nil
+	}
+	if f.Keyring != "" {
+		return errors.New("--keyring has no effect with --hold: ./ma passes the keyring copy next to the dump itself")
+	}
+	if !f.DumpHeaderSet || !f.DumpNameSet {
+		return errors.New("--hold needs --dump-header and --dump-name: ./ma is older than the image; use the ./ma of this release")
+	}
+	if f.DumpHeader != dumpHeaderSealed && f.DumpHeader != dumpHeaderPlain {
+		return fmt.Errorf("--dump-header %q: want %s or %s", f.DumpHeader, dumpHeaderSealed, dumpHeaderPlain)
+	}
+	return nil
 }
 
 func fileExists(path string) bool {
@@ -575,6 +727,19 @@ func runRestore(ctx context.Context, job restoreJob, out io.Writer) error {
 		"--no-owner", "--single-transaction", "--exit-on-error", "--no-password",
 		"--dbname="+cfg.Database)
 	cmd.Env, cmd.Stdout, cmd.Stderr = env, out, &stderr
+	if f, ok := job.In.(*os.File); ok && !job.Sealed {
+		// A dump without encryption: pg_restore reads the file itself.
+		// Through a pipe it can end before the end of the file (a dump
+		// pg_dump wrote into a file has data offsets, and pg_restore stops
+		// after the last entry it restores), which the copy would report
+		// as a broken pipe after a restore that succeeded.
+		cmd.Stdin = f
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("pg_restore: %w: %s (in one transaction: the database is unchanged)", err, strings.TrimSpace(stderr.String()))
+		}
+		fmt.Fprintf(out, "restored the dump %s\n", job.Name)
+		return nil
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

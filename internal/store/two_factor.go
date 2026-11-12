@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -24,7 +25,18 @@ import (
 var (
 	ErrTwoFactorInvalid = errors.New("invalid two-factor code")
 	ErrTwoFactorExpired = errors.New("two-factor challenge expired or invalid")
+	// ErrTwoFactorExhausted: the login challenge has no attempts left
+	// (MaxTwoFactorAttempts). Alone it means that this request checked no
+	// code; together with ErrTwoFactorInvalid (errTwoFactorLastInvalid)
+	// that its code was wrong and used the last attempt.
+	ErrTwoFactorExhausted = errors.New("two-factor challenge has no attempts left")
+
+	errTwoFactorLastInvalid = fmt.Errorf("%w: %w", ErrTwoFactorInvalid, ErrTwoFactorExhausted)
 )
+
+// MaxTwoFactorAttempts is the number of codes a login challenge accepts.
+// The wrong code that uses the last attempt ends the challenge.
+const MaxTwoFactorAttempts = 3
 
 // TwoFactorState is a user's 2FA setup.
 type TwoFactorState struct {
@@ -290,10 +302,50 @@ func (s *Store) TwoFactorChallengeUser(ctx context.Context, token string) (*User
 // CompleteTwoFactorLogin checks the second factor for a challenge and, in
 // the same transaction, uses up the challenge and creates the session. The
 // challenge fails if the user's 2FA state changed since it was issued.
+//
+// Each call first reserves one of the challenge's MaxTwoFactorAttempts in
+// its own autocommit statement: the count must survive the rollback of a
+// wrong code, and it cannot be part of the login transaction, which writes
+// the pending audit entry of a successful login on commit. The row lock of
+// that statement orders parallel requests, so at most MaxTwoFactorAttempts
+// codes are ever checked per challenge, whatever happens in front of the
+// store. A call that finds no attempt left returns ErrTwoFactorExhausted
+// and checks nothing. A wrong code that used the last attempt deletes the
+// challenge and returns an error that is both ErrTwoFactorInvalid and
+// ErrTwoFactorExhausted; a request still in flight on it then finds the
+// challenge gone (ErrTwoFactorExpired).
 func (s *Store) CompleteTwoFactorLogin(ctx context.Context, token, code string, now time.Time, sealer *crypto.Sealer, key []byte, sessionHash []byte, expiresAt time.Time, userAgent string) (*User, error) {
+	challengeID := auth.HashSessionToken(token)
+	used, err := s.q.ReserveTwoFactorAttempt(ctx, db.ReserveTwoFactorAttemptParams{ID: challengeID, MaxAttempts: MaxTwoFactorAttempts})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Expired, gone, or out of attempts. Between the two statements the
+		// challenge may be deleted (used or exhausted by a parallel
+		// request): then it answers as expired, which is just as final.
+		exhausted, err := s.q.TwoFactorChallengeExhausted(ctx, db.TwoFactorChallengeExhaustedParams{ID: challengeID, MaxAttempts: MaxTwoFactorAttempts})
+		if err != nil {
+			return nil, err
+		}
+		if exhausted {
+			return nil, ErrTwoFactorExhausted
+		}
+		return nil, ErrTwoFactorExpired
+	}
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.completeTwoFactorLogin(ctx, challengeID, code, now, sealer, key, sessionHash, expiresAt, userAgent)
+	if errors.Is(err, ErrTwoFactorInvalid) && used >= MaxTwoFactorAttempts {
+		// Best effort: the challenge accepts no code anyway, and
+		// DeleteExpiredTwoFactorChallenges removes it once it expires.
+		_ = s.q.DeleteExhaustedTwoFactorChallenge(ctx, db.DeleteExhaustedTwoFactorChallengeParams{ID: challengeID, MaxAttempts: MaxTwoFactorAttempts})
+		return nil, errTwoFactorLastInvalid
+	}
+	return out, err
+}
+
+func (s *Store) completeTwoFactorLogin(ctx context.Context, challengeID []byte, code string, now time.Time, sealer *crypto.Sealer, key []byte, sessionHash []byte, expiresAt time.Time, userAgent string) (*User, error) {
 	var out *User
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		challengeID := auth.HashSessionToken(token)
 		userID, err := q.GetTwoFactorChallengeUser(ctx, challengeID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrTwoFactorExpired

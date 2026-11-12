@@ -27,7 +27,8 @@ func dial(t *testing.T, srv *imaptest.Server) *imapsync.Conn {
 }
 
 func msg(id string) []byte {
-	return fmt.Appendf(nil, "From: a@example.com\r\nMessage-ID: <%s>\r\nSubject: s\r\n\r\nbody %s\r\n", id, id)
+	return fmt.Appendf(nil, "From: a@example.com\r\nTo: b@example.com\r\nMessage-ID: <%s>\r\nX-Other: x\r\n"+
+		"Subject: s\r\nDate: Mon, 1 Jun 2026 12:00:00 +0200\r\n\r\nbody %s\r\n", id, id)
 }
 
 func TestListHeaders(t *testing.T) {
@@ -63,8 +64,10 @@ func TestListHeaders(t *testing.T) {
 	if len(got) != 2 || got[0].UID != 2 || got[1].UID != 3 {
 		t.Fatalf("headers %+v", got)
 	}
-	if string(got[0].MessageID) != "Message-ID: <m2@example.com>\r\n\r\n" {
-		t.Errorf("message id %q", got[0].MessageID)
+	// The four fields a fill compares (#4 of the security fixes), and no
+	// other.
+	if want := "From: a@example.com\r\nMessage-ID: <m2@example.com>\r\nSubject: s\r\nDate: Mon, 1 Jun 2026 12:00:00 +0200\r\n\r\n"; string(got[0].Fields) != want {
+		t.Errorf("fields %q, want %q", got[0].Fields, want)
 	}
 	if !got[0].InternalDate.Equal(at.Add(time.Hour)) {
 		t.Errorf("internal date %v, want %v", got[0].InternalDate, at.Add(time.Hour))

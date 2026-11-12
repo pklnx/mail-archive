@@ -126,15 +126,20 @@ WHERE account_id = $1 AND (status = 'running' OR keep_running);
 -- name: FillStatus :one
 SELECT status FROM smtp_fills WHERE id = $1;
 
--- name: JournaledMessageIDs :many
--- Message-IDs among @ids of messages the account received over SMTP (with
--- an envelope); uses messages_message_id_idx.
-SELECT DISTINCT m.message_id::text AS message_id
+-- name: JournaledMatchCandidates :many
+-- The Message-ID, Date, From and Subject of messages the account received
+-- over SMTP (with an envelope) whose Message-ID is among @ids and whose
+-- Date, to the second, among @dates: the candidates for the journaled check
+-- of a fill or a journal import, which compares all four. Uses
+-- messages_message_id_idx; at most @max_rows rows.
+SELECT DISTINCT m.message_id::text AS message_id, m.sent_at, m.from_addr, m.subject
 FROM messages m
 JOIN message_locations l ON l.message_sha256 = m.sha256
 JOIN envelopes e ON e.location_id = l.id
 JOIN folders f ON f.id = l.folder_id
-WHERE f.account_id = @account_id AND m.message_id = ANY (@ids::text[]);
+WHERE f.account_id = @account_id AND m.message_id = ANY (@ids::text[])
+  AND m.sent_at IS NOT NULL AND date_trunc('second', m.sent_at) = ANY (@dates::timestamptz[])
+LIMIT @max_rows;
 
 -- name: FirstReceived :one
 -- The first message the smtp account received over SMTP that is still

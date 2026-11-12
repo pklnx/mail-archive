@@ -374,8 +374,9 @@ jobs:
       # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
       - run: npm install -g corepack@0.36.0 && corepack enable
       - run: pnpm install --frozen-lockfile
-      # The headless Chromium of the pinned Playwright, without apt unless
-      # the runner image lacks one of its libraries (then with a warning).
+      # The headless shell and the full Chromium (web/e2e/hints.spec.ts) of
+      # the pinned Playwright, without apt unless the runner image lacks one
+      # of their libraries (then with a warning).
       - run: sh ../scripts/ci-playwright-chromium-test.sh
       - run: sh ../scripts/ci-playwright-chromium.sh
       # The config builds the UI, then builds and starts the demo (it embeds
@@ -406,7 +407,7 @@ jobs:
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
     # `playwright install --with-deps webkit` always runs apt: 8-13 min when
-    # the mirror is slow (scripts/ci-playwright-chromium.sh:5-8), then the
+    # the mirror is slow (scripts/ci-playwright-chromium.sh:7-10), then the
     # build and one spec.
     timeout-minutes: 30
     env:

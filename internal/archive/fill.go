@@ -26,8 +26,9 @@ import (
 // journal copy and the mailbox copy of one message differ in their
 // Received: lines, so the archive cannot tell them apart by content; the
 // fill decides by INTERNALDATE and leaves out messages the account already
-// received over SMTP (same Message-ID). Its locations have no envelope,
-// which tells them from journaled ones.
+// received over SMTP: the same Message-ID, Date, From and Subject
+// (journalKey). Its locations have no envelope, which tells them from
+// journaled ones.
 //
 // A one-time fill imports what is older than its cut-off. A recurring
 // fill imports a message once it is RecurringGrace old, so that a journal
@@ -122,10 +123,32 @@ func (w *watermark) advance(last *uint32, uid uint32, hold bool) {
 // a message is held when it waits, or when its body was requested but did
 // not come back (the server lost it meanwhile, or skipped it), so that the
 // next run asks for it again.
-func (w *watermark) advanceBatch(last *uint32, chunk []imapsync.Header, waiting, requested, fetched map[uint32]bool) {
+func (w *watermark) advanceBatch(last *uint32, chunk []fillHeader, waiting, requested, fetched map[uint32]bool) {
 	for _, h := range chunk {
 		w.advance(last, h.UID, waiting[h.UID] || requested[h.UID] && !fetched[h.UID])
 	}
+}
+
+// fillHeader is what a fill keeps of a listed message until it decides
+// about it: not the raw header fields, which take more room per message
+// of the folder.
+type fillHeader struct {
+	UID          uint32
+	InternalDate time.Time
+	Size         int64
+	MessageID    string
+	key          journalKey
+	keyOK        bool // the message can count as journaled (newJournalKey)
+}
+
+func newFillHeader(h imapsync.Header) fillHeader {
+	parsed := ParseHeaders(bytes.NewReader(h.Fields))
+	key, ok := headersKey(parsed)
+	id := parsed.MessageID
+	if ok {
+		id = key.messageID // one string for both
+	}
+	return fillHeader{UID: h.UID, InternalDate: h.InternalDate, Size: h.Size, MessageID: id, key: key, keyOK: ok}
 }
 
 // A fill's password is sealed with its own associated data, so it cannot be
@@ -395,15 +418,15 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 		}
 		ff.SourceUIDValidity, ff.LastUID = status.UIDValidity, 0
 	}
-	var headers []imapsync.Header
+	var headers []fillHeader
 	if err := imapsync.ListHeaders(conn, ff.LastUID, func(h imapsync.Header) error {
-		headers = append(headers, h)
+		headers = append(headers, newFillHeader(h))
 		return ctx.Err()
 	}); err != nil {
 		return err
 	}
 	// The watermark needs UID order, which servers do not promise.
-	slices.SortFunc(headers, func(a, b imapsync.Header) int { return cmp.Compare(a.UID, b.UID) })
+	slices.SortFunc(headers, func(a, b fillHeader) int { return cmp.Compare(a.UID, b.UID) })
 	ff.Error = ""
 	ff.Counts.Waiting = 0 // a snapshot of this pass
 	var wm watermark
@@ -450,12 +473,16 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 // (same Message-ID, INTERNALDATE and size): moved or seen again after a
 // rescan.
 func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder, wm *watermark,
-	now time.Time, chunk []imapsync.Header, last bool, log *slog.Logger) error {
+	now time.Time, chunk []fillHeader, last bool, log *slog.Logger) error {
 	ids := make([]string, len(chunk))
+	var keys []journalKey
 	for i, h := range chunk {
-		ids[i] = ParseHeaders(bytes.NewReader(h.MessageID)).MessageID
+		ids[i] = h.MessageID
+		if h.keyOK {
+			keys = append(keys, h.key)
+		}
 	}
-	journaled, err := f.Store.JournaledMessageIDs(ctx, fill.AccountID, ids)
+	journaled, err := journaledKeys(ctx, f.Store, fill.AccountID, keys, log)
 	if err != nil {
 		return err
 	}
@@ -471,7 +498,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	waiting, requested, fetched := map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}
 	for i, h := range chunk {
 		next.Counts.Scanned++
-		isJournaled := ids[i] != "" && journaled[ids[i]]
+		isJournaled := h.keyOK && journaled[h.key]
 		var v fillVerdict
 		if recurring {
 			if h.InternalDate.After(now.Add(futureSlack)) && !isJournaled {

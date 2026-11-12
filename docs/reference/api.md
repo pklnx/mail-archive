@@ -21,8 +21,8 @@ answer `404`.
 | Endpoint | Description |
 |---|---|
 | `GET /api/session` | The logged-in user: `{"user": {"name": "patrick", "admin": true, "language": "auto", "locale": "auto"}}`. Without a session `401` with `{"error": "login required", "setupRequired": false}`; `setupRequired` is `true` while no user exists, `passkeyOrigin` says where passkeys work (missing when they are off). |
-| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user and for an [auditor](#auditors) without an active grant (`"you have no active auditor access"`, only after a correct password and second factor), `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures. |
-| `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge, `429` like the password step. |
+| `POST /api/session` | Log in with `{"username": "...", "password": "..."}`. Answers like `GET` and sets the cookie. For a user with 2FA it answers `200 {"twoFactorRequired": true, "challenge": "..."}` instead and sets no cookie; the challenge is valid for 5 minutes and once. `401` for a wrong name or password, `403` for a locked user and for an [auditor](#auditors) without an active grant (`"you have no active auditor access"`, only after a correct password and second factor), `429` with `Retry-After` (and `retryAfter` in seconds) after too many failures, and after waiting 60 seconds for parallel attempts ahead of it. |
+| `POST /api/session/2fa` | Second step for users with 2FA: `{"challenge": "...", "code": "..."}`. `code` is a TOTP code or a recovery code. Answers like `GET` and sets the cookie. `401` for a wrong code or an expired challenge. A challenge accepts at most 3 codes: the wrong code that uses the last one, and every request after it, answer `401` with `too many wrong codes; the login has expired, log in again`, and the login starts again with the password. `429` like the password step. |
 | `POST /api/session/passkey/begin` | Start a passkey login: `{"token", "publicKey"}`, where `publicKey` holds the options for `navigator.credentials.get()` (binary values in base64url). `503` without `MAIL_ARCHIVE_PUBLIC_URL`, `429` after 30 starts per minute from one address (IPv6: one `/64`). |
 | `POST /api/session/passkey/finish` | `{"token": "...", "credential": {...}}` with the browser's answer in JSON. Answers like `POST /api/session` and sets the cookie. `401` for a passkey that is not accepted or an expired token; for an unknown passkey also `"unknownCredential": true` with `credentialId` and `rpId`. `403` for a locked user. |
 | `DELETE /api/session` | Log out (`204`). |
@@ -76,7 +76,7 @@ admin's own accounts and those shared with them, like a session.
 | Endpoint outside the key's scopes | `403` `{"error": "this API key lacks the sync scope", "scope": "sync"}` |
 | Endpoint for sessions only | `403` `{"error": "not available with an API key"}` |
 | The owner must change their password or set up 2FA | `403` with `passwordChangeRequired` or `twoFactorSetupRequired`, as for a session |
-| More than 600 requests per key and minute, or more than 30 invalid keys per client address (IPv6: per `/64`) and minute | `429` with `Retry-After` |
+| More than 600 requests per key and minute, more than 30 invalid keys per client address (IPv6: per `/64`) and minute, or a wait of 60 seconds for the key checks in flight from that address | `429` with `Retry-After` |
 
 A request with `Authorization: Bearer ma_…` never uses the session cookie,
 also when the key is invalid. Other `Authorization` headers, such as Basic
@@ -444,8 +444,10 @@ limits the fill to these folders. Every IMAP folder goes into `JOURNAL`; a
 message filed in several folders is stored once. `folderPrefix` is no longer
 supported: a non-empty value is answered `400`. `before` is the cut-off,
 by default now: a message is copied when its INTERNALDATE is before the
-cut-off plus one hour, unless the account received a message with the same
-Message-ID over SMTP. The password is kept, encrypted, only while the fill
+cut-off plus one hour, unless the account received the same message over
+SMTP: the same Message-ID, Date, From and Subject (see
+[Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)).
+The password is kept, encrypted, only while the fill
 runs.
 
 With `"keepRunning": true` the fill is recurring and has no cut-off (`before`

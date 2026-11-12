@@ -103,6 +103,13 @@ func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 func newAuthFixtureLog(t *testing.T, opts Options, w io.Writer) *authFixture {
 	t.Helper()
 	st, dbURL := storetest.NewWithURL(t)
+	return newAuthFixtureOn(t, opts, w, st, dbURL)
+}
+
+// newAuthFixtureOn is newAuthFixtureLog on the store st of the database at
+// dbURL.
+func newAuthFixtureOn(t *testing.T, opts Options, w io.Writer, st *store.Store, dbURL string) *authFixture {
+	t.Helper()
 	key := bytes.Repeat([]byte{7}, 32)
 	sealer, err := crypto.NewSealer(key)
 	if err != nil {

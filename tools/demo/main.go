@@ -838,6 +838,71 @@ func neutralized(date time.Time, webURL string) message {
 		"Rendering check: boxes that stay empty", date, b.String())}
 }
 
+// The hosts and ports the request checks below point at (web/e2e/demo.ts):
+// the hint servers of web/e2e/hints.spec.ts on *.localhost, and the server
+// of web/e2e/referrer.spec.ts on 127.0.0.2, which is not a demo host, so
+// the server keeps its links.
+const (
+	hintHTTP    = "http://hint-prerender.localhost:18184"
+	hintConnect = "http://hint-preconnect.localhost:18185"
+	referrerURL = "http://127.0.0.2:18183"
+)
+
+// hintCheck is an HTML mail that asks the browser for requests on its own,
+// for web/e2e/hints.spec.ts: resource hints (prerender, prefetch,
+// preconnect, dns-prefetch, preload, modulepreload) in <head> and <body> and
+// in syntax variants, speculation rules, and frames whose src would make the
+// browser connect to the host. The server renames rel and src (and the
+// sandbox and script-src 'none' block the rules), so the browser sends none
+// of them. Its attribute variant is for web/e2e/referrer.spec.ts: a link and
+// images that set their own referrer policy and cors mode, which the server
+// renames too. Only this mail has the word "periscope". It sits below the
+// kaleidoscope mail, below the rows of the list screenshots.
+func hintCheck(date time.Time) message {
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html>` + "\n" + `<html><head>`)
+	b.WriteString(`<link rel="prerender" href="` + hintHTTP + `/head-prerender">`)
+	b.WriteString(`<link rel="prefetch" href="` + hintHTTP + `/head-prefetch">`)
+	b.WriteString(`<link rel="preconnect" href="` + hintConnect + `/">`)
+	b.WriteString(`<link rel="dns-prefetch" href="//hint-dns.localhost/">`)
+	b.WriteString(`<link rel="preload" as="image" href="` + hintHTTP + `/preload.png" imagesrcset="` + hintHTTP + `/preload-2x.png 2x">`)
+	b.WriteString(`<link rel="modulepreload" href="` + hintHTTP + `/module.js">`)
+	b.WriteString(`<script type="speculationrules">{"prerender":[{"source":"list","urls":["` + hintHTTP + `/speculation"]}]}</script>`)
+	b.WriteString(`</head><body style="font-family:Arial,sans-serif;color:#222">`)
+	b.WriteString(`<p>Hi Alex, this is the periscope check. A safe mail client sends no request for this mail until you click.</p>`)
+	b.WriteString(`<LINK REL=PRERENDER HREF=` + hintHTTP + `/body-prerender>`)
+	b.WriteString(`<link rel=preconnect href=` + hintConnect + `/body>`)
+	b.WriteString(`<link/rel=dns-prefetch href="//hint-dns-body.localhost/">`)
+	b.WriteString(`<link href="` + hintHTTP + `/after-quote"rel="prefetch">`)
+	// A frame's URL: the CSP blocks the navigation, but a full Chromium
+	// connects to the host first. The server renames src on <iframe> and
+	// <frame>. A <frame> outside a <frameset> is dropped by the parser; it is
+	// here for the bytes, the unit tests cover the frameset.
+	b.WriteString(`<iframe src="` + hintHTTP + `/iframe" width="16" height="16"></iframe>`)
+	b.WriteString(`<IFRAME SRC=` + hintConnect + `/iframe-upper width=16 height=16></IFRAME>`)
+	b.WriteString(`<frame src="` + hintHTTP + `/frame">`)
+	b.WriteString(`<p><a referrerpolicy="unsafe-url" href="` + referrerURL + `/attr-click">The attribute check</a></p>`)
+	b.WriteString(`<p><img referrerpolicy="unsafe-url" crossorigin="anonymous" src="` + referrerURL + `/attr-img" width="16" height="16" alt="">`)
+	b.WriteString(`<svg width="16" height="16"><image crossorigin="anonymous" referrerpolicy="unsafe-url" href="` + referrerURL + `/attr-svgimg" width="16" height="16"/></svg></p>`)
+	b.WriteString(`</body></html>`)
+	return message{"work", "INBOX", htmlReply("periscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"Request check: hints that stay silent", date, b.String())}
+}
+
+// referrerCheck is an HTML mail whose <meta> asks for the full referrer,
+// with a link and an image, for web/e2e/referrer.spec.ts. The server renames
+// the meta's content, so the server's Referrer-Policy: no-referrer holds.
+// Only this mail has the word "semaphore". It sits below the kaleidoscope
+// mail, below the rows of the list screenshots.
+func referrerCheck(date time.Time) message {
+	return message{"work", "INBOX", htmlReply("semaphore@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"Referrer check: links that tell nothing", date,
+		`<html><head><meta name="referrer" content="unsafe-url"></head><body style="font-family:Arial,sans-serif;color:#222">`+
+			`<p>Hi Alex, this is the semaphore check. A safe mail client does not tell the sender where you read this mail.</p>`+
+			`<p><a href="`+referrerURL+`/meta-click">The meta check</a></p>`+
+			`<p><img src="`+referrerURL+`/meta-img" width="16" height="16" alt=""></p></body></html>`)}
+}
+
 // leasePDF is the lease attached to Sam's mail: a PDF with a text layer.
 // Only it has the word "deposit", so a search for it matches the
 // attachment alone (web/e2e/mail.spec.ts, the search-attachment
@@ -956,7 +1021,7 @@ Content-Transfer-Encoding: base64
 			"Thanks for signing up. Your mailbox is ready.")},
 	}
 	msgs = append(msgs, offsite(ago)...)
-	msgs = append(msgs, neutralized(ago(19, 12), webURL))
+	msgs = append(msgs, neutralized(ago(19, 12), webURL), hintCheck(ago(19, 14)), referrerCheck(ago(19, 16)))
 	for i := range 25 {
 		msgs = append(msgs, message{"work", "INBOX", plain("Newsletter <news@shop.example>", "alex.morgan@work.example",
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})
