@@ -19,8 +19,10 @@ async function addUser(page: Page, name: string, group: string) {
   await main.getByRole("status").filter({ hasText: `Password for ${name}` }).getByRole("button", { name: "Done" }).click();
 }
 
-test("add a user, copy the generated password, lock and unlock", async ({ page, context }) => {
-  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+test("add a user, copy the generated password, lock and unlock", async ({ page, context, browserName }) => {
+  // Engine fact (#398): Playwright's WebKit knows only clipboard-read and
+  // throws "Unknown permission: clipboard-write".
+  await context.grantPermissions(browserName === "webkit" ? ["clipboard-read"] : ["clipboard-read", "clipboard-write"], { origin });
   const name = unique("e2e-user");
   await page.goto("/?view=users");
   const main = page.getByRole("main");

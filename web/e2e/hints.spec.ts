@@ -151,9 +151,10 @@ async function readNetLog(path: string): Promise<{ names: string[]; addresses: s
   return { names, addresses, mailNames: [...mailNames], probes };
 }
 
-test("a mail's resource hints send nothing, with background networking on", async ({ browserName }, testInfo) => {
-  // Chromium's net log and launch flags; the webkit project does not run this spec.
-  test.skip(browserName !== "chromium", "Chromium only");
+// It launches its own Chromium and reads Chromium's net log, whatever the
+// project's browser: it runs in the chromium project only (@chromium-launch,
+// #398), and the webkit job has no Chromium installed.
+test("a mail's resource hints send nothing, with background networking on", { tag: "@chromium-launch" }, async ({}, testInfo) => {
   // Launching a second browser with a fresh profile takes a few seconds.
   test.setTimeout(90_000);
   // Each listener reports what reaches it. Any connection to one of the

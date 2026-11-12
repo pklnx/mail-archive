@@ -171,7 +171,8 @@ test("phone: a tap on a location tag opens its hint in view; a tap on the hint k
 // open (#200). The swipe is a real touch sequence through the DevTools
 // protocol (Input.synthesizeScrollGesture with a touch source does not
 // scroll in the headless shell); each call returns once the page has
-// handled the event.
+// handled the event. Playwright has no touch move for WebKit, so these tests
+// are Chromium only (@cdp, #398).
 async function swipeUp(page: Page, x: number, y: number) {
   const cdp = await page.context().newCDPSession(page);
   // Event timestamps, not real time: 50ms per step, then the finger rests
@@ -191,7 +192,7 @@ const scrollY = (page: Page) => page.evaluate(() => new Promise<number>((r) => r
 const scrolls = (page: Page) => page.evaluate(() => document.scrollingElement!.scrollHeight > innerHeight + 100);
 const rem = 16;
 
-test("phone: a swipe on the SideNav's scrim does not scroll the message behind it; a tap closes it", async ({ page }) => {
+test("phone: a swipe on the SideNav's scrim does not scroll the message behind it; a tap closes it", { tag: "@cdp" }, async ({ page }) => {
   await openLong(page);
   await expect.poll(() => scrolls(page)).toBe(true);
   const nav = page.getByRole("navigation", { name: "Main navigation" });
@@ -213,7 +214,7 @@ test("phone: a swipe on the SideNav's scrim does not scroll the message behind i
   expect(await scrollY(page)).toBeGreaterThan(before);
 });
 
-test("phone: a swipe on the Folders scrim does not scroll the message behind it; a tap closes it", async ({ page }) => {
+test("phone: a swipe on the Folders scrim does not scroll the message behind it; a tap closes it", { tag: "@cdp" }, async ({ page }) => {
   // Only history brings the overlay over an open message: the Folders
   // button is in the list, which a phone hides while reading.
   await page.goto("/?q=itinerary");
@@ -244,11 +245,13 @@ test("phone: a swipe on the Folders scrim does not scroll the message behind it;
   expect(await scrollY(page)).toBeGreaterThan(before);
 });
 
-test("phone: a long attachment name takes one line and keeps the matched term visible (#479)", async ({ page }) => {
+const longAttachment = "Residential Lease Agreement for Unit 4B signed by both parties final version 2026 including all annexes.pdf";
+
+/** The search hit of #479 on an iPhone-wide screen, with the long name the demo's answer gets. */
+async function longAttachmentHit(page: Page) {
   // The iPhone width of the finding.
   await page.setViewportSize({ width: 393, height: 852 });
   // The demo's answer, with a long name for the matching attachment (Lease.pdf).
-  const long = "Residential Lease Agreement for Unit 4B signed by both parties final version 2026 including all annexes.pdf";
   let replaced = 0;
   await page.route(
     (url) => url.pathname === "/api/messages" && url.searchParams.get("q") === "deposit",
@@ -257,7 +260,7 @@ test("phone: a long attachment name takes one line and keeps the matched term vi
       const body = (await response.json()) as { messages: { matchedAttachment?: { filename: string } }[] };
       for (const m of body.messages)
         if (m.matchedAttachment) {
-          m.matchedAttachment.filename = long;
+          m.matchedAttachment.filename = longAttachment;
           replaced++;
         }
       await route.fulfill({ response, json: body });
@@ -267,12 +270,17 @@ test("phone: a long attachment name takes one line and keeps the matched term vi
   const list = page.getByRole("list", { name: "Messages" });
   const hit = list.getByRole("button", { name: /Photos from the weekend and the lease/ });
   const match = hit.locator(".mail-row__match-line");
+  await expect(match).toHaveText(`In ${longAttachment}:`);
+  expect(replaced).toBe(1);
+  return { list, hit, match };
+}
+
+test("phone: a long attachment name takes one line and keeps the matched term visible (#479)", async ({ page }) => {
+  const { list, hit, match } = await longAttachmentHit(page);
   const name = match.locator(".mail-row__match-name");
   const ext = match.locator(".mail-row__match-ext");
   const snippet = hit.locator(".mail-row__snippet");
   const mark = snippet.locator("mark");
-  await expect(match).toHaveText(`In ${long}:`);
-  expect(replaced).toBe(1);
   await expect(ext).toHaveText(".pdf");
   await expect(mark).toHaveText(["deposit"]);
 
@@ -300,12 +308,16 @@ test("phone: a long attachment name takes one line and keeps the matched term vi
   expect(await sideScrolls(page)).toBe(false);
   const scroll = await sideScroll(list);
   expect(scroll.scrollWidth).toBeLessThanOrEqual(scroll.clientWidth);
+});
 
-  // Chromium's own accessible name of the row reads the full name unbroken
-  // (the stem and the extension are flex items) and apart from the snippet.
+// Chromium's own accessible name of the row reads the full name unbroken
+// (the stem and the extension are flex items) and apart from the snippet,
+// read through the DevTools protocol (Chromium only, #398).
+test("phone: the row with a long attachment name has the full name in Chromium's accessibility tree (#479)", { tag: "@cdp" }, async ({ page }) => {
+  await longAttachmentHit(page);
   const cdp = await page.context().newCDPSession(page);
   const { nodes } = (await cdp.send("Accessibility.getFullAXTree")) as { nodes: { role?: { value: string }; name?: { value: string } }[] };
   const rowName = nodes.find((n) => n.role?.value === "button" && n.name?.value.includes("Photos from the weekend"))?.name?.value ?? "";
-  expect(rowName).toContain(`In ${long}: `);
+  expect(rowName).toContain(`In ${longAttachment}: `);
   await cdp.detach();
 });
