@@ -131,6 +131,13 @@ func (s *Server) routes() []route {
 		h("PATCH /api/accounts/{name}/fills/{id}", s.handleChangeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/resume", s.handleResumeFill, accessSession),
 		h("POST /api/accounts/{name}/fills/{id}/cancel", s.handleCancelFill, accessSession),
+		// SMTP credentials of smtp accounts (#395): the owner, who is an
+		// admin, with a session; any admin lists and revokes them all.
+		h("GET /api/accounts/{name}/smtp-credentials", s.handleListSMTPCredentials, accessSession),
+		h("POST /api/accounts/{name}/smtp-credentials", s.handleCreateSMTPCredential, accessSession),
+		h("DELETE /api/accounts/{name}/smtp-credentials/{id}", s.handleRevokeSMTPCredential, accessSession),
+		h("GET /api/admin/smtp-credentials", s.handleListAllSMTPCredentials, accessSession),
+		h("DELETE /api/admin/smtp-credentials/{id}", s.handleRevokeAnySMTPCredential, accessSession),
 		// Only the owner shares, within their group, with a session (#389, #470).
 		h("PUT /api/accounts/{name}/shares/{user}", s.handleShareAccount, accessSession),
 		h("DELETE /api/accounts/{name}/shares/{user}", s.handleUnshareAccount, accessSession),

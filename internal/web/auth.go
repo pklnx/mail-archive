@@ -607,7 +607,8 @@ const auditMonthsAhead = 3
 
 // housekeeping runs at start and then every hour until ctx ends: it creates
 // the audit log partitions ahead and deletes expired sessions, challenges
-// and ceremonies, and API keys revoked or expired 30 days ago.
+// and ceremonies, and API keys and SMTP secrets revoked or expired 30 days
+// ago.
 func (s *Server) housekeeping(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -631,6 +632,13 @@ func (s *Server) housekeeping(ctx context.Context) {
 			}
 		} else if n > 0 {
 			s.log.Debug("deleted API keys revoked or expired 30 days ago", "count", n)
+		}
+		if n, err := s.store.DeleteOldSMTPCredentials(ctx, s.currentTime()); err != nil {
+			if ctx.Err() == nil {
+				s.log.Warn("delete old SMTP credentials", "err", err)
+			}
+		} else if n > 0 {
+			s.log.Debug("deleted SMTP credentials revoked or expired 30 days ago", "count", n)
 		}
 		if n, err := s.store.DeleteExpiredSessions(ctx, time.Now().Add(-auth.IdleTimeout)); err != nil {
 			if ctx.Err() == nil {
