@@ -20,9 +20,16 @@ import (
 // the cap (docs/guide/operations.md, "IMAP limits").
 const DefaultMaxReconcileMessages = config.DefaultReconcileMaxMessages
 
-// maxFlagSets caps the bytes of the distinct flag combinations one
-// reconcile keeps: real folders have a few hundred of under 100 B.
+// maxFlagSets caps the memory of the distinct flag combinations one
+// reconcile keeps: real folders have a few hundred of under 100 B. Each
+// combination is charged its bytes plus flagSetOverhead.
 const maxFlagSets = 4 << 20
+
+// flagSetOverhead is what one entry of the intern map costs besides its
+// key bytes: measured at about 85 B live per entry for keys of 1-4 bytes
+// (Go 1.27, the map's two string headers, its slack and the key's
+// allocation), rounded up.
+const flagSetOverhead = 88
 
 // reconcileSlack is how many more messages than the folder held (EXISTS)
 // a reconcile's listing accepts: imapsync's slack for messages that
@@ -88,7 +95,7 @@ func (s *Syncer) reconcileFolder(ctx context.Context, conn *imapsync.Conn, folde
 			key = flagKey(key[:0], fl)
 			k, ok := intern[string(key)]
 			if !ok {
-				if setBytes += len(key); setBytes > maxFlagSets {
+				if setBytes += len(key) + flagSetOverhead; setBytes > maxFlagSets {
 					tooMany = true
 					return
 				}

@@ -146,9 +146,10 @@ func TestMidHeaderEOF(t *testing.T) {
 	wantCategory(t, err, imapsync.CategoryProtocol, true)
 }
 
-// noticeScript answers EXAMINE with exists messages and the UID FETCH with
+// noticeScript answers EXAMINE with exists messages, the probe for the
+// newest UID with newest (no probe expected if 0), and the UID FETCH with
 // notices produced by notice(i) for i = 1..n, then one new message.
-func noticeScript(t *testing.T, exists, n int, notice func(i int) string) *imaptest.Script {
+func noticeScript(t *testing.T, exists, n int, newest uint32, notice func(i int) string) *imaptest.Script {
 	t.Helper()
 	return imaptest.StartScript(t, func(c *imaptest.ScriptConn) error {
 		if err := c.Greet(""); err != nil {
@@ -156,6 +157,11 @@ func noticeScript(t *testing.T, exists, n int, notice func(i int) string) *imapt
 		}
 		if err := c.Examine(exists); err != nil {
 			return err
+		}
+		if newest != 0 {
+			if err := c.Newest(newest); err != nil {
+				return err
+			}
 		}
 		tag, err := c.Expect("UID FETCH")
 		if err != nil {
@@ -182,7 +188,7 @@ func TestUnilateralNoticesPass(t *testing.T) {
 	}
 	for name, notice := range cases {
 		t.Run(name, func(t *testing.T) {
-			s := noticeScript(t, n+1, n, notice)
+			s := noticeScript(t, n+1, n, n+1, notice)
 			conn := dialScript(t, s, nil)
 			if _, err := conn.Examine("INBOX"); err != nil {
 				t.Fatal(err)
@@ -199,7 +205,8 @@ func TestUnilateralNoticesPass(t *testing.T) {
 			}
 			// The notices earned no more than they cost: the budget grew
 			// by at most the command's and the one message's credit.
-			if gain := conn.Budget() - before; gain > 16<<10+1<<10 {
+			// The probe for the newest UID earns 1 KiB.
+			if gain := conn.Budget() - before; gain > 16<<10+1<<10+1<<10 {
 				t.Errorf("budget grew by %d during the notices", gain)
 			}
 		})
@@ -209,7 +216,7 @@ func TestUnilateralNoticesPass(t *testing.T) {
 // Notices beyond the folder's message count (plus 1,000) earn nothing:
 // an unbounded flood still runs the budget dry.
 func TestUnilateralNoticeFlood(t *testing.T) {
-	s := noticeScript(t, 1, endless, func(int) string { return "* 1 EXPUNGE" })
+	s := noticeScript(t, 1, endless, 0, func(int) string { return "* 1 EXPUNGE" })
 	conn := dialScript(t, s, nil)
 	if _, err := conn.Examine("INBOX"); err != nil {
 		t.Fatal(err)
@@ -256,7 +263,7 @@ func TestUnilateralNoticeHugeExists(t *testing.T) {
 	if imapsync.NoticesMax != 1_000_000 {
 		t.Errorf("NoticesMax = %d", imapsync.NoticesMax)
 	}
-	s := noticeScript(t, 4_000_000_000, endless, func(int) string { return notice })
+	s := noticeScript(t, 4_000_000_000, endless, 0, func(int) string { return notice })
 	conn := dialScript(t, s, func(c *imapsync.Config) { imapsync.SetNoticesMax(c, capped) })
 	if _, err := conn.Examine("INBOX"); err != nil {
 		t.Fatal(err)

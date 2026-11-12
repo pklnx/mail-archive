@@ -976,7 +976,8 @@ folder's `EXAMINE`, and the same account lock as the sync.
    client). Folders above `MaxReconcileMessages` (2,000,000 by default,
    `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`) are refused. The two slices are
    allocated once for EXISTS + 1,000 messages, at most the limit, which is
-   all `ListFlags` accepts; distinct flag combinations may take 4 MiB.
+   all `ListFlags` accepts; distinct flag combinations may take 4 MiB,
+   each charged its bytes plus 88 B for its map entry (`flagSetOverhead`).
 2. The UIDs go into a `[]int64`; each message's flags without `\Recent`,
    sorted and joined by spaces, into a `[]string`, with one string per flag
    combination through a map.

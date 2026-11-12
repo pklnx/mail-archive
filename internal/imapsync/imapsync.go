@@ -515,9 +515,26 @@ type BodySink[T any] func(r io.Reader) (T, error)
 // accepts at most the folder's live message count (EXISTS) plus 1,000
 // FETCH responses, and no body larger than MaxMessageSize: the size is
 // checked before sink is called. Errors from sink and handle are returned
-// as they are.
+// as they are. With after > 0 it first asks for the newest UID and sends
+// no body fetch if that is not above after.
 func FetchAfter[T any](conn *Conn, after uint32, sink BodySink[T], handle func(Message[T]) error) error {
 	const op = "fetch"
+	if after > 0 {
+		// "n:*" returns the folder's last message even when its UID is
+		// below n. go-imap does not pass such a message to the command, so
+		// its body would spend the credit budget as unrequested data, and
+		// an honest folder with nothing new (its newest messages deleted
+		// since the last sync) would break the connection on every run.
+		// Ask for the newest UID first; with nothing after it, send no
+		// body fetch.
+		newest, err := newestUID(conn)
+		if err != nil {
+			return err
+		}
+		if newest != 0 && newest <= after {
+			return nil
+		}
+	}
 	var set imap.UIDSet
 	set.AddRange(imap.UID(after+1), 0) // after+1:*
 	section := &imap.FetchItemBodySection{Peek: true}
@@ -536,6 +553,45 @@ func FetchAfter[T any](conn *Conn, after uint32, sink BodySink[T], handle func(M
 		}
 		return handle(m)
 	})
+}
+
+// creditProbe is the credit of newestUID's command: its answer is one
+// line of under 100 bytes.
+const creditProbe = 1 << 10
+
+// newestUID returns the UID of the examined folder's last message
+// (FETCH <EXISTS> (UID)), 0 for an empty folder or if the server did not
+// say. The command earns creditProbe and its answer nothing, so a flood
+// runs the budget dry.
+func newestUID(conn *Conn) (uint32, error) {
+	const op = "fetch newest UID"
+	n := conn.Messages()
+	if n == 0 {
+		return 0, nil
+	}
+	conn.m.beginCredit("FETCH", time.Time{}, conn.noticeLimit(), creditProbe)
+	defer conn.m.end()
+	cmd := conn.c.Fetch(imap.SeqSetNum(n), &imap.FetchOptions{UID: true})
+	var uid uint32
+	for {
+		msg := cmd.Next()
+		if msg == nil {
+			break
+		}
+		for {
+			item := msg.Next()
+			if item == nil {
+				break
+			}
+			if u, ok := item.(imapclient.FetchItemDataUID); ok && msg.SeqNum == n {
+				uid = uint32(u.UID)
+			}
+		}
+	}
+	if err := cmd.Close(); err != nil {
+		return 0, conn.wrap(op, err)
+	}
+	return uid, nil
 }
 
 // errSkip tells fetchMessages that a message was not used: it earns no

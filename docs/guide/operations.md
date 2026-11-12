@@ -868,7 +868,7 @@ none of them is reached by a normal mailbox.
 
 | What | Limit | When it is reached |
 |---|---|---|
-| Data the client did not ask for, per connection | 64 KiB at the start, at most 256 KiB; each command adds 16 KiB, each response the archive uses 512 B plus its size, each byte of a message body 1¼ B | The connection is closed (`unrequested data`). A real server never comes near it. |
+| Data the client did not ask for, per connection | 64 KiB at the start, at most 256 KiB; each command adds 16 KiB, each response the archive uses 512 B plus its size, each byte of a message body 1¼ B | The connection is closed (`unrequested data`). A real server stays far below it. Before a body fetch the archive asks for the folder's newest UID and sends no fetch when nothing is new, so the one message a server returns for an empty `UID FETCH n:*` is never downloaded. Only if the newest messages of a folder are deleted on the server in the moment between those two commands can that message still exceed the budget; the folder then fails once and syncs in the next run. |
 | Read by one login check | 16 MiB, or 1.1 KiB per folder of `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` if that is more | The check fails. |
 | Folders of one account | 10,000, `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | The whole sync, fill or login check fails; the error names the setting. |
 | Length of a folder name | 1,024 bytes | As above. |
@@ -877,7 +877,7 @@ none of them is reached by a normal mailbox.
 | A message | 256 MiB, as for imports | See [A message over 256 MiB](#a-message-over-256-mib). The size is checked before anything is downloaded. |
 | Header of one message in a fill's listing | 128 KiB | The folder fails. |
 | Messages a reconcile compares | 2,000,000 per folder, `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | The folder is not reconciled; its sync ends `partial`, and the error names the setting. |
-| Distinct flag combinations in one reconcile | 4 MiB | The folder is not reconciled; real folders have a few hundred. |
+| Distinct flag combinations in one reconcile | 4 MiB, counting each combination's bytes plus 88 B for its entry in memory | The folder is not reconciled; real folders have a few hundred. |
 | Messages a fill lists of one folder per pass | 500,000, `MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | The folder fails; the error names the setting. |
 | Message-IDs kept in that listing | 96 bytes per message of the fill limit in all (48 MiB at the default) | As above. A single Message-ID over 998 bytes is not kept: that message counts as one without a Message-ID, so it is imported, never left out as journaled. |
 | New connections after a broken one, per run | 5 | The remaining folders wait for the next run; the run is `partial` if earlier folders synced, otherwise `failed`. |

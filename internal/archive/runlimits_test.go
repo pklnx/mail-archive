@@ -687,3 +687,82 @@ func TestRunnerRequeuesAtTimeLimit(t *testing.T) {
 		t.Errorf("A's last UID %d", f.lastUID(a, "A"))
 	}
 }
+
+// newestScript serves an INBOX of 3 messages with UIDNEXT 10 whose newest
+// message has UID newest, as a real server does: a UID FETCH n:* with
+// nothing at or after n answers with that newest message, here with a
+// 300 KiB body. bodies counts the UID FETCH commands it got.
+func newestScript(t *testing.T, newest uint32, bodies *atomic.Int32) *imaptest.Script {
+	return imaptest.StartScript(t, func(c *imaptest.ScriptConn) error {
+		if err := c.Greet(""); err != nil {
+			return err
+		}
+		if err := sendList(c, "INBOX"); err != nil {
+			return err
+		}
+		if err := expectExamine(c, "INBOX", 3, 10); err != nil {
+			return err
+		}
+		if err := c.Newest(newest); err != nil {
+			return err
+		}
+		for {
+			tag, line, err := c.Next()
+			if err != nil {
+				return nil //nolint:nilerr // the client closed
+			}
+			switch {
+			case strings.HasPrefix(line, "LOGOUT"):
+				return c.Send("* BYE", tag+" OK bye")
+			case strings.HasPrefix(line, "UID FETCH"):
+				bodies.Add(1)
+				b := strings.Repeat("x", 300<<10)
+				if _, err := fmt.Fprintf(c, "* 3 FETCH (UID %d FLAGS () INTERNALDATE \"05-Mar-2010 10:00:00 +0000\" BODY[] {%d}\r\n%s)\r\n",
+					newest, len(b), b); err != nil {
+					return nil //nolint:nilerr // the client closed
+				}
+				if err := c.Send(tag + " OK done"); err != nil {
+					return nil //nolint:nilerr // the client closed
+				}
+			default:
+				return fmt.Errorf("unexpected command %q", line)
+			}
+		}
+	})
+}
+
+// A folder whose newest message is already archived (later ones were
+// deleted on the server, so UIDNEXT is past it) syncs without a body
+// fetch: "n:*" would return that message, whose body go-imap does not
+// pass to the command and which spent the credit budget, breaking the
+// connection on every run (review of #535). With a new message after a
+// gap, only that message is fetched.
+func TestSyncNothingAfterLastUID(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		lastUID, newest uint32
+		wantBodies      int32
+		wantNew         int
+	}{
+		{"newest already archived", 7, 7, 0, 0},
+		{"new mail after a gap", 5, 9, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var bodies atomic.Int32
+			s := newestScript(t, tc.newest, &bodies)
+			f := newFixture(t)
+			acc := f.syncedAccount(s, tc.lastUID)
+			r := f.syncer.SyncAccount(f.ctx, acc)
+			runs, _ := f.store.LastRuns(f.ctx)
+			if r.Err != nil || runs[acc.ID].Status != "ok" || r.New != tc.wantNew {
+				t.Fatalf("result %+v, status %s", r, runs[acc.ID].Status)
+			}
+			if n := bodies.Load(); n != tc.wantBodies {
+				t.Errorf("%d body fetches, want %d", n, tc.wantBodies)
+			}
+			if got := f.lastUID(acc, "INBOX"); got != tc.newest {
+				t.Errorf("last UID %d, want %d", got, tc.newest)
+			}
+		})
+	}
+}

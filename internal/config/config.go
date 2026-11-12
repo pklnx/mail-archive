@@ -483,9 +483,9 @@ func ParseIMAPLimits(getenv func(string) string) (IMAPLimits, error) {
 	return l, nil
 }
 
-// parseCount reads a whole number from minimum to maximum.
-// parseCount parses a count that fits in 32 bits, so callers may convert
-// it to uint32 or int without a further check.
+// parseCount reads a whole number from minimum to maximum. It parses a
+// count that fits in 32 bits, so callers may convert it to uint32 or int
+// without a further check.
 func parseCount(env, v string, def, minimum, maximum uint32) (uint32, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {

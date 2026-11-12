@@ -3,6 +3,7 @@ package archive_test
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -123,6 +124,20 @@ func TestReconcileFlagSetCap(t *testing.T) {
 	runs, _ := f.store.LastRuns(f.ctx)
 	if st := runs[acc.ID].Status; st != "partial" {
 		t.Errorf("status %s", st)
+	}
+}
+
+// The cap counts each distinct set's map entry, not only its bytes: 50,000
+// sets of 1-4 bytes (about 200 KB of keys, but about 4.4 MB of map) trip
+// it (review of #535).
+func TestReconcileFlagSetCapShortKeys(t *testing.T) {
+	const n = 50_000
+	s := reconcileScript(t, n, n, func(i int) string { return strconv.FormatInt(int64(i), 36) })
+	f := newFixture(t)
+	acc := f.syncedAccount(s, n)
+	r := f.syncer.SyncAccountWith(f.ctx, acc, archive.SyncOptions{Reconcile: true})
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "distinct flag combinations take more than 4 MiB") {
+		t.Fatalf("result %+v", r)
 	}
 }
 
