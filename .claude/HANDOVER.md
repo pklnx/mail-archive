@@ -14,7 +14,8 @@ Current state only. At session end replace these sections; never append. History
 - Earlier: v1.4.0 (main 774a2a0), customer groups (#470); release test #504 passed.
 
 ## Open PRs
-- Dependabot #523 (go-pdfium 1.21.3 → 1.21.4 with PDFium engine 8057 → 8111, yaml v3 3.0.5 → 3.0.6; it replaces #491) and #522 (vitepress alpha.20 → alpha.21, docs site only): milestone 1.6.0. Merge them only **after the 1.5.1 release**. The new PDFium has no advisory and is not patch material (coordinator, 2026-11-12). Each needs `@dependabot rebase` onto main (vulncheck was red without #525), green CI and one review. #523: a test of the PDF text extraction (`internal/attachtext`) in CI is enough. The rebase also removes the stale x/net v0.61.0 lines in `go.sum`.
+- Dependabot #527 (go-dependencies, based on a3609fd; it replaces #523 and #491): fxamacker/cbor/v2 2.9.6 → 2.10.0, go-pdfium 1.21.3 → 1.21.4 (PDFium engine 8057 → 8111), go.yaml.in/yaml/v3 3.0.5 → 3.0.6. Milestone 1.6.0; merge only **after the 1.5.1 release**. Neither the new PDFium nor the cbor minor has an advisory, so they are not patch material (coordinator, 2026-11-12). It needs green CI and one review. Check two things: the PDF text extraction (`internal/attachtext`), and cbor, which is direct only in `internal/web/passkeys_test.go` but which go-webauthn uses for passkeys. It gets `second-review` (auth).
+- Dependabot #522 (vitepress alpha.20 → alpha.21, docs site only): milestone 1.6.0, after the 1.5.1 release. It is behind main and needs `@dependabot rebase`, green CI and one review.
 
 ## Open tickets
 - **1.6.0:** these are `ready`:
