@@ -638,6 +638,12 @@ With the [worker service](#background-jobs) on (`COMPOSE_PROFILES=worker`),
 restart it too: `docker compose up -d web worker` instead of
 `docker compose up -d web`, here and in the steps below.
 
+With the SMTP server's certificate mounted by `docker-compose.smtp.yml`
+([SMTP certificate](#smtp-certificate)), every `docker compose` command for
+the web server needs that file too: set
+`COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml` in `.env` once, or
+add `-f docker-compose.yml -f docker-compose.smtp.yml` to each command here.
+
 `docker compose up -d web`, `docker compose stop` and `docker compose restart`
 give the web server up to 45 seconds to shut down. It ends syncs and fills
 right away and records how far they got, so they resume at the next run.
@@ -648,8 +654,8 @@ together with `web` (`docker compose up -d`, `docker compose restart postgres`)
 restart `web` too, so its start-up checks run again; `./ma`
 starts only `postgres`.
 
-The new bundle replaces `docker-compose.yml`, `./ma`, `.env.example` and
-`README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
+The new bundle replaces `docker-compose.yml`, `docker-compose.smtp.yml`,
+`./ma`, `.env.example` and `README.txt` and keeps `.env` and `data/`. Compare `.env.example` with your
 `.env` for new settings. A specific version instead of the latest:
 `https://github.com/pklnx/mail-archive/releases/download/v1.0.0/mail-archive.tar.gz`.
 
@@ -850,6 +856,7 @@ migrations; the one-time steps of those versions are in the
 
 | When upgrading from | Run |
 |---|---|
+| A version without SMTP login (before 1.6.0) | Only with the SMTP server on (`MAIL_ARCHIVE_SMTP_LISTEN` set). `MAIL_ARCHIVE_SMTP_AUTH=required` is the new default: mail servers log in with an [SMTP secret](../reference/cli#smtp-secrets) over `STARTTLS`, and without `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY` the web server and every `./ma` command refuse to start, naming the variable. A setup that relies on the allowlist alone, such as a Postfix on the same host, keeps working unchanged after adding `MAIL_ARCHIVE_SMTP_AUTH=off` to `.env` **before** the upgrade. To move to logins instead: put the certificate in place ([SMTP certificate](#smtp-certificate)), create a secret per smtp account (`./ma account smtp-secret NAME --new`), change the mail server ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)), then upgrade without `off`. A setup that already has a certificate starts in `required` mode and answers `451` to mail servers that do not log in yet: their copies wait in the queue (5 days by default) until they log in or `off` is set. The SMTP server now takes 16 connections at once instead of 10. |
 | A version without customer groups | Nothing to run. The migration puts every user, and with them every account, into one group, `Default`; existing shares stay. It adds a column and an index on the audit log, which every existing entry leaves empty: like the shared accounts index below, building it reads every partition and holds back audit log writes until it is done, about 0.1 seconds per 1,000,000 entries with the log in memory. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). For a shared instance, create a group per customer afterwards and move its users (see [Customer groups](./users#customer-groups)). Rolling back the migration refuses while more than one group exists. |
 | A version without attachment search | Nothing to run. The migration only adds two empty tables and is quick; it neither reads nor rewrites the message rows, so deliveries and syncs go on (they wait at most a moment while it adds its foreign keys). Afterwards the web server, or the worker service if you run it, extracts the text of PDF and text attachments of older messages in the background, one message at a time and newest first, and logs at start how many are pending; new mail becomes searchable shortly after it is stored. About 17 ms per message with a typical PDF invoice (26 ms on average over a test corpus of 1,412 varied PDFs), and about 52 MB of database space per 10,000 PDFs with 3.5 KB of text each. `./ma reindex` does the same at once in the foreground; it can run while the web server and syncs run, and can be interrupted and run again. Installations without the web server, which run only `./ma sync` or `./ma import` from cron, get attachment text only from `./ma reindex` or from the worker service: run it after those commands, for example in the same cron job. While it extracts, the process needs up to 224 MiB more memory per worker (see [Hardware and budgets](#hardware-and-budgets)), and the first PDF after a start takes about 3 seconds once (see [Security](../reference/security#the-smtp-server)). Message rows are not rewritten, so no `VACUUM` is needed. With [legal holds](./retention#legal-holds) that use a search filter, run `./ma reindex` before relying on them over attachment text: the background extraction goes newest first, so the oldest mail, which retention deletes first, is extracted last. |
 | A version without shared accounts | Nothing to run. The migration adds an empty table and an index on the audit log. Building the index reads every partition of the audit log and holds back audit log writes until it is done, and with them the web server's reads and logins: about 0.1 seconds for 1,000,000 entries (253 MB) on PostgreSQL 18 with the log in memory, longer when it has to be read from disk. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). |
@@ -1091,6 +1098,103 @@ background run**, on one core and only during that account's turn, plus
 login check costs **about 1 to 2 seconds** of CPU at most; with
 `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` raised, about 0.1 s per 1,000 folders of the
 limit more.
+
+## SMTP journaling
+
+The SMTP server receives the copies of [journaling](./journaling). On a
+hosted instance, customers' mail servers connect over the internet and log
+in with an [SMTP secret](../reference/cli#smtp-secrets)
+(`MAIL_ARCHIVE_SMTP_AUTH=required`, the default); see
+[The SMTP server](../reference/security#the-smtp-server) for what protects
+the port.
+
+### The hosted SMTP port
+
+```sh
+MAIL_ARCHIVE_SMTP_LISTEN=:2525
+MAIL_ARCHIVE_SMTP_HOSTNAME=archive.customer.example
+MAIL_ARCHIVE_SMTP_TLS_CERT=/tls/fullchain.pem
+MAIL_ARCHIVE_SMTP_TLS_KEY=/tls/privkey.pem
+SMTP_BIND=0.0.0.0
+SMTP_PORT=587
+COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml
+```
+
+The log shows `smtp on` with `auth=required`, the certificate's
+`cert_not_after` and `max_conns_per_addr`.
+
+- **Port 587.** Many networks block outgoing connections to port 25, but not
+  to 587. The archive speaks plain SMTP with `STARTTLS` there; implicit TLS
+  (port 465) is not offered.
+- **The real client address.** The failed-login limit and the cap per
+  address count the address the connection comes from. Publish the port
+  directly: Docker with `"userland-proxy": false` in the daemon's
+  `/etc/docker/daemon.json` (otherwise, for example, IPv6 clients reach an
+  IPv4-only container network through a proxy and all share its address),
+  or host networking, or a TCP proxy that does not translate addresses. A
+  load balancer that does translate them puts every customer behind one
+  address, and one scanner then blocks them all. The PROXY protocol is not
+  supported.
+- **Connections.** At most 16 at once, at most 8 per client address
+  (`MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`), and 60 seconds to log in. A
+  customer's Postfix with one transport per smtp account and `maxproc` 2
+  ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret))
+  opens up to 2 connections per account: raise the cap for a customer with
+  more than 4 smtp accounts behind one address. A few addresses that hold
+  connections without logging in can take every slot; each is closed after
+  60 seconds at the latest, and in the meantime the customers' mail servers
+  get `421` and retry later, so the copies wait in their queue but are not
+  lost.
+- **Failed logins** are logged as `smtp auth failed` with the client address
+  and a reason; 20 within 15 minutes block that address for 15 minutes
+  (`smtp auth blocked`). A customer whose mail server logs in with an old or
+  wrong secret sees its copies wait in the queue: Postfix keeps them after a
+  `535` (`smtp_sasl_auth_soft_bounce`, on by default).
+
+### SMTP certificate
+
+The SMTP server uses a certificate the operator provides, as PEM files, for
+the name in `MAIL_ARCHIVE_SMTP_HOSTNAME`; there is no ACME client in the
+archive. Customers' mail servers verify it, so it must come from a public CA
+(Let's Encrypt with certbot or lego, or a copy of the one Caddy gets for the
+same name).
+
+- **Compose mounts it** from `SMTP_TLS_DIR` (default `./tls`) as `/tls` with
+  `docker-compose.smtp.yml`. Every command that starts or updates the web
+  server needs both files: `docker compose -f docker-compose.yml -f
+  docker-compose.smtp.yml up -d web`, or once
+  `COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml` in `.env`, which
+  `docker compose` and `./ma` read. The file is separate so that an instance
+  without SMTP needs no `./tls`, and Docker never creates a missing directory
+  as root.
+- **The key** must be readable by the container user (UID 65532) and by
+  nobody else: `chown 65532 tls/privkey.pem && chmod 0400 tls/privkey.pem`.
+  A key every user of the machine can read is logged as a warning.
+- **Renewal without a restart.** When a client connects, the server looks at
+  the two files at most once a minute and loads them again when one has
+  changed (`smtp certificate reloaded`). Copy the renewed files in with a
+  deploy hook; mounting certbot's `live/` directory alone does not work,
+  because its files are links into `archive/`. For certbot:
+
+  ```sh
+  #!/bin/sh
+  # /etc/letsencrypt/renewal-hooks/deploy/mail-archive-smtp
+  set -eu
+  dir=/srv/mail-archive/tls
+  install -m 0644 "$RENEWED_LINEAGE/fullchain.pem" "$dir/fullchain.pem.new"
+  install -m 0400 -o 65532 "$RENEWED_LINEAGE/privkey.pem" "$dir/privkey.pem.new"
+  mv "$dir/fullchain.pem.new" "$dir/fullchain.pem"
+  mv "$dir/privkey.pem.new" "$dir/privkey.pem"
+  ```
+
+  A pair that does not load, such as a certificate and a key that do not
+  match yet, leaves the current one in use; the error is logged once and the
+  pair is tried again at the next check.
+- **Expiry.** From 14 days before the certificate expires, the log warns at
+  start and then once a day (`smtp certificate expires soon`); an expired
+  certificate is logged as an error once a day. The web server keeps
+  running, but mail servers that verify the certificate no longer log in and
+  queue the copies.
 
 ## Monitoring and alerts
 

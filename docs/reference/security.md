@@ -17,7 +17,8 @@
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
 | Retention and deletion | Nothing is deleted without a [retention rule](./cli#retention) and a reviewed, confirmed [deletion run](./cli#deletion); rules, legal holds and runs are admin-only and recorded in the audit log. Database triggers refuse to delete a location whose period has not ended or that is on hold, and a message row without its deletion record. A message stays while any location of it, in any user's account, has no rule or an unexpired one, or is on legal hold. |
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
-| The SMTP port | Off by default. When on, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect; see [The SMTP server](#the-smtp-server). |
+| SMTP secrets | Only their SHA-256 and last 4 characters are stored; the secret is shown once, like an API key. A secret lets a mail server hand over mail for its one smtp account, nothing else: it reads nothing. See [The SMTP server](#the-smtp-server). |
+| The SMTP port | Off by default. With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default once it is on) a mail server must log in over TLS with a secret of the smtp account it delivers for; the port may then face the internet. With `off`, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect, and the port must never face the internet. See [The SMTP server](#the-smtp-server). |
 
 ## Login
 
@@ -337,7 +338,52 @@ restores the guard.
 ## The SMTP server
 
 With `MAIL_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
-[smtp accounts](../guide/journaling) from a mail server you run.
+[smtp accounts](../guide/journaling) from a mail server. How it decides who
+may hand over mail depends on `MAIL_ARCHIVE_SMTP_AUTH`.
+
+**`required` (the default).** Port 587 may be public, for customers' mail
+servers that connect over the internet from changing addresses. The gate is:
+
+- **Mandatory TLS.** The server does not start without a certificate. It
+  offers `AUTH` only after `STARTTLS` and answers `AUTH` before it with
+  `523`. `MAIL` without TLS gets `451`. The Postfix setup in the
+  [journaling guide](../guide/journaling#log-in-with-an-smtp-secret) verifies
+  the certificate and the host name (`smtp_tls_security_level = secure`), so
+  a man in the middle cannot strip `STARTTLS` and read the secret.
+- **A secret per smtp account.** `AUTH PLAIN` or `AUTH LOGIN` with the user
+  name `smtp-<account ID>` and a secret of that account: `mas_` and 256
+  random bits, stored only as SHA-256 plus a 4-character hint, shown once
+  ([`account smtp-secret`](./cli#smtp-secrets)). A login hands over mail only
+  for the addresses of its own account. Every `MAIL` checks the secret again,
+  so a revoked or expired secret stops working at the next message, also on
+  an open connection. A wrong login answers `535`; a missing one, or one for
+  another account's address, answers `451`, so the mail server keeps the copy
+  queued instead of dropping it.
+- **Failed logins are limited per address**, like the web login: 20 failures
+  within 15 minutes block the client address (an IPv6 address counts per
+  `/64`) for 15 minutes, with `454` before its credentials are even looked
+  at. There is no limit per user name: a 256-bit secret cannot be guessed,
+  and such a limit would let anyone who knows a user name stop that
+  customer's journaling.
+- **Connection caps and a deadline:** at most 16 connections, at most 8 from
+  one address (`MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`, IPv6 per `/64`), and 60
+  seconds to log in; then the connection is closed. More connections get
+  `421`.
+- **The allowlist is optional:** with `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`
+  set, a client must be in it **and** log in.
+- **Logged without secrets.** A login is logged at info level with the
+  client address, the user name and the secret's ID; a failed one at warning
+  level with the client address and a reason (`malformed`, `unknown`,
+  `wrong_user`, `expired`, `revoked`, `account_removed`, `not_smtp`). A user
+  name is logged only in its own format (`smtp-` and digits), otherwise as
+  `username_valid=false`, because a customer may type the secret, or a
+  mailbox password, into that field. The password, its hash, the SASL bytes
+  and any part of a secret are never logged. A password that does not have
+  the format of a secret is not even hashed. SMTP logins get no audit entries
+  (a public port is scanned all the time); creating and revoking secrets
+  does.
+
+**`off`.** For a mail server on a network you control:
 
 - **The allowlist is the only gate.** There is no SMTP login. Clients outside
   `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` get `554` before they can send
@@ -346,7 +392,10 @@ With `MAIL_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
   `SMTP_BIND` says otherwise; never forward it from the internet.
 - **STARTTLS** is offered when a certificate is configured. Postfix on the same
   host or Docker network does not need it.
-- **Limits:** at most 10 connections (more get `421`), 100 recipients per
+
+In both modes:
+
+- **Limits:** at most 16 connections (more get `421`), 100 recipients per
   message, `MAIL_ARCHIVE_SMTP_MAX_SIZE` per message (`50M`), lines up to 1 MiB,
   5 minutes to send a command or a whole message, 1 minute for each answer
   to be read. A message is acknowledged only after it is stored.

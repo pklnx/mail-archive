@@ -49,10 +49,12 @@ The SMTP server receives copies of every message from a mail server for
 | Variable | Default | Description |
 |---|---|---|
 | `MAIL_ARCHIVE_SMTP_LISTEN` | (none: off) | Address to listen on, like `:2525` or `127.0.0.1:2525`. In Docker, `:2525`; Compose publishes it on `SMTP_BIND:SMTP_PORT`. |
-| `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` | (required with the listen address) | Networks and addresses that may connect, comma-separated: `172.16.0.0/12, 192.0.2.10`. Everyone else gets `554`. There is no SMTP login: this is the only gate. |
+| `MAIL_ARCHIVE_SMTP_AUTH` | `required` | `required`: a mail server logs in with the [SMTP secret](./cli#smtp-secrets) of an smtp account, only after `STARTTLS`, and hands over mail only for that account; the certificate below is required, the allowlist optional. `off`: no login, the allowlist is required and the only gate, for a mail server on a network you control. Any other value stops the start. See [The SMTP server](./security#the-smtp-server). |
+| `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` | (required with `off`) | Networks and addresses that may connect, comma-separated: `172.16.0.0/12, 192.0.2.10`. Everyone else gets `554`. With `off` this is the only gate. With `required` it is optional: empty allows any address, which then has to log in; set, a client must be in it and log in. |
+| `MAIL_ARCHIVE_SMTP_TLS_CERT`, `MAIL_ARCHIVE_SMTP_TLS_KEY` | (required with `required`) | PEM certificate (with its chain) and key; both turn STARTTLS on. The files are checked for changes at most once a minute when a client connects, and a renewed pair is used without a restart. In Docker, `/tls/fullchain.pem` and `/tls/privkey.pem` from `SMTP_TLS_DIR`; see [SMTP certificate](../guide/operations#smtp-certificate). |
+| `MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR` | `8` | With `required`: connections at once from one client address (an IPv6 address counts per `/64`), `1` to `64`; more get `421`. A mail server with one transport per smtp account opens up to 2 per account: raise it for more than 4 accounts behind one address. Refused with `off`. |
 | `MAIL_ARCHIVE_SMTP_MAX_SIZE` | `50M` | Largest message accepted, in bytes or with `K`, `M` or `G` (powers of 1024), from `1M` to `1G`. Must be at least Postfix's `message_size_limit`: Postfix drops a copy the archive refuses as too large. |
-| `MAIL_ARCHIVE_SMTP_HOSTNAME` | the host name | Name in the greeting. |
-| `MAIL_ARCHIVE_SMTP_TLS_CERT`, `MAIL_ARCHIVE_SMTP_TLS_KEY` | (none) | PEM certificate and key; both turn STARTTLS on. |
+| `MAIL_ARCHIVE_SMTP_HOSTNAME` | the host name | Name in the greeting. With `required`, the name in the certificate that mail servers connect to. |
 
 ## Encryption at rest
 
@@ -91,13 +93,14 @@ transaction mode (PgBouncer `pool_mode=transaction`) breaks session locks.
 | `WEB_BIND` | `127.0.0.1` | Address the web UI is published on. `0.0.0.0` for all interfaces, or a LAN or Tailscale address. See [Network access](./security#network-access). |
 | `WEB_PORT` | `8080` | Port of the web UI. |
 | `POSTGRES_PORT` | `5432` | Port of PostgreSQL on `127.0.0.1`, for backups and development. |
-| `SMTP_BIND` | `127.0.0.1` | Address the SMTP port for journaling is published on. A mail server on another machine needs a reachable address here, and that machine in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`. |
+| `SMTP_BIND` | `127.0.0.1` | Address the SMTP port for journaling is published on. A mail server on another machine needs a reachable address here: `0.0.0.0` for a hosted instance with `MAIL_ARCHIVE_SMTP_AUTH=required`; with `off`, also that machine in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS`. |
 | `MAIL_ARCHIVE_IMAGE` | the bundle's version; `mail-archive:local` in a clone | The image of the web server and the CLI. In a [release bundle](../guide/getting-started#install) it defaults to `ghcr.io/pklnx/mail-archive:<version>`; see [Versions](../guide/operations#versions). A value set in `.env` stays when you extract a newer bundle; see [Upgrades](../guide/operations#upgrades). `./ma restore-dump` needs the image of the same release as `./ma`. In a clone of the repository the image is built locally under this name. |
 | `COMPOSE_PROFILES` | (none) | `worker` starts the optional [worker service](../guide/operations#background-jobs) for background jobs with the other services. |
 | `WEB_JOB_WORKERS` | `1` | `MAIL_ARCHIVE_JOB_WORKERS` of the web server; `0` with the worker service. |
 | `WORKER_JOB_WORKERS` | `1` | `MAIL_ARCHIVE_JOB_WORKERS` of the worker service, `1` to `8`. |
 | `WORKER_GOMEMLIMIT` | `576MiB` | Go's soft heap limit in the worker service: its `mem_limit` (768 MiB) minus 128 MiB per job at a time minus 64 MiB; `448MiB` for two. |
-| `SMTP_PORT` | `2525` | Port of the SMTP server on the host. Compose always binds this port on the host; the container accepts connections only when `MAIL_ARCHIVE_SMTP_LISTEN=:2525` is set. |
+| `SMTP_PORT` | `2525` | Port of the SMTP server on the host. Compose always binds this port on the host; the container accepts connections only when `MAIL_ARCHIVE_SMTP_LISTEN=:2525` is set. `587` for a hosted instance: many networks block outgoing connections to port 25, but not to 587. |
+| `SMTP_TLS_DIR` | `./tls` | Host directory with the SMTP certificate and key, mounted read-only as `/tls` into the web server by `docker-compose.smtp.yml`. Use that file with every command that starts the web server, most simply with `COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml` in `.env`. The key must be readable by the container user (UID 65532). See [SMTP certificate](../guide/operations#smtp-certificate). |
 
 The published ports listen on `127.0.0.1` only unless `WEB_BIND` or
 `SMTP_BIND` is set.
