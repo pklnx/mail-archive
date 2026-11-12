@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
 import { origin } from "./demo";
-import { escapeRegExp, formatConsoleError, formatFrameEvents, fromMailFrame, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo, type Guards } from "./fixtures";
+import { escapeRegExp, formatConsoleError, formatFrameEvents, fromMailFrame, fromWebKitStyleRefusal, isResizeObserverLoop, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo, type Guards } from "./fixtures";
 
 const frame = `${origin}/api/messages/${"ab".repeat(32)}/html`;
 const pixel = "https://tracker.example/pixel.gif";
@@ -135,7 +135,7 @@ base("the frame event log is one line per event, oldest first", () => {
 // The page is served from the demo origin, because the guards abort any other
 // host. The test reads what the fixture collected and takes the problem, so
 // it does not fail on purpose.
-test("a javascript: navigation of a sandboxed frame is reported with that frame", async ({ page, context, guards }) => {
+test("a javascript: navigation of a sandboxed frame is reported with that frame", async ({ page, context, guards, browserName }) => {
   await page.route(`${origin}/e2e/blocked-frame`, (route) =>
     route.fulfill({
       contentType: "text/html",
@@ -151,7 +151,8 @@ test("a javascript: navigation of a sandboxed frame is reported with that frame"
   const problems = guards.takeProblems();
   expect(problems).toHaveLength(1);
   const report = problems[0]!;
-  expect(report.split("\n")[0]).toBe(`console error: ${blockedBlank} (about:blank)`);
+  // Engine fact (#398, first WebKit run): WebKit logs it without a location.
+  expect(report.split("\n")[0]).toBe(`console error: ${blockedBlank} (${browserName === "webkit" ? "" : "about:blank"})`);
   // The snapshot shows the frame under the page. Chromium gives a frame
   // navigated to javascript: neither a name nor a URL, so the parent is what
   // places it.
@@ -286,6 +287,93 @@ test("a remote image in the app page fails the guards", async ({ page, context, 
   expect(problems).toContainEqual(sentinelLine);
 });
 
+// WebKit's own <select> style (#398): WebKit checks a style attribute in
+// the select's user-agent shadow tree against the page's CSP, and the guards
+// skip exactly that report (fixtures.ts). These run in both engines; in
+// Chromium no select reports anything. A style attribute that the page sets,
+// on a select or elsewhere, still fails. Each step ends on a marker: a style
+// attribute the test sets on its own element, which every engine refuses
+// and reports after the step's own reports.
+const styleAttrLines = (problems: string[]) => problems.filter((p) => p.startsWith("console error: CSP violation: style-src-attr ")).length;
+
+/** Runs the step in the page, then sets the marker and waits until the guards have its report; returns the style-src-attr reports. */
+async function styleAttrReports(page: Page, context: BrowserContext, guards: Guards, step: () => void): Promise<number> {
+  await page.evaluate(step);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const marker = document.createElement("p");
+        marker.id = "style-marker";
+        document.body.append(marker);
+        const done = (e: SecurityPolicyViolationEvent) => {
+          if (e.target !== marker) return;
+          document.removeEventListener("securitypolicyviolation", done);
+          resolve();
+        };
+        document.addEventListener("securitypolicyviolation", done);
+        marker.setAttribute("style", "color: red");
+      }),
+  );
+  await logSentinel(page, context);
+  // One report is the marker's.
+  return styleAttrLines(guards.takeProblems()) - 1;
+}
+
+async function appPage(page: Page) {
+  await page.goto("/");
+  await expect(page.getByRole("list", { name: "Messages" }).getByRole("button").first()).toBeVisible();
+}
+
+test("a select created by the page is no problem, attached or not", async ({ page, context, guards }) => {
+  await appPage(page);
+  expect(
+    await styleAttrReports(page, context, guards, () => {
+      const attached = document.createElement("select");
+      attached.append(new Option("a"));
+      document.body.append(attached);
+      document.createElement("select").append(new Option("b"));
+    }),
+  ).toBe(0);
+});
+
+test("a style attribute on a select still fails the guards", async ({ page, context, guards }) => {
+  await appPage(page);
+  // The select first, so its own WebKit report is settled.
+  expect(
+    await styleAttrReports(page, context, guards, () => {
+      const select = document.createElement("select");
+      select.id = "styled-select";
+      document.body.append(select);
+    }),
+  ).toBe(0);
+  expect(await styleAttrReports(page, context, guards, () => document.getElementById("styled-select")!.setAttribute("style", "color: red"))).toBe(1);
+});
+
+test("a style attribute on a new element right after a new select still fails the guards", async ({ page, context, guards }) => {
+  await appPage(page);
+  // Both reports target the document in WebKit: only the select's is skipped.
+  expect(
+    await styleAttrReports(page, context, guards, () => {
+      document.createElement("select");
+      document.createElement("div").setAttribute("style", "color: red");
+    }),
+  ).toBe(1);
+});
+
+base("WebKit's own style refusal line and the ResizeObserver loop are matched exactly", () => {
+  const refused = "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.";
+  expect(fromWebKitStyleRefusal(refused)).toBe(true);
+  expect(fromWebKitStyleRefusal(refused.replace("style-src", "script-src"))).toBe(false);
+  expect(fromWebKitStyleRefusal(`${refused} `)).toBe(false);
+  expect(fromWebKitStyleRefusal("Applying inline style violates the following Content Security Policy directive 'style-src 'self''.")).toBe(false);
+  const loop = "ResizeObserver loop completed with undelivered notifications.";
+  expect(isResizeObserverLoop({ message: loop, stack: "" })).toBe(true);
+  expect(isResizeObserverLoop({ message: loop })).toBe(true);
+  expect(isResizeObserverLoop({ message: loop, stack: "Error: x\n    at f (app.js:1:1)" })).toBe(false);
+  expect(isResizeObserverLoop({ message: "ResizeObserver loop limit exceeded" })).toBe(false);
+  expect(isResizeObserverLoop({ message: `${loop} ` })).toBe(false);
+});
+
 // guards.takeProblems() empties the guard, so only the guards' own tests here
 // may call it; anything else declares its errors with expectConsoleError. A
 // shared helper counts too: it would silence the guard for every spec that
@@ -329,73 +417,3 @@ test("an expected console error that never comes fails the test", async ({ guard
   test.fail();
   guards.expectConsoleError(new RegExp(`^${declared}$`));
 });
-
-// DIAG #398 (temporary): which element creation makes WebKit report a
-// style-src-attr violation, with the blocked style as the sample
-// ('report-sample'), with and without a CSP, and from script and parser.
-const diagTags = ["select", "select:multiple", "input", "input:number", "input:date", "input:range", "input:checkbox", "input:file", "input:search", "textarea", "button", "details", "progress", "meter", "video"];
-for (const csp of ["default-src 'self'; style-src 'self' 'report-sample'", ""]) {
-  test(`DIAG element creation under CSP ${JSON.stringify(csp)}`, async ({ page, guards, browserName }) => {
-    await page.addInitScript(() => {
-      const w = window as unknown as { __v: unknown[] };
-      w.__v = [];
-      document.addEventListener(
-        "securitypolicyviolation",
-        (e) => w.__v.push({ d: e.violatedDirective, sample: e.sample, target: (e.target as Element)?.nodeName, at: `${e.sourceFile}:${e.lineNumber}:${e.columnNumber}` }),
-        true,
-      );
-    });
-    const headers: Record<string, string> = csp ? { "Content-Security-Policy": csp } : {};
-    await page.route(`${origin}/e2e/diag-parse`, (route) =>
-      route.fulfill({ contentType: "text/html", headers, body: `<!doctype html><title>p</title><select id=s><option>a</option></select><input id=i type=number><textarea></textarea>` }),
-    );
-    await page.goto(`${origin}/e2e/diag-parse`);
-    // Marker: a style attribute set by script, which every CSP without 'unsafe-inline' refuses; events come in order.
-    const flush = () =>
-      page.evaluate(
-        (csp) =>
-          new Promise<unknown[]>((resolve) => {
-            const w = window as unknown as { __v: unknown[] };
-            if (!csp) return requestAnimationFrame(() => requestAnimationFrame(() => resolve(w.__v.splice(0))));
-            const marker = (e: SecurityPolicyViolationEvent) => {
-              if (e.sample !== "color: rgb(1, 2, 3)" && !(e.target as Element)?.id?.startsWith("marker")) return;
-              document.removeEventListener("securitypolicyviolation", marker, true);
-              resolve(w.__v.splice(0));
-            };
-            document.addEventListener("securitypolicyviolation", marker, true);
-            const m = document.createElement("div");
-            m.id = `marker${Math.random()}`;
-            document.body.append(m);
-            m.setAttribute("style", "color: rgb(1, 2, 3)");
-          }),
-        csp,
-      );
-    const parsed = await flush();
-    const parsedSelect = await page.evaluate(() => {
-      const s = document.getElementById("s") as HTMLSelectElement;
-      const cs = getComputedStyle(s);
-      return { h: s.offsetHeight, w: s.offsetWidth, appearance: cs.appearance, display: cs.display };
-    });
-    console.log(`[diag ${browserName} csp=${JSON.stringify(csp)}] parser: ${JSON.stringify(parsed)} select=${JSON.stringify(parsedSelect)}`);
-    for (const spec of diagTags) {
-      for (const attach of [false, true]) {
-        const metrics = await page.evaluate(
-          ({ spec, attach }) => {
-            const [tag, kind] = spec.split(":");
-            const el = document.createElement(tag!);
-            if (kind === "multiple") (el as HTMLSelectElement).multiple = true;
-            else if (kind) (el as HTMLInputElement).type = kind;
-            if (tag === "select") el.append(new Option("a"));
-            if (attach) document.body.append(el);
-            const cs = getComputedStyle(el);
-            return attach ? { h: (el as HTMLElement).offsetHeight, w: (el as HTMLElement).offsetWidth, appearance: cs.appearance } : null;
-          },
-          { spec, attach },
-        );
-        const v = await flush();
-        console.log(`[diag ${browserName} csp=${JSON.stringify(csp)}] ${spec} attach=${attach}: ${JSON.stringify(v)} ${JSON.stringify(metrics)}`);
-      }
-    }
-    guards.takeProblems();
-  });
-}

@@ -128,10 +128,7 @@ function readColours(page: Page, selector: string, scheme: "light" | "dark"): Pr
       for (const root of roots) {
         const l = luminance(background(root));
         out.read.backgrounds++;
-        // DIAG #398 (temporary): the computed backgrounds up the tree.
-        const chain: string[] = [];
-        for (let e: Element | null = root; e && chain.length < 6; e = e.parentElement) chain.push(`${e.nodeName}.${[...e.classList].slice(0, 2).join(".")}=${getComputedStyle(e).backgroundColor}`);
-        if (scheme === "dark" ? l > 0.1 : l < 0.7) out.backgrounds.push({ what: `${name(root)} ${chain.join(" < ")}`, luminance: l });
+        if (scheme === "dark" ? l > 0.1 : l < 0.7) out.backgrounds.push({ what: name(root), luminance: l });
         if (scheme === "light") continue;
         // The elements in it that paint text: their own text nodes, or a field's value.
         const painters = [root, ...root.querySelectorAll("*")].filter(

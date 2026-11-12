@@ -57,8 +57,6 @@ export default defineConfig({
           // @chromium-launch launches its own Chromium. They still run in
           // every chromium run.
           grepInvert: /@cdp|@chromium-layer|@chromium-launch/,
-          // DIAG #398 (temporary): the specs whose WebKit failures are being classified.
-          testMatch: /guards\.spec\.ts$/,
           use: {
             ...devices["Desktop Safari"],
             // As Desktop Chrome: the engine differs, not the pixel ratio.

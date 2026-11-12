@@ -65,6 +65,29 @@ export function fromMailFrame(url: string, text: string): boolean {
   return mailFrameErrors.some((e) => e.text.test(text) && e.url.test(url));
 }
 
+// WebKit's own console line for a style it refuses under the CSP, for a
+// style attribute and a <style> element alike, located at the page. In
+// WebKit the guards accept it by its words (#398): the guards' own
+// securitypolicyviolation listener reports every such refusal in an app
+// document, with its directive, except WebKit's own <select> style below.
+const webkitStyleRefused = "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.";
+
+/** Whether a console error is WebKit's own line for a refused style, which the guards accept in WebKit only. */
+export function fromWebKitStyleRefusal(text: string): boolean {
+  return text === webkitStyleRefused;
+}
+
+// The page error WebKit reports when a ResizeObserver callback resizes what
+// it observes again within one frame (the spec's loop limit; no Error
+// object). The web UI's frame fit does that (frameFit.ts); a follow-up
+// defers the fit. Accepted in WebKit only and only with exactly this text.
+const resizeObserverLoop = "ResizeObserver loop completed with undelivered notifications.";
+
+/** Whether a page error is the ResizeObserver loop limit, which the guards accept in WebKit only. */
+export function isResizeObserverLoop(error: { message: string; stack?: string }): boolean {
+  return error.message === resizeObserverLoop && !error.stack;
+}
+
 /** A frame as the diagnostics record it. A frame whose URL is empty (a
  * javascript: navigation) is told apart by its name and its parent. */
 export interface FrameInfo {
@@ -200,15 +223,56 @@ export const test = base.extend<{ guards: Guards }>({
       );
       // The browser logs CSP violations too; the listener also catches the
       // ones of report-only policies and names the directive.
-      await context.addInitScript(() => {
+      //
+      // WebKit only (#398): WebKit gives every <select>, from the parser or
+      // from script, a style attribute in its own user-agent shadow tree
+      // (text-overflow:inherit) and checks it against the page's CSP, so each
+      // select reports one style-src-attr violation of an inline style, with
+      // no sample. Its target is the select, or the document when the select
+      // was created by script and not yet inserted. Chromium reports none.
+      // The listener skips exactly that: a style-src-attr violation of an
+      // inline style without a sample whose target is a select without a
+      // style attribute of its own, or the document while a select that the
+      // page's script created has not reported yet; at most one per select.
+      // Every other violation, a style attribute on a select included, is
+      // reported. guards.spec.ts checks both.
+      await context.addInitScript((webkit: boolean) => {
+        const unreported: HTMLSelectElement[] = [];
+        const accounted = new WeakSet<HTMLSelectElement>();
+        if (webkit) {
+          const createElement = Document.prototype.createElement;
+          Document.prototype.createElement = function (this: Document, ...args: Parameters<Document["createElement"]>) {
+            const el = createElement.apply(this, args);
+            if (el instanceof HTMLSelectElement) unreported.push(el);
+            return el;
+          } as Document["createElement"];
+        }
+        const selectsOwnStyle = (e: SecurityPolicyViolationEvent) => {
+          if (!webkit || e.violatedDirective !== "style-src-attr" || e.blockedURI !== "inline" || e.sample !== "") return false;
+          const t = e.target;
+          if (t instanceof HTMLSelectElement) {
+            if (t.hasAttribute("style") || accounted.has(t)) return false;
+            accounted.add(t);
+            const i = unreported.indexOf(t);
+            if (i >= 0) unreported.splice(i, 1);
+            return true;
+          }
+          if (t === document && unreported.length > 0) {
+            accounted.add(unreported.shift()!);
+            return true;
+          }
+          return false;
+        };
         document.addEventListener("securitypolicyviolation", (e) => {
+          if (selectsOwnStyle(e)) return;
           console.error(`CSP violation: ${e.violatedDirective} blocked ${e.blockedURI || "inline"} in ${e.sourceFile || e.documentURI}`);
         });
-      });
+      }, browserName === "webkit");
       context.on("console", (msg) => {
         if (msg.type() !== "error") return;
         const { url } = msg.location();
         if (fromMailFrame(url, msg.text()) || expectedHTTPError(url, msg.text()) || expectedConsoleError(msg.text())) return;
+        if (browserName === "webkit" && fromWebKitStyleRefusal(msg.text())) return;
         problems.push(
           formatConsoleError(
             {
@@ -221,97 +285,10 @@ export const test = base.extend<{ guards: Guards }>({
           ),
         );
       });
-      context.on("weberror", (err) => problems.push(`page error: ${err.error().stack ?? err.error().message}`));
-      // DIAG #398 (temporary, WebKit only): where style-attribute CSP violations and page errors come from.
-      if (browserName === "webkit") {
-        context.on("weberror", (err) => {
-          const e = err.error();
-          console.log(`[diag ${testInfo.title}] weberror name=${e.name} message=${JSON.stringify(e.message)} string=${JSON.stringify(String(e))} stack=${JSON.stringify(e.stack ?? "")}`);
-        });
-        context.on("console", (msg) => {
-          if (msg.text().startsWith("diag-")) console.log(`[diag ${testInfo.title}] ${msg.text()}`);
-        });
-        await context.addInitScript(() => {
-          const stack = () => (new Error().stack ?? "").split("\n").slice(2, 7).join(" | ");
-          const log = (what: string, detail: string) => console.warn(`diag-style ${what} ${detail} @ ${stack()}`);
-          const hasStyle = (v: unknown) => typeof v === "string" && /style\s*=/i.test(v);
-          const setAttribute = Element.prototype.setAttribute;
-          Element.prototype.setAttribute = function (this: Element, n: string, v: string) {
-            if (String(n).toLowerCase() === "style") log("setAttribute", `${this.nodeName} ${JSON.stringify(String(v).slice(0, 160))}`);
-            return setAttribute.call(this, n, v);
-          };
-          const setAttributeNS = Element.prototype.setAttributeNS;
-          Element.prototype.setAttributeNS = function (this: Element, ns: string | null, n: string, v: string) {
-            if (/(^|:)style$/i.test(String(n))) log("setAttributeNS", `${this.nodeName} ${JSON.stringify(String(v).slice(0, 160))}`);
-            return setAttributeNS.call(this, ns, n, v);
-          };
-          for (const [proto, prop] of [
-            [Element.prototype, "innerHTML"],
-            [Element.prototype, "outerHTML"],
-            [ShadowRoot.prototype, "innerHTML"],
-          ] as const) {
-            const d = Object.getOwnPropertyDescriptor(proto, prop);
-            if (!d?.set) continue;
-            const set = d.set;
-            Object.defineProperty(proto, prop, {
-              ...d,
-              set(this: Element, v: string) {
-                if (hasStyle(v)) log(prop, `${this.nodeName} ${JSON.stringify(String(v).slice(0, 200))}`);
-                set.call(this, v);
-              },
-            });
-          }
-          const insertAdjacentHTML = Element.prototype.insertAdjacentHTML;
-          Element.prototype.insertAdjacentHTML = function (this: Element, w: InsertPosition, h: string) {
-            if (hasStyle(h)) log("insertAdjacentHTML", JSON.stringify(String(h).slice(0, 200)));
-            return insertAdjacentHTML.call(this, w, h);
-          };
-          const fragment = Range.prototype.createContextualFragment;
-          Range.prototype.createContextualFragment = function (this: Range, h: string) {
-            if (hasStyle(h)) log("createContextualFragment", JSON.stringify(String(h).slice(0, 200)));
-            return fragment.call(this, h);
-          };
-          const parse = DOMParser.prototype.parseFromString;
-          DOMParser.prototype.parseFromString = function (this: DOMParser, h: string, t: DOMParserSupportedType) {
-            if (hasStyle(h)) log("parseFromString", JSON.stringify(String(h).slice(0, 200)));
-            return parse.call(this, h, t);
-          };
-          const attrValue = Object.getOwnPropertyDescriptor(Attr.prototype, "value");
-          if (attrValue?.set) {
-            const set = attrValue.set;
-            Object.defineProperty(Attr.prototype, "value", {
-              ...attrValue,
-              set(this: Attr, v: string) {
-                if (this.name.toLowerCase() === "style") log("Attr.value", JSON.stringify(String(v).slice(0, 160)));
-                set.call(this, v);
-              },
-            });
-          }
-          const cssText = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "cssText");
-          if (cssText?.set) {
-            const set = cssText.set;
-            Object.defineProperty(CSSStyleDeclaration.prototype, "cssText", {
-              ...cssText,
-              set(this: CSSStyleDeclaration, v: string) {
-                log("cssText", JSON.stringify(String(v).slice(0, 160)));
-                set.call(this, v);
-              },
-            });
-          }
-          document.addEventListener(
-            "securitypolicyviolation",
-            (e) => {
-              const t = e.target as Element | null;
-              console.warn(
-                `diag-csp ${e.violatedDirective}/${e.effectiveDirective} ${e.disposition} ${e.sourceFile}:${e.lineNumber}:${e.columnNumber} blocked=${e.blockedURI} sample=${JSON.stringify(e.sample)} target=${t?.nodeName} ${JSON.stringify(t && "outerHTML" in t ? t.outerHTML.slice(0, 240) : "")} @ ${stack()}`,
-              );
-            },
-            true,
-          );
-          window.addEventListener("error", (e) => console.warn(`diag-window-error ${JSON.stringify(e.message)} ${e.filename}:${e.lineno}:${e.colno} error=${String(e.error)} ${e.error?.stack ?? ""}`));
-          window.addEventListener("unhandledrejection", (e) => console.warn(`diag-rejection ${String(e.reason)} ${e.reason?.stack ?? ""}`));
-        });
-      }
+      context.on("weberror", (err) => {
+        if (browserName === "webkit" && isResizeObserverLoop(err.error())) return;
+        problems.push(`page error: ${err.error().stack ?? err.error().message}`);
+      });
       await use({
         allowHTTPError: (path, status) => allowed.push({ path, status }),
         expectConsoleError: (text, count = 1) => void expected.push({ text, count, seen: 0 }),

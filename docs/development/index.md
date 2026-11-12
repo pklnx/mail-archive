@@ -210,20 +210,46 @@ browser.
   the full-Chromium case of `css-images.spec.ts`).
 
 Where an expected value is a fact of the engine, not of the app, the test
-reads that fact and names it (`web/e2e/engine.ts`): Playwright's WebKit has no
-WebAuthn (it stubs `PublicKeyCredential` as an object), so the login page
-offers no passkey there; it knows no `clipboard-write` permission; it may
-report `user-select` only with the `-webkit-` prefix, so the test reads that
-too. A WebKit failure of an assertion about the app is an app bug.
+names that fact, and reads it from the browser where it can
+(`web/e2e/engine.ts`). In Playwright's WebKit:
 
-The guards make no exception for WebKit. Playwright's trace screenshots add
-an inline style to the page in WebKit, which the app's CSP refuses
+- there is no WebAuthn (it stubs `PublicKeyCredential` as an object), so the
+  login page offers no passkey;
+- there is no `clipboard-write` permission;
+- `-webkit-user-select` is inherited but the unprefixed `user-select` is not,
+  so the tests read the prefixed one first;
+- CSS images honour `Referrer-Policy: no-referrer` and send no Referer, while
+  Chromium sends the origin;
+- the mouse wheel does not work in a mobile context;
+- some lengths and positions come out with sub-pixel differences, so a few
+  checks allow them (a frame's height under 1 px at the Pixel 7's 2.625
+  pixel ratio, a table row's alignment 2 px instead of 1.5).
+
+A WebKit failure of an assertion about the app is an app bug.
+
+Playwright's trace screenshots add an inline style to the page in WebKit,
+which the app's CSP refuses
 ([#343](https://github.com/pklnx/mail-archive/issues/343)), so the `webkit`
-project records traces without screenshots. WebKit logs a remote image that
-the mail frame's CSP refuses without a location, on an app page as well, so
-the guards accept that message by its wording only; on an app page the
-guards' own `securitypolicyviolation` listener still reports it
-(`guards.spec.ts` checks both cases, and an inline style on an app page).
+project records traces without screenshots. In WebKit the guards'
+`securitypolicyviolation` listener is the guard of record, with a few narrow
+exceptions (`web/e2e/fixtures.ts`), each with a test in `guards.spec.ts` that
+it still fails what it must:
+
+- WebKit gives every `<select>` a style attribute in its own user-agent
+  shadow tree (`text-overflow:inherit`) and checks it against the page's CSP,
+  so each select reports one `style-src-attr` violation. Chromium reports
+  none. The listener skips exactly that report: no sample, its target a
+  select without a style attribute of its own, or the document right after
+  the page's script created a select; at most one per select. A style
+  attribute the page sets, on a select or elsewhere, still fails.
+- WebKit's own console lines for a refused style ("Refused to apply a
+  stylesheet …") and for a remote image the mail frame refuses carry no
+  useful location, so the guards accept them by their words; on an app page
+  the listener still reports each refusal.
+- The page error "ResizeObserver loop completed with undelivered
+  notifications.", which Playwright's WebKit reports when the frame fit
+  resizes what its observer watches within one frame; accepted by its exact
+  text until the frame fit defers that work.
 
 CI runs it in the `web-e2e-webkit` job, next to `web-e2e` and with the same
 skip rule. It is a job of its own, not a matrix: a matrix would rename the

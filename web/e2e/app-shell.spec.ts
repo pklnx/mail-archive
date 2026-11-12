@@ -20,20 +20,19 @@ function style(el: Locator, prop: string): Promise<string> {
 }
 
 /**
- * The computed user-select. Engine fact (#398): Chromium reports it
- * unprefixed; WebKit may know only -webkit-user-select, which the build
- * emits next to the unprefixed one, and then reports "" for user-select.
+ * The computed user-select that takes effect. Engine fact (#398, first
+ * WebKit run): in Chromium -webkit-user-select is an alias of user-select,
+ * and both are inherited. WebKit keeps -webkit-user-select inherited but
+ * computes the unprefixed user-select as the spec says, not inherited: a
+ * link inside the side navigation (user-select: none) reports
+ * user-select "auto" and -webkit-user-select "none". The build emits both,
+ * so the prefixed one is read first; the unprefixed one only where an
+ * engine lacks the prefix.
  */
 const userSelect = (el: Locator) =>
   el.evaluate((e) => {
     const s = getComputedStyle(e);
-    return s.getPropertyValue("user-select") || s.getPropertyValue("-webkit-user-select");
-  });
-// DIAG #398 (temporary): both user-select values as the engine reports them.
-const diagUserSelect = (el: Locator) =>
-  el.evaluate((e) => {
-    const s = getComputedStyle(e);
-    return `${e.nodeName}.${e.className} user-select=${JSON.stringify(s.getPropertyValue("user-select"))} -webkit-user-select=${JSON.stringify(s.getPropertyValue("-webkit-user-select"))} userSelect=${JSON.stringify((s as unknown as Record<string, string>).userSelect)} webkitUserSelect=${JSON.stringify((s as unknown as Record<string, string>).webkitUserSelect)}`;
+    return s.getPropertyValue("-webkit-user-select") || s.getPropertyValue("user-select");
   });
 
 /** The computed font size in pixels. */
@@ -184,7 +183,6 @@ test.describe("desktop", () => {
       page.locator(".cds--btn").first(),
       page.locator(".mail-row").first(),
     ];
-    for (const el of chrome) console.log(`[diag user-select] ${await diagUserSelect(el)}`);
     for (const el of chrome) expect(await userSelect(el)).toBe("none");
     // The user actions in the header bar (#488).
     for (const name of ["Profile (demo)", "Keyboard shortcuts", "Log out"]) {
@@ -224,7 +222,7 @@ test.describe("desktop", () => {
     expect(
       await frame.evaluate((f: HTMLIFrameElement) => {
         const s = getComputedStyle(f.contentDocument!.body);
-        return s.getPropertyValue("user-select") || s.getPropertyValue("-webkit-user-select");
+        return s.getPropertyValue("-webkit-user-select") || s.getPropertyValue("user-select");
       }),
     ).not.toBe("none");
 

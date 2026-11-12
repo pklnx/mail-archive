@@ -99,7 +99,7 @@ async function leaks(requests: Request[], headers: (path: string) => Record<stri
 const refusedHint = "Remote images stay blocked for this message";
 
 /** The zoetrope check in page: after "Load remote images", only the controls load. */
-async function checkCSSImages(page: Page, context: BrowserContext) {
+async function checkCSSImages(page: Page, context: BrowserContext, browserName: string) {
   const server = await recorder(context);
   const requests = issuedCSS(context);
   try {
@@ -115,9 +115,11 @@ async function checkCSSImages(page: Page, context: BrowserContext) {
     const mask = server.requested("/css-control-mask");
     await addToMail(page, `background-image:url(${referrerOrigin}/css-control-bg)`);
     await addToMail(page, `mask-image:url(${referrerOrigin}/css-control-mask)`);
-    // DIAG #398 (temporary): the controls' headers as the recorder got them.
-    console.log(`[diag css-images] bg=${JSON.stringify(await bg)} mask=${JSON.stringify(await mask)} frame-referrer=${await page.getByRole("article").locator("iframe").evaluate((f: HTMLIFrameElement) => f.contentDocument?.referrer + " policy=" + (f.contentDocument?.querySelector("meta[name=referrer]")?.getAttribute("content") ?? "none"))}`);
-    expect((await bg).referer, "Referer of the control background").toBe(`${origin}/`);
+    // Engine fact (#398, first WebKit run): WebKit honours the frame's
+    // Referrer-Policy: no-referrer for CSS images and sends no Referer;
+    // Chromium sends the origin whatever the policy. The request itself is
+    // the control in both.
+    expect((await bg).referer, "Referer of the control background").toBe(browserName === "webkit" ? undefined : `${origin}/`);
     expect((await mask).origin, "Origin of the control mask").toBe(origin);
     expect(await leaks(requests, server.headers), "the mail's CSS images, checked after the controls").toEqual([]);
 
@@ -133,8 +135,8 @@ async function checkCSSImages(page: Page, context: BrowserContext) {
   }
 }
 
-test("CSS images in a mail stay unloaded after Load remote images (the project's browser)", async ({ page, context }) => {
-  await checkCSSImages(page, context);
+test("CSS images in a mail stay unloaded after Load remote images (the project's browser)", async ({ page, context, browserName }) => {
+  await checkCSSImages(page, context, browserName);
 });
 
 // It launches its own Chromium whatever the project's browser, so it runs in
@@ -145,7 +147,7 @@ test("CSS images in a mail stay unloaded after Load remote images (full Chromium
   const browser = await chromium.launch({ channel: "chromium", executablePath: process.env.CHROMIUM_PATH || undefined });
   try {
     const context = await browser.newContext({ baseURL: origin, storageState: adminState, locale: "en-US", timezoneId: "Europe/Berlin" });
-    await checkCSSImages(await context.newPage(), context);
+    await checkCSSImages(await context.newPage(), context, "chromium");
   } finally {
     await browser.close();
   }
