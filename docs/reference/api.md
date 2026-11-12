@@ -100,12 +100,14 @@ own group only on the command line or through another admin.
 | `GET /api/users` | All users: `name`, `admin`, `locked`, `mustChangePassword`, `twoFactorEnabled`, `passkeys` (a count), `apiKeys` (active keys), `accounts` (a count), `createdAt`, `lastLoginAt`, `self`, `group` (the user's [customer group](../guide/users#customer-groups), `{"id", "name"}`), `auditor`. |
 | `POST /api/users` | Add a user with `{"name": "...", "admin": false}`. Answers `201 {"name", "password"}` with a generated password, shown only here. `"group"` is the id of the user's [customer group](../guide/users#customer-groups): needed while several groups exist (`400 "choose a group"`), otherwise the user joins the only one; an unknown id is `400 "unknown group"`. `"auditor": true` creates an [auditor](#auditors) (never with `admin`: `400`). |
 | `POST /api/users/{name}/password` | Generate a new password (`{"name", "password"}`). The user is logged out and must change it at the next login. Their passkeys are removed and their API keys revoked too, unless the body says `{"removePasskeys": false}` or `{"revokeApiKeys": false}`. |
-| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` and `locked` answer `204`; `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n, "grantsRevoked": m}` (both `0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id; `grantsRevoked` counts the [auditor grants](#auditors) of the user, as auditor or as owner, that the move revoked. Audited as `user.group_change`, with the ended shares and revoked grants. `{"admin": true}` for an auditor is `409`. |
+| `PATCH /api/users/{name}` | Exactly one of `{"admin": true\|false}`, `{"locked": true\|false}` or `{"group": id}` (`400` for none or more). `admin` answers `204`, `locked` `200 {"smtpCredentialsActive": n}`: for a lock, how many usable [SMTP secrets](#smtp-secrets) the smtp accounts the user owns have, which the lock does not stop (`0` for an unlock); `409` for the last admin. `group` moves the user, with the accounts they own, into that [customer group](../guide/users#customer-groups) and ends every share that would then cross groups; it answers `200 {"sharesEnded": n, "grantsRevoked": m}` (both `0` when the user already was in the group, which writes no entry) and `400 "unknown group"` for an unknown id; `grantsRevoked` counts the [auditor grants](#auditors) of the user, as auditor or as owner, that the move revoked. Audited as `user.group_change`, with the ended shares and revoked grants. `{"admin": true}` for an auditor is `409`. |
 | `POST /api/users/{name}/2fa/reset` | Turn off the user's 2FA and end their sessions (`204`). |
 | `DELETE /api/users/{name}/passkeys` | Remove all passkeys of another user and end their sessions (`204`). |
 | `DELETE /api/users/{name}` | Remove a user, with their API keys (`204`). `409` while they own accounts, or for the last admin. Removing an [auditor](#auditors) first revokes their unrevoked grants and answers `200 {"grantsRevoked": [{"id", "label", "owner", "auditor"}]}`; the grants stay in their owners' lists without the auditor's name (`revokeReason: "user_removed"`). |
 | `GET /api/api-keys` | Every user's API keys, like `GET /api/profile/api-keys` plus `user`. Never the keys themselves. |
 | `DELETE /api/api-keys/{id}` | Revoke any user's key, also an own one (`204`). |
+| `GET /api/admin/smtp-credentials` | Every smtp account's [SMTP secrets](#smtp-secrets), also of removed accounts, by account: like the account's list plus `account`, `username`, `owner` (empty without one) and `accountRemoved`. Never the secrets. |
+| `DELETE /api/admin/smtp-credentials/{id}` | Revoke any smtp account's secret (`204`), for example after locking its owner. Audited as `smtp_credential.revoke` with `by_admin`. |
 | `GET /api/groups` | All [customer groups](../guide/users#customer-groups) by name: `{"groups": [{"id", "name", "users", "accounts", "createdAt"}]}`; `accounts` counts the accounts of the group's users, removed ones included. |
 | `POST /api/groups` | Add a group with `{"name": "..."}` (1 to 100 characters, without control characters; spaces at either end are removed). Answers `201` with the group. `409` for a name a group has already, in any case. Audited as `group.add`. |
 | `PATCH /api/groups/{id}` | Rename a group with `{"name": "..."}` (`204`). `404` for an unknown id, `409` for a name another group has. Audited as `group.rename`. |
@@ -350,6 +352,27 @@ when the check's minute runs out), `imap_server`, `imap_protocol` or
 own text is only in the server log. Checks are limited
 ([Security](./security#login-checks)); a refused check answers `429` with
 `Retry-After`, `retryAfter` and `code: too_many_checks`, before it connects.
+
+### SMTP secrets
+
+A mail server logs in to the SMTP server of an smtp account with the user
+name `smtp-<account id>` and a secret (`mas_` and 52 characters). The
+account's owner manages them, and must be an admin (otherwise `403`, also
+for an own account); another user's account is `404`, an account of
+another kind or a removed one `409`. Sessions only. Any admin also lists and
+revokes every account's secrets with `/api/admin/smtp-credentials`
+([Users and profile](#users-and-profile)). The command line does the same
+with [`./ma account smtp-secret`](./cli#smtp-secrets).
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/accounts/{name}/smtp-credentials` | `{"username": "smtp-42", "credentials": [{"id", "hint", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`, newest first; revoked and expired secrets for 30 days. `hint` is the last 4 characters; `state` is `active` (the current secret), `expiring` (superseded, usable until `expiresAt`), `expired` or `revoked`. |
+| `POST /api/accounts/{name}/smtp-credentials` | Create a secret: `{"currentPassword": "...", "code": "...", "graceDays": 7}`; `code` (TOTP or recovery code) only with 2FA on. The current secret stays usable for `graceDays` (0 to 30, default 7; 0 revokes it at once), and a secret that was already expiring is revoked, so at most two are usable. Answers `201 {"username", "secret", "credential", "previous": [{"id", "expiresAt"\|"revokedAt"}]}`; the secret is shown only here, and only its SHA-256 is stored. `401` for a wrong password or code (counts like a failed login), `400` for `graceDays` out of range. Audited as `smtp_credential.create` (`credential_id`, `hint`, `grace_days`, `superseded`). |
+| `DELETE /api/accounts/{name}/smtp-credentials/{id}` | Revoke a secret of the account at once (`204`). No password needed. `404` for a secret of another account or one already revoked. Audited as `smtp_credential.revoke` (`credential_id`, `hint`). |
+
+Locking the owner does not stop the secrets: the mail server keeps
+delivering, so no journal copy is lost. Revoke them, or create a new one with
+`graceDays` 0, when someone who knows a secret should no longer deliver.
 
 ### Shared accounts
 

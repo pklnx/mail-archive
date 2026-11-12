@@ -266,6 +266,16 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
+	// A locked owner's SMTP secrets keep working (#395 decision 9): the
+	// answer to a lock counts them, so the admin can revoke them. They are
+	// counted before the lock, so a failure changes nothing.
+	var smtpActive int64
+	if in.Locked != nil && *in.Locked {
+		if smtpActive, err = s.smtpCredentialsActive(r, u); err != nil {
+			s.failStore(w, r, err)
+			return
+		}
+	}
 	e := s.targetedEntry(r, "user.change")
 	auditUser(e, u)
 	switch {
@@ -289,7 +299,19 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("user changed", "user", u.Name, "by", currentSession(r).UserName)
+	if in.Locked != nil {
+		s.writeJSON(w, http.StatusOK, userLockJSON{SMTPCredentialsActive: smtpActive})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// userLockJSON answers a lock or unlock.
+type userLockJSON struct {
+	// SMTPCredentialsActive counts the usable SMTP secrets of the smtp
+	// accounts the locked user owns, which the lock does not stop; 0 for
+	// an unlock.
+	SMTPCredentialsActive int64 `json:"smtpCredentialsActive"`
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {

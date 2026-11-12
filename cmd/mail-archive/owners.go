@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -173,6 +174,17 @@ of the account ends.`,
 				return staleError(err)
 			}
 			fmt.Printf("account %q now belongs to %q\n", acc.Name, target.Name)
+			// The previous owner may know the account's SMTP secrets (#395).
+			if acc.Kind == store.KindSMTP {
+				n, err := a.store.UsableSMTPCredentials(cmd.Context(), acc.ID, time.Now())
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: the account was moved, but its SMTP secrets could not be counted: %v\n", err)
+				}
+				if n > 0 {
+					smtpSecretHint([]store.SMTPCredentialCount{{AccountID: acc.ID, AccountName: acc.Name, N: n}},
+						target.Name, fmt.Sprintf("the previous owner %q", ownerName(names, acc.OwnerID)))
+				}
+			}
 			if ended, ok := e.Details["shares_ended"].([]string); ok {
 				for _, u := range ended {
 					fmt.Printf("share with %q ended\n", u)

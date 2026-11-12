@@ -314,6 +314,7 @@ func newAccountCmd() *cobra.Command {
 		newAccountAddCmd(),
 		newAccountAddSMTPCmd(),
 		newAccountSMTPAddressesCmd(),
+		newAccountSMTPSecretCmd(),
 		newAccountFillCmd(),
 		newAccountListCmd(),
 		newAccountFoldersCmd(),
