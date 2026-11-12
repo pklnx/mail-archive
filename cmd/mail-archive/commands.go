@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
+	"net"
 	"os"
 	"regexp"
 	"slices"
@@ -24,7 +24,6 @@ import (
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/jobs"
 	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/web"
 )
 
 type app struct {
@@ -1004,12 +1003,18 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 (journaling from a mail server) from the networks in
 ` + config.EnvSMTPAllowedNetworks + `.
 
-At start it takes the migration lock, waiting while a migrate or another
-start holds it. With ` + config.EnvMigrateOnStart + `=on it then applies pending
-migrations as migrate does; it refuses to start (exit code 4) while
-migrations are pending or a newer version migrated the database. A
-migration that fails ends it with exit code 3. See docs/guide/operations.md,
-"Upgrades".`,
+It needs the secret key (` + config.EnvSecretKeyFile + ` or ` + config.EnvSecretKey + `)
+and refuses to start without it (exit code 4).
+
+It listens at once; until it is ready, /healthz answers 503 with
+{"status":"starting"} and every other request 503. At start it takes the
+migration lock, waiting while a migrate or another start holds it. With
+` + config.EnvMigrateOnStart + `=on it then applies pending migrations as migrate does;
+it refuses to start (exit code 4) while migrations are pending or a newer
+version migrated the database. A migration that fails ends it with exit
+code 3. It then checks the secret key against the instance and refuses
+another one (exit code 4; see secret-key accept). See
+docs/guide/operations.md, "Upgrades".`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
@@ -1017,130 +1022,15 @@ migration that fails ends it with exit code 3. See docs/guide/operations.md,
 				return err
 			}
 			log := newLogger(cfg.LogLevel)
-			// The migration lock, start-up migrations and the schema check
-			// (#396), before anything of this process uses the database.
-			if err := prepareInstance(cmd.Context(), cfg, log, "serve"); err != nil {
-				return err
+			// Before it listens or migrates (#396, step 0).
+			if cfg.SecretKey == nil {
+				return missingSecretKeyError()
 			}
-			a, err := openAppConfig(cmd.Context(), cfg, openNormal)
+			ln, err := (&net.ListenConfig{}).Listen(cmd.Context(), "tcp", listen)
 			if err != nil {
 				return err
 			}
-			defer a.close()
-			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "serve", archive.RoleWriter)
-			if err != nil {
-				return err
-			}
-			defer ar.Close()
-			opts := web.Options{
-				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
-				AlertAfterFailures: a.cfg.AlertAfterFailures, TrustedProxies: a.cfg.TrustedProxies,
-			}
-			// After a restore, attestations only the file has are imported
-			// before anything archives, so new messages are numbered past
-			// them.
-			archive.CatchUpAtStart(cmd.Context(), a.store, a.cfg.AttestDir(), log)
-			// Background jobs, beside the notifier and the schedule; stopped
-			// before the store closes, releasing running jobs.
-			stopJobs, err := startJobs(cmd.Context(), a, blobs, log)
-			if err != nil {
-				return err
-			}
-			defer stopJobs()
-			var afterSync func()
-			if n := newNotifier(a, log); n != nil {
-				ctx, cancel := context.WithCancel(cmd.Context())
-				notifierDone := make(chan struct{})
-				go func() {
-					n.Run(ctx)
-					close(notifierDone)
-				}()
-				// Stop it also when serve fails, and before the store closes.
-				defer func() {
-					cancel()
-					<-notifierDone
-				}()
-				log.Info("alerts on", "target", a.cfg.Webhook.Target(), "after_failures", a.cfg.AlertAfterFailures)
-				afterSync = n.Wake
-			} else {
-				log.Info("alerts off", "reason", config.EnvNotifyWebhookURL+" is not set")
-			}
-			if sealer, err := a.cfg.Sealer(); err != nil {
-				log.Warn("account management and sync are off", "reason", err)
-			} else {
-				opts.Sealer = sealer
-				if n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer); err != nil {
-					return err
-				} else if n > 0 {
-					log.Info("stored passwords bound to the account ID", "accounts", n)
-				}
-				// Background runs end at a time limit, so that a slow or
-				// silent server cannot hold the only sync or fill worker.
-				opts.Syncer = &archive.Syncer{
-					Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
-					ReconcileInterval:    a.cfg.ReconcileInterval,
-					MaxReconcileMessages: a.cfg.IMAP.ReconcileMaxMessages, IMAP: imapSettings(a.cfg),
-					MaxRunTime: archive.DefaultMaxRunTime,
-				}
-				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Schedule: scheduleOf(a.cfg), AfterSync: afterSync}
-				runnerDone := make(chan struct{})
-				go func() {
-					opts.Runner.Run(cmd.Context())
-					close(runnerDone)
-				}()
-				// Let a running sync record its outcome before the store closes.
-				defer func() { <-runnerDone }()
-				// Recurring fills wait after the start, so that journal copies
-				// the mail server queued during an outage arrive first.
-				opts.Fills = &archive.FillRunner{
-					Filler: &archive.Filler{
-						Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
-						IMAP: imapSettings(a.cfg), MaxFolderMessages: a.cfg.IMAP.FillMaxFolderMessages,
-						MaxRunTime: archive.DefaultMaxRunTime,
-					},
-					Schedule: opts.Runner.Schedule, HoldUntil: time.Now().Add(archive.RecurringStartHold), AfterRun: afterSync,
-				}
-				fillsDone := make(chan struct{})
-				go func() {
-					opts.Fills.Run(cmd.Context())
-					close(fillsDone)
-				}()
-				// A fill records its last batch before the store closes.
-				defer func() { <-fillsDone }()
-				if a.cfg.SyncInterval > 0 {
-					log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "min", a.cfg.SyncIntervalMin, "reconcile_interval", a.cfg.ReconcileInterval)
-				} else {
-					log.Info("sync schedule off")
-				}
-			}
-			if pending, err := a.store.HasUnindexed(cmd.Context()); err == nil && pending {
-				log.Warn("some messages are not fully searchable yet", "command", commandName()+" reindex")
-			}
-			if n, err := a.store.CountUsers(cmd.Context()); err != nil {
-				return err
-			} else if n == 0 {
-				log.Warn("no users yet; the web UI shows how to create the first admin", "command", commandName()+" user add NAME --admin")
-			}
-			// The first attestation of a large archive takes minutes; it runs
-			// in the background. Stopped before the store closes.
-			defer startAttester(cmd.Context(), a, log)()
-			retention, stopRetention := startRetention(cmd.Context(), a, blobs, log)
-			defer stopRetention()
-			opts.Retention = retention
-			if a.cfg.SMTP != nil {
-				stop, err := startSMTP(cmd.Context(), a, blobs, log)
-				if err != nil {
-					return err
-				}
-				defer stop()
-				opts.SMTPListen = a.cfg.SMTP.Listen
-			}
-			srv := web.New(a.store, blobs, log, opts)
-			log.Info("listening", "addr", listen)
-			if err := srv.ListenAndServe(cmd.Context(), listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return err
-			}
-			return nil
+			return runServe(cmd.Context(), cfg, log, ln)
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")

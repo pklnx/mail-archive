@@ -196,6 +196,9 @@ var auditActionClasses = map[string][]AuditClass{
 	"audit.export":     {AuditInstance},
 	"jobs.retry":       {AuditInstance},
 
+	// The instance's secret key (#396): `secret-key accept`.
+	"instance.secret_key_accepted": {AuditInstance},
+
 	"retention.rule_add":    {AuditTargeted},
 	"retention.rule_remove": {AuditTargeted},
 	"hold.add":              {AuditTargeted, AuditInstance}, // instance: no owner and no account

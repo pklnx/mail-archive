@@ -56,13 +56,15 @@ const (
 //     sequence of `migrate` (applyMigrations);
 //  4. check the schema: refuse when migrations are pending or the database
 //     is newer than the binary;
+//  5. serve only: check the secret key (checkSecretKey);
 //  8. release the lock and close the store.
 //
-// Steps 3 and 4 run under the lock, so serve, worker and `migrate`
+// Steps 3 to 5 run under the lock, so serve, worker and `migrate`
 // started at the same time apply each migration once, and a process that
 // starts while another one migrates waits for it and then finds nothing
-// left. Steps 1 and 5 to 7 belong to serve and come with #396 parts 2
-// and 3; step 3b is the underLock hook.
+// left. Step 1, listening with the starting handler, is serve's own
+// (newServeCmd); steps 6 and 7 come with #396 part 3; step 3b is the
+// underLock hook.
 type instanceStart struct {
 	cfg  *config.Config
 	log  *slog.Logger
@@ -77,12 +79,15 @@ type instanceStart struct {
 	// under the migration lock after the schema check, so on a current
 	// schema and before any process of this version starts writing.
 	underLock func(ctx context.Context, st *store.Store) error
+	// secretKey runs step 5, the check of the secret key (checkSecretKey),
+	// after underLock: serve only. The worker seals and opens nothing.
+	secretKey bool
 }
 
 // prepareInstance runs the start-up steps of serve and worker before they
 // open their store (instanceStart).
 func prepareInstance(ctx context.Context, cfg *config.Config, log *slog.Logger, role string) error {
-	return instanceStart{cfg: cfg, log: log, role: role}.run(ctx)
+	return instanceStart{cfg: cfg, log: log, role: role, secretKey: role == "serve"}.run(ctx)
 }
 
 func (s instanceStart) run(ctx context.Context) error {
@@ -115,7 +120,12 @@ func (s instanceStart) run(ctx context.Context) error {
 		return err
 	}
 	if s.underLock != nil {
-		return s.underLock(ctx, st)
+		if err := s.underLock(ctx, st); err != nil {
+			return err
+		}
+	}
+	if s.secretKey {
+		return checkSecretKey(ctx, st, s.cfg, s.log)
 	}
 	return nil
 }

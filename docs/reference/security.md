@@ -76,7 +76,10 @@ login.
 - **Failed logins:** after 5 failures for a user name within 15 minutes, the
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
   further failure. 20 failures from one address (IPv6: per `/64`) within 15
-  minutes block that address for 15 minutes. Failed passkey logins count for
+  minutes block that address for 15 minutes. Behind a reverse proxy, set
+  `MAIL_ARCHIVE_TRUSTED_PROXIES` to it: otherwise every client counts as the
+  proxy's address, and 20 failures from anyone block every login through
+  the proxy for 15 minutes. Failed passkey logins count for
   the address only (IPv6: per `/64`). An IPv6 client usually gets a whole
   `/64`, so changing addresses within it does not escape the limits. Logs and
   the audit log keep the full address. The server log, like the audit log,
@@ -654,6 +657,12 @@ alerts, so a hostile server can put text there through a folder name.
 
 ## Health endpoints and alerts
 
+While the web server starts (it waits for the migration lock, migrates and
+checks the secret key), it already listens: `/healthz` answers `503` with
+`{"status":"starting"}`, and every other request `503` with `Retry-After: 5`,
+after the same Host check and headers as later. Nothing else is served
+before the start is complete.
+
 `/healthz/sync` needs no login, so that monitoring tools can use it. It names
 no accounts, users or mail, only account IDs. Still, anyone who can reach the
 server with an allowed host name learns how many accounts exist (roughly,
@@ -708,11 +717,42 @@ addresses or UIDs.
 
 ## The secret key
 
-`MAIL_ARCHIVE_SECRET_KEY` encrypts the stored passwords. Keep it outside the
-archive backup's location or protect both equally. If it is lost, archived
-mail stays readable, but every account needs its password again. If it
-leaks together with the database, the IMAP passwords are exposed: change them
-at the providers.
+`MAIL_ARCHIVE_SECRET_KEY` encrypts the stored IMAP passwords and TOTP
+secrets. Keep it outside the archive backup's location or protect both
+equally. If it is lost, archived mail stays readable, but every account
+needs its password again and every user with TOTP a new setup. If it leaks
+together with the database, the IMAP passwords are exposed: change them at
+the providers.
+
+- **From a file.** `MAIL_ARCHIVE_SECRET_KEY_FILE` names a file that holds the
+  key, preferred over the variable; both set is refused. The file has the
+  rules of the archive key file: refused when group or others have any
+  permission on it, when it is not a regular file, and when it lies inside
+  the data directory. The error names the reason, never the key. Under
+  Docker Compose it lies in `SECRET_KEY_DIR`, mounted read-only into the
+  web server and the command-line container only.
+- **Required.** The web server refuses to start without a key (exit code 4),
+  before it listens or migrates.
+- **Checked at start.** The database keeps a check value of the key,
+  HMAC-SHA256 with the key over a fixed text, never the key. The web server
+  refuses to start with another key (exit code 4), so a wrong key is noticed
+  before anything is sealed with it, instead of later as passwords that no
+  longer open. The message names two fingerprints, the first 8 bytes of the
+  check values of the configured and of the expected key, never a key. On
+  the first start of 1.6.0 there is no check value yet: if stored IMAP
+  passwords or TOTP secrets exist, the key must open at least one of up to 5
+  of each, otherwise the start is refused; then the check value is recorded.
+  After an intended change of the key, `./ma secret-key accept --yes` records
+  the new one (audit log `instance.secret_key_accepted`, with both
+  fingerprints); the passwords and TOTP secrets sealed with the old key must
+  then be set again.
+- **Not in other processes.** The worker gets no secret key under Docker
+  Compose: it seals and opens nothing. The processes the app starts get
+  none either: `pg_dump` and `pg_restore` only what the table above lists,
+  and the write check of the data directory that `./ma migrate` runs as the
+  container user (`prepare-data --check`) only the data directory and
+  `PATH`, `TZ`, `LANG` and `LC_ALL`. No `MAIL_ARCHIVE_*` or `PG*` variable of
+  the app reaches a child process, apart from what it is given on purpose.
 
 ## The archive key
 
