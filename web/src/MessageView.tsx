@@ -353,6 +353,15 @@ function Message({ msg, open, focusSubject }: { msg: MessageDetail; open: (id: s
           </ul>
         )}
         {msg.truncated && <p className="app-text-warning app-text-small">{t.truncated}</p>}
+        {/* After "Load remote images" for a mail the server refuses them
+            for (inline SVG or MathML), so the button does not seem to do
+            nothing. The server's CSS check can also refuse other mail; the
+            message does not say so in advance, so that case has no hint. */}
+        {html && images && msg.remoteImagesRefused && (
+          <p role="status" className="app-text-secondary app-text-small">
+            {t.remoteImagesRefused}
+          </p>
+        )}
       </header>
       {conv && conversationOpen && (
         <ConversationPanel

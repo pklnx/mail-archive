@@ -168,7 +168,8 @@ func TestImportEMLDeduplicatesWithIMAP(t *testing.T) {
 	}
 	im := &archive.Importer{Store: f.store, Blobs: f.blobs, Logger: quiet}
 	res, err := im.Import(f.ctx, acc, folders)
-	if err != nil || res.Total().Added != 1 || res.Total().New != 0 {
+	// New to the import account, though the archive held the bytes.
+	if err != nil || res.Total().Added != 1 || res.Total().New != 1 {
 		t.Fatalf("%v %+v", err, res)
 	}
 	if n := f.countBlobFiles(); n != 1 {

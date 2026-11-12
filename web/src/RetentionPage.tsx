@@ -89,7 +89,7 @@ export function holdScope(h: LegalHold): string {
     const f = h.filter;
     const terms = [f.q ?? "", f.from ? `from:${f.from}` : "", f.to ? `to:${f.to}` : "", f.attachment ? `attachment:${f.attachment}` : ""];
     if (f.hasAttachment) terms.push("has:attachment");
-    parts.push(`${terms.filter(Boolean).join(" ")} (${h.matchedAt ? t.holdMatched(h.matched) : t.holdNotMatched})`);
+    parts.push(`${terms.filter(Boolean).join(" ")} (${h.matchedAt ? (h.matched === null ? t.holdMatchedHidden : t.holdMatched(h.matched)) : t.holdNotMatched})`);
   }
   return parts.length ? parts.join(", ") : t.holdScopeAll;
 }

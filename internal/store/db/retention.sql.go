@@ -175,6 +175,18 @@ func (q *Queries) CheckTimeZone(ctx context.Context, timeZone string) error {
 	return err
 }
 
+const countLegalHoldMessages = `-- name: CountLegalHoldMessages :one
+SELECT count(*)::bigint FROM legal_hold_messages WHERE hold_id = $1::bigint
+`
+
+// The messages one hold's filter matched so far.
+func (q *Queries) CountLegalHoldMessages(ctx context.Context, holdID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countLegalHoldMessages, holdID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteRetentionRule = `-- name: DeleteRetentionRule :one
 DELETE FROM retention_rules WHERE id = $1
 RETURNING account_id, folder, years, time_zone
@@ -353,6 +365,7 @@ func (q *Queries) LegalHoldScope(ctx context.Context, id int64) (LegalHoldScopeR
 
 const listLegalHolds = `-- name: ListLegalHolds :many
 SELECT h.id, h.name, h.reason, h.owner_id, ou.name AS owner, h.account_id, a.name AS account, au.name AS account_owner,
+       a.owner_id AS account_owner_id,
        h.filter, h.period_start, h.period_end, h.matched_at, h.created_at, cu.name AS created_by,
        h.released_at, ru.name AS released_by, h.release_note,
        (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id)::bigint AS matched,
@@ -378,6 +391,7 @@ type ListLegalHoldsRow struct {
 	AccountID        *int64
 	Account          *string
 	AccountOwner     *string
+	AccountOwnerID   *int64
 	Filter           []byte
 	PeriodStart      *time.Time
 	PeriodEnd        *time.Time
@@ -415,6 +429,7 @@ func (q *Queries) ListLegalHolds(ctx context.Context, released bool) ([]ListLega
 			&i.AccountID,
 			&i.Account,
 			&i.AccountOwner,
+			&i.AccountOwnerID,
 			&i.Filter,
 			&i.PeriodStart,
 			&i.PeriodEnd,

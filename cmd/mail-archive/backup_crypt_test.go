@@ -83,13 +83,15 @@ func assertNoMarkers(t *testing.T, what string, data []byte) {
 	}
 }
 
-// fakePgDumpMarkers is a pg_dump whose dump holds the marker words.
+// fakePgDumpMarkers is a pg_dump whose dump holds the marker words; it
+// fails while a file "fail" lies next to it (pg_dump gets no variable of
+// the test's environment).
 func fakePgDumpMarkers(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	script := `#!/bin/sh
 if [ "$1" = --version ]; then echo "pg_dump (PostgreSQL) 18.1"; exit 0; fi
-if [ -n "$FAKE_FAIL" ]; then printf 'PGDMP half'; echo "connection refused" >&2; exit 1; fi
+if [ -e "$(dirname "$0")/fail" ]; then printf 'PGDMP half'; echo "connection refused" >&2; exit 1; fi
 printf 'PGDMP ` + leakMarker1 + ` '
 i=0; while [ $i -lt 3000 ]; do printf '` + leakMarker2 + ` %d\n' $i; i=$((i+1)); done
 `
@@ -158,7 +160,9 @@ func TestBackupSealed(t *testing.T) {
 		}
 	}
 
-	t.Setenv("FAKE_FAIL", "1")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(pgDump), "fail"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	job.Name = "second.dump"
 	if _, err := runBackup(context.Background(), job); err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("failing pg_dump: %v", err)
@@ -295,14 +299,17 @@ func TestSealUnsealStream(t *testing.T) {
 }
 
 // fakePgRestore is a pg_restore that copies its standard input to
-// logDir/stdin and writes logDir/done only after reading it to the end.
+// logDir/stdin and writes logDir/done only after reading it to the end. It
+// records its environment in logDir/version-env for --version and in
+// logDir/env for the restore.
 func fakePgRestore(t *testing.T, version string) (path, logDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	logDir = t.TempDir()
 	script := `#!/bin/sh
-if [ "$1" = --version ]; then echo "pg_restore (PostgreSQL) ` + version + `"; exit 0; fi
+if [ "$1" = --version ]; then env > "` + logDir + `/version-env"; echo "pg_restore (PostgreSQL) ` + version + `"; exit 0; fi
 printf '%s\n' "$@" > "` + logDir + `/args"
+env > "` + logDir + `/env"
 cat > "` + logDir + `/stdin"
 echo done > "` + logDir + `/done"
 `
@@ -336,6 +343,7 @@ func TestRunRestore(t *testing.T) {
 		return r
 	}
 
+	basics := setEnvMarkers(t)
 	pgRestore, logDir := fakePgRestore(t, "18.0")
 	job := restoreJob{PgRestore: pgRestore, DatabaseURL: "postgres://u:p@h/archive", ServerMajor: 18, In: open(sealed.Bytes()), Name: "x.dump.enc", Sealed: true}
 	var out bytes.Buffer
@@ -353,6 +361,9 @@ func TestRunRestore(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "restored the encrypted dump x.dump.enc") {
 		t.Errorf("output %q", out.String())
+	}
+	for _, name := range []string{"version-env", "env"} {
+		assertPgToolEnv(t, "pg_restore "+name, filepath.Join(logDir, name), append(basics, "PGPASSWORD=p", "PGDATABASE=archive")...)
 	}
 
 	// Cut at a chunk boundary: everything before the cut reaches

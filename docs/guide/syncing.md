@@ -264,6 +264,13 @@ the messages fetched and new so far while it syncs. The page refreshes every
 so syncs from the schedule or the command line show up too. `./ma status`
 prints the same per account.
 
+*New* counts the messages the account did not hold before, in any of its
+folders, even if the archive already held the same bytes from another
+account. A message moved to another folder on the server, or fetched again
+after a `UIDVALIDITY` change, is not new; one that retention deleted and
+that comes back is. Syncs before version 1.5.3 keep the figure they
+recorded then.
+
 A sync ends as `ok`, `partial` (some folders failed, or could not be
 reconciled; the others are archived) or `failed` (for example a wrong
 password).

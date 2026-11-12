@@ -80,7 +80,7 @@ func TestFills(t *testing.T) {
 	ff.Counts = store.FillCounts{Scanned: 3, Imported: 1, AfterCutoff: 1, Journaled: 1}
 	loc := store.Location{InternalDate: time.Now()}
 	res, err := st.SaveFillBatch(ctx, ff, []store.MessageMeta{meta}, []store.Location{loc})
-	if err != nil || res.New != 1 || ff.Counts.New != 1 {
+	if err != nil || res.Added != 1 || ff.Counts.New != 1 {
 		t.Fatalf("save: %+v, %+v, %v", res, ff, err)
 	}
 	// A failing batch changes neither the messages nor the progress.

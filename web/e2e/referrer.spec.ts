@@ -1,8 +1,8 @@
-import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { BrowserContext, Page } from "@playwright/test";
 import { referrerOrigin } from "./demo";
 import { expect, test } from "./fixtures";
 import { frameOf, mailReady } from "./mailFrame";
+import { recorder } from "./recorder";
 
 // The server sends Referrer-Policy: no-referrer with every answer, the mail
 // frame's included. A mail could override it with <meta name="referrer"> or
@@ -13,39 +13,7 @@ import { frameOf, mailReady } from "./mailFrame";
 // referrerpolicy and crossorigin (neutralizeHTML in internal/web), so none
 // of them takes effect. The demo's checks (tools/demo, referrerCheck and
 // hintCheck) point their links and images at referrerOrigin, where this spec
-// runs a server that records each request's headers.
-
-/** Starts the recording server; requested(path) settles with the headers of the first request for path. */
-async function recorder(context: BrowserContext) {
-  const seen = new Map<string, IncomingHttpHeaders>();
-  const waiting = new Map<string, (h: IncomingHttpHeaders) => void>();
-  const server = createServer((req, res) => {
-    const path = new URL(req.url ?? "/", referrerOrigin).pathname;
-    if (!seen.has(path)) {
-      seen.set(path, req.headers);
-      waiting.get(path)?.(req.headers);
-    }
-    if (/-(img|svgimg)$/.test(path)) {
-      // A 1×1 transparent GIF.
-      res.writeHead(200, { "content-type": "image/gif" }).end(Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
-    } else {
-      res.writeHead(200, { "content-type": "text/html" }).end("<p>check</p>");
-    }
-  });
-  const { hostname, port } = new URL(referrerOrigin);
-  await new Promise<void>((resolve, reject) => server.once("error", reject).listen(Number(port), hostname, resolve));
-  // Past the guards' block of other hosts: this one is ours.
-  await context.route(`${referrerOrigin}/**`, (route) => route.continue());
-  return {
-    requested: (path: string) =>
-      new Promise<IncomingHttpHeaders>((resolve) => {
-        const h = seen.get(path);
-        if (h) resolve(h);
-        else waiting.set(path, resolve);
-      }),
-    close: () => new Promise((resolve) => server.close(resolve)),
-  };
-}
+// runs a server that records each request's headers (recorder.ts).
 
 /** Opens the demo mail found by word. */
 async function openMail(page: Page, word: string, subject: string) {
@@ -97,16 +65,13 @@ test("a mail's referrerpolicy and crossorigin attributes do not take effect", as
     expect((await click).referer, "Referer of the link click").toBeUndefined();
     await tab.close();
 
+    // Only <img>: a mail with an SVG <image> has inline SVG, so it gets no
+    // remote images at all (css-images.spec.ts, the stereoscope mail).
     const img = server.requested("/attr-img");
-    const svg = server.requested("/attr-svgimg");
     await page.getByRole("article").getByRole("button", { name: "Load remote images" }).click();
-    for (const [name, headers] of [
-      ["<img>", await img],
-      ["SVG <image>", await svg],
-    ] as const) {
-      expect(headers.referer, `Referer of the ${name}`).toBeUndefined();
-      expect(headers.origin, `Origin of the ${name}`).toBeUndefined();
-    }
+    const headers = await img;
+    expect(headers.referer, "Referer of the <img>").toBeUndefined();
+    expect(headers.origin, "Origin of the <img>").toBeUndefined();
   } finally {
     await server.close();
   }

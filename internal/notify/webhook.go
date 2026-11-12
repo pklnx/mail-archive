@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,9 +24,6 @@ const RequestTimeout = 10 * time.Second
 
 // maxResponseBody is how much of the answer is read before it is dropped.
 const maxResponseBody = 4 << 10
-
-// discordLimit is the longest content Discord accepts.
-const discordLimit = 2000
 
 // Events.
 const (
@@ -70,23 +66,45 @@ type FolderLoss struct {
 
 // Message is one webhook request.
 type Message struct {
-	ID       string
-	Event    string
-	Title    string
-	Body     string
+	ID    string
+	Event string
+	// Title and Body are plain text, for Gotify, ntfy and generic
+	// receivers.
+	Title string
+	Body  string
+	// Slack (Slack and Mattermost) and Discord are the title and the body
+	// with every value as a code span, fitted to the field's limit. Empty
+	// means Title and Body hold no value and are sent as they are.
+	Slack    string
+	Discord  string
 	Accounts []AccountEvent
 }
 
-// jsonBody covers Gotify (title, message), Slack and Mattermost (text) and
-// Discord (content), plus the structured fields for everything else.
+// jsonBody covers Gotify (title, message, extras), Slack and Mattermost
+// (text) and Discord (content, allowed_mentions), plus the structured
+// fields for everything else.
 type jsonBody struct {
-	ID       string         `json:"id"`
-	Event    string         `json:"event"`
-	Title    string         `json:"title"`
-	Message  string         `json:"message"`
-	Text     string         `json:"text"`
-	Content  string         `json:"content"`
-	Accounts []AccountEvent `json:"accounts"`
+	ID              string          `json:"id"`
+	Event           string          `json:"event"`
+	Title           string          `json:"title"`
+	Message         string          `json:"message"`
+	Text            string          `json:"text"`
+	Content         string          `json:"content"`
+	AllowedMentions allowedMentions `json:"allowed_mentions"`
+	Extras          extras          `json:"extras"`
+	Accounts        []AccountEvent  `json:"accounts"`
+}
+
+// allowedMentions with an empty Parse makes Discord ping no one.
+type allowedMentions struct {
+	Parse []string `json:"parse"`
+}
+
+// extras pins Gotify to plain text.
+type extras struct {
+	ClientDisplay struct {
+		ContentType string `json:"contentType"`
+	} `json:"client::display"`
 }
 
 // Webhook sends messages to the configured URL. It never follows
@@ -145,16 +163,24 @@ func (w *Webhook) Send(ctx context.Context, m *Message) (int, error) {
 	if w.cfg.Format == config.WebhookFormatNtfy {
 		body, contentType = []byte(m.Body), "text/plain; charset=utf-8"
 	} else {
-		text := m.Title + "\n" + m.Body
+		slack, discord := m.Slack, m.Discord
+		if slack == "" {
+			slack = m.Title + "\n" + m.Body
+		}
+		if discord == "" {
+			discord = m.Title + "\n" + m.Body
+		}
 		accounts := m.Accounts
 		if accounts == nil {
 			accounts = []AccountEvent{}
 		}
-		var err error
-		body, err = json.Marshal(jsonBody{
+		jb := jsonBody{
 			ID: m.ID, Event: m.Event, Title: m.Title, Message: m.Body,
-			Text: text, Content: truncate(text, discordLimit), Accounts: accounts,
-		})
+			Text: slack, Content: discord, AllowedMentions: allowedMentions{Parse: []string{}}, Accounts: accounts,
+		}
+		jb.Extras.ClientDisplay.ContentType = "text/plain"
+		var err error
+		body, err = json.Marshal(jb)
 		if err != nil {
 			return 0, &DeliveryError{Err: err}
 		}
@@ -170,7 +196,7 @@ func (w *Webhook) Send(ctx context.Context, m *Message) (int, error) {
 		req.Header.Set("Authorization", w.cfg.Authorization)
 	}
 	if w.cfg.Format == config.WebhookFormatNtfy {
-		req.Header.Set("Title", mime.BEncoding.Encode("UTF-8", m.Title))
+		req.Header.Set("Title", encodeTitle(m.Title))
 		priority, tags := "default", "white_check_mark"
 		switch m.Event {
 		case EventFailing, EventMixed:

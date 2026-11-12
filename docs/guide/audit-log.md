@@ -40,7 +40,7 @@ Each event writes exactly one entry.
 | `auth.logout` | A valid session logged out. |
 | `message.search` | A list with a search or filter: `q`, `from`, `to`, `attachment`, `after`, `before` or `has`. The details hold every parameter that was set. |
 | `message.open` | A message was opened. |
-| `message.html` | Its HTML body was loaded; `images: true` with remote images. `inline_images` counts the embedded images (`cid:` references) shown, `inline_omitted` those shown empty (unknown, not an image type that is shown, past the 10 MiB limit, or unreadable). |
+| `message.html` | Its HTML body was loaded; `images: true` with remote images. `images_refused` when remote images were asked for but not allowed: `"svg"` or `"math"` for a mail with inline SVG or MathML, `"css"` when the mail's CSS could still load an image in a way the server cannot make inert (see [HTML mail](../reference/security#html-mail)); the mail is then shown without remote images. `inline_images` counts the embedded images (`cid:` references) shown, `inline_omitted` those shown empty (unknown, not an image type that is shown, past the 10 MiB limit, or unreadable). |
 | `message.raw` | The `.eml` file was downloaded. |
 | `message.part` | An attachment was loaded; `index`, `content_type` and `inline`. In older entries also an inline image of an HTML message. |
 | `message.list`, `message.page`, `message.conversation` | Only for users with [shared accounts](#shared-accounts), when the request reaches one, and for every request of an [auditor](#auditors): a list without search parameters (folder or all mail, also an expanded conversation with `thread`), a further page of any list (`cursor`), and a message's conversation (`members`, the number of messages shown). |

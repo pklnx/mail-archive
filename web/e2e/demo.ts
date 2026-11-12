@@ -15,10 +15,11 @@ export const origin = `http://localhost:${port}`;
  */
 export const redirectOrigin = "http://127.0.0.2:18182";
 /**
- * The site of the demo's referrer checks (tools/demo, hintCheck and
- * referrerCheck): their links and images point here, and referrer.spec.ts
- * runs a server here that records each request's headers. Like
- * redirectOrigin, not one of the demo's hosts, so the links stay links.
+ * The site of the demo's referrer and CSS checks (tools/demo, hintCheck,
+ * referrerCheck, cssCheck and cssSVGCheck): their links and images point
+ * here, and referrer.spec.ts and css-images.spec.ts run a server here that
+ * records each request's headers (recorder.ts). Like redirectOrigin, not
+ * one of the demo's hosts, so the links stay links.
  */
 export const referrerOrigin = "http://127.0.0.2:18183";
 /**

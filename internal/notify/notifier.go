@@ -247,8 +247,9 @@ func EventID(accountID int64, failingSince *time.Time, event string) string {
 // BuildMessage turns claimed announcements into one message.
 func BuildMessage(pending []store.PendingNotification) *Message {
 	m := &Message{Accounts: make([]AccountEvent, 0, len(pending))}
+	var d draft
 	var failing, recovered int
-	var lines, ids []string
+	var ids []string
 	for _, p := range pending {
 		ev := AccountEvent{
 			Event: EventFailing, AccountID: p.AccountID, Account: p.Account, Owner: p.Owner,
@@ -263,25 +264,25 @@ func BuildMessage(pending []store.PendingNotification) *Message {
 		ev.ID = EventID(p.AccountID, p.FailingSince, ev.Event)
 		m.Accounts = append(m.Accounts, ev)
 		ids = append(ids, ev.ID)
-		lines = append(lines, describe(ev))
+		d.entries = append(d.entries, describe(ev))
 	}
 	switch {
 	case failing > 0 && recovered > 0:
 		m.Event = EventMixed
-		m.Title = fmt.Sprintf("Mail archive: %s failing, %d recovered", plural(failing, "account"), recovered)
+		d.title = []piece{constant(fmt.Sprintf("Mail archive: %s failing, %d recovered", plural(failing, "account"), recovered))}
 	case failing > 0:
 		m.Event = EventFailing
 		if failing == 1 {
-			m.Title = "Mail archive: sync of " + m.Accounts[0].Account + " keeps failing"
+			d.title = []piece{constant("Mail archive: sync of "), value(m.Accounts[0].Account), constant(" keeps failing")}
 		} else {
-			m.Title = fmt.Sprintf("Mail archive: syncs of %d accounts keep failing", failing)
+			d.title = []piece{constant(fmt.Sprintf("Mail archive: syncs of %d accounts keep failing", failing))}
 		}
 	default:
 		m.Event = EventRecovered
 		if recovered == 1 {
-			m.Title = "Mail archive: " + m.Accounts[0].Account + " syncs again"
+			d.title = []piece{constant("Mail archive: "), value(m.Accounts[0].Account), constant(" syncs again")}
 		} else {
-			m.Title = fmt.Sprintf("Mail archive: %d accounts sync again", recovered)
+			d.title = []piece{constant(fmt.Sprintf("Mail archive: %d accounts sync again", recovered))}
 		}
 	}
 	if len(ids) == 1 {
@@ -290,7 +291,7 @@ func BuildMessage(pending []store.PendingNotification) *Message {
 		sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
 		m.ID = "batch-" + hex.EncodeToString(sum[:8])
 	}
-	m.Body = strings.Join(lines, "\n\n")
+	d.apply(m)
 	return m
 }
 
@@ -304,8 +305,9 @@ func FillEventID(fillID int64, failingSince *time.Time, event string) string {
 // message, like BuildMessage.
 func BuildFillMessage(pending []store.PendingNotification) *Message {
 	m := &Message{Accounts: make([]AccountEvent, 0, len(pending))}
+	var d draft
 	var failing, recovered int
-	var lines, ids []string
+	var ids []string
 	for _, p := range pending {
 		ev := AccountEvent{
 			Event: EventFailing, AccountID: p.AccountID, Account: p.Account, Owner: p.Owner, FillID: p.FillID, Mailbox: p.Mailbox,
@@ -320,26 +322,26 @@ func BuildFillMessage(pending []store.PendingNotification) *Message {
 		ev.ID = FillEventID(p.FillID, p.FailingSince, ev.Event)
 		m.Accounts = append(m.Accounts, ev)
 		ids = append(ids, ev.ID)
-		lines = append(lines, describeFill(ev))
+		d.entries = append(d.entries, describeFill(ev))
 	}
 	first := m.Accounts[0]
 	switch {
 	case failing > 0 && recovered > 0:
 		m.Event = EventMixed
-		m.Title = fmt.Sprintf("Mail archive: %s failing, %d recovered", plural(failing, "import"), recovered)
+		d.title = []piece{constant(fmt.Sprintf("Mail archive: %s failing, %d recovered", plural(failing, "import"), recovered))}
 	case failing > 0:
 		m.Event = EventFailing
 		if failing == 1 {
-			m.Title = "Mail archive: import of " + first.Mailbox + " into " + first.Account + " keeps failing"
+			d.title = []piece{constant("Mail archive: import of "), value(first.Mailbox), constant(" into "), value(first.Account), constant(" keeps failing")}
 		} else {
-			m.Title = fmt.Sprintf("Mail archive: imports of %d mailboxes keep failing", failing)
+			d.title = []piece{constant(fmt.Sprintf("Mail archive: imports of %d mailboxes keep failing", failing))}
 		}
 	default:
 		m.Event = EventRecovered
 		if recovered == 1 {
-			m.Title = "Mail archive: " + first.Mailbox + " imports into " + first.Account + " again"
+			d.title = []piece{constant("Mail archive: "), value(first.Mailbox), constant(" imports into "), value(first.Account), constant(" again")}
 		} else {
-			m.Title = fmt.Sprintf("Mail archive: %d mailboxes import again", recovered)
+			d.title = []piece{constant(fmt.Sprintf("Mail archive: %d mailboxes import again", recovered))}
 		}
 	}
 	if len(ids) == 1 {
@@ -348,40 +350,45 @@ func BuildFillMessage(pending []store.PendingNotification) *Message {
 		sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
 		m.ID = "batch-" + hex.EncodeToString(sum[:8])
 	}
-	m.Body = strings.Join(lines, "\n\n")
+	d.apply(m)
 	return m
 }
 
-func describeFill(ev AccountEvent) string {
-	who := fmt.Sprintf("Import of %s into account %q (owner %s, fill %d)", ev.Mailbox, ev.Account, orDash(ev.Owner), ev.FillID)
+func describeFill(ev AccountEvent) []piece {
+	who := []piece{constant("Import of "), value(ev.Mailbox), constant(" into account "), quoted(ev.Account),
+		constant(" (owner "), owner(ev.Owner), constant(fmt.Sprintf(", fill %d)", ev.FillID))}
+	return describeHealth(ev, who, "ran successfully again", "run")
+}
+
+func describe(ev AccountEvent) []piece {
+	who := []piece{constant("Account "), quoted(ev.Account), constant(" (owner "), owner(ev.Owner),
+		constant(fmt.Sprintf(", ID %d)", ev.AccountID))}
+	return describeHealth(ev, who, "synced successfully again", "sync")
+}
+
+// describeHealth is the entry of a failing or recovered sync or fill: who,
+// what happened since when, and the last error.
+func describeHealth(ev AccountEvent, who []piece, again, unit string) []piece {
 	since := ""
 	if ev.FailingSince != nil {
 		since = " since " + ev.FailingSince.UTC().Format("2006-01-02 15:04 UTC")
 	}
 	if ev.Event == EventRecovered {
-		return who + " ran successfully again after failing" + since + "."
+		return append(who, constant(" "+again+" after failing"+since+"."))
 	}
-	s := fmt.Sprintf("%s failed %s in a row%s.", who, plural(ev.FailureStreak, "run"), since)
+	s := append(who, constant(fmt.Sprintf(" failed %s in a row%s.", plural(ev.FailureStreak, unit), since)))
 	if ev.LastError != "" {
-		s += "\nLast error: " + ev.LastError
+		s = append(s, constant("\nLast error: "), value(ev.LastError))
 	}
 	return s
 }
 
-func describe(ev AccountEvent) string {
-	who := fmt.Sprintf("Account %q (owner %s, ID %d)", ev.Account, orDash(ev.Owner), ev.AccountID)
-	since := ""
-	if ev.FailingSince != nil {
-		since = " since " + ev.FailingSince.UTC().Format("2006-01-02 15:04 UTC")
+// owner is the owner's name as a value, or "-" for none.
+func owner(name string) piece {
+	if name == "" {
+		return constant("-")
 	}
-	if ev.Event == EventRecovered {
-		return who + " synced successfully again after failing" + since + "."
-	}
-	s := fmt.Sprintf("%s failed %s in a row%s.", who, plural(ev.FailureStreak, "sync"), since)
-	if ev.LastError != "" {
-		s += "\nLast error: " + ev.LastError
-	}
-	return s
+	return value(name)
 }
 
 func plural(n int, word string) string {
@@ -389,13 +396,6 @@ func plural(n int, word string) string {
 		return "1 " + word
 	}
 	return thousands(n) + " " + word + "s"
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 func (n *Notifier) now() time.Time {
@@ -481,7 +481,8 @@ func LossEventID(syncRunID int64) string {
 // BuildLossMessage turns claimed loss alerts into one message.
 func BuildLossMessage(pending []store.PendingLossAlert) *Message {
 	m := &Message{Event: EventGone, Accounts: make([]AccountEvent, 0, len(pending))}
-	var lines, ids []string
+	var d draft
+	var ids []string
 	total := 0
 	for _, p := range pending {
 		ev := AccountEvent{
@@ -494,33 +495,37 @@ func BuildLossMessage(pending []store.PendingLossAlert) *Message {
 		total += p.Lost
 		m.Accounts = append(m.Accounts, ev)
 		ids = append(ids, ev.ID)
-		lines = append(lines, describeLoss(ev))
+		d.entries = append(d.entries, describeLoss(ev))
 	}
 	if len(pending) == 1 {
-		m.Title = fmt.Sprintf("Mail archive: %s deleted on the server (%s)", plural(total, "message"), m.Accounts[0].Account)
+		d.title = []piece{constant(fmt.Sprintf("Mail archive: %s deleted on the server (", plural(total, "message"))),
+			value(m.Accounts[0].Account), constant(")")}
 		m.ID = ids[0]
 	} else {
-		m.Title = fmt.Sprintf("Mail archive: %s deleted on the server in %d accounts", plural(total, "message"), len(pending))
+		d.title = []piece{constant(fmt.Sprintf("Mail archive: %s deleted on the server in %d accounts", plural(total, "message"), len(pending)))}
 		sum := sha256.Sum256([]byte(strings.Join(ids, ",")))
 		m.ID = "batch-" + hex.EncodeToString(sum[:8])
 	}
-	m.Body = strings.Join(lines, "\n\n")
+	d.apply(m)
 	return m
 }
 
-func describeLoss(ev AccountEvent) string {
-	s := fmt.Sprintf("Account %q (owner %s, ID %d): %s of %s are no longer on the server. They stay in the archive.",
-		ev.Account, orDash(ev.Owner), ev.AccountID, thousands(ev.Lost), plural(ev.PresentBefore, "message"))
+func describeLoss(ev AccountEvent) []piece {
+	s := []piece{constant("Account "), quoted(ev.Account), constant(" (owner "), owner(ev.Owner),
+		constant(fmt.Sprintf(", ID %d): %s of %s are no longer on the server. They stay in the archive.",
+			ev.AccountID, thousands(ev.Lost), plural(ev.PresentBefore, "message")))}
 	if len(ev.Folders) > 0 {
-		parts := make([]string, 0, len(ev.Folders))
-		for _, f := range ev.Folders {
-			parts = append(parts, f.Name+" "+thousands(f.Lost))
+		s = append(s, constant("\nFolders: "))
+		for i, f := range ev.Folders {
+			if i > 0 {
+				s = append(s, constant(", "))
+			}
+			s = append(s, value(f.Name), constant(" "+thousands(f.Lost)))
 		}
-		s += "\nFolders: " + strings.Join(parts, ", ")
 		if ev.MoreFolders > 0 {
-			s += fmt.Sprintf(" and %d more", ev.MoreFolders)
+			s = append(s, constant(fmt.Sprintf(" and %d more", ev.MoreFolders)))
 		}
-		s += "."
+		s = append(s, constant("."))
 	}
 	return s
 }

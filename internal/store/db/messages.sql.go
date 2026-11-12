@@ -10,6 +10,46 @@ import (
 	"time"
 )
 
+const accountHeldMessages = `-- name: AccountHeldMessages :many
+SELECT DISTINCT l.message_sha256::text AS sha256
+FROM folders f
+JOIN LATERAL (
+    SELECT ml.message_sha256 FROM message_locations ml
+    WHERE ml.folder_id = f.id AND ml.message_sha256 = ANY ($1::bpchar[])
+) l ON true
+WHERE f.account_id = (SELECT a.account_id FROM folders a WHERE a.id = $2)
+`
+
+type AccountHeldMessagesParams struct {
+	Shas     []string
+	FolderID int64
+}
+
+// Hashes of a batch that the account of the folder holds already, in any
+// of its folders (gone locations included). Driven from the account's
+// folders: one probe of message_locations_folder_sha_idx per folder and
+// hash, so the cost does not depend on how many other accounts hold the
+// same bytes.
+func (q *Queries) AccountHeldMessages(ctx context.Context, arg AccountHeldMessagesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, accountHeldMessages, arg.Shas, arg.FolderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countMessages = `-- name: CountMessages :one
 SELECT count(*) FROM messages
 `

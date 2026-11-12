@@ -104,6 +104,7 @@ export function PurgeReview({ preview: p, busy, error, onConfirm, onCancel }: Re
                     : {t.messageCount(k.messages, formatCount(k.messages))}
                   </li>
                 ))}
+                {p.keptByOthers > 0 && <li>{t.purgeKeptByOthers(p.keptByOthers, formatCount(p.keptByOthers))}</li>}
               </ul>
             </li>
           )}

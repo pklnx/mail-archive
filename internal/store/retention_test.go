@@ -296,6 +296,88 @@ func TestLegalHolds(t *testing.T) {
 	}
 }
 
+// A hold's filter never searches smtp envelopes: to: matches the To and
+// Cc headers only, for holds on an smtp account, on another account of its
+// owner and on the whole instance. Matches stored before stay.
+func TestHoldFilterIgnoresEnvelopes(t *testing.T) {
+	f := newRetentionFixture(t)
+	imap := f.folder(f.alice, "work", "INBOX")
+	journal := createSMTPAccount(t, f.st, &f.alice.ID, "journal", "journal@example.com")
+	meta := receivedMeta(0x42)
+	meta.Subject, meta.To = "budget", "team@x.example"
+	f.uid++
+	if _, err := f.st.SaveBatch(f.ctx, imap.ID, f.uid, []store.MessageMeta{meta}, []store.Location{{FolderID: imap.ID, UID: f.uid}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.ReceiveMessage(f.ctx, journal.ID, meta, envelope("hidden@bcc.example"), present); err != nil {
+		t.Fatal(err)
+	}
+	// bob has his own copy of the same message, without an envelope.
+	bobs := f.folder(f.bob, "mail", "INBOX")
+	f.uid++
+	if _, err := f.st.SaveBatch(f.ctx, bobs.ID, f.uid, []store.MessageMeta{meta}, []store.Location{{FolderID: bobs.ID, UID: f.uid}}); err != nil {
+		t.Fatal(err)
+	}
+	// The search itself still finds alice's envelope.
+	if rows, err := f.st.SearchMessages(f.ctx, store.SearchFilter{Scope: storetest.Viewer(t, f.st, f.alice.ID), To: "hidden@bcc", Limit: 10}); err != nil || len(rows) != 1 {
+		t.Fatalf("search to:hidden@bcc: %d %v", len(rows), err)
+	}
+
+	filter := func(to string) *store.HoldFilter { return &store.HoldFilter{To: to} }
+	onJournal := f.hold(store.NewLegalHold{AccountID: &journal.ID, Filter: filter("hidden@bcc")})
+	onIMAP := f.hold(store.NewLegalHold{AccountID: &imap.AccountID, Filter: filter("hidden@bcc")})
+	instance := f.hold(store.NewLegalHold{Filter: filter("hidden@bcc")})
+	kept := f.hold(store.NewLegalHold{AccountID: &journal.ID, Filter: filter("hidden@bcc")})
+	if _, err := connect(t, f.url).Exec(f.ctx, `INSERT INTO legal_hold_messages (hold_id, message_sha256) VALUES ($1, $2)`, kept, meta.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.MatchLegalHolds(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	matched := func() map[int64]int64 {
+		t.Helper()
+		holds, err := f.st.LegalHolds(f.ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[int64]int64{}
+		for _, h := range holds {
+			out[h.ID] = h.Matched
+		}
+		return out
+	}
+	m := matched()
+	for name, c := range map[string]struct {
+		id   int64
+		want int64
+	}{"smtp account": {onJournal, 0}, "imap account": {onIMAP, 0}, "instance": {instance, 0}, "matched before": {kept, 1}} {
+		if m[c.id] != c.want {
+			t.Errorf("%s hold to:hidden@bcc matched %d, want %d", name, m[c.id], c.want)
+		}
+	}
+	// No hold covers bob's copy through alice's envelope.
+	if l := f.detail(f.bob, meta.SHA256).Locations; len(l) != 1 || l[0].OnHold {
+		t.Errorf("bob's copy through alice's envelope: %+v", l)
+	}
+
+	// The To header still matches, in every scope.
+	headerJournal := f.hold(store.NewLegalHold{AccountID: &journal.ID, Filter: filter("team@x")})
+	headerIMAP := f.hold(store.NewLegalHold{AccountID: &imap.AccountID, Filter: filter("team@x")})
+	headerInstance := f.hold(store.NewLegalHold{Filter: filter("team@x")})
+	if _, err := f.st.MatchLegalHolds(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	m = matched()
+	for name, id := range map[string]int64{"smtp account": headerJournal, "imap account": headerIMAP, "instance": headerInstance} {
+		if m[id] != 1 {
+			t.Errorf("%s hold to:team@x matched %d, want 1", name, m[id])
+		}
+	}
+	if l := f.detail(f.bob, meta.SHA256).Locations; len(l) != 1 || !l[0].OnHold {
+		t.Errorf("bob's copy under the instance hold on the To header: %+v", l)
+	}
+}
+
 // checkHoldError checks that err is a *store.HoldError with the IDs, for
 // the web answer, and that its text is unchanged, for the command line.
 func checkHoldError(t *testing.T, err error, text string, ids ...int64) {

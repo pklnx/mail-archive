@@ -352,6 +352,11 @@ paths:
       operationId: beginPasskeyLogin
       x-auditor: true
       summary: Start a passkey login
+      description: |
+        Needs no session. Limited to 30 starts per minute per address (IPv6:
+        per `/64`), to 50 starts within 5 minutes per address (IPv6: per
+        `/64`) and 200 per IPv6 `/48`, and to 50,000 starts within 5 minutes
+        in total.
       security: []
       responses:
         "200":
@@ -361,7 +366,22 @@ paths:
               schema:
                 $ref: "#/components/schemas/Ceremony"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          description: |
+            A limit is reached: 30 starts per minute from the address, 50
+            starts within 5 minutes from the address, 200 from the IPv6
+            `/48`, or 50,000 in total; or the address is blocked after
+            failed logins. For the limits within 5 minutes, `Retry-After` is
+            the exact time until the oldest start that blocks this one is 5
+            minutes old.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Retry"
         "503":
           $ref: "#/components/responses/PasskeysOff"
 
@@ -1453,8 +1473,9 @@ paths:
       summary: Add a legal hold
       description: |
         Every condition that is set must match. A filter is matched at once
-        by search, as the owner of the mail sees it; until then the hold
-        covers its whole scope. Without any condition the hold covers the
+        by search, as the owner of the mail sees it, over headers and text:
+        `to` matches the To and Cc headers only, never envelope (BCC)
+        recipients. Until then the hold covers its whole scope. Without any condition the hold covers the
         whole archive, which needs `all`. With `group`, a `user` or
         `accountId` must be in that customer group (`400` otherwise).
       requestBody:
@@ -1513,7 +1534,10 @@ paths:
                   matched:
                     type: integer
                     format: int64
-                    description: Messages the filter matched; only with a filter.
+                    description: >-
+                      Messages the new hold's filter matched; only with a
+                      filter, only for a hold on the caller or on one of
+                      their own accounts, and absent if matching failed.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -3069,7 +3093,13 @@ paths:
         shadow roots and `srcdoc` frames are neutralized in the bytes as
         served: attribute names starting with `shadowroot` on `<template>`
         and `srcdoc` on `<iframe>` get the prefix `data-`; the rename changes
-        no other byte. The
+        no other byte. URLs in the mail's CSS are made inert in the served
+        HTML (`data:,` in front of every `url()`, `_` before every CSS
+        function not known to load nothing). With `images=1`, a mail with
+        inline SVG or MathML (the bytes `<svg` or `<math`, in any case), or
+        whose CSS could still load an image, gets no remote images
+        (`img-src data:`); the message's `remoteImagesRefused` tells the
+        first case in advance. The
         frame needs no request to the parts endpoint; requests it makes to
         `/api` (images, links) are refused with `403` by their Fetch
         Metadata (see the API description).
@@ -4064,7 +4094,7 @@ components:
           description: Messages kept so far, because they are also in other accounts.
     PurgePreview:
       type: object
-      required: [account, kind, locations, messages, deleted, deletedBytes, kept, keptIn, grace, blockers, purge]
+      required: [account, kind, locations, messages, deleted, deletedBytes, kept, keptIn, keptByOthers, grace, blockers, purge]
       properties:
         account:
           type: string
@@ -4091,7 +4121,9 @@ components:
           description: Messages also in other accounts; they stay there.
         keptIn:
           type: array
-          description: Where the kept messages also are (counts only).
+          description: >-
+            The caller's own other accounts that keep copies (counts only).
+            Accounts the caller does not own are never named.
           items:
             type: object
             required: [owner, account, messages]
@@ -4104,6 +4136,12 @@ components:
               messages:
                 type: integer
                 format: int64
+        keptByOthers:
+          type: integer
+          format: int64
+          description: >-
+            Kept messages in none of the caller's other accounts, only in
+            accounts the caller does not own.
         grace:
           type: string
           description: >-
@@ -4249,6 +4287,10 @@ components:
           type: integer
         new:
           type: integer
+          description: >-
+            Messages new to the account: not held before in any of its
+            folders, even if the archive held the same bytes from another
+            account. Runs before 1.5.3 keep the figure they recorded.
         error:
           type: string
         reconciledFolders:
@@ -4554,7 +4596,10 @@ components:
           description: Messages copied.
         new:
           type: integer
-          description: Of those, messages new to the archive.
+          description: >-
+            Of those, messages new to the account: not held before in any of
+            its folders, even if the archive held the same bytes from another
+            account.
         afterCutoff:
           type: integer
           description: Left to journaling (from an hour after the cut-off on).
@@ -4704,7 +4749,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/MessageSummary"
         - type: object
-          required: [messageId, to, cc, dateHeader, text, hasHtml, truncated, parts, locations]
+          required: [messageId, to, cc, dateHeader, text, hasHtml, truncated, parts, locations, remoteImagesRefused]
           properties:
             messageId:
               type: string
@@ -4721,6 +4766,11 @@ components:
               type: string
             hasHtml:
               type: boolean
+            remoteImagesRefused:
+              type: boolean
+              description: |
+                The HTML body has inline SVG or MathML, so its HTML with
+                `images=1` loads no remote images.
             truncated:
               type: boolean
             parts:
@@ -5007,8 +5057,12 @@ components:
           format: date-time
           description: When the filter's matches were last stored; until then the hold covers its whole scope.
         matched:
-          type: integer
+          type: [integer, "null"]
           format: int64
+          description: >-
+            Messages the filter matched so far; only for a hold on the
+            caller or on one of their own accounts, null for every other
+            hold (other users, their accounts, groups, the instance).
         createdAt:
           type: string
           format: date-time

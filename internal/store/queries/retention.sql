@@ -39,6 +39,7 @@ RETURNING id, created_at;
 -- whose mail it covers: that one, or the group of its user or of its
 -- account's owner. NULL: every group.
 SELECT h.id, h.name, h.reason, h.owner_id, ou.name AS owner, h.account_id, a.name AS account, au.name AS account_owner,
+       a.owner_id AS account_owner_id,
        h.filter, h.period_start, h.period_end, h.matched_at, h.created_at, cu.name AS created_by,
        h.released_at, ru.name AS released_by, h.release_note,
        (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id)::bigint AS matched,
@@ -69,6 +70,10 @@ INSERT INTO legal_hold_messages (hold_id, message_sha256)
 SELECT @hold_id::bigint, s FROM unnest(@shas::text[]) s
 WHERE EXISTS (SELECT 1 FROM legal_holds WHERE id = @hold_id::bigint AND released_at IS NULL)
 ON CONFLICT DO NOTHING;
+
+-- name: CountLegalHoldMessages :one
+-- The messages one hold's filter matched so far.
+SELECT count(*)::bigint FROM legal_hold_messages WHERE hold_id = @hold_id::bigint;
 
 -- name: SetLegalHoldMatched :exec
 UPDATE legal_holds SET matched_at = @matched_at::timestamptz WHERE id = @id AND released_at IS NULL;

@@ -76,18 +76,22 @@ func TestRetentionRulesAPI(t *testing.T) {
 func TestLegalHoldsAPI(t *testing.T) {
 	f := newAuthFixture(t)
 	ctx := context.Background()
-	f.addUser("admin", keyPassword, true)
+	admin := f.addUser("admin", keyPassword, true)
 	alice := f.addUser("alice", keyPassword, false)
 	acc := f.imapAccount("work", alice)
-	folder, err := f.st.GetOrCreateFolder(ctx, acc.ID, "INBOX")
-	if err != nil {
-		t.Fatal(err)
+	own := f.imapAccount("personal", admin)
+	save := func(a *store.Account, uid uint32, sha, subject string) {
+		t.Helper()
+		folder, err := f.st.GetOrCreateFolder(ctx, a.ID, "INBOX")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.st.SaveBatch(ctx, folder.ID, uid, []store.MessageMeta{{SHA256: sha, Size: 1, StoredPath: "x", Subject: subject}},
+			[]store.Location{{FolderID: folder.ID, UID: uid}}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	sha := strings.Repeat("a", 64)
-	if _, err := f.st.SaveBatch(ctx, folder.ID, 1, []store.MessageMeta{{SHA256: sha, Size: 1, StoredPath: "x", Subject: "Falcon contract"}},
-		[]store.Location{{FolderID: folder.ID, UID: 1}}); err != nil {
-		t.Fatal(err)
-	}
+	save(acc, 1, strings.Repeat("a", 64), "Falcon contract")
 	f.loginOK("admin", keyPassword)
 
 	// Without any condition, a hold needs all.
@@ -102,14 +106,56 @@ func TestLegalHoldsAPI(t *testing.T) {
 		"name": "Falcon", "reason": "lawsuit", "user": "alice", "accountId": acc.ID,
 		"filter": map[string]any{"q": "falcon"}, "since": "2019-01-01T00:00:00Z",
 	}, 201)
-	if filtered["matched"] != float64(1) {
-		t.Fatalf("filter hold %v", filtered)
+	// The number of messages a filter matched is shown only for the
+	// caller's own accounts: admins see no mail except their own.
+	if _, ok := filtered["matched"]; ok || filtered["id"] == nil {
+		t.Fatalf("filter hold on alice's account %v", filtered)
 	}
 
 	s := toJSON(f.expect("GET", "/api/legal-holds", nil, 200))
 	if !strings.Contains(s, `"name":"Falcon"`) || !strings.Contains(s, `"user":"alice"`) || !strings.Contains(s, `"account":"work"`) ||
-		!strings.Contains(s, `"filter":{"q":"falcon"}`) || !strings.Contains(s, `"matched":1`) {
+		!strings.Contains(s, `"filter":{"q":"falcon"}`) || !strings.Contains(s, `"matched":null`) || strings.Contains(s, `"matched":1`) {
 		t.Fatalf("list %s", s)
+	}
+
+	// The count of a new hold on the admin's own account is its own, not
+	// the sum of the new matches of every filter hold, alice's included.
+	save(acc, 2, strings.Repeat("c", 64), "Falcon appendix")
+	save(own, 1, strings.Repeat("b", 64), "Falcon minutes")
+	falcon := map[string]any{"q": "falcon"}
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own account", "reason": "r", "accountId": own.ID, "filter": falcon}, 201); h["matched"] != float64(1) {
+		t.Errorf("hold on the admin's own account %v", h)
+	}
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own user", "reason": "r", "user": "admin", "filter": falcon}, 201); h["matched"] != float64(1) {
+		t.Errorf("hold on the admin %v", h)
+	}
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "alice account", "reason": "r", "accountId": acc.ID, "filter": falcon}, 201); h["matched"] != nil {
+		t.Errorf("hold on alice's account without a user %v", h)
+	}
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "instance", "reason": "r", "filter": falcon}, 201); h["matched"] != nil {
+		t.Errorf("instance filter hold %v", h)
+	}
+	// The group holds the admin's accounts too, and alice's.
+	g, err := f.st.GetGroupByName(ctx, "Default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "group", "reason": "r", "group": g.ID, "filter": falcon}, 201); h["matched"] != nil {
+		t.Errorf("group filter hold %v", h)
+	}
+	matched := map[string]string{}
+	for _, h := range f.expect("GET", "/api/legal-holds", nil, 200)["holds"].([]any) {
+		m := h.(map[string]any)
+		v, ok := m["matched"]
+		if !ok {
+			t.Errorf("hold %v without matched", m["name"])
+		}
+		matched[m["name"].(string)] = toJSON(v)
+	}
+	if want := map[string]string{
+		"everything": "null", "Falcon": "null", "alice account": "null", "own account": "1", "own user": "1", "instance": "null", "group": "null",
+	}; toJSON(matched) != toJSON(want) {
+		t.Errorf("matched in the list %v, want %v", matched, want)
 	}
 
 	id := itoa(int64(all["id"].(float64)))
@@ -136,6 +182,14 @@ func TestLegalHoldsAPI(t *testing.T) {
 	if !strings.Contains(body["error"].(string), "legal hold") || body["code"] != "on_hold" ||
 		toJSON(body["holdIds"]) != toJSON([]any{carolHold["id"]}) || strings.Contains(body["error"].(string), "lock the user instead") {
 		t.Fatalf("remove held user: %v", body)
+	}
+
+	// When matching fails, the new hold is not matched yet and covers its
+	// whole scope: no count, not even a partial one. A filter of the wrong
+	// type passes the database's check and fails when it is read.
+	f.exec(`INSERT INTO legal_holds (name, reason, filter) VALUES ('broken', 'r', '{"q": 5}')`)
+	if h := f.expect("POST", "/api/legal-holds", map[string]any{"name": "own again", "reason": "r", "accountId": own.ID, "filter": falcon}, 201); h["id"] == nil || h["matched"] != nil {
+		t.Errorf("hold when matching fails %v", h)
 	}
 }
 

@@ -209,12 +209,27 @@ type legalHoldJSON struct {
 	Since        *time.Time      `json:"since"`
 	Until        *time.Time      `json:"until"`
 	MatchedAt    *time.Time      `json:"matchedAt"`
-	Matched      int64           `json:"matched"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	CreatedBy    string          `json:"createdBy"`
-	ReleasedAt   *time.Time      `json:"releasedAt"`
-	ReleasedBy   string          `json:"releasedBy"`
-	ReleaseNote  string          `json:"releaseNote"`
+	// Matched is how many messages the filter matched so far, only for a
+	// hold on the caller or on one of their own accounts; null otherwise.
+	Matched     *int64     `json:"matched"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	CreatedBy   string     `json:"createdBy"`
+	ReleasedAt  *time.Time `json:"releasedAt"`
+	ReleasedBy  string     `json:"releasedBy"`
+	ReleaseNote string     `json:"releaseNote"`
+}
+
+// holdOwnedBy reports whether every account a hold can cover belongs to
+// the caller: the hold names the caller as its user, or names no user and
+// one of the caller's own accounts. A number found by searching mail is
+// shown only for such holds: admins see no mail except their own.
+// Group, instance and other users' holds, and holds on accounts without
+// owner, are not the caller's.
+func holdOwnedBy(ownerID, accountID, accountOwnerID *int64, caller int64) bool {
+	if ownerID != nil {
+		return *ownerID == caller
+	}
+	return accountID != nil && accountOwnerID != nil && *accountOwnerID == caller
 }
 
 func (s *Server) handleListLegalHolds(w http.ResponseWriter, r *http.Request) {
@@ -226,13 +241,18 @@ func (s *Server) handleListLegalHolds(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
+	caller := userID(r)
 	out := make([]legalHoldJSON, 0, len(holds))
 	for _, h := range holds {
 		j := legalHoldJSON{
 			ID: h.ID, Name: h.Name, Reason: h.Reason, User: h.Owner, AccountID: h.AccountID, Account: h.Account,
 			AccountOwner: h.AccountOwner, Group: groupRef(h.GroupID, h.Group),
-			CoveredGroup: groupRef(h.CoveredGroupID, h.CoveredGroup), Since: h.PeriodStart, Until: h.PeriodEnd, MatchedAt: h.MatchedAt, Matched: h.Matched,
+			CoveredGroup: groupRef(h.CoveredGroupID, h.CoveredGroup), Since: h.PeriodStart, Until: h.PeriodEnd, MatchedAt: h.MatchedAt,
 			CreatedAt: h.CreatedAt, CreatedBy: h.CreatedBy, ReleasedAt: h.ReleasedAt, ReleasedBy: h.ReleasedBy, ReleaseNote: h.ReleaseNote,
+		}
+		if holdOwnedBy(h.OwnerID, h.AccountID, h.AccountOwnerID, caller) {
+			n := h.Matched
+			j.Matched = &n
 		}
 		if f := h.Filter; f != nil {
 			j.Filter = &holdFilterJSON{Query: f.Query, From: f.From, To: f.To, Attachment: f.Attachment, HasAttachment: f.HasAttachment}
@@ -351,12 +371,28 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("legal hold added", "id", id, "name", h.Name, "by", currentSession(r).UserName)
 	out := map[string]int64{"id": id}
 	if h.Filter != nil {
+		// The sum covers every active filter hold, other users' too: only
+		// logged.
 		n, err := s.store.MatchLegalHolds(r.Context())
 		if err != nil {
-			// The hold covers its whole scope until it is matched.
+			// The hold covers its whole scope until it is matched; its
+			// count would be partial, so it is left out.
 			s.log.Error("matching legal holds failed", "err", err)
+		} else {
+			s.log.Info("legal holds matched", "added", n)
+			var accountOwner *int64
+			if account != nil {
+				accountOwner = account.OwnerID
+			}
+			if holdOwnedBy(h.OwnerID, h.AccountID, accountOwner, by) {
+				m, err := s.store.LegalHoldMatched(r.Context(), id)
+				if err != nil {
+					s.log.Error("counting a legal hold's matches failed", "id", id, "err", err)
+				} else {
+					out["matched"] = m
+				}
+			}
 		}
-		out["matched"] = n
 	}
 	s.writeJSON(w, http.StatusCreated, out)
 }

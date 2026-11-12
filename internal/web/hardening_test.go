@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -543,6 +544,27 @@ func TestLimitKey(t *testing.T) {
 	r.RemoteAddr = "pipe"
 	if got := s.clientAddr(r); got != "pipe" {
 		t.Errorf("no address: %q", got)
+	}
+}
+
+// The passkey-begin caps count IPv6 per /64 and per /48, IPv4 per address;
+// without an address, per RemoteAddr.
+func TestPasskeyOpenKeys(t *testing.T) {
+	for _, c := range []struct {
+		addr string
+		want []auth.QuotaKey
+	}{
+		{"2001:db8:1:2:3:4:5:6", []auth.QuotaKey{{Key: "2001:db8:1:2::/64", Cap: passkeyOpenPerAddr}, {Key: "2001:db8:1::/48", Cap: passkeyOpenPer48}}},
+		{"fe80::1%eth0", []auth.QuotaKey{{Key: "fe80::/64", Cap: passkeyOpenPerAddr}, {Key: "fe80::/48", Cap: passkeyOpenPer48}}},
+		{"::ffff:192.0.2.1", []auth.QuotaKey{{Key: "192.0.2.1", Cap: passkeyOpenPerAddr}}},
+		{"pipe", []auth.QuotaKey{{Key: "pipe", Cap: passkeyOpenPerAddr}}},
+	} {
+		s := &Server{}
+		r := httptest.NewRequest("POST", "/", nil)
+		r.RemoteAddr = c.addr
+		if got := s.passkeyOpenKeys(r); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %v, want %v", c.addr, got, c.want)
+		}
 	}
 }
 

@@ -170,6 +170,19 @@ first, so the oldest mail, which retention deletes first, comes last: ask
 the operator to run `./ma reindex` once before you rely on a filter hold
 over attachment text. Only admins see holds.
 
+A filter searches the headers and the text, never SMTP envelopes: a
+recipient filter (`to:`, `--recipient`) matches the To and Cc headers only,
+not envelope (BCC) recipients. To keep journal mail that reached someone
+only as a BCC recipient, hold the smtp account itself, with a period if
+needed. Matches a filter stored before version 1.5.3 through an envelope
+stay held until the hold is released.
+
+The number of messages a filter matched is shown only for a hold on you or
+on one of your own accounts. For any other hold the table says that it is
+matched, without the number: admins see no mail except their own (see
+[Security](../reference/security)). The operator's `./ma hold list` shows
+every number.
+
 Holds are released with a note and never deleted. A user named by a hold
 can therefore not be removed (lock them instead), and an account whose owner
 is on hold cannot move to another user.

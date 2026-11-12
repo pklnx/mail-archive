@@ -49,6 +49,8 @@ type Server struct {
 	webauthn      *webauthn.WebAuthn
 	publicOrigin  string
 	passkeyBegins *auth.Rate
+	// passkeyOpen caps the passkey logins started per client and in total.
+	passkeyOpen *auth.Quota
 	// apiKeyRate limits requests per key, badKeyRate invalid keys per
 	// client address. Not the login limiter: behind a reverse proxy all
 	// clients may share an address, and a broken script must not block
@@ -161,8 +163,9 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	srv := &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner, fills: opts.Fills,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
-		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
-		apiKeyRate: auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
+		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow).WithClock(now),
+		passkeyOpen: auth.NewQuota(passkeyCeremonyTTL, passkeyOpenTotal, now),
+		apiKeyRate:  auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
 		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen,
 	}
 	if opts.Retention != nil {

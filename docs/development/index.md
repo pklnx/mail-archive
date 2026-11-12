@@ -151,6 +151,23 @@ browser; a hint of the mail fails the test at once, and no control fails it
 at the timeout. The rest of the suite keeps Playwright's default launch, in
 which this cannot be seen.
 
+`web/e2e/css-images.spec.ts` checks that images an HTML mail sets through
+CSS are never requested, also after **Load remote images**: the demo's CSS
+checks give every construct its own path on the recorder of
+`referrer.spec.ts` (`referrerOrigin`, 127.0.0.2:18183, `recorder.ts`). Its
+positive controls are a CSS background and a CSS mask that the test adds to
+the mail's document; they must arrive with the archive's origin, so an
+absence means something, and a last control is the signal for the negative
+check. It runs in the fixture's page (the headless shell) and in a context
+of the full Chromium with default launch arguments (no persistent profile).
+The CSS check mail holds no SVG or MathML, so it is also the positive
+control that an ordinary HTML mail still loads remote images. A second
+mail, with SVG and MathML (presentation attributes, an SVG `<image>`, SVG `<style>` the
+server's rewrite cannot read as the browser does, and the x/net/html parser
+divergences found in review), must get a CSP without remote images,
+issue no request, and show the web UI's hint that remote images stay
+blocked.
+
 One spec also runs in Playwright's WebKit until
 [#398](https://github.com/pklnx/mail-archive/issues/398) runs the suite there:
 `web/e2e/frame-links.spec.ts`, which checks that no link in an HTML mail leads

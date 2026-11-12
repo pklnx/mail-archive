@@ -419,7 +419,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 		ff.SourceUIDValidity, ff.LastUID = status.UIDValidity, 0
 	}
 	var headers []fillHeader
-	if err := imapsync.ListHeaders(conn, ff.LastUID, func(h imapsync.Header) error {
+	if err := imapsync.ListHeaders(conn, ff.LastUID, 0, func(h imapsync.Header) error {
 		headers = append(headers, newFillHeader(h))
 		return ctx.Err()
 	}); err != nil {

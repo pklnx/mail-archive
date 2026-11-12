@@ -202,6 +202,7 @@ func purgeFromRow(r db.GetAccountPurgeRow) *AccountPurge {
 // PurgeKept counts the messages a purge keeps by where else they are.
 type PurgeKept struct {
 	Owner    string // empty: no owner
+	OwnerID  *int64 // nil: no owner
 	Account  string
 	Messages int64
 }
@@ -219,7 +220,10 @@ type PurgePreview struct {
 	DeletedBytes int64
 	Kept         int64
 	KeptIn       []PurgeKept
-	Blockers     PurgeBlockers
+	// KeptOutsideOwner of Kept are in no other account of the account's
+	// owner, only in accounts of other owners or of none.
+	KeptOutsideOwner int64
+	Blockers         PurgeBlockers
 	// Open is this account's open purge, if there is one.
 	Open *AccountPurge
 }
@@ -262,7 +266,10 @@ func purgePreview(ctx context.Context, q *db.Queries, r db.Account, syncing bool
 		return nil, err
 	}
 	for _, k := range kept {
-		p.KeptIn = append(p.KeptIn, PurgeKept{Owner: k.Owner, Account: k.Account, Messages: k.Messages})
+		p.KeptIn = append(p.KeptIn, PurgeKept{Owner: k.Owner, OwnerID: k.OwnerID, Account: k.Account, Messages: k.Messages})
+	}
+	if p.KeptOutsideOwner, err = q.PurgeKeptOutsideOwner(ctx, r.ID); err != nil {
+		return nil, err
 	}
 	b := &p.Blockers
 	b.NotRemoved = r.RemovedAt == nil

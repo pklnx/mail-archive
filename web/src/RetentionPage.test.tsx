@@ -52,6 +52,16 @@ describe("holdScope", () => {
   it("shows the matches once matched", () => {
     expect(holdScope(hold({ filter: { q: "x" }, matchedAt: "2026-10-01T00:00:00Z", matched: 3 }))).toContain(t.holdMatched(3));
   });
+  it("shows no count for a hold that is not on the admin's own accounts", () => {
+    const s = holdScope(hold({ user: "alice", filter: { q: "x" }, matchedAt: "2026-10-01T00:00:00Z", matched: null }));
+    expect(s).toContain(`x (${t.holdMatchedHidden})`);
+    expect(s).not.toMatch(/\d+ matched|null/);
+  });
+  it("says that to: matches no envelope recipients, in English and German", () => {
+    expect(t.holdFilterHint).toContain("to: matches To and Cc only, never envelope (BCC) recipients.");
+    expect(messagesFor("de").holdFilterHint).toContain("to: findet nur An und Cc, nie Empfänger aus dem Umschlag (BCC).");
+    expect(messagesFor("de").holdMatchedHidden).toBe("abgeglichen; die Anzahl steht nur bei eigenen Konten");
+  });
 });
 
 describe("accountLabel", () => {

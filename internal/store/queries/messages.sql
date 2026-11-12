@@ -54,3 +54,17 @@ SELECT count(DISTINCT l.message_sha256) FROM message_locations l
 JOIN folders f ON f.id = l.folder_id
 JOIN accounts a ON a.id = f.account_id
 WHERE a.owner_id = $1;
+
+-- name: AccountHeldMessages :many
+-- Hashes of a batch that the account of the folder holds already, in any
+-- of its folders (gone locations included). Driven from the account's
+-- folders: one probe of message_locations_folder_sha_idx per folder and
+-- hash, so the cost does not depend on how many other accounts hold the
+-- same bytes.
+SELECT DISTINCT l.message_sha256::text AS sha256
+FROM folders f
+JOIN LATERAL (
+    SELECT ml.message_sha256 FROM message_locations ml
+    WHERE ml.folder_id = f.id AND ml.message_sha256 = ANY (@shas::bpchar[])
+) l ON true
+WHERE f.account_id = (SELECT a.account_id FROM folders a WHERE a.id = @folder_id);

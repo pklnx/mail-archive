@@ -95,6 +95,16 @@ func (sc Scope) Only(id int64) Scope {
 	return sc.filter(func(a ScopeAccount) bool { return a.ID == id })
 }
 
+// WithoutEnvelopes returns the scope without the viewer's smtp envelopes:
+// a to: filter then matches the To and Cc headers only. Legal hold
+// filters use it, so a hold never searches envelope (BCC)
+// recipients, which differ per account while the message is the same.
+func (sc Scope) WithoutEnvelopes() Scope {
+	out := sc
+	out.envelopes = []int64{}
+	return out
+}
+
 // OwnAccount narrows the scope to the viewer's own account of this name;
 // empty if there is none. A shared account of the same name is left out.
 func (sc Scope) OwnAccount(name string) Scope {

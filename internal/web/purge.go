@@ -59,14 +59,19 @@ type purgeStateJSON struct {
 }
 
 type purgePreviewJSON struct {
-	Account      string          `json:"account"`
-	Kind         string          `json:"kind"`
-	Locations    int64           `json:"locations"`
-	Messages     int64           `json:"messages"`
-	Deleted      int64           `json:"deleted"`
-	DeletedBytes int64           `json:"deletedBytes"`
-	Kept         int64           `json:"kept"`
-	KeptIn       []purgeKeptJSON `json:"keptIn"`
+	Account      string `json:"account"`
+	Kind         string `json:"kind"`
+	Locations    int64  `json:"locations"`
+	Messages     int64  `json:"messages"`
+	Deleted      int64  `json:"deleted"`
+	DeletedBytes int64  `json:"deletedBytes"`
+	Kept         int64  `json:"kept"`
+	// KeptIn lists the caller's own other accounts that keep copies;
+	// accounts the caller does not own are never named.
+	KeptIn []purgeKeptJSON `json:"keptIn"`
+	// KeptByOthers of Kept are in none of the caller's other accounts,
+	// only in accounts the caller does not own.
+	KeptByOthers int64 `json:"keptByOthers"`
 	// Grace is MAIL_ARCHIVE_RETENTION_FILE_GRACE ("168h0m0s"): how long
 	// the files of deleted messages are kept.
 	Grace    string            `json:"grace"`
@@ -102,7 +107,7 @@ func (s *Server) handlePurgePreview(w http.ResponseWriter, r *http.Request) {
 	b := &p.Blockers
 	out := purgePreviewJSON{
 		Account: a.Name, Kind: string(a.Kind), Locations: p.Locations, Messages: p.Messages, Deleted: p.Deleted,
-		DeletedBytes: p.DeletedBytes, Kept: p.Kept, KeptIn: []purgeKeptJSON{},
+		DeletedBytes: p.DeletedBytes, Kept: p.Kept, KeptIn: []purgeKeptJSON{}, KeptByOthers: p.KeptOutsideOwner,
 		Blockers: purgeBlockersJSON{
 			NotRemoved: b.NotRemoved, Syncing: b.Syncing, PurgeOpen: b.OpenPurge != nil,
 			Rules: []purgeRuleJSON{}, Holds: []purgeHoldJSON{}, Messages: b.Messages(a.Name),
@@ -114,7 +119,13 @@ func (s *Server) handlePurgePreview(w http.ResponseWriter, r *http.Request) {
 	if out.Blockers.Messages == nil {
 		out.Blockers.Messages = []string{}
 	}
+	// pathPurgeAccount admits only the caller's own accounts, so the
+	// account's owner is the caller.
+	caller := userID(r)
 	for _, k := range p.KeptIn {
+		if k.OwnerID == nil || *k.OwnerID != caller {
+			continue
+		}
 		out.KeptIn = append(out.KeptIn, purgeKeptJSON{Owner: k.Owner, Account: k.Account, Messages: k.Messages})
 	}
 	for _, rule := range b.Rules {

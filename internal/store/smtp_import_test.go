@@ -101,7 +101,7 @@ func TestSaveJournalImportBatch(t *testing.T) {
 	metas := []store.MessageMeta{receivedMeta(3), receivedMeta(1), receivedMeta(2), receivedMeta(3)}
 	locs := []store.Location{{InternalDate: date, Flags: []string{`\Seen`}}, {}, {UID: 1}, {}}
 	res, present, err := st.SaveJournalImportBatch(ctx, folderID, imp.ID, metas, locs)
-	if err != nil || res.New != 2 || res.Skipped != 0 || present != 2 {
+	if err != nil || res.Added != 2 || res.Skipped != 0 || present != 2 {
 		t.Fatalf("batch %+v, present %d, %v", res, present, err)
 	}
 	type row struct {
@@ -167,7 +167,7 @@ func TestSaveJournalImportBatch(t *testing.T) {
 
 	// Again: everything is there.
 	res, present, err = st.SaveJournalImportBatch(ctx, folderID, imp.ID, metas, locs)
-	if err != nil || res.New != 0 || present != 4 || len(rows()) != 4 {
+	if err != nil || res.Added != 0 || present != 4 || len(rows()) != 4 {
 		t.Fatalf("again %+v, present %d, %v", res, present, err)
 	}
 
@@ -188,7 +188,7 @@ func TestSaveJournalImportBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, present, err = st.SaveJournalImportBatch(ctx, folderID, imp.ID, []store.MessageMeta{deleted}, []store.Location{{InternalDate: sent}})
-	if err != nil || res.Skipped != 1 || res.New != 0 || present != 0 || len(rows()) != 4 {
+	if err != nil || res.Skipped != 1 || res.Added != 0 || present != 0 || len(rows()) != 4 {
 		t.Fatalf("deleted by retention %+v, present %d, %v", res, present, err)
 	}
 }
