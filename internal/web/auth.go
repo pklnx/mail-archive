@@ -563,7 +563,9 @@ func (s *Server) verifyDummy(ctx context.Context, password string) {
 }
 
 type retryJSON struct {
-	Error      string `json:"error"`
+	Error string `json:"error"`
+	// Code is set for a refused IMAP login check (errTooManyChecks).
+	Code       string `json:"code,omitempty"`
 	RetryAfter int    `json:"retryAfter"` // seconds
 }
 

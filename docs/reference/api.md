@@ -338,6 +338,19 @@ nothing, so a value stored before `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` was raised
 can be sent back. A change needs no login check and applies at the next
 minute's check of the schedule.
 
+### Login checks
+
+A login check connects to the IMAP server and lists its folders: adding an
+account, a `PATCH` with a new connection or password, `server-folders`, and
+a fill's folders, start, switch-on and resume. A failed check answers `422`
+(`server-folders`: `502`) with a fixed English `error` and a `code` naming
+the category: `imap_connect`, `imap_tls`, `imap_login`, `imap_timeout` (also
+when the check's minute runs out), `imap_server`, `imap_protocol` or
+`imap_limit` (also when the check reads more than its limit). The server's
+own text is only in the server log. Checks are limited
+([Security](./security#login-checks)); a refused check answers `429` with
+`Retry-After`, `retryAfter` and `code: too_many_checks`, before it connects.
+
 ### Shared accounts
 
 An owner can let another user read an account: search, read and download its

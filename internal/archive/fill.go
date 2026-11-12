@@ -317,10 +317,9 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 		stuck bool
 	)
 	end := func(status string, cause error) (*store.Fill, error) {
-		text := ""
-		if cause != nil {
-			text = cause.Error()
-		}
+		// Shown in the web UI and sent in alerts: an IMAP error's own text
+		// goes only to the log.
+		text := DescribeError(cause)
 		finish := f.Store.FinishFill
 		if stuck && status == store.FillPartial {
 			finish = f.Store.FinishFillUnhealthy
@@ -333,10 +332,15 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 		if gerr != nil {
 			return nil, gerr
 		}
+		// The raw error, with the server's own text, goes to the log only.
+		attrs := []any{"status", got.Status}
+		if cause != nil {
+			attrs = append(attrs, "err", cause)
+		}
 		if got.Recurring() && got.Status != store.FillCancelled {
-			log.Info("fill run ended", "status", got.Status)
+			log.Info("fill run ended", attrs...)
 		} else {
-			log.Info("fill ended", "status", got.Status)
+			log.Info("fill ended", attrs...)
 		}
 		return got, nil
 	}
@@ -499,7 +503,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	defer func() {
 		// Keep the folder's error for the report; the progress so far stays.
 		if err != nil && !errors.Is(err, errFillCancelled) && ctx.Err() == nil {
-			ff.Error = err.Error()
+			ff.Error = DescribeError(err)
 			if uerr := f.Store.UpdateFillFolder(context.WithoutCancel(ctx), ff); uerr != nil {
 				log.Error("record the folder's error", "err", uerr)
 			}

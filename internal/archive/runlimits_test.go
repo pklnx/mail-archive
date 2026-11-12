@@ -627,7 +627,7 @@ func TestRunnerSilentServer(t *testing.T) {
 		t.Fatalf("order %v", order)
 	}
 	runs, _ := f.store.LastRuns(f.ctx)
-	if runs[a.ID].Status != "failed" || !strings.Contains(runs[a.ID].Error, "during LIST; raise "+config.EnvIMAPIdleTimeout) {
+	if runs[a.ID].Status != "failed" || runs[a.ID].Error != "the IMAP server did not answer in time (during LIST); raise "+config.EnvIMAPIdleTimeout {
 		t.Errorf("silent account: %+v", runs[a.ID])
 	}
 	if runs[b.ID].Status != "ok" || runs[b.ID].MessagesNew != 1 {

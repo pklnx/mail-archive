@@ -57,6 +57,8 @@ type Server struct {
 	// everyone's password logins.
 	apiKeyRate *auth.Rate
 	badKeyRate *auth.Rate
+	// checks limits the IMAP login checks (loginCheck).
+	checks *loginChecks
 	// alertAfter failed syncs in a row make an account failing.
 	alertAfter  int
 	healthCache syncHealthCache
@@ -166,6 +168,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow).WithClock(now),
 		passkeyOpen: auth.NewQuota(passkeyCeremonyTTL, passkeyOpenTotal, now),
 		apiKeyRate:  auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
+		checks:     newLoginChecks(),
 		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen,
 	}
 	if opts.Retention != nil {

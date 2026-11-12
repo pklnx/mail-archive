@@ -5,8 +5,7 @@ import { DangerModal } from "./DangerModal";
 import { canKeepRunning, cutoffFromInput, fillIntervalOptions, fillStatus, resumable, stoppable } from "./fill";
 import { formatCount, longDate } from "./format";
 import { t } from "./i18n";
-
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+import { errorMessage } from "./imapText";
 
 /**
  * The fill part of an smtp account's card: its recurring fills and its
@@ -48,7 +47,7 @@ function FillBlock({ account: a, fill: f, data, manage, onChanged }: { account: 
     } catch (err) {
       const question = folderQuestion(err);
       if (question) setConfirm(question);
-      else setError(t.failed(errorText(err)));
+      else setError(t.failed(errorMessage(err)));
     }
     setBusy(false);
     onChanged();
@@ -238,7 +237,7 @@ export function FillForm({ account, data, onCancel, onStarted }: { account: Acco
       setSuggested(list.suggestedExclusions);
       setFolders(list.folders.map((f) => ({ ...f, selected: !list.suggestedExclusions.includes(f.name) })));
     } catch (err) {
-      setError(errorText(err));
+      setError(errorMessage(err));
     }
     setBusy(false);
   };
@@ -262,7 +261,7 @@ export function FillForm({ account, data, onCancel, onStarted }: { account: Acco
       onStarted();
     } catch (err) {
       const question = folderQuestion(err);
-      setError(question ? t.fillTrashSpam(question.join(", ")) : errorText(err));
+      setError(question ? t.fillTrashSpam(question.join(", ")) : errorMessage(err));
       setBusy(false);
     }
   };

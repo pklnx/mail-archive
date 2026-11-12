@@ -39,8 +39,11 @@ lead back.
 | Username, password | Usually the full email address. Gmail and iCloud need an app password. |
 
 The server logs in before it saves anything; if the login fails, the form
-shows the server's error and nothing is stored. After saving, the first sync
-starts right away.
+says why (the server cannot be reached, the TLS connection failed, the
+login was refused, no answer in time, …) and nothing is stored. The IMAP
+server's own message is in the server log. Too many checks in a short time
+are refused for a while; see [Login checks](../reference/security#login-checks).
+After saving, the first sync starts right away.
 
 **Command line** (operator):
 

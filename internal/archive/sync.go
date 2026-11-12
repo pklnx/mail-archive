@@ -194,8 +194,10 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		run.Status = status
 		run.MessagesFetched, run.MessagesNew = res.Fetched, res.New
 		run.Reconcile = res.Reconcile
+		// The stored text is shown in the web UI and sent in alerts: an
+		// IMAP error's own text goes only to the log.
 		if res.Err != nil {
-			run.Error = res.Err.Error()
+			run.Error = DescribeError(res.Err)
 		}
 		// A run cancelled by a shutdown says nothing about the account. A
 		// folder stuck behind a large message is a failure: the account is

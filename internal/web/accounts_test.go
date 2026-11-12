@@ -218,7 +218,7 @@ func TestCreateAccountAndSync(t *testing.T) {
 
 	// The login is checked before anything is saved.
 	body := f.do("POST", "/api/accounts", f.newAccount("private", "alice", "wrong"), http.StatusUnprocessableEntity)
-	if !strings.Contains(string(body), "login failed") {
+	if !strings.Contains(string(body), `"code":"imap_login"`) {
 		t.Errorf("wrong password: %s", body)
 	}
 	if n := len(f.accounts().Accounts); n != 0 {

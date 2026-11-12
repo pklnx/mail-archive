@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -670,9 +672,11 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusConflict, fmt.Sprintf("an account named %q already exists (removed accounts keep their name)", a.Name), nil)
 		return
 	}
-	folders, err := s.syncer.CheckLogin(r.Context(), a, *in.Password)
-	if err != nil {
-		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+	var folders []imapsync.Folder
+	if !s.loginCheck(w, r, a, false, http.StatusUnprocessableEntity, func(ctx context.Context) (err error) {
+		folders, err = s.syncer.CheckLogin(ctx, a, *in.Password)
+		return err
+	}) {
 		return
 	}
 	// Trash and spam are archived like any folder, but only after the user
@@ -822,7 +826,6 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusConflict, store.ErrNoServer.Error(), nil)
 		return
 	}
-	ctx := r.Context()
 	own, err := s.ownIntervalChange(&in, a.SyncInterval)
 	if err != nil {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
@@ -855,8 +858,10 @@ func (s *Server) handleUpdateAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			password = pw
 		}
-		if _, err := s.syncer.CheckLogin(ctx, &conn, password); err != nil {
-			s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+		if !s.loginCheck(w, r, &conn, false, http.StatusUnprocessableEntity, func(ctx context.Context) error {
+			_, err := s.syncer.CheckLogin(ctx, &conn, password)
+			return err
+		}) {
 			return
 		}
 		enc, err := archive.SealPassword(s.syncer.Sealer, a.ID, password)
@@ -947,9 +952,14 @@ func (s *Server) handleServerFolders(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	list, err := s.syncer.ListFolders(r.Context(), a)
-	if err != nil {
-		s.fail(w, r, http.StatusBadGateway, "cannot list folders: "+err.Error(), nil)
+	// With the saved password, which the request cannot choose: the check
+	// does not count against the IMAP login, so that nobody can block
+	// another user's folder list. Failing upstream, it answers 502.
+	var list []imapsync.Folder
+	if !s.loginCheck(w, r, a, true, http.StatusBadGateway, func(ctx context.Context) (err error) {
+		list, err = s.syncer.ListFolders(ctx, a)
+		return err
+	}) {
 		return
 	}
 	out := make([]serverFolderJSON, 0, len(list))
