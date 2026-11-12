@@ -200,7 +200,9 @@ Docker Compose publishes the web UI on `127.0.0.1`, so only this computer can
 reach it. To use it from your home network or a VPN:
 
 1. **Use HTTPS.** Without it, passwords and session cookies cross the network
-   in plain text. Put a reverse proxy or `tailscale serve` in front. The
+   in plain text, and the browser's protection against HTML mail is weaker
+   (see [Plain LAN access](#plain-lan-access)). Put a reverse proxy or
+   `tailscale serve` in front. The
    server learns that the browser used HTTPS from the proxy's
    `X-Forwarded-Proto: https`, then sets the session cookie as
    `__Host-mail_archive_session` with `Secure` and sends
@@ -310,6 +312,27 @@ believed; list only the proxy, and only if all access goes through it. See
 the network who can read the traffic can take over a session. Use this only
 in a network you fully trust. Browsers offer passkeys only over HTTPS or on
 `localhost`, so they do not work this way.
+
+Browsers also send the Fetch Metadata headers (`Sec-Fetch-*`) only over HTTPS
+and to `localhost` (`127.0.0.1`, `::1`). Over plain HTTP on any other address
+(a LAN or VPN address) the server's guard against requests from HTML mail
+([HTML mail](#html-mail)) therefore does nothing, in every browser. After
+**Load remote images**, an image in a mail that points at the archive's own
+address then reaches the API with your session, in every browser. In
+Chromium, which sends the session cookie because the navigation began in the
+mail frame, a link in a mail to an external page that redirects back to the
+archive can also open a mail's HTML (also with its remote images loaded), its
+`.eml` or an attachment in a new tab. A page of another service under the
+same host name (on another port) or the same domain counts as the same site:
+its images and links to the archive carry your session too. Nobody can read
+the answers and nothing can be changed, but these requests leave audit
+entries in your name, some open IMAP connections, and a mail opened with its
+remote images tells its sender that it was opened. The other browser
+protections still hold over plain HTTP: the `Host` check, the `Origin` check
+on changes, the `SameSite=Strict` session cookie, the mail frame's sandbox
+and CSP, the server's link rewrite and, in Chromium, the web UI's link
+blocker. HTTPS, as above, or `http://localhost` on the computer itself
+restores the guard.
 
 ## The SMTP server
 
@@ -430,8 +453,9 @@ IMAP connections. These layers stop them:
   `GET /api/messages/{id}/html`, `…/raw`, `…/parts/{n}` and
   `/api/openapi.json`. A navigation to these routes is refused too when the
   browser marks it as coming from another site (`Sec-Fetch-Site`
-  `cross-site` or `same-site`). Requests without these headers (scripts,
-  API clients) are not affected.
+  `cross-site` or `same-site`). Requests without these headers (scripts, API
+  clients, and browsers over plain HTTP on any address other than
+  `localhost`, see [Plain LAN access](#plain-lan-access)) are not affected.
 - The server takes every link into the app out of the HTML before it serves
   it. Every `href` and `xlink:href` attribute, on every element, keeps its
   value only if the markup spells out, without character references, an
@@ -536,8 +560,9 @@ What remains:
   website can. The server refuses navigations to the routes above that the
   browser marks as coming from another site (`Sec-Fetch-Site` `cross-site`
   or `same-site`), so a link in a mail that redirects back to the archive
-  cannot open them, in every browser with Fetch Metadata (Chromium,
-  Firefox, Safari 16.4 and later); Chromium would send the session cookie
+  cannot open them, in every browser with Fetch Metadata (Chromium, Firefox,
+  Safari 16.4 and later) when you open the archive over HTTPS or on
+  `localhost`; Chromium would send the session cookie
   along, because the navigation began in the mail frame. Opening such an
   address directly (typed, a bookmark, the app's own links) still works.
 - A link or redirect can still open the web UI itself (`/`, for example
@@ -545,9 +570,16 @@ What remains:
   the usual `message.open` and `message.html` entries in your name, as with
   any website that links to the archive; the sender has to know the stored
   message's SHA-256.
-- Browsers without Fetch Metadata (Safari before 16.4) do not send the
-  headers, so the server cannot tell these requests apart: there, after
-  **Load remote images**, an image in the mail can make such requests.
+- Browsers send the Fetch Metadata headers only over HTTPS and to `localhost`
+  (`127.0.0.1`, `::1`); browsers without Fetch Metadata (Safari before 16.4)
+  send none. Without the headers the server cannot tell these requests apart.
+  Over [plain LAN access](#plain-lan-access) (plain HTTP on any address other
+  than `localhost`), after **Load remote images** an image in the mail can
+  make such requests in every browser, and in Chromium a link in a mail that
+  redirects back to the archive can open the routes above, with remote images
+  loaded. In Safari before 16.4, after **Load remote images**, an image in
+  the mail can make such requests over HTTPS too. Nobody can read the
+  answers; they leave audit entries in your name.
 - For a mail without inline SVG or MathML, whether its CSS can load an
   image is decided by the server's HTML parser and CSS tokenizer, which
   read such mail as Chromium does today, and by its list of CSS functions
@@ -561,7 +593,8 @@ What remains:
   it would run with the app's origin.
 
 What holds per engine: in Chromium and WebKit, the sandbox, the CSP, the
-Fetch Metadata guard (Safari 16.4 and later) and the server's link rewrite;
+Fetch Metadata guard (over HTTPS or on `localhost` only; Safari 16.4 and
+later) and the server's link rewrite;
 in Chromium also the web UI's blocker and `inert` gate. In WebKit, a link
 that would open in the frame itself leaves the frame on the mail instead of
 showing an error page. Measured in Playwright's Chromium and Linux WebKit
