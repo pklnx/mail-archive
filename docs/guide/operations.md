@@ -896,7 +896,7 @@ login first. Besides the minute and the read limit above:
 |---|---|---|
 | Checks per user | 20 in 10 minutes | `429` with `Retry-After`; no connection is made. |
 | Checks per client address (IPv6: per `/64`) | 60 in 10 minutes | As above. |
-| Failed logins per IMAP server, port and user name | 10 in 10 minutes, whoever makes them; every failure after the login was sent counts. The folder list of a saved account does not count. | As above, until the 10 minutes have passed. |
+| Failed logins per IMAP server, port and user name | 10 in 10 minutes, whoever makes them; every failure after the login was sent counts. The folder list of a saved account does not count. Kept per spelling: case, a trailing dot and the forms of one IP address count as one, but a DNS alias or another address of the same server counts separately (the limits per user and per address still apply). | As above, until the 10 minutes have passed. |
 | Checks at a time | 2 in all, 1 per user | A check waits for its turn up to 15 seconds, then `429` with `Retry-After: 15`. |
 
 These limits are fixed: the server keeps them in memory, and a restart
@@ -906,11 +906,13 @@ resets them.
 
 Errors from an IMAP server or the network are shown, stored and sent in
 [alerts](#monitoring-and-alerts) as a fixed sentence of their category,
-after the folder they occurred in. The server's own answer and the
-network's error text, which can name addresses and certificates, go only to
-the server log (`docker compose logs web`, the lines `sync failed`,
-`folder sync failed`, `fill of a folder failed`, `fill ended`,
-`fill run ended` and `imap login check failed`).
+after the folder they occurred in. The folder name comes from the server,
+so a hostile server can still put text into a run error and an alert
+through it. The server's own answer and the network's error text, which can
+name addresses and certificates, go only to the server log
+(`docker compose logs web`, the lines `sync failed`, `folder sync failed`,
+`fill of a folder failed`, `fill ended`, `fill run ended` and
+`imap login check failed`).
 
 | Category | Sentence | Code of a login check |
 |---|---|---|

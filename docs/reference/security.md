@@ -633,7 +633,12 @@ limited before they connect; a refused check answers `429` with
   someone else's mailbox. Every check that fails after the login was sent
   counts, also when the server drops the connection instead of answering.
   The folder list of a saved account, which uses its saved password, does
-  not count, so nobody can block another user's folder list;
+  not count, so nobody can block another user's folder list. The limit is
+  kept per spelling of the host, port and user name: case, a trailing dot
+  and the ways of writing one IP address count as one, but another name for
+  the same server (a DNS alias, `localhost` for `127.0.0.1`, another address
+  of the provider) or a user-name alias the server accepts gets its own 10
+  failures. The limits per user and per address still apply to all of them;
 - 2 checks at a time in all and 1 per user; a check waits for its turn at
   most 15 seconds (`Retry-After: 15`).
 
@@ -643,7 +648,9 @@ failed check answers with a fixed sentence and a code naming its category
 (`imap_connect`, `imap_tls`, `imap_login`, `imap_timeout`, `imap_server`,
 `imap_protocol`, `imap_limit`). The IMAP server's own answer and the
 network's error text (addresses, certificate names) go only to the server
-log, never to the user, the web UI or alerts.
+log, never to the user, the web UI or alerts. Folder names, which the IMAP
+server chooses (up to 1,024 bytes), still appear in stored run errors and
+alerts, so a hostile server can put text there through a folder name.
 
 ## Health endpoints and alerts
 

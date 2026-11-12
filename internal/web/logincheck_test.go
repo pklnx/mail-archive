@@ -15,9 +15,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/imaptest"
+	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // Tests of the limits and answers of IMAP login checks. Dials are counted
@@ -449,4 +452,113 @@ func TestServerFoldersFailureCode(t *testing.T) {
 	if strings.Contains(r.raw, upstreamText) {
 		t.Errorf("answer %s", r.raw)
 	}
+}
+
+// Every other route with a login check goes through the limits and
+// answers the category: a connection change of an account, and a fill's
+// folders, start, switch-on and resume. With a refused login each answers
+// 422 imap_login without the server's text; once the user's limit is used
+// up, each answers 429 without connecting.
+func TestLoginCheckRoutes(t *testing.T) {
+	f, journal := fillFixture(t)
+	ctx := context.Background()
+	tester, err := f.st.GetUserByName(ctx, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An IMAP account, disabled so that no sync runs.
+	work := &store.Account{Name: "work", Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", OwnerID: &tester.ID}
+	if err := f.st.CreateAccountSealed(ctx, work, func(id int64) ([]byte, error) {
+		return archive.SealPassword(f.server.syncer.Sealer, id, "secret")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A fill that failed (its saved password is wrong): it can be resumed
+	// and switched on.
+	cutoff := time.Now()
+	fill := &store.Fill{AccountID: journal.ID, Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", CreatedBy: &tester.ID, Cutoff: &cutoff}
+	if err := f.st.CreateFill(ctx, fill, func(id int64) ([]byte, error) {
+		return archive.SealFillPassword(f.server.syncer.Sealer, id, "wrong")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.waitFill("journal", store.FillFailed)
+
+	fills := "/api/accounts/journal/fills"
+	routes := []struct {
+		name, method, path string
+		body               map[string]any
+	}{
+		{"account connection", "PATCH", "/api/accounts/work", map[string]any{"port": f.port, "password": "pw"}},
+		{"fill folders", "POST", fills + "/folders", f.fillBody("pw")},
+		{"fill start", "POST", fills, f.fillBody("pw")},
+		{"fill switch-on", "PATCH", fmt.Sprintf("%s/%d", fills, fill.ID), map[string]any{"keepRunning": true, "password": "pw"}},
+		{"fill resume", "POST", fmt.Sprintf("%s/%d/resume", fills, fill.ID), map[string]any{"password": "pw"}},
+	}
+	dials := dialStub(f, refusedLogin)
+	for _, rt := range routes {
+		t.Run("failed/"+rt.name, func(t *testing.T) {
+			before := dials.Load()
+			r := f.check("", rt.method, rt.path, rt.body)
+			wantFailed(t, r, http.StatusUnprocessableEntity, "imap_login")
+			if r.Error != "the IMAP server refused the login" || strings.Contains(r.raw, upstreamText) {
+				t.Errorf("answer %s", r.raw)
+			}
+			if n := dials.Load() - before; n != 1 {
+				t.Errorf("%d dials, want 1", n)
+			}
+		})
+	}
+
+	// Use up the user's limit with other checks.
+	for i := 0; ; i++ {
+		if i > loginCheckUserLimit {
+			t.Fatal("the user's limit never refused a check")
+		}
+		if r := f.addAccount("", "imap.example", 993, fmt.Sprintf("user%d", i), "pw"); r.status == http.StatusTooManyRequests {
+			break
+		}
+	}
+	before := dials.Load()
+	for _, rt := range routes {
+		t.Run("refused/"+rt.name, func(t *testing.T) {
+			wantRefused(t, f.check("", rt.method, rt.path, rt.body), 0)
+		})
+	}
+	if n := dials.Load(); n != before {
+		t.Errorf("%d dials after the limit, want none", n-before)
+	}
+}
+
+// A check that panics gives back its place in the IMAP login's limit and
+// its turn: all 10 failures stay allowed afterwards. A place still held
+// would make the 10th wait, and with every wait ended at once, be refused.
+func TestLoginCheckPanicReleases(t *testing.T) {
+	f := newManageFixture(t)
+	w := recordWaits(f)
+	var panicked atomic.Bool
+	f.server.syncer.Dial = func(_ context.Context, cfg imapsync.Config) (*imapsync.Conn, error) {
+		if panicked.CompareAndSwap(false, true) {
+			panic("dial broke")
+		}
+		return nil, refusedLogin(cfg)
+	}
+	f.server.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	b, _ := json.Marshal(map[string]any{"name": "new", "host": "imap.example", "port": 993, "tls": "none", "username": "victim", "password": "pw"})
+	req, _ := http.NewRequest("POST", f.srv.URL+"/api/accounts", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", f.srv.URL)
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		_ = resp.Body.Close() // the server drops the connection of a panic
+	}
+	if !panicked.Load() {
+		t.Fatal("the check did not run")
+	}
+	w.mu.Lock()
+	w.expired = true
+	w.mu.Unlock()
+	for range loginCheckTargetLimit {
+		wantFailed(t, f.addAccount("", "imap.example", 993, "victim", "pw"), http.StatusUnprocessableEntity, "imap_login")
+	}
+	wantRefused(t, f.addAccount("", "imap.example", 993, "victim", "pw"), 0)
 }

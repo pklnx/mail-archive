@@ -178,6 +178,8 @@ func (s *Server) loginCheck(w http.ResponseWriter, r *http.Request, a *store.Acc
 			s.refuseCheck(w, r, wait, "imap login")
 			return false
 		}
+		// Also if the check panics; after Fail or Release it does nothing.
+		defer attempt.Release()
 	}
 	if err := c.acquire(wctx, user); err != nil {
 		attempt.Release()
