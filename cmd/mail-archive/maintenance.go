@@ -401,7 +401,9 @@ the database container and writes DIR on the host.`,
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := openApp(cmd.Context())
+			// A schema that does not match is only a warning: the backup
+			// before an upgrade must work (#396).
+			a, err := openAppSchemaWarn(cmd.Context())
 			if err != nil {
 				return err
 			}

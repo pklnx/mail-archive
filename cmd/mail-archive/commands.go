@@ -33,8 +33,15 @@ type app struct {
 }
 
 // openApp opens the database for a command. It refuses while the database
-// needs a one-time index rebuild (see checkIndexRebuild).
-func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, true) }
+// needs a one-time index rebuild (see checkIndexRebuild), and while its
+// schema does not match this binary: migrations pending, or a newer
+// version migrated it (exit code 4, #396).
+func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, openNormal) }
+
+// openAppSchemaWarn is openApp for `backup` and `status`: a schema that does
+// not match is only a warning, so that the backup before an upgrade and a
+// look at the instance still work.
+func openAppSchemaWarn(ctx context.Context) (*app, error) { return openAppChecked(ctx, openSchemaWarn) }
 
 // openAppForMigrate opens the database without the index rebuild check and
 // without touching it, for `migrate` and `migrate down` (which take the
@@ -43,27 +50,65 @@ func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, tru
 // connections let the server end a statement soon after the command was
 // killed (store.ForMigrations).
 func openAppForMigrate(ctx context.Context) (*app, error) {
-	return openAppChecked(ctx, false, store.ForMigrations())
+	return openAppChecked(ctx, openForMigrate, store.ForMigrations())
 }
 
-func openAppChecked(ctx context.Context, normal bool, opts ...store.Option) (*app, error) {
+// openMode says which checks openAppChecked runs.
+type openMode int
+
+const (
+	// openNormal: the index rebuild check, the schema check, which
+	// refuses, and the audit log partitions.
+	openNormal openMode = iota
+	// openSchemaWarn: the same, but the schema check only warns.
+	openSchemaWarn
+	// openForMigrate: none of them.
+	openForMigrate
+)
+
+func openAppChecked(ctx context.Context, mode openMode, opts ...store.Option) (*app, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
+	return openAppConfig(ctx, cfg, mode, opts...)
+}
+
+// openAppConfig is openAppChecked with the configuration already loaded.
+func openAppConfig(ctx context.Context, cfg *config.Config, mode openMode, opts ...store.Option) (*app, error) {
 	st, err := store.Open(ctx, cfg.DatabaseURL, opts...)
 	if err != nil {
 		return nil, err
 	}
-	if normal {
+	if mode != openForMigrate {
 		// Before anything else touches the database.
 		if err := checkIndexRebuild(ctx, st); err != nil {
+			st.Close()
+			return nil, err
+		}
+		if err := checkSchema(ctx, st, mode); err != nil {
 			st.Close()
 			return nil, err
 		}
 		ensureAuditPartitions(ctx, st)
 	}
 	return &app{cfg: cfg, store: st}, nil
+}
+
+// checkSchema refuses (openNormal) or warns (openSchemaWarn) when the
+// database's schema does not match this binary (#396, step 4). It does
+// not wait for a running migrate.
+func checkSchema(ctx context.Context, st *store.Store, mode openMode) error {
+	state, err := st.SchemaState(ctx)
+	if err != nil {
+		return err
+	}
+	err = schemaError(state, false)
+	if err != nil && mode == openSchemaWarn {
+		fmt.Fprintln(os.Stderr, "warning:", err)
+		return nil
+	}
+	return err
 }
 
 // checkIndexRebuild refuses while the database was created by the
@@ -103,37 +148,12 @@ func newMigrateCmd() *cobra.Command {
 			return err
 		}
 		defer unlock()
-		// The index rebuild first, before anything writes; Migrate checks
-		// again and finds nothing left to do.
-		if _, err := a.store.RebuildIndexesIfNeeded(cmd.Context(), func(c store.CollationState) {
-			fmt.Println(indexRebuildNotice(c))
-		}); err != nil {
-			return err
-		}
-		ensureAuditPartitions(cmd.Context(), a.store)
-		applied, err := a.store.Migrate(cmd.Context())
-		if err != nil {
-			return err
-		}
-		if len(applied) == 0 {
-			fmt.Println("database schema is up to date")
-		}
-		for _, m := range applied {
-			fmt.Println("applied", m)
-		}
-		if pending, err := a.store.HasUnindexed(cmd.Context()); err == nil && pending {
-			fmt.Println("some messages are not fully searchable yet: run `reindex` once")
-		}
-		if sealer, err := a.cfg.Sealer(); err == nil {
-			n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer)
-			if err != nil {
-				return err
-			}
-			if n > 0 {
-				fmt.Printf("stored passwords of %d account(s) bound to the account ID\n", n)
-			}
-		}
-		return nil
+		// The same sequence as serve and worker at start; unlike them,
+		// migrate also runs a migration again that failed before
+		// (the failure record), and clears the record when it passes.
+		return applyMigrations(cmd.Context(), a.store, a.cfg, func(line string) {
+			fmt.Fprintln(cmd.OutOrStdout(), line)
+		})
 	}
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -982,10 +1002,27 @@ network.
 
 With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 (journaling from a mail server) from the networks in
-` + config.EnvSMTPAllowedNetworks + `.`,
+` + config.EnvSMTPAllowedNetworks + `.
+
+At start it takes the migration lock, waiting while a migrate or another
+start holds it. With ` + config.EnvMigrateOnStart + `=on it then applies pending
+migrations as migrate does; it refuses to start (exit code 4) while
+migrations are pending or a newer version migrated the database. A
+migration that fails ends it with exit code 3. See docs/guide/operations.md,
+"Upgrades".`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			log := newLogger(cfg.LogLevel)
+			// The migration lock, start-up migrations and the schema check
+			// (#396), before anything of this process uses the database.
+			if err := prepareInstance(cmd.Context(), cfg, log, "serve"); err != nil {
+				return err
+			}
+			a, err := openAppConfig(cmd.Context(), cfg, openNormal)
 			if err != nil {
 				return err
 			}
@@ -995,7 +1032,6 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				return err
 			}
 			defer ar.Close()
-			log := newLogger(a.cfg.LogLevel)
 			opts := web.Options{
 				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
 				AlertAfterFailures: a.cfg.AlertAfterFailures, TrustedProxies: a.cfg.TrustedProxies,
@@ -1227,7 +1263,7 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 "disable" with its progress and the command that finishes it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			a, err := openAppSchemaWarn(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -1310,6 +1346,10 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 			}
 			fmt.Println(line)
 			if line, err = atRestStatus(cmd.Context(), a); err != nil {
+				return err
+			}
+			fmt.Println(line)
+			if line, err = schemaStatus(cmd.Context(), a.store); err != nil {
 				return err
 			}
 			fmt.Println(line)

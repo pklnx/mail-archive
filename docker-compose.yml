@@ -44,7 +44,9 @@ services:
   # Web server (UI and JSON API, login required). Reachable from this machine
   # only unless WEB_BIND is set; see docs/reference/security.md.
   # Start or update with: ./ma migrate && docker compose up -d web
-  # (docker compose up -d web worker with the worker profile on).
+  # (docker compose up -d web worker with the worker profile on). With
+  # MAIL_ARCHIVE_MIGRATE_ON_START=on (the default here) web and worker also
+  # apply pending migrations themselves when they start.
   web:
     build:
       context: .
@@ -72,6 +74,10 @@ services:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      # Apply pending database migrations at start, under the same lock as
+      # ./ma migrate; off: refuse to start while migrations are pending.
+      # Back up before an upgrade. See docs/guide/operations.md, "Upgrades".
+      MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-on}
       MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}
       # Reverse proxies whose X-Forwarded-For names the client (audit log,
       # login limits). Empty: the direct peer counts.
@@ -158,6 +164,8 @@ services:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      # As for web: whichever starts first migrates, the other waits.
+      MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-on}
       MAIL_ARCHIVE_JOB_WORKERS: ${WORKER_JOB_WORKERS:-1}
       # Go's heap limit: mem_limit minus 128 MiB of WebAssembly memory per worker
       # (outside the Go heap) minus 64 MiB of headroom. See operations.md.
