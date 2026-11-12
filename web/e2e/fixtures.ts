@@ -285,21 +285,6 @@ export const test = base.extend<{ guards: Guards }>({
           ),
         );
       });
-      // CHECK #398 (temporary, reverted in the next push): does the
-      // ResizeObserver loop also happen in Chromium, where Playwright does
-      // not report it? Counts the window's error events with that message.
-      let roLoops = 0;
-      context.on("console", (msg) => {
-        if (msg.text() === "ro-loop-check") roLoops++;
-      });
-      await context.addInitScript(() => {
-        window.addEventListener("error", (e) => {
-          if (typeof e.message === "string" && e.message.startsWith("ResizeObserver loop")) console.info("ro-loop-check");
-        });
-      });
-      const reportLoops = () => {
-        if (roLoops > 0) console.log(`[ro-loop-check ${browserName}] ${testInfo.titlePath.slice(1).join(" › ")}: ${roLoops}`);
-      };
       context.on("weberror", (err) => {
         if (browserName === "webkit" && isResizeObserverLoop(err.error())) return;
         problems.push(`page error: ${err.error().stack ?? err.error().message}`);
@@ -310,7 +295,6 @@ export const test = base.extend<{ guards: Guards }>({
         takeProblems: () => problems.splice(0),
         frameLog: () => formatFrameEvents(frameEvents),
       });
-      reportLoops();
       // Fewer than expected: a declared error that went missing. More were
       // reported one by one as they came.
       for (const e of expected) if (e.seen < e.count) problems.push(`expected console error ${e.text} ${e.count}×, saw ${e.seen}`);
