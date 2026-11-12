@@ -2,7 +2,7 @@ module github.com/pklnx/mail-archive
 
 go 1.26.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
@@ -18,7 +18,7 @@ require (
 	github.com/tetratelabs/wazero v1.12.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.org/x/text v0.43.0

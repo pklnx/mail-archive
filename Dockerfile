@@ -23,7 +23,7 @@ RUN pnpm build
 # could silently build with an older patch release. The check below fails the
 # image build on a mismatch. It covers image builds only, not host builds
 # (`make build`, scripts that run `go build` on the host).
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
