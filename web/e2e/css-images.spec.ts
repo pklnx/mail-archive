@@ -25,8 +25,9 @@ import { recorder } from "./recorder";
 // through contentDocument (no script runs in the frame) must arrive with
 // the origin. A last control, added after them, is the signal for the
 // negative check: once it is issued, nothing the mail asked for is still
-// to come. The check runs in the fixture's page (the headless shell, as in
-// CI) and in Playwright's full Chromium, with default launch arguments.
+// to come. The check runs in the fixture's page (the project's browser: the
+// headless shell in the chromium project, WebKit in the webkit project) and
+// in Playwright's full Chromium, with default launch arguments.
 
 /** The /css-* requests that the browser issued, in order; also those the CSP then blocks. */
 function issuedCSS(context: BrowserContext) {
@@ -98,7 +99,7 @@ async function leaks(requests: Request[], headers: (path: string) => Record<stri
 const refusedHint = "Remote images stay blocked for this message";
 
 /** The zoetrope check in page: after "Load remote images", only the controls load. */
-async function checkCSSImages(page: Page, context: BrowserContext) {
+async function checkCSSImages(page: Page, context: BrowserContext, browserName: string) {
   const server = await recorder(context);
   const requests = issuedCSS(context);
   try {
@@ -114,7 +115,11 @@ async function checkCSSImages(page: Page, context: BrowserContext) {
     const mask = server.requested("/css-control-mask");
     await addToMail(page, `background-image:url(${referrerOrigin}/css-control-bg)`);
     await addToMail(page, `mask-image:url(${referrerOrigin}/css-control-mask)`);
-    expect((await bg).referer, "Referer of the control background").toBe(`${origin}/`);
+    // Engine fact (#398, first WebKit run): WebKit honours the frame's
+    // Referrer-Policy: no-referrer for CSS images and sends no Referer;
+    // Chromium sends the origin whatever the policy. The request itself is
+    // the control in both.
+    expect((await bg).referer, "Referer of the control background").toBe(browserName === "webkit" ? undefined : `${origin}/`);
     expect((await mask).origin, "Origin of the control mask").toBe(origin);
     expect(await leaks(requests, server.headers), "the mail's CSS images, checked after the controls").toEqual([]);
 
@@ -130,17 +135,19 @@ async function checkCSSImages(page: Page, context: BrowserContext) {
   }
 }
 
-test("CSS images in a mail stay unloaded after Load remote images (headless shell)", async ({ page, context }) => {
-  await checkCSSImages(page, context);
+test("CSS images in a mail stay unloaded after Load remote images (the project's browser)", async ({ page, context, browserName }) => {
+  await checkCSSImages(page, context, browserName);
 });
 
-test("CSS images in a mail stay unloaded after Load remote images (full Chromium)", async () => {
+// It launches its own Chromium whatever the project's browser, so it runs in
+// the chromium project only (@chromium-launch, #398).
+test("CSS images in a mail stay unloaded after Load remote images (full Chromium)", { tag: "@chromium-launch" }, async () => {
   // The full Chromium that `playwright install chromium` brings, as in
   // hints.spec.ts, but with default arguments and the admin session.
   const browser = await chromium.launch({ channel: "chromium", executablePath: process.env.CHROMIUM_PATH || undefined });
   try {
     const context = await browser.newContext({ baseURL: origin, storageState: adminState, locale: "en-US", timezoneId: "Europe/Berlin" });
-    await checkCSSImages(await context.newPage(), context);
+    await checkCSSImages(await context.newPage(), context, "chromium");
   } finally {
     await browser.close();
   }

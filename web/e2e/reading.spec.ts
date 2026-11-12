@@ -7,7 +7,9 @@ import { conversationToggle, frameOf, mailReady, openLong } from "./mailFrame";
 // sandboxed with the same origin and without scripts, and the app sizes it
 // to its document. The demo's offsite conversation (work / INBOX, six
 // messages) has a long HTML mail as its 4th message; its subject wraps on
-// a phone. Chromium only: the iPhone is its viewport and touch, not WebKit.
+// a phone. The iPhone is its viewport and touch: in the chromium project on
+// Chromium, in the webkit project on Playwright's WebKit (#398), which is
+// the Linux port, not iOS.
 
 const { defaultBrowserType: _pixel, ...pixel7 } = devices["Pixel 7"];
 const { defaultBrowserType: _iphone, ...iphone13 } = devices["iPhone 13"];
@@ -320,7 +322,7 @@ for (const size of sizes) {
       await fitted(page);
     });
 
-    test("a wheel over the frame moves the message, and a link in the mail works on the first click", async ({ page, context }) => {
+    test("a wheel over the frame moves the message, and a link in the mail works on the first click", async ({ page, context, browserName, isMobile }) => {
       await addToMail(page, `<p><a href="https://links.example/agenda">Agenda</a></p>`, "start");
       await context.route("https://links.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<p>agenda</p>" }));
       await openLong(page);
@@ -329,12 +331,16 @@ for (const size of sizes) {
       const frameScroll = () => frame.evaluate((f: HTMLIFrameElement) => f.contentWindow!.scrollY);
 
       // The wheel over the mail at scroll 0 moves the pane or page; the
-      // frame's document has nothing to scroll.
-      const box = (await frame.boundingBox())!;
-      await page.mouse.move(box.x + 20, box.y + 60);
-      await page.mouse.wheel(0, 200);
-      await expect.poll(() => scrollTop(page, phone)).toBeGreaterThan(0);
-      expect(await frameScroll()).toBe(0);
+      // frame's document has nothing to scroll. Playwright limitation (#398):
+      // "Mouse wheel is not supported in mobile WebKit", so the phones in the
+      // webkit project check only the link below.
+      if (!(browserName === "webkit" && isMobile)) {
+        const box = (await frame.boundingBox())!;
+        await page.mouse.move(box.x + 20, box.y + 60);
+        await page.mouse.wheel(0, 200);
+        await expect.poll(() => scrollTop(page, phone)).toBeGreaterThan(0);
+        expect(await frameScroll()).toBe(0);
+      }
 
       // At scroll 0 a pointer on the link reaches the frame, and the click
       // opens the link in a new tab right away.
@@ -350,7 +356,7 @@ for (const size of sizes) {
       expect(await frame.evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
     });
 
-    test("the frame fits again after a resize or rotation and in the dark theme; the next message starts at the top", async ({ page }) => {
+    test("the frame fits again after a resize or rotation and in the dark theme; the next message starts at the top", async ({ page, browserName }) => {
       await openLong(page);
       const before = await fitted(page);
       const vp = page.viewportSize()!;
@@ -368,7 +374,12 @@ for (const size of sizes) {
       await expect(page.locator(".cds--g100 .message__html")).toBeAttached();
       await expect.poll(() => frameOf(page).evaluate((f) => f.clientWidth)).toBeLessThan(light);
       const dark = await fitted(page);
-      expect(await frameOf(page).evaluate((f) => f.style.blockSize)).toBe(`${dark.frame + 2}px`);
+      const blockSize = await frameOf(page).evaluate((f) => f.style.blockSize);
+      // Engine fact (#398, first WebKit run): at a fractional device pixel
+      // ratio (the Pixel 7's 2.625) WebKit reads the length back snapped to
+      // device pixels (5425.52381px for 5426px).
+      if (browserName === "webkit") expect(Math.abs(parseFloat(blockSize) - (dark.frame + 2))).toBeLessThan(1);
+      else expect(blockSize).toBe(`${dark.frame + 2}px`);
 
       // j opens the next message in the list (the 3rd of the conversation,
       // a short HTML mail) at its top, in a frame as short as the mail.
@@ -439,7 +450,13 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect((await fitted(page)).frame - before.frame).toBeLessThanOrEqual(320);
   });
 
-  test("links into the app are blocked in the frame, other links open", async ({ page, context }) => {
+  // The four "links into the app are blocked" tests add their links after
+  // the server (addToMail), so the server's link rewrite never sees them:
+  // they test the web UI's own blocker in frameFit.ts. WebKit does not run
+  // the listeners the parent adds to the sandboxed frame (#459), so these
+  // tests are Chromium only (@chromium-layer, #398). frame-links.spec.ts
+  // tests the server's rewrite in both engines.
+  test("links into the app are blocked in the frame, other links open", { tag: "@chromium-layer" }, async ({ page, context }) => {
     await addToMail(
       page,
       `<p><a href="/api/status" target="_self">Status here</a> <a href="/api/status">Status tab</a> <a href="/api/messages?q=x">Search</a> ` +
@@ -477,7 +494,7 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(await frameOf(page).evaluate((f: HTMLIFrameElement) => new URL(f.contentDocument!.URL).pathname)).toMatch(/\/html$/);
   });
 
-  test("links into the app are blocked before the frame's load", async ({ page, context }) => {
+  test("links into the app are blocked before the frame's load", { tag: "@chromium-layer" }, async ({ page, context }) => {
     // A remote image that does not answer holds the frame's load (after
     // Load remote images). The frame is inert until the link blocker is on
     // the mail's document, and the blocker is installed as soon as that
@@ -542,7 +559,7 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(appRequests).toEqual([]);
   });
 
-  test("links into the app are blocked when the frame shows a mail again", async ({ page, context, guards }) => {
+  test("links into the app are blocked when the frame shows a mail again", { tag: "@chromium-layer" }, async ({ page, context, guards }) => {
     // #265: a link that opens in the frame itself takes the frame away from
     // the mail; the app's CSP (frame-src 'self') refuses the external page,
     // so the frame shows the browser's error page. Back shows the mail's
@@ -634,7 +651,7 @@ test.describe("the frame's sandbox and the API guard", () => {
     expect(appRequests).toEqual([]);
   });
 
-  test("links through SVG <use> are blocked", async ({ page, context }) => {
+  test("links through SVG <use> are blocked", { tag: "@chromium-layer" }, async ({ page, context }) => {
     // use clones the link it references into a user-agent shadow tree that
     // the event's path does not show. One link without a target (it would
     // navigate the mail frame itself) and one with target=_blank; clicks and

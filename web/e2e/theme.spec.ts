@@ -3,7 +3,7 @@
 // focus and tertiary colours (the five tokens v0.1.0 turned Purple, because
 // its light block also matched :root).
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { documentAnimationsDone, expect, test } from "./fixtures";
 
 const purple = "rgb(138, 63, 252)"; // Purple 60, #8a3ffc
 
@@ -158,11 +158,18 @@ async function bothSchemes(page: Page, selector: string, what: string) {
   await page.getByRole("main").getByRole("heading", { level: 1 }).hover();
   await page.emulateMedia({ colorScheme: "light" });
   await expect(html).toHaveClass(/(^|\s)cds--white(\s|$)/);
+  // The switch starts transitions: Carbon's text input fades its
+  // background-color over 70 ms, and prefers-reduced-motion does not stop
+  // it. Colours read before they end are in between (#398: WebKit read the
+  // Connection form's inputs at luminance 0.69 and 0.64). So the colours
+  // are read once the document's transitions have finished.
+  await documentAnimationsDone(page);
   const light = await readColours(page, selector, "light");
   expect(light.read.backgrounds, `${what}: elements read`).toBeGreaterThan(0);
   expect(light.backgrounds, `${what}: light backgrounds in light mode`).toEqual([]);
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(html).toHaveClass(/(^|\s)cds--g100(\s|$)/);
+  await documentAnimationsDone(page);
   const dark = await readColours(page, selector, "dark");
   expect(dark.read.texts, `${what}: texts read`).toBeGreaterThan(0);
   expect(dark.backgrounds, `${what}: dark backgrounds in dark mode`).toEqual([]);

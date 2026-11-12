@@ -39,11 +39,22 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
     text: new RegExp(`^Loading the image '${remote}' violates the following Content Security Policy directive: "img-src [^"]*"\\. The action has been blocked\\.\\s*$`),
     url: mailFrame,
   },
+  // WebKit's wording (Playwright's WebKit 27.2, #398). WebKit logs it with an
+  // empty location, in the mail frame and on an app page alike, so the URL
+  // cannot limit it to the frame here. An app page still fails: the guards'
+  // securitypolicyviolation listener runs in the app's documents (it cannot
+  // run in the sandboxed frame, which has no allow-scripts) and reports the
+  // same refusal as "CSP violation: img-src …" (guards.spec.ts checks this).
+  {
+    text: new RegExp(`^Refused to load ${remote} because it does not appear in the img-src directive of the Content Security Policy\\.$`),
+    url: new RegExp(`^(${message}/html(\\?[^#]*)?)?$`),
+  },
   // The mail's own <script>, which the sandbox (no allow-scripts) blocks and
   // the browser logs, e.g. in "no script runs in the mail". Playwright's DOM
   // snapshotter used to add to these in every frame, and for a frame that had
   // committed about:blank; the config records traces without DOM snapshots
-  // now, so it does not (#260). Nothing here covers about:blank.
+  // now, so it does not (#260). Nothing here covers about:blank. WebKit's
+  // wording is the same (#459).
   {
     text: new RegExp(`^Blocked script execution in '${message}/html[^']*' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\\.$`),
     url: /.*/, // reported with or without the frame's URL
@@ -52,6 +63,29 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
 
 export function fromMailFrame(url: string, text: string): boolean {
   return mailFrameErrors.some((e) => e.text.test(text) && e.url.test(url));
+}
+
+// WebKit's own console line for a style it refuses under the CSP, for a
+// style attribute and a <style> element alike, located at the page. In
+// WebKit the guards accept it by its words (#398): the guards' own
+// securitypolicyviolation listener reports every such refusal in an app
+// document, with its directive, except WebKit's own <select> style below.
+const webkitStyleRefused = "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.";
+
+/** Whether a console error is WebKit's own line for a refused style, which the guards accept in WebKit only. */
+export function fromWebKitStyleRefusal(text: string): boolean {
+  return text === webkitStyleRefused;
+}
+
+// The page error WebKit reports when a ResizeObserver callback resizes what
+// it observes again within one frame (the spec's loop limit; no Error
+// object). The web UI's frame fit does that (frameFit.ts); a follow-up
+// defers the fit. Accepted in WebKit only and only with exactly this text.
+const resizeObserverLoop = "ResizeObserver loop completed with undelivered notifications.";
+
+/** Whether a page error is the ResizeObserver loop limit, which the guards accept in WebKit only. */
+export function isResizeObserverLoop(error: { message: string; stack?: string }): boolean {
+  return error.message === resizeObserverLoop && !error.stack;
 }
 
 /** A frame as the diagnostics record it. A frame whose URL is empty (a
@@ -144,7 +178,7 @@ export interface Guards {
 
 export const test = base.extend<{ guards: Guards }>({
   guards: [
-    async ({ context }, use, testInfo) => {
+    async ({ context, browserName }, use, testInfo) => {
       const problems: string[] = [];
       const frameEvents: FrameEvent[] = [];
       const record = (kind: FrameEvent["kind"], f: Frame) => {
@@ -189,15 +223,56 @@ export const test = base.extend<{ guards: Guards }>({
       );
       // The browser logs CSP violations too; the listener also catches the
       // ones of report-only policies and names the directive.
-      await context.addInitScript(() => {
+      //
+      // WebKit only (#398): WebKit gives every <select>, from the parser or
+      // from script, a style attribute in its own user-agent shadow tree
+      // (text-overflow:inherit) and checks it against the page's CSP, so each
+      // select reports one style-src-attr violation of an inline style, with
+      // no sample. Its target is the select, or the document when the select
+      // was created by script and not yet inserted. Chromium reports none.
+      // The listener skips exactly that: a style-src-attr violation of an
+      // inline style without a sample whose target is a select without a
+      // style attribute of its own, or the document while a select that the
+      // page's script created has not reported yet; at most one per select.
+      // Every other violation, a style attribute on a select included, is
+      // reported. guards.spec.ts checks both.
+      await context.addInitScript((webkit: boolean) => {
+        const unreported: HTMLSelectElement[] = [];
+        const accounted = new WeakSet<HTMLSelectElement>();
+        if (webkit) {
+          const createElement = Document.prototype.createElement;
+          Document.prototype.createElement = function (this: Document, ...args: Parameters<Document["createElement"]>) {
+            const el = createElement.apply(this, args);
+            if (el instanceof HTMLSelectElement) unreported.push(el);
+            return el;
+          } as Document["createElement"];
+        }
+        const selectsOwnStyle = (e: SecurityPolicyViolationEvent) => {
+          if (!webkit || e.violatedDirective !== "style-src-attr" || e.blockedURI !== "inline" || e.sample !== "") return false;
+          const t = e.target;
+          if (t instanceof HTMLSelectElement) {
+            if (t.hasAttribute("style") || accounted.has(t)) return false;
+            accounted.add(t);
+            const i = unreported.indexOf(t);
+            if (i >= 0) unreported.splice(i, 1);
+            return true;
+          }
+          if (t === document && unreported.length > 0) {
+            accounted.add(unreported.shift()!);
+            return true;
+          }
+          return false;
+        };
         document.addEventListener("securitypolicyviolation", (e) => {
+          if (selectsOwnStyle(e)) return;
           console.error(`CSP violation: ${e.violatedDirective} blocked ${e.blockedURI || "inline"} in ${e.sourceFile || e.documentURI}`);
         });
-      });
+      }, browserName === "webkit");
       context.on("console", (msg) => {
         if (msg.type() !== "error") return;
         const { url } = msg.location();
         if (fromMailFrame(url, msg.text()) || expectedHTTPError(url, msg.text()) || expectedConsoleError(msg.text())) return;
+        if (browserName === "webkit" && fromWebKitStyleRefusal(msg.text())) return;
         problems.push(
           formatConsoleError(
             {
@@ -210,7 +285,10 @@ export const test = base.extend<{ guards: Guards }>({
           ),
         );
       });
-      context.on("weberror", (err) => problems.push(`page error: ${err.error().stack ?? err.error().message}`));
+      context.on("weberror", (err) => {
+        if (browserName === "webkit" && isResizeObserverLoop(err.error())) return;
+        problems.push(`page error: ${err.error().stack ?? err.error().message}`);
+      });
       await use({
         allowHTTPError: (path, status) => allowed.push({ path, status }),
         expectConsoleError: (text, count = 1) => void expected.push({ text, count, seen: 0 }),
@@ -269,6 +347,24 @@ export async function animationsDone(target: Locator): Promise<void> {
         .getAnimations()
         .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
         // A cancelled animation (the element removed or hidden on the way) rejects with AbortError: done as well.
+        .map((a) => a.finished.catch(() => undefined)),
+    ).then(() => undefined),
+  );
+}
+
+/**
+ * Waits until every finite animation and transition of the page's document
+ * has finished: a signal from the browser, not a delay. getAnimations()
+ * flushes pending style changes first, so a transition that a class change
+ * just started (a theme switch) is included. Repeating ones (Carbon's
+ * skeleton pulse) are left out, and a cancelled one counts as finished.
+ */
+export async function documentAnimationsDone(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
         .map((a) => a.finished.catch(() => undefined)),
     ).then(() => undefined),
   );

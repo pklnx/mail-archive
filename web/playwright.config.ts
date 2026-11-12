@@ -1,7 +1,10 @@
 // End-to-end tests of the web UI against the demo server (tools/demo):
 // made-up mail, a temporary database, no network. Run with `make web-e2e`.
-// E2E_BROWSER picks the engine: chromium (the default) runs every spec;
-// webkit runs only frame-links.spec.ts until #398 (`pnpm e2e:webkit`, #459).
+// E2E_BROWSER picks the engine: chromium (the default) or webkit
+// (`pnpm e2e:webkit`, #398). One engine per run, because the run's demo has
+// state the tests change: retention.spec.ts empties a folder, and a second
+// project against the same demo would find it empty. CI runs each engine in
+// its own job with its own demo.
 import { defineConfig, devices } from "@playwright/test";
 import { adminState } from "./e2e/global-setup";
 import { imapPort, origin, port } from "./e2e/demo";
@@ -47,12 +50,21 @@ export default defineConfig({
         }
       : {
           name: "webkit",
-          // One spec until #398 runs the suite in WebKit.
-          testMatch: /frame-links\.spec\.ts$/,
+          // Playwright's WebKit is the Linux port, not Safari. Tests it cannot
+          // run are scoped by tag, never skipped per browser (#398):
+          // @cdp uses the DevTools protocol, @chromium-layer tests the web
+          // UI's own frame blocker, which WebKit does not run (#459), and
+          // @chromium-launch launches its own Chromium. They still run in
+          // every chromium run.
+          grepInvert: /@cdp|@chromium-layer|@chromium-launch/,
           use: {
             ...devices["Desktop Safari"],
-            // No screencast frames either (#398 review): only the trace's
-            // actions, network and console.
+            // As Desktop Chrome: the engine differs, not the pixel ratio.
+            deviceScaleFactor: 1,
+            // No screencast frames either (#398 review, #343): Playwright adds
+            // an inline style to the page for each action screenshot in
+            // WebKit, which the app's CSP refuses and the guards fail on.
+            // Only the trace's actions, network and console.
             trace: { mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: false } },
           },
         },
