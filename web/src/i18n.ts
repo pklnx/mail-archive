@@ -212,7 +212,7 @@ const en = {
   resumeFillHint: "The password is asked for again: it was deleted when the import stopped.",
   fieldCutoff: "Cut-off (optional)",
   cutoffHint:
-    "Mail the mailbox received before this time is imported, except messages already received over SMTP (same Message-ID). Empty: now. Mail from an hour after it on is left to journaling.",
+    "Mail the mailbox received before this time is imported, except messages already received over SMTP (same Message-ID, date, sender and subject). Empty: now. Mail from an hour after it on is left to journaling.",
   cutoffGap: "Mail that arrives after an earlier cut-off while journaling is not set up yet is in neither place.",
   firstReceived: (when: string, subject: string) => `First message received over SMTP: ${when}, “${subject}”`,
   noneReceived: "No message received over SMTP yet.",
@@ -449,6 +449,7 @@ const en = {
   twoFactorRecoveryCode: "Recovery code",
   invalidTwoFactor: "The authentication code is invalid or has already been used.",
   twoFactorExpired: "The login took too long. Log in again.",
+  twoFactorTooManyCodes: "Too many wrong codes. Log in again.",
   twoFactorStateOn: "On",
   twoFactorStateOff: "Off",
   twoFactorQR: "QR code for your authenticator app",
@@ -899,7 +900,7 @@ const de: Messages = {
   resumeFillHint: "Das Passwort wird erneut abgefragt: Es wurde gelöscht, als der Import endete.",
   fieldCutoff: "Stichtag (optional)",
   cutoffHint:
-    "Mails, die das Postfach vor diesem Zeitpunkt empfangen hat, werden importiert, außer Nachrichten, die schon per SMTP kamen (gleiche Message-ID). Leer: jetzt. Mails ab einer Stunde danach bleiben dem Journaling überlassen.",
+    "Mails, die das Postfach vor diesem Zeitpunkt empfangen hat, werden importiert, außer Nachrichten, die schon per SMTP kamen (gleiche Message-ID, gleiches Datum, gleicher Absender und gleicher Betreff). Leer: jetzt. Mails ab einer Stunde danach bleiben dem Journaling überlassen.",
   cutoffGap: "Mails, die nach einem früheren Stichtag ankommen, solange Journaling noch nicht eingerichtet ist, landen nirgends.",
   firstReceived: (when, subject) => `Erste per SMTP empfangene Nachricht: ${when}, „${subject}“`,
   noneReceived: "Noch keine Nachricht per SMTP empfangen.",
@@ -1133,6 +1134,7 @@ const de: Messages = {
   twoFactorRecoveryCode: "Wiederherstellungscode",
   invalidTwoFactor: "Der Bestätigungscode ist ungültig oder wurde bereits verwendet.",
   twoFactorExpired: "Die Anmeldung hat zu lange gedauert. Melde dich erneut an.",
+  twoFactorTooManyCodes: "Zu viele falsche Codes. Melde dich erneut an.",
   twoFactorStateOn: "Aktiv",
   twoFactorStateOff: "Nicht aktiv",
   twoFactorQR: "QR-Code für deine Authenticator-App",

@@ -167,6 +167,31 @@ describe("login", () => {
     expect(password().value).toBe("");
   });
 
+  it("returns to the password step after too many wrong codes", async () => {
+    serve({
+      "GET /api/session": [noSession],
+      "POST /api/session": [{ status: 200, body: { twoFactorRequired: true, challenge: "ch-1" } }],
+      "POST /api/session/2fa": [
+        { status: 401, body: { error: "invalid two-factor code" } },
+        { status: 401, body: { error: "too many wrong codes; the login has expired, log in again" } },
+      ],
+    });
+    renderGate();
+    await logIn("kim", "kim-password");
+    const code = (await screen.findByLabelText(t.twoFactorCode)) as HTMLInputElement;
+    fireEvent.change(code, { target: { value: "111111" } });
+    fireEvent.click(screen.getByRole("button", { name: t.logIn }));
+    await waitFor(() => expect(alertText()).toContain(t.invalidTwoFactor));
+
+    fireEvent.change(code, { target: { value: "222222" } });
+    fireEvent.click(screen.getByRole("button", { name: t.logIn }));
+    await waitFor(() => expect(alertText()).toContain(t.twoFactorTooManyCodes));
+    expect(alertText()).not.toContain(t.twoFactorExpired);
+    expect(screen.getByLabelText(t.userName)).toBeTruthy();
+    expect(screen.queryByLabelText(t.twoFactorCode)).toBeNull();
+    expect(password().value).toBe("");
+  });
+
   it("explains how to create the first admin", async () => {
     serve({ "GET /api/session": [{ status: 401, body: { error: "setup required", setupRequired: true } }] });
     renderGate();

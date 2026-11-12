@@ -3,9 +3,7 @@ package web
 import (
 	"context"
 	"errors"
-	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -449,16 +447,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := auth.NormalizeUserName(in.Username)
-	addr := s.clientAddr(r)
-	if wait := s.limiter.Blocked(name, addr); wait > 0 {
-		secs := int(math.Ceil(wait.Seconds()))
-		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed logins; try again later", RetryAfter: secs})
+	a := s.beginAttempt(w, r, name, "too many failed logins; try again later")
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	if len(in.Password) > auth.MaxPasswordLength {
 		// No stored password is that long; skip the hashing work.
-		s.limiter.Fail(name, addr)
+		a.Fail()
 		s.auditUnknownLogin(r, name, reasonWrongPassword)
 		s.fail(w, r, http.StatusUnauthorized, errWrongLogin, nil)
 		return
@@ -467,22 +463,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	u, err := s.store.GetUserByName(ctx, name)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.Release()
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	ok, rehash := false, false
 	if u == nil {
-		s.hasher.VerifyDummy(ctx, in.Password)
+		s.verifyDummy(ctx, in.Password)
 	} else {
-		ok, rehash, err = s.hasher.Verify(ctx, u.PasswordHash, in.Password)
+		ok, rehash, err = s.verifyPassword(ctx, u.PasswordHash, in.Password)
 		if err != nil {
+			a.Release()
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
 	}
 	if !ok {
-		s.limiter.Fail(name, addr)
-		s.log.Info("login failed", "user", name, "addr", s.clientIP(r))
+		a.Fail()
+		// The name field may hold anything, also a password typed into
+		// it: only a valid user name goes into the log.
+		if auth.ValidateUserName(name) == nil {
+			s.log.Info("login failed", "user", name, "addr", s.clientIP(r))
+		} else {
+			s.log.Info("login failed", "user_valid", false, "addr", s.clientIP(r))
+		}
 		if u == nil {
 			s.auditUnknownLogin(r, name, reasonUnknownUser)
 		} else {
@@ -492,6 +496,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u.LockedAt != nil {
+		a.Release()
 		s.auditLoginFailed(r, "password", reasonLocked, u)
 		s.fail(w, r, http.StatusForbidden, "this user is locked", nil)
 		return
@@ -508,10 +513,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// With 2FA on (required or voluntary), the password is only the first
 	// step: the limiter is reset after the second one.
 	if u.TwoFactorEnabled {
+		a.Release()
 		s.startTwoFactorLogin(w, r, u)
 		return
 	}
-	s.limiter.Succeed(name)
+	a.Succeed()
 	// A fresh token on every login: a token planted before the login is
 	// never promoted to a valid session.
 	s.deleteOldSessions(r)
@@ -538,6 +544,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("login", "user", u.Name, "addr", s.clientIP(r))
 	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
 	s.writeJSON(w, http.StatusOK, body)
+}
+
+// verifyPassword is s.hasher.Verify with the test hook beforeVerify.
+func (s *Server) verifyPassword(ctx context.Context, stored, password string) (ok, rehash bool, err error) {
+	if s.beforeVerify != nil {
+		s.beforeVerify()
+	}
+	return s.hasher.Verify(ctx, stored, password)
+}
+
+// verifyDummy is s.hasher.VerifyDummy with the test hook beforeVerify.
+func (s *Server) verifyDummy(ctx context.Context, password string) {
+	if s.beforeVerify != nil {
+		s.beforeVerify()
+	}
+	s.hasher.VerifyDummy(ctx, password)
 }
 
 type retryJSON struct {

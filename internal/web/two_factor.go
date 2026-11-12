@@ -27,6 +27,12 @@ const twoFactorChallengeTTL = 5 * time.Minute
 
 const errInvalidSecondFactor = "invalid two-factor code"
 
+// errTwoFactorExhausted answers a login challenge without attempts left
+// (store.MaxTwoFactorAttempts). It contains "expired", as the answer to an
+// expired challenge does, so that clients that only look for that word
+// also return to the password step.
+const errTwoFactorExhausted = "too many wrong codes; the login has expired, log in again"
+
 // twoFactorRequired reports whether the user must use 2FA: admins and
 // auditors (#393) always.
 func (s *Server) twoFactorRequired(admin, auditor bool) bool {
@@ -53,18 +59,39 @@ func (s *Server) twoFactorReady(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// blocked answers 429 if failed attempts for name or the client address are
-// over the limit.
-func (s *Server) blocked(w http.ResponseWriter, r *http.Request, name string) bool {
-	wait := s.limiter.Blocked(name, s.clientAddr(r))
-	if wait <= 0 {
+// beginAttempt reserves a login attempt for name and the client address
+// (auth.Limiter.Begin), after the request body was read. If the attempt is
+// refused it answers the request, or leaves it unanswered when the client
+// went away, and returns nil. The caller ends the attempt before it answers
+// and defers Release as a safety net.
+func (s *Server) beginAttempt(w http.ResponseWriter, r *http.Request, name, blockedMsg string) *auth.Attempt {
+	a, wait, err := s.limiter.Begin(r.Context(), name, s.clientAddr(r))
+	if s.attemptRefused(w, r, wait, err, blockedMsg) {
+		return nil
+	}
+	return a
+}
+
+// attemptRefused answers a refused Begin of the limiter or a rate: 429 for
+// a block or a wait that took too long, nothing when the client is gone.
+func (s *Server) attemptRefused(w http.ResponseWriter, r *http.Request, wait time.Duration, err error, blockedMsg string) bool {
+	switch {
+	case errors.Is(err, auth.ErrBusy):
+		s.log.Warn("too many attempts in flight", "addr", s.clientIP(r), "waited", auth.MaxWait)
+		wait = auth.MaxWait
+	case err != nil:
+		// The request's context ended while it waited: the client is gone.
+		return true
+	case wait <= 0:
 		return false
 	}
-	secs := int(math.Ceil(wait.Seconds()))
+	secs := max(1, int(math.Ceil(wait.Seconds())))
 	w.Header().Set("Retry-After", strconv.Itoa(secs))
-	s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: "too many failed attempts; try again later", RetryAfter: secs})
+	s.writeJSON(w, http.StatusTooManyRequests, retryJSON{Error: blockedMsg, RetryAfter: secs})
 	return true
 }
+
+const errTooManyAttempts = "too many failed attempts; try again later"
 
 type twoFactorJSON struct {
 	Enabled      bool `json:"enabled"`
@@ -143,20 +170,25 @@ func (s *Server) handleConfirmTwoFactor(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sess := currentSession(r)
-	if s.blocked(w, r, sess.UserName) {
+	a := s.beginAttempt(w, r, sess.UserName, errTooManyAttempts)
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	codes, err := auth.GenerateRecoveryCodes()
 	if err != nil {
+		a.Release()
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	err = s.store.ConfirmTwoFactorSetup(withAudit(r, s.selfEntry(r, "profile.2fa_enable")), sess.UserID, auth.NormalizeTOTPCode(in.Code), s.now(), s.sealer, codes, s.secretKey)
 	if errors.Is(err, store.ErrTwoFactorInvalid) {
-		s.limiter.Fail(sess.UserName, s.clientAddr(r))
+		a.Fail()
 		s.fail(w, r, http.StatusUnauthorized, errInvalidSecondFactor, nil)
 		return
 	}
+	// A correct code does not reset the name's failures, as before.
+	a.Release()
 	if err != nil {
 		s.failStore(w, r, err)
 		return
@@ -203,12 +235,14 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	addr := s.clientAddr(r)
-	if s.blocked(w, r, u.Name) {
+	a := s.beginAttempt(w, r, u.Name, errTooManyAttempts)
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	token, hash, err := auth.NewSessionToken()
 	if err != nil {
+		a.Release()
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
@@ -216,9 +250,23 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	e.Detail("method", "2fa")
 	user, err := s.store.CompleteTwoFactorLogin(withAudit(r, e), in.Challenge, auth.NormalizeTOTPCode(in.Code), s.now(),
 		s.sealer, s.secretKey, hash, s.now().Add(auth.MaxSessionAge), truncateUserAgent(r.UserAgent()))
+	if errors.Is(err, store.ErrTwoFactorInvalid) {
+		a.Fail()
+	} else if err != nil {
+		a.Release()
+	}
 	switch {
+	case errors.Is(err, store.ErrTwoFactorExhausted):
+		// Only the wrong code that used the last attempt was checked and
+		// counts (a.Fail above); a request that found no attempt left
+		// checked nothing and released its attempt.
+		if errors.Is(err, store.ErrTwoFactorInvalid) {
+			s.log.Info("login failed: second factor", "user", u.Name, "addr", s.clientIP(r))
+			s.auditLoginFailed(r, "2fa", reasonSecondFactor, u)
+		}
+		s.fail(w, r, http.StatusUnauthorized, errTwoFactorExhausted, nil)
+		return
 	case errors.Is(err, store.ErrTwoFactorInvalid):
-		s.limiter.Fail(u.Name, addr)
 		s.log.Info("login failed: second factor", "user", u.Name, "addr", s.clientIP(r))
 		s.auditLoginFailed(r, "2fa", reasonSecondFactor, u)
 		s.fail(w, r, http.StatusUnauthorized, errInvalidSecondFactor, nil)
@@ -234,11 +282,12 @@ func (s *Server) handleTwoFactorLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := s.loginBody(r.Context(), user, hash, true)
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return
 	}
 	// Only now is the login complete.
-	s.limiter.Succeed(u.Name)
+	a.Succeed()
 	s.log.Info("login", "user", user.Name, "addr", s.clientIP(r), "2fa", true)
 	s.setSessionCookie(w, r, token, auth.MaxSessionAge)
 	s.writeJSON(w, http.StatusOK, body)
@@ -259,17 +308,20 @@ func truncateUserAgent(ua string) string {
 	return ua[:cut]
 }
 
-// verifyOwnSecondFactor checks a code of the logged-in user with the login
-// limits and returns the 2FA version it was checked against.
-func (s *Server) verifyOwnSecondFactor(w http.ResponseWriter, r *http.Request, code string) (int64, bool) {
+// verifyOwnSecondFactor checks a code of the logged-in user within the
+// caller's login attempt a and returns the 2FA version it was checked
+// against. A wrong code fails a; on every refusal a has ended and the
+// request is answered.
+func (s *Server) verifyOwnSecondFactor(w http.ResponseWriter, r *http.Request, a *auth.Attempt, code string) (int64, bool) {
 	sess := currentSession(r)
 	version, err := s.store.VerifyTwoFactorCode(r.Context(), sess.UserID, auth.NormalizeTOTPCode(code), s.now(), s.sealer, s.secretKey)
 	if errors.Is(err, store.ErrTwoFactorInvalid) {
-		s.limiter.Fail(sess.UserName, s.clientAddr(r))
+		a.Fail()
 		s.fail(w, r, http.StatusUnauthorized, errInvalidSecondFactor, nil)
 		return 0, false
 	}
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return 0, false
 	}
@@ -292,31 +344,36 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 	if !s.decode(w, r, &in) {
 		return
 	}
-	if s.blocked(w, r, sess.UserName) {
+	a := s.beginAttempt(w, r, sess.UserName, errTooManyAttempts)
+	if a == nil {
 		return
 	}
+	defer a.Release()
 	u, err := s.store.GetUserByID(r.Context(), sess.UserID)
 	if err != nil {
+		a.Release()
 		s.failStore(w, r, err)
 		return
 	}
 	ok := false
 	if len(in.CurrentPassword) <= auth.MaxPasswordLength {
-		if ok, _, err = s.hasher.Verify(r.Context(), u.PasswordHash, in.CurrentPassword); err != nil {
+		if ok, _, err = s.verifyPassword(r.Context(), u.PasswordHash, in.CurrentPassword); err != nil {
+			a.Release()
 			s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 			return
 		}
 	}
 	if !ok {
-		s.limiter.Fail(sess.UserName, s.clientAddr(r))
+		a.Fail()
 		s.fail(w, r, http.StatusUnauthorized, "the current password is wrong", nil)
 		return
 	}
-	version, ok := s.verifyOwnSecondFactor(w, r, in.Code)
+	version, ok := s.verifyOwnSecondFactor(w, r, a, in.Code)
 	if !ok {
 		return
 	}
 	if err := s.store.DisableOwnTwoFactor(withAudit(r, s.selfEntry(r, "profile.2fa_disable")), sess.UserID, version, auth.HashSessionToken(s.sessionToken(r))); err != nil {
+		a.Release()
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, "two-factor authentication changed meanwhile; reload and try again", nil)
 			return
@@ -324,7 +381,7 @@ func (s *Server) handleDisableTwoFactor(w http.ResponseWriter, r *http.Request) 
 		s.failStore(w, r, err)
 		return
 	}
-	s.limiter.Succeed(sess.UserName)
+	a.Succeed()
 	s.log.Info("2fa disabled", "user", sess.UserName)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -338,19 +395,23 @@ func (s *Server) handleRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		return
 	}
 	sess := currentSession(r)
-	if s.blocked(w, r, sess.UserName) {
+	a := s.beginAttempt(w, r, sess.UserName, errTooManyAttempts)
+	if a == nil {
 		return
 	}
-	version, ok := s.verifyOwnSecondFactor(w, r, in.Code)
+	defer a.Release()
+	version, ok := s.verifyOwnSecondFactor(w, r, a, in.Code)
 	if !ok {
 		return
 	}
 	codes, err := auth.GenerateRecoveryCodes()
 	if err != nil {
+		a.Release()
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	if err := s.store.ReplaceRecoveryCodes(withAudit(r, s.selfEntry(r, "profile.recovery_codes")), sess.UserID, version, codes, s.secretKey); err != nil {
+		a.Release()
 		if errors.Is(err, store.ErrConflict) {
 			s.fail(w, r, http.StatusConflict, "two-factor authentication changed meanwhile; reload and try again", nil)
 			return
@@ -358,7 +419,7 @@ func (s *Server) handleRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Re
 		s.failStore(w, r, err)
 		return
 	}
-	s.limiter.Succeed(sess.UserName)
+	a.Succeed()
 	s.writeJSON(w, http.StatusOK, recoveryCodesJSON{RecoveryCodes: codes})
 }
 

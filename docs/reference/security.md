@@ -7,7 +7,7 @@
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail (message files) | With [encryption at rest](#the-archive-key) on, every message file is stored encrypted with AES-256-GCM (`<sha256>.enc`) and written encrypted from the first byte, so no plaintext of it reaches the disk; the key is kept apart from the data. A key file on the same disk as the data protects copies and backups of the data directory, not snapshots of that disk. Without encryption at rest, plain `.eml` files, **not encrypted**: use an encrypted disk. |
 | Archived mail (database) | PostgreSQL rows **are not encrypted**, also with encryption at rest: subjects, addresses, body text, the text extracted from attachments for search, attachment names, Message-IDs, envelopes, folder names, account and user names, the audit log and legal holds. Use an encrypted disk; a hosted instance must keep PostgreSQL on an encrypted volume whose key is kept away from its snapshots. |
-| Exports and backups | `export` and `backup` write files with mode 0600 in directories with mode 0700. Exports are unencrypted, also with encryption at rest (an export is meant for a mail client: delete it once used); an export inside the data directory gets a warning while encryption at rest is on. Without encryption at rest the database dump is unencrypted; with it, `backup` encrypts the dump while `pg_dump` writes it (`*.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring wrapped under the archive keys, and refuses without the archive key. A dump opens only with a key of its time; `restore-dump` writes only authenticated data into `pg_restore`, in one transaction, so a damaged dump changes nothing. `BACKUP-NOTE.txt` names the secret key and the fingerprints of the archive keys but never contains a key, and `pg_dump` gets the database password in its environment, not on the command line. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
+| Exports and backups | `export` and `backup` write files with mode 0600 in directories with mode 0700. Exports are unencrypted, also with encryption at rest (an export is meant for a mail client: delete it once used); an export inside the data directory gets a warning while encryption at rest is on. Without encryption at rest the database dump is unencrypted; with it, `backup` encrypts the dump while `pg_dump` writes it (`*.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring wrapped under the archive keys, and refuses without the archive key. A dump opens only with a key of its time. On an archive with any sign of encryption at rest, `restore-dump` writes only authenticated data into `pg_restore` unless the operator passes `--plaintext`. On an archive that never used encryption, dumps are not authenticated: whoever can write the backup location can run SQL as the database superuser on the next restore, so protect it like the database. `restore-dump` runs `pg_restore` in one transaction, so a damaged dump changes nothing. `BACKUP-NOTE.txt` names the secret key and the fingerprints of the archive keys but never contains a key, and `pg_dump` gets the database password in its environment, not on the command line. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
 | Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
@@ -40,7 +40,7 @@ login.
   browser only gets a random token in an `HttpOnly`, `SameSite=Strict` cookie;
   the database stores its SHA-256, so a database copy contains no usable
   sessions.
-- **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes. The PDF and text downloads are made in the browser from the codes on screen; the server does not send the codes again.
+- **Two-factor authentication:** TOTP uses 6-digit RFC 6238 codes with a 30-second period and one-step clock tolerance. Administrators must have TOTP enabled and cannot disable it. A user with mandatory TOTP enabled but without setup is restricted to completing setup. TOTP challenges expire after 5 minutes, are single-use, accept at most 3 codes, and include a version check so resets win over in-flight logins. Recovery codes are shown once, are one-use, and are stored only as keyed hashes. The PDF and text downloads are made in the browser from the codes on screen; the server does not send the codes again.
 - **Passkeys** (WebAuthn) replace password and TOTP at the login. They are
   bound to the host of `MAIL_ARCHIVE_PUBLIC_URL`, so a look-alike site cannot
   use them. Every passkey login needs user verification (Face ID, Touch ID,
@@ -66,21 +66,31 @@ login.
   them. The user's own password change keeps them: scripts should not break
   on a routine change; the profile lists them for revocation. Each key may
   make 600 requests per minute; more than 30 invalid keys per client address
-  (IPv6: per `/64`) and minute answer `429`, without touching the password login limits. Keys
-  never appear in logs or in the audit log.
+  (IPv6: per `/64`) and minute answer `429`, without touching the password login limits. A key
+  request that waits more than 60 seconds for the key checks ahead of it
+  from its address also gets `429`. Keys never appear in logs or in the
+  audit log.
 - **Failed logins:** after 5 failures for a user name within 15 minutes, the
   name is blocked for 1 minute, then 2, 4, 8 and at most 15 minutes for every
   further failure. 20 failures from one address (IPv6: per `/64`) within 15
   minutes block that address for 15 minutes. Failed passkey logins count for
   the address only (IPv6: per `/64`). An IPv6 client usually gets a whole
   `/64`, so changing addresses within it does not escape the limits. Logs and
-  the audit log keep the full address.
+  the audit log keep the full address. The server log, like the audit log,
+  keeps the name of a failed login only if it is a valid user name, so a
+  password typed into the name field is not logged.
   Wrong names and wrong passwords get the same answer
-  and take the same time. The counters live in memory and reset when the
+  and take the same time. An attempt holds its place in these limits from
+  the moment it starts, so parallel attempts are decided as if they came one
+  after another and cannot get past the limits. An attempt waits at most 60
+  seconds for the attempts ahead of it; after that it gets `429` with
+  `Retry-After: 60`. User names that are not
+  valid share one counter. The counters live in memory and reset when the
   server restarts.
 - Behind a reverse proxy, the server sees the proxy's address for every
   client, so all clients share the address limit; the limit per user name
-  still applies.
+  still applies. Close to the address limit, logins through the proxy are
+  checked one after another.
 
 Each user sees only their own accounts, the accounts other users shared with
 them, and the mail found in them. A message in several accounts is stored once
@@ -425,12 +435,21 @@ IMAP connections. These layers stop them:
   `javascript:`, `data:`, `vbscript:` and every other scheme. `ping`
   attributes and `<meta http-equiv>` get the prefix too. `attributeName`
   gets it as well, so SVG animations cannot set a link (they do not animate
-  in mail). This needs nothing to run in the browser, so it holds in every
-  engine. Only the HTML sent to the browser for display is changed: the
-  stored message file, `…/raw`, `…/parts/{n}` and exports stay byte for byte
-  as archived. What you see: links into the archive's own address are not
-  clickable, SVG `<use>` and SVG images given by `href` show nothing;
-  external links work as before.
+  in mail). So do `rel`, `referrerpolicy`, `crossorigin`, `content`,
+  `attributionsrc`, `browsingtopics` and `sharedstoragewritable`, on every
+  element, and frame sources (below). A `<link>` in a mail therefore does nothing: no prerender,
+  prefetch, preconnect, DNS prefetch or stylesheet. A `<meta>` sets
+  nothing; the header's `charset=utf-8` takes precedence over a
+  `<meta charset>`. The server's `Referrer-Policy: no-referrer` holds for
+  link clicks and, after **Load remote images**, for `<img>` and SVG image
+  elements, which send neither `Referer` nor `Origin`. This needs nothing
+  to run in the browser, so it holds in every engine. Only the HTML sent to
+  the browser for display is changed: the stored message file, `…/raw`,
+  `…/parts/{n}` and exports stay byte for byte as archived. What you see:
+  links into the archive's own address are not clickable, SVG `<use>` and
+  SVG images whose `href` the rewrite renames (relative, into the archive,
+  `data:` and so on) show nothing, and a mail's own `color-scheme` or
+  `theme-color` `<meta>` has no effect; external links work as before.
 - In Chromium the web UI also cancels clicks, middle clicks and drags of such
   links (also inside open shadow roots) and of `javascript:`, `data:` and
   `vbscript:` links. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
@@ -456,16 +475,20 @@ link in a tree the web UI cannot see into (cancelled as above), in a
 declarative shadow root and in a `srcdoc` frame. Before it serves the HTML, the server neutralizes the last
 two: declarative shadow roots (attributes whose names start with
 `shadowroot` on `<template>`, such as `shadowrootmode="closed"`) and
-`srcdoc` frames (attributes whose names start with `srcdoc` on `<iframe>`).
-It puts `data-` in front of these attribute names, so the template stays an
-unrendered `<template>` and the frame an empty page; their content is not
-shown. The rename runs last, on the bytes as served (after the images are
+frames (attributes whose names start with `src` on `<iframe>` and
+`<frame>`, so `srcdoc` and `src`). It puts `data-` in front of these
+attribute names, so the template stays an unrendered `<template>` and the
+frame an empty page; their content is not shown. A frame's `src` would load
+nothing under the CSP, but Chromium connects to its host before the CSP
+blocks the navigation, which would tell the sender that the mail was
+opened; renamed, the frame connects nowhere. The rename runs last, on the bytes as served (after the images are
 inlined), and changes no other byte. It does not depend on where the tag
 is, so the same text in a comment, a style or an attribute value gets the
 prefix too. The link rewrite runs in the same pass and the same way. Other
-ways to nest a document (a frame or object with a `src` or `data` URL,
-`embed`, a `<meta>` refresh) load nothing under the CSP. This was measured
-in Chromium and WebKit.
+ways to nest a document (an object with a `data` URL, `embed`, a `<meta>`
+refresh) load nothing under the CSP. This was measured in Chromium and
+WebKit; that they open no connection either (and that a renamed frame opens
+none) was measured in Chromium only.
 
 What remains:
 
@@ -487,6 +510,12 @@ What remains:
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests.
+- After **Load remote images**, images that a mail loads through CSS (such
+  as `background-image`, `list-style-image`, `border-image`, `mask-image`
+  or `shape-outside`) still tell the sender the archive's origin (scheme,
+  host and port) in `Referer`, and for some of them in `Origin`. They never
+  reveal the path or the message's SHA-256. Images in `<img>` and SVG image
+  elements send neither.
 - The accepted cost above: if a browser bug ever ran script in the frame,
   it would run with the app's origin.
 
@@ -504,7 +533,10 @@ sandboxed frame, and the frame's own `load` and the web UI's
 MathML `href` is a link, and an SVG link without `target` opens in a new
 tab; in Chromium, MathML `href` is not a link and an SVG link without
 `target` opens in the frame itself. Safari on macOS and iOS uses the same
-engine but was not tested.
+engine but was not tested. Resource hints were measured in Playwright's
+full Chromium 156.0.8078.4 with background networking on: the headless
+shell never sends them, and the full Chromium sends a prerender in any
+profile but a preconnect or DNS prefetch only in a persistent one.
 
 ### Login checks
 

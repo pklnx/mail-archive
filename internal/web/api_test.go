@@ -621,19 +621,37 @@ func rawGet(t *testing.T, srv *httptest.Server, host, path string) (*http.Respon
 }
 
 // linkMail is an HTML mail with links into the app (relative, by the
-// request's host and port, by an allowed host) and an external one, for
+// request's host and port, by an allowed host) and an external one, and
+// with resource hints, referrer policies and crossorigin (policyMail), for
 // TestMessageHTMLLinks and TestMessageHTMLRewriteLeavesStoredBytes.
 func linkMail(port string) string {
 	return `<p><a href="/api/openapi.json?link=root">a</a> <a href="api/x">b</a> ` +
 		`<a href="http://127.0.0.1:` + port + `/api/openapi.json?link=port">c</a> ` +
 		`<a href="https://archive.example/api/openapi.json?link=public">d</a> ` +
-		`<a href="https://links.example/">e</a></p>`
+		`<a href="https://links.example/">e</a></p>` + policyMail
 }
+
+// policyMail holds what would change how the browser requests: resource
+// hints, a referrer policy by <meta> and by attribute, and crossorigin.
+const policyMail = `<meta name="referrer" content="unsafe-url">` +
+	`<link rel="prerender" href="https://hints.example/p"><link REL=preconnect href=https://hints.example/>` +
+	`<link rel="dns-prefetch" href="//hints.example/">` +
+	`<a referrerpolicy="unsafe-url" href="https://links.example/r">f</a>` +
+	`<img referrerpolicy="unsafe-url" crossorigin="anonymous" src="https://links.example/i.png">` +
+	`<svg><image crossorigin="anonymous" href="https://links.example/s.png"/></svg>`
+
+// policyServed is policyMail as /html serves it.
+const policyServed = `<meta name="referrer" data-content="unsafe-url">` +
+	`<link data-rel="prerender" href="https://hints.example/p"><link data-REL=preconnect href=https://hints.example/>` +
+	`<link data-rel="dns-prefetch" href="//hints.example/">` +
+	`<a data-referrerpolicy="unsafe-url" href="https://links.example/r">f</a>` +
+	`<img data-referrerpolicy="unsafe-url" data-crossorigin="anonymous" src="https://links.example/i.png">` +
+	`<svg><image data-crossorigin="anonymous" href="https://links.example/s.png"/></svg>`
 
 // The served HTML has no link into the app (#459): relative links, links
 // to the request's own host and port and links to an allowed host are
-// renamed; the external link is kept. The same for either Host the server
-// accepts.
+// renamed; the external link is kept. No resource hint, referrer policy or
+// crossorigin is left either. The same for either Host the server accepts.
 func TestMessageHTMLLinks(t *testing.T) {
 	f := newAPIFixture(t)
 	srv := f.linkServer()
@@ -643,7 +661,7 @@ func TestMessageHTMLLinks(t *testing.T) {
 	want := htmlPreamble + `<p><a data-href="/api/openapi.json?link=root">a</a> <a data-href="api/x">b</a> ` +
 		`<a data-href="http://127.0.0.1:` + u.Port() + `/api/openapi.json?link=port">c</a> ` +
 		`<a data-href="https://archive.example/api/openapi.json?link=public">d</a> ` +
-		`<a href="https://links.example/">e</a></p>`
+		`<a href="https://links.example/">e</a></p>` + policyServed
 	for _, host := range []string{u.Host, "archive.example"} {
 		resp, body := rawGet(t, srv, host, "/api/messages/"+f.ids["links"]+"/html")
 		if resp.StatusCode != http.StatusOK {
@@ -651,6 +669,9 @@ func TestMessageHTMLLinks(t *testing.T) {
 		}
 		if body = strings.TrimSuffix(body, "\r\n"); body != want {
 			t.Errorf("Host %s: body\n got %q\nwant %q", host, body, want)
+		}
+		if s := neutralizeSurvivors(body); len(s) > 0 {
+			t.Errorf("Host %s: served body keeps %v", host, s)
 		}
 	}
 	// Another host is refused before anything is served.
@@ -660,7 +681,8 @@ func TestMessageHTMLLinks(t *testing.T) {
 }
 
 // Only the rendering changes (#459): /raw, the stored blob and a part keep
-// the archived bytes, links and all, while /html is rewritten.
+// the archived bytes, links, resource hints and referrer policies and all,
+// while /html is rewritten.
 func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
 	f := newAPIFixture(t)
 	srv := f.linkServer()
@@ -676,8 +698,11 @@ func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
 	sha := f.ids["stored"]
 
 	resp, body := rawGet(t, srv, u.Host, "/api/messages/"+sha+"/html")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) || !strings.Contains(body, policyServed) {
 		t.Fatalf("html: %d %q", resp.StatusCode, body)
+	}
+	if !strings.Contains(raw, policyMail) || !strings.Contains(attachment, policyMail) {
+		t.Fatal("the stored mail lacks the policy payloads")
 	}
 	if resp, body = rawGet(t, srv, u.Host, "/api/messages/"+sha+"/raw"); resp.StatusCode != http.StatusOK || body != raw {
 		t.Errorf("raw: %d %q", resp.StatusCode, body)

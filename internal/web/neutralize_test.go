@@ -118,6 +118,19 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"both rules", `<template shadowrootmode=closed><iframe srcdoc=x></iframe></template>`,
 			`<template data-shadowrootmode=closed><iframe data-srcdoc=x></iframe></template>`},
 	},
+	// Frames that load a URL: the CSP blocks the navigation, but a full
+	// Chromium connects to the host first.
+	"src": {
+		{"iframe src", `<iframe src="https://x.example/" width=10></iframe>`, `<iframe data-src="https://x.example/" width=10></iframe>`},
+		{"iframe src uppercase, unquoted", `<IFRAME SRC=http://x.example/t></IFRAME>`, `<IFRAME data-SRC=http://x.example/t></IFRAME>`},
+		{"iframe src after a quoted value", `<iframe title="t"src="//x.example/"></iframe>`, `<iframe title="t"data-src="//x.example/"></iframe>`},
+		{"iframe src and srcdoc", `<iframe src=//x.example/ srcdoc=y></iframe>`, `<iframe data-src=//x.example/ data-srcdoc=y></iframe>`},
+		{"iframe other src names", `<iframe srcx=1 Src-Y=2>`, `<iframe data-srcx=1 data-Src-Y=2>`},
+		{"frameset", `<frameset cols="*"><frame src="http://x.example/f"><FRAME/SRC=http://x.example/g></frameset>`,
+			`<frameset cols="*"><frame data-src="http://x.example/f"><FRAME/data-SRC=http://x.example/g></frameset>`},
+		{"frame in body", `<body><frame src=http://x.example/f>`, `<body><frame data-src=http://x.example/f>`},
+		{"in a comment", `<!-- <iframe src=http://x.example/> -->`, `<!-- <iframe data-src=http://x.example/> -->`},
+	},
 	// Links into the app, or not to an http(s), mailto: or tel: URL: the
 	// oracle sees each of them (TestLinkSurvivorsOracle).
 	"link renamed": linkCases(false,
@@ -173,11 +186,11 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"use", `<svg><use href="#d"/><use xlink:href="#d"/></svg>`, `<svg><use data-href="#d"/><use data-xlink:href="#d"/></svg>`},
 		{"image", `<svg><image href="data:image/png;base64,AAAA"/></svg>`, `<svg><image data-href="data:image/png;base64,AAAA"/></svg>`},
 		{"mathml", `<math><mi href="/api/x">x</mi></math>`, `<math><mi data-href="/api/x">x</mi></math>`},
-		{"link and base", `<link rel=stylesheet href=/api/x><base href="/api/">`, `<link rel=stylesheet data-href=/api/x><base data-href="/api/">`},
+		{"link and base", `<link rel=stylesheet href=/api/x><base href="/api/">`, `<link data-rel=stylesheet data-href=/api/x><base data-href="/api/">`},
 		{"any element", `<div href=/x><custom-el href=/x><p:q href=/x>`, `<div data-href=/x><custom-el data-href=/x><p:q data-href=/x>`},
 		{"ping", `<a href="https://links.example/" ping="https://links.example/p">x</a>`, `<a href="https://links.example/" data-ping="https://links.example/p">x</a>`},
 		{"ping uppercase, valueless", `<a PING>`, `<a data-PING>`},
-		{"meta refresh", `<META HTTP-EQUIV=Refresh content="0;url=/api/x">`, `<META data-HTTP-EQUIV=Refresh content="0;url=/api/x">`},
+		{"meta refresh", `<META HTTP-EQUIV=Refresh content="0;url=/api/x">`, `<META data-HTTP-EQUIV=Refresh data-content="0;url=/api/x">`},
 		{"http-equiv elsewhere", `<p http-equiv=x>`, `<p data-http-equiv=x>`},
 		{"set", `<svg><a><set attributeName=href to=/x /><rect/></a></svg>`, `<svg><a><set data-attributeName=href to=/x /><rect/></a></svg>`},
 		{"animate", `<svg><a><animate attributeName="xlink:href" values="/x"/></a></svg>`, `<svg><a><animate data-attributeName="xlink:href" values="/x"/></a></svg>`},
@@ -205,8 +218,62 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"white space around equals", "<a href" + strings.Repeat(" ", 1000) + "=" + strings.Repeat("\n", 1000) + "https://links.example/>",
 			"<a href" + strings.Repeat(" ", 1000) + "=" + strings.Repeat("\n", 1000) + "https://links.example/>"},
 	},
+	// Attributes with which a mail would change how the browser requests:
+	// resource hints, referrer policies, cors mode, document metadata and
+	// requests the browser makes on its own. Renamed on every element,
+	// whatever the value.
+	"policy": {
+		{"rel on link", `<link rel="prerender" href="https://links.example/p">`, `<link data-rel="prerender" href="https://links.example/p">`},
+		{"rel on a", `<a rel="noopener" href="https://links.example/">x</a>`, `<a data-rel="noopener" href="https://links.example/">x</a>`},
+		{"rel on area", `<map name=m><area rel=opener href=https://links.example/ shape=rect coords=0,0,9,9></map>`,
+			`<map name=m><area data-rel=opener href=https://links.example/ shape=rect coords=0,0,9,9></map>`},
+		{"rel uppercase", `<LINK REL=PRECONNECT HREF=https://links.example/>`, `<LINK data-REL=PRECONNECT HREF=https://links.example/>`},
+		{"rel unquoted", `<link rel=dns-prefetch href=//links.example/>`, `<link data-rel=dns-prefetch href=//links.example/>`},
+		{"rel single-quoted", `<link rel='prefetch' href='https://links.example/n'>`, `<link data-rel='prefetch' href='https://links.example/n'>`},
+		{"rel after a slash", `<link/rel=prerender href=https://links.example/>`, `<link/data-rel=prerender href=https://links.example/>`},
+		{"rel after a quoted value", `<link href="https://links.example/"rel=prerender>`, `<link href="https://links.example/"data-rel=prerender>`},
+		{"rel valueless", `<link rel href=https://links.example/>`, `<link data-rel href=https://links.example/>`},
+		{"rel preload with imagesrcset", `<link rel=preload as=image imagesrcset="https://links.example/a.png 1x" imagesizes=10px>`,
+			`<link data-rel=preload as=image imagesrcset="https://links.example/a.png 1x" imagesizes=10px>`},
+		{"rel modulepreload", `<link rel=modulepreload href=https://links.example/m.js>`, `<link data-rel=modulepreload href=https://links.example/m.js>`},
+		{"rel in body and svg", `<body><link rel=prerender href=https://links.example/><svg><link rel=preconnect href=https://links.example/ /></svg>`,
+			`<body><link data-rel=prerender href=https://links.example/><svg><link data-rel=preconnect href=https://links.example/ /></svg>`},
+		{"referrerpolicy on img", `<img referrerpolicy="unsafe-url" src="https://links.example/i.png">`, `<img data-referrerpolicy="unsafe-url" src="https://links.example/i.png">`},
+		{"referrerpolicy on a", `<a href="https://links.example/" ReferrerPolicy=unsafe-url>x</a>`, `<a href="https://links.example/" data-ReferrerPolicy=unsafe-url>x</a>`},
+		{"referrerpolicy on link", `<link referrerpolicy=unsafe-url rel=prefetch href=https://links.example/>`,
+			`<link data-referrerpolicy=unsafe-url data-rel=prefetch href=https://links.example/>`},
+		{"referrerpolicy on iframe", `<iframe referrerpolicy=unsafe-url src=https://links.example/></iframe>`, `<iframe data-referrerpolicy=unsafe-url data-src=https://links.example/></iframe>`},
+		{"referrerpolicy on svg a", `<svg><a href="https://links.example/" referrerpolicy="unsafe-url"><rect/></a></svg>`,
+			`<svg><a href="https://links.example/" data-referrerpolicy="unsafe-url"><rect/></a></svg>`},
+		{"crossorigin valueless", `<img crossorigin src="https://links.example/i.png">`, `<img data-crossorigin src="https://links.example/i.png">`},
+		{"crossorigin uppercase", `<img CROSSORIGIN=anonymous src=https://links.example/i.png>`, `<img data-CROSSORIGIN=anonymous src=https://links.example/i.png>`},
+		{"crossorigin on svg image", `<svg><image crossorigin="use-credentials" href="https://links.example/i.png"/></svg>`,
+			`<svg><image data-crossorigin="use-credentials" href="https://links.example/i.png"/></svg>`},
+		{"crossorigin and rel on link", `<link crossorigin rel=preload as=font href=https://links.example/f.woff2>`,
+			`<link data-crossorigin data-rel=preload as=font href=https://links.example/f.woff2>`},
+		{"meta referrer", `<meta name=referrer content=unsafe-url>`, `<meta name=referrer data-content=unsafe-url>`},
+		{"meta referrer uppercase", `<META NAME="Referrer" CONTENT="unsafe-url">`, `<META NAME="Referrer" data-CONTENT="unsafe-url">`},
+		{"meta color-scheme", `<meta name="color-scheme" content="dark">`, `<meta name="color-scheme" data-content="dark">`},
+		{"meta content first", `<meta content="unsafe-url" name="referrer">`, `<meta data-content="unsafe-url" name="referrer">`},
+		{"attributionsrc", `<a attributionsrc href=https://links.example/>x</a><img attributionsrc="https://links.example/r" src=data:,>`,
+			`<a data-attributionsrc href=https://links.example/>x</a><img data-attributionsrc="https://links.example/r" src=data:,>`},
+		{"browsingtopics", `<iframe browsingtopics src=https://links.example/></iframe><img BrowsingTopics src=data:,>`,
+			`<iframe data-browsingtopics data-src=https://links.example/></iframe><img data-BrowsingTopics src=data:,>`},
+		{"sharedstoragewritable", `<img sharedstoragewritable src=https://links.example/i.png>`, `<img data-sharedstoragewritable src=https://links.example/i.png>`},
+		{"in a comment", `<!-- <link rel=prerender> <meta content=x> -->`, `<!-- <link data-rel=prerender> <meta data-content=x> -->`},
+		{"in an attribute value", `<p title="<img referrerpolicy=unsafe-url crossorigin>">`, `<p title="<img data-referrerpolicy=unsafe-url data-crossorigin>">`},
+		{"in style", `<style><link rel=prerender></style>`, `<style><link data-rel=prerender></style>`},
+	},
 	"unchanged": {
 		{"empty", ``, ``},
+		{"policy names, already renamed or longer or shorter", `<link data-rel=prerender relx=a re=b xrel=c><img data-crossorigin crossoriginx xreferrerpolicy=x referrerpolicyx=y>` +
+			`<meta data-content=x content-x=y contents=z><div contenteditable data-referrerpolicy=x attributionsrcx browsingtopic sharedstorage>`,
+			`<link data-rel=prerender relx=a re=b xrel=c><img data-crossorigin crossoriginx xreferrerpolicy=x referrerpolicyx=y>` +
+				`<meta data-content=x content-x=y contents=z><div contenteditable data-referrerpolicy=x attributionsrcx browsingtopic sharedstorage>`},
+		{"policy names in text and values", `rel=prerender content=x <p title="rel" class=crossorigin>referrerpolicy</p>`,
+			`rel=prerender content=x <p title="rel" class=crossorigin>referrerpolicy</p>`},
+		{"meta charset and map name", `<meta charset="windows-1252"><map name=m></map><img usemap=#m src=data:,>`,
+			`<meta charset="windows-1252"><map name=m></map><img usemap=#m src=data:,>`},
 		{"already renamed", `<a data-href=/x data-ping=/x><set data-attributename=href><meta data-http-equiv=refresh>`,
 			`<a data-href=/x data-ping=/x><set data-attributename=href><meta data-http-equiv=refresh>`},
 		{"longer and shorter names", `<a hrefx=/x xhref=/x hre=/x pings=/x attributenames=href http-equivx=refresh xlink:hrefs=/x>`,
@@ -226,8 +293,8 @@ var neutralizeCases = map[string][]neutralizeCase{
 		{"in values", `<template title="shadowrootmode=closed" alt='srcdoc'><iframe title=srcdoc>`,
 			`<template title="shadowrootmode=closed" alt='srcdoc'><iframe title=srcdoc>`},
 		{"after a valueless equals", `<template =shadowrootmode>`, `<template =shadowrootmode>`},
-		{"iframe without srcdoc", `<iframe src="https://x.example/" width=10></iframe>`,
-			`<iframe src="https://x.example/" width=10></iframe>`},
+		{"src on other elements", `<img src="data:,"><frameset><frameset-x src=x><framex src=x><script src=x></script><embed src=x>`,
+			`<img src="data:,"><frameset><frameset-x src=x><framex src=x><script src=x></script><embed src=x>`},
 		{"end tags", `</template shadowrootmode=closed></iframe srcdoc=x>`, `</template shadowrootmode=closed></iframe srcdoc=x>`},
 		{"after the tag ends", `<template>shadowrootmode=closed</template><iframe> srcdoc=x`,
 			`<template>shadowrootmode=closed</template><iframe> srcdoc=x`},
@@ -269,6 +336,9 @@ func TestNeutralizeSurvivorsOracle(t *testing.T) {
 		`<noscript><iframe srcdoc=x></iframe></noscript>`,
 		`<template x="a"shadowrootmode=closed>`,
 		`<iframe/SRCDOC=x>`,
+		`<iframe src=http://x.example/>`,
+		`<p><IFRAME SRC=http://x.example/></IFRAME>`,
+		`<frameset><frame src=http://x.example/></frameset>`,
 	} {
 		if len(neutralizeSurvivors(in)) == 0 {
 			t.Errorf("oracle finds nothing in %q", in)
@@ -293,6 +363,24 @@ func TestLinkSurvivorsOracle(t *testing.T) {
 		`<svg><set attributeName=href to=/x /></svg>`,
 		`<META HTTP-EQUIV=Refresh content="0;url=/api/x">`,
 		`<a href=http://LOCALHOST.:1/>`,
+	} {
+		if len(neutralizeSurvivors(in)) == 0 {
+			t.Errorf("oracle finds nothing in %q", in)
+		}
+	}
+	// Each attribute that changes how the browser requests is found where
+	// it is the only offending attribute of the input.
+	for _, in := range []string{
+		`<link rel=prerender href=https://links.example/>`,
+		`<svg><link REL=preconnect href=https://links.example/ /></svg>`,
+		`<a href=https://links.example/ referrerpolicy=unsafe-url>x</a>`,
+		`<img crossorigin src=https://links.example/i.png>`,
+		`<svg><image crossorigin href="https://links.example/i.png"/></svg>`,
+		`<meta name=referrer content=unsafe-url>`,
+		`<template><meta name=referrer content=unsafe-url></template>`,
+		`<a href=https://links.example/ attributionsrc>x</a>`,
+		`<img browsingtopics src=data:,>`,
+		`<img sharedstoragewritable src=data:,>`,
 	} {
 		if len(neutralizeSurvivors(in)) == 0 {
 			t.Errorf("oracle finds nothing in %q", in)
@@ -389,14 +477,17 @@ var oracleBase, _ = url.Parse("http://localhost:18181/api/messages/" + strings.R
 
 // linkSurvives reports whether an attribute with this (lowercase) key and
 // decoded value is one neutralizeHTML must not leave: any ping,
-// attributename or http-equiv, and an href or xlink:href that is not an
+// attributename, http-equiv, rel, referrerpolicy, crossorigin, content,
+// attributionsrc, browsingtopics or sharedstoragewritable, and an href or
+// xlink:href that is not an
 // http(s) link to a host outside testHosts, a mailto: or a tel: link. It
 // works independently of linkKept, on the parsed value, with net/url, IDNA
 // mapping and the WHATWG IPv4 parser; where it reads a value differently
 // from the browser, it errs towards reporting it.
 func linkSurvives(key, val string) bool {
 	switch key {
-	case "ping", "attributename", "http-equiv":
+	case "ping", "attributename", "http-equiv",
+		"rel", "referrerpolicy", "crossorigin", "content", "attributionsrc", "browsingtopics", "sharedstoragewritable":
 		return true
 	case "href", "xlink:href":
 	default:

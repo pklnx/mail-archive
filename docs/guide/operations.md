@@ -88,6 +88,9 @@ dump only passes through a pipe and never reaches a disk. It writes:
 
 Without the archive key, `backup` refuses: a dump is never written in
 plaintext while encryption is on. If `pg_dump` fails, nothing is written.
+Only an encrypted dump is authenticated, so on an archive with encryption at
+rest `restore-dump` refuses a dump without encryption unless you pass
+`--plaintext` (see [Restore](#restore), step 2).
 To read a dump the **archive key that was current when it was made**, or a
 recovery key of that time, is needed: a key removed later still opens it,
 and a key added later does not. Keep the old keys as long as such backups
@@ -126,7 +129,10 @@ the [command reference](../reference/cli#verify) for the findings.
 
 1. Put `MAIL_ARCHIVE_SECRET_KEY` back into `.env` and, with encryption at
    rest, the archive key file into the keys directory
-   (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`). Copy the data directory back to `data/`
+   (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`). The key opens the dump, and it is
+   also what tells `restore-dump` that this archive uses encryption at rest,
+   so that a dump without encryption put in place of the encrypted one is
+   refused (step 2). Copy the data directory back to `data/`
    (or `ARCHIVE_DIR`). On Linux the files must belong to UID 65532 again:
    `sudo chown -R 65532:65532 data` (for rootless Docker, see
    [Linux hosts](./getting-started#linux-hosts)). Stop the web server and
@@ -140,7 +146,23 @@ the [command reference](../reference/cli#verify) for the findings.
    (or the `.dump` of an archive without encryption). It runs `pg_restore`
    in the database container in one transaction; an encrypted dump is
    decrypted on its way there with the keyring copy next to it. A damaged or
-   cut dump is refused, and the database stays empty. `restore-dump`
+   cut dump is refused, and the database stays empty.
+
+   Only an encrypted dump is authenticated: whoever can write the backup
+   location decides what a dump without encryption holds, and `pg_restore`
+   runs it as the database superuser. So `restore-dump` refuses a dump
+   without encryption, before anything is restored, when the archive shows
+   any sign of encryption at rest: an archive key is configured, the data
+   directory has a keyring (`data/keys/keyring`), the file name ends in
+   `.enc`, or a keyring copy lies next to the dump. The message lists the
+   signs it found. Nothing in the backup location can lift this. If the
+   dump is one you expect without encryption (a backup from before
+   `encryption enable` or after `encryption disable`), check where it came
+   from first, then pass `--plaintext`:
+   `./ma restore-dump --plaintext backups/mailarchive-<time>.dump`.
+   `--plaintext` on an encrypted dump is refused. On an archive without any
+   of these signs, a `.dump` is restored without the flag, as before; keep
+   such backups where only you can write. `restore-dump`
    refuses a database that holds anything: `pg_restore --clean` cannot
    replace this schema (it cannot drop the partitions of the audit log), so
    a restore over the old database would fail half-way or mix both. Without
@@ -174,15 +196,15 @@ together and prints each step:
   copy: a recovery key added with `encryption add-key` after the backup is
   in the newer keyring file and stays. The data keys of both copies are
   kept, so files encrypted under a key only one copy knows stay readable.
-  A keyring of another archive is refused: for an encrypted dump before
-  anything is restored, by the keyring copy next to it; for a dump without
-  encryption only after loading it, since its keyring copy is in the dump.
-  Restore that dump into a new database again with the right data
-  directory.
+  A keyring of another archive is refused before anything is restored when
+  a keyring copy lies next to the dump, encrypted or not; for a dump
+  without encryption and without a copy next to it, only after loading it,
+  since its keyring copy is in the dump. Restore that dump into a new
+  database again with the right data directory.
 - A dump that says off next to a data directory with encrypted files (a
-  backup from before `encryption enable`) gives the state `encrypting`:
-  run `./ma encryption enable` before anything else starts; it finishes in
-  one quick pass.
+  backup from before `encryption enable`, restored with `--plaintext`)
+  gives the state `encrypting`: run `./ma encryption enable` before
+  anything else starts; it finishes in one quick pass.
 - A missing keyring file is rebuilt from the dump.
 
 For a dump older than the schema of this version, it says to run
@@ -435,7 +457,10 @@ on an archive that is off, it first looks for encrypted files in
 `messages/`.
 Files left in `tmp/` are moved to `orphans/<time>/tmp/` and kept as they
 are. The keyring and the key stay; keep them as long as backups made with
-encryption on exist.
+encryption on exist. While they stay, the dumps that `./ma backup` writes
+after `disable` (without encryption) restore only with
+`./ma restore-dump --plaintext`, and their `BACKUP-NOTE.txt` says so (see
+[Restore](#restore)).
 
 **Old plaintext.** After turning it on, earlier plaintext can survive in
 free space of the disk, in older snapshots and in backups made before. For
@@ -623,6 +648,14 @@ If you ran the steps above with the line in place, change it as described
 and repeat the upgrade from `./ma migrate` on, with the manual steps from
 the release notes and the [One-time steps](#one-time-steps) in their order,
 then run `docker compose up -d web`.
+
+`./ma restore-dump` needs the image of the same release as `./ma`: `./ma`
+passes the holder in the image what it read about the dump (since 1.5.2).
+An older `./ma` with a newer image is refused with "./ma is older than the
+image"; a newer `./ma` with an older image (for example a kept
+`MAIL_ARCHIVE_IMAGE` line) fails with "unknown flag: --dump-name". Both
+stop before anything is restored; fix the `MAIL_ARCHIVE_IMAGE` line as
+above.
 
 With a clone of the repository (see [From source](./getting-started#install)),
 `git pull` replaces the download, and `./ma migrate` rebuilds the image for

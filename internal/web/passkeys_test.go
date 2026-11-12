@@ -499,3 +499,36 @@ func (f *authFixture) listedPasskeys() map[string]float64 {
 	}
 	return out
 }
+
+// A passkey login still works after failures from its address and for its
+// user name, and it forgets the name's failures like a password login: the
+// limiter wiring of the passkey finish (BeginAddr, then Limiter.Succeed for
+// the name found by the passkey).
+func TestPasskeyLoginAfterFailures(t *testing.T) {
+	f := newPasskeyFixture(t)
+	f.addUser("alice", "correct horse battery", false)
+	f.loginOK("alice", "correct horse battery")
+	k := newSoftKey(t)
+	f.addPasskey(k, "Phone", "correct horse battery", "")
+
+	anon := f.as()
+	stranger := newSoftKey(t)
+	stranger.handle = []byte("x")
+	for range 10 {
+		anon.passkeyLogin(stranger, 401) // failures of the address
+	}
+	for range 4 {
+		if resp := anon.login("alice", wrongPassword); resp.StatusCode != 401 {
+			t.Fatalf("wrong password: %d", resp.StatusCode)
+		}
+	}
+	if u, _ := anon.passkeyLogin(k, 200)["user"].(map[string]any); u["name"] != "alice" {
+		t.Fatalf("passkey login after failures: %v", u)
+	}
+	// The name's failures are forgotten: without that, the 2nd is 429.
+	for i := range 4 {
+		if resp := f.as().login("alice", wrongPassword); resp.StatusCode != 401 {
+			t.Fatalf("wrong password %d after the passkey login: %d", i+1, resp.StatusCode)
+		}
+	}
+}

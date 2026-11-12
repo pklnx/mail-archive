@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -120,44 +121,44 @@ func TestLimiterPerUser(t *testing.T) {
 	l.now = func() time.Time { return now }
 
 	for i := range 4 {
-		l.Fail("alice", "10.0.0.1")
-		if d := l.Blocked("alice", "10.0.0.1"); d != 0 {
+		fail(t, l, "alice", "10.0.0.1")
+		if d := blocked(t, l, "alice", "10.0.0.1"); d != 0 {
 			t.Fatalf("blocked after %d failures: %v", i+1, d)
 		}
 	}
-	l.Fail("alice", "10.0.0.1")
-	if d := l.Blocked("alice", "10.0.0.9"); d != time.Minute {
+	fail(t, l, "alice", "10.0.0.1")
+	if d := blocked(t, l, "alice", "10.0.0.9"); d != time.Minute {
 		t.Fatalf("after 5 failures: %v", d)
 	}
-	if d := l.Blocked("bob", "10.0.0.1"); d != 0 {
+	if d := blocked(t, l, "bob", "10.0.0.1"); d != 0 {
 		t.Fatalf("other user blocked: %v", d)
 	}
 
 	// The block doubles with each further failure, up to 15 minutes.
 	want := []time.Duration{2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 15 * time.Minute, 15 * time.Minute}
 	for _, w := range want {
-		now = now.Add(l.Blocked("alice", "x"))
-		l.Fail("alice", "10.0.0.2")
-		if d := l.Blocked("alice", "x"); d != w {
+		now = now.Add(blocked(t, l, "alice", "x"))
+		fail(t, l, "alice", "10.0.0.2")
+		if d := blocked(t, l, "alice", "x"); d != w {
 			t.Fatalf("block = %v, want %v", d, w)
 		}
 	}
 
 	// A success forgets the user's failures.
 	now = now.Add(15 * time.Minute)
-	l.Succeed("alice")
-	l.Fail("alice", "10.0.0.3")
-	if d := l.Blocked("alice", "x"); d != 0 {
+	succeed(t, l, "alice", "10.0.0.3")
+	fail(t, l, "alice", "10.0.0.3")
+	if d := blocked(t, l, "alice", "x"); d != 0 {
 		t.Fatalf("blocked after success: %v", d)
 	}
 
 	// Failures older than the window do not count.
 	for range 4 {
-		l.Fail("carol", "10.0.0.4")
+		fail(t, l, "carol", "10.0.0.4")
 	}
 	now = now.Add(16 * time.Minute)
-	l.Fail("carol", "10.0.0.4")
-	if d := l.Blocked("carol", "x"); d != 0 {
+	fail(t, l, "carol", "10.0.0.4")
+	if d := blocked(t, l, "carol", "x"); d != 0 {
 		t.Fatalf("old failures counted: %v", d)
 	}
 }
@@ -167,19 +168,19 @@ func TestLimiterPerAddress(t *testing.T) {
 	l := NewLimiter()
 	l.now = func() time.Time { return now }
 	for i := range 20 {
-		if d := l.Blocked("x", "10.0.0.1"); d != 0 {
+		if d := blocked(t, l, "x", "10.0.0.1"); d != 0 {
 			t.Fatalf("blocked after %d failures", i)
 		}
-		l.Fail(strings.Repeat("u", i+1), "10.0.0.1") // a new name each time
+		fail(t, l, strings.Repeat("u", i+1), "10.0.0.1") // a new name each time
 	}
-	if d := l.Blocked("new", "10.0.0.1"); d != 15*time.Minute {
+	if d := blocked(t, l, "new", "10.0.0.1"); d != 15*time.Minute {
 		t.Fatalf("address block = %v", d)
 	}
-	if d := l.Blocked("new", "10.0.0.2"); d != 0 {
+	if d := blocked(t, l, "new", "10.0.0.2"); d != 0 {
 		t.Fatalf("other address blocked: %v", d)
 	}
 	now = now.Add(15 * time.Minute)
-	if d := l.Blocked("new", "10.0.0.1"); d != 0 {
+	if d := blocked(t, l, "new", "10.0.0.1"); d != 0 {
 		t.Fatalf("still blocked: %v", d)
 	}
 }
@@ -189,13 +190,55 @@ func TestLimiterSweeps(t *testing.T) {
 	l := NewLimiter()
 	l.now = func() time.Time { return now }
 	for i := range sweepEvery - 1 {
-		l.Fail(string(rune('a'+i%26))+strings.Repeat("x", i), "10.0.0.1")
+		// Recorded without Begin: the address is blocked after 20.
+		forceFail(l, fmt.Sprintf("u%d", i), "10.0.0.1")
 	}
 	now = now.Add(time.Hour)
-	l.Fail("last", "10.0.0.2")
+	forceFail(l, "last", "10.0.0.2")
 	if len(l.users) != 1 || len(l.addrs) != 1 {
 		t.Fatalf("after sweep: %d users, %d addrs", len(l.users), len(l.addrs))
 	}
+}
+
+// blocked returns how long Begin refuses user from addr; zero means it
+// admits an attempt, which is released.
+func blocked(t *testing.T, l *Limiter, user, addr string) time.Duration {
+	t.Helper()
+	a, wait, err := l.Begin(context.Background(), user, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Release()
+	return wait
+}
+
+// fail records a failed attempt of user from addr, which must be admitted.
+func fail(t *testing.T, l *Limiter, user, addr string) {
+	t.Helper()
+	a, wait, err := l.Begin(context.Background(), user, addr)
+	if a == nil {
+		t.Fatalf("attempt of %q from %s refused: %v %v", user, addr, wait, err)
+	}
+	a.Fail()
+}
+
+// succeed records a successful attempt of user from addr.
+func succeed(t *testing.T, l *Limiter, user, addr string) {
+	t.Helper()
+	a, wait, err := l.Begin(context.Background(), user, addr)
+	if a == nil {
+		t.Fatalf("attempt of %q from %s refused: %v %v", user, addr, wait, err)
+	}
+	a.Succeed()
+}
+
+// forceFail records a failure even while user or addr is blocked.
+func forceFail(l *Limiter, user, addr string) {
+	l.mu.Lock()
+	k := userKey(user)
+	a := &Attempt{l: l, userKey: k, user: reserve(l.users, k), addrKey: addr, addr: reserve(l.addrs, addr)}
+	l.mu.Unlock()
+	a.Fail()
 }
 
 func TestGeneratePassword(t *testing.T) {

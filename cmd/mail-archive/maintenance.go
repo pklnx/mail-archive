@@ -686,6 +686,11 @@ func backupNote(ctx context.Context, a *app, dumpName string, ring *blobcrypt.Ke
 		if a.cfg.ArchiveKey != nil {
 			d.Configured = blobcrypt.Fingerprint(a.cfg.ArchiveKey)
 		}
+	} else {
+		// A dump without encryption on an archive with a sign of
+		// encryption at rest (after encryption disable, the key and the
+		// keyring stay): restore-dump refuses it without --plaintext.
+		d.Plaintext = a.cfg.ArchiveKey != nil || fileExists(blobcrypt.KeyringPath(a.cfg.DataDir))
 	}
 	return formatBackupNote(d), nil
 }
@@ -716,6 +721,9 @@ type backupNoteData struct {
 	DataDir   string
 	Compose   bool
 	Attest    bool // attestations are on
+	// Plaintext: the dump is not encrypted, but the archive shows a sign
+	// of encryption at rest, so restore-dump needs --plaintext.
+	Plaintext bool
 
 	// Set for an encrypted dump.
 	Keyring    string // file name of the keyring copy
@@ -781,14 +789,18 @@ Restore:
 	if d.Keyring != "" {
 		keys = "the key into .env and the archive key file into the keys directory"
 	}
+	plaintextFlag := ""
+	if d.Plaintext {
+		plaintextFlag = "--plaintext "
+	}
 	if d.Compose {
 		fmt.Fprintf(&b, `1. Put %s, copy the data directory back, stop the web server and
    the worker (docker compose stop web worker), and create an empty database:
    docker compose exec -T postgres dropdb -U mailarchive --force mailarchive
    docker compose exec -T postgres createdb -U mailarchive mailarchive
 2. Load the dump into it, in one transaction:
-   ./ma restore-dump <this directory>/%s
-`, keys, d.Dump)
+   ./ma restore-dump %s<this directory>/%s
+`, keys, plaintextFlag, d.Dump)
 	} else {
 		keys = config.EnvSecretKey
 		if d.Keyring != "" {
@@ -797,8 +809,8 @@ Restore:
 		fmt.Fprintf(&b, `1. Set %s, copy the data directory back, create an empty database,
    and stop the web server and the worker.
 2. Load the dump into it, in one transaction (needs pg_restore in PATH):
-   mail-archive restore-dump %s
-`, keys, d.Dump)
+   mail-archive restore-dump %s%s
+`, keys, plaintextFlag, d.Dump)
 		if d.Keyring != "" {
 			fmt.Fprintf(&b, `   or by hand:
    mail-archive unseal-stream --keyring %s < %s |
@@ -809,6 +821,13 @@ Restore:
    pg_restore --no-owner --single-transaction --exit-on-error -d "$DATABASE_URL" %s
 `, d.Dump)
 		}
+	}
+	if d.Plaintext {
+		b.WriteString(`   --plaintext: the dump is not encrypted, but this archive has an archive
+   key or a keyring (encryption at rest was turned off), so restore-dump
+   refuses it without the flag. A dump without encryption is not
+   authenticated: restore only one you know comes from this backup.
+`)
 	}
 	b.WriteString(`   restore-dump then reconciles the keyring and the state of encryption at
    rest with the data directory and prints what it changed.

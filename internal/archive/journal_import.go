@@ -17,8 +17,10 @@ import (
 // an smtp account, with a fill's rules (#152): next to what arrives over
 // SMTP, numbered after it under the folder's row lock, without an envelope
 // and naming the import imp. A message the folder holds already counts as
-// Present; one whose Message-ID the account received over SMTP is left out
-// and counts as Journaled. The source folders are merged; their names only
+// Present; one the account received over SMTP is left out and counts as
+// Journaled: the same Message-ID, Date, From and Subject (journalKey), as
+// for a fill. Only such a message's file may be removed; any other is
+// stored. The source folders are merged; their names only
 // label the counts.
 //
 // Copies of the same bytes count one by one, in one batch as in two (#306):
@@ -33,9 +35,9 @@ import (
 // re-run adds only what is missing. Batches committed before an error stay.
 // No sync run is recorded: smtp accounts have none.
 //
-// The Message-ID check runs before the batch takes the folder's lock, like
-// a fill's: a delivery with the same Message-ID but other bytes that
-// arrives in between gives two copies, never a gap.
+// The journaled check runs before the batch takes the folder's lock, like
+// a fill's: a delivery of the same message with other bytes that arrives
+// in between gives two copies, never a gap.
 func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *store.SMTPImport,
 	folders []mailbox.SourceFolder) (*ImportResult, error) {
 	if acc.Kind != store.KindSMTP {
@@ -106,12 +108,13 @@ type journalImport struct {
 	batch                         []journalPending
 }
 
-// journalPending is a message waiting for the Message-ID check.
+// journalPending is a message waiting for the journaled check.
 type journalPending struct {
-	blob      blobstore.Blob
-	created   bool
-	messageID string
-	loc       store.Location
+	blob    blobstore.Blob
+	created bool
+	key     journalKey
+	keyOK   bool // the message can count as journaled (newJournalKey)
+	loc     store.Location
 }
 
 func (j *journalImport) run(ctx context.Context, sf mailbox.SourceFolder) error {
@@ -140,7 +143,7 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 		j.fr.Present++
 		return nil
 	}
-	// Always from the message itself: BuildMeta leaves the Message-ID
+	// Always from the message itself: BuildMeta leaves the header values
 	// empty for a message the archive already holds.
 	h, err := j.im.blobHeaders(blob)
 	if err != nil {
@@ -157,8 +160,9 @@ func (j *journalImport) add(ctx context.Context, body io.Reader, m sourceMessage
 			date = *h.Date
 		}
 	}
+	key, keyOK := headersKey(h)
 	j.batch = append(j.batch, journalPending{
-		blob: blob, created: created, messageID: h.MessageID,
+		blob: blob, created: created, key: key, keyOK: keyOK,
 		loc: store.Location{FolderID: j.folderID, Flags: flags, InternalDate: date},
 	})
 	if len(j.batch) >= j.im.batchSize() {
@@ -172,11 +176,13 @@ func (j *journalImport) flush(ctx context.Context) error {
 	if len(j.batch) == 0 {
 		return nil
 	}
-	ids := make([]string, len(j.batch))
-	for i, p := range j.batch {
-		ids[i] = p.messageID
+	var keys []journalKey
+	for _, p := range j.batch {
+		if p.keyOK {
+			keys = append(keys, p.key)
+		}
 	}
-	journaled, err := j.im.Store.JournaledMessageIDs(ctx, j.accountID, ids)
+	journaled, err := journaledKeys(ctx, j.im.Store, j.accountID, keys, j.log)
 	if err != nil {
 		return err
 	}
@@ -185,7 +191,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 		locs  []store.Location
 	)
 	for _, p := range j.batch {
-		if p.messageID != "" && journaled[p.messageID] {
+		if p.keyOK && journaled[p.key] {
 			j.fr.Journaled++
 			if p.created {
 				// A file only this import wrote: the sweep removes it

@@ -47,8 +47,9 @@ mail, whatever their IMAP folder; they have no envelope, and the message
 view names the mailbox they came from.
 
 A one-time fill imports a message when its INTERNALDATE is before the
-cut-off plus one hour, unless the account already received a message with
-the same Message-ID over SMTP. The cut-off is now by default; --before sets
+cut-off plus one hour, unless the account already received the same
+message over SMTP: the same Message-ID, Date, From addresses and Subject.
+The cut-off is now by default; --before sets
 an earlier one (RFC 3339, or YYYY-MM-DD for midnight UTC).
 
 A recurring fill (--keep-running) has no cut-off: it imports a message

@@ -329,7 +329,8 @@ for marker in 'Smoke test' 'Work message' alice; do
 done
 docker compose --progress quiet exec -T postgres pg_restore --list < "$work/plain.dump" > "$work/out"
 expect "$work/out" 'TABLE public messages'
-rm -f "$work/plain.dump" "$work/plain.sql"
+# plain.dump stays for the downgrade check of restore-dump below.
+rm -f "$work/plain.sql"
 
 echo "== restore-dump into a fresh database"
 # A recovery key added after the backup lives in the keyring file only; the
@@ -341,6 +342,30 @@ tables() {
 	docker compose --progress quiet exec -T postgres psql -U mailarchive -d mailarchive -Atc \
 		"SELECT count(*) FROM pg_tables WHERE schemaname = 'public'"
 }
+# A dump without encryption in place of an encrypted one is refused on this
+# archive (archive key, keyring, .enc name) before pg_restore runs
+# (GHSA-w6jg-ffvw-q4f5); with --plaintext it is restored, and the holder's
+# note does not break the ./ma protocol.
+downgrade=$work/backups/x.dump.enc
+mv "$work/plain.dump" "$downgrade"
+if ./ma restore-dump "$downgrade" > "$work/out" 2>&1; then
+	cat "$work/out" >&2
+	echo "expected ./ma restore-dump to refuse a dump without encryption named .dump.enc" >&2
+	exit 1
+fi
+expect "$work/out" 'has no encryption header'
+expect "$work/out" 'restore-dump --plaintext'
+if [ "$(tables | tr -d ' \r')" != 0 ]; then
+	echo "a refused dump without encryption left tables behind" >&2
+	exit 1
+fi
+./ma restore-dump --plaintext "$downgrade" > "$work/out" 2>&1 || { cat "$work/out" >&2; exit 1; }
+cat "$work/out"
+expect "$work/out" 'restoring an unencrypted dump \(--plaintext\)'
+expect "$work/out" "restored $downgrade"
+rm -f "$downgrade"
+docker compose --progress quiet exec -T postgres dropdb -U mailarchive --force mailarchive
+docker compose --progress quiet exec -T postgres createdb -U mailarchive mailarchive
 # A damaged dump is refused and leaves the new database empty.
 cut=$work/backups/cut.dump.enc
 head -c "$(($(wc -c < "$dump") - 1))" "$dump" > "$cut"

@@ -312,8 +312,10 @@ function LoginPage({ done, passkeyOrigin }: { done: (s: Session) => void; passke
       done(await sessionApi.login2FA(challenge, password));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401 && err.message.includes("expired")) {
+        // The challenge is gone: it expired, or it took its last code
+        // ("too many wrong codes; the login has expired, log in again").
         setChallenge(null);
-        setError(t.twoFactorExpired);
+        setError(err.message.includes("too many wrong codes") ? t.twoFactorTooManyCodes : t.twoFactorExpired);
       } else {
         setError(err instanceof ApiError && err.status === 401 ? t.invalidTwoFactor : loginError(err));
       }

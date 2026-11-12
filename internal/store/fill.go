@@ -121,7 +121,7 @@ type FillCounts struct {
 	Imported    int // locations added
 	New         int // messages new to the archive
 	AfterCutoff int // left to journaling
-	Journaled   int // same Message-ID received over SMTP
+	Journaled   int // the same message received over SMTP (Message-ID, Date, From, Subject)
 	Present     int // already in the target folder
 	Deleted     int // deleted by retention, not stored again
 	Waiting     int // recurring fills: younger than two hours, for the next run
@@ -801,26 +801,42 @@ func (s *Store) FillStatus(ctx context.Context, id int64) (string, error) {
 	return st, err
 }
 
-// JournaledMessageIDs returns which of ids the account received over SMTP
-// (a location with an envelope). Empty IDs never match: messages without a
-// Message-ID store NULL.
-func (s *Store) JournaledMessageIDs(ctx context.Context, accountID int64, ids []string) (map[string]bool, error) {
+// JournaledCandidate is a message the account received over SMTP, with
+// the stored values the journaled check of a fill or a journal import
+// compares (archive.journalKey). A NULL Subject or From is "".
+type JournaledCandidate struct {
+	MessageID string
+	SentAt    *time.Time
+	From      string
+	Subject   string
+}
+
+// JournaledCandidates returns messages the account received over SMTP (a
+// location with an envelope) whose Message-ID is among ids and whose Date,
+// truncated to the second, is among dates; at most maxRows of them, so a
+// flood of copies cannot make a batch unbounded. The caller compares the
+// values; it passes dates truncated to the second. Empty IDs never match:
+// messages without a Message-ID store NULL.
+func (s *Store) JournaledCandidates(ctx context.Context, accountID int64, ids []string, dates []time.Time,
+	maxRows int) ([]JournaledCandidate, error) {
 	var want []string
 	for _, id := range ids {
 		if id != "" {
 			want = append(want, id)
 		}
 	}
-	out := map[string]bool{}
-	if len(want) == 0 {
-		return out, nil
+	if len(want) == 0 || len(dates) == 0 || maxRows <= 0 {
+		return nil, nil
 	}
-	got, err := s.q.JournaledMessageIDs(ctx, db.JournaledMessageIDsParams{AccountID: accountID, Ids: want})
+	rows, err := s.q.JournaledMatchCandidates(ctx, db.JournaledMatchCandidatesParams{
+		AccountID: accountID, Ids: want, Dates: dates, MaxRows: int32(min(maxRows, math.MaxInt32)),
+	})
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range got {
-		out[id] = true
+	out := make([]JournaledCandidate, len(rows))
+	for i, r := range rows {
+		out[i] = JournaledCandidate{MessageID: r.MessageID, SentAt: r.SentAt, From: deref(r.FromAddr), Subject: deref(r.Subject)}
 	}
 	return out, nil
 }

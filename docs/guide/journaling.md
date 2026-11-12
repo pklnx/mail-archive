@@ -283,24 +283,73 @@ journal folder; that is only how they are displayed.
 **Which messages.** The journal copy and the mailbox copy of a message differ
 in their `Received:` lines, so the archive cannot match them by content. The
 fill decides by the time the mailbox received a message (its INTERNALDATE)
-and by its Message-ID. `C` is the cut-off, now by default; `--before` sets an
+and by whether the account received the same message over SMTP. `C` is the
+cut-off, now by default; `--before` sets an
 earlier one (`2026-06-01` for midnight UTC, or RFC 3339 with an offset).
 
 | INTERNALDATE | Fill |
 |---|---|
-| before `C` plus one hour | imported, unless the account received a message with the same Message-ID over SMTP |
+| before `C` plus one hour | imported, unless the account received the same message over SMTP (see below) |
 | from `C` plus one hour on | left to journaling |
 
 - The hour covers clocks that differ and mail that was delivered late.
-- The Message-ID check runs on every message, so a test message, copies the
-  archive refused or a late start of journaling cause neither gaps nor two
-  copies.
-- **Still stored twice:** a message without a `Message-ID` header that was
-  journaled too. It is imported anyway; a duplicate is better than a gap.
+- The check for the same message runs on every message, so a test message,
+  copies the archive refused or a late start of journaling cause no gaps,
+  and usually no second copy.
+- **Still stored twice:** a journaled message the check cannot recognise (see
+  below). It is imported anyway; a duplicate is better than a gap.
 - **Not stored:** mail that arrives after an earlier `--before` while
   journaling is not set up yet. With the default cut-off, nothing.
 - Trash and spam folders are refused unless excluded, or confirmed with
   `--confirm-folders`.
+
+**The same message.** A mailbox message counts as received over SMTP only
+when a message the account received over SMTP has all of these:
+
+- the same `Message-ID`;
+- the same `Date` as a point in time, to the second: `Mon, 1 Jun 2026
+  12:00:00 +0200` and `1 Jun 2026 10:00:00 GMT` are the same;
+- the same sender addresses in `From`, ignoring upper and lower case and the
+  display name;
+- the same `Subject` after decoding (`=?UTF-8?…?=`) and joining folded lines;
+  upper and lower case count. An empty `Subject` matches an empty one.
+
+Anything else is imported, because a duplicate is better than a gap. Up to
+version 1.5.1 the `Message-ID` alone decided, so a sender could keep a
+mailbox message out of the archive by sending a forged message with its
+`Message-ID` to the journaled address.
+
+- **Stored twice:** a message without a `Message-ID`, without a `Date` that
+  can be read or without a `From`; a message whose journal copy a gateway
+  changed, for example an `[EXTERNAL]` tag added to the `Subject`; and mail
+  journaled by an older version that stored one of these values differently.
+- **Still left out:** a message that matches on all four counts as the same
+  message even if its body differs. Anyone who has a copy of a mailbox
+  message (its sender or another recipient) and so knows its exact
+  `Message-ID`, `Date`, `From` and `Subject` can still keep it out.
+
+**After upgrading to 1.5.2.** Fills and imports that ran before are not
+checked again by themselves: nothing reads a mailbox again unasked, and an
+ended fill does not ask for its password again. A message an earlier fill
+left out because of a forged journal copy stays missing until you check
+again, in one of two ways:
+
+- Start a new one-time fill of the mailbox with the cut-off of the earlier
+  fill (`--before`). It downloads every message before the cut-off again;
+  what the earlier fill imported is recognised as already there and not
+  stored a second time.
+- Or switch an ended one-time fill on with **Keep importing new mail**, or
+  `./ma account fill journal --keep-running`. Its first run scans the
+  mailbox again from the start, and what the fill imported before is
+  recognised without downloading it. Stop it afterwards with **Stop
+  importing** if it should not keep running.
+
+A recurring fill uses the new rule from its next run on, for the messages it
+has not decided yet; to check the older ones, stop it and start a new
+one-time fill as above. Run an `import --journal` again on the same files to
+check them again. Either way, mail an earlier version recognised as
+journaled but which the new rule does not (see *Stored twice*) is stored a
+second time.
 
 **Several mailboxes** journaled into one account get one fill each, one after
 another, all into `JOURNAL`; the origin section tells which mailbox a message
@@ -330,7 +379,7 @@ picks it up within a minute.
 mailbox, such as a [piler](./importing#piler-into-a-journaled-mailbox)
 export, goes into the same account with `import --journal`, which the
 operator runs with the files handed over, with the rules of a fill: what
-the account received over SMTP is left out by its Message-ID, and the origin
+the account received over SMTP is left out by the same check, and the origin
 section says "Imported from files: LABEL". See
 [Into an smtp account](./importing#into-an-smtp-account).
 
@@ -361,7 +410,7 @@ The first run happens right away (on the command line in the foreground);
 afterwards the web server runs it on its schedule.
 
 A recurring fill has no cut-off: a message is imported once it is two hours
-old and the account did not receive its Message-ID over SMTP. A younger
+old and the account did not receive the same message over SMTP. A younger
 message waits for the next run, because its journal copy may still be in the
 mail server's queue. How the fill decides in detail, what it does after a
 restart of the web server, with moved, deleted and new folders, its interval
@@ -385,4 +434,5 @@ delivered it there, so its bytes differ. Search finds both. The same is true
 for mail imported from piler into an import account. A
 [fill](#bring-in-the-mail-from-before-journaling) and
 [`import --journal`](./importing#into-an-smtp-account) avoid this inside an
-smtp account by checking the Message-ID.
+smtp account by checking the `Message-ID`, `Date`, `From` and `Subject` (see
+[The same message](#bring-in-the-mail-from-before-journaling)).

@@ -9,15 +9,21 @@ import "strings"
 //     legacy shadowroot and any future shadowroot* name). The HTML parser
 //     attaches such a root without script, and a click inside a closed root
 //     cannot be seen by the app's link blocker.
-//   - iframe, srcdoc...: a nested document built from an attribute value.
-//     The app's link blocker is installed only on the mail's own document,
-//     and the nested document's content is escaped, so a scan for the
-//     template rule never sees a shadow root inside it.
+//   - iframe, src...: srcdoc builds a nested document from an attribute
+//     value. The app's link blocker is installed only on the mail's own
+//     document, and the nested document's content is escaped, so a scan for
+//     the template rule never sees a shadow root inside it. src (and any
+//     other src* name): the CSP's default-src 'none' blocks the frame's
+//     navigation, but a full Chromium with a persistent profile has
+//     already looked up the host and opened a connection to it, which tells
+//     the sender that the mail was opened.
+//   - frame, src...: the same connection for <frame> in a <frameset>.
 //
 // Tags and prefixes are lowercase ASCII.
 var neutralizeRules = [...]struct{ tag, prefix string }{
 	{"template", "shadowroot"},
-	{"iframe", "srcdoc"},
+	{"iframe", "src"},
+	{"frame", "src"},
 }
 
 // linkNames are the attribute names neutralizeHTML renames on every start
@@ -34,6 +40,32 @@ var neutralizeRules = [...]struct{ tag, prefix string }{
 //     an href among them, without one in the markup.
 //   - http-equiv: <meta http-equiv=refresh> navigates the frame; on other
 //     elements it does nothing.
+//
+// The rest keep a mail from changing how the browser makes requests: a
+// served mail may not configure the document, set a referrer policy or ask
+// for a request on its own. Remote requests come only from what the CSP
+// governs: images after "Load remote images", and clicks.
+//
+//   - rel: a <link> does nothing without it, so this covers every link type
+//     at once (prerender, prefetch, preconnect, dns-prefetch, preload,
+//     modulepreload, stylesheet, icon, manifest and future ones), which
+//     the CSP does not reliably govern. On <a>, <area> and <form> it only
+//     weakens (rel=opener); the header's policy and noopener by default
+//     stay.
+//   - referrerpolicy: on <a>, <area>, <img>, <link>, <iframe> and <script>
+//     it overrides the server's Referrer-Policy: no-referrer.
+//   - crossorigin: an image requested in cors mode sends the archive's
+//     origin in Origin; renamed, it loads no-cors without one.
+//   - content: <meta name=...> takes effect only through it (referrer,
+//     color-scheme, theme-color, viewport); http-equiv is renamed already,
+//     so a <meta> sets nothing. No other HTML, SVG or MathML element uses
+//     it.
+//   - attributionsrc, browsingtopics, sharedstoragewritable: a background
+//     request (Attribution Reporting) or tracking headers (Topics, Shared
+//     Storage) the browser sends on its own.
+//
+// An element is never dropped: only the prefix is inserted (#209), and a
+// <link> without rel is inert.
 var linkNames = [...]struct {
 	name        string
 	conditional bool
@@ -43,6 +75,13 @@ var linkNames = [...]struct {
 	{"ping", false},
 	{"attributename", false},
 	{"http-equiv", false},
+	{"rel", false},
+	{"referrerpolicy", false},
+	{"crossorigin", false},
+	{"content", false},
+	{"attributionsrc", false},
+	{"browsingtopics", false},
+	{"sharedstoragewritable", false},
 }
 
 // neutralizePrefix goes in front of every renamed attribute name. It holds no
@@ -57,9 +96,10 @@ const neutralizePrefix = "data-"
 // keep its value. A template then stays an inert <template> and a frame an
 // empty about:blank; their content is not shown. No link in the served HTML
 // points into the app (hosts) or to anything but an http(s), mailto: or tel:
-// URL, in every engine, without any script in the browser (#459). All other
-// bytes are kept, so the token boundaries and token types are the same as in
-// doc.
+// URL, in every engine, without any script in the browser (#459). No <link>
+// or <meta> in it takes effect, and no element sets its own referrer policy
+// or cors mode. All other bytes are kept, so the token boundaries and token
+// types are the same as in doc.
 //
 // The scan is context-free: which state the browser's tokenizer is in at a
 // "<" depends on tree construction (raw text, foreign content, noscript with
@@ -119,8 +159,10 @@ func neutralizeHTML(doc string, hosts appHosts) string {
 		cls := attrClassOf(c)
 		// The rules' prefixes and linkNames are pairwise disjoint (no name
 		// is a prefix of another or starts with a rule's prefix: shadowroot,
-		// srcdoc, href, xlink:href, ping, attributename, http-equiv), so at
-		// most one of them matches at i; the prefix goes in once.
+		// src, href, xlink:href, ping, attributename, http-equiv, rel,
+		// referrerpolicy, crossorigin, content, attributionsrc,
+		// browsingtopics, sharedstoragewritable), so at most one of them
+		// matches at i; the prefix goes in once.
 		insert := false
 		for r := range neutralizeRules {
 			if pending[r] == i {

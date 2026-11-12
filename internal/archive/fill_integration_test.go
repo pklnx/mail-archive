@@ -25,11 +25,14 @@ import (
 
 var fillCutoff = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
+// fillMessage is a mailbox message; its journal copy (journal) has the
+// same Message-ID, Date, From and Subject.
 func fillMessage(id string) []byte {
 	if id == "" {
-		return []byte("From: a@example.com\r\nSubject: no id\r\n\r\nNo Message-ID.\r\n")
+		return []byte("From: a@example.com\r\nSubject: no id\r\nDate: Fri, 5 Mar 2010 10:00:00 +0000\r\n\r\nNo Message-ID.\r\n")
 	}
-	return fmt.Appendf(nil, "Message-ID: <%s@example.com>\r\nFrom: a@example.com\r\nSubject: %s\r\n\r\nBody of %s\r\n", id, id, id)
+	return fmt.Appendf(nil, "Message-ID: <%s@example.com>\r\nFrom: a@example.com\r\nSubject: %s\r\n"+
+		"Date: Fri, 5 Mar 2010 10:00:00 +0000\r\n\r\nBody of %s\r\n", id, id, id)
 }
 
 // journal stores the journal copy of a message: the same Message-ID, other

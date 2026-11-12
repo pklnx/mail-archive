@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -176,7 +177,11 @@ func TestFills(t *testing.T) {
 	}
 }
 
-func TestJournaledMessageIDs(t *testing.T) {
+// TestJournaledCandidates checks the pre-selection of the journaled check
+// (#4 of the security fixes): messages with an envelope in this account
+// whose Message-ID and Date, to the second, are asked for; a NULL From and
+// Subject come back empty; at most maxRows rows.
+func TestJournaledCandidates(t *testing.T) {
 	st := storetest.New(t)
 	ctx := context.Background()
 	a := createSMTPAccount(t, st, nil, "journal", "archive@example.com")
@@ -184,23 +189,72 @@ func TestJournaledMessageIDs(t *testing.T) {
 	if first, err := st.FirstReceived(ctx, a.ID); err != nil || first != nil {
 		t.Fatalf("first of an empty account: %+v, %v", first, err)
 	}
-	m1 := receivedMeta(1)
-	m1.MessageID, m1.Subject = "one@example.com", "first"
-	m2 := receivedMeta(2)
-	m2.MessageID = "two@example.com"
-	for _, m := range []store.MessageMeta{m1, m2} {
+	at := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	frac := at.Add(500 * time.Millisecond)
+	later := at.Add(time.Hour)
+	meta := func(sha byte, id string, date *time.Time, from, subject string) store.MessageMeta {
+		m := receivedMeta(sha)
+		m.MessageID, m.SentAt, m.From, m.Subject = id, date, from, subject
+		return m
+	}
+	for _, m := range []store.MessageMeta{
+		meta(1, "one@example.com", &at, "a@example.com", "first"),
+		meta(2, "one@example.com", &frac, "b@example.com", "second"), // the same second
+		meta(3, "one@example.com", &later, "a@example.com", "first"), // another Date
+		meta(4, "two@example.com", &at, "", ""),                      // NULL From and Subject
+		meta(5, "three@example.com", nil, "a@example.com", "x"),      // no Date
+	} {
 		if _, err := st.ReceiveMessage(ctx, a.ID, m, envelope("x@example.com"), present); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m3 := receivedMeta(3)
-	m3.MessageID = "three@example.com"
-	if _, err := st.ReceiveMessage(ctx, other.ID, m3, envelope("x@example.com"), present); err != nil {
+	// Another account's mail and a fill's import into this account are no
+	// candidates.
+	if _, err := st.ReceiveMessage(ctx, other.ID, meta(6, "four@example.com", &at, "a@example.com", "x"), envelope("x@example.com"), present); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.JournaledMessageIDs(ctx, a.ID, []string{"one@example.com", "three@example.com", "", "none@example.com"})
-	if err != nil || len(got) != 1 || !got["one@example.com"] {
-		t.Errorf("journaled %v, %v", got, err)
+	f := newFill(a, "alice@example.com")
+	if err := st.CreateFill(ctx, f, seal); err != nil {
+		t.Fatal(err)
+	}
+	ff, err := st.FillFolder(ctx, f, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ff.Counts.Imported = 1
+	if _, err := st.SaveFillBatch(ctx, ff, []store.MessageMeta{meta(7, "five@example.com", &at, "a@example.com", "x")}, []store.Location{{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := []string{"one@example.com", "two@example.com", "three@example.com", "four@example.com", "five@example.com", "", "none@example.com"}
+	got, err := st.JournaledCandidates(ctx, a.ID, ids, []time.Time{at}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(got, func(x, y store.JournaledCandidate) int {
+		return strings.Compare(x.MessageID+x.From, y.MessageID+y.From)
+	})
+	type row struct{ id, from, subject string }
+	var rows []row
+	for _, c := range got {
+		if c.SentAt == nil || !c.SentAt.Truncate(time.Second).Equal(at) {
+			t.Errorf("candidate %+v: date", c)
+		}
+		rows = append(rows, row{c.MessageID, c.From, c.Subject})
+	}
+	want := []row{{"one@example.com", "a@example.com", "first"}, {"one@example.com", "b@example.com", "second"}, {"two@example.com", "", ""}}
+	if !slices.Equal(rows, want) {
+		t.Errorf("candidates %+v, want %+v", rows, want)
+	}
+	if got, err := st.JournaledCandidates(ctx, a.ID, ids, []time.Time{later}, 100); err != nil || len(got) != 1 || got[0].MessageID != "one@example.com" {
+		t.Errorf("later: %+v, %v", got, err)
+	}
+	// The cap cuts the rows.
+	if got, err := st.JournaledCandidates(ctx, a.ID, ids, []time.Time{at, later}, 2); err != nil || len(got) != 2 {
+		t.Errorf("capped: %+v, %v", got, err)
+	}
+	if got, err := st.JournaledCandidates(ctx, a.ID, []string{"", ""}, []time.Time{at}, 100); err != nil || len(got) != 0 {
+		t.Errorf("empty IDs: %+v, %v", got, err)
 	}
 	first, err := st.FirstReceived(ctx, a.ID)
 	if err != nil || first == nil || first.Subject != "first" || first.ReceivedAt.IsZero() {

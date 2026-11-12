@@ -211,7 +211,8 @@ code from the app (**Generate new recovery codes**), and download them the
 same way. The old codes stop working, so throw away the old sheet.
 
 From then on, the login asks for a code after the password. A code works
-only once and only for about 30 seconds before or after its time.
+only once and only for about 30 seconds before or after its time. After 3
+wrong codes, the login starts again with the password.
 
 Users who are not admins can turn 2FA off in their profile with their
 password and a code, unless the operator requires it for everyone

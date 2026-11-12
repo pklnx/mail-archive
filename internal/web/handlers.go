@@ -493,9 +493,16 @@ const frameSandbox = "allow-same-origin allow-popups allow-popups-to-escape-sand
 // document).
 //
 // The served bytes are built by servedMailHTML: it also neutralizes
-// declarative shadow roots and srcdoc frames (#209), which the app's link
-// blocker cannot see into. Only the served rendering changes: the stored
-// message, /raw, /parts/{n} and exports keep the archived bytes.
+// declarative shadow roots and frames (srcdoc and src, #209), which the
+// app's link blocker cannot see into or which connect to the sender's host,
+// and the attributes with which a mail would change
+// how the browser makes requests: resource hints (<link rel>), referrer
+// policies (<meta name=referrer>, referrerpolicy) and crossorigin. No
+// directive of the CSP reliably governs resource hints, so they are removed
+// from the bytes, and Referrer-Policy: no-referrer holds for link clicks and
+// for remote <img> and SVG image elements (images a mail loads through CSS
+// still send the origin). Only the served rendering changes: the stored message,
+// /raw, /parts/{n} and exports keep the archived bytes.
 func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 	sha, ok := s.pathSHA(w, r)
 	if !ok {
@@ -560,11 +567,15 @@ func (s *Server) handleMessageHTML(w http.ResponseWriter, r *http.Request) {
 // so the frame could not load them from the parts endpoint), then the
 // preamble, then neutralizeHTML. That renames the attributes that make a
 // nested document the app's link blocker cannot reach (#209): declarative
-// shadow roots (shadowroot... on <template>) and srcdoc frames (srcdoc... on
-// <iframe>) get the prefix "data-", so their content is not shown. It also
+// shadow roots (shadowroot... on <template>) and frames (src..., srcdoc
+// among them, on <iframe> and <frame>) get the prefix "data-", so their
+// content is not shown and no connection is opened for them. It also
 // renames every href and xlink:href that is not an external link (not to
 // one of hosts, the app's own host names), and every ping, attributeName and
-// http-equiv (#459), so no link in the served HTML points into the app.
+// http-equiv (#459), so no link in the served HTML points into the app. And
+// it renames every rel, referrerpolicy, crossorigin, content,
+// attributionsrc, browsingtopics and sharedstoragewritable, so no <link> or
+// <meta> takes effect and the mail cannot change how the browser requests.
 //
 // neutralizeHTML runs last, on exactly the bytes that are served: any
 // rewrite after it could change how the scanned bytes tokenize. Inlining

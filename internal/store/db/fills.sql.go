@@ -379,35 +379,59 @@ func (q *Queries) JournalFolder(ctx context.Context, arg JournalFolderParams) (i
 	return id, err
 }
 
-const journaledMessageIDs = `-- name: JournaledMessageIDs :many
-SELECT DISTINCT m.message_id::text AS message_id
+const journaledMatchCandidates = `-- name: JournaledMatchCandidates :many
+SELECT DISTINCT m.message_id::text AS message_id, m.sent_at, m.from_addr, m.subject
 FROM messages m
 JOIN message_locations l ON l.message_sha256 = m.sha256
 JOIN envelopes e ON e.location_id = l.id
 JOIN folders f ON f.id = l.folder_id
 WHERE f.account_id = $1 AND m.message_id = ANY ($2::text[])
+  AND m.sent_at IS NOT NULL AND date_trunc('second', m.sent_at) = ANY ($3::timestamptz[])
+LIMIT $4
 `
 
-type JournaledMessageIDsParams struct {
+type JournaledMatchCandidatesParams struct {
 	AccountID int64
 	Ids       []string
+	Dates     []time.Time
+	MaxRows   int32
 }
 
-// Message-IDs among @ids of messages the account received over SMTP (with
-// an envelope); uses messages_message_id_idx.
-func (q *Queries) JournaledMessageIDs(ctx context.Context, arg JournaledMessageIDsParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, journaledMessageIDs, arg.AccountID, arg.Ids)
+type JournaledMatchCandidatesRow struct {
+	MessageID string
+	SentAt    *time.Time
+	FromAddr  *string
+	Subject   *string
+}
+
+// The Message-ID, Date, From and Subject of messages the account received
+// over SMTP (with an envelope) whose Message-ID is among @ids and whose
+// Date, to the second, among @dates: the candidates for the journaled check
+// of a fill or a journal import, which compares all four. Uses
+// messages_message_id_idx; at most @max_rows rows.
+func (q *Queries) JournaledMatchCandidates(ctx context.Context, arg JournaledMatchCandidatesParams) ([]JournaledMatchCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, journaledMatchCandidates,
+		arg.AccountID,
+		arg.Ids,
+		arg.Dates,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []JournaledMatchCandidatesRow
 	for rows.Next() {
-		var message_id string
-		if err := rows.Scan(&message_id); err != nil {
+		var i JournaledMatchCandidatesRow
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.SentAt,
+			&i.FromAddr,
+			&i.Subject,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, message_id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
