@@ -19,7 +19,7 @@ With Docker Compose, run every command through the wrapper, for example
 
 | Command | Purpose |
 |---|---|
-| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. Waits for another running `migrate`, and after a killed `migrate` for goose's migration lock; see below. |
+| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. Waits for another running `migrate` or a starting `serve` or `worker`, and after a killed `migrate` for goose's migration lock; see below. While migrations are pending, the other commands that use the database refuse with exit code `4` (`backup` and `status` only warn), and so do `serve` and `worker` unless `MAIL_ARCHIVE_MIGRATE_ON_START=on` lets them migrate at start. A failed migration is rolled back and ends `migrate` with exit code `3`. Unlike a start, `migrate` also runs a migration again whose failure was recorded (see [When a migration fails](../guide/operations#when-a-migration-fails)). |
 | `migrate status` | Show applied and pending migrations. Does not wait for a running migration. |
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. Waits for another running `migrate`, also during its one-time index rebuild, and, like `migrate`, for goose's migration lock. Refuses, like the other commands, while no `migrate` has done that rebuild. |
 | `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |
@@ -50,8 +50,13 @@ The wait has no time limit; Ctrl-C stops it (same 15 second limit). If no
 `pg_terminate_backend` calls that stop the holder. Statements of the killed
 command outside goose's lock (the index rebuild, the audit log partitions,
 the password upgrade) are not waited for: within those 10 seconds a new
-command can start next to such a statement. The web server is not covered:
-it neither waits for nor blocks a migration, so stop it before `./ma migrate`
+command can start next to such a statement.
+
+`serve` and `worker` take the same lock when they start, until they have
+checked the schema (see [Start-up migrations](../guide/operations#start-up-migrations)):
+a start waits for a running `migrate`, and `migrate` waits for a start
+that migrates. A web server that is already running is not covered: it
+neither waits for nor blocks a migration, so stop it before `./ma migrate`
 when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
 
 ## Encryption
@@ -315,8 +320,8 @@ retention has usually ended too, so the next deletion run lists it.
 | `hold add\|list\|release` | Legal holds: no deletion of what they cover. See below. |
 | `retention preview\|show\|confirm\|cancel\|runs\|sweep` | Delete mail whose retention period has ended, in a reviewed run. See below. |
 | `attest check [--file FILE] [--public-key FILE] [--offline]` | Check only the attestations, fast. See below. |
-| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule, attestations and, unless `MAIL_ARCHIVE_JOB_WORKERS=0`, the [background jobs](../guide/operations#background-jobs). Default `127.0.0.1:8080`. |
-| `worker` | Run only the background jobs, `MAIL_ARCHIVE_JOB_WORKERS` (1 to 8) at a time: no web server, SMTP, syncs, fills, attestations or retention. For a separate process with its own memory limit, with `MAIL_ARCHIVE_JOB_WORKERS=0` for `serve`; with Compose, the `worker` service. Stops on SIGTERM and hands running jobs back to the queue. Refuses `MAIL_ARCHIVE_JOB_WORKERS=0`. |
+| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule, attestations and, unless `MAIL_ARCHIVE_JOB_WORKERS=0`, the [background jobs](../guide/operations#background-jobs). Default `127.0.0.1:8080`. At start it waits for a running `migrate`, applies pending migrations with `MAIL_ARCHIVE_MIGRATE_ON_START=on`, and refuses with exit code `4` while migrations are pending or a newer version migrated the database; a failed migration ends it with exit code `3` ([Start-up migrations](../guide/operations#start-up-migrations)). |
+| `worker` | Run only the background jobs, `MAIL_ARCHIVE_JOB_WORKERS` (1 to 8) at a time: no web server, SMTP, syncs, fills, attestations or retention. For a separate process with its own memory limit, with `MAIL_ARCHIVE_JOB_WORKERS=0` for `serve`; with Compose, the `worker` service. Stops on SIGTERM and hands running jobs back to the queue. Refuses `MAIL_ARCHIVE_JOB_WORKERS=0`. Starts like `serve`: start-up migrations, schema check, exit codes `3` and `4`. |
 | `jobs retry KIND` | Queue the failed background jobs of `KIND` (for example `attachment_text`) again, with their attempts reset, and print how many. `status` shows how many failed. Recorded in the audit log as `jobs.retry`. |
 
 Commands that change users or accounts, `jobs retry`, and `import`, `export`, `backup`

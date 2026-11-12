@@ -125,6 +125,30 @@ func TestParseJobWorkers(t *testing.T) {
 	}
 }
 
+// TestMigrateOnStart (#396): on or off in any case, off when empty;
+// anything else is refused, naming the variable.
+func TestMigrateOnStart(t *testing.T) {
+	for in, want := range map[string]bool{"": false, "off": false, "OFF": false, "on": true, " On ": true} {
+		if got, err := parseOnOff(EnvMigrateOnStart, in); err != nil || got != want {
+			t.Errorf("parseOnOff(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"true", "1", "yes", "onn"} {
+		if _, err := parseOnOff(EnvMigrateOnStart, in); err == nil || !strings.Contains(err.Error(), EnvMigrateOnStart) {
+			t.Errorf("parseOnOff(%q): %v", in, err)
+		}
+	}
+	t.Setenv(EnvDatabaseURL, "postgres://localhost/x")
+	t.Setenv(EnvMigrateOnStart, "on")
+	if cfg, err := Load(); err != nil || !cfg.MigrateOnStart {
+		t.Errorf("Load with on: %v", err)
+	}
+	t.Setenv(EnvMigrateOnStart, "maybe")
+	if _, err := Load(); err == nil {
+		t.Error("Load accepted maybe")
+	}
+}
+
 func TestParseWebhook(t *testing.T) {
 	for _, format := range []string{"", "json", "ntfy"} {
 		// Compose passes the default format without a URL.

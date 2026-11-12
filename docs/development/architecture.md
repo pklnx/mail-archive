@@ -27,7 +27,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/blobstore` | Content-addressed `.eml` storage, or `.enc` with encryption at rest: files are named by their SHA-256 and published and removed durably (see [Blob durability](#blob-durability)). |
 | `internal/mime` | MIME parsing: text for the search index, parts and HTML for display. |
 | `internal/attachtext` | Text of attachments for search: plain text, CSV, TSV, Markdown, HTML, and PDFs through PDFium compiled to WebAssembly in wazero (no file system, network or environment; one PDF at a time per process; a new instance per document). No database. |
-| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. `migrate` and `migrate down` hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command on a connection of its own outside the pool; goose's session lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations, from a short-lived pool of its own (one extra connection per call) whose teardown frees a lock left on a given-up connection (#269). Both commands open the store with `ForMigrations` (`client_connection_check_interval` and TCP keepalives), so the server frees a killed command's locks. What an operator sees of this (two runs wait for each other, the holder message, the time limits, what `migrate status`, `backup` and `serve` do) is in the CLI reference under [`migrate`](../reference/cli#migrate). |
+| `internal/store` | PostgreSQL access: migrations (goose), queries (sqlc), the per-account sync lock, the blob lock, the attestation fence and the migration lock. `migrate` and `migrate down` hold the command lock (advisory lock class `0x6d68`, key 0) for the whole command on a connection of its own outside the pool; goose's session lock is taken by a locker of our own (`gooselock.go`) on the connection that runs the migrations, from a short-lived pool of its own (one extra connection per call) whose teardown frees a lock left on a given-up connection (#269). Both commands open the store with `ForMigrations` (`client_connection_check_interval` and TCP keepalives), so the server frees a killed command's locks. What an operator sees of this (two runs wait for each other, the holder message, the time limits, what `migrate status`, `backup` and `serve` do) is in the CLI reference under [`migrate`](../reference/cli#migrate). `serve` and `worker` take the command lock at start too (see [Start-up of serve and worker](#start-up-of-serve-and-worker)). |
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files, and the signed statement of a GoBD export (`statement.go`). No database. |
 | `internal/gobd` | The GoBD export, [format v1](#gobd-export-format-v1): the writer with its directory and ZIP sinks, README.txt, index.xml, SHA256SUMS, and the offline `export verify`. No database. |
 | `internal/csvsafe` | The leading `'` that keeps spreadsheets from reading a CSV cell as a formula; used by the audit CSV, the deletion preview and the GoBD export. |
@@ -1268,6 +1268,42 @@ with `Kind.NewJob(key, priority)` through `store.EnqueueJobs`, or
 for a job about one message. Return `jobs.Permanent` for errors a retry
 cannot fix and `jobs.Code` to name an error in `last_error`. Tests register
 their kinds in the test only.
+
+## Start-up of serve and worker
+
+`serve` and `worker` run `prepareInstance` (`cmd/mail-archive/startup.go`,
+#396) before they open their own store. The steps are numbered as in the
+plan of #396; parts 2 and 3 add the missing ones:
+
+| # | Step | serve | worker | other commands |
+|---|---|---|---|---|
+| 2 | Open a short-lived store with `ForMigrations` and take the migration command lock (`LockMigrations`), logging once if it has to wait. | yes | yes | no |
+| 3 | With `MAIL_ARCHIVE_MIGRATE_ON_START=on`: refuse a migration whose failure is recorded with the same file (exit 3), log the pending migrations and the last `data.backup` audit entry (a warning when none is younger than 26 h), then run `applyMigrations`, the sequence `migrate` runs too (index rebuild, audit partitions, `Store.Migrate`, password upgrade). | yes | yes | `migrate` only, without the record check |
+| 4 | Schema check (`Store.SchemaState`): refuse when migrations are pending or the database has a newer migration than the binary (exit 4). | yes | yes | yes, in `openApp`; `backup` and `status` only warn |
+| 3b | Hook under the lock, on a current schema (part 3: encryption at setup). | yes | yes | no |
+| 8 | Release the lock, close the store, then `openApp` and the process's own start. | yes | yes | – |
+
+Steps 3 to 3b run under the lock, so starts and `migrate` at the same time
+apply each migration once: the first runs them, the others wait and find
+nothing left. goose's own lock stays nested inside, as for `migrate`.
+
+goose runs each migration in a transaction of its own and stops at the
+first failure; `Store.Migrate` turns its `PartialError` into
+`MigrationFailed` with the failed file, its SHA-256 and the migrations of
+the run that stayed applied. `TestMigrationsAreTransactional` refuses
+`-- +goose NO TRANSACTION`, so a failure always rolls back completely. A
+failure whose SQLSTATE class repeats on the same SQL and data (22, 23, 42,
+0A, P0) is written to `instance_state` (migration 00039) in a separate
+statement, keyed on the version and the file's SHA-256; others (timeouts,
+lock and serialization failures, lost connections, cancels) are not, so
+the next start retries them. Before `instance_state` exists, nothing is
+read or written. A successful `applyMigrations` clears the record.
+`Store.InstanceStatus` reports the binary and schema versions, the pending
+migrations and the record (numbers and times only, no error texts).
+
+Exit codes come from `codedError` in `main`: `3` for a failed migration
+(also `migrate`), `4` for a refused start-up check (also any command that
+uses the database while its schema does not match).
 
 ## Web server
 

@@ -100,6 +100,9 @@ const (
 	// EnvIMAPIdleTimeout is how long an IMAP server may send nothing while
 	// a command is in flight.
 	EnvIMAPIdleTimeout = "MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT"
+	// EnvMigrateOnStart ("on" or "off", default off) makes serve and
+	// worker apply pending migrations at start, as `migrate` does (#396).
+	EnvMigrateOnStart = "MAIL_ARCHIVE_MIGRATE_ON_START"
 )
 
 // IMAP limits an honest large mailbox can reach (EnvFillMaxFolderMessages,
@@ -215,6 +218,9 @@ type Config struct {
 	ArchiveKeySource string
 	// IMAP holds the IMAP limits an operator may raise.
 	IMAP IMAPLimits
+	// MigrateOnStart makes serve and worker apply pending migrations at
+	// start.
+	MigrateOnStart bool
 }
 
 // IMAPLimits are the IMAP limits an operator may raise, each checked
@@ -341,6 +347,9 @@ func Load() (*Config, error) {
 	if cfg.IMAP, err = ParseIMAPLimits(os.Getenv); err != nil {
 		return nil, err
 	}
+	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, os.Getenv(EnvMigrateOnStart)); err != nil {
+		return nil, err
+	}
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
 		if err != nil {
@@ -387,6 +396,17 @@ func ParsePublicURL(v string) (origin, rpID string, err error) {
 		}
 	}
 	return origin, host, nil
+}
+
+// parseOnOff reads a switch: "on" or "off", in any case; empty is off.
+func parseOnOff(name, v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s: want on or off, got %q", name, v)
 }
 
 func parseSyncInterval(v string) (time.Duration, error) {
