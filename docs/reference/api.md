@@ -167,15 +167,18 @@ headers what a request is for. Requests to `/api` answer `403`
   `Sec-Fetch-Site` is absent, `same-origin` or `none` (the app's own links,
   a typed address, a bookmark). A navigation from another site
   (`Sec-Fetch-Site` `cross-site` or `same-site`) gets `403` even for these
-  routes, so a link elsewhere that redirects back to the archive cannot open
-  them; or
+  routes, so over HTTPS or on `localhost` a link elsewhere that redirects
+  back to the archive cannot open them; or
 - for anything but a fetch (`Sec-Fetch-Dest` other than `empty`: an image,
   a style sheet, a font and so on).
 
 The check comes first, so such a request writes no audit entry. It keeps an
 HTML mail, which runs with the app's origin, from reaching the API; see
-[HTML mail](./security#html-mail). Requests without these headers, from
-curl, scripts and API clients, are not affected.
+[HTML mail](./security#html-mail). Requests without these headers, from curl,
+scripts and API clients, are not affected. Browsers send them only over HTTPS
+and to `localhost`, so over plain HTTP on any other address (a LAN or VPN
+address) the check does not apply; see
+[Plain LAN access](./security#plain-lan-access).
 
 ## Audit log
 
