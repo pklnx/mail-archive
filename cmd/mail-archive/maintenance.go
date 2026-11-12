@@ -522,7 +522,7 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	version, err := exec.CommandContext(ctx, job.PgDump, "--version").Output() //nolint:gosec // pg_dump from PATH
+	version, err := pgCommand(ctx, job.PgDump, env, "--version").Output()
 	if err != nil {
 		return "", fmt.Errorf("pg_dump --version: %w", err)
 	}
@@ -558,8 +558,8 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 		}
 		out = sealer
 	}
-	cmd := exec.CommandContext(ctx, job.PgDump, "--format=custom", "--no-password") //nolint:gosec // pg_dump from PATH
-	cmd.Env, cmd.Stdout, cmd.Stderr = env, out, &stderr
+	cmd := pgCommand(ctx, job.PgDump, env, "--format=custom", "--no-password")
+	cmd.Stdout, cmd.Stderr = out, &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("pg_dump: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
@@ -588,17 +588,30 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 	return path, writeFileAtomic(filepath.Join(job.Dir, backupNoteName), []byte(job.Note))
 }
 
-// pgEnv turns a database URL into libpq environment variables, replacing
-// any PG* variables of this process.
+// pgToolEnvNames are the variables of this process that pg_dump and
+// pg_restore get besides the libpq variables of the database URL: none
+// holds a secret, and libpq, OpenSSL, Kerberos or the client install may
+// need them (HOME for ~/.pgpass and ~/.postgresql/root.crt, SSL_CERT_* for
+// sslrootcert=system, KRB5* for GSSAPI). Nothing else is passed on, so no
+// MAIL_ARCHIVE_* variable and no PG* variable of this process reaches the
+// tools.
+var pgToolEnvNames = []string{
+	"PATH", "HOME", "TMPDIR", "TZ", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LD_LIBRARY_PATH",
+	"SSL_CERT_FILE", "SSL_CERT_DIR", "OPENSSL_CONF", "KRB5CCNAME", "KRB5_CONFIG",
+}
+
+// pgEnv builds the whole environment of pg_dump and pg_restore: the libpq
+// variables of the database URL and, when set in this process, the
+// variables of pgToolEnvNames.
 func pgEnv(databaseURL string) ([]string, error) {
 	cfg, err := pgconn.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", config.EnvDatabaseURL, err)
 	}
 	var env []string
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "PG") {
-			env = append(env, kv)
+	for _, name := range pgToolEnvNames {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
 		}
 	}
 	env = append(env,
@@ -614,6 +627,14 @@ func pgEnv(databaseURL string) ([]string, error) {
 		env = append(env, key+"="+value)
 	}
 	return env, nil
+}
+
+// pgCommand runs pg_dump or pg_restore with env, the environment pgEnv
+// built, and nothing inherited from this process.
+func pgCommand(ctx context.Context, tool string, env []string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, tool, args...) //nolint:gosec // pg_dump or pg_restore from PATH
+	cmd.Env = env
+	return cmd
 }
 
 // sslSettings reads the TLS parameters of a URL or key=value connection

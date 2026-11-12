@@ -236,7 +236,9 @@ else. The operator, on the command line:
 
 In the web UI, **Delete completely…** is in the row menu of an admin's own
 accounts under *Removed accounts* (a click on the heading unfolds them) and
-in the menu of the account's page. It opens the same preview in a dialog;
+in the menu of the account's page. It opens the preview in a dialog; the
+dialog names only your own accounts that keep copies and counts the rest as
+kept in accounts you do not own;
 **Delete completely** is enabled only once the number of messages to delete
 is typed, exactly. When something is in the way, the dialog names the rules
 and holds and offers no button: remove the rules and release the holds on
@@ -264,8 +266,8 @@ A purge is only possible when:
 The command names every rule and hold in the way. Otherwise it shows how
 many locations are removed, how many messages are deleted because this
 account has their last location, and how many are kept because they are also
-in other accounts (with owner and account), then asks for the number of
-messages to delete.
+in other accounts (on the command line with owner and account), then asks for
+the number of messages to delete.
 
 - A message **also in another account**, of any user, stays there unchanged,
   file included.

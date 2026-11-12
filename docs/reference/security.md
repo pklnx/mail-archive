@@ -7,7 +7,7 @@
 | IMAP passwords | Encrypted in PostgreSQL with AES-256-GCM, bound to the account's internal ID (so a stored password cannot be moved to another account), using `MAIL_ARCHIVE_SECRET_KEY`. API responses never contain them. |
 | Archived mail (message files) | With [encryption at rest](#the-archive-key) on, every message file is stored encrypted with AES-256-GCM (`<sha256>.enc`) and written encrypted from the first byte, so no plaintext of it reaches the disk; the key is kept apart from the data. A key file on the same disk as the data protects copies and backups of the data directory, not snapshots of that disk. Without encryption at rest, plain `.eml` files, **not encrypted**: use an encrypted disk. |
 | Archived mail (database) | PostgreSQL rows **are not encrypted**, also with encryption at rest: subjects, addresses, body text, the text extracted from attachments for search, attachment names, Message-IDs, envelopes, folder names, account and user names, the audit log and legal holds. Use an encrypted disk; a hosted instance must keep PostgreSQL on an encrypted volume whose key is kept away from its snapshots. |
-| Exports and backups | `export` and `backup` write files with mode 0600 in directories with mode 0700. Exports are unencrypted, also with encryption at rest (an export is meant for a mail client: delete it once used); an export inside the data directory gets a warning while encryption at rest is on. Without encryption at rest the database dump is unencrypted; with it, `backup` encrypts the dump while `pg_dump` writes it (`*.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring wrapped under the archive keys, and refuses without the archive key. A dump opens only with a key of its time. On an archive with any sign of encryption at rest, `restore-dump` writes only authenticated data into `pg_restore` unless the operator passes `--plaintext`. On an archive that never used encryption, dumps are not authenticated: whoever can write the backup location can run SQL as the database superuser on the next restore, so protect it like the database. `restore-dump` runs `pg_restore` in one transaction, so a damaged dump changes nothing. `BACKUP-NOTE.txt` names the secret key and the fingerprints of the archive keys but never contains a key, and `pg_dump` gets the database password in its environment, not on the command line. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
+| Exports and backups | `export` and `backup` write files with mode 0600 in directories with mode 0700. Exports are unencrypted, also with encryption at rest (an export is meant for a mail client: delete it once used); an export inside the data directory gets a warning while encryption at rest is on. Without encryption at rest the database dump is unencrypted; with it, `backup` encrypts the dump while `pg_dump` writes it (`*.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring wrapped under the archive keys, and refuses without the archive key. A dump opens only with a key of its time. On an archive with any sign of encryption at rest, `restore-dump` writes only authenticated data into `pg_restore` unless the operator passes `--plaintext`. On an archive that never used encryption, dumps are not authenticated: whoever can write the backup location can run SQL as the database superuser on the next restore, so protect it like the database. `restore-dump` runs `pg_restore` in one transaction, so a damaged dump changes nothing. `BACKUP-NOTE.txt` names the secret key and the fingerprints of the archive keys but never contains a key, and `pg_dump` and `pg_restore` get the database password in their environment, not on the command line. That environment holds nothing else of the app: without Docker Compose, `backup` and `restore-dump` give them only the libpq variables built from `MAIL_ARCHIVE_DATABASE_URL` (`PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`) and, when set, `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LD_LIBRARY_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`, `KRB5CCNAME` and `KRB5_CONFIG`, never a `MAIL_ARCHIVE_*` variable or another variable of the process (a `PG*` variable of the process counts only where the app's own connection takes a host, user or password from it that the URL leaves out); `./ma` runs them in the database container with `docker compose exec`, which passes on no variable of the host. A copy of the data directory holds the message files as they are stored, and the keyring only wrapped under the archive keys. A [GoBD export](./cli#export-format-gobd) is plaintext too, outside any encryption at rest: with Docker Compose it goes to `/export` (`EXPORT_DIR`, outside the data directory), and an output inside the data directory gets a warning while encryption at rest is on. Its `STATEMENT.txt` is signed with the attestation key, never with the archive key or `MAIL_ARCHIVE_SECRET_KEY`, under its own header, so it never passes for an attestation nor an attestation for it. |
 | Your mail servers | Only read: `EXAMINE`, `BODY.PEEK[]` and, to [reconcile](../guide/syncing#reconcile), `UID FETCH 1:* (UID FLAGS)`. Never `STORE`, `EXPUNGE` or a read-write `SELECT`. |
 | The web UI | Login with user name and password, sessions in PostgreSQL, limits on failed logins, and the browser protections below. |
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
@@ -50,9 +50,12 @@ login.
   password, and a TOTP or recovery code if the user has 2FA on. Removing a
   passkey ends the user's other sessions. Admins with mandatory TOTP must
   still set it up: a passkey session is restricted like a password session
-  until then. Starting a passkey login needs no session; it is limited to 30
-  per minute per address (IPv6: per `/64`) and 1000 open logins in total. Passwords stay: an
-  account never depends on passkeys alone.
+  until then. Starting a passkey login needs no session. It is limited to 30
+  per minute per address (IPv6: per `/64`), and to 50 started in 5 minutes
+  per address (IPv6: per `/64`) and 200 per IPv6 `/48`. The total of 50,000
+  started in 5 minutes only bounds memory and the table. Like the other
+  limits, these counters are kept in memory, and a restart resets them.
+  Passwords stay: an account never depends on passkeys alone.
 - **API keys** let scripts read mail (`read`) or start syncs (`sync`), and
   nothing else: logins, the profile, users and account changes stay with
   the session and the command line. Creating a key needs the password and,
@@ -114,10 +117,16 @@ the grant and ends the auditor's sessions on it at once. Users who are not
 admins never see names of users of other groups, except in older
 Log entries from the time that user was still in the same group. Admins see every
 group's users, accounts, audit log, retention rules and holds, but no mail
-except their own and what was shared with them. Groups separate customers
+except their own and what was shared with them: a hold's number of matched
+messages is shown only for a hold on the admin themselves or on one of their
+own accounts, and the preview of deleting an account completely names only
+the admin's own accounts that keep copies of its mail. Groups separate customers
 inside one instance: they share one database, one archive directory, one
 secret key and one backup, and a message that several groups received is
-stored once and shown to each only through its own accounts. One GoBD
+stored once and shown to each only through its own accounts. Sync, import
+and fill statistics count per account: a message is *new* when the account
+did not hold it before, so these figures do not show whether another account
+already held the same bytes. One GoBD
 export never spans customer groups: a selection whose users and accounts are
 not all in one group is refused, never filtered, and the signed statement
 names the group and its owners; places of a message in another group's
@@ -125,8 +134,9 @@ accounts are never part of it.
 
 A shared user may search, read and download. Managing, syncing, retention
 and removal stay with the owner; the shared user gets `404` (`403` for the admin-only purge
-routes) for the account's management routes. smtp (journal) accounts cannot be shared, so envelopes (BCC
-recipients) stay with their owner. An unshare takes effect on the user's next
+routes) for the account's management routes. smtp (journal) accounts cannot be shared and a legal
+hold's filter never searches envelopes, so envelopes (BCC recipients) stay with their owner.
+An unshare takes effect on the user's next
 request. Every read of shared mail is in the reader's audit log entries, and
 the owner sees reads of their shared accounts as described in
 [Audit log, Shared accounts](../guide/audit-log#shared-accounts), without the
@@ -441,15 +451,43 @@ IMAP connections. These layers stop them:
   prefetch, preconnect, DNS prefetch or stylesheet. A `<meta>` sets
   nothing; the header's `charset=utf-8` takes precedence over a
   `<meta charset>`. The server's `Referrer-Policy: no-referrer` holds for
-  link clicks and, after **Load remote images**, for `<img>` and SVG image
-  elements, which send neither `Referer` nor `Origin`. This needs nothing
+  link clicks and, after **Load remote images**, for `<img>` elements,
+  which send neither `Referer` nor `Origin`. A mail with inline SVG or
+  MathML loads no remote images at all (below). Images that a mail
+  would load through CSS are never requested: Chromium sends the archive's
+  origin with them whatever the policy says, some of them in `Origin` too.
+  So in `style` attributes, in the SVG attributes that hold CSS (such as
+  `fill` or `mask`) and in `<style>`, the server puts `data:,` in front of
+  every URL in `url()` that is not a `data:` URL or a reference into the
+  mail itself (`#…`). It also puts `_` before the parenthesis of every CSS
+  function that is not on its list of functions that load nothing
+  (colours, gradients, `calc()`, transforms and the like), so the browser
+  ignores that declaration or rule. A mail with inline SVG or MathML never
+  loads remote images, also after **Load remote images**: there the
+  server's HTML parser and the browser can build different documents, so
+  the server cannot know which CSS the browser applies. The server finds
+  such a mail by the bytes `<svg` or `<math` anywhere in its HTML, in any
+  case, without parsing it, and the web UI says why the images stay off.
+  For any other mail, before it serves the message with **Load remote
+  images**, the server parses the HTML as a browser does. It reads the CSS
+  that applies there with a tokenizer that follows the CSS Syntax
+  specification, escapes included. If it still finds such a URL or an
+  unlisted function, no remote image is loaded for that message either.
+  This holds as long as the server's HTML parser and CSS tokenizer read
+  such mail as the browser does. This needs nothing
   to run in the browser, so it holds in every engine. Only the HTML sent to
   the browser for display is changed: the stored message file, `…/raw`,
   `…/parts/{n}` and exports stay byte for byte as archived. What you see:
   links into the archive's own address are not clickable, SVG `<use>` and
   SVG images whose `href` the rewrite renames (relative, into the archive,
   `data:` and so on) show nothing, and a mail's own `color-scheme` or
-  `theme-color` `<meta>` has no effect; external links work as before.
+  `theme-color` `<meta>` has no effect. Images a mail sets through CSS
+  (backgrounds, list bullets, border images) stay empty, also after
+  **Load remote images**, and an element with a CSS mask from another
+  address is not shown. A mail with inline SVG or MathML shows no remote
+  images at all. The colours and the rest of the mail's CSS apply,
+  except a declaration or rule that uses a CSS function the server does
+  not know. External links work as before.
 - In Chromium the web UI also cancels clicks, middle clicks and drags of such
   links (also inside open shadow roots) and of `javascript:`, `data:` and
   `vbscript:` links. It cancels every click, middle click and drag through an SVG `<use>` element, whatever the link
@@ -510,12 +548,15 @@ What remains:
 - Browsers without Fetch Metadata (Safari before 16.4) do not send the
   headers, so the server cannot tell these requests apart: there, after
   **Load remote images**, an image in the mail can make such requests.
-- After **Load remote images**, images that a mail loads through CSS (such
-  as `background-image`, `list-style-image`, `border-image`, `mask-image`
-  or `shape-outside`) still tell the sender the archive's origin (scheme,
-  host and port) in `Referer`, and for some of them in `Origin`. They never
-  reveal the path or the message's SHA-256. Images in `<img>` and SVG image
-  elements send neither.
+- For a mail without inline SVG or MathML, whether its CSS can load an
+  image is decided by the server's HTML parser and CSS tokenizer, which
+  read such mail as Chromium does today, and by its list of CSS functions
+  that load nothing. Inside SVG and MathML they are known to differ from
+  Chromium, which is why such mail gets no remote images. If a browser
+  later parses HTML or CSS outside SVG and MathML differently from the
+  server, or lets a function on the server's list load an image, a mail
+  written for that could again tell the sender the archive's origin after
+  **Load remote images**, until the server follows.
 - The accepted cost above: if a browser bug ever ran script in the frame,
   it would run with the app's origin.
 
@@ -536,7 +577,9 @@ tab; in Chromium, MathML `href` is not a link and an SVG link without
 engine but was not tested. Resource hints were measured in Playwright's
 full Chromium 156.0.8078.4 with background networking on: the headless
 shell never sends them, and the full Chromium sends a prerender in any
-profile but a preconnect or DNS prefetch only in a persistent one.
+profile but a preconnect or DNS prefetch only in a persistent one. CSS
+images were measured in Playwright's headless shell and full Chromium
+156.0.8078.4.
 
 ### Login checks
 
@@ -574,6 +617,18 @@ Alerts name the account, its owner, its ID and the last sync error (up to
 its owner and ID, the number of messages and the names of up to 20 folders,
 never subjects, addresses or UIDs. Treat the receiver like `./ma status`, which shows the same:
 on the public ntfy.sh server, use a protected topic or a long random one.
+
+Names, mailboxes, errors and folder names in an alert are shown as literal
+text in every receiver, so whoever controls them (a user, a mail server)
+cannot add formatting, links or mentions to the alert, or forge a line.
+In the `text` (Slack, Mattermost) and `content` (Discord) fields each value
+is inline code, with backticks replaced and, in `text`, `&`, `<` and `>`
+escaped; both fields are shortened by whole accounts, so every code span is
+closed, and Discord is told to ping no one (`allowed_mentions`). Gotify is
+told to show plain text (`extras`), and ntfy gets plain text with an always
+encoded `Title` header. In every field, control characters, line and
+paragraph separators and bidirectional controls in a value become spaces.
+`accounts` holds the exact values.
 
 ## Messages no longer on the server
 

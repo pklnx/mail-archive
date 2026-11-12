@@ -39,9 +39,6 @@ VALUES ($1, $2, $3, $4, $5, $6);
 DELETE FROM webauthn_ceremonies WHERE id = $1 AND kind = $2 AND expires_at > now()
 RETURNING *;
 
--- name: CountOpenLoginCeremonies :one
-SELECT count(*) FROM webauthn_ceremonies WHERE kind = 'login' AND expires_at > now();
-
 -- name: DeleteExpiredWebAuthnCeremonies :exec
 DELETE FROM webauthn_ceremonies WHERE expires_at <= now();
 

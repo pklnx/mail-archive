@@ -281,16 +281,3 @@ func TestPasskeyRemovalAndPasswordReset(t *testing.T) {
 		t.Fatalf("passkeys after reset: %v", n)
 	}
 }
-
-func TestPasskeyLoginCeremonyCap(t *testing.T) {
-	st := storetest.New(t)
-	ctx := context.Background()
-	for i := range store.MaxOpenLoginCeremonies {
-		if _, err := st.BeginPasskeyLogin(ctx, []byte(`{}`), time.Now().Add(time.Minute)); err != nil {
-			t.Fatalf("ceremony %d: %v", i, err)
-		}
-	}
-	if _, err := st.BeginPasskeyLogin(ctx, []byte(`{}`), time.Now().Add(time.Minute)); !errors.Is(err, store.ErrTooManyCeremonies) {
-		t.Fatalf("over the cap: %v", err)
-	}
-}

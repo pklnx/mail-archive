@@ -246,7 +246,7 @@ func TestRearchiveAfterDeletion(t *testing.T) {
 	f.uid++
 	res, err := f.st.SaveBatch(f.ctx, inbox.ID, f.uid, []store.MessageMeta{{SHA256: hashOf('a'), Size: 1, StoredPath: "x", SentAt: old}},
 		[]store.Location{{FolderID: inbox.ID, UID: f.uid, InternalDate: *old}})
-	if err != nil || res.Skipped != 1 || res.New != 0 {
+	if err != nil || res.Skipped != 1 || res.Added != 0 {
 		t.Fatalf("expired folder: %+v %v", res, err)
 	}
 	if due, err := f.st.BlobRemovalDue(f.ctx); err != nil || !due {
@@ -257,7 +257,7 @@ func TestRearchiveAfterDeletion(t *testing.T) {
 	f.uid++
 	res, err = f.st.SaveBatch(f.ctx, other.ID, f.uid, []store.MessageMeta{{SHA256: hashOf('a'), Size: 1, StoredPath: "x", SentAt: old}},
 		[]store.Location{{FolderID: other.ID, UID: f.uid, InternalDate: *old}})
-	if err != nil || res.Skipped != 0 || res.New != 1 {
+	if err != nil || res.Skipped != 0 || res.Added != 1 {
 		t.Fatalf("unruled folder: %+v %v", res, err)
 	}
 	rows, err := f.st.DueBlobRemovals(f.ctx, time.Time{}, "", 10)

@@ -680,14 +680,172 @@ func TestMessageHTMLLinks(t *testing.T) {
 	}
 }
 
+// htmlMail is a stored HTML mail with this body.
+func htmlMail(id, body string) string {
+	return "Message-ID: <" + id + "@x>\r\nFrom: a@example.com\r\nSubject: css\r\n" +
+		"Date: Fri, 9 Oct 2026 10:00:00 +0000\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + body + "\r\n"
+}
+
+// cssHTMLMail holds CSS that would load images, without SVG or MathML: a
+// background in a style attribute, image-set() and a mask in <style>, and
+// an ordinary remote <img>.
+const cssHTMLMail = `<style>.a{mask-image:url("https://images.example/m.png")}` +
+	`.b{background-image:image-set("https://images.example/s.png" 1x)}</style>` +
+	`<p class="a" style="background:#036 url(https://images.example/bg.png)">a</p>` +
+	`<img src="https://images.example/i.png" alt="">`
+
+// cssMail is cssHTMLMail with an SVG fill.
+const cssMail = cssHTMLMail + `<svg><rect fill="url(https://images.example/f.svg)"/></svg>`
+
+// cssHTMLServed is cssHTMLMail as /html serves it.
+const cssHTMLServed = `<style>.a{mask-image:url("data:,https://images.example/m.png")}` +
+	`.b{background-image:image-set_("https://images.example/s.png" 1x)}</style>` +
+	`<p class="a" style="background:#036 url(data:,https://images.example/bg.png)">a</p>` +
+	`<img src="https://images.example/i.png" alt="">`
+
+// cssServed is cssMail as /html serves it.
+const cssServed = cssHTMLServed + `<svg><rect fill="url(data:,https://images.example/f.svg)"/></svg>`
+
+// cssHTML gets the mail's /html, with images=1 if asked, through the real
+// route table, and returns the body, the img-src sources and the audit
+// entry's details.
+func (f *apiFixture) cssHTML(name string, images bool) (string, string, map[string]any) {
+	f.t.Helper()
+	path := "/api/messages/" + f.ids[name] + "/html"
+	if images {
+		path += "?images=1"
+	}
+	n := len(auditLog(f.t, f.st))
+	resp, body := rawGet(f.t, f.srv, f.srv.Listener.Addr().String(), path)
+	if resp.StatusCode != http.StatusOK {
+		f.t.Fatalf("%s: status %d: %s", path, resp.StatusCode, body)
+	}
+	got := newEntries(f.t, f.st, n)
+	if len(got) != 1 || got[0].Action != "message.html" {
+		f.t.Fatalf("%s: audit %+v", path, got)
+	}
+	return body, cspDirective(resp.Header.Get("Content-Security-Policy"), "img-src"), details(f.t, got[0])
+}
+
+// CSS in a served mail loads nothing: every URL in url() gets "data:," and
+// image-set() a "_", with and without images=1, and the bytes do not depend
+// on the flag. With images=1 the CSP lets remote images through for an
+// ordinary HTML mail, since the served CSS can load none (the positive
+// control), and the message's JSON says they are not refused. The same CSS
+// with an inline SVG gets no remote images: img-src stays data:, the audit
+// entry records images_refused: "svg", and the JSON says so in advance.
+func TestMessageHTMLCSS(t *testing.T) {
+	f := newAPIFixture(t)
+	f.addMessage("alice", "INBOX", "css", htmlMail("css", cssHTMLMail), 10)
+	f.addMessage("alice", "INBOX", "css svg", htmlMail("css-svg", cssMail), 11)
+	for _, c := range []struct {
+		name, served, img, refused string
+	}{
+		{"css", cssHTMLServed, "data: https: http:", ""},
+		{"css svg", cssServed, "data:", "svg"},
+	} {
+		plain, img, d := f.cssHTML(c.name, false)
+		if want := htmlPreamble + c.served + "\r\n"; plain != want {
+			t.Errorf("%s: body\n got %q\nwant %q", c.name, plain, want)
+		}
+		if img != "data:" || d["images_refused"] != nil {
+			t.Errorf("%s without images: img-src %q, details %v", c.name, img, d)
+		}
+		withImages, img, d := f.cssHTML(c.name, true)
+		if withImages != plain {
+			t.Errorf("%s: images=1 body %q differs from %q", c.name, withImages, plain)
+		}
+		var refused any
+		if c.refused != "" {
+			refused = c.refused
+		}
+		if img != c.img || d["images"] != true || d["images_refused"] != refused {
+			t.Errorf("%s images=1: img-src %q, details %v", c.name, img, d)
+		}
+		if got := f.remoteImagesRefused(c.name); got != (c.refused != "") {
+			t.Errorf("%s: remoteImagesRefused %v", c.name, got)
+		}
+	}
+}
+
+// firstForeign is the refusal reason a test mail expects, independent of
+// foreignContent: "svg" or "math", whichever of "<svg" and "<math" comes
+// first in any case, else "css".
+func firstForeign(body string) string {
+	l := strings.ToLower(body)
+	i, j := strings.Index(l, "<svg"), strings.Index(l, "<math")
+	switch {
+	case i >= 0 && (j < 0 || i < j):
+		return "svg"
+	case j >= 0:
+		return "math"
+	}
+	return "css"
+}
+
+// remoteImagesRefused reads the field from the message's JSON, as the UI
+// does.
+func (f *apiFixture) remoteImagesRefused(name string) bool {
+	f.t.Helper()
+	var m struct {
+		Refused *bool `json:"remoteImagesRefused"`
+	}
+	f.getJSON("/api/messages/"+f.ids[name], http.StatusOK, &m)
+	if m.Refused == nil {
+		f.t.Fatalf("%s: remoteImagesRefused missing", name)
+	}
+	return *m.Refused
+}
+
+// A mail with inline SVG or MathML gets no remote image with images=1,
+// whatever its CSS: x/net/html can build a different tree than the browser
+// there, so the parse check alone could miss CSS the browser applies. The
+// two parser divergences found in review (a <template> in an
+// integration point, a duplicate attribute with the value "/") are served
+// with CSS that the check does not see, and are refused all the same, as is
+// every SVG and MathML <style> survivor. A mail without SVG or MathML that
+// x/net/html cannot parse is refused by the CSS check ("css"). Each case is
+// refused on its own, and the bytes are the same as without images=1.
+func TestMessageHTMLCSSRefused(t *testing.T) {
+	f := newAPIFixture(t)
+	uid := uint32(10)
+	cases := map[string]string{"too deep": strings.Repeat("<div>", 600) + "x"}
+	for name, body := range cssSVGStyleSurvivors {
+		cases[name] = body
+	}
+	for name, body := range cssParserDivergences {
+		cases[name] = body
+	}
+	for name, body := range cases {
+		key := "refused " + name
+		f.addMessage("alice", "INBOX", key, htmlMail(strings.ReplaceAll(key, " ", "-"), `<p>x</p>`+body), uid)
+		uid++
+		want := firstForeign(body)
+		plain, img, d := f.cssHTML(key, false)
+		if img != "data:" || d["images_refused"] != nil {
+			t.Errorf("%s without images: img-src %q, details %v", name, img, d)
+		}
+		withImages, img, d := f.cssHTML(key, true)
+		if img != "data:" || d["images"] != true || d["images_refused"] != want {
+			t.Errorf("%s: img-src %q, details %v, want images_refused %q", name, img, d, want)
+		}
+		if withImages != plain {
+			t.Errorf("%s: images=1 body %q differs from %q", name, withImages, plain)
+		}
+		if got := f.remoteImagesRefused(key); got != (want != "css") {
+			t.Errorf("%s: remoteImagesRefused %v", name, got)
+		}
+	}
+}
+
 // Only the rendering changes (#459): /raw, the stored blob and a part keep
-// the archived bytes, links, resource hints and referrer policies and all,
-// while /html is rewritten.
+// the archived bytes, links, resource hints, referrer policies and CSS URLs
+// and all, while /html is rewritten.
 func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
 	f := newAPIFixture(t)
 	srv := f.linkServer()
 	u, _ := url.Parse(srv.URL)
-	mail := linkMail(u.Port())
+	mail := linkMail(u.Port()) + cssMail
 	attachment := `<html><body>` + mail + `</body></html>`
 	raw := "Message-ID: <links-stored@x>\r\nFrom: a@example.com\r\nSubject: links\r\n" +
 		"Date: Fri, 9 Oct 2026 10:00:00 +0000\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
@@ -698,11 +856,13 @@ func TestMessageHTMLRewriteLeavesStoredBytes(t *testing.T) {
 	sha := f.ids["stored"]
 
 	resp, body := rawGet(t, srv, u.Host, "/api/messages/"+sha+"/html")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) || !strings.Contains(body, policyServed) {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `<a data-href="/api/openapi.json?link=root">`) ||
+		!strings.Contains(body, policyServed) || !strings.Contains(body, cssServed) {
 		t.Fatalf("html: %d %q", resp.StatusCode, body)
 	}
-	if !strings.Contains(raw, policyMail) || !strings.Contains(attachment, policyMail) {
-		t.Fatal("the stored mail lacks the policy payloads")
+	if !strings.Contains(raw, policyMail) || !strings.Contains(attachment, policyMail) ||
+		!strings.Contains(raw, cssMail) || !strings.Contains(attachment, cssMail) {
+		t.Fatal("the stored mail lacks the policy or CSS payloads")
 	}
 	if resp, body = rawGet(t, srv, u.Host, "/api/messages/"+sha+"/raw"); resp.StatusCode != http.StatusOK || body != raw {
 		t.Errorf("raw: %d %q", resp.StatusCode, body)

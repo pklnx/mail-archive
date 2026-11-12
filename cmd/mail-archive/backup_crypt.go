@@ -711,7 +711,7 @@ func runRestore(ctx context.Context, job restoreJob, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", config.EnvDatabaseURL, err)
 	}
-	version, err := exec.CommandContext(ctx, job.PgRestore, "--version").Output() //nolint:gosec // pg_restore from PATH
+	version, err := pgCommand(ctx, job.PgRestore, env, "--version").Output()
 	if err != nil {
 		return fmt.Errorf("pg_restore --version: %w", err)
 	}
@@ -723,10 +723,10 @@ func runRestore(ctx context.Context, job restoreJob, out io.Writer) error {
 		return fmt.Errorf("pg_restore is version %d, the server %d: install pg_restore %d or newer", major, job.ServerMajor, job.ServerMajor)
 	}
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, job.PgRestore, //nolint:gosec // pg_restore from PATH
+	cmd := pgCommand(ctx, job.PgRestore, env,
 		"--no-owner", "--single-transaction", "--exit-on-error", "--no-password",
 		"--dbname="+cfg.Database)
-	cmd.Env, cmd.Stdout, cmd.Stderr = env, out, &stderr
+	cmd.Stdout, cmd.Stderr = out, &stderr
 	if f, ok := job.In.(*os.File); ok && !job.Sealed {
 		// A dump without encryption: pg_restore reads the file itself.
 		// Through a pipe it can end before the end of the file (a dump

@@ -103,6 +103,7 @@ const en = {
   showHTML: "Show HTML",
   remoteImagesHint: "Remote images can tell the sender that you opened this message.",
   loadRemoteImages: "Load remote images",
+  remoteImagesRefused: "Remote images stay blocked for this message: it contains inline SVG or MathML, which the archive cannot check safely.",
   downloadEml: "Download .eml",
   attachments: "Attachments",
   part: (n: number) => `part ${n}`,
@@ -297,6 +298,8 @@ const en = {
     `${n === 1 ? "Its file is" : "Their files are"} removed after the grace period, so restoring the last dump still works.`,
   purgeKept: (n: number, s: string) =>
     n === 1 ? "1 message is also in other accounts and stays there:" : `${s} messages are also in other accounts and stay there:`,
+  purgeKeptByOthers: (n: number, s: string) =>
+    n === 1 ? "1 message only in accounts you do not own" : `${s} messages only in accounts you do not own`,
   purgeAccountGone: "Then its folders and the account are deleted; its name is free again. This cannot be undone.",
   purgeTypeCount: (n: number) => `Type ${n} to confirm`,
   purgeConfirm: "Delete completely",
@@ -549,7 +552,8 @@ const en = {
   holdAccount: "Account",
   holdAnyAccount: "Any account",
   holdFilter: "Search filter",
-  holdFilterHint: "Search syntax as in the search field, for example falcon from:example.com after:2019-01-01 before:2024-01-01",
+  holdFilterHint:
+    "Search syntax as in the search field, for example falcon from:example.com after:2019-01-01 before:2024-01-01. to: matches To and Cc only, never envelope (BCC) recipients.",
   holdAll: "Hold the whole archive",
   holdAllNeeded: "Without user, account or filter the hold covers the whole archive. Tick the box to confirm.",
   holdAdd: "Add hold",
@@ -568,6 +572,7 @@ const en = {
   holdScopeFrom: (d: string) => `from ${d}`,
   holdScopeBefore: (d: string) => `before ${d}`,
   holdMatched: (n: number) => `${n} matched`,
+  holdMatchedHidden: "matched; the count is shown only for your own accounts",
   holdNotMatched: "not matched yet (covers its whole scope)",
   retentionEnds: "Retention",
   retentionEndsOn: (d: string) => `ends ${d}`,
@@ -793,6 +798,7 @@ const de: Messages = {
   showHTML: "HTML anzeigen",
   remoteImagesHint: "Externe Bilder können dem Absender verraten, dass du die Nachricht geöffnet hast.",
   loadRemoteImages: "Externe Bilder laden",
+  remoteImagesRefused: "Externe Bilder bleiben für diese Nachricht blockiert: Sie enthält eingebettetes SVG oder MathML, das das Archiv nicht sicher prüfen kann.",
   downloadEml: ".eml herunterladen",
   attachments: "Anhänge",
   part: (n) => `Teil ${n}`,
@@ -983,6 +989,8 @@ const de: Messages = {
     `${n === 1 ? "Ihre Datei wird" : "Ihre Dateien werden"} nach der Karenzzeit entfernt, damit das Wiederherstellen des letzten Dumps noch funktioniert.`,
   purgeKept: (n, s) =>
     n === 1 ? "1 Nachricht ist auch in anderen Konten und bleibt dort:" : `${s} Nachrichten sind auch in anderen Konten und bleiben dort:`,
+  purgeKeptByOthers: (n, s) =>
+    n === 1 ? "1 Nachricht nur in Konten, die Ihnen nicht gehören" : `${s} Nachrichten nur in Konten, die Ihnen nicht gehören`,
   purgeAccountGone: "Danach werden seine Ordner und das Konto gelöscht; der Name ist wieder frei. Das lässt sich nicht rückgängig machen.",
   purgeTypeCount: (n) => `Zur Bestätigung ${n} eingeben`,
   purgeConfirm: "Vollständig löschen",
@@ -1174,7 +1182,8 @@ const de: Messages = {
   holdAccount: "Konto",
   holdAnyAccount: "Alle Konten",
   holdFilter: "Suchfilter",
-  holdFilterHint: "Suchsyntax wie im Suchfeld, zum Beispiel falcon from:example.com after:2019-01-01 before:2024-01-01",
+  holdFilterHint:
+    "Suchsyntax wie im Suchfeld, zum Beispiel falcon from:example.com after:2019-01-01 before:2024-01-01. to: findet nur An und Cc, nie Empfänger aus dem Umschlag (BCC).",
   holdAll: "Ganzes Archiv sperren",
   holdAllNeeded: "Ohne Benutzer, Konto oder Filter umfasst der Hold das ganze Archiv. Zum Bestätigen das Kästchen ankreuzen.",
   holdAdd: "Hold anlegen",
@@ -1193,6 +1202,7 @@ const de: Messages = {
   holdScopeFrom: (d) => `ab ${d}`,
   holdScopeBefore: (d) => `vor ${d}`,
   holdMatched: (n) => `${n} gefunden`,
+  holdMatchedHidden: "abgeglichen; die Anzahl steht nur bei eigenen Konten",
   holdNotMatched: "noch nicht abgeglichen (umfasst den ganzen Bereich)",
   retentionEnds: "Aufbewahrung",
   retentionEndsOn: (d) => `endet ${d}`,

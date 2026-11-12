@@ -214,7 +214,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		j.fr.New += res.New
+		j.fr.New += res.Added
 		j.fr.Deleted += res.Skipped
 		j.fr.Present += present
 		j.fr.Added += len(metas) - res.Skipped - present

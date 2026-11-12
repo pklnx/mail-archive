@@ -417,10 +417,10 @@ func printImportResult(out io.Writer, res *archive.ImportResult, journal bool) {
 	_ = w.Flush()
 	t := res.Total()
 	if journal {
-		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the archive), %d already there, %d already journaled, %d skipped\n",
+		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the account), %d already there, %d already journaled, %d skipped\n",
 			res.Status, t.Read, t.Added, t.New, t.Present, t.Journaled, t.Skipped)
 	} else {
-		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the archive), %d already there, %d skipped\n",
+		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the account), %d already there, %d skipped\n",
 			res.Status, t.Read, t.Added, t.New, t.Present, t.Skipped)
 	}
 	if t.Deleted > 0 {

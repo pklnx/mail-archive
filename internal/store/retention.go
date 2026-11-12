@@ -239,6 +239,9 @@ type LegalHold struct {
 	AccountID    *int64
 	Account      string
 	AccountOwner string
+	// AccountOwnerID is the owner of the hold's account; nil without an
+	// account or for an account without owner.
+	AccountOwnerID *int64
 	// GroupID and Group: the customer group the hold names (#470).
 	GroupID *int64
 	Group   string
@@ -396,7 +399,7 @@ func (s *Store) LegalHolds(ctx context.Context, released bool) ([]LegalHold, err
 	for i, r := range rows {
 		h := LegalHold{
 			ID: r.ID, Name: r.Name, Reason: r.Reason, OwnerID: r.OwnerID, Owner: deref(r.Owner),
-			AccountID: r.AccountID, Account: deref(r.Account), AccountOwner: deref(r.AccountOwner),
+			AccountID: r.AccountID, Account: deref(r.Account), AccountOwner: deref(r.AccountOwner), AccountOwnerID: r.AccountOwnerID,
 			PeriodStart: r.PeriodStart, PeriodEnd: r.PeriodEnd, MatchedAt: r.MatchedAt, Matched: r.Matched,
 			CreatedAt: r.CreatedAt, CreatedBy: deref(r.CreatedBy), ReleasedAt: r.ReleasedAt,
 			ReleasedBy: deref(r.ReleasedBy), ReleaseNote: deref(r.ReleaseNote),
@@ -533,7 +536,8 @@ func (s *Store) MatchLegalHolds(ctx context.Context) (int64, error) {
 
 // matchHold matches a hold's filter as one owner, over that owner's own
 // accounts only (of account, if set): a hold on a user never covers the
-// accounts other users shared with them (#389).
+// accounts other users shared with them (#389). It never searches smtp
+// envelopes: to: matches the To and Cc headers only.
 func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int64, f HoldFilter) (int64, error) {
 	sc, err := s.OwnerScope(ctx, owner)
 	if err != nil {
@@ -542,6 +546,11 @@ func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int
 	if account != nil {
 		sc = sc.Only(*account)
 	}
+	// Matches are stored per message, and every account's copy of a
+	// message has the same bytes; only envelopes differ per account. A
+	// filter that searched them would reveal one user's envelopes through
+	// the hold on another's copy.
+	sc = sc.WithoutEnvelopes()
 	sf := SearchFilter{
 		Scope: sc, Query: f.Query, From: f.From, To: f.To,
 		Attachment: f.Attachment, HasAttachment: f.HasAttachment, Limit: holdMatchPage,
@@ -570,6 +579,12 @@ func (s *Store) matchHold(ctx context.Context, holdID, owner int64, account *int
 		last := page[len(page)-1]
 		sf.CursorAt, sf.CursorSHA = &last.SortAt, last.SHA256
 	}
+}
+
+// LegalHoldMatched returns how many messages one hold's filter matched so
+// far.
+func (s *Store) LegalHoldMatched(ctx context.Context, id int64) (int64, error) {
+	return s.q.CountLegalHoldMessages(ctx, id)
 }
 
 // RetentionCounts are the numbers status shows.

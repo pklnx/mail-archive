@@ -128,13 +128,46 @@ func TestPurgePreview(t *testing.T) {
 		p.Account.Name != "old" || p.Blockers.Any() || p.Open != nil {
 		t.Fatalf("preview %+v", p)
 	}
-	want := []store.PurgeKept{{Owner: "alice", Account: "work", Messages: 1}, {Owner: "bob", Account: "mail", Messages: 1}}
-	if !slices.Equal(p.KeptIn, want) {
-		t.Errorf("kept in %+v", p.KeptIn)
+	keptIn := func(p *store.PurgePreview) string {
+		t.Helper()
+		var out []string
+		for _, k := range p.KeptIn {
+			owner := int64(0)
+			if k.OwnerID != nil {
+				owner = *k.OwnerID
+			}
+			out = append(out, fmt.Sprintf("%s(%d)/%s:%d", k.Owner, owner, k.Account, k.Messages))
+		}
+		return strings.Join(out, " ")
+	}
+	want := fmt.Sprintf("alice(%d)/work:1 bob(%d)/mail:1", f.alice.ID, f.bob.ID)
+	if got := keptIn(p); got != want {
+		t.Errorf("kept in %s, want %s", got, want)
+	}
+	// m2 is only in bob's account, m3 also in alice's "work".
+	if p.KeptOutsideOwner != 1 {
+		t.Errorf("kept outside the owner %d, want 1", p.KeptOutsideOwner)
 	}
 	// Nothing changed.
 	if q := f.preview(); q.Locations != 4 {
 		t.Errorf("second preview %+v", q)
+	}
+
+	// A message also in alice's "work" and bob's "mail" is kept by alice:
+	// not outside the owner. One in two of bob's accounts counts once.
+	f.save(f.inbox, hashOf('5'), "everywhere", old, old)
+	f.save(f.aliceWork, hashOf('5'), "everywhere", old, old)
+	f.save(f.bobInbox, hashOf('5'), "everywhere", old, old)
+	f.save(f.inbox, hashOf('6'), "bob twice", old, old)
+	f.save(f.bobInbox, hashOf('6'), "bob twice", old, old)
+	f.save(f.folder(f.bob, "more", "INBOX"), hashOf('6'), "bob twice", old, old)
+	p = f.preview()
+	if p.Kept != 4 || p.KeptOutsideOwner != 2 {
+		t.Errorf("with more copies: kept %d, outside the owner %d; want 4, 2", p.Kept, p.KeptOutsideOwner)
+	}
+	want = fmt.Sprintf("alice(%d)/work:2 bob(%d)/mail:3 bob(%d)/more:1", f.alice.ID, f.bob.ID, f.bob.ID)
+	if got := keptIn(p); got != want {
+		t.Errorf("with more copies: kept in %s, want %s", got, want)
 	}
 }
 

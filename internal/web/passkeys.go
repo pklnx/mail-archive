@@ -30,11 +30,33 @@ import (
 // passkeyCeremonyTTL is how long a registration or login may take.
 const passkeyCeremonyTTL = 5 * time.Minute
 
-// Starting a passkey login needs no session; this bounds it per address.
+// Starting a passkey login needs no session. passkeyBeginLimit bounds the
+// rate per address (IPv6: per /64). The logins started within
+// passkeyCeremonyTTL are capped per client, so that a few clients cannot
+// use up the total: per address or /64, and per IPv6 /48. The total only
+// bounds memory and the ceremony table.
 const (
 	passkeyBeginLimit  = 30
 	passkeyBeginWindow = time.Minute
+	passkeyOpenPerAddr = 50
+	passkeyOpenPer48   = 200
+	passkeyOpenTotal   = 50_000
 )
+
+// passkeyOpenKeys are the keys a passkey login start counts against in
+// passkeyOpen: the client's address (IPv6: its /64) and, for IPv6, its /48.
+func (s *Server) passkeyOpenKeys(r *http.Request) []auth.QuotaKey {
+	a := s.clientIP(r)
+	if !a.IsValid() {
+		return []auth.QuotaKey{{Key: r.RemoteAddr, Cap: passkeyOpenPerAddr}}
+	}
+	keys := limitKeys(a)
+	out := []auth.QuotaKey{{Key: keys[0], Cap: passkeyOpenPerAddr}}
+	for _, k := range keys[1:] {
+		out = append(out, auth.QuotaKey{Key: k, Cap: passkeyOpenPer48})
+	}
+	return out
+}
 
 // maxCredentialName is the longest name of a passkey or an API key, in
 // characters.
@@ -129,16 +151,23 @@ func (s *Server) handleBeginPasskeyLogin(w http.ResponseWriter, r *http.Request)
 		s.fail(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
-	token, err := s.store.BeginPasskeyLogin(r.Context(), data, s.currentTime().Add(passkeyCeremonyTTL))
-	if errors.Is(err, store.ErrTooManyCeremonies) {
-		s.log.Warn("too many passkey logins in progress", "addr", s.clientIP(r), "key", addr)
-		s.tooMany(w, time.Minute)
+	// The slot is taken last, so that only the store call can fail while it
+	// is held; the deferred Release frees it then.
+	slot, wait, full := s.passkeyOpen.Begin(s.passkeyOpenKeys(r)...)
+	if slot == nil {
+		if full {
+			s.log.Warn("too many passkey logins in progress", "addr", s.clientIP(r), "key", addr)
+		}
+		s.tooMany(w, wait)
 		return
 	}
+	defer slot.Release()
+	token, err := s.store.BeginPasskeyLogin(r.Context(), data, s.currentTime().Add(passkeyCeremonyTTL))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
+	slot.Succeed()
 	s.writeJSON(w, http.StatusOK, ceremonyJSON{Token: token, PublicKey: assertion.Response})
 }
 

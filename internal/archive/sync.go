@@ -50,7 +50,7 @@ type AccountResult struct {
 	Account string
 	OwnerID *int64
 	Fetched int
-	New     int
+	New     int // messages new to the account (store.SaveResult.Added)
 	// Skipped counts messages deleted by retention that were not archived
 	// again (see store.SaveBatch).
 	Skipped int

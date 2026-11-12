@@ -119,7 +119,7 @@ func (f *Fill) IntoJournal() bool { return f.FolderPrefix == "" || f.Recurring()
 type FillCounts struct {
 	Scanned     int // headers read
 	Imported    int // locations added
-	New         int // messages new to the archive
+	New         int // messages new to the account (SaveResult.Added)
 	AfterCutoff int // left to journaling
 	Journaled   int // the same message received over SMTP (Message-ID, Date, From, Subject)
 	Present     int // already in the target folder
@@ -462,7 +462,7 @@ func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []Messa
 			ff.Counts.Deleted += res.Skipped
 			ff.Counts.Present += present
 			ff.Counts.Imported -= res.Skipped + present
-			ff.Counts.New += res.New
+			ff.Counts.New += res.Added
 			return updateFillFolder(ctx, q, ff)
 		})
 	if err != nil {
@@ -501,6 +501,10 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 		if err != nil {
 			return err
 		}
+		held, err := accountHeld(ctx, q, folder.ID, metas)
+		if err != nil {
+			return err
+		}
 		type pending struct {
 			meta *MessageMeta
 			loc  Location
@@ -529,7 +533,10 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 			if err != nil {
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
-			res.New += int(n)
+			if !held[m.SHA256] {
+				held[m.SHA256] = true
+				res.Added++
+			}
 			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
 				return err
 			}

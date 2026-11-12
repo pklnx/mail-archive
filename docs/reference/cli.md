@@ -213,7 +213,10 @@ then removes folders from what is left. Names are matched case-insensitively.
 Without flags it lists the fills, with the schedule, health and waiting
 messages of recurring ones. The first run happens in the foreground and
 prints the first message the account received over SMTP and then the
-progress per folder; exit code `1` when some folders failed. The web UI
+progress per folder; exit code `1` when some folders failed. In the counts
+per folder, `NEW` is the part of `IMPORTED` the account did not hold before
+in any of its folders, even if the archive held the same bytes from another
+account. The web UI
 offers the same on the account's page; see
 [Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
 and [Keep importing](../guide/journaling#keep-importing-recurring-fill). A
@@ -291,7 +294,7 @@ retention has usually ended too, so the next deletion run lists it.
 
 | Command | Purpose |
 |---|---|
-| `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
+| `sync` | Copy new messages from all enabled accounts. Prints a line per account with `fetched=N new=N`; `new` counts the messages the account did not hold before in any of its folders, even if the archive held the same bytes from another account. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
 | `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. A line counts the [background jobs](../guide/operations#background-jobs) per kind: `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, also `retrying` for jobs that wait for another attempt, or `jobs: none`. The last line shows encryption at rest: `on`, `off`, or an unfinished `encryption enable` or `disable` with its progress and the command that finishes it. When the PDF reader could not be prepared in the process that ran them, a further line says `attachment text: PDF extractor unavailable for N message(s)`: the cause is in the log of the web server or worker; after fixing it and a restart, `jobs retry attachment_text`. |
@@ -504,7 +507,9 @@ later; a `--user` or `--account` must be in it), `--since` and
 inside), and a search filter (`--query`, `--sender`, `--recipient`,
 `--attachment`, `--has-attachment`). A filter is matched by search, as the
 mail's owner sees it, when the hold is added and again before every
-deletion; matches are only ever added. Until the first match, a filter hold
+deletion; matches are only ever added. It never searches SMTP envelopes:
+`--recipient` matches the To and Cc headers only, not envelope (BCC)
+recipients; hold the smtp account to keep journal mail by its envelope. Until the first match, a filter hold
 covers its whole scope. Without any condition the hold covers the whole
 archive and needs `--all`.
 
@@ -515,7 +520,8 @@ is kept as removed instead of being deleted. A user cannot leave a group
 whose active hold covers their accounts (`user set-group`), an account
 cannot move into another group while such a hold covers it, and a group that
 a hold names stays (`group remove` is refused). `hold list` shows a group
-hold as `group NAME`.
+hold as `group NAME`, and every hold's number of matched messages; the web
+interface shows that number only for an admin's own holds.
 
 ### deletion
 

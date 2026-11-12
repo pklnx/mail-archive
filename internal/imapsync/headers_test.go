@@ -46,7 +46,7 @@ func TestListHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.ResetCommands()
-	if err := imapsync.ListHeaders(conn, 0, func(imapsync.Header) error { t.Error("header in an empty folder"); return nil }); err != nil {
+	if err := imapsync.ListHeaders(conn, 0, 0, func(imapsync.Header) error { t.Error("header in an empty folder"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if c := srv.Commands(); len(c) != 0 {
@@ -58,7 +58,7 @@ func TestListHeaders(t *testing.T) {
 	}
 	srv.ResetCommands()
 	var got []imapsync.Header
-	if err := imapsync.ListHeaders(conn, 1, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
+	if err := imapsync.ListHeaders(conn, 1, 0, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].UID != 2 || got[1].UID != 3 {
@@ -81,7 +81,7 @@ func TestListHeaders(t *testing.T) {
 
 	// "4:*" answers the last message (UID 3); it is not listed.
 	got = nil
-	if err := imapsync.ListHeaders(conn, 3, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
+	if err := imapsync.ListHeaders(conn, 3, 0, func(h imapsync.Header) error { got = append(got, h); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {

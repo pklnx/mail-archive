@@ -46,6 +46,13 @@ func NewRate(limit int, window time.Duration) *Rate {
 	return &Rate{limit: limit, window: window, counts: map[string]*rateWindow{}, now: time.Now, timeout: realTimeout}
 }
 
+// WithClock makes r read the time from now instead of the wall clock and
+// returns r. Call it before r is used.
+func (r *Rate) WithClock(now func() time.Time) *Rate {
+	r.now = now
+	return r
+}
+
 // current returns key's counter for the window at now, created if needed.
 // mu is held.
 func (r *Rate) current(key string, now time.Time) *rateWindow {

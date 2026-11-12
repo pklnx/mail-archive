@@ -60,7 +60,7 @@ func (s *Syncer) reconcileFolder(ctx context.Context, conn *imapsync.Conn, folde
 		// Most messages share a few flag combinations: keep one string each.
 		intern := map[string]string{}
 		var key []byte
-		err := imapsync.ListFlags(conn, func(uid uint32, fl []imap.Flag) {
+		err := imapsync.ListFlags(conn, limit, func(uid uint32, fl []imap.Flag) {
 			key = flagKey(key[:0], fl)
 			k, ok := intern[string(key)]
 			if !ok {

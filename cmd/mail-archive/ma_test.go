@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
@@ -26,9 +29,12 @@ func runMa(t *testing.T, args ...string) (int, string, []string) {
 		t.Fatal(err)
 	}
 	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "docker.log")
-	// The holder's call also logs the keyring copy ./ma passes to it.
+	// The holder's call also logs the keyring copy ./ma passes to it; with
+	// MA_TEST_HOLDER_READY set, it says "ready" and reads to the end of its
+	// input, so that the restore runs.
 	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + log + "'\n" +
-		"case \"$*\" in *' --hold '*) printf 'keyring-copy=%s\\n' \"${MAIL_ARCHIVE_KEYRING_COPY:-}\" >> '" + log + "' ;; esac\nexit 0\n"
+		"case \"$*\" in *' --hold '*) printf 'keyring-copy=%s\\n' \"${MAIL_ARCHIVE_KEYRING_COPY:-}\" >> '" + log + "'\n" +
+		"  if [ -n \"${MA_TEST_HOLDER_READY:-}\" ]; then echo ready; cat >/dev/null; fi ;; esac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(shim), 0o700); err != nil { //nolint:gosec // an executable test script
 		t.Fatal(err)
 	}
@@ -139,5 +145,97 @@ func TestMaRestoreDumpFacts(t *testing.T) {
 	}
 	if code, out, _ := runMa(t, "restore-dump", "--plaintext"); code != 2 || !strings.Contains(out, "usage: ./ma restore-dump [--plaintext] FILE") {
 		t.Errorf("--plaintext without FILE: exit %d\n%s", code, out)
+	}
+}
+
+// TestMaPgToolsNoEnv: on the Docker path pg_dump and pg_restore run in the
+// postgres container through `compose exec -T postgres`, which passes on no
+// variable of the host, and never with -e or --env; the postgres service
+// itself has only POSTGRES_* variables. This guard holds on the Docker path
+// already.
+func TestMaPgToolsNoEnv(t *testing.T) {
+	const prefix = "compose --progress quiet exec -T postgres "
+	check := func(what string, calls []string, tool string) {
+		t.Helper()
+		n := 0
+		for _, call := range calls {
+			if !strings.Contains(call, tool) {
+				continue
+			}
+			n++
+			if !strings.HasPrefix(call, prefix+tool+" ") {
+				t.Errorf("%s: %q does not start with %q", what, call, prefix+tool)
+			}
+			for _, f := range strings.Fields(call) {
+				if f == "-e" || f == "--env" || strings.HasPrefix(f, "--env=") || f == "--env-file" {
+					t.Errorf("%s: %q passes variables", what, call)
+				}
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s: no %s call:\n%s", what, tool, strings.Join(calls, "\n"))
+		}
+	}
+
+	code, out, calls := runMa(t, "backup", filepath.Join(t.TempDir(), "backups"))
+	if code != 0 {
+		t.Errorf("backup: exit %d\n%s", code, out)
+	}
+	check("backup", calls, "pg_dump")
+
+	t.Setenv("MA_TEST_HOLDER_READY", "1")
+	dir := t.TempDir()
+	for _, c := range []struct{ name, data string }{{"plain.dump", "PGDMP plain"}, {"sealed.dump.enc", "MA-ENC1 sealed"}} {
+		path := filepath.Join(dir, c.name)
+		if err := os.WriteFile(path, []byte(c.data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, out, calls := runMa(t, "restore-dump", path)
+		if code != 0 || !strings.Contains(out, "restored "+path) {
+			t.Errorf("restore-dump %s: exit %d\n%s", c.name, code, out)
+		}
+		check("restore-dump "+c.name, calls, "pg_restore")
+	}
+
+	// Every pg_dump and pg_restore in the script, the encrypted backup's too.
+	script, err := os.ReadFile("../../ma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`compose\s[^\n|;&]*\bpg_(dump|restore)\b`)
+	found := re.FindAllString(string(script), -1)
+	if len(found) < 3 {
+		t.Errorf("found %d pg_dump/pg_restore calls in ./ma: %q", len(found), found)
+	}
+	for _, m := range found {
+		if m != "compose exec -T postgres pg_dump" && m != "compose exec -T postgres pg_restore" {
+			t.Errorf("./ma runs %q", m)
+		}
+	}
+
+	compose, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Services map[string]struct {
+			Environment map[string]any `yaml:"environment"`
+			EnvFile     any            `yaml:"env_file"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(compose, &file); err != nil {
+		t.Fatal(err)
+	}
+	pg, ok := file.Services["postgres"]
+	if !ok || len(pg.Environment) == 0 {
+		t.Fatalf("no postgres service environment in docker-compose.yml")
+	}
+	for name := range pg.Environment {
+		if !strings.HasPrefix(name, "POSTGRES_") {
+			t.Errorf("the postgres service gets %s", name)
+		}
+	}
+	if pg.EnvFile != nil {
+		t.Errorf("the postgres service has an env_file: %v", pg.EnvFile)
 	}
 }

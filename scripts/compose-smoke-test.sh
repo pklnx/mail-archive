@@ -219,7 +219,7 @@ fi
 
 echo "== import"
 ./ma import old --from /import/thunderbird --format mbox | tee "$work/out"
-expect "$work/out" "ok: read 4, added 4 \(4 new to the archive\)"
+expect "$work/out" "ok: read 4, added 4 \(4 new to the account\)"
 ./ma import old --from /import/thunderbird --format mbox > "$work/out"
 expect "$work/out" "4 already there"
 

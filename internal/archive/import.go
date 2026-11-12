@@ -113,7 +113,7 @@ type Importer struct {
 type ImportFolderResult struct {
 	Folder  string
 	Read    int // messages read from the source
-	New     int // messages new to the archive
+	New     int // messages new to the account (not held before in any of its folders)
 	Added   int // new locations in the folder (without Deleted)
 	Present int // already in the folder from an earlier import
 	Skipped int // too large or unreadable

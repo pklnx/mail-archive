@@ -22,7 +22,18 @@ A complete backup has three parts, made in this order:
    [encryption at rest](#encryption-at-rest) on, the dump is encrypted
    instead, see [Encrypted backups](#encrypted-backups). Without Docker
    Compose, `mail-archive backup DIR` does the same with the `pg_dump` in
-   `PATH`.
+   `PATH`. `pg_dump` (and `pg_restore` in `restore-dump`) then gets only
+   the connection from `MAIL_ARCHIVE_DATABASE_URL` and the variables `PATH`,
+   `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`,
+   `LD_LIBRARY_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`,
+   `KRB5CCNAME` and `KRB5_CONFIG`, so no secret of the app reaches it. Put
+   client settings into `MAIL_ARCHIVE_DATABASE_URL`: `PG*` variables are
+   not passed on (one only counts where the app's own connection takes a
+   host, user or password from it that the URL leaves out). Of the URL's
+   parameters only `sslmode`, `sslrootcert`, `sslcert` and `sslkey` are
+   passed on; others, such as `sslcrl`, `sslpassword` or `connect_timeout`,
+   are not, as before.
+   `~/.pgpass` and `~/.postgresql/` keep working through `HOME`.
 2. **The archive directory** (`data/`, or `ARCHIVE_DIR`): the message files.
    Copy it **after** the dump. Files are only added, so a copy made later
    covers every message in the dump.
@@ -895,6 +906,28 @@ and the token travel unencrypted.
 with the format `json`. They show the `text` (Slack, Mattermost) or `content`
 (Discord) field.
 
+**How names and errors appear.** Account and owner names, mailboxes, sync
+errors and folder names come from users and mail servers, so alerts show
+them as literal text, never as formatting, links or mentions:
+
+- In `text` and `content` each of them is inline code, for example
+  `` Account `work` (owner `anna`, ID 3) ``. A backtick in a name shows as
+  `'`. In `text`, `&`, `<` and `>` are written as `&amp;`, `&lt;` and `&gt;`,
+  which Slack shows as the characters; Mattermost shows them as written,
+  inside the code. `content` carries `"allowed_mentions": {"parse": []}`, so
+  Discord pings no one. A message that is too long for Discord (2,000
+  characters) or for Mattermost (16,000 here) lists the first accounts and
+  ends with "… and N more (see accounts)"; a single very long name is cut
+  with "…". `accounts` always has all of them, unchanged.
+- `title` and `message` (Gotify and generic receivers) and ntfy's message
+  are plain text. The body carries
+  `"extras": {"client::display": {"contentType": "text/plain"}}`, so Gotify
+  never renders Markdown; ntfy gets no `Markdown` header. ntfy's `Title`
+  header is always RFC 2047 encoded.
+- Everywhere, line breaks, other control characters, the Unicode line and
+  paragraph separators and the bidirectional controls in a name or error
+  become a space, so a value cannot start a new line or reorder the text.
+
 **Anything else:** the `json` format posts:
 
 ```json
@@ -904,6 +937,8 @@ with the format `json`. They show the `text` (Slack, Mattermost) or `content`
   "title": "Mail archive: sync of work keeps failing",
   "message": "Account \"work\" (owner anna, ID 3) failed 3 syncs in a row since 2026-10-01 12:00 UTC.\nLast error: …",
   "text": "…", "content": "…",
+  "allowed_mentions": {"parse": []},
+  "extras": {"client::display": {"contentType": "text/plain"}},
   "accounts": [{"id": "3-1759320000-failing", "event": "failing", "accountId": 3, "account": "work",
                 "owner": "anna", "failureStreak": 3, "failingSince": "2026-10-01T12:00:00Z", "lastError": "…"}]
 }

@@ -855,8 +855,8 @@ const (
 // browser connect to the host. The server renames rel and src (and the
 // sandbox and script-src 'none' block the rules), so the browser sends none
 // of them. Its attribute variant is for web/e2e/referrer.spec.ts: a link and
-// images that set their own referrer policy and cors mode, which the server
-// renames too. Only this mail has the word "periscope". It sits below the
+// an image that set their own referrer policy and cors mode, which the
+// server renames too. It has no SVG or MathML, so its remote images load. Only this mail has the word "periscope". It sits below the
 // kaleidoscope mail, below the rows of the list screenshots.
 func hintCheck(date time.Time) message {
 	var b strings.Builder
@@ -882,8 +882,9 @@ func hintCheck(date time.Time) message {
 	b.WriteString(`<IFRAME SRC=` + hintConnect + `/iframe-upper width=16 height=16></IFRAME>`)
 	b.WriteString(`<frame src="` + hintHTTP + `/frame">`)
 	b.WriteString(`<p><a referrerpolicy="unsafe-url" href="` + referrerURL + `/attr-click">The attribute check</a></p>`)
-	b.WriteString(`<p><img referrerpolicy="unsafe-url" crossorigin="anonymous" src="` + referrerURL + `/attr-img" width="16" height="16" alt="">`)
-	b.WriteString(`<svg width="16" height="16"><image crossorigin="anonymous" referrerpolicy="unsafe-url" href="` + referrerURL + `/attr-svgimg" width="16" height="16"/></svg></p>`)
+	// No SVG <image> here: a mail with inline SVG gets no remote images at
+	// all, so this mail would get none either. cssSVGCheck has one.
+	b.WriteString(`<p><img referrerpolicy="unsafe-url" crossorigin="anonymous" src="` + referrerURL + `/attr-img" width="16" height="16" alt=""></p>`)
 	b.WriteString(`</body></html>`)
 	return message{"work", "INBOX", htmlReply("periscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
 		"Request check: hints that stay silent", date, b.String())}
@@ -901,6 +902,144 @@ func referrerCheck(date time.Time) message {
 			`<p>Hi Alex, this is the semaphore check. A safe mail client does not tell the sender where you read this mail.</p>`+
 			`<p><a href="`+referrerURL+`/meta-click">The meta check</a></p>`+
 			`<p><img src="`+referrerURL+`/meta-img" width="16" height="16" alt=""></p></body></html>`)}
+}
+
+// cssBox sizes a check's element, so its CSS images are in the layout.
+const cssBox = `display:block;width:24px;height:24px;margin:2px;`
+
+// cssCheck is an HTML mail whose CSS asks for images on
+// web/e2e/css-images.spec.ts's recorder (referrerURL), one path per
+// construct: every property that loads an image (as a style attribute,
+// /css-<name>-attr, and in <style>, /css-<name>-style), image-set() and
+// friends, var(), a custom function, escapes, character references,
+// preprocessing and comments. Chromium would send the archive's origin with
+// each of them; the server makes them inert, so after "Load remote images"
+// only the <img> control loads. It has no SVG or MathML (a mail with them
+// gets no remote images at all, cssSVGCheck), so it is also the positive
+// control that an ordinary HTML mail still loads remote images. Only this
+// mail has the word "zoetrope". It sits below the kaleidoscope mail, below
+// the rows of the list screenshots.
+func cssCheck(date time.Time) message {
+	u := func(path string) string { return referrerURL + "/css-" + path }
+	var rules, body strings.Builder
+	// attr adds an element whose style attribute is decl ({u}: the URL),
+	// with its double quotes as &quot;; raw adds one with decl as it is.
+	raw := func(name, decl string) {
+		body.WriteString(`<div style="` + cssBox + strings.ReplaceAll(decl, "{u}", u(name+"-attr")) + `"></div>`)
+	}
+	attr := func(name, decl string) { raw(name, strings.ReplaceAll(decl, `"`, "&quot;")) }
+	// style adds a rule with decl and an element it applies to.
+	style := func(name, decl string) {
+		rules.WriteString(".c-" + name + "{" + cssBox + strings.ReplaceAll(decl, "{u}", u(name+"-style")) + "}")
+		body.WriteString(`<div class="c-` + name + `"></div>`)
+	}
+	both := func(name, decl string) { attr(name, decl); style(name, decl) }
+
+	// Every property that loads an image.
+	both("background-image", `background-image:url({u})`)
+	both("background", `background:#036 url({u}) no-repeat`)
+	both("list-style-image", `display:list-item;list-style-position:inside;list-style-image:url({u})`)
+	both("list-style", `display:list-item;list-style:square inside url({u})`)
+	both("border-image", `border:4px solid #036;border-image:url({u}) 30 round`)
+	both("content", `content:url({u})`)
+	both("cursor", `cursor:url({u}),auto`)
+	both("mask-image", `mask-image:url({u})`)
+	both("mask", `mask:url({u})`)
+	both("webkit-mask-image", `-webkit-mask-image:url({u})`)
+	both("shape-outside", `float:left;shape-outside:url({u})`)
+	both("clip-path", `clip-path:url({u}#c)`)
+	// Functions that take a URL as a string, also through var() and a
+	// custom function (defined once in <style>).
+	both("image-set", `background-image:image-set("{u}" 1x)`)
+	both("webkit-image-set", `background-image:-webkit-image-set("{u}" 1x)`)
+	both("var-url", `--v:url({u});background-image:var(--v)`)
+	both("var-string", `--s:"{u}";background-image:image-set(var(--s) 1x)`)
+	both("function", `background-image:--f_("{u}")`)
+	// Spellings: a string, escapes, preprocessing, comments.
+	both("url-string", `background-image:url("{u}")`)
+	both("css-escape", `background-image:\75 rl({u})`)
+	both("esc-backslash-l", `background-image:ur\l({u})`)
+	both("esc-55-RL", `background-image:\55 RL({u})`)
+	both("esc-000072", `background-image:u\000072l({u})`)
+	both("esc-imageset", `background-image:imag\65-set("{u}" 1x)`)
+	both("upper-imageset", `background-image:IMAGE-SET("{u}" 1x)`)
+	both("url-tab-escape", `background-image:url(\9 {u})`)
+	both("comment-around", `/**/background-image:url({u})/**/`)
+	style("pre-ff", "background-image:\furl({u})")
+	// Character references, only in an attribute.
+	raw("pre-cr", `background-image:&#13;url({u})`)
+	raw("pre-ff", `background-image:&#12;url({u})`)
+	raw("ref-r", `background-image:u&#114;l({u})`)
+	raw("quot-bare", `background-image:url(&quot`+strings.TrimPrefix(u("quot-bare-attr"), "http:")+`&quot)`)
+	// <!-- and --> around a rule.
+	rules.WriteString("<!-- .c-cdo-cdc{" + cssBox + "background-image:url(" + u("cdo-cdc-style") + ")} -->")
+	body.WriteString(`<div class="c-cdo-cdc"></div>`)
+
+	return message{"work", "INBOX", htmlReply("zoetrope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"CSS image check: backgrounds that stay empty", date,
+		`<!DOCTYPE html>`+"\n"+`<html><head><style>@function --f_(--s){result:image-set(var(--s) 1x)}`+rules.String()+`</style></head>`+
+			`<body style="font-family:Arial,sans-serif;color:#222">`+
+			`<p>Hi Alex, this is the zoetrope check. A safe mail client loads no image a mail sets in its CSS, not even after you load remote images.</p>`+
+			`<p><img src="`+referrerURL+`/css-control-img" width="16" height="16" alt=""></p>`+
+			body.String()+`</body></html>`)}
+}
+
+// cssSVGCheck is an HTML mail with inline SVG and MathML whose CSS loads
+// images, for web/e2e/css-images.spec.ts: SVG presentation attributes and a
+// plain SVG <style>, which the server's rewrite makes inert, an SVG <image>
+// element (/css-svg-image, not CSS, but under the same refusal), and SVG
+// <style> that x/net/html, the server's HTML parser, does not see where the
+// browser does (found in review): a duplicate attribute with the
+// unquoted value "/" (x/net/html calls the tag self-closing, so the <style>
+// after it is HTML raw text there), and a <template> in an integration
+// point (x/net/html ends the document there). The browser joins the
+// <style>'s text children around a comment or CDATA section to url(, so the
+// rewrite, which reads raw text, sees no URL either. A mail with inline SVG
+// or MathML gets no remote images, so no path may get a request, and the
+// web UI says why after "Load remote images". Nothing in it is CSS that the
+// server's parse check finds: without the refusal by "<svg" and "<math",
+// the parser cases would load. Only this mail has the word "stereoscope".
+// It sits below the kaleidoscope mail, below the rows of the list
+// screenshots.
+func cssSVGCheck(date time.Time) message {
+	u := func(path string) string { return referrerURL + "/css-" + path }
+	var b strings.Builder
+	// SVG: presentation attributes, and a plain <style>.
+	svg := func(content string) {
+		b.WriteString(`<svg width="24" height="24" style="margin:2px">` + content + `</svg>`)
+	}
+	rect := `<rect width="24" height="24"`
+	svg(rect + ` fill="url(` + u("svg-fill-attr") + `#p)"/>`)
+	svg(rect + ` fill="none" stroke-width="4" stroke="url(` + u("svg-stroke-attr") + `#p)"/>`)
+	svg(rect + ` fill="#036" mask="url(` + u("svg-mask-attr") + `#m)"/>`)
+	svg(rect + ` fill="#036" clip-path="url(` + u("svg-clip-path-attr") + `#c)"/>`)
+	svg(`<path d="M4 4L20 20" stroke="#036" marker-start="url(` + u("svg-marker-start-attr") + `#k)"/>`)
+	svg(`<style>.sv{fill:url(` + u("svg-style") + `#p)}</style>` + rect + ` class="sv"/>`)
+	// An SVG image element, with its own referrer policy and cors mode
+	// (formerly in hintCheck): no CSS, but refused all the same.
+	svg(`<image crossorigin="anonymous" referrerpolicy="unsafe-url" href="` + u("svg-image") + `" width="24" height="24"/>`)
+	// The parser cases: each <style> gives the HTML <div> after it a
+	// background. The duplicate attribute cases first, the <template>
+	// cases last: x/net/html sees nothing after the first of those.
+	n := 0
+	parser := func(name, before, style, after string) {
+		n++
+		c := fmt.Sprintf("p%d", n)
+		b.WriteString(before + `<style>.` + c + `{background-image:` + strings.ReplaceAll(style, "{u}", u(name)) + `}</style>` +
+			after + `<div class="` + c + `" style="` + cssBox + `"></div>`)
+	}
+	parser("dup-attr-slash", `<svg width="24" height="24"><foreignObject width="24" height="24"><svg data-x=a data-x=/>`, `url<!--c-->({u})`, `</svg></foreignObject></svg>`)
+	parser("dup-attr-bare", `<svg width="24" height="24"><foreignObject width="24" height="24"><svg data-x data-x=/>`, `url<!--c-->({u})`, `</svg></foreignObject></svg>`)
+	parser("math-dup-attr", `<math><mi><svg data-x=a data-x=/>`, `url<!--c-->({u})`, `</svg></mi></math>`)
+	parser("template-foreignobject", `<svg width="24" height="24"><foreignObject width="24" height="24"><div><template></template></div></foreignObject></svg><svg width="0" height="0">`, `url<!--c-->({u})`, `</svg>`)
+	parser("template-mtext", `<math><mtext><template></template></mtext></math><svg width="0" height="0">`, `url<![CDATA[(]]>{u})`, `</svg>`)
+	parser("template-mi", `<math><mi><template></template></mi></math><svg width="0" height="0">`, `url<!--c-->({u})`, `</svg>`)
+	return message{"work", "INBOX", htmlReply("stereoscope@layout.example", "Layout Lab <check@layout.example>", "alex.morgan@work.example",
+		"CSS check, SVG style: images that stay off", date,
+		`<html><body style="font-family:Arial,sans-serif;color:#222">`+
+			`<p>Hi Alex, this is the stereoscope check. A safe mail client loads no image this mail's SVG styles ask for.</p>`+
+			`<p><img src="`+referrerURL+`/css-svg-control-img" width="16" height="16" alt=""></p>`+
+			b.String()+`</body></html>`)}
 }
 
 // leasePDF is the lease attached to Sam's mail: a PDF with a text layer.
@@ -1021,7 +1160,8 @@ Content-Transfer-Encoding: base64
 			"Thanks for signing up. Your mailbox is ready.")},
 	}
 	msgs = append(msgs, offsite(ago)...)
-	msgs = append(msgs, neutralized(ago(19, 12), webURL), hintCheck(ago(19, 14)), referrerCheck(ago(19, 16)))
+	msgs = append(msgs, neutralized(ago(19, 12), webURL), hintCheck(ago(19, 14)), referrerCheck(ago(19, 16)),
+		cssCheck(ago(19, 18)), cssSVGCheck(ago(19, 20)))
 	for i := range 25 {
 		msgs = append(msgs, message{"work", "INBOX", plain("Newsletter <news@shop.example>", "alex.morgan@work.example",
 			fmt.Sprintf("Deals of week %d", 40-i), ago(6+i, 0), fmt.Sprintf("The best deals of week %d.", 40-i))})

@@ -362,6 +362,8 @@ export interface MessageDetail extends MessageSummary {
   retainUntil: string | null;
   /** One of the locations is on legal hold; only sent to admins. */
   onHold?: boolean;
+  /** The HTML body has inline SVG or MathML: the server loads no remote images for it, even with images=1. */
+  remoteImagesRefused: boolean;
 }
 
 export interface Filter {
@@ -519,7 +521,10 @@ export interface PurgePreview {
   deletedBytes: number;
   /** Messages also in other accounts: they stay there. */
   kept: number;
+  /** The caller's own other accounts that keep copies; accounts the caller does not own are never named. */
   keptIn: { owner: string; account: string; messages: number }[];
+  /** Kept messages in none of the caller's other accounts, only in accounts the caller does not own. */
+  keptByOthers: number;
   /** How long the files of deleted messages are kept, a Go duration ("168h0m0s"); empty if unknown. */
   grace: string;
   blockers: PurgeBlockers;
@@ -858,7 +863,8 @@ export interface LegalHold {
   since: string | null;
   until: string | null;
   matchedAt: string | null;
-  matched: number;
+  /** Messages the filter matched; null unless the hold is on the caller or one of their own accounts. */
+  matched: number | null;
   createdAt: string;
   createdBy: string;
   releasedAt: string | null;

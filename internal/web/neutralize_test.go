@@ -748,9 +748,12 @@ func servedCIDParts(t testing.TB) ([]mime.Part, func() (io.ReadCloser, error)) {
 }
 
 // FuzzServedMailHTML checks what the handler serves (servedMailHTML: inline
-// images, preamble, rename), not neutralizeHTML alone: no rewrite after the
-// rename may bring a declarative shadow root, a srcdoc frame or a link into
-// the app back.
+// images, preamble, rename, CSS rewrite), not neutralizeHTML alone: no
+// rewrite after the rename may bring a declarative shadow root, a srcdoc
+// frame or a link into the app back, and the rename stays a fixpoint on the
+// served bytes. Without foreign content, templates, noscript or CDATA, the
+// browser's CSS sources are exactly what neutralizeCSS reads, so the CSS
+// check finds nothing there.
 func FuzzServedMailHTML(f *testing.F) {
 	for _, cases := range neutralizeCases {
 		for _, c := range cases {
@@ -767,8 +770,18 @@ func FuzzServedMailHTML(f *testing.F) {
 		`<a cid:q= href=/api/x>x</a>`,
 		`<a cid:a@x=/href=/api/x>x</a>`,
 		`<svg><set cid:q= attributeName=href to=/x /></svg>`,
+		`<p style="background:url(cid:a@x=)"><a style="x:url(href=/api/x)" href=/api/x>`,
+		`<p style="background:url(&quot/x&quot);mask:image-set(&#x22;a&#x22 1x)">`,
+		`<a x=url( =href=/api/x)>`,
+		`<style>a{background:url(<a href=/api/x>)}</style>`,
+		`<A STYLE=url(d>`,
+		`<img src=cid:a@x<svg>`,
+		`<p style="background:url(cid:a@x)<MATH">`,
 	} {
 		f.Add(s)
+	}
+	for _, c := range neutralizeCSSCases {
+		f.Add(c.in)
 	}
 	parts, open := servedCIDParts(f)
 	f.Fuzz(func(t *testing.T, in string) {
@@ -778,12 +791,27 @@ func FuzzServedMailHTML(f *testing.F) {
 			t.Fatal(err)
 		}
 		// Alignment: the inlined mail with the preamble, plus prefixes only
-		// directly before a rule prefix.
-		if _, ok := neutralizeInsertions(withPreamble(inl.HTML), served); !ok {
-			t.Fatalf("not an insertion:\n in %q\nserved %q", in, served)
+		// directly before a rule prefix, then the CSS insertions.
+		renamed := neutralizeHTML(withPreamble(inl.HTML), testAppHosts)
+		if _, ok := neutralizeInsertions(withPreamble(inl.HTML), renamed); !ok {
+			t.Fatalf("not an insertion:\n in %q\nrenamed %q", in, renamed)
+		}
+		if served != neutralizeCSS(renamed) {
+			t.Fatalf("served is not the CSS rewrite of the renamed bytes:\n in %q\nserved %q", in, served)
+		}
+		if !cssInsertOnly(renamed, served) {
+			t.Fatalf("CSS rewrite not insert-only:\nrenamed %q\n served %q", renamed, served)
 		}
 		if again := neutralizeHTML(served, testAppHosts); again != served {
 			t.Fatalf("served bytes not final:\n in %q\nserved %q", in, served)
+		}
+		if again := neutralizeCSS(served); again != served {
+			t.Fatalf("CSS rewrite not idempotent:\n in %q\nserved %q\n 2nd %q", in, served, again)
+		}
+		// The message's JSON reads the stored body (remoteImagesRefused),
+		// /html the served bytes: both must agree.
+		if a, b := foreignContent(in), foreignContent(served); a != b {
+			t.Fatalf("foreignContent %q of the mail, %q of the served bytes:\n in %q\nserved %q", a, b, in, served)
 		}
 		if p, key, keeps := neutralizeCandidateKeeps(served); keeps {
 			t.Fatalf("candidate at %d keeps %q:\n in %q\nserved %q", p, key, in, served)
@@ -791,7 +819,25 @@ func FuzzServedMailHTML(f *testing.F) {
 		if s := neutralizeSurvivors(served); len(s) > 0 {
 			t.Fatalf("oracle: %v survive:\n in %q\nserved %q", s, in, served)
 		}
+		if !hasTreeContext(in) {
+			if s := cssFetchSurvivors(served); len(s) > 0 {
+				t.Fatalf("CSS check: %v:\n in %q\nserved %q", s, in, served)
+			}
+		}
 	})
+}
+
+// hasTreeContext reports whether doc holds what makes the browser read
+// markup where x/net/html's Tokenizer reads raw text or the reverse:
+// foreign content, templates, noscript or CDATA (ASCII case-insensitive).
+func hasTreeContext(doc string) bool {
+	l := strings.ToLower(doc)
+	for _, s := range []string{"<svg", "<math", "<template", "<noscript", "<![cdata["} {
+		if strings.Contains(l, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // benchInputs builds the 4 MiB inputs in memory.

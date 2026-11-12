@@ -47,7 +47,7 @@ const summary = (id: string, subject: string): MessageSummary => ({
 });
 const detail = (id: string): MessageDetail => ({
   ...summary(id, `Subject ${id}`), messageId: `<${id}@example.org>`, to: "alice@example.org", cc: "", dateHeader: "", text: "Hello",
-  hasHtml: false, truncated: false, parts: [], locations: [], retainUntil: null,
+  hasHtml: false, truncated: false, parts: [], locations: [], retainUntil: null, remoteImagesRefused: false,
 });
 /** The messages the list gets; none unless a test sets them. */
 let listed: MessageSummary[] = [];

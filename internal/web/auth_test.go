@@ -92,7 +92,7 @@ func newAuthFixtureWith(t *testing.T, require2FA bool) *authFixture {
 }
 
 // newAuthFixtureOpts is newAuthFixture with Require2FA, PublicURL, Syncer,
-// Runner, AlertAfterFailures and Retention (its Store set to the fixture's
+// Runner, AlertAfterFailures, TrustedProxies and Retention (its Store set to the fixture's
 // if nil) from opts.
 func newAuthFixtureOpts(t *testing.T, opts Options) *authFixture {
 	t.Helper()
@@ -122,7 +122,7 @@ func newAuthFixtureOn(t *testing.T, opts Options, w io.Writer, st *store.Store, 
 	s := New(st, nil, slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug})), Options{
 		AllowedHosts: []string{"127.0.0.1"}, Hasher: cheapHasher, Sealer: sealer, SecretKey: key, Now: clock.Now,
 		Require2FA: opts.Require2FA, PublicURL: opts.PublicURL, Syncer: opts.Syncer, Runner: opts.Runner, Fills: opts.Fills, AlertAfterFailures: opts.AlertAfterFailures,
-		Retention: opts.Retention,
+		Retention: opts.Retention, TrustedProxies: opts.TrustedProxies,
 	})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

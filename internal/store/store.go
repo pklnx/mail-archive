@@ -655,7 +655,11 @@ func (s *Store) MessageExists(ctx context.Context, sha256 string) (bool, error) 
 
 // SaveResult tells what SaveBatch stored.
 type SaveResult struct {
-	New int // messages new to the archive
+	// Added counts the stored messages the account did not hold before, in
+	// any of its folders (gone locations count as held). It never depends
+	// on what other accounts hold: deduplication across accounts stays
+	// invisible.
+	Added int
 	// Skipped counts messages deleted by retention that were not archived
 	// again, because they would already be expired in this folder.
 	Skipped int
@@ -687,6 +691,10 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err != nil {
 			return err
 		}
+		held, err := accountHeld(ctx, q, folderID, metas)
+		if err != nil {
+			return err
+		}
 		for i := range metas {
 			m := &metas[i]
 			if skip[m.SHA256] {
@@ -697,7 +705,10 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if err != nil {
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
-			res.New += int(n)
+			if !held[m.SHA256] {
+				held[m.SHA256] = true
+				res.Added++
+			}
 			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
 				return err
 			}
@@ -732,6 +743,30 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		return SaveResult{}, err
 	}
 	return res, nil
+}
+
+// accountHeld returns the hashes of a batch that the account of the folder
+// holds already, in any of its folders. It runs inside the batch's
+// transaction; the account's sync lock (sync, import, fill) keeps the
+// answer stable until the batch commits. The map is never nil, so the
+// caller can mark the hashes it adds.
+func accountHeld(ctx context.Context, q *db.Queries, folderID int64, metas []MessageMeta) (map[string]bool, error) {
+	shas := make([]string, len(metas))
+	for i := range metas {
+		shas[i] = metas[i].SHA256
+	}
+	held := make(map[string]bool, len(metas))
+	if len(shas) == 0 {
+		return held, nil
+	}
+	rows, err := q.AccountHeldMessages(ctx, db.AccountHeldMessagesParams{FolderID: folderID, Shas: shas})
+	if err != nil {
+		return nil, fmt.Errorf("account held messages: %w", err)
+	}
+	for _, sha := range rows {
+		held[sha] = true
+	}
+	return held, nil
 }
 
 // skipDeleted returns the hashes of a batch to skip: messages deleted by

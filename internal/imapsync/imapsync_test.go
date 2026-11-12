@@ -177,7 +177,7 @@ func TestListFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[uint32][]imap.Flag{}
-	if err := ListFlags(conn, func(uid uint32, flags []imap.Flag) { got[uid] = flags }); err != nil {
+	if err := ListFlags(conn, 0, func(uid uint32, flags []imap.Flag) { got[uid] = flags }); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 3 || len(got[1]) != 0 || len(got[2]) != 2 {
@@ -198,7 +198,7 @@ func TestListFlagsIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := 0
-	err := ListFlags(conn, func(uint32, []imap.Flag) { n++ })
+	err := ListFlags(conn, 0, func(uint32, []imap.Flag) { n++ })
 	if !errors.Is(err, ErrIncomplete) || n != 2 {
 		t.Fatalf("err = %v after %d messages, want ErrIncomplete", err, n)
 	}
@@ -209,7 +209,7 @@ func TestListFlagsEmptyFolder(t *testing.T) {
 	if _, err := conn.Examine("Empty"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ListFlags(conn, func(uint32, []imap.Flag) {}); err == nil {
+	if err := ListFlags(conn, 0, func(uint32, []imap.Flag) {}); err == nil {
 		t.Fatal("ListFlags on an empty folder succeeded")
 	}
 	if strings.Contains(traffic.String(), "FETCH") {

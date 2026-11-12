@@ -187,7 +187,12 @@ height of the visible area and scroll inside it. HTML mail is rendered like
 in other mail clients: with a doctype in standards mode, without in quirks
 mode. **Remote images stay blocked** because they tell the sender that you
 opened the message (tracking pixels); **Load remote images** allows them
-for one message. Images embedded in the message (`cid:`) are always shown if
+for one message. Images a mail sets through CSS (backgrounds, list bullets)
+stay empty even then, and a mail with inline SVG or MathML (pictures or
+formulas written into the mail) gets no remote images at all: after
+**Load remote images** it shows **Remote images stay blocked for this
+message**, with the reason (see [HTML mail](../reference/security#html-mail)).
+Images embedded in the message (`cid:`) are always shown if
 they are PNG, JPEG, GIF or WebP, up to 10 MiB per message; other types such
 as SVG, and images past that limit, show as a broken image. In dark mode
 the mail keeps its own colors on a white sheet, since most HTML mail is

@@ -210,7 +210,10 @@ IMAP; when it exists only as files (a piler export, an mbox, a Maildir),
   journaled check needs every message read, so it only runs for real.
 
 The summary has a `JOURNALED` column and ends with
-`ok: read N, added N (N new to the archive), N already there, N already journaled, N skipped`.
+`ok: read N, added N (N new to the account), N already there, N already journaled, N skipped`.
+*New to the account* counts the messages the account did not hold in any of
+its folders before, even if the archive held the same bytes from another
+account.
 Running it again adds nothing new; each run gets a row of its own, and only
 what it adds names it.
 

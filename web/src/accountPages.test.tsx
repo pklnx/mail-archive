@@ -92,7 +92,7 @@ afterEach(() => {
 
 function preview(more: Partial<PurgePreview> = {}): PurgePreview {
   return {
-    account: "old", kind: "imap", locations: 5, messages: 4, deleted: 3, deletedBytes: 2048, kept: 0, keptIn: [], grace: "168h0m0s",
+    account: "old", kind: "imap", locations: 5, messages: 4, deleted: 3, deletedBytes: 2048, kept: 0, keptIn: [], keptByOthers: 0, grace: "168h0m0s",
     blockers: { notRemoved: false, syncing: false, purgeOpen: false, rules: [], holds: [], messages: [] }, purge: null, ...more,
   };
 }
