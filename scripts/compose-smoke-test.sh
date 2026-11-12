@@ -68,6 +68,7 @@ MAIL_ARCHIVE_SECRET_KEY=$(openssl rand -base64 32)
 ARCHIVE_DIR=$work/data
 IMPORT_DIR=$work/import
 ARCHIVE_KEY_DIR=$work/keys
+SECRET_KEY_DIR=$work/secret-key
 POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-0}
 WEB_PORT=${SMOKE_WEB_PORT:-0}
 MAIL_ARCHIVE_PUBLIC_URL=http://localhost
@@ -141,6 +142,11 @@ expect "$work/out" '^805306368 1000000000 20 \[no-new-privileges:true\]$'
 docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$worker_id" > "$work/out"
 expect "$work/out" '^GOMEMLIMIT=576MiB$'
 expect "$work/out" '^MAIL_ARCHIVE_JOB_WORKERS=1$'
+# The worker seals and opens no password: it gets no secret key (#396).
+if grep -q '^MAIL_ARCHIVE_SECRET_KEY' "$work/out"; then
+	echo "the worker gets the secret key" >&2
+	exit 1
+fi
 docker compose --progress quiet --profile worker logs worker > "$work/out" 2>&1
 expect "$work/out" 'msg="worker on" workers=1'
 docker compose --progress quiet --profile worker stop worker

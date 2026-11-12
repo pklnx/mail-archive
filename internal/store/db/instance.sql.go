@@ -43,6 +43,17 @@ func (q *Queries) GetMigrationFailure(ctx context.Context) (GetMigrationFailureR
 	return i, err
 }
 
+const getSecretKeyCheck = `-- name: GetSecretKeyCheck :one
+SELECT secret_key_check FROM instance_state
+`
+
+func (q *Queries) GetSecretKeyCheck(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getSecretKeyCheck)
+	var secret_key_check []byte
+	err := row.Scan(&secret_key_check)
+	return secret_key_check, err
+}
+
 const instanceStateExists = `-- name: InstanceStateExists :one
 SELECT (to_regclass('instance_state') IS NOT NULL)::boolean AS exists
 `
@@ -72,6 +83,66 @@ func (q *Queries) LastBackupSince(ctx context.Context, since time.Time) (time.Ti
 	return at, err
 }
 
+const lockSecretKeyCheck = `-- name: LockSecretKeyCheck :one
+SELECT secret_key_check FROM instance_state FOR UPDATE
+`
+
+func (q *Queries) LockSecretKeyCheck(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lockSecretKeyCheck)
+	var secret_key_check []byte
+	err := row.Scan(&secret_key_check)
+	return secret_key_check, err
+}
+
+const recordSecretKeyCheck = `-- name: RecordSecretKeyCheck :execrows
+UPDATE instance_state
+SET secret_key_check = $1::bytea, updated_at = now()
+WHERE secret_key_check IS NULL
+`
+
+// The first start of a key records its check value, unless one is there.
+func (q *Queries) RecordSecretKeyCheck(ctx context.Context, keyCheck []byte) (int64, error) {
+	result, err := q.db.Exec(ctx, recordSecretKeyCheck, keyCheck)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sampleTwoFactorSecrets = `-- name: SampleTwoFactorSecrets :many
+SELECT id, two_factor_secret FROM users
+WHERE two_factor_secret IS NOT NULL
+ORDER BY id
+LIMIT $1::int
+`
+
+type SampleTwoFactorSecretsRow struct {
+	ID              int64
+	TwoFactorSecret []byte
+}
+
+// Some of the sealed TOTP secrets, to tell whether the secret key opens
+// them (#396).
+func (q *Queries) SampleTwoFactorSecrets(ctx context.Context, maxRows int32) ([]SampleTwoFactorSecretsRow, error) {
+	rows, err := q.db.Query(ctx, sampleTwoFactorSecrets, maxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SampleTwoFactorSecretsRow
+	for rows.Next() {
+		var i SampleTwoFactorSecretsRow
+		if err := rows.Scan(&i.ID, &i.TwoFactorSecret); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setMigrationFailure = `-- name: SetMigrationFailure :execrows
 UPDATE instance_state
 SET migration_failed_version = $1::bigint, migration_failed_sha256 = $2::bytea,
@@ -85,6 +156,19 @@ type SetMigrationFailureParams struct {
 
 func (q *Queries) SetMigrationFailure(ctx context.Context, arg SetMigrationFailureParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setMigrationFailure, arg.Version, arg.Sha256)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSecretKeyCheck = `-- name: SetSecretKeyCheck :execrows
+UPDATE instance_state
+SET secret_key_check = $1::bytea, updated_at = now()
+`
+
+func (q *Queries) SetSecretKeyCheck(ctx context.Context, keyCheck []byte) (int64, error) {
+	result, err := q.db.Exec(ctx, setSecretKeyCheck, keyCheck)
 	if err != nil {
 		return 0, err
 	}

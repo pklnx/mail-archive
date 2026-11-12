@@ -72,7 +72,13 @@ services:
         restart: true
     environment:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
-      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
+      # The secret key: the variable, or a file in SECRET_KEY_DIR (mounted
+      # read-only as /secret-key) with
+      # MAIL_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key; not both. The
+      # web server refuses to start without one. See
+      # docs/reference/configuration.md.
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
+      MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       # Apply pending database migrations at start, under the same lock as
       # ./ma migrate; off: refuse to start while migrations are pending.
@@ -136,6 +142,8 @@ services:
       - ${ARCHIVE_DIR:-./data}:/data
       # The archive key, read-only, outside the data directory.
       - ${ARCHIVE_KEY_DIR:-./keys}:/keys:ro
+      # The secret key file, read-only, outside the data directory.
+      - ${SECRET_KEY_DIR:-./secret-key}:/secret-key:ro
     ports:
       # WEB_BIND=0.0.0.0 (or a LAN or Tailscale address) opens it to a network.
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
@@ -169,7 +177,7 @@ services:
         restart: true
     environment:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
-      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
+      # No secret key: the worker seals and opens no password.
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       # As for web: whichever starts first migrates, the other waits.
       MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-on}
@@ -204,7 +212,9 @@ services:
         condition: service_healthy
     environment:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
-      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:?set MAIL_ARCHIVE_SECRET_KEY in .env}
+      # The secret key, as for web.
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
+      MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       # `./ma status` shows when each account is due and whether it is
       # stale; `./ma account set-schedule` checks the floor.
@@ -253,6 +263,8 @@ services:
       - ${EXPORT_DIR:-./export}:/export
       # The archive key, read-only, outside the data directory.
       - ${ARCHIVE_KEY_DIR:-./keys}:/keys:ro
+      # The secret key file, read-only, outside the data directory.
+      - ${SECRET_KEY_DIR:-./secret-key}:/secret-key:ro
 
   # One-shot `./ma encryption keygen`: writes keys/archive.key and the
   # keyring in data/. The only service with the keys directory writable;

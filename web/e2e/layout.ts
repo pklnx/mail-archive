@@ -134,16 +134,21 @@ export const rowCentres = (table: Locator) =>
 /**
  * Every row of a table holds its cells on one top alignment: each cell's
  * first line and the ⋮ sit within 1.5 px of the row header's first line
- * (#378). `menus` is how many rows at least have a ⋮ that is checked.
+ * (#378), 2 px in WebKit. `menus` is how many rows at least have a ⋮ that is
+ * checked.
  */
 export async function rowsAligned(table: Locator, menus = 1) {
+  // Engine fact (#398, first WebKit run): WebKit's line boxes put a cell
+  // 1.99 px off the row header where Chromium's are within 1.5 px (sub-pixel
+  // layout and font metrics); a coordinator decision allows 2 px there.
+  const tolerance = table.page().context().browser()?.browserType().name() === "webkit" ? 2 : 1.5;
   await expect(table.locator("tbody tr").first()).toBeVisible();
   const all = await rowCentres(table);
   expect(all.filter((cells) => cells.some((c) => c.cell.endsWith("⋮"))).length, `rows with a ⋮ in ${JSON.stringify(all)}`).toBeGreaterThanOrEqual(menus);
   for (const cells of all) {
     expect(cells.length, `cells of ${JSON.stringify(cells)}`).toBeGreaterThan(1);
     const name = cells[0]!.centre;
-    for (const c of cells) expect(Math.abs(c.centre - name), `${c.cell} against the row header in ${JSON.stringify(cells)}`).toBeLessThanOrEqual(1.5);
+    for (const c of cells) expect(Math.abs(c.centre - name), `${c.cell} against the row header in ${JSON.stringify(cells)}`).toBeLessThanOrEqual(tolerance);
   }
 }
 

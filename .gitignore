@@ -59,3 +59,6 @@ go.work.sum
 
 # Archive key files of encryption at rest (ARCHIVE_KEY_DIR)
 /keys/
+
+# The secret key file (SECRET_KEY_DIR)
+/secret-key/

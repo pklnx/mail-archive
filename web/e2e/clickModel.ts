@@ -1,5 +1,5 @@
 // A model of how Safari (WebKit) and Firefox on macOS treat focus on a mouse
-// click, for Chromium (#335, S1 and S2). In those browsers a clicked button,
+// click, for the engines in CI (#335, S1 and S2). In those browsers a clicked button,
 // link, checkbox or radio does not take the focus: the element that had it
 // blurs on mousedown with no relatedTarget, and the focus goes to the body.
 // Chromium focuses the clicked control instead, so a close-on-blur that
@@ -18,6 +18,11 @@
 // order, their focus rings, text fields, which do take the focus, or
 // elements with a tabindex), so each check under it keeps a manual remainder
 // in real Safari and Firefox.
+//
+// The model is applied in the webkit project too (#398): Playwright's WebKit
+// is the Linux port, which focuses a clicked button as Chromium does; not
+// focusing on click is macOS platform behaviour. user-panel.spec.ts checks
+// the engine's own click focus without the model in both projects.
 import type { Page } from "@playwright/test";
 
 /** Installs the model in every document the page loads from now on. */

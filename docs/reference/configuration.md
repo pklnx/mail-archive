@@ -14,7 +14,8 @@ are named on the guide pages: the default sync interval
 | Variable | Default | Description |
 |---|---|---|
 | `MAIL_ARCHIVE_DATABASE_URL` | (required) | PostgreSQL connection URL. Compose sets it from `POSTGRES_PASSWORD`. |
-| `MAIL_ARCHIVE_SECRET_KEY` | (required to add accounts and sync) | 32 bytes, base64. Encrypts IMAP passwords. Create with `openssl rand -base64 32` or `./ma keygen`. Without it the web UI is browse-only. |
+| `MAIL_ARCHIVE_SECRET_KEY` | (required by `serve`, and to add accounts and sync) | 32 bytes, base64. Encrypts IMAP passwords and TOTP secrets. Create with `openssl rand -base64 32` or `./ma keygen`. The web server refuses to start without it, and with another key than the instance's: see [The secret key](./security#the-secret-key) and [`secret-key accept`](./cli#secret-key). The worker does not need it. |
+| `MAIL_ARCHIVE_SECRET_KEY_FILE` | (none) | File holding the secret key, base64 (Compose: `/secret-key/secret.key`, from `SECRET_KEY_DIR`). Preferred; a systemd credential or a Docker secret works too if group and others have no permission on it. Setting both this and `MAIL_ARCHIVE_SECRET_KEY` is refused. Refused when group or others have any permission on it (0400 or 0600 are fine; 0440 or 0644 are not), when it is not a regular file and when it lies inside the data directory. The error names the reason, never the key. Every refusal of the secret key ends a command with exit code 4. |
 | `MAIL_ARCHIVE_DATA_DIR` | `./data` (`/data` in Docker) | Directory for the message files (`.eml`, or `.enc` with encryption at rest) and the keyring. |
 | `MAIL_ARCHIVE_SYNC_INTERVAL` | `6h` | How often the web server syncs each enabled account without its own interval, and runs each [recurring fill](../guide/journaling#keep-importing-recurring-fill) without its own. A Go duration like `30m` or `12h`; at least `5m` and at least `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`; `0` turns the schedule off for every account and every recurring fill (a fill just switched on, resumed or interrupted still finishes its current run). See [The schedule](../guide/syncing#the-schedule). |
 | `MAIL_ARCHIVE_SYNC_INTERVAL_MIN` | `5m` | The shortest interval the schedule syncs any account at, or runs a recurring fill at, also one with a shorter own interval. From `5m` to `720h`. |
@@ -89,6 +90,7 @@ transaction mode (PgBouncer `pool_mode=transaction`) breaks session locks.
 |---|---|---|
 | `POSTGRES_PASSWORD` | (required) | Password of the bundled PostgreSQL. |
 | `ARCHIVE_DIR` | `./data` | Host directory mounted as `/data`. |
+| `SECRET_KEY_DIR` | `./secret-key` | Host directory mounted read-only as `/secret-key` into the web server and the CLI, not the worker. Put the secret key there as `secret.key`, owned by the container user (UID 65532) with mode 0400, and set `MAIL_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key` instead of `MAIL_ARCHIVE_SECRET_KEY`. Keep it out of `ARCHIVE_DIR`. |
 | `ARCHIVE_KEY_DIR` | `./keys` | Host directory mounted read-only as `/keys` into the web server, the worker and the CLI, and writable only by `./ma encryption keygen` and `./ma encryption rotate-key`. The default lies in the Compose project directory, next to `./data` on the same disk; keep it out of `ARCHIVE_DIR`, and move it to another disk or a secret store for real separation. |
 | `WEB_BIND` | `127.0.0.1` | Address the web UI is published on. `0.0.0.0` for all interfaces, or a LAN or Tailscale address. See [Network access](./security#network-access). |
 | `WEB_PORT` | `8080` | Port of the web UI. |

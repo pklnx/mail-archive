@@ -1273,17 +1273,32 @@ their kinds in the test only.
 
 `serve` and `worker` run `prepareInstance` (`cmd/mail-archive/startup.go`,
 #396) before they open their own store. The steps are numbered as in the
-plan of #396; parts 2 and 3 add the missing ones:
+plan of #396; part 3 adds the missing ones:
 
 | # | Step | serve | worker | other commands |
 |---|---|---|---|---|
+| 0 | Load the configuration; the secret key from `MAIL_ARCHIVE_SECRET_KEY_FILE` or `MAIL_ARCHIVE_SECRET_KEY` (`config.LoadSecretKey`). A refused key configuration is a `config.SecretKeyError` (exit 4). `serve` refuses without a key here, before it listens or migrates. | yes | yes | yes |
+| 1 | Listen, and answer with the starting handler (`web.Starting`): `/healthz` 503 `{"status":"starting"}`, everything else 503 with `Retry-After`, behind `protect`. | yes | no | no |
 | 2 | Open a short-lived store with `ForMigrations` and take the migration command lock (`LockMigrations`), logging once if it has to wait. | yes | yes | no |
 | 3 | With `MAIL_ARCHIVE_MIGRATE_ON_START=on`: refuse a migration whose failure is recorded with the same file (exit 3), log the pending migrations and the last `data.backup` audit entry (a warning when none is younger than 26 h), then run `applyMigrations`, the sequence `migrate` runs too (index rebuild, audit partitions, `Store.Migrate`, password upgrade). | yes | yes | `migrate` only, without the record check |
 | 4 | Schema check (`Store.SchemaState`): refuse when migrations are pending or the database has a newer migration than the binary (exit 4). | yes | yes | yes, in `openApp`; `backup` and `status` only warn |
 | 3b | Hook under the lock, on a current schema (part 3: encryption at setup). | yes | yes | no |
-| 8 | Release the lock, close the store, then `openApp` and the process's own start. | yes | yes | – |
+| 5 | Secret key (`checkSecretKey`): refuse another key than the one whose check value `instance_state.secret_key_check` holds (HMAC-SHA256 with the key over `mail-archive secret key check v1`, `crypto.KeyCheck`), exit 4 with both fingerprints. Without a check value, the key must open one of up to 5 sealed account passwords and 5 TOTP secrets if there are any; then the value is recorded. `secret-key accept` replaces it. | yes | no | no |
+| 8 | Release the lock, close the store, then `openApp` and the process's own start; `serve` swaps the handler of its HTTP server to `web.Server`'s (`web.Swap`). | yes | yes | – |
 
-Steps 3 to 3b run under the lock, so starts and `migrate` at the same time
+`serve` has one `http.Server` and one listener for its whole run
+(`runServe`, `web.Serve`): its handler is a `web.Swap`, an
+`atomic.Pointer` that holds the starting handler first and the app after
+step 8. No listener or connection is closed by the swap; a request that
+began before it ends with the handler it began with.
+
+Child processes get an environment built by `config.ChildEnv`: only the
+variables of an allowlist (`pgToolEnvNames` for `pg_dump` and `pg_restore`,
+`containerCheckEnvNames` for `prepare-data --check`) and what the caller
+adds (the libpq variables of the database URL, the data directory). A
+`MAIL_ARCHIVE_*` or `PG*` variable of the process is never passed on.
+
+Steps 3 to 5 run under the lock, so starts and `migrate` at the same time
 apply each migration once: the first runs them, the others wait and find
 nothing left. goose's own lock stays nested inside, as for `migrate`.
 

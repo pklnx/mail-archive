@@ -19,8 +19,21 @@ function style(el: Locator, prop: string): Promise<string> {
   return el.evaluate((e, p) => getComputedStyle(e).getPropertyValue(p), prop);
 }
 
-/** The computed user-select (Chromium reports it unprefixed). */
-const userSelect = (el: Locator) => style(el, "user-select");
+/**
+ * The computed user-select that takes effect. Engine fact (#398, first
+ * WebKit run): in Chromium -webkit-user-select is an alias of user-select,
+ * and both are inherited. WebKit keeps -webkit-user-select inherited but
+ * computes the unprefixed user-select as the spec says, not inherited: a
+ * link inside the side navigation (user-select: none) reports
+ * user-select "auto" and -webkit-user-select "none". The build emits both,
+ * so the prefixed one is read first; the unprefixed one only where an
+ * engine lacks the prefix.
+ */
+const userSelect = (el: Locator) =>
+  el.evaluate((e) => {
+    const s = getComputedStyle(e);
+    return s.getPropertyValue("-webkit-user-select") || s.getPropertyValue("user-select");
+  });
 
 /** The computed font size in pixels. */
 async function fontSize(el: Locator): Promise<number> {
@@ -206,7 +219,12 @@ test.describe("desktop", () => {
     await expect
       .poll(() => frame.evaluate((f: HTMLIFrameElement) => f.contentDocument?.readyState === "complete" && /\/html$/.test(new URL(f.contentDocument.URL).pathname)))
       .toBe(true);
-    expect(await frame.evaluate((f: HTMLIFrameElement) => getComputedStyle(f.contentDocument!.body).getPropertyValue("user-select"))).not.toBe("none");
+    expect(
+      await frame.evaluate((f: HTMLIFrameElement) => {
+        const s = getComputedStyle(f.contentDocument!.body);
+        return s.getPropertyValue("-webkit-user-select") || s.getPropertyValue("user-select");
+      }),
+    ).not.toBe("none");
 
     // A plain-text mail.
     await openMessage(page, /Invoice 2026-10/);
