@@ -621,6 +621,30 @@ port given in the request. Every logged-in user can do this, so the server
 can be used to probe hosts in your network. Only give logins to people you
 trust.
 
+The same holds for a fill's folders, starting, switching on and resuming a
+fill, and an account's folder list from the server. All these checks are
+limited before they connect; a refused check answers `429` with
+`Retry-After` and makes no connection:
+
+- 20 checks per user and 60 per client address (IPv6: per `/64`) in 10
+  minutes;
+- 10 failed logins per IMAP server, port and user name in 10 minutes,
+  whoever makes them, so the archive cannot be used to guess the password of
+  someone else's mailbox. Every check that fails after the login was sent
+  counts, also when the server drops the connection instead of answering.
+  The folder list of a saved account, which uses its saved password, does
+  not count, so nobody can block another user's folder list;
+- 2 checks at a time in all and 1 per user; a check waits for its turn at
+  most 15 seconds (`Retry-After: 15`).
+
+Each check takes at most a minute and reads at most 16 MiB (more with a
+raised folder limit, see [IMAP limits](../guide/operations#imap-limits)). A
+failed check answers with a fixed sentence and a code naming its category
+(`imap_connect`, `imap_tls`, `imap_login`, `imap_timeout`, `imap_server`,
+`imap_protocol`, `imap_limit`). The IMAP server's own answer and the
+network's error text (addresses, certificate names) go only to the server
+log, never to the user, the web UI or alerts.
+
 ## Health endpoints and alerts
 
 `/healthz/sync` needs no login, so that monitoring tools can use it. It names
@@ -646,7 +670,8 @@ authorization and the message never reach another host. A request times out
 after 10 seconds and at most 4 KiB of the answer is read.
 
 Alerts name the account, its owner, its ID and the last sync error (up to
-200 characters). Alerts about mail deleted on the server name the account,
+200 characters). For an error from the IMAP server or the network, that is a
+fixed sentence of its category, never the server's own text. Alerts about mail deleted on the server name the account,
 its owner and ID, the number of messages and the names of up to 20 folders,
 never subjects, addresses or UIDs. Treat the receiver like `./ma status`, which shows the same:
 on the public ntfy.sh server, use a protected topic or a long random one.

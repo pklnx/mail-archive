@@ -764,11 +764,12 @@ describe("the account's page", () => {
   });
 
   it("shows a failed folder load in the error colour, with Cancel", async () => {
-    answer = (url) => (url.endsWith("/server-folders") ? json({ error: "login failed" }, 502) : undefined);
+    // The server's English sentence gives way to the UI's text for its code.
+    answer = (url) => (url.endsWith("/server-folders") ? json({ error: "the IMAP server refused the login", code: "imap_login" }, 502) : undefined);
     show("/?view=accounts&id=work", data([account("work")]));
     fireEvent.click(section(t.folders).getByRole("button", { name: t.edit }));
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: t.folders }));
-    const message = await section(t.folders).findByText(/login failed/);
+    const message = await section(t.folders).findByText(t.failed(t.imapCheck.imap_login));
     expect(message.className).toContain("app-text-error");
     expect(section(t.folders).queryByRole("button", { name: t.saveFolders })).toBeNull();
     fireEvent.click(section(t.folders).getByRole("button", { name: t.cancel }));

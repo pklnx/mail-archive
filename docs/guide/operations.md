@@ -886,6 +886,47 @@ When a cap is reached in a folder, the connection is closed; the next
 folder gets a new connection, so one bad folder does not fail the folders
 after it.
 
+### Login checks
+
+Adding or changing an account, a fill's folders, starting, switching on or
+resuming a fill, and an account's folder list from the server each check the
+login first. Besides the minute and the read limit above:
+
+| What | Limit | When it is reached |
+|---|---|---|
+| Checks per user | 20 in 10 minutes | `429` with `Retry-After`; no connection is made. |
+| Checks per client address (IPv6: per `/64`) | 60 in 10 minutes | As above. |
+| Failed logins per IMAP server, port and user name | 10 in 10 minutes, whoever makes them; every failure after the login was sent counts. The folder list of a saved account does not count. | As above, until the 10 minutes have passed. |
+| Checks at a time | 2 in all, 1 per user | A check waits for its turn up to 15 seconds, then `429` with `Retry-After: 15`. |
+
+These limits are fixed: the server keeps them in memory, and a restart
+resets them.
+
+### Error messages
+
+Errors from an IMAP server or the network are shown, stored and sent in
+[alerts](#monitoring-and-alerts) as a fixed sentence of their category,
+after the folder they occurred in. The server's own answer and the
+network's error text, which can name addresses and certificates, go only to
+the server log (`docker compose logs web`, the lines `sync failed`,
+`folder sync failed`, `fill of a folder failed`, `fill ended`,
+`fill run ended` and `imap login check failed`).
+
+| Category | Sentence | Code of a login check |
+|---|---|---|
+| The server cannot be reached (DNS, connection refused) | cannot connect to the IMAP server | `imap_connect` |
+| TLS handshake or certificate | the secure connection to the IMAP server failed | `imap_tls` |
+| The server refused the login | the IMAP server refused the login | `imap_login` |
+| No answer in time: the idle deadline, a login check's minute | the IMAP server did not answer in time (during COMMAND) | `imap_timeout` |
+| The server refused another command (NO or BAD) | the IMAP server refused a command | `imap_server` |
+| An answer that cannot be read | the IMAP server sent an answer that cannot be read | `imap_protocol` |
+| A limit above was reached | the IMAP server exceeded a limit (WHAT: N) | `imap_limit` |
+
+A limit an operator can raise is followed by the setting, as in "…; raise
+`MAIL_ARCHIVE_IMAP_MAX_FOLDERS`". The web UI shows a login check's error in
+the user's language. Run errors stored before 1.5.3 keep their old text until
+the account's or fill's next run replaces them.
+
 ### A message over 256 MiB
 
 Each sync stops that folder right before the message: messages with a

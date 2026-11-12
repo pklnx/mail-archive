@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -262,9 +264,8 @@ func (s *Server) handleFillFolders(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	folders, err := s.syncer.CheckLogin(r.Context(), src, in.Password)
-	if err != nil {
-		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+	folders, ok := s.checkFillLogin(w, r, src, in.Password)
+	if !ok {
 		return
 	}
 	out := make([]serverFolderJSON, 0, len(folders))
@@ -317,9 +318,8 @@ func (s *Server) handleStartFill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	folders, err := s.syncer.CheckLogin(r.Context(), src, in.Password)
-	if err != nil {
-		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+	folders, ok := s.checkFillLogin(w, r, src, in.Password)
+	if !ok {
 		return
 	}
 	// Trash and spam only after the user said so: once copied, excluding
@@ -462,9 +462,8 @@ func (s *Server) switchFillOn(w http.ResponseWriter, r *http.Request, a *store.A
 		return
 	}
 	src := &store.Account{Host: fill.Host, Port: fill.Port, TLSMode: fill.TLSMode, Username: fill.Username}
-	folders, err := s.syncer.CheckLogin(r.Context(), src, in.Password)
-	if err != nil {
-		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+	folders, ok := s.checkFillLogin(w, r, src, in.Password)
+	if !ok {
 		return
 	}
 	// Trash and spam folders the fill has not filled yet need a yes, as
@@ -487,7 +486,7 @@ func (s *Server) switchFillOn(w http.ResponseWriter, r *http.Request, a *store.A
 	e.Detail("keep_running", map[string]any{"from": false, "to": true})
 	e.Detail("interval", map[string]any{"from": archive.FillIntervalDetail(fill), "to": archive.FormatOwnInterval(interval)})
 	seal := func(id int64) ([]byte, error) { return archive.SealFillPassword(s.syncer.Sealer, id, in.Password) }
-	err = s.store.SetFillRecurring(withAudit(r, e), fill.ID, interval, confirm, seal)
+	err := s.store.SetFillRecurring(withAudit(r, e), fill.ID, interval, confirm, seal)
 	switch {
 	case errors.Is(err, store.ErrFillRunning), errors.Is(err, store.ErrFillKeepsRunning):
 		s.fail(w, r, http.StatusConflict, err.Error(), nil)
@@ -564,8 +563,7 @@ func (s *Server) handleResumeFill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src := &store.Account{Host: fill.Host, Port: fill.Port, TLSMode: fill.TLSMode, Username: fill.Username}
-	if _, err := s.syncer.CheckLogin(r.Context(), src, in.Password); err != nil {
-		s.fail(w, r, http.StatusUnprocessableEntity, "login failed: "+err.Error(), nil)
+	if _, ok := s.checkFillLogin(w, r, src, in.Password); !ok {
 		return
 	}
 	e := s.targetedEntry(r, "data.fill_resume")
@@ -617,4 +615,15 @@ func (s *Server) cancelFill(w http.ResponseWriter, r *http.Request, a *store.Acc
 	}
 	s.log.Info("fill cancelled", "account", a.Name, "fill", fill.ID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// checkFillLogin is the login check of a fill's server with the password
+// the user typed (loginCheck); it returns the server's folders.
+func (s *Server) checkFillLogin(w http.ResponseWriter, r *http.Request, src *store.Account, password string) ([]imapsync.Folder, bool) {
+	var folders []imapsync.Folder
+	ok := s.loginCheck(w, r, src, false, http.StatusUnprocessableEntity, func(ctx context.Context) (err error) {
+		folders, err = s.syncer.CheckLogin(ctx, src, password)
+		return err
+	})
+	return folders, ok
 }

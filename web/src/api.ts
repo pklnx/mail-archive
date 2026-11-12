@@ -1,5 +1,7 @@
 // Types and calls for the JSON API served by `mail-archive serve`.
 
+import { t } from "./i18n";
+
 export interface Folder {
   name: string;
   messages: number;
@@ -450,7 +452,23 @@ async function errorFrom(res: Response): Promise<ApiError> {
   } catch {
     // not JSON
   }
-  return new ApiError(res.status, typeof body.error === "string" ? body.error : res.statusText, body);
+  return new ApiError(res.status, imapCheckText(res.status, body) ?? (typeof body.error === "string" ? body.error : res.statusText), body);
+}
+
+/**
+ * The text of a failed or refused IMAP login check (adding or changing an
+ * account, a fill's folders, start and resume, an account's folder list) in
+ * the UI's language, by the answer's code; null for other answers. The
+ * server's English text is a fixed sentence too, but untranslated.
+ */
+export function imapCheckText(status: number, body: Record<string, unknown>): string | null {
+  const code = body.code;
+  if (typeof code !== "string") return null;
+  if (status === 429 && code === "too_many_checks") {
+    const s = body.retryAfter;
+    return t.tooManyChecks(typeof s === "number" && s > 0 ? s : 60);
+  }
+  return Object.hasOwn(t.imapCheck, code) ? t.imapCheck[code as keyof typeof t.imapCheck] : null;
 }
 
 // Write requests carry JSON; the server rejects anything else (CSRF guard).

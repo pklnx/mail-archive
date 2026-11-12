@@ -2246,6 +2246,8 @@ paths:
                 $ref: "#/components/schemas/FolderConfirmation"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2298,6 +2300,8 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
     delete:
@@ -2539,8 +2543,12 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/NoServer"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "502":
-          description: The server could not be reached or refused the login.
+          description: |
+            The server could not be reached or refused the login; `code` names
+            the category, as for a failed login check (`LoginFailed`).
           content:
             application/json:
               schema:
@@ -2662,6 +2670,8 @@ paths:
                 $ref: "#/components/schemas/FolderConfirmation"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2720,6 +2730,8 @@ paths:
                 $ref: "#/components/schemas/FolderConfirmation"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2777,6 +2789,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -2826,6 +2840,8 @@ paths:
                 $ref: "#/components/schemas/Error"
         "422":
           $ref: "#/components/responses/LoginFailed"
+        "429":
+          $ref: "#/components/responses/TooManyChecks"
         "503":
           $ref: "#/components/responses/SecretKeyMissing"
 
@@ -3309,11 +3325,36 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     LoginFailed:
-      description: The IMAP server refused the login.
+      description: |
+        The login check against the IMAP server failed. `code` names the
+        category: `imap_connect` (the server cannot be reached),
+        `imap_tls` (TLS handshake or certificate), `imap_login` (the server
+        refused the login), `imap_timeout` (no answer in time, or the
+        check's minute ran out), `imap_server` (the server refused another
+        command), `imap_protocol` (an answer that cannot be read) or
+        `imap_limit` (the server sent more than the archive accepts, such as
+        too many folders). `error` is a fixed English sentence; the server's
+        own text is only in the server log.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    TooManyChecks:
+      description: |
+        A limit of IMAP login checks refused the check before it connected
+        (`code: too_many_checks`): 20 checks per user and 60 per client
+        address in 10 minutes, 10 failed logins per IMAP server and user name
+        in 10 minutes, or no turn within 15 seconds (2 checks run at a time,
+        one per user).
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Retry"
     TooManyRequests:
       description: Too many attempts.
       headers:
@@ -3356,13 +3397,14 @@ components:
           type: string
         code:
           type: string
-          enum: [on_hold, conflict, released]
+          enum: [on_hold, conflict, released, imap_connect, imap_tls, imap_login, imap_timeout, imap_server, imap_protocol, imap_limit]
           description: |
             A stable, machine-readable reason, for clients that explain the
             error in their own words; `error` is English text that may
             change. `on_hold`: a legal hold names what the request would
             remove. `conflict`: the thing already exists. `released`: the
-            legal hold is released already.
+            legal hold is released already. `imap_*`: the category of a
+            failed IMAP login check (`LoginFailed`).
         holdIds:
           type: array
           items:
@@ -3448,6 +3490,10 @@ components:
       properties:
         error:
           type: string
+        code:
+          type: string
+          enum: [too_many_checks]
+          description: Set when a limit of IMAP login checks refused the request.
         retryAfter:
           type: integer
           description: Seconds.

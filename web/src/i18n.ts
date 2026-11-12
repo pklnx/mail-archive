@@ -346,6 +346,20 @@ const en = {
   tagFailing: "failing",
   removedAccountsCount: (n: number) => `Removed accounts (${n})`,
   failed: (err: string) => `Failed: ${err}`,
+  /** A failed IMAP login check, by the server's code (imap_<category>). */
+  imapCheck: {
+    imap_connect: "The IMAP server cannot be reached. Check the server name and port.",
+    imap_tls: "The secure connection to the IMAP server failed. Check the TLS setting and the server's certificate.",
+    imap_login: "The IMAP server refused the login. Check the user name and password.",
+    imap_timeout: "The IMAP server did not answer in time. Try again later.",
+    imap_server: "The IMAP server refused a command. Try again later.",
+    imap_protocol: "The IMAP server sent an answer the archive cannot read.",
+    imap_limit: "The IMAP server sent more than the archive accepts, for example too many folders. Ask an admin.",
+  },
+  tooManyChecks: (seconds: number) =>
+    seconds < 60
+      ? `Too many server checks. Try again in ${seconds} seconds.`
+      : `Too many server checks. Try again in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "minute" : "minutes"}.`,
   trashSpamQuestion: (folders: string) =>
     `The server marks these folders as trash or spam: ${folders}. Archive them too? Mail archived from them stays in the archive even if you exclude them later.`,
   saveWithout: "Save without them",
@@ -1036,6 +1050,19 @@ const de: Messages = {
   tagFailing: "fehlerhaft",
   removedAccountsCount: (n) => `Entfernte Konten (${n})`,
   failed: (err) => `Fehlgeschlagen: ${err}`,
+  imapCheck: {
+    imap_connect: "Der IMAP-Server ist nicht erreichbar. Prüfe Servername und Port.",
+    imap_tls: "Die sichere Verbindung zum IMAP-Server ist fehlgeschlagen. Prüfe die TLS-Einstellung und das Zertifikat des Servers.",
+    imap_login: "Der IMAP-Server hat die Anmeldung abgelehnt. Prüfe Benutzername und Passwort.",
+    imap_timeout: "Der IMAP-Server hat nicht rechtzeitig geantwortet. Versuche es später erneut.",
+    imap_server: "Der IMAP-Server hat einen Befehl abgelehnt. Versuche es später erneut.",
+    imap_protocol: "Der IMAP-Server hat eine Antwort geschickt, die das Archiv nicht lesen kann.",
+    imap_limit: "Der IMAP-Server hat mehr geschickt, als das Archiv annimmt, zum Beispiel zu viele Ordner. Wende dich an einen Admin.",
+  },
+  tooManyChecks: (seconds) =>
+    seconds < 60
+      ? `Zu viele Serverprüfungen. Versuche es in ${seconds} Sekunden erneut.`
+      : `Zu viele Serverprüfungen. Versuche es in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "Minute" : "Minuten"} erneut.`,
   trashSpamQuestion: (folders) =>
     `Der Server kennzeichnet diese Ordner als Papierkorb oder Spam: ${folders}. Sollen sie mitarchiviert werden? Was einmal archiviert ist, bleibt im Archiv, auch wenn du die Ordner später abwählst.`,
   saveWithout: "Ohne diese speichern",
