@@ -265,8 +265,8 @@ test.describe("desktop 1280×800, the accessibility tree", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   // The names and descriptions a screen reader gets for the date range
-  // (#332, #335 R3), from Chromium's own accessibility tree.
-  test("the presets are a group named Date, Since and Until describe their format, the calendar has its label", async ({ page }) => {
+  // (#332, #335 R3), in every engine.
+  test("the presets are a group named Date, Since and Until describe their format", async ({ page }) => {
     await ready(page);
     const { button, form, since } = parts(page);
     await button.click();
@@ -278,8 +278,16 @@ test.describe("desktop 1280×800, the accessibility tree", () => {
     expect(placeholder).toBeTruthy();
     await expect(since).toHaveAccessibleDescription(`Format: ${placeholder}`);
     await expect(until).toHaveAccessibleDescription(`Format: ${placeholder}`);
+  });
 
-    // The calendar's label as Chromium exposes it. Closed, the query finds no node.
+  // The calendar's label as Chromium's own accessibility tree exposes it,
+  // read through the DevTools protocol (Chromium only, #398).
+  test("the calendar has its label in Chromium's accessibility tree", { tag: "@cdp" }, async ({ page }) => {
+    await ready(page);
+    const { button, since } = parts(page);
+    await button.click();
+    await expect(since).toBeVisible();
+    // Closed, the query finds no node.
     const cdp = await page.context().newCDPSession(page);
     const calendarNode = async () => {
       const { root } = await cdp.send("DOM.getDocument", { depth: 0 });

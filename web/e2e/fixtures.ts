@@ -39,11 +39,22 @@ const mailFrameErrors: { text: RegExp; url: RegExp }[] = [
     text: new RegExp(`^Loading the image '${remote}' violates the following Content Security Policy directive: "img-src [^"]*"\\. The action has been blocked\\.\\s*$`),
     url: mailFrame,
   },
+  // WebKit's wording (Playwright's WebKit 27.2, #398). WebKit logs it with an
+  // empty location, in the mail frame and on an app page alike, so the URL
+  // cannot limit it to the frame here. An app page still fails: the guards'
+  // securitypolicyviolation listener runs in the app's documents (it cannot
+  // run in the sandboxed frame, which has no allow-scripts) and reports the
+  // same refusal as "CSP violation: img-src …" (guards.spec.ts checks this).
+  {
+    text: new RegExp(`^Refused to load ${remote} because it does not appear in the img-src directive of the Content Security Policy\\.$`),
+    url: new RegExp(`^(${message}/html(\\?[^#]*)?)?$`),
+  },
   // The mail's own <script>, which the sandbox (no allow-scripts) blocks and
   // the browser logs, e.g. in "no script runs in the mail". Playwright's DOM
   // snapshotter used to add to these in every frame, and for a frame that had
   // committed about:blank; the config records traces without DOM snapshots
-  // now, so it does not (#260). Nothing here covers about:blank.
+  // now, so it does not (#260). Nothing here covers about:blank. WebKit's
+  // wording is the same (#459).
   {
     text: new RegExp(`^Blocked script execution in '${message}/html[^']*' because the document's frame is sandboxed and the 'allow-scripts' permission is not set\\.$`),
     url: /.*/, // reported with or without the frame's URL

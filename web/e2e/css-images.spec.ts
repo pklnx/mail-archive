@@ -25,8 +25,9 @@ import { recorder } from "./recorder";
 // through contentDocument (no script runs in the frame) must arrive with
 // the origin. A last control, added after them, is the signal for the
 // negative check: once it is issued, nothing the mail asked for is still
-// to come. The check runs in the fixture's page (the headless shell, as in
-// CI) and in Playwright's full Chromium, with default launch arguments.
+// to come. The check runs in the fixture's page (the project's browser: the
+// headless shell in the chromium project, WebKit in the webkit project) and
+// in Playwright's full Chromium, with default launch arguments.
 
 /** The /css-* requests that the browser issued, in order; also those the CSP then blocks. */
 function issuedCSS(context: BrowserContext) {
@@ -130,11 +131,13 @@ async function checkCSSImages(page: Page, context: BrowserContext) {
   }
 }
 
-test("CSS images in a mail stay unloaded after Load remote images (headless shell)", async ({ page, context }) => {
+test("CSS images in a mail stay unloaded after Load remote images (the project's browser)", async ({ page, context }) => {
   await checkCSSImages(page, context);
 });
 
-test("CSS images in a mail stay unloaded after Load remote images (full Chromium)", async () => {
+// It launches its own Chromium whatever the project's browser, so it runs in
+// the chromium project only (@chromium-launch, #398).
+test("CSS images in a mail stay unloaded after Load remote images (full Chromium)", { tag: "@chromium-launch" }, async () => {
   // The full Chromium that `playwright install chromium` brings, as in
   // hints.spec.ts, but with default arguments and the admin session.
   const browser = await chromium.launch({ channel: "chromium", executablePath: process.env.CHROMIUM_PATH || undefined });

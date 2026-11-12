@@ -83,8 +83,9 @@ soon. The coordinator creates it after the merge, and its body names the pull
 request or review it comes from. Every other non-blocking remark stays in the
 review and is done with it.
 
-What CI cannot check (a real device, Safari, Firefox, a screen reader) the
-pull request lists under "Open manual checks". After the merge the coordinator
+What CI cannot check (a real device; Safari beyond the WebKit engine, such
+as macOS clicks and scrollbars or iOS; Firefox; a screen reader) the pull
+request lists under "Open manual checks". After the merge the coordinator
 appends these items to the open round of manual device checks: an issue titled
 "Manual device checks, round N" and labelled **`device-checks`**, one open at a
 time. The maintainer ticks what passed; a failed check gets a bug issue,

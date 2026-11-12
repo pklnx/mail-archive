@@ -19,8 +19,16 @@ function style(el: Locator, prop: string): Promise<string> {
   return el.evaluate((e, p) => getComputedStyle(e).getPropertyValue(p), prop);
 }
 
-/** The computed user-select (Chromium reports it unprefixed). */
-const userSelect = (el: Locator) => style(el, "user-select");
+/**
+ * The computed user-select. Engine fact (#398): Chromium reports it
+ * unprefixed; WebKit may know only -webkit-user-select, which the build
+ * emits next to the unprefixed one, and then reports "" for user-select.
+ */
+const userSelect = (el: Locator) =>
+  el.evaluate((e) => {
+    const s = getComputedStyle(e);
+    return s.getPropertyValue("user-select") || s.getPropertyValue("-webkit-user-select");
+  });
 
 /** The computed font size in pixels. */
 async function fontSize(el: Locator): Promise<number> {
@@ -206,7 +214,12 @@ test.describe("desktop", () => {
     await expect
       .poll(() => frame.evaluate((f: HTMLIFrameElement) => f.contentDocument?.readyState === "complete" && /\/html$/.test(new URL(f.contentDocument.URL).pathname)))
       .toBe(true);
-    expect(await frame.evaluate((f: HTMLIFrameElement) => getComputedStyle(f.contentDocument!.body).getPropertyValue("user-select"))).not.toBe("none");
+    expect(
+      await frame.evaluate((f: HTMLIFrameElement) => {
+        const s = getComputedStyle(f.contentDocument!.body);
+        return s.getPropertyValue("user-select") || s.getPropertyValue("-webkit-user-select");
+      }),
+    ).not.toBe("none");
 
     // A plain-text mail.
     await openMessage(page, /Invoice 2026-10/);

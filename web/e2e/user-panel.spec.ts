@@ -188,6 +188,24 @@ test.describe("desktop (mouse) 1280×800, the actions", () => {
     await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
   });
 
+  // The engine's own click focus, without the model (#398): Chromium and
+  // Playwright's WebKit (the Linux port) both focus a clicked button, so the
+  // model below is needed in both projects. Not focusing on click is macOS
+  // platform behaviour, which no CI browser has. If this ever fails in one
+  // engine, the model is wrong for it.
+  test("the engine's own click focus: a clicked button takes the focus", async ({ page }) => {
+    await ready(page);
+    const shortcuts = button(page, "Keyboard shortcuts");
+    await shortcuts.hover();
+    await page.mouse.down();
+    await expect(shortcuts).toBeFocused();
+    await page.mouse.up();
+    const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  });
+
   // Safari and Firefox on macOS focus nothing on a click (clickModel.ts).
   test("under the Safari and Firefox click model every action works by click", async ({ page, guards }) => {
     guards.allowHTTPError("/api/session", 500);
@@ -525,16 +543,17 @@ test.describe("tablet 820×1180 with touch", () => {
 });
 
 // The notch and the home indicator (#324, #335 I5): the safe-area insets of
-// an iPhone, set through the DevTools protocol. The header reaches under the
-// notch and grows by the top inset; the panel opens below it and keeps its
-// last item above the home indicator, also scrolled to its end.
+// an iPhone, set through the DevTools protocol, so Chromium only (@cdp,
+// #398). The header reaches under the notch and grows by the top inset; the
+// panel opens below it and keeps its last item above the home indicator,
+// also scrolled to its end.
 test.describe("phone with safe-area insets", () => {
   const { defaultBrowserType: _, ...iphone } = devices["iPhone 13"];
   // Short enough that the open panel scrolls.
   test.use({ ...iphone, viewport: { width: 390, height: 240 } });
   const insets = { top: 47, bottom: 34 };
 
-  test("the header grows by the top inset; the panel opens below it and its last item clears the bottom inset", async ({ page }) => {
+  test("the header grows by the top inset; the panel opens below it and its last item clears the bottom inset", { tag: "@cdp" }, async ({ page }) => {
     await ready(page);
     const header = page.locator(".app-shell > .cds--header");
     const height = () => header.evaluate((e) => e.getBoundingClientRect().height);

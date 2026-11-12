@@ -1,11 +1,12 @@
 // The guards' exceptions for the sandboxed mail frame stay narrow. No
-// browser needed: these check the matcher on the messages Chromium logs.
+// browser needed: these check the matcher on the messages Chromium and
+// WebKit log.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
 import { origin } from "./demo";
-import { formatConsoleError, formatFrameEvents, fromMailFrame, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo } from "./fixtures";
+import { escapeRegExp, formatConsoleError, formatFrameEvents, fromMailFrame, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo, type Guards } from "./fixtures";
 
 const frame = `${origin}/api/messages/${"ab".repeat(32)}/html`;
 const pixel = "https://tracker.example/pixel.gif";
@@ -36,6 +37,34 @@ base("other CSP violations still fail", () => {
   // Inline script, fonts, connections.
   expect(fromMailFrame(frame, `Refused to execute inline script because it violates the following Content Security Policy directive: "script-src 'none'".`)).toBe(false);
   expect(fromMailFrame(frame, `Loading the font 'https://fonts.example/x.woff2' violates the following Content Security Policy directive: "font-src 'none'". The action has been blocked.`)).toBe(false);
+});
+
+// WebKit's wording (Playwright's WebKit 27.2, #398), logged with an empty
+// location: in the mail frame and on an app page alike, so the matcher takes
+// it by its words. An app page still fails through the guards' own listener
+// (the browser tests below).
+const refusedWebKit = `Refused to load ${pixel} because it does not appear in the img-src directive of the Content Security Policy.`;
+
+base("a remote image blocked in the mail frame is expected in WebKit's wording too", () => {
+  expect(fromMailFrame("", refusedWebKit)).toBe(true);
+  expect(fromMailFrame(frame, refusedWebKit)).toBe(true);
+  expect(fromMailFrame(`${frame}?images=1`, refusedWebKit)).toBe(true);
+});
+
+base("other CSP violations in WebKit's wording still fail", () => {
+  // A location that is not the mail frame: the app itself, a part.
+  expect(fromMailFrame(`${origin}/`, refusedWebKit)).toBe(false);
+  expect(fromMailFrame(`${origin}/api/messages/${"ab".repeat(32)}/parts/1`, refusedWebKit)).toBe(false);
+  expect(fromMailFrame("about:blank", refusedWebKit)).toBe(false);
+  // Another directive.
+  for (const directive of ["style-src", "font-src", "frame-src", "connect-src", "media-src"])
+    expect(fromMailFrame("", refusedWebKit.replace("img-src", directive))).toBe(false);
+  // An image from the demo server itself is not "remote".
+  expect(fromMailFrame("", refusedWebKit.replace(pixel, `${origin}/logo.png`))).toBe(false);
+  expect(fromMailFrame("", refusedWebKit.replace(pixel, "http://127.0.0.1:18181/logo.png"))).toBe(false);
+  // Not WebKit's whole sentence.
+  expect(fromMailFrame("", `${refusedWebKit} More.`)).toBe(false);
+  expect(fromMailFrame("", `Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.`)).toBe(false);
 });
 
 // The flaky "Blocked script execution in 'about:blank'" error (#260): the guard
@@ -153,9 +182,21 @@ async function logSentinel(page: Page, context: BrowserContext) {
   await logged;
 }
 
-test("a sandboxed frame that commits about:blank logs nothing while the trace records", async ({ page, context, guards }) => {
-  // The setting this test depends on: a change back to DOM snapshots fails here first.
-  expect(test.info().project.use.trace).toEqual({ mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: true } });
+/** The first lines of the problems so far, which it takes from the guard. */
+const takeFirstLines = (guards: Guards) => guards.takeProblems().map((p) => p.split("\n")[0]);
+/**
+ * The first line of a problem for a console.error the test evaluated in the
+ * page, whatever location the engine gives it. Chromium gives none; WebKit
+ * may give one (it locates the init scripts' lines at Playwright's
+ * web-inspector://bootstrap.js, #398 plan review).
+ */
+const evaluatedLine = (text: string) => expect.stringMatching(new RegExp(`^console error: ${escapeRegExp(text)} \\([^()]*\\)$`));
+const sentinelLine = evaluatedLine(sentinel);
+
+test("a sandboxed frame that commits about:blank logs nothing while the trace records", async ({ page, context, guards, browserName }) => {
+  // The setting this test depends on: a change back to DOM snapshots fails
+  // here first. WebKit's traces have no screenshots either (#343, #398).
+  expect(test.info().project.use.trace).toEqual({ mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: browserName !== "webkit" } });
   await page.route(`${origin}/e2e/outer`, (route) =>
     route.fulfill({ contentType: "text/html", body: `<!doctype html><button>go</button><iframe ${sandboxed} src="/e2e/inner"></iframe>` }),
   );
@@ -171,10 +212,10 @@ test("a sandboxed frame that commits about:blank logs nothing while the trace re
   );
   await page.getByRole("button", { name: "go" }).click();
   await logSentinel(page, context);
-  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([`console error: ${sentinel} ()`]);
+  expect(takeFirstLines(guards)).toEqual([sentinelLine]);
 });
 
-test("a script blocked in a sandboxed frame outside the mail frame still fails the guard", async ({ page, context, guards }) => {
+test("a script blocked in a sandboxed frame outside the mail frame still fails the guard", async ({ page, context, guards, browserName }) => {
   await page.route(`${origin}/e2e/outer`, (route) =>
     route.fulfill({ contentType: "text/html", body: `<!doctype html><button>go</button><iframe ${sandboxed} src="/e2e/inner"></iframe>` }),
   );
@@ -184,11 +225,65 @@ test("a script blocked in a sandboxed frame outside the mail frame still fails t
   await page.goto(`${origin}/e2e/outer`);
   await page.getByRole("button", { name: "go" }).click();
   await logSentinel(page, context);
-  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([
-    `console error: Blocked script execution in '${origin}/e2e/inner' because the document's frame is sandboxed and the 'allow-scripts' permission is not set. (${origin}/e2e/inner)`,
-    `console error: ${sentinel} ()`,
+  // Engine fact: WebKit logs it without a location (#398 plan review).
+  const location = browserName === "webkit" ? "" : `${origin}/e2e/inner`;
+  expect(takeFirstLines(guards)).toEqual([
+    `console error: Blocked script execution in '${origin}/e2e/inner' because the document's frame is sandboxed and the 'allow-scripts' permission is not set. (${location})`,
+    sentinelLine,
   ]);
   expect(await page.title()).toBe("");
+});
+
+// The app's own CSP violations fail the guards in every engine (#343, #398):
+// the guards make no exception for WebKit. In WebKit, Playwright's trace
+// screenshots add an inline style to the page, which the app's CSP refuses;
+// the webkit project records no screenshots instead. The app page is the
+// real one, with the app's CSP; the test changes its document and waits for
+// the browser's securitypolicyviolation event (the guards' listener, from
+// the init script, has run before), then for a console sentinel, so the
+// guard has seen every message before.
+async function violate(page: Page, what: { style: string } | { img: string }) {
+  await page.goto("/");
+  await expect(page.getByRole("list", { name: "Messages" }).getByRole("button").first()).toBeVisible();
+  await page.evaluate(
+    (what) =>
+      new Promise<void>((resolve) => {
+        document.addEventListener("securitypolicyviolation", () => resolve(), { once: true });
+        if ("style" in what) {
+          const style = document.createElement("style");
+          style.textContent = what.style;
+          document.head.append(style);
+        } else {
+          const img = document.createElement("img");
+          img.src = what.img;
+          document.body.append(img);
+        }
+      }),
+    what,
+  );
+}
+
+test("an inline style in the app page fails the guards", async ({ page, context, guards }) => {
+  await violate(page, { style: "body { outline: 1px solid red }" });
+  await logSentinel(page, context);
+  const problems = takeFirstLines(guards);
+  // The guards' listener names the directive: style-src-elem, or style-src.
+  expect(problems).toContainEqual(expect.stringMatching(/^console error: CSP violation: style-src(-elem)? blocked inline in /));
+  expect(problems).toContainEqual(sentinelLine);
+});
+
+test("a remote image in the app page fails the guards", async ({ page, context, guards }) => {
+  // The app's img-src refuses it before any request. WebKit's own console
+  // line for it has no location and matches the mail frame's exception
+  // (fixtures.ts); the guards' listener still reports it.
+  const host = "https://img.example";
+  await violate(page, { img: `${host}/app-page.png` });
+  await logSentinel(page, context);
+  const problems = takeFirstLines(guards);
+  // The blocked URI is the image's URL, or only its origin where the engine
+  // strips a cross-origin one for reports.
+  expect(problems).toContainEqual(expect.stringMatching(new RegExp(`^console error: CSP violation: img-src blocked ${escapeRegExp(host)}(/app-page\\.png)? in `)));
+  expect(problems).toContainEqual(sentinelLine);
 });
 
 // guards.takeProblems() empties the guard, so only the guards' own tests here
@@ -225,7 +320,7 @@ test("an expected console error logged more often than expected is a problem fro
   guards.expectConsoleError(new RegExp(`^${declared}`));
   await logError(page, context, `${declared} 1`);
   await logError(page, context, `${declared} 2`);
-  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([`console error: ${declared} 2 ()`]);
+  expect(takeFirstLines(guards)).toEqual([evaluatedLine(`${declared} 2`)]);
 });
 
 // The teardown's problem is the failure this test expects; the body is only
