@@ -320,11 +320,11 @@ func TestAPIKeyLifecycle(t *testing.T) {
 	}
 
 	// Locking suspends, unlocking restores.
-	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": true}, 204)
+	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": true}, 200)
 	if s := k.keyStatus(key, "GET", "/api/status"); s != 401 {
 		t.Fatalf("locked: %d", s)
 	}
-	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": false}, 204)
+	f.expect("PATCH", "/api/users/kim", map[string]any{"locked": false}, 200)
 	if s := k.keyStatus(key, "GET", "/api/status"); s != 200 {
 		t.Fatalf("unlocked: %d", s)
 	}

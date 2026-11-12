@@ -375,7 +375,8 @@ func downGroupsMigration(t *testing.T, st *store.Store) {
 	}
 }
 
-// downGroupHoldsMigration rolls back 00038_two_factor_challenge_attempts,
+// downGroupHoldsMigration rolls back 00040_smtp_credentials,
+// 00039_instance_state, 00038_two_factor_challenge_attempts,
 // 00037_blob_encryption,
 // 00036_auditor_access and 00035_group_holds.
 func downGroupHoldsMigration(t *testing.T, st *store.Store) {
