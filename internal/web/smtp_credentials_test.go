@@ -216,6 +216,21 @@ func TestSMTPCredentialAccess(t *testing.T) {
 		}
 	}
 
+	// The owner's revoke route takes only a secret of the account in the
+	// path: a secret of the owner's other smtp account is 404 there and
+	// stays usable.
+	second := &store.Account{Name: "second", Enabled: true, OwnerID: &x.owner.ID}
+	if err := f.st.CreateSMTPAccount(context.Background(), second, []string{"second@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	other := x.create(f, "owner", "second", nil)
+	otherID := int64(other["credential"].(map[string]any)["id"].(float64))
+	f.expect("DELETE", base+"/"+itoa(otherID), nil, 404)
+	if err := f.st.SMTPCredentialUsable(context.Background(), otherID, f.clock.Now()); err != nil {
+		t.Errorf("revoked through another account's route: %v", err)
+	}
+	f.expect("DELETE", "/api/accounts/second/smtp-credentials/"+itoa(otherID), nil, 204)
+
 	// A member who owns an smtp account (moved to them on the command
 	// line) is refused, also on the admin routes.
 	kim, _ := f.st.GetUserByName(context.Background(), "kim")

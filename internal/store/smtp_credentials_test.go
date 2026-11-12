@@ -12,6 +12,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // smtpSecret creates a secret for a with grace at now and returns its
@@ -194,6 +195,51 @@ func TestSMTPCredentialRotation(t *testing.T) {
 	}
 }
 
+// Concurrent creates for one account are serialized by the account's row
+// lock: each supersedes the one before it, so one secret stays current and
+// at most two are usable.
+func TestSMTPCredentialConcurrentCreates(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	a := createSMTPAccount(t, st, nil, "journal", "journal@example.com")
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	const n = 8
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	for range n {
+		go func() {
+			<-start
+			_, hash, hint, err := auth.NewSMTPSecret()
+			if err == nil {
+				_, _, err = st.CreateSMTPCredential(ctx, a.Ref(), store.NewSMTPCredential{Hash: hash, Hint: hint, Grace: 7 * 24 * time.Hour, Now: now})
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	limit := time.After(testwait.Limit(t))
+	for range n {
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Errorf("create: %v", err)
+			}
+		case <-limit:
+			t.Fatal("concurrent creates did not finish")
+		}
+	}
+	counts := map[string]int{}
+	for _, state := range credentialStates(t, st, a.ID, now) {
+		counts[state]++
+	}
+	if counts[store.SMTPCredentialActive] != 1 || counts[store.SMTPCredentialExpiring] != 1 || counts[store.SMTPCredentialRevoked] != n-2 {
+		t.Fatalf("states after %d concurrent creates: %v", n, counts)
+	}
+	if u, err := st.UsableSMTPCredentials(ctx, a.ID, now); err != nil || u != 2 {
+		t.Fatalf("usable: %d %v", u, err)
+	}
+}
+
 func TestSMTPCredentialRevoke(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
@@ -369,7 +415,7 @@ func TestSMTPCredentialCleanup(t *testing.T) {
 	}
 }
 
-// 00039 goes down and up again with secrets stored.
+// 00040 goes down and up again with secrets stored.
 func TestSMTPCredentialsMigration(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
@@ -394,11 +440,11 @@ func TestSMTPCredentialsMigration(t *testing.T) {
 	}
 }
 
-// downSMTPCredentialsMigration rolls back 00039_smtp_credentials, the
+// downSMTPCredentialsMigration rolls back 00040_smtp_credentials, the
 // latest migration.
 func downSMTPCredentialsMigration(t *testing.T, st *store.Store) {
 	t.Helper()
-	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00039_smtp_credentials") {
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00040_smtp_credentials") {
 		t.Fatalf("down: %q %v", m, err)
 	}
 }

@@ -272,6 +272,19 @@ type Folder struct {
 	Delimiter        *string
 }
 
+type InstanceState struct {
+	ID                     bool
+	SecretKeyCheck         []byte
+	SetupTokenHash         []byte
+	SetupTokenSince        *time.Time
+	SetupCompletedAt       *time.Time
+	SetupUserID            *int64
+	MigrationFailedVersion *int64
+	MigrationFailedSha256  []byte
+	MigrationFailedAt      *time.Time
+	UpdatedAt              time.Time
+}
+
 type Job struct {
 	ID            int64
 	Kind          string

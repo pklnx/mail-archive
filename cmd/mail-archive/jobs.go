@@ -109,23 +109,36 @@ Run it as a separate process with its own memory limit, and set
 ` + config.EnvJobWorkers + `=0 for serve, which otherwise runs them itself. Several
 workers, also on several hosts, share the queue safely. It stops on SIGTERM
 and hands running jobs back to the queue. See docs/guide/operations.md,
-"Background jobs".`,
+"Background jobs".
+
+At start it takes the migration lock, applies pending migrations with
+` + config.EnvMigrateOnStart + `=on and checks the schema, as serve does (exit
+codes 3 and 4).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if cfg.JobWorkers == 0 {
+				return errors.New(config.EnvJobWorkers + "=0: the worker would run no jobs; set it from 1 to 8")
+			}
+			log := newLogger(cfg.LogLevel)
+			// The migration lock, start-up migrations and the schema check
+			// (#396), as serve does.
+			if err := prepareInstance(cmd.Context(), cfg, log, "worker"); err != nil {
+				return err
+			}
+			a, err := openAppConfig(cmd.Context(), cfg, openNormal)
 			if err != nil {
 				return err
 			}
 			defer a.close()
-			if a.cfg.JobWorkers == 0 {
-				return errors.New(config.EnvJobWorkers + "=0: the worker would run no jobs; set it from 1 to 8")
-			}
 			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "worker", archive.RoleWriter)
 			if err != nil {
 				return err
 			}
 			defer ar.Close()
-			log := newLogger(a.cfg.LogLevel)
 			kinds, err := jobRegistry(attachmentIndexer(a, blobs, log))
 			if err != nil {
 				return err
