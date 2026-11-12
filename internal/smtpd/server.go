@@ -56,6 +56,14 @@ const (
 	storeTimeout = 2 * time.Minute
 	// queryTimeout bounds one lookup of an address or a login.
 	queryTimeout = 30 * time.Second
+	// maxRefusals is how many refused AUTH and MAIL commands a connection
+	// gets before it is closed. A mail server that is set up right gets
+	// none; one that is not (no TLS, no or an old secret) gets one per
+	// attempt and Postfix then ends the session, so 3 leaves room for a
+	// retry of AUTH and a MAIL on the same connection. go-smtp closes after
+	// 3 protocol errors as well. Without the cap, pipelined refusals cost
+	// a client a few bytes each and the log about 4 times as much.
+	maxRefusals = 3
 )
 
 // Server receives mail for smtp accounts.
@@ -96,6 +104,8 @@ type Server struct {
 	slotFreed func()
 	// logins checks SMTP secrets; tests replace it.
 	logins loginStore
+	// refusalLimit is maxRefusals; tests raise it.
+	refusalLimit int
 	// afterFunc starts the pre-auth timer; tests replace it.
 	afterFunc func(time.Duration, func()) (stop func() bool)
 	// receive stores a message for one account; tests replace it.
@@ -132,6 +142,9 @@ func (s *Server) defaults() {
 	}
 	if s.logins == nil {
 		s.logins = s.Store
+	}
+	if s.refusalLimit <= 0 {
+		s.refusalLimit = maxRefusals
 	}
 	if s.Limiter == nil {
 		s.Limiter = auth.NewLimiter()
@@ -255,6 +268,9 @@ func (ss *session) tls() bool {
 func (ss *session) Mail(from string, _ *smtp.MailOptions) error {
 	ss.Reset()
 	if ss.s.Auth {
+		if ss.closing() {
+			return errMailRefused
+		}
 		if err := ss.checkLogin(); err != nil {
 			return err
 		}
@@ -284,8 +300,44 @@ func (ss *session) checkLogin() error {
 }
 
 func (ss *session) refuseMail(msg, reason string) error {
-	ss.s.Logger.Warn("smtp mail refused", "code", 451, "client_ip", ss.ip.String(), "reason", reason)
+	if ss.refused() {
+		ss.s.Logger.Warn("smtp mail refused", "code", 451, "client_ip", ss.ip.String(), "reason", reason)
+	}
 	return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 0}, Message: msg}
+}
+
+// errMailRefused answers MAIL on a connection that is being closed.
+var errMailRefused = &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 7, 0}, Message: "authentication required"}
+
+// refused counts a refused AUTH or MAIL of the connection and reports
+// whether to log it. The refusal that reaches the limit closes the
+// connection once its answer is written; commands the client pipelined
+// behind it are answered without a log line or a lookup.
+func (ss *session) refused() bool {
+	g := ss.gate()
+	if g == nil {
+		return true
+	}
+	n := int(g.refusals.Add(1))
+	if n == ss.s.refusalLimit {
+		g.closeAfterWrite.Store(true)
+		ss.s.Logger.Warn("smtp connection closed", "client_ip", ss.ip.String(), "reason", fmt.Sprintf("%d refused commands", n))
+	}
+	return n <= ss.s.refusalLimit
+}
+
+// closing reports whether the connection reached the refusal limit.
+func (ss *session) closing() bool {
+	g := ss.gate()
+	return g != nil && int(g.refusals.Load()) >= ss.s.refusalLimit
+}
+
+// gate is the connection's gatedConn, also below TLS; nil without one.
+func (ss *session) gate() *gatedConn {
+	if ss.conn == nil {
+		return nil
+	}
+	return gated(ss.conn.Conn())
 }
 
 func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {

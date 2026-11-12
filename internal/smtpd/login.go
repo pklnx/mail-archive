@@ -64,8 +64,13 @@ func (ss *session) Auth(mech string) (sasl.Server, error) {
 	if mech != mechPlain && mech != mechLogin {
 		return nil, smtp.ErrAuthUnknownMechanism
 	}
+	if ss.closing() {
+		return nil, errAuthFailed
+	}
 	if wait := ss.s.Limiter.AddrBlocked(auth.LimitKey(ss.ip)); wait > 0 {
-		ss.s.Logger.Warn("smtp auth blocked", "client_ip", ss.ip.String(), "mechanism", mech, "until", ss.s.Now().Add(wait))
+		if ss.refused() {
+			ss.s.Logger.Warn("smtp auth blocked", "client_ip", ss.ip.String(), "mechanism", mech, "until", ss.s.Now().Add(wait))
+		}
 		return nil, errAuthBlocked
 	}
 	switch mech {
@@ -158,13 +163,17 @@ func (ss *session) authenticate(mech, user, pass string, wellFormed bool) error 
 		return errAuthTemp
 	}
 	if a == nil {
-		log.Warn("smtp auth blocked", "until", ss.s.Now().Add(wait))
+		if ss.refused() {
+			log.Warn("smtp auth blocked", "until", ss.s.Now().Add(wait))
+		}
 		return errAuthBlocked
 	}
 	defer a.Release()
 	fail := func(reason string) error {
 		a.Fail()
-		log.Warn("smtp auth failed", "reason", reason)
+		if ss.refused() {
+			log.Warn("smtp auth failed", "reason", reason)
+		}
 		return errAuthFailed
 	}
 	if !wellFormed || !auth.ValidSMTPSecretFormat(pass) {
@@ -184,7 +193,7 @@ func (ss *session) authenticate(mech, user, pass string, wellFormed bool) error 
 	}
 	a.Succeed()
 	ss.cred, ss.account = login.CredentialID, login.AccountID
-	if g := gated(ss.conn.Conn()); g != nil {
+	if g := ss.gate(); g != nil {
 		g.authenticated()
 	}
 	log.Info("smtp auth", "credential_id", login.CredentialID)

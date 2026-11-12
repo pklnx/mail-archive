@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
@@ -143,6 +144,19 @@ type gatedConn struct {
 	// stop stops the pre-auth timer; nil without one. Set before Accept
 	// returns the connection.
 	stop func() bool
+	// refusals counts refused AUTH and MAIL commands (session.refused);
+	// closeAfterWrite closes the connection after the next write, the
+	// answer to the last one.
+	refusals        atomic.Int32
+	closeAfterWrite atomic.Bool
+}
+
+func (c *gatedConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if c.closeAfterWrite.Load() {
+		_ = c.Close()
+	}
+	return n, err
 }
 
 func (c *gatedConn) Close() error {

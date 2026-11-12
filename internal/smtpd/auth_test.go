@@ -636,7 +636,8 @@ func TestAuthRcptOrder(t *testing.T) {
 // even with the right secret, without looking it up, until the block ends.
 // A database error answers 454 and counts nothing.
 func TestAuthRateLimit(t *testing.T) {
-	f := newAuthFixture(t, nil)
+	// Many refusals on one connection (TestAuthRefusalLimit has the cap).
+	f := newAuthFixture(t, func(s *Server) { s.refusalLimit = 100 })
 	secret, _ := f.secret(f.journal, 0)
 	user := auth.SMTPUsername(f.journal.ID)
 	wrong, _, _, err := auth.NewSMTPSecret()
@@ -675,6 +676,171 @@ func TestAuthRateLimit(t *testing.T) {
 	f.clock.Add(15 * time.Minute)
 	c2.must(235, "AUTH PLAIN %s", plain("", user, secret))
 	f.logLacks(secret, wrong)
+}
+
+// A refusal for a user name that does not belong to a valid secret counts
+// like any other failure: 20 block the address.
+func TestAuthWrongUserCounted(t *testing.T) {
+	f := newAuthFixture(t, func(s *Server) { s.refusalLimit = 100 })
+	other := f.account("other", "other@archive.test")
+	secret, _ := f.secret(f.journal, 0)
+	c, _ := f.raw()
+	c.startTLS(f.roots)
+	for range 20 {
+		c.must(535, "AUTH PLAIN %s", plain("", auth.SMTPUsername(other.ID), secret))
+	}
+	c.must(454, "AUTH PLAIN %s", plain("", auth.SMTPUsername(f.journal.ID), secret))
+	if n := strings.Count(f.logs.String(), "reason=wrong_user"); n != 20 {
+		t.Errorf("%d wrong_user lines, want 20", n)
+	}
+}
+
+// After every refused login the connection has no login: MAIL on the same
+// connection answers 451 with reason=no_auth, also when the secret itself
+// was valid.
+func TestAuthRefusedLeavesNoLogin(t *testing.T) {
+	f := newAuthFixture(t, nil)
+	other := f.account("other", "other@archive.test")
+	user := auth.SMTPUsername(f.journal.ID)
+	ctx := context.Background()
+	// expired: superseded with a grace of an hour, then two hours pass.
+	expired, _ := f.secret(f.journal, 0)
+	expiring, expiringID := f.secret(f.journal, time.Hour)
+	f.clock.Add(2 * time.Hour)
+	// revoked: superseded again (the expired one stays expired), then
+	// revoked.
+	current, _ := f.secret(f.journal, time.Hour)
+	if _, err := f.st.RevokeSMTPCredential(ctx, nil, expiringID, nil, f.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	unknown, _, _, err := auth.NewSMTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b64 := base64.StdEncoding.EncodeToString
+	for _, tc := range []struct {
+		name, reason string
+		auth         []string // the AUTH exchange; the last line gets 535
+	}{
+		{"wrong_user", "wrong_user", []string{"AUTH PLAIN " + plain("", auth.SMTPUsername(other.ID), current)}},
+		{"wrong_user with LOGIN", "wrong_user", []string{"AUTH LOGIN " + b64([]byte(auth.SMTPUsername(other.ID))), b64([]byte(current))}},
+		{"authzid of another account", "malformed", []string{"AUTH PLAIN " + plain(auth.SMTPUsername(other.ID), user, current)}},
+		{"revoked", "revoked", []string{"AUTH PLAIN " + plain("", user, expiring)}},
+		{"expired", "expired", []string{"AUTH PLAIN " + plain("", user, expired)}},
+		{"malformed", "malformed", []string{"AUTH PLAIN " + plain("", user, "mailbox-password")}},
+		{"unknown", "unknown", []string{"AUTH PLAIN " + plain("", user, unknown)}},
+	} {
+		c, _ := f.raw()
+		c.startTLS(f.roots)
+		for i, line := range tc.auth {
+			want := 334
+			if i == len(tc.auth)-1 {
+				want = 535
+			}
+			if code, msg := c.cmd("%s", line); code != want {
+				t.Fatalf("%s: AUTH step %d: %d %s, want %d", tc.name, i, code, msg, want)
+			}
+		}
+		before := strings.Count(f.logs.String(), "reason=no_auth")
+		if code, msg := c.cmd("MAIL FROM:<sender@example.com>"); code != 451 || !strings.Contains(msg, "authentication required") {
+			t.Errorf("%s: MAIL after the refused login: %d %s", tc.name, code, msg)
+		}
+		if n := strings.Count(f.logs.String(), "reason=no_auth"); n != before+1 {
+			t.Errorf("%s: MAIL refusal not logged as no_auth", tc.name)
+		}
+		f.logHas("reason=" + tc.reason)
+	}
+	// The current secret itself still logs in.
+	if _, code := f.login(user, current); code != 235 {
+		t.Errorf("current secret: %d", code)
+	}
+}
+
+// The MAIL check decides expiry with the server's clock, not the wall
+// clock: the fake clock here runs a century ahead.
+func TestAuthMailUsesServerClock(t *testing.T) {
+	f := newAuthFixture(t, nil)
+	f.clock.Add(100 * 365 * 24 * time.Hour)
+	user := auth.SMTPUsername(f.journal.ID)
+	old, _ := f.secret(f.journal, 0)
+	f.secret(f.journal, time.Hour) // old expires in an hour, server time
+	c, code := f.login(user, old)
+	if code != 235 {
+		t.Fatalf("AUTH during the grace: %d", code)
+	}
+	if code, msg := c.deliver("sender@example.com", []string{"archive@archive.test"}, message("before")); code != 250 {
+		t.Fatalf("before the expiry: %d %s", code, msg)
+	}
+	f.clock.Add(2 * time.Hour)
+	if code, msg := c.deliver("sender@example.com", []string{"archive@archive.test"}, message("after")); code != 451 {
+		t.Errorf("after the expiry: %d %s", code, msg)
+	}
+	f.logHas(`level=WARN msg="smtp mail refused" code=451 client_ip=127.0.0.1 reason=expired`)
+}
+
+// A client that is refused again and again is cut off after maxRefusals:
+// a pipelined burst of refused MAIL or blocked AUTH commands logs at most
+// maxRefusals lines and one for the close, and costs no lookups.
+func TestAuthRefusalLimit(t *testing.T) {
+	var freed testwait.Signal
+	var frees atomic.Int32
+	f := newAuthFixture(t, func(s *Server) {
+		s.slotFreed = func() { frees.Add(1); freed.Notify() }
+	})
+	burst := func(c *rawClient, line string) {
+		t.Helper()
+		// The server may cut the write short: it closes after the limit.
+		_, _ = c.conn.Write([]byte(strings.Repeat(line+"\r\n", 2000)))
+		// The server closes: the reads end (EOF, or a reset for the
+		// commands it did not read). The deadline is a hang guard.
+		if err := c.conn.SetReadDeadline(time.Now().Add(testwait.Limit(t))); err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 4096)
+		for {
+			if _, err := c.conn.Read(buf); err != nil {
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
+					t.Fatal("the connection stayed open")
+				}
+				return
+			}
+		}
+	}
+
+	// Without TLS, MAIL after MAIL.
+	c, _ := f.raw()
+	c.must(250, "EHLO mx.example.com")
+	burst(c, "MAIL FROM:<x@example.com>")
+	testwait.Until(t, &freed, "the first connection's slot", func() bool { return frees.Load() >= 1 })
+	if n := strings.Count(f.logs.String(), `msg="smtp mail refused"`); n != maxRefusals {
+		t.Errorf("%d refused MAIL lines, want %d", n, maxRefusals)
+	}
+
+	// A blocked address, with AUTH after AUTH over TLS.
+	for range 20 {
+		a, _, err := f.srv.Limiter.BeginAddr(context.Background(), "127.0.0.1")
+		if err != nil || a == nil {
+			t.Fatalf("begin: %v", err)
+		}
+		a.Fail()
+	}
+	c2, _ := f.raw()
+	c2.startTLS(f.roots)
+	burst(c2, "AUTH LOGIN")
+	testwait.Until(t, &freed, "the second connection's slot", func() bool { return frees.Load() >= 2 })
+	if n := strings.Count(f.logs.String(), `msg="smtp auth blocked"`); n != maxRefusals {
+		t.Errorf("%d blocked AUTH lines, want %d", n, maxRefusals)
+	}
+	if n := strings.Count(f.logs.String(), `msg="smtp connection closed" client_ip=127.0.0.1 reason="3 refused commands"`); n != 2 {
+		t.Errorf("%d close lines, want 2", n)
+	}
+	if n := len(f.logs.String()); n > 3000 {
+		t.Errorf("%d bytes of log for two bursts of 2000 commands:\n%s", n, f.logs)
+	}
+	if n := f.logins.lookups.Load(); n != 0 {
+		t.Errorf("%d lookups", n)
+	}
 }
 
 // A connection that has not logged in when its timer fires is closed; a
