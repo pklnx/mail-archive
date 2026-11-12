@@ -466,7 +466,7 @@ func ParseIMAPLimits(getenv func(string) string) (IMAPLimits, error) {
 	if err != nil {
 		return l, err
 	}
-	l.FillMaxFolderMessages, l.ReconcileMaxMessages = uint32(fill), uint32(reconcile) //nolint:gosec // range-checked above
+	l.FillMaxFolderMessages, l.ReconcileMaxMessages = fill, reconcile
 	l.MaxFolders = int(folders)
 	l.IdleTimeout = DefaultIMAPIdleTimeout
 	if v := strings.TrimSpace(getenv(EnvIMAPIdleTimeout)); v != "" {
@@ -481,16 +481,18 @@ func ParseIMAPLimits(getenv func(string) string) (IMAPLimits, error) {
 }
 
 // parseCount reads a whole number from minimum to maximum.
-func parseCount(env, v string, def, minimum, maximum int64) (int64, error) {
+// parseCount parses a count that fits in 32 bits, so callers may convert
+// it to uint32 or int without a further check.
+func parseCount(env, v string, def, minimum, maximum uint32) (uint32, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return def, nil
 	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n < minimum || n > maximum {
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil || n < uint64(minimum) || n > uint64(maximum) {
 		return 0, fmt.Errorf("%s: want a number from %d to %d, got %q", env, minimum, maximum, v)
 	}
-	return n, nil
+	return uint32(n), nil
 }
 
 func parseAlertAfter(v string) (int, error) {
