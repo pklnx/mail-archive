@@ -296,7 +296,9 @@ pg_restore with the archive key and the keyring copy next to it
 keyring copy of another archive than the data directory's is refused before
 anything is restored, for a dump without encryption too. If the dump is
 damaged or cut, pg_restore is stopped and the database stays as it was. The
-writers lock is held from the checks to the end of the reconciliation.
+writers lock and the migration lock are held from the checks to the end of
+the reconciliation: a web server or worker that starts meanwhile waits for
+the restore instead of migrating the empty database.
 
 Only an encrypted dump is authenticated. A dump without encryption is
 refused, before anything is restored, when the archive shows any sign of
@@ -347,6 +349,22 @@ major version. The Docker image has none: with Docker Compose use
 				return err
 			}
 			defer a.close()
+			// The migration lock too, until the end of the reconciliation
+			// (#396): a serve or worker that starts meanwhile with
+			// MAIL_ARCHIVE_MIGRATE_ON_START=on takes it before it asks for
+			// the writers lock, and would migrate the empty database. It
+			// waits instead, and then finds the restored schema. Taken
+			// before the writers lock, so that a restore waiting for a
+			// running migrate holds nothing. The wait message goes to
+			// standard error: with --hold, standard output carries only the
+			// protocol.
+			unlockMigrations, err := a.store.LockMigrations(ctx, func() {
+				fmt.Fprintln(cmd.ErrOrStderr(), "a migrate, or a web server or worker that starts, holds the migration lock; waiting for it (Ctrl-C to stop) ...")
+			})
+			if err != nil {
+				return err
+			}
+			defer unlockMigrations()
 			lock, err := a.store.TryLockWritersExclusive(ctx, "restore-dump")
 			if err != nil {
 				return err

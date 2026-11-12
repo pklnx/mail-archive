@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -587,5 +588,133 @@ func TestExitStatusCoded(t *testing.T) {
 	}
 	if code, _ := exitStatus(context.Background(), &codedError{code: exitMigrationFailed, msg: "failed"}); code != exitMigrationFailed {
 		t.Errorf("exit %d", code)
+	}
+}
+
+// waitForMigrateLockWaiters returns once n sessions wait for the migration
+// lock (their pg_locks rows). None of the runs in done may end meanwhile.
+func waitForMigrateLockWaiters(t *testing.T, ctx context.Context, url string, n int, done ...<-chan error) {
+	t.Helper()
+	conn := connectObserver(t, ctx, url)
+	for {
+		var waiting int
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_locks
+			WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid = 0 AND objsubid = 2 AND NOT granted
+			  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, migrateLockClassForTest).Scan(&waiting); err != nil {
+			t.Fatalf("waiting for %d waiters: %v", n, err)
+		}
+		if waiting == n {
+			return
+		}
+		for _, d := range done {
+			select {
+			case err := <-d:
+				t.Fatalf("a run ended while the migration lock was held: %v", err)
+			default:
+			}
+		}
+	}
+}
+
+// TestStartWaitsForRestore (#396, review 2 of #545): restore-dump holds the
+// migration lock until its reconciliation, so a serve that starts with
+// MAIL_ARCHIVE_MIGRATE_ON_START=on during the restore waits instead of
+// migrating the empty database, and then finds the restored schema with
+// nothing left to apply. The restore is ./ma's: --hold, with the dump
+// loaded by the test in place of pg_restore.
+func TestStartWaitsForRestore(t *testing.T) {
+	newArchiveSetup(t) // the data directory of an archive without encryption
+	st, _ := switchDatabase(t)
+	t.Setenv(config.EnvMigrateOnStart, "on")
+	url := os.Getenv("MAIL_ARCHIVE_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+
+	in, out, holdDone := startHoldWith(t, io.Discard, holdArgs("plain", "mailarchive-T.dump")...)
+	s, logs := newStart(t, "serve")
+	startDone := make(chan error, 1)
+	go func() { startDone <- s.run(ctx) }()
+	waitForMigrateLockWaiters(t, ctx, url, 1, startDone, holdDone)
+
+	// What pg_restore would load: a migrated database with a user.
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateUser(ctx, "restored", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(in, holdRestored+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = in.Close()
+	rest, _ := io.ReadAll(out)
+	if err := <-holdDone; err != nil {
+		t.Fatalf("--hold: %v\n%s", err, rest)
+	}
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Fatalf("start: %v\n%s", err, logs)
+		}
+	case <-ctx.Done():
+		t.Fatalf("the start did not end: %v", ctx.Err())
+	}
+	if out := logs.String(); !strings.Contains(out, "waiting for the migration lock") || strings.Contains(out, "applied 000") {
+		t.Errorf("the start's log:\n%s", out)
+	}
+	if u, err := st.GetUserByName(ctx, "restored"); err != nil || u == nil {
+		t.Errorf("the restored user: %v", err)
+	}
+}
+
+// TestStartConcurrentFailure (#396, review 1 of #545): serve and worker
+// start together on a migration that fails deterministically: exactly one
+// runs it, and the other, waiting for the lock meanwhile, refuses from the
+// failure record without running it. Both end with exit code 3.
+func TestStartConcurrentFailure(t *testing.T) {
+	_, url := storetest.NewWithURL(t)
+	startEnv(t, url, true)
+	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
+	defer cancel()
+	unlock, err := openStore(t, url).LockMigrations(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	files := startMigrations(t, map[string]string{"90001_start_good.sql": goodMigration, "90002_start_bad.sql": badMigration})
+	var runs atomic.Int32
+	var done []<-chan error
+	var dones []chan error
+	for _, role := range []string{"serve", "worker"} {
+		s, _ := newStart(t, role, store.WithMigrationsFS(files))
+		s.beforeMigrate = func() { runs.Add(1) }
+		d := make(chan error, 1)
+		go func() { d <- s.run(ctx) }()
+		done, dones = append(done, d), append(dones, d)
+	}
+	waitForMigrateLockWaiters(t, ctx, url, 2, done...)
+	unlock()
+
+	ran, refused := 0, 0
+	for _, d := range dones {
+		var err error
+		select {
+		case err = <-d:
+		case <-ctx.Done():
+			t.Fatalf("a start did not end: %v", ctx.Err())
+		}
+		code, msg := exitCode(err)
+		if code != exitMigrationFailed {
+			t.Fatalf("exit %d: %s", code, msg)
+		}
+		switch {
+		case strings.Contains(msg, "failed and was rolled back:"):
+			ran++
+		case strings.Contains(msg, "migration 90002_start_bad.sql failed at"):
+			refused++
+		}
+	}
+	if runs.Load() != 1 || ran != 1 || refused != 1 {
+		t.Errorf("goose ran %d times; %d ran it, %d refused from the record", runs.Load(), ran, refused)
 	}
 }

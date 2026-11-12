@@ -179,10 +179,13 @@ the [command reference](../reference/cli#verify) for the findings.
    a restore over the old database would fail half-way or mix both. Without
    Docker Compose: `mail-archive restore-dump FILE`, with `pg_restore` in
    `PATH`, into a database made with `dropdb --force` and `createdb`. It
-   refuses while a writer runs, and holds the writers lock until it has
-   reconciled: a web server, worker or cron `./ma sync` that starts
-   meanwhile refuses to start and is retried by Compose or the next cron
-   run.
+   refuses while a writer runs, and holds the writers lock and the
+   migration lock until it has reconciled: a web server or worker that
+   starts meanwhile waits for the restore instead of migrating the empty
+   database with [start-up migrations](#start-up-migrations) on, and then
+   checks the restored schema (and migrates a dump older than this version
+   when they are on); a cron `./ma sync` that starts meanwhile refuses to
+   start and is retried by the next cron run.
 3. `./ma migrate`, then `./ma attest` if attestations are on (it imports
    the attestations written after the dump, before anything archives; see
    [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,
@@ -774,8 +777,11 @@ not recorded and runs again at every start.
 
 #### Going back after an upgrade
 
-An older version refuses a database that a newer one migrated: `the
-database schema is at migration 40, newer than this binary`. To go back:
+From 1.6.0 on, an older version refuses a database that a newer one
+migrated: `the database schema is at migration 40, newer than this
+binary`. Versions before 1.6.0 do not check and start anyway, on a schema
+they do not know; going back to one needs the restore all the same. To go
+back:
 
 1. Stop the web server and the worker: `docker compose stop web worker`.
 2. Restore the backup from before the upgrade (see [Restore](#restore)).
