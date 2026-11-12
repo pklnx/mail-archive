@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse } from "./api";
 import { addressList } from "./accountParts";
 import { AccountsPage } from "./AccountsPage";
-import { t } from "./i18n";
+import { languages, messagesFor, t } from "./i18n";
 import { findAlert } from "./test/alerts";
 
 function smtpAccount(more: Partial<Account> = {}): Account {
@@ -47,6 +47,17 @@ function page(admin: boolean, d = data()) {
 }
 
 describe("adding an smtp account", () => {
+  it("names both ways to turn the SMTP server on", () => {
+    // The default needs a certificate (MAIL_ARCHIVE_SMTP_AUTH=required);
+    // the allowlist alone only with off.
+    for (const lang of languages) {
+      const text = messagesFor(lang).smtpServerOff;
+      for (const name of ["MAIL_ARCHIVE_SMTP_LISTEN", "MAIL_ARCHIVE_SMTP_TLS_CERT", "MAIL_ARCHIVE_SMTP_TLS_KEY", "MAIL_ARCHIVE_SMTP_AUTH=off", "MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS"]) {
+        expect(text, lang).toContain(name);
+      }
+    }
+  });
+
   it("offers the source only to admins", () => {
     page(false);
     fireEvent.click(screen.getByRole("button", { name: t.addAccount }));

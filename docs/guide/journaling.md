@@ -302,8 +302,11 @@ accounts, ask the operator to raise it.
 Postfix adds BCC copies with `NOTIFY=NONE`. If the archive answers a copy with
 a **permanent error (`5xx`)**, Postfix drops it: no bounce, no notice, only a
 line in the Postfix log. The archive therefore refuses permanently only what
-cannot work, and logs every refusal at error level with client address,
-sender, recipients and reason (never the content):
+cannot work. It logs every permanent refusal (`5xx`) at error level with
+client address, sender, recipients and reason (never the content); a
+temporary one (`4xx`), after which Postfix retries, is logged at warning
+level, and an address of another smtp account than the login's at error
+level:
 
 | Answer | When | Result |
 |---|---|---|
@@ -364,10 +367,13 @@ mail server. Two checks cover both kinds of failure:
 
 On the archive's side, the Accounts page shows for each smtp account when it
 last received a message (the operator sees the same in `./ma status`), and
-the web server logs every refusal at error level, in the log the operator
-reads. Failed logins are logged as `smtp auth failed` with the client
-address and a reason (`unknown`, `revoked`, `expired`, `wrong_user`, ...),
-and a refused `MAIL` as `smtp mail refused`.
+the web server logs every refusal, in the log the operator reads: a copy
+Postfix drops (`5xx`) at error level, one it keeps queued (`4xx`) at
+warning level. Failed logins are logged as `smtp auth failed` (warning) with
+the client address and a reason (`unknown`, `revoked`, `expired`,
+`wrong_user`, ...), and a refused `MAIL` as `smtp mail refused` (warning).
+After 3 refused logins or `MAIL` commands the archive closes the connection
+(`smtp connection closed`); Postfix retries later.
 
 ## Bring in the mail from before journaling
 

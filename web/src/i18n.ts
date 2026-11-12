@@ -192,7 +192,7 @@ const en = {
   removeAddress: (addr: string) => `Remove ${addr || "this address"}`,
   addressesAdminOnly: "Only admins can change the addresses: they decide who receives the copies of every message.",
   smtpServerOff:
-    "The SMTP server is off. Set MAIL_ARCHIVE_SMTP_LISTEN and MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS and restart the web server. You can create the account now; it receives mail once the server is on.",
+    "The SMTP server is off. Set MAIL_ARCHIVE_SMTP_LISTEN with a certificate in MAIL_ARCHIVE_SMTP_TLS_CERT and MAIL_ARCHIVE_SMTP_TLS_KEY (mail servers log in over TLS), or for a mail server on your own network with MAIL_ARCHIVE_SMTP_AUTH=off and MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS, and restart the web server. You can create the account now; it receives mail once the server is on.",
   smtpServerOffCard: "The SMTP server is off: this account receives nothing until MAIL_ARCHIVE_SMTP_LISTEN is set.",
   importFromIMAP: "Import existing mail from IMAP",
   fillIntro:
@@ -886,7 +886,7 @@ const de: Messages = {
   removeAddress: (addr) => `${addr || "Diese Adresse"} entfernen`,
   addressesAdminOnly: "Nur Admins können die Adressen ändern: Sie bestimmen, wer die Kopien aller Nachrichten erhält.",
   smtpServerOff:
-    "Der SMTP-Server ist aus. Setze MAIL_ARCHIVE_SMTP_LISTEN und MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS und starte den Webserver neu. Du kannst das Konto schon jetzt anlegen; es empfängt Mails, sobald der Server läuft.",
+    "Der SMTP-Server ist aus. Setze MAIL_ARCHIVE_SMTP_LISTEN mit einem Zertifikat in MAIL_ARCHIVE_SMTP_TLS_CERT und MAIL_ARCHIVE_SMTP_TLS_KEY (Mailserver melden sich über TLS an) oder, für einen Mailserver im eigenen Netz, mit MAIL_ARCHIVE_SMTP_AUTH=off und MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS, und starte den Webserver neu. Du kannst das Konto schon jetzt anlegen; es empfängt Mails, sobald der Server läuft.",
   smtpServerOffCard: "Der SMTP-Server ist aus: Dieses Konto empfängt nichts, bis MAIL_ARCHIVE_SMTP_LISTEN gesetzt ist.",
   importFromIMAP: "Vorhandene Mails aus IMAP importieren",
   fillIntro:
