@@ -104,27 +104,33 @@ async function readNetLog(path: string): Promise<{ names: string[]; addresses: s
     log = JSON.parse(text.replace(/,?\s*$/, "") + "]}");
   }
   const type = log.constants.logEventTypes;
-  // Each source's parent (a socket's owner), the sources of reachability
-  // checks, and the sources that sent bytes.
+  // Each socket's owner, the sources of reachability checks, and the sources
+  // that sent bytes. Only SOCKET_ALIVE names the owner: other events'
+  // source_dependency point the other way, from a connect job to the socket
+  // it made, and following those would walk into unrelated sockets.
   const parent = new Map<number, number>();
   const checks = new Set<number>();
   const sent = new Set<number>();
   for (const e of log.events) {
     const dep = e.params?.source_dependency?.id;
-    if (dep !== undefined && !parent.has(e.source.id)) parent.set(e.source.id, dep);
+    if (e.type === type.SOCKET_ALIVE && dep !== undefined && !parent.has(e.source.id)) parent.set(e.source.id, dep);
     if (e.type === type.HOST_RESOLVER_MANAGER_IPV6_REACHABILITY_CHECK) checks.add(e.source.id);
     if (e.type === type.UDP_BYTES_SENT || e.type === type.SOCKET_BYTES_SENT) sent.add(e.source.id);
   }
-  /** The source and its owners, up to the request that made it. */
-  const chain = (id: number) => {
-    const ids = [id];
-    for (let p = parent.get(id); p !== undefined && ids.length < 8 && !ids.includes(p); p = parent.get(p)) ids.push(p);
-    return ids;
-  };
+  /**
+   * A UDP connect to the probe address whose socket was opened, through its
+   * owners, by a source that ran the reachability check, with no socket on
+   * the way sending a byte.
+   */
   const isProbe = (e: NetLogEvent, a: string) => {
     if (e.type !== type.UDP_CONNECT || a !== ipv6ProbeAddress) return false;
-    const ids = chain(e.source.id);
-    return ids.some((id) => checks.has(id)) && !ids.some((id) => sent.has(id));
+    const seen = new Set<number>();
+    for (let id: number | undefined = e.source.id; id !== undefined && !seen.has(id); id = parent.get(id)) {
+      seen.add(id);
+      if (sent.has(id)) return false;
+      if (checks.has(id)) return true;
+    }
+    return false;
   };
   const names: string[] = [];
   const addresses: string[] = [];
