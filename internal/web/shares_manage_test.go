@@ -13,8 +13,7 @@ import (
 
 // A shared user only reads (#389, decision 3, test 4): every route under
 // /api/accounts/{name} answers 404 for the owner's account, with a
-// session and with a sync key (purges and SMTP credentials, admins only,
-// 403), and the account stays as it was; POST
+// session and with a sync key (purges, admins only, 403), and the account stays as it was; POST
 // /api/sync queues none of the owner's accounts.
 func TestSharedUserCannotManage(t *testing.T) {
 	f := newManageFixture(t, testUser(t))
@@ -52,7 +51,7 @@ func TestSharedUserCannotManage(t *testing.T) {
 			body = map[string]any{"enabled": false, "name": "taken"}
 		}
 		want := http.StatusNotFound
-		if strings.HasSuffix(path, "/purge") || strings.Contains(path, "/smtp-credentials") {
+		if strings.HasSuffix(path, "/purge") {
 			want = http.StatusForbidden // admins only, whoever owns the account
 		}
 		g.do(method, path, body, want)

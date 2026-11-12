@@ -123,14 +123,8 @@ func TestAdminCannotChangeOwnLogin(t *testing.T) {
 	// Other admins can be changed; one field per request.
 	f.expect("PATCH", "/api/users/second", map[string]any{"admin": false, "locked": true}, 400)
 	f.expect("PATCH", "/api/users/second", map[string]any{"admin": false}, 204)
-	// A lock answers how many SMTP secrets of the user's smtp accounts
-	// stay usable (#395): none here.
-	if out := f.expect("PATCH", "/api/users/second", map[string]any{"locked": true}, 200); len(out) != 1 || out["smtpCredentialsActive"] != float64(0) {
-		t.Errorf("lock answer: %v", out)
-	}
-	if out := f.expect("PATCH", "/api/users/second", map[string]any{"locked": false}, 200); len(out) != 1 || out["smtpCredentialsActive"] != float64(0) {
-		t.Errorf("unlock answer: %v", out)
-	}
+	f.expect("PATCH", "/api/users/second", map[string]any{"locked": true}, 204)
+	f.expect("PATCH", "/api/users/second", map[string]any{"locked": false}, 204)
 	f.expect("PATCH", "/api/users/nobody", map[string]any{"locked": true}, 404)
 	// The demoted user cannot use the admin endpoints anymore.
 	second := f.as()
@@ -342,10 +336,8 @@ func TestChangeUserGroupAPI(t *testing.T) {
 	if got := newEntries(t, w.st, m); len(got) != 0 {
 		t.Errorf("logged %+v", got)
 	}
-	// admin still answers 204; locked answers the usable SMTP secrets
-	// (#395).
-	if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"locked": true}); status != http.StatusOK ||
-		string(out) != `{"smtpCredentialsActive":0}`+"\n" {
+	// admin and locked still answer 204.
+	if status, out := w.sendJSON(cx, "PATCH", "/api/users/b", map[string]any{"locked": true}); status != http.StatusNoContent {
 		t.Errorf("lock: %d %s", status, out)
 	}
 }

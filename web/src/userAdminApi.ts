@@ -34,12 +34,7 @@ export const userAdminApi = {
   resetPassword: async (name: string, removePasskeys: boolean, revokeApiKeys: boolean) =>
     (await send<GeneratedPassword>("POST", `${userPath(name)}/password`, { removePasskeys, revokeApiKeys }))!,
   setAdmin: (name: string, admin: boolean) => send("PATCH", userPath(name), { admin }),
-  /**
-   * Locks or unlocks the user; resolves to how many SMTP secrets of the smtp
-   * accounts they own stay usable (#395): a lock does not stop them. 0 for an unlock.
-   */
-  setLocked: async (name: string, locked: boolean) =>
-    (await send<{ smtpCredentialsActive: number }>("PATCH", userPath(name), { locked }))?.smtpCredentialsActive ?? 0,
+  setLocked: (name: string, locked: boolean) => send("PATCH", userPath(name), { locked }),
   /** Moves the user into the group; resolves to how many shares and auditor grants (#393) ended. */
   setGroup: async (name: string, group: number) =>
     (await send<{ sharesEnded: number; grantsRevoked?: number }>("PATCH", userPath(name), { group }))!,

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -214,21 +215,26 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 
 // ListenAndServe serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
-	if _, err := openAPI(); err != nil {
+	if addr == "" {
+		addr = ":http"
+	}
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
 		return err
 	}
-	srv := newHTTPServer(addr, s.Handler())
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	go s.housekeeping(ctx)
-	select {
-	case err := <-errc:
+	return s.Serve(ctx, ln)
+}
+
+// Serve serves on ln until ctx is cancelled, then shuts down gracefully.
+// It closes ln. serve itself uses Starting, Swap and the package's Serve
+// instead, so that it answers while it starts (#396).
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	h, err := s.Start(ctx)
+	if err != nil {
+		_ = ln.Close()
 		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutdownCtx)
 	}
+	return Serve(ctx, ln, h)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {

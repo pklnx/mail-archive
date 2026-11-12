@@ -322,16 +322,6 @@ func newUserLockCmd(lock bool) *cobra.Command {
 				return lastAdminError(err, u.Name)
 			}
 			fmt.Printf("user %q %s\n", u.Name, done)
-			if lock {
-				// The lock does not stop the SMTP secrets of the user's smtp
-				// accounts (#395 decision 9).
-				counts, err := a.store.UsableSMTPCredentialsByOwner(cmd.Context(), u.ID, time.Now())
-				if err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: the user is locked, but their SMTP secrets could not be counted: %v\n", err)
-					return nil
-				}
-				smtpSecretHint(counts, u.Name, fmt.Sprintf("%q", u.Name))
-			}
 			return nil
 		},
 	}

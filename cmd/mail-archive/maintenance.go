@@ -602,33 +602,27 @@ var pgToolEnvNames = []string{
 	"SSL_CERT_FILE", "SSL_CERT_DIR", "OPENSSL_CONF", "KRB5CCNAME", "KRB5_CONFIG",
 }
 
-// pgEnv builds the whole environment of pg_dump and pg_restore: the libpq
-// variables of the database URL and, when set in this process, the
-// variables of pgToolEnvNames.
+// pgEnv builds the whole environment of pg_dump and pg_restore
+// (config.ChildEnv): when set in this process, the variables of
+// pgToolEnvNames, then the libpq variables of the database URL.
 func pgEnv(databaseURL string) ([]string, error) {
 	cfg, err := pgconn.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", config.EnvDatabaseURL, err)
 	}
-	var env []string
-	for _, name := range pgToolEnvNames {
-		if value, ok := os.LookupEnv(name); ok {
-			env = append(env, name+"="+value)
-		}
+	libpq := []string{
+		"PGHOST=" + cfg.Host,
+		"PGPORT=" + strconv.Itoa(int(cfg.Port)),
+		"PGUSER=" + cfg.User,
+		"PGDATABASE=" + cfg.Database,
 	}
-	env = append(env,
-		"PGHOST="+cfg.Host,
-		"PGPORT="+strconv.Itoa(int(cfg.Port)),
-		"PGUSER="+cfg.User,
-		"PGDATABASE="+cfg.Database,
-	)
 	if cfg.Password != "" {
-		env = append(env, "PGPASSWORD="+cfg.Password)
+		libpq = append(libpq, "PGPASSWORD="+cfg.Password)
 	}
 	for key, value := range sslSettings(databaseURL) {
-		env = append(env, key+"="+value)
+		libpq = append(libpq, key+"="+value)
 	}
-	return env, nil
+	return config.ChildEnv(os.Environ(), pgToolEnvNames, libpq...), nil
 }
 
 // pgCommand runs pg_dump or pg_restore with env, the environment pgEnv

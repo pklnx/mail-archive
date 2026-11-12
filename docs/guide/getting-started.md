@@ -106,9 +106,12 @@ and a `README.txt`. Its `docker-compose.yml` uses the release's image,
 Edit `.env`:
 
 - `POSTGRES_PASSWORD`: any long random password.
-- `MAIL_ARCHIVE_SECRET_KEY`: encrypts the stored IMAP passwords. Create one
-  with `openssl rand -base64 32` and **back it up** (see
-  [Backups](./operations#backups)).
+- `MAIL_ARCHIVE_SECRET_KEY`: encrypts the stored IMAP passwords and TOTP
+  secrets; the web server does not start without it. Create one with
+  `openssl rand -base64 32` and **back it up** (see
+  [Backups](./operations#backups)). It can come from a file instead
+  (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see
+  [Configuration](../reference/configuration#mail-archive)).
 
 Create the schema and your own admin user, then start the web server. The
 first `./ma` command downloads the images:

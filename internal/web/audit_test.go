@@ -248,7 +248,7 @@ func TestAuditChanges(t *testing.T) {
 		detail       map[string]any
 	}{
 		{"POST", "/api/users", map[string]any{"name": "carol"}, 201, "user.add", nil, map[string]any{"admin": false}},
-		{"PATCH", "/api/users/alice", map[string]any{"locked": true}, 200, "user.change", &aliceID, map[string]any{"locked": true}},
+		{"PATCH", "/api/users/alice", map[string]any{"locked": true}, 204, "user.change", &aliceID, map[string]any{"locked": true}},
 		{"PATCH", "/api/users/alice", map[string]any{"admin": true}, 204, "user.change", &aliceID, map[string]any{"admin": true}},
 		{"POST", "/api/users/alice/password", map[string]any{"removePasskeys": false}, 200, "user.password_reset", &aliceID, map[string]any{"passkeys_removed": false}},
 		{"POST", "/api/users/alice/2fa/reset", nil, 204, "user.2fa_reset", &aliceID, nil},

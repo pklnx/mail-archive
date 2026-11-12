@@ -265,11 +265,9 @@ func TestMigrationFailureBeforeInstanceState(t *testing.T) {
 	}
 }
 
-// downInstanceStateMigration rolls back 00040_smtp_credentials and
-// 00039_instance_state.
+// downInstanceStateMigration rolls back 00039_instance_state.
 func downInstanceStateMigration(t *testing.T, st *store.Store) {
 	t.Helper()
-	downSMTPCredentialsMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00039_instance_state") {
 		t.Fatalf("down: %q %v", m, err)
 	}

@@ -162,11 +162,6 @@ var auditActionClasses = map[string][]AuditClass{
 	"account.purge_finish": {AuditTargeted},
 	"account.purge_cancel": {AuditTargeted},
 
-	// SMTP credentials of smtp accounts (#395): about the account. Logins
-	// over SMTP are logged, not audited.
-	"smtp_credential.create": {AuditTargeted},
-	"smtp_credential.revoke": {AuditTargeted},
-
 	"message.search":       {AuditSelf},
 	"message.list":         {AuditSelf},
 	"message.page":         {AuditSelf},
@@ -200,6 +195,9 @@ var auditActionClasses = map[string][]AuditClass{
 	"data.backup":      {AuditInstance},
 	"audit.export":     {AuditInstance},
 	"jobs.retry":       {AuditInstance},
+
+	// The instance's secret key (#396): `secret-key accept`.
+	"instance.secret_key_accepted": {AuditInstance},
 
 	"retention.rule_add":    {AuditTargeted},
 	"retention.rule_remove": {AuditTargeted},
@@ -525,7 +523,7 @@ var auditGroups = map[string][]string{
 	"search":    {"message.search", "message.list", "message.page"},
 	"read":      {"message.open", "message.html", "message.raw", "message.part", "message.conversation"},
 	"export":    {"data.%", "audit.export"},
-	"accounts":  {"account.%", "smtp_credential.%"},
+	"accounts":  {"account.%"},
 	"users":     {"user.%", "group.%"},
 	"profile":   {"profile.%"},
 	"api_keys":  {"api_key.%"},

@@ -26,17 +26,9 @@ describe("user admin requests", () => {
   });
 
   it("encodes user names in paths", async () => {
-    const fetch = respond({ smtpCredentialsActive: 0 });
+    const fetch = respond(null, 204);
     await userAdminApi.setLocked("a.b", true);
     expect(sent(fetch)).toEqual({ path: "/api/users/a.b", method: "PATCH", body: { locked: true } });
-  });
-
-  it("locks a user and resolves to the SMTP secrets that stay usable (#395)", async () => {
-    const fetch = respond({ smtpCredentialsActive: 2 });
-    expect(await userAdminApi.setLocked("jo", true)).toBe(2);
-    expect(sent(fetch)).toEqual({ path: "/api/users/jo", method: "PATCH", body: { locked: true } });
-    respond({ smtpCredentialsActive: 0 });
-    expect(await userAdminApi.setLocked("jo", false)).toBe(0);
   });
 
   it("moves a user into a group and resolves to the numbers of ended shares and auditor grants", async () => {

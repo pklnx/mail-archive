@@ -589,6 +589,11 @@ func TestExitStatusCoded(t *testing.T) {
 	if code, _ := exitStatus(context.Background(), &codedError{code: exitMigrationFailed, msg: "failed"}); code != exitMigrationFailed {
 		t.Errorf("exit %d", code)
 	}
+	// A refused secret key (#396, part 2), also wrapped.
+	err = fmt.Errorf("config: %w", config.NewSecretKeyError("no key"))
+	if code, msg := exitStatus(context.Background(), err); code != exitStartRefused || msg != "config: no key" {
+		t.Errorf("secret key: exit %d, %q", code, msg)
+	}
 }
 
 // waitForMigrateLockWaiters returns once n sessions wait for the migration

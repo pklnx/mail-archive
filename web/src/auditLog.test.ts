@@ -120,8 +120,6 @@ describe("entry texts", () => {
   });
   it("words every action and falls back to the name", () => {
     expect(auditAction("message.open")).not.toBe("message.open");
-    expect(auditAction("smtp_credential.create")).toBe("Created SMTP secret");
-    expect(auditAction("smtp_credential.revoke", "de")).toBe("SMTP-Geheimnis widerrufen");
     expect(auditAction("data.fill_change")).toBe("Changed import from IMAP");
     expect(auditAction("data.fill_cancel")).toBe("Stopped or cancelled import from IMAP");
     expect(auditAction("future.thing")).toBe("future.thing");

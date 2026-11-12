@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -164,8 +165,7 @@ func checkAsContainerUser(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	cmd := exec.Command(exe, "prepare-data", "--check") //nolint:gosec // this binary itself
-	cmd.Env = append(os.Environ(), config.EnvDataDir+"="+dir)
+	cmd := containerCheckCmd(exe, dir, os.Environ())
 	if err := runAs(cmd, containerUID, containerGID); err != nil {
 		return false, err
 	}
@@ -180,6 +180,22 @@ func checkAsContainerUser(dir string) (bool, error) {
 		return false, fmt.Errorf("%w: %s", err, msg)
 	}
 	return false, err
+}
+
+// containerCheckEnvNames are the variables of this process that the
+// write check as the container user gets: none holds a secret.
+var containerCheckEnvNames = []string{"PATH", "TZ", "LANG", "LC_ALL"}
+
+// containerCheckCmd is `exe prepare-data --check` for dir. Its environment
+// holds containerCheckEnvNames of environ and the data directory, nothing
+// else (config.ChildEnv, #396): the check runs as another user and needs
+// no secret key, archive key or database URL.
+func containerCheckCmd(exe, dir string, environ []string) *exec.Cmd {
+	// No context: prepare-data runs once, before anything else, and the
+	// check ends by itself.
+	cmd := exec.CommandContext(context.Background(), exe, "prepare-data", "--check") //nolint:gosec // this binary itself
+	cmd.Env = config.ChildEnv(environ, containerCheckEnvNames, config.EnvDataDir+"="+dir)
+	return cmd
 }
 
 // tryWrite creates and removes a file in dir.
