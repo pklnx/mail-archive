@@ -17,6 +17,11 @@ UPDATE folders SET uidvalidity = $2, last_uid = 0 WHERE id = $1;
 -- name: AdvanceFolder :exec
 UPDATE folders SET last_uid = GREATEST(last_uid, @last_uid::bigint), last_synced_at = now() WHERE id = @id;
 
+-- name: CapFolderLastUID :execrows
+-- Moves the folder's last UID back to at most @last_uid: a sync that
+-- stopped before a message it cannot archive must fetch it again.
+UPDATE folders SET last_uid = LEAST(last_uid, @last_uid::bigint) WHERE id = @id;
+
 -- name: TouchFolder :execrows
 UPDATE folders SET last_synced_at = now() WHERE id = $1;
 

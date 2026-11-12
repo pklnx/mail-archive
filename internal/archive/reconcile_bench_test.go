@@ -25,14 +25,27 @@ import (
 
 const benchServerEnv = "MAIL_ARCHIVE_BENCH_SERVER"
 
-// TestReconcileCost reconciles folders of 100k and 500k messages, one
-// percent of them deleted and one percent with new flags. The IMAP server
-// runs in a child process, so the reported peak heap is the archive's.
+// TestReconcileCost reconciles folders of 100k and 500k messages (or the
+// comma-separated sizes in MAIL_ARCHIVE_BENCH_SIZES, such as 2000000 for
+// the default limit), one percent of them deleted and one percent with
+// new flags. The IMAP server runs in a child process, so the reported
+// peak heap is the archive's.
 func TestReconcileCost(t *testing.T) {
 	if os.Getenv("MAIL_ARCHIVE_BENCH") != "1" {
 		t.Skip("set MAIL_ARCHIVE_BENCH=1 to run")
 	}
-	for _, n := range []int{100_000, 500_000} {
+	sizes := []int{100_000, 500_000}
+	if v := os.Getenv("MAIL_ARCHIVE_BENCH_SIZES"); v != "" {
+		sizes = nil
+		for _, f := range strings.Split(v, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(f))
+			if err != nil {
+				t.Fatalf("MAIL_ARCHIVE_BENCH_SIZES: %v", err)
+			}
+			sizes = append(sizes, n)
+		}
+	}
+	for _, n := range sizes {
 		t.Run(strconv.Itoa(n), func(t *testing.T) { reconcileCost(t, n) })
 	}
 }

@@ -617,6 +617,14 @@ func (s *Store) ResetFolder(ctx context.Context, folderID int64, uidValidity uin
 	return one(s.q.ResetFolder(ctx, db.ResetFolderParams{ID: folderID, Uidvalidity: int64(uidValidity)}))
 }
 
+// CapFolderLastUID sets the folder's last UID to at most uid, so that the
+// next sync fetches every message after uid again; messages it already
+// holds are not stored twice. A sync calls it while it holds the
+// account's sync lock.
+func (s *Store) CapFolderLastUID(ctx context.Context, folderID int64, uid uint32) error {
+	return one(s.q.CapFolderLastUID(ctx, db.CapFolderLastUIDParams{ID: folderID, LastUid: int64(uid)}))
+}
+
 // MessageMeta is the parsed metadata of a message.
 type MessageMeta struct {
 	SHA256     string

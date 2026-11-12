@@ -147,12 +147,15 @@ Measured against a local test server:
 |---|---|---|
 | 100,000 | 0.6 s | 22 MB |
 | 500,000 | 4 s | 30 MB |
+| 2,000,000 | 14 s | 153 MB |
 
 On a real server the transfer adds roughly 40 bytes per message. Only rows
 that change are written to the database.
 
 Folders with more than 2,000,000 messages are not reconciled; the sync of
-such a folder ends `partial` with an error that says so.
+such a folder ends `partial` with an error that says so and names
+`MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`, the setting that raises the limit (see
+[IMAP limits](./operations#imap-limits)).
 
 ### When it runs
 

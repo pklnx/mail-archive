@@ -215,7 +215,7 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 	}
 	src := &store.Account{Host: fl.host, Port: port, TLSMode: tlsMode, Username: fl.username}
 	fmt.Fprintf(out, "checking login at %s:%d ...\n", fl.host, port)
-	folders, err := checkLogin(ctx, src, password)
+	folders, err := checkLogin(ctx, a.cfg, src, password)
 	if err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
@@ -376,7 +376,7 @@ func resumeFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) er
 		return err
 	}
 	src := &store.Account{Host: last.Host, Port: last.Port, TLSMode: last.TLSMode, Username: last.Username}
-	if _, err := checkLogin(ctx, src, password); err != nil {
+	if _, err := checkLogin(ctx, a.cfg, src, password); err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
 	e := cliAccountTarget(cliTargeted("data.fill_resume"), acc)
@@ -432,7 +432,7 @@ func keepFillRunning(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlag
 		return err
 	}
 	src := &store.Account{Host: fill.Host, Port: fill.Port, TLSMode: fill.TLSMode, Username: fill.Username}
-	folders, err := checkLogin(ctx, src, password)
+	folders, err := checkLogin(ctx, a.cfg, src, password)
 	if err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
@@ -497,6 +497,7 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 	out := cmd.ErrOrStderr()
 	filler := &archive.Filler{
 		Store: a.store, Blobs: blobs, Sealer: sealer, Logger: newLogger(a.cfg.LogLevel).With("account", acc.Name),
+		IMAP: imapSettings(a.cfg), MaxFolderMessages: a.cfg.IMAP.FillMaxFolderMessages,
 		Progress: func(ff store.FillFolder) {
 			c := ff.Counts
 			fmt.Fprintf(out, "%s: scanned %d, imported %d, after cut-off %d, journaled %d, waiting %d\n",

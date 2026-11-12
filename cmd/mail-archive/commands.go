@@ -364,7 +364,7 @@ The login is verified before the account is saved unless --skip-check is set.`,
 			var folders []imapsync.Folder
 			if !skipCheck {
 				fmt.Fprintf(os.Stderr, "checking login at %s:%d ...\n", acc.Host, acc.Port)
-				folders, err = checkLogin(cmd.Context(), &acc, password)
+				folders, err = checkLogin(cmd.Context(), a.cfg, &acc, password)
 				if err != nil {
 					return fmt.Errorf("login check failed (use --skip-check to save anyway): %w", err)
 				}
@@ -402,15 +402,10 @@ The login is verified before the account is saved unless --skip-check is set.`,
 	return cmd
 }
 
-func checkLogin(ctx context.Context, acc *store.Account, password string) ([]imapsync.Folder, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	conn, err := imapsync.Dial(ctx, imapConfig(acc, password))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = conn.Close() }()
-	return conn.ListFolders()
+// checkLogin is the login check of the web server (Syncer.CheckLogin),
+// with the configured IMAP limits.
+func checkLogin(ctx context.Context, cfg *config.Config, acc *store.Account, password string) ([]imapsync.Folder, error) {
+	return (&archive.Syncer{IMAP: imapSettings(cfg)}).CheckLogin(ctx, acc, password)
 }
 
 // printExclusionHint suggests excluding junk and trash folders that the
@@ -453,10 +448,11 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func imapConfig(acc *store.Account, password string) imapsync.Config {
+func imapConfig(cfg *config.Config, acc *store.Account, password string) imapsync.Config {
 	return imapsync.Config{
 		Host: acc.Host, Port: acc.Port, TLSMode: string(acc.TLSMode),
 		Username: acc.Username, Password: password,
+		MaxFolders: cfg.IMAP.MaxFolders, IdleTimeout: cfg.IMAP.IdleTimeout,
 	}
 }
 
@@ -654,7 +650,7 @@ func newAccountFoldersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, err := imapsync.Dial(cmd.Context(), imapConfig(acc, pw))
+			conn, err := imapsync.Dial(cmd.Context(), imapConfig(a.cfg, acc, pw))
 			if err != nil {
 				return err
 			}
@@ -879,9 +875,11 @@ failing, and their recovery, are sent at the end.`,
 			}
 			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
+			// The command line runs without a time limit: it is interactive.
 			syncer := &archive.Syncer{
 				Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
-				ReconcileInterval: a.cfg.ReconcileInterval,
+				ReconcileInterval:    a.cfg.ReconcileInterval,
+				MaxReconcileMessages: a.cfg.IMAP.ReconcileMaxMessages, IMAP: imapSettings(a.cfg),
 			}
 			var owner *int64
 			if u, err := flagUser(cmd, a); err != nil {
@@ -1040,9 +1038,13 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				} else if n > 0 {
 					log.Info("stored passwords bound to the account ID", "accounts", n)
 				}
+				// Background runs end at a time limit, so that a slow or
+				// silent server cannot hold the only sync or fill worker.
 				opts.Syncer = &archive.Syncer{
 					Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
-					ReconcileInterval: a.cfg.ReconcileInterval,
+					ReconcileInterval:    a.cfg.ReconcileInterval,
+					MaxReconcileMessages: a.cfg.IMAP.ReconcileMaxMessages, IMAP: imapSettings(a.cfg),
+					MaxRunTime: archive.DefaultMaxRunTime,
 				}
 				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Schedule: scheduleOf(a.cfg), AfterSync: afterSync}
 				runnerDone := make(chan struct{})
@@ -1055,7 +1057,11 @@ With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
 				// Recurring fills wait after the start, so that journal copies
 				// the mail server queued during an outage arrive first.
 				opts.Fills = &archive.FillRunner{
-					Filler:   &archive.Filler{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log},
+					Filler: &archive.Filler{
+						Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
+						IMAP: imapSettings(a.cfg), MaxFolderMessages: a.cfg.IMAP.FillMaxFolderMessages,
+						MaxRunTime: archive.DefaultMaxRunTime,
+					},
 					Schedule: opts.Runner.Schedule, HoldUntil: time.Now().Add(archive.RecurringStartHold), AfterRun: afterSync,
 				}
 				fillsDone := make(chan struct{})
@@ -1325,4 +1331,10 @@ func sourceLabel(k store.AccountKind) string {
 	default:
 		return "snapshot (IMAP)"
 	}
+}
+
+// imapSettings are the operator's IMAP limits for syncs, fills and login
+// checks.
+func imapSettings(cfg *config.Config) archive.IMAPSettings {
+	return archive.IMAPSettings{MaxFolders: cfg.IMAP.MaxFolders, IdleTimeout: cfg.IMAP.IdleTimeout}
 }

@@ -112,11 +112,17 @@ func (m *meteredConn) arm() {
 // bounds the whole command. notices is how many unsolicited notices the
 // command may earn credit for.
 func (m *meteredConn) begin(cmd string, hard time.Time, notices int64) {
+	m.beginCredit(cmd, hard, notices, creditCommand)
+}
+
+// beginCredit is begin with the command's credit given: a command whose
+// answer is one short line earns less than creditCommand.
+func (m *meteredConn) beginCredit(cmd string, hard time.Time, notices, credit int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cmd, m.hard = cmd, hard
 	m.notices, m.noticeMax = 0, notices
-	m.budget = min(m.budget+creditCommand, budgetMax)
+	m.budget = min(m.budget+credit, budgetMax)
 	if m.reading {
 		m.arm()
 	}

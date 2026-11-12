@@ -846,6 +846,92 @@ throughput, run a second worker *process*: another worker service or
 - **Waiting time:** with one worker, new mail waits behind at most one
   running job of older mail, which ends within its time limit.
 
+## IMAP limits
+
+Syncs, fills and login checks talk to IMAP servers that the archive does
+not control. A server that stops answering, sends without end, or offers
+a folder far larger than any real one must not hold the web server's only
+sync worker, use up its memory or keep a core busy. These limits apply;
+none of them is reached by a normal mailbox.
+
+### Deadlines
+
+| What | Limit | When it is reached |
+|---|---|---|
+| Connection setup (TCP, TLS, greeting, STARTTLS) | 30 s | The run fails (`connect` or `timeout`). |
+| Server silent while a command runs | 2 min, `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT` | The connection is closed and the folder fails; the next folder gets a new connection. The error names the command and the setting. Between commands no deadline applies, so slow database work never breaks a connection. |
+| LOGOUT | 5 s | The connection is closed anyway. |
+| A background sync of one account, or a run of a fill | 60 min (the web server; `./ma sync` and `./ma fill` have none) | What was committed stays. If the run committed messages, it ends `partial` and the account is queued again behind the accounts waiting; a fill stays running and is queued again behind the other fills. Without progress the run fails and counts as a failure for [alerts](#monitoring-and-alerts). |
+| A login check (adding or changing an account, a fill's folder list) | 60 s in all | The check fails. |
+
+### Sizes and counts
+
+| What | Limit | When it is reached |
+|---|---|---|
+| Data the client did not ask for, per connection | 64 KiB at the start, at most 256 KiB; each command adds 16 KiB, each response the archive uses 512 B plus its size, each byte of a message body 1¼ B | The connection is closed (`unrequested data`). A real server stays far below it. Before a body fetch the archive asks for the folder's newest UID and sends no fetch when nothing is new, so the one message a server returns for an empty `UID FETCH n:*` is never downloaded. Only if the newest messages of a folder are deleted on the server in the moment between those two commands can that message still exceed the budget; the folder then fails once and syncs in the next run. |
+| Read by one login check | 16 MiB, or 1.1 KiB per folder of `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` if that is more | The check fails. |
+| Folders of one account | 10,000, `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | The whole sync, fill or login check fails; the error names the setting. |
+| Length of a folder name | 1,024 bytes | As above. |
+| Flags of one message | 1,000 | The folder fails. |
+| Messages a FETCH may answer | the folder's message count at the start + 1,000 | The folder fails. |
+| A message | 256 MiB, as for imports | See [A message over 256 MiB](#a-message-over-256-mib). The size is checked before anything is downloaded. |
+| Header of one message in a fill's listing | 128 KiB | The folder fails. |
+| Messages a reconcile compares | 2,000,000 per folder, `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | The folder is not reconciled; its sync ends `partial`, and the error names the setting. |
+| Distinct flag combinations in one reconcile | 4 MiB, counting each combination's bytes plus 88 B for its entry in memory | The folder is not reconciled; real folders have a few hundred. |
+| Messages a fill lists of one folder per pass | 500,000, `MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | The folder fails; the error names the setting. |
+| Message-IDs kept in that listing | 96 bytes per message of the fill limit in all (48 MiB at the default) | As above. A single Message-ID over 998 bytes is not kept: that message counts as one without a Message-ID, so it is imported, never left out as journaled. |
+| New connections after a broken one, per run | 5 | The remaining folders wait for the next run; the run is `partial` if earlier folders synced, otherwise `failed`. |
+
+When a cap is reached in a folder, the connection is closed; the next
+folder gets a new connection, so one bad folder does not fail the folders
+after it.
+
+### A message over 256 MiB
+
+Each sync stops that folder right before the message: messages with a
+higher UID in that folder are not archived until the message is deleted or
+moved on the server. Other folders sync as usual. The run ends `partial`
+with the error "a message (UID n) is larger than 256 MiB; later messages in
+this folder are not archived until it is removed from the server", and it
+counts as a **failure** for [alerts](#monitoring-and-alerts): after
+`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` such runs the "failing" alert names the
+folder, and "recovered" follows once the message is gone. `/healthz/sync`
+shows the account as failing meanwhile, since it is not fully archived. A
+recurring fill holds such a message the same way.
+
+### Settings and their memory
+
+The four settings are read at start and refused outside their range. Their
+defaults fit the [4 GB budget](#hardware-and-budgets): with every IMAP limit
+reached at once (one sync, one fill and two login checks), the IMAP work
+needs about 280 MiB of live heap, about 560 MiB with the garbage
+collector's headroom, of the web server's 768 MiB. A real mailbox stays far
+below that, under 30 MiB.
+
+| Setting | Default | Range | Memory for raising it (with the garbage collector's headroom) |
+|---|---|---|---|
+| `MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | 500,000 | 10,000 to 10,000,000 | about 42 MiB per 100,000 messages |
+| `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | 2,000,000 | 10,000 to 20,000,000 | about 9 MiB per 100,000 messages |
+| `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | 10,000 | 100 to 200,000 | up to about 13 MiB per 1,000 folders (folder names of 1,024 bytes; real ones need a quarter of that) |
+| `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT` | 2m | 30s to 30m | none; a silent server holds the sync worker longer |
+
+**Raise the web server's memory with them.** The web server sets no memory
+limit by default; on a 4 GB host a raised limit takes its memory from the
+page cache. A host that sets one (see [Hardware and budgets](#hardware-and-budgets))
+adds the cost above to both `mem_limit` and `GOMEMLIMIT`. Set them in `.env`
+and restart with `docker compose up -d web`; Compose passes them to the web
+server and to `./ma`.
+
+### CPU
+
+Data that no code of the archive uses is bounded by the limits above. In
+the worst case a misbehaving server costs **about 40 to 95 seconds of CPU per
+background run**, on one core and only during that account's turn, plus
+512 B per used response, which is far less than storing the message. A
+login check costs **about 1 to 2 seconds** of CPU at most; with
+`MAIL_ARCHIVE_IMAP_MAX_FOLDERS` raised, about 0.1 s per 1,000 folders of the
+limit more.
+
 ## Monitoring and alerts
 
 An account whose syncs fail (a changed password, a provider that blocks the

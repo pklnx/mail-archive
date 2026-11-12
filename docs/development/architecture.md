@@ -973,7 +973,11 @@ folder's `EXAMINE`, and the same account lock as the sync.
 1. `imapsync.ListFlags` sends `UID FETCH 1:* (UID FLAGS)` (never for an
    empty folder) and fails with `ErrIncomplete` if fewer messages came back
    than the folder holds after the command (`EXISTS`, kept current by the
-   client). Folders above `MaxReconcileMessages` (2,000,000) are refused.
+   client). Folders above `MaxReconcileMessages` (2,000,000 by default,
+   `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`) are refused. The two slices are
+   allocated once for EXISTS + 1,000 messages, at most the limit, which is
+   all `ListFlags` accepts; distinct flag combinations may take 4 MiB,
+   each charged its bytes plus 88 B for its map entry (`flagSetOverhead`).
 2. The UIDs go into a `[]int64`; each message's flags without `\Recent`,
    sorted and joined by spaces, into a `[]string`, with one string per flag
    combination through a map.

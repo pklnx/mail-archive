@@ -146,9 +146,10 @@ func TestMidHeaderEOF(t *testing.T) {
 	wantCategory(t, err, imapsync.CategoryProtocol, true)
 }
 
-// noticeScript answers EXAMINE with exists messages and the UID FETCH with
+// noticeScript answers EXAMINE with exists messages, the probe for the
+// newest UID with newest (no probe expected if 0), and the UID FETCH with
 // notices produced by notice(i) for i = 1..n, then one new message.
-func noticeScript(t *testing.T, exists, n int, notice func(i int) string) *imaptest.Script {
+func noticeScript(t *testing.T, exists, n int, newest uint32, notice func(i int) string) *imaptest.Script {
 	t.Helper()
 	return imaptest.StartScript(t, func(c *imaptest.ScriptConn) error {
 		if err := c.Greet(""); err != nil {
@@ -156,6 +157,11 @@ func noticeScript(t *testing.T, exists, n int, notice func(i int) string) *imapt
 		}
 		if err := c.Examine(exists); err != nil {
 			return err
+		}
+		if newest != 0 {
+			if err := c.Newest(newest); err != nil {
+				return err
+			}
 		}
 		tag, err := c.Expect("UID FETCH")
 		if err != nil {
@@ -182,7 +188,7 @@ func TestUnilateralNoticesPass(t *testing.T) {
 	}
 	for name, notice := range cases {
 		t.Run(name, func(t *testing.T) {
-			s := noticeScript(t, n+1, n, notice)
+			s := noticeScript(t, n+1, n, n+1, notice)
 			conn := dialScript(t, s, nil)
 			if _, err := conn.Examine("INBOX"); err != nil {
 				t.Fatal(err)
@@ -199,7 +205,8 @@ func TestUnilateralNoticesPass(t *testing.T) {
 			}
 			// The notices earned no more than they cost: the budget grew
 			// by at most the command's and the one message's credit.
-			if gain := conn.Budget() - before; gain > 16<<10+1<<10 {
+			// The probe for the newest UID earns 1 KiB.
+			if gain := conn.Budget() - before; gain > 16<<10+1<<10+1<<10 {
 				t.Errorf("budget grew by %d during the notices", gain)
 			}
 		})
@@ -209,7 +216,7 @@ func TestUnilateralNoticesPass(t *testing.T) {
 // Notices beyond the folder's message count (plus 1,000) earn nothing:
 // an unbounded flood still runs the budget dry.
 func TestUnilateralNoticeFlood(t *testing.T) {
-	s := noticeScript(t, 1, endless, func(int) string { return "* 1 EXPUNGE" })
+	s := noticeScript(t, 1, endless, 0, func(int) string { return "* 1 EXPUNGE" })
 	conn := dialScript(t, s, nil)
 	if _, err := conn.Examine("INBOX"); err != nil {
 		t.Fatal(err)
@@ -256,7 +263,7 @@ func TestUnilateralNoticeHugeExists(t *testing.T) {
 	if imapsync.NoticesMax != 1_000_000 {
 		t.Errorf("NoticesMax = %d", imapsync.NoticesMax)
 	}
-	s := noticeScript(t, 4_000_000_000, endless, func(int) string { return notice })
+	s := noticeScript(t, 4_000_000_000, endless, 0, func(int) string { return notice })
 	conn := dialScript(t, s, func(c *imapsync.Config) { imapsync.SetNoticesMax(c, capped) })
 	if _, err := conn.Examine("INBOX"); err != nil {
 		t.Fatal(err)
@@ -390,5 +397,75 @@ func TestUnilateralNoticeLoneLF(t *testing.T) {
 	wantLimit(t, conn, err, imapsync.LimitUnrequested, 0)
 	if n, most := conn.BytesRead(), int64(capped*12+capped+2*imapsync.BudgetMax); n > most {
 		t.Errorf("read %d bytes, more than %d", n, most)
+	}
+}
+
+// A sink that stops inside the literal, or after exactly its Size() bytes
+// without reading EOF, and then fails with the context cancelled: more
+// messages are buffered behind it, and FetchAfter still returns. Guards
+// connErr's rule (wait for go-imap's reader only after a read error)
+// against a go-imap upgrade that changes when a literal's reader is
+// released.
+func TestSinkErrorAfterPartialReadCancel(t *testing.T) {
+	const size = 200
+	for _, tc := range []struct {
+		name string
+		read int
+	}{
+		{"half", size / 2},
+		{"exact size, no EOF", size},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := strings.Repeat("x", size)
+			s := imaptest.StartScript(t, func(c *imaptest.ScriptConn) error {
+				if err := c.Greet(""); err != nil {
+					return err
+				}
+				if err := c.Examine(5); err != nil {
+					return err
+				}
+				tag, err := c.Expect("UID FETCH")
+				if err != nil {
+					return err
+				}
+				var b strings.Builder
+				for i := 1; i <= 5; i++ {
+					fmt.Fprintf(&b, "* %d FETCH (UID %d BODY[] {%d}\r\n%s)\r\n", i, i, len(body), body)
+				}
+				b.WriteString(tag + " OK done\r\n")
+				if _, err := io.WriteString(c, b.String()); err != nil {
+					return err
+				}
+				return drain(c)
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn, err := imapsync.Dial(ctx, scriptConfig(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Examine("INBOX"); err != nil {
+				t.Fatal(err)
+			}
+			errc := make(chan error, 1)
+			go func() {
+				errc <- imapsync.FetchAfter(conn, 0, func(r io.Reader) (int64, error) {
+					buf := make([]byte, tc.read)
+					if _, err := io.ReadFull(r, buf); err != nil {
+						return 0, err
+					}
+					cancel()
+					return 0, errors.New("disk full")
+				}, func(imapsync.Message[int64]) error {
+					t.Error("message handled")
+					return nil
+				})
+			}()
+			err = waitErr(t, errc)
+			wantCategory(t, err, imapsync.CategoryTimeout, true)
+			if !errors.Is(err, context.Canceled) || !conn.Broken() {
+				t.Errorf("err = %v, broken %v", err, conn.Broken())
+			}
+		})
 	}
 }

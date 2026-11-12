@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -32,8 +33,20 @@ type Syncer struct {
 	// MaxReconcileMessages: larger folders are not reconciled (default
 	// DefaultMaxReconcileMessages).
 	MaxReconcileMessages uint32
+	// IMAP are the operator's IMAP limits, for syncs and login checks.
+	IMAP IMAPSettings
+	// MaxRunTime limits one account's run (DefaultMaxRunTime in the web
+	// server); zero means no limit. A run at its limit keeps what it
+	// committed, and the Runner queues it again if it made progress.
+	MaxRunTime time.Duration
 	// Dial is used to connect to IMAP servers. Defaults to imapsync.Dial.
 	Dial func(context.Context, imapsync.Config) (*imapsync.Conn, error)
+
+	// limitRun replaces the run's time limit; a test seam.
+	limitRun func(context.Context) (context.Context, context.CancelFunc)
+	// afterListFlags, if set, is called with the length and capacity of a
+	// reconcile's UID list; a test seam.
+	afterListFlags func(n, capacity int)
 }
 
 // ErrSyncRunning is returned when another process already syncs the account.
@@ -56,7 +69,10 @@ type AccountResult struct {
 	Skipped int
 	// Reconcile sums what comparing folders with the server changed.
 	Reconcile store.ReconcileCounts
-	Err       error
+	// Resume reports a run that reached its time limit after it committed
+	// messages: the rest follows in another run.
+	Resume bool
+	Err    error
 }
 
 // SyncAll syncs every enabled account (or only the named ones, even if
@@ -142,7 +158,19 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		res.Err = err
 		return res
 	}
-	var folderErrs []error
+	// The run's own context ends at its time limit; parent's end is a
+	// shutdown, which records no health.
+	parent := ctx
+	ctx, cancelRun := runContext(parent, s.MaxRunTime, s.limitRun)
+	defer cancelRun()
+	var (
+		folderErrs []error
+		// committed counts the batches this run committed; okFolders the
+		// folders that synced cleanly.
+		committed, okFolders int
+		// stuck: a folder waits behind a message over the size cap.
+		stuck bool
+	)
 	// Folders whose first reconcile runs now: what they find gone was
 	// deleted before, not in this run, and never alerts.
 	var baseline []int64
@@ -169,11 +197,15 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		if res.Err != nil {
 			run.Error = res.Err.Error()
 		}
-		// A run cancelled by a shutdown says nothing about the account.
+		// A run cancelled by a shutdown says nothing about the account. A
+		// folder stuck behind a large message is a failure: the account is
+		// not fully archived, and the alert says so.
 		switch {
+		case stuck && status == "partial":
+			run.Health = store.HealthFailure
 		case status == "ok" || status == "partial":
 			run.Health = store.HealthSuccess
-		case ctx.Err() == nil:
+		case parent.Err() == nil:
 			run.Health = store.HealthFailure
 		}
 		// Record the outcome even if ctx was cancelled.
@@ -188,27 +220,70 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 		res.Err = err
 		return finish("failed")
 	}
+	// stopped ends the run before its last folder. At the time limit it
+	// is partial if it committed messages (and is resumed), else failed.
+	// When the connection cannot be used again, it is partial if earlier
+	// folders synced, else failed.
+	stopped := func(cause error) AccountResult {
+		if parent.Err() != nil {
+			res.Err = parent.Err()
+			return finish("failed")
+		}
+		progress := okFolders > 0 || committed > 0
+		if atTimeLimit(parent, ctx) {
+			cause = timeLimitError(s.MaxRunTime)
+			progress = committed > 0
+			res.Resume = progress
+		}
+		res.Err = errors.Join(append(folderErrs, cause)...)
+		if progress {
+			return finish("partial")
+		}
+		return finish("failed")
+	}
 	conn, err := s.dial(ctx, a, password)
 	if err != nil {
-		res.Err = err
+		if atTimeLimit(parent, ctx) {
+			return stopped(err)
+		}
+		res.Err = nameSetting(err, "")
 		return finish("failed")
 	}
 	defer func() { _ = conn.Close() }()
 
 	folders, err := conn.ListFolders()
 	if err != nil {
-		res.Err = err
+		if atTimeLimit(parent, ctx) {
+			return stopped(err)
+		}
+		res.Err = nameSetting(err, "")
 		return finish("failed")
 	}
 	now := time.Now()
+	var redial redialer
 	for _, f := range folders {
 		if !FolderSelected(f.Name, a.IncludedFolders, a.ExcludedFolders) {
 			log.Debug("skip folder", "folder", f.Name)
 			continue
 		}
+		if ctx.Err() != nil {
+			return stopped(ctx.Err())
+		}
+		// One bad folder must not fail the ones after it: a connection
+		// that broke (a cap, the idle deadline, a read error) is replaced.
+		if conn.Broken() {
+			nc, err := redial.again(conn, func() (*imapsync.Conn, error) { return s.dial(ctx, a, password) })
+			if err != nil {
+				log.Error("sync stopped: no new connection", "err", err)
+				return stopped(nameSetting(err, ""))
+			}
+			conn = nc
+			log.Info("connected again after a broken connection", "redials", redial.n)
+		}
 		flog := log.With("folder", f.Name)
 		base := res
 		progress := func(fetched, added int) {
+			committed++
 			run.MessagesFetched, run.MessagesNew = base.Fetched+fetched, base.New+added
 			if err := s.Store.UpdateSyncRunProgress(ctx, run); err != nil {
 				log.Debug("record sync progress", "err", err)
@@ -229,16 +304,21 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 				res.Reconcile.Add(r)
 				warnOnLoss(flog, r)
 			} else {
-				err = fmt.Errorf("reconcile: %w", err)
+				err = fmt.Errorf("reconcile: %w", nameSetting(err, config.EnvReconcileMaxMessages))
 			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				res.Err = ctx.Err()
-				return finish("failed")
+				return stopped(fmt.Errorf("%s: %w", f.Name, err))
+			}
+			var st *StuckError
+			if errors.As(err, &st) {
+				stuck = true
 			}
 			flog.Error("folder sync failed", "err", err)
-			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", f.Name, err))
+			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", f.Name, nameSetting(err, "")))
+		} else {
+			okFolders++
 		}
 	}
 	// After the loop, so folders created in this run get theirs too. Also for
@@ -249,8 +329,7 @@ func (s *Syncer) SyncAccountWith(ctx context.Context, a *store.Account, opts Syn
 	}
 	if err := s.reconcileVanished(ctx, a, folders, opts, now, &res.Reconcile, &baseline, log); err != nil {
 		if ctx.Err() != nil {
-			res.Err = ctx.Err()
-			return finish("failed")
+			return stopped(err)
 		}
 		log.Error("reconcile vanished folders failed", "err", err)
 		folderErrs = append(folderErrs, fmt.Errorf("vanished folders: %w", err))
@@ -277,27 +356,32 @@ func (s *Syncer) recordDelimiters(ctx context.Context, accountID int64, folders 
 }
 
 func (s *Syncer) dial(ctx context.Context, a *store.Account, password string) (*imapsync.Conn, error) {
+	return s.dialWith(ctx, s.IMAP.config(a.Host, a.Port, string(a.TLSMode), a.Username, password))
+}
+
+func (s *Syncer) dialWith(ctx context.Context, cfg imapsync.Config) (*imapsync.Conn, error) {
 	dial := s.Dial
 	if dial == nil {
 		dial = imapsync.Dial
 	}
-	return dial(ctx, imapsync.Config{
-		Host: a.Host, Port: a.Port, TLSMode: string(a.TLSMode),
-		Username: a.Username, Password: password,
-	})
+	return dial(ctx, cfg)
 }
 
 // CheckLogin connects with the given settings and password and lists the
-// folders, to verify an account before it is saved.
+// folders, to verify an account before it is saved. It takes at most a
+// minute and reads at most loginCheckMaxRead bytes.
 func (s *Syncer) CheckLogin(ctx context.Context, a *store.Account, password string) ([]imapsync.Folder, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	conn, err := s.dial(ctx, a, password)
+	cfg := s.IMAP.config(a.Host, a.Port, string(a.TLSMode), a.Username, password)
+	cfg.MaxRead = loginCheckMaxRead(s.IMAP.MaxFolders)
+	conn, err := s.dialWith(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, nameSetting(err, "")
 	}
 	defer func() { _ = conn.Close() }()
-	return conn.ListFolders()
+	folders, err := conn.ListFolders()
+	return folders, nameSetting(err, "")
 }
 
 // ListFolders connects with the account's stored password and lists its
@@ -362,7 +446,9 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 			Flags: storedFlags(m.Flags), InternalDate: m.InternalDate,
 		})
 	})
-	if err == nil {
+	if lim, ok := oversized(err); ok {
+		err = s.holdBefore(ctx, w, folder.ID, lim, err, log)
+	} else if err == nil {
 		err = w.flush(ctx)
 	}
 	if w.skipped > 0 {
@@ -373,6 +459,35 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 	}
 	log.Debug("folder synced", "fetched", fetched, "new", w.added)
 	return folder, fetched, w.added, w.skipped, nil
+}
+
+// holdBefore stops a folder's sync before a message over the size cap:
+// the folder's last UID becomes at most the message's UID - 1, also if an
+// earlier batch went past it (a server answering out of UID order), and
+// the queued messages are saved only if all of them come before it. With
+// the UID unknown nothing moves. It returns a StuckError, or the error of
+// saving.
+func (s *Syncer) holdBefore(ctx context.Context, w *folderWriter, folderID int64, lim *imapsync.LimitError,
+	cause error, log *slog.Logger) error {
+	stuck := &StuckError{UID: lim.UID, Err: cause}
+	if lim.UID == 0 {
+		log.Warn("a message over the size cap came without its UID; the folder's last UID stays, queued messages are not saved",
+			"queued", len(w.locs))
+		return stuck
+	}
+	if w.below(lim.UID) {
+		w.maxUID = min(w.maxUID, lim.UID-1)
+		if err := w.flush(ctx); err != nil {
+			return err
+		}
+	} else {
+		log.Info("queued messages not saved: some come after the large message", "queued", len(w.locs))
+	}
+	if err := s.Store.CapFolderLastUID(ctx, folderID, lim.UID-1); err != nil {
+		return err
+	}
+	log.Warn("folder stops before a message over the size cap", "uid", lim.UID)
+	return stuck
 }
 
 func (s *Syncer) logger() *slog.Logger {

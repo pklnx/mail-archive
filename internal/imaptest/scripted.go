@@ -168,6 +168,20 @@ func (c *ScriptConn) Examine(exists int) error {
 	)
 }
 
+// Newest answers the next command, which must be a FETCH of one sequence
+// number for its UID (imapsync's probe before a body fetch), with uid.
+func (c *ScriptConn) Newest(uid uint32) error {
+	tag, line, err := c.Next()
+	if err != nil {
+		return err
+	}
+	var seq uint32
+	if _, err := fmt.Sscanf(line, "FETCH %d (UID)", &seq); err != nil {
+		return fmt.Errorf("got %q, want FETCH n (UID)", line)
+	}
+	return c.Send(fmt.Sprintf("* %d FETCH (UID %d)", seq, uid), tag+" OK done")
+}
+
 // Serve answers LOGOUT and returns nil once the client logs out or
 // closes the connection; any other command fails.
 func (c *ScriptConn) Serve() error {

@@ -24,6 +24,10 @@ are named on the guide pages: the default sync interval
 | `MAIL_ARCHIVE_REQUIRE_2FA` | `false` | Require TOTP for all non-admin users. Administrators always require TOTP. |
 | `MAIL_ARCHIVE_PUBLIC_URL` | (none; Compose: `http://localhost:WEB_PORT`) | The address you open in the browser, like `https://archive.example.ts.net`: scheme, host name and port, no path. Passkeys work only there; without it they are off. Only `https://` with a host name, or `http://localhost`. Its host is accepted in addition to `MAIL_ARCHIVE_ALLOWED_HOSTS`. Changing the host later makes existing passkeys unusable. |
 | `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` | `3` | How many syncs of an account (or runs of a recurring fill) in a row must fail before it counts as failing: the alert, the banner and [`/healthz/sync`](../guide/operations#monitoring-and-alerts) use it. `1` to `100`. |
+| `MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | `500000` | How many messages a [fill](../guide/journaling) lists of one IMAP folder per pass; its Message-IDs may take 96 bytes per message of this limit in all. A larger folder fails with an error that names this setting. `10000` to `10000000`; each 100,000 more cost about 42 MiB of the web server's memory. See [IMAP limits](../guide/operations#imap-limits). |
+| `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | `2000000` | Folders with more messages are not [reconciled](../guide/syncing#reconcile); their sync ends `partial` with an error that names this setting. `10000` to `20000000`; each 100,000 more cost about 9 MiB. |
+| `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | `10000` | How many folders one IMAP account may list. More fail the whole sync, fill or login check, with an error that names this setting. `100` to `200000`; each 1,000 more cost up to about 13 MiB. A login check may read about 1.1 KiB per folder of this limit, at least 16 MiB. |
+| `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT` | `2m` | How long an IMAP server may send nothing while a command is in flight before the connection is closed (the folder fails; the next one gets a new connection). From `30s` to `30m`. |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` | (none: no alerts) | Where alerts about failing syncs are posted. `http://` or `https://`, no `#fragment`. A secret: it often contains a topic or token, and is never logged. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT` | `json` | `json` (Gotify, Slack, Mattermost, Discord and generic receivers) or `ntfy` (plain text with `Title`, `Priority` and `Tags` headers). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
@@ -102,6 +106,11 @@ Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`, `
 `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the three `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
 variables to both the web server and the CLI (`./ma`), so `./ma sync` from
 cron reconciles and sends alerts too.
+
+Compose passes the four IMAP limits (`MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES`,
+`MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`, `MAIL_ARCHIVE_IMAP_MAX_FOLDERS`,
+`MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT`) to both as well, so `./ma sync`, `./ma fill`
+and `./ma account add` use the same limits as the web server.
 
 Compose passes the two `MAIL_ARCHIVE_ATTEST_*` variables to both as well, so
 `./ma attest` uses the same key as the web server, and the two

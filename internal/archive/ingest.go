@@ -95,6 +95,16 @@ func (w *folderWriter) add(ctx context.Context, meta store.MessageMeta, loc stor
 	return nil
 }
 
+// below reports whether every queued message has a UID below uid.
+func (w *folderWriter) below(uid uint32) bool {
+	for _, l := range w.locs {
+		if l.UID >= uid {
+			return false
+		}
+	}
+	return true
+}
+
 // flush commits the queued messages, if any.
 func (w *folderWriter) flush(ctx context.Context) error {
 	if len(w.metas) == 0 {
