@@ -12,6 +12,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+
+	"github.com/pklnx/mail-archive/internal/config"
 )
 
 var version = "dev"
@@ -36,6 +38,7 @@ func main() {
 		newMigrateCmd(),
 		newPrepareDataCmd(),
 		newKeygenCmd(),
+		newSecretKeyCmd(),
 		newAccountCmd(),
 		newUserCmd(),
 		newGroupCmd(),
@@ -86,6 +89,11 @@ func exitStatus(ctx context.Context, err error) (int, string) {
 	var coded *codedError
 	if errors.As(err, &coded) {
 		return coded.code, err.Error()
+	}
+	// A refused secret key (#396): its configuration or its check.
+	var keyErr *config.SecretKeyError
+	if errors.As(err, &keyErr) {
+		return exitStartRefused, err.Error()
 	}
 	var exitErr *exitError
 	if !errors.As(err, &exitErr) {

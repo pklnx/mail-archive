@@ -22,7 +22,8 @@ With Docker Compose, run every command through the wrapper, for example
 | `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. Waits for another running `migrate` or a starting `serve` or `worker`, and after a killed `migrate` for goose's migration lock; see below. While migrations are pending, the other commands that use the database refuse with exit code `4` (`backup` and `status` only warn), and so do `serve` and `worker` unless `MAIL_ARCHIVE_MIGRATE_ON_START=on` lets them migrate at start. A failed migration is rolled back and ends `migrate` with exit code `3`. Unlike a start, `migrate` also runs a migration again whose failure was recorded (see [When a migration fails](../guide/operations#when-a-migration-fails)). |
 | `migrate status` | Show applied and pending migrations. Does not wait for a running migration. |
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. Waits for another running `migrate`, also during its one-time index rebuild, and, like `migrate`, for goose's migration lock. Refuses, like the other commands, while no `migrate` has done that rebuild. |
-| `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |
+| `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` or `MAIL_ARCHIVE_SECRET_KEY_FILE` (not the attestation key, see [`attest keygen`](#attest)). |
+| `secret-key accept --yes` | Make the configured secret key the instance's key after an intended change, so that `serve` starts with it. See [below](#secret-key). |
 
 ### migrate
 
@@ -58,6 +59,28 @@ a start waits for a running `migrate`, and `migrate` waits for a start
 that migrates. A web server that is already running is not covered: it
 neither waits for nor blocks a migration, so stop it before `./ma migrate`
 when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
+
+### secret-key
+
+The database keeps a check value of the secret key (HMAC-SHA256 with the
+key, never the key). `serve` refuses to start, with exit code `4`, without a
+key and with another key than the one recorded, and names the fingerprints
+of both, never a key. On the first start of 1.6.0 nothing is recorded yet:
+the key must open at least one of the stored IMAP passwords and TOTP secrets
+it tries (up to 5 of each), if there are any, and is then recorded. See
+[The secret key](./security#the-secret-key).
+
+`secret-key accept` prints how many of the stored IMAP passwords and TOTP
+secrets it tried open with the configured key; with `--yes` it records the
+key as the instance's (audit log `instance.secret_key_accepted`, with the
+fingerprints of the old and the new key). Those that do not open must be
+set again: `account set-password` and `user reset-2fa`. Without `--yes` it
+changes nothing.
+
+Every refusal of the secret key ends a command with exit code `4`: both
+`MAIL_ARCHIVE_SECRET_KEY_FILE` and `MAIL_ARCHIVE_SECRET_KEY` set, a key file
+that group or others may access, that is not a regular file or lies inside
+the data directory, and a key that is not 32 bytes of base64.
 
 ## Encryption
 
@@ -356,11 +379,11 @@ retention has usually ended too, so the next deletion run lists it.
 | `hold add\|list\|release` | Legal holds: no deletion of what they cover. See below. |
 | `retention preview\|show\|confirm\|cancel\|runs\|sweep` | Delete mail whose retention period has ended, in a reviewed run. See below. |
 | `attest check [--file FILE] [--public-key FILE] [--offline]` | Check only the attestations, fast. See below. |
-| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule, attestations and, unless `MAIL_ARCHIVE_JOB_WORKERS=0`, the [background jobs](../guide/operations#background-jobs). Default `127.0.0.1:8080`. At start it waits for a running `migrate`, applies pending migrations with `MAIL_ARCHIVE_MIGRATE_ON_START=on`, and refuses with exit code `4` while migrations are pending or a newer version migrated the database; a failed migration ends it with exit code `3` ([Start-up migrations](../guide/operations#start-up-migrations)). |
-| `worker` | Run only the background jobs, `MAIL_ARCHIVE_JOB_WORKERS` (1 to 8) at a time: no web server, SMTP, syncs, fills, attestations or retention. For a separate process with its own memory limit, with `MAIL_ARCHIVE_JOB_WORKERS=0` for `serve`; with Compose, the `worker` service. Stops on SIGTERM and hands running jobs back to the queue. Refuses `MAIL_ARCHIVE_JOB_WORKERS=0`. Starts like `serve`: start-up migrations, schema check, exit codes `3` and `4`. |
+| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule, attestations and, unless `MAIL_ARCHIVE_JOB_WORKERS=0`, the [background jobs](../guide/operations#background-jobs). Default `127.0.0.1:8080`. Needs the secret key (`MAIL_ARCHIVE_SECRET_KEY_FILE` or `MAIL_ARCHIVE_SECRET_KEY`) and refuses to start without it with exit code `4`, before it listens. It listens at once; until it is ready, `/healthz` answers `503` with `{"status":"starting"}` and every other request `503` with `Retry-After: 5`. At start it waits for a running `migrate`, applies pending migrations with `MAIL_ARCHIVE_MIGRATE_ON_START=on`, and refuses with exit code `4` while migrations are pending or a newer version migrated the database; a failed migration ends it with exit code `3` ([Start-up migrations](../guide/operations#start-up-migrations)). Then it checks the secret key against the instance and refuses another one with exit code `4` ([`secret-key`](#secret-key)). |
+| `worker` | Run only the background jobs, `MAIL_ARCHIVE_JOB_WORKERS` (1 to 8) at a time: no web server, SMTP, syncs, fills, attestations or retention. For a separate process with its own memory limit, with `MAIL_ARCHIVE_JOB_WORKERS=0` for `serve`; with Compose, the `worker` service. Stops on SIGTERM and hands running jobs back to the queue. Refuses `MAIL_ARCHIVE_JOB_WORKERS=0`. Starts like `serve`: start-up migrations, schema check, exit codes `3` and `4`; it does not listen and does not need or check the secret key (Compose gives it none). |
 | `jobs retry KIND` | Queue the failed background jobs of `KIND` (for example `attachment_text`) again, with their attempts reset, and print how many. `status` shows how many failed. Recorded in the audit log as `jobs.retry`. |
 
-Commands that change users or accounts, `jobs retry`, and `import`, `export`, `backup`
+Commands that change users or accounts, `jobs retry`, `secret-key accept`, and `import`, `export`, `backup`
 and `audit`, write an entry to the [audit log](../guide/audit-log) first;
 if it cannot be written they do nothing. A GoBD export also records its end
 (`data.export_done`). `sync`, `status`, `verify`, `export verify` and the

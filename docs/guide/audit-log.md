@@ -63,6 +63,7 @@ Each event writes exactly one entry.
 | `data.export_done` | The end of a GoBD export, also of one that stopped: `id`, the counts (`messages`, `locations`, `missing`, `bytes`), `complete`, `manifest_sha256` (the SHA-256 of `SHA256SUMS`) and `statement_sha256` (of `STATEMENT.txt`), with which a customer's copy can be checked later; `aborted` with the reason when it stopped, and `group_moved_after_snapshot` with the names of the selected users and accounts that changed group while it ran. With `--grant` also `auditor_grant` and `via_owners`. |
 | `data.fill`, `data.fill_change`, `data.fill_resume`, `data.fill_cancel`, `data.fill_done` | A [fill](./journaling#bring-in-the-mail-from-before-journaling) of an smtp account from IMAP: started (`fill`, `host`, `username`, `folders`, and `before`, or for a [recurring fill](./journaling#keep-importing-recurring-fill) `keep_running` and `interval`; `prefix` for fills from before fills wrote into `JOURNAL`), changed (`fill_change`: switched to recurring with `keep_running` and `interval` as `{"from", "to"}`, or a new `interval`), resumed, cancelled or stopped, and the end of a one-time fill with `status` and the counts. The runs of a recurring fill are not logged, like scheduled syncs. A fill the web server ran ends without a user, with `"by": "web server"`. The password is never recorded. The Log page lists them under the Export filter, with the other `data.*` actions. |
 | `jobs.retry` | `./ma jobs retry KIND` queued failed [background jobs](./operations#background-jobs) again: `kind` and the number of `jobs`. |
+| `instance.secret_key_accepted` | `./ma secret-key accept --yes` made the configured secret key the instance's key: `fingerprint` of the new key's check value and `previous` of the old one, never a key. See [The secret key](../reference/security#the-secret-key). |
 | `audit.export` | `./ma audit` itself. |
 
 Not recorded:
@@ -130,7 +131,8 @@ it belongs to, at the time it is written:
   a sync of all their accounts) has that user's group.
 - Instance-level entries have no group, whoever made them: deletion runs and
   file sweeps (`retention.preview` to `retention.sweep`), holds that name no
-  user or account, `data.backup`, `audit.export`, `jobs.retry`, and failed
+  user or account, `data.backup`, `audit.export`, `jobs.retry`,
+  `instance.secret_key_accepted`, and failed
   logins of a name that is not a user.
 - `group.add`, `group.rename` and `group.remove` have the group they are
   about.

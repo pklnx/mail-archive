@@ -179,8 +179,12 @@ const DefaultRetentionFileGrace = 7 * 24 * time.Hour
 type Config struct {
 	DatabaseURL string
 	DataDir     string
-	SecretKey   []byte // nil if not configured
-	LogLevel    string
+	// SecretKey is nil if not configured (#396: from EnvSecretKeyFile or
+	// EnvSecretKey). A secret: never log it.
+	SecretKey []byte
+	// SecretKeySource says where SecretKey came from, for messages.
+	SecretKeySource string
+	LogLevel        string
 	// AllowedHosts for the web server; empty means the server's defaults.
 	AllowedHosts []string
 	// SyncInterval of the web server's schedule, the default for accounts
@@ -350,12 +354,8 @@ func Load() (*Config, error) {
 	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, os.Getenv(EnvMigrateOnStart)); err != nil {
 		return nil, err
 	}
-	if raw := os.Getenv(EnvSecretKey); raw != "" {
-		key, err := crypto.ParseKey(raw)
-		if err != nil {
-			return nil, errors.New(EnvSecretKey + ": " + err.Error())
-		}
-		cfg.SecretKey = key
+	if cfg.SecretKey, cfg.SecretKeySource, err = LoadSecretKey(os.Getenv(EnvSecretKeyFile), os.Getenv(EnvSecretKey), cfg.DataDir); err != nil {
+		return nil, err
 	}
 	cfg.ArchiveKey, cfg.ArchiveKeySource, err = LoadArchiveKey(os.Getenv(EnvArchiveKeyFile), os.Getenv(EnvArchiveKey),
 		cfg.DataDir, cfg.SecretKey)
