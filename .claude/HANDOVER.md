@@ -8,12 +8,13 @@ Current state only. At session end replace these sections; never append. History
   - auditor access for tax advisors and auditors (#393: #509, #511, #515, #517);
   - GoBD export on the command line (#394: #507, #512).
 - Migrations 00036 (auditor) and 00037 (blob_encryption).
-- Milestone 1.5.0: every issue is closed, but the milestone itself is still open (see Maintainer actions).
+- Milestone 1.5.0 is closed.
+- **1.5.1 pending** (milestone 1.5.1, maintainer OK 2026-11-12): #524 is merged as #525 (main a3609fd). It moves the Go toolchain to 1.27.4 (GO-2026-6859, net/http) and golang.org/x/net to 0.62.0 (GO-2026-6860 = CVE-2026-78661 from the image scan, GO-2026-6866). None of these is reachable in practice: only `html.NewTokenizer` is used, and there is no `MaxBytesReader`. But `vulncheck` on 1.27.3 has failed every run since 2026-11-11. The release needs the maintainer (see Maintainer actions).
 - Release test #520 (Mac Safari, iPhone, iPad, VoiceOver) runs after the release; a failure goes into 1.5.1.
 - Earlier: v1.4.0 (main 774a2a0), customer groups (#470); release test #504 passed.
 
 ## Open PRs
-- Dependabot #491 (go.yaml.in/yaml/v3 3.0.5 → 3.0.6, `dependencies`, based on an old main 9b12a50): not reviewed yet. It needs a rebase onto main (`@dependabot rebase`), green CI and one review; it can go into 1.5.1 or 1.6.0.
+- Dependabot #523 (go-pdfium 1.21.3 → 1.21.4 with PDFium engine 8057 → 8111, yaml v3 3.0.5 → 3.0.6; it replaces #491) and #522 (vitepress alpha.20 → alpha.21, docs site only): milestone 1.6.0. Merge them only **after the 1.5.1 release**. The new PDFium has no advisory and is not patch material (coordinator, 2026-11-12). Each needs `@dependabot rebase` onto main (vulncheck was red without #525), green CI and one review. #523: a test of the PDF text extraction (`internal/attachtext`) in CI is enough. The rebase also removes the stale x/net v0.61.0 lines in `go.sum`.
 
 ## Open tickets
 - **1.6.0:** these are `ready`:
@@ -57,7 +58,7 @@ Current state only. At session end replace these sections; never append. History
   - Avoid "fix #N" and other closing keywords in PR bodies for issues that stay open. Conversely, check that "Closes #N" really closed the issue: #435 stayed open after #513.
 
 ## Maintainer actions
-- Close milestone 1.5.0 (Milestones → 1.5.0 → Close). Every issue in it is closed.
+- **Release 1.5.1:** Actions → Release → Run workflow, from main a3609fd or later, dry run first. Then rescan `ghcr.io/pklnx/mail-archive:1.5.1`: CVE-2026-78661 must be gone (#524, last Done-when item). After the release the coordinator closes milestone 1.5.1.
 - #520 release test of 1.5.0.
 - Manual checks from #519, which no test covers: `./ma encryption rotate-key --new-key-file /keys/archive-2.key` through Compose (service `mail-archive-keys`: the new file owned by 65532 with mode 0400, then `.env` switched and `docker compose up -d`), and `./ma encryption rekey` on a real instance, including `--keep-key-file`.
 - On the shared instance:
