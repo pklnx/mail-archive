@@ -67,8 +67,10 @@ func TestLoadSecretKey(t *testing.T) {
 		t.Errorf("mode 0600 refused: %v", err)
 	}
 
-	// A malformed key that must not show up in the message either.
-	const badKey = "bm90LWEta2V5LWJ1dC1hLW1hcmtlcg"
+	// A malformed key that must not show up in the message either: valid
+	// base64 of 20 bytes instead of 32, built here so that no key-like
+	// literal sits in the source.
+	badKey := base64.RawStdEncoding.EncodeToString([]byte(strings.Repeat("not-a-key-", 2)))
 	notRegular := filepath.Join(t.TempDir(), "dir")
 	_ = os.Mkdir(notRegular, 0o700)
 	for name, c := range map[string]struct {
