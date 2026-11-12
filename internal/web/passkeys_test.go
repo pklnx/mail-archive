@@ -430,9 +430,9 @@ func TestPasskeySessionStateMachine(t *testing.T) {
 	}
 
 	// A locked user gets in neither way.
-	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": true}, 204)
+	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": true}, 200)
 	f.as().passkeyLogin(aliceKey, 403)
-	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": false}, 204)
+	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": false}, 200)
 
 	// An admin whose TOTP was reset must set it up again.
 	if err := f.st.ResetTwoFactor(t.Context(), mustUser(t, f, "admin").ID); err != nil {

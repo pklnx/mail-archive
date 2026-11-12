@@ -56,6 +56,7 @@ beforeEach(() => {
     if (method === "GET" && url === "/api/groups") return json({ groups });
     if (method === "POST" && url === "/api/groups") return json({ id: 9, name: "New", users: 0, accounts: 0, createdAt: "2026-10-30T00:00:00Z" }, 201);
     if (method === "PATCH" && init?.body && "group" in JSON.parse(String(init.body))) return json({ sharesEnded: 1 });
+    if (method === "PATCH" && init?.body && "locked" in JSON.parse(String(init.body))) return json({ smtpCredentialsActive: 0 });
     if (method === "GET" && url === "/api/api-keys") {
       return json({ keys: [bobKey, aliceKey].map((k) => (revoked.has(k.id) ? { ...k, state: "revoked" } : k)) });
     }

@@ -415,6 +415,8 @@ func TestSchemasMatchStructs(t *testing.T) {
 		{retentionRuleJSON{}, "RetentionRule", true},
 		{retentionAccountJSON{}, "RetentionAccount", true},
 		{legalHoldJSON{}, "LegalHold", true},
+		{smtpCredentialJSON{}, "SMTPCredential", true},
+		{smtpCredentialsJSON{}, "SMTPCredentials", true},
 	} {
 		s, ok := schemas[c.schema].(map[string]any)
 		if !ok {

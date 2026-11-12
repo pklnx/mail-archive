@@ -116,7 +116,7 @@ characters and are prompted twice, or read once from stdin with
 | `user revoke-api-keys NAME` | Revoke all API keys of a user, for example when no admin can log in. |
 | `user reset-2fa NAME` | Turn off the user's 2FA, for example after a lost phone. Ends the user's sessions; admins set it up again at the next login. |
 | `user promote NAME`, `user demote NAME` | Grant or take away the admin role. |
-| `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
+| `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. It does not stop the [SMTP secrets](#smtp-secrets) of the user's smtp accounts: the mail server keeps delivering. `user lock` names each smtp account with usable secrets and the command that rotates them. |
 | `user remove NAME` | Delete the user. Refused while the user owns accounts, also removed ones; hand them over with `account move` first. An auditor's unrevoked grants are revoked first and printed; they stay in their owners' lists as history. |
 
 The last admin who can log in cannot be locked, removed or demoted. Admins
@@ -157,6 +157,7 @@ customers gets one auditor login per group.
 | `account add NAME` | Add an account. Flags: `--host` and `--username` (required), `--port`, `--tls tls\|starttls\|none` (default `tls`), `--include FOLDER`, `--exclude FOLDER` (repeatable), `--password-stdin`, `--skip-check`. The login is checked before saving unless `--skip-check` is set. |
 | `account add-smtp NAME --address ADDRESS` | Add an smtp account that receives copies of every message from a mail server (`--address` repeatable, at least one). An address has no `+`: the part after `+` encodes the original recipient. See [Journaling with Postfix](../guide/journaling). |
 | `account smtp-addresses NAME` | Show the addresses of an smtp account; `--add ADDRESS` and `--remove ADDRESS` (repeatable) change them. An address belongs to one account; the account keeps at least one. |
+| `account smtp-secret NAME` | List, create or revoke the [SMTP secrets](#smtp-secrets) a mail server logs in with. |
 | `account fill NAME --host HOST --username USER` | Copy an IMAP mailbox into an smtp account, into its folder `JOURNAL`: the mail from before journaling, once up to a cut-off or, with `--keep-running`, recurring. See below. |
 | `account list` | List accounts with owner, the owner's group, server, login, state (enabled, disabled, removed, removed (being deleted), import) and folder filters. For smtp accounts, SERVER is `smtp` and LOGIN lists the addresses. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
@@ -167,7 +168,7 @@ customers gets one auditor login per group.
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. A disabled smtp account answers `451`: the mail server keeps the copies queued for `maximal_queue_lifetime` (5 days by default) and then drops them. |
 | `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced or imported into. Prints how to delete it completely with `account purge`. |
 | `account purge NAME` | Delete a removed account completely: its locations, folders and the account; the name is free again. Messages also in another account stay there; messages whose last location is in this account are deleted like a retention deletion (record, attestation entry, file removed after `MAIL_ARCHIVE_RETENTION_FILE_GRACE`). Refused, naming the reason, for an account that is not removed, has a retention rule, is named by a legal hold (also a released one) or has mail covered by an active hold, is being synced, filled or imported into, or while another purge is open. Shows the locations to remove, the messages to delete and those kept (by owner and account), then asks for the number of messages to delete; `--count N` gives it instead and must match, `--dry-run` stops after the preview. Runs in batches (`--lock-timeout`, default 10 minutes, per batch); an interrupted purge resumes with the same command or when the web server starts. `--cancel` cancels an open purge: what it deleted stays deleted, the account stays removed. See [Deleting a removed account completely](../guide/accounts#deleting-a-removed-account-completely). |
-| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. The account leaves the old owner's [auditor grants](#auditors); a grant left without accounts is revoked; each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. |
+| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. The account leaves the old owner's [auditor grants](#auditors); a grant left without accounts is revoked; each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. For an smtp account with usable [SMTP secrets](#smtp-secrets), prints that the old owner may know them and the command that rotates them. |
 
 Account changes work while the account is being synced and apply from the
 next sync; only `account remove` waits for the sync to finish. A command
@@ -183,6 +184,41 @@ unless `--user` is given.
 
 Folder filters: with `--include`, only those folders are archived; `--exclude`
 then removes folders from what is left. Names are matched case-insensitively.
+
+### SMTP secrets
+
+A mail server logs in to the SMTP server of an smtp account with the user
+name `smtp-` and the account's ID, for example `smtp-42`, and a secret that
+starts with `mas_`. The user name never changes. The secret is shown once;
+the archive stores only its SHA-256 and its last 4 characters.
+
+```sh
+./ma account smtp-secret journal               # the user name and the secrets
+./ma account smtp-secret journal --new         # a new secret, printed once
+./ma account smtp-secret journal --new --grace 0
+./ma account smtp-secret journal --revoke 12
+```
+
+- Without a flag, the command prints the user name and lists the secrets:
+  ID, last characters, created, expires, last used and state (`active`,
+  `expiring`, `expired` or `revoked`). Revoked and expired secrets stay
+  listed for 30 days.
+- `--new` prints the user name, the secret and the line for the mail
+  server's SASL password map. The current secret stays usable for
+  `--grace` (whole days, default `7d`, at most `30d`), so the mail server
+  can switch to the new one without losing mail. `--grace 0` revokes it at
+  once. A secret that was already expiring is revoked: an account has at
+  most two usable secrets.
+- `--revoke ID` revokes a secret at once.
+- Each change is recorded in the [audit log](../guide/audit-log)
+  (`smtp_credential.create`, `smtp_credential.revoke`), never with the
+  secret.
+
+The account's owner, who must be an admin, also manages the secrets in the
+web UI, and every admin can list and revoke all of them
+([API](./api#smtp-secrets)). Locking the owner or moving the account to
+another user does not stop the secrets: rotate them with `--new --grace 0`
+when someone who knows a secret should no longer deliver mail.
 
 ### account fill
 

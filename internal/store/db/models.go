@@ -416,6 +416,19 @@ type SmtpAddress struct {
 	AccountID int64
 }
 
+type SmtpCredential struct {
+	ID         int64
+	AccountID  int64
+	SecretHash []byte
+	Hint       string
+	CreatedAt  time.Time
+	CreatedBy  *int64
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	RevokedBy  *int64
+}
+
 type SmtpFill struct {
 	ID                 int64
 	AccountID          int64

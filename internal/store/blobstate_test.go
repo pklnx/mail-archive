@@ -290,8 +290,8 @@ func TestBlobEncryptionMigrationDown(t *testing.T) {
 	}
 }
 
-// downBlobEncryptionMigration rolls back 00038_two_factor_challenge_attempts
-// and 00037_blob_encryption.
+// downBlobEncryptionMigration rolls back 00039_smtp_credentials,
+// 00038_two_factor_challenge_attempts and 00037_blob_encryption.
 func downBlobEncryptionMigration(t *testing.T, st *store.Store) {
 	t.Helper()
 	downTwoFactorAttemptsMigration(t, st)
