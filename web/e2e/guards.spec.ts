@@ -329,3 +329,73 @@ test("an expected console error that never comes fails the test", async ({ guard
   test.fail();
   guards.expectConsoleError(new RegExp(`^${declared}$`));
 });
+
+// DIAG #398 (temporary): which element creation makes WebKit report a
+// style-src-attr violation, with the blocked style as the sample
+// ('report-sample'), with and without a CSP, and from script and parser.
+const diagTags = ["select", "select:multiple", "input", "input:number", "input:date", "input:range", "input:checkbox", "input:file", "input:search", "textarea", "button", "details", "progress", "meter", "video"];
+for (const csp of ["default-src 'self'; style-src 'self' 'report-sample'", ""]) {
+  test(`DIAG element creation under CSP ${JSON.stringify(csp)}`, async ({ page, guards, browserName }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __v: unknown[] };
+      w.__v = [];
+      document.addEventListener(
+        "securitypolicyviolation",
+        (e) => w.__v.push({ d: e.violatedDirective, sample: e.sample, target: (e.target as Element)?.nodeName, at: `${e.sourceFile}:${e.lineNumber}:${e.columnNumber}` }),
+        true,
+      );
+    });
+    const headers: Record<string, string> = csp ? { "Content-Security-Policy": csp } : {};
+    await page.route(`${origin}/e2e/diag-parse`, (route) =>
+      route.fulfill({ contentType: "text/html", headers, body: `<!doctype html><title>p</title><select id=s><option>a</option></select><input id=i type=number><textarea></textarea>` }),
+    );
+    await page.goto(`${origin}/e2e/diag-parse`);
+    // Marker: a style attribute set by script, which every CSP without 'unsafe-inline' refuses; events come in order.
+    const flush = () =>
+      page.evaluate(
+        (csp) =>
+          new Promise<unknown[]>((resolve) => {
+            const w = window as unknown as { __v: unknown[] };
+            if (!csp) return requestAnimationFrame(() => requestAnimationFrame(() => resolve(w.__v.splice(0))));
+            const marker = (e: SecurityPolicyViolationEvent) => {
+              if (e.sample !== "color: rgb(1, 2, 3)" && !(e.target as Element)?.id?.startsWith("marker")) return;
+              document.removeEventListener("securitypolicyviolation", marker, true);
+              resolve(w.__v.splice(0));
+            };
+            document.addEventListener("securitypolicyviolation", marker, true);
+            const m = document.createElement("div");
+            m.id = `marker${Math.random()}`;
+            document.body.append(m);
+            m.setAttribute("style", "color: rgb(1, 2, 3)");
+          }),
+        csp,
+      );
+    const parsed = await flush();
+    const parsedSelect = await page.evaluate(() => {
+      const s = document.getElementById("s") as HTMLSelectElement;
+      const cs = getComputedStyle(s);
+      return { h: s.offsetHeight, w: s.offsetWidth, appearance: cs.appearance, display: cs.display };
+    });
+    console.log(`[diag ${browserName} csp=${JSON.stringify(csp)}] parser: ${JSON.stringify(parsed)} select=${JSON.stringify(parsedSelect)}`);
+    for (const spec of diagTags) {
+      for (const attach of [false, true]) {
+        const metrics = await page.evaluate(
+          ({ spec, attach }) => {
+            const [tag, kind] = spec.split(":");
+            const el = document.createElement(tag!);
+            if (kind === "multiple") (el as HTMLSelectElement).multiple = true;
+            else if (kind) (el as HTMLInputElement).type = kind;
+            if (tag === "select") el.append(new Option("a"));
+            if (attach) document.body.append(el);
+            const cs = getComputedStyle(el);
+            return attach ? { h: (el as HTMLElement).offsetHeight, w: (el as HTMLElement).offsetWidth, appearance: cs.appearance } : null;
+          },
+          { spec, attach },
+        );
+        const v = await flush();
+        console.log(`[diag ${browserName} csp=${JSON.stringify(csp)}] ${spec} attach=${attach}: ${JSON.stringify(v)} ${JSON.stringify(metrics)}`);
+      }
+    }
+    guards.takeProblems();
+  });
+}
