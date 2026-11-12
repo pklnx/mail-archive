@@ -82,6 +82,11 @@ func exitStatus(ctx context.Context, err error) (int, string) {
 	if err == nil {
 		return 0, ""
 	}
+	// A failed migration or a refused start-up check (#396).
+	var coded *codedError
+	if errors.As(err, &coded) {
+		return coded.code, err.Error()
+	}
 	var exitErr *exitError
 	if !errors.As(err, &exitErr) {
 		return 1, err.Error()

@@ -328,7 +328,11 @@ ALTER TABLE messages DROP COLUMN thread_id;
 ```
 
 Name new files with the next number. Never edit a migration that has been
-released; add a new one. The store tests roll every migration down and up
+released; add a new one. Every migration runs in a transaction of its own:
+`-- +goose NO TRANSACTION` is refused by `TestMigrationsAreTransactional`,
+because `serve` and `worker` apply migrations at start and rely on a failed
+one rolling back completely (see
+[Start-up of serve and worker](./architecture#start-up-of-serve-and-worker)). The store tests roll every migration down and up
 again, so a broken `Down` section fails CI. The [review gate](./review-gate)
 lints the `Up` section of new migrations with squawk and reports an edited
 or deleted migration.

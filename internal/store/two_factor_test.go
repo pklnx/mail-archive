@@ -306,9 +306,11 @@ func TestTwoFactorAttemptsMigration(t *testing.T) {
 	}
 }
 
-// downTwoFactorAttemptsMigration rolls back 00038_two_factor_challenge_attempts.
+// downTwoFactorAttemptsMigration rolls back 00039_instance_state and
+// 00038_two_factor_challenge_attempts.
 func downTwoFactorAttemptsMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downInstanceStateMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00038_two_factor_challenge_attempts") {
 		t.Fatalf("down: %q %v", m, err)
 	}

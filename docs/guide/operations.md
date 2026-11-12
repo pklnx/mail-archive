@@ -179,10 +179,13 @@ the [command reference](../reference/cli#verify) for the findings.
    a restore over the old database would fail half-way or mix both. Without
    Docker Compose: `mail-archive restore-dump FILE`, with `pg_restore` in
    `PATH`, into a database made with `dropdb --force` and `createdb`. It
-   refuses while a writer runs, and holds the writers lock until it has
-   reconciled: a web server, worker or cron `./ma sync` that starts
-   meanwhile refuses to start and is retried by Compose or the next cron
-   run.
+   refuses while a writer runs, and holds the writers lock and the
+   migration lock until it has reconciled: a web server or worker that
+   starts meanwhile waits for the restore instead of migrating the empty
+   database with [start-up migrations](#start-up-migrations) on, and then
+   checks the restored schema (and migrates a dump older than this version
+   when they are on); a cron `./ma sync` that starts meanwhile refuses to
+   start and is retried by the next cron run.
 3. `./ma migrate`, then `./ma attest` if attestations are on (it imports
    the attestations written after the dump, before anything archives; see
    [Restore](./tamper-evidence#restore-from-a-backup)), then `./ma sync`,
@@ -623,6 +626,14 @@ docker compose up -d web  # restart the web server with the new image
 ./ma --version            # the version you are running
 ```
 
+With the bundled `docker-compose.yml`, the web server and the worker also
+apply pending migrations themselves when they start
+(`MAIL_ARCHIVE_MIGRATE_ON_START=on`, see
+[Start-up migrations](#start-up-migrations)), so `docker compose up -d web`
+alone upgrades the database too. `./ma migrate` first shows the migrations
+and their messages in the terminal and finds a problem before the web
+server is down; both use the same lock.
+
 With the [worker service](#background-jobs) on (`COMPOSE_PROFILES=worker`),
 restart it too: `docker compose up -d web worker` instead of
 `docker compose up -d web`, here and in the steps below.
@@ -678,6 +689,110 @@ killed `migrate` the next one may wait for the database server to end the
 killed statement; see [`migrate`](../reference/cli#migrate) for the messages
 and time limits.
 
+### Start-up migrations
+
+`serve` and `worker` take the migration lock of `./ma migrate` when they
+start, and hold it until they have checked the database schema:
+
+- With `MAIL_ARCHIVE_MIGRATE_ON_START=on` (the default in the bundled
+  `docker-compose.yml`), they first do what `./ma migrate` does: the
+  one-time index rebuild of a database from the `postgres:18-alpine` image,
+  the pending migrations and the password upgrade. The log names the pending
+  migrations and each one applied.
+- Then they check the schema. With migrations still pending (start-up
+  migrations `off`, the default of the binary outside Compose), they refuse
+  to start: `the database schema is not up to date: 1 migration
+  (00039_instance_state.sql) pending; run ./ma migrate, or set
+  MAIL_ARCHIVE_MIGRATE_ON_START=on`. A database that a newer version
+  migrated is refused too, with both versions; see
+  [Going back after an upgrade](#going-back-after-an-upgrade).
+
+The other commands that use the database (`./ma user add`, `./ma sync`,
+...) refuse in the same way while migrations are pending or the database is
+newer; `./ma backup` and `./ma status` only warn, so the backup before an
+upgrade works. `./ma status` ends with a `schema:` line.
+
+**Several starts at the same time.** The web server, the worker and
+`./ma migrate` started together wait for each other: the first applies the
+migrations, the others then find nothing left to do. Each migration is
+applied once. A process that waits logs `waiting for the migration lock`
+(or prints `another migrate is running`); the wait has no time limit,
+because a first migration may rebuild indexes for many minutes. Processes
+of the older version that still run are not stopped by this: Compose stops
+them when it recreates the containers, so update web and worker together.
+
+**Backups.** A start does not take a backup: the image has no `pg_dump`.
+Take one before every upgrade (`./ma backup`, or a snapshot of the volumes),
+also when an image update starts the migration. Before it migrates an
+existing database, the start logs the time of the last `./ma backup` from
+the audit log, and a warning when there is none from the last 26 hours.
+The warning does not stop the start: a snapshot leaves no audit entry.
+
+**Exit codes.** `serve` and `worker` end with exit code `3` when a
+migration failed (see below) and `4` when a start-up check refused, such as
+pending migrations without start-up migrations or a database that is newer
+than the binary. Other errors end with `1`. Commands that use the database
+refuse with `4` as well, and `./ma migrate` ends with `3` when a migration
+failed. Under Compose, `restart: unless-stopped` starts the container again
+after either code; the log shows why.
+
+#### When a migration fails
+
+Each migration runs in a transaction of its own. When one fails, it is
+rolled back completely; the migrations before it in the same run stay
+applied. The process logs an `ERROR` line and ends with exit code `3` and a
+message that names the failed migration, the error, and the migrations this
+run kept:
+
+```
+error: migration 00041_example.sql failed and was rolled back: ERROR: ... (SQLSTATE 23505)
+applied in this run and kept: 1 migration (00040_other.sql)
+starts do not run it again while the file is unchanged; ./ma migrate does
+restore the backup from before the upgrade, or fix the cause and start again (docs/guide/operations.md, "When a migration fails")
+```
+
+An error that comes back on the same data (invalid data, a constraint, a
+syntax or permission error, a check the migration raises itself) is
+recorded in the database with the migration's number and a hash of its
+file. The next start with the same migration refuses at once with exit
+code `3`, without running it again, so a restart loop does not repeat a
+long failing statement every minute. An error that may pass (a lock or
+statement timeout, a lost connection, a full disk, a cancelled start) is
+not recorded: the next start runs the migration again. A migration that
+fails before the upgrade to 1.6.0 created the record's table is only
+logged.
+
+Then either:
+
+- restore the backup from before the upgrade (see [Restore](#restore)) and
+  start the old version again, or
+- fix the cause, for example the data a constraint refuses, and run
+  `./ma migrate`. It runs the migration again also when it is recorded,
+  and clears the record when it succeeds. A new image whose migration file
+  differs is run again at start as well.
+
+A failed one-time index rebuild (databases from the `postgres:18-alpine`
+image of versions before 1.0.0, see [Database locale](#database-locale)) is
+not recorded and runs again at every start.
+
+#### Going back after an upgrade
+
+From 1.6.0 on, an older version refuses a database that a newer one
+migrated: `the database schema is at migration 40, newer than this
+binary`. Versions before 1.6.0 do not check and start anyway, on a schema
+they do not know; going back to one needs the restore all the same. To go
+back:
+
+1. Stop the web server and the worker: `docker compose stop web worker`.
+2. Restore the backup from before the upgrade (see [Restore](#restore)).
+3. Start the old image: set `MAIL_ARCHIVE_IMAGE` in `.env` to it (see
+   [Versions](#versions)) and run `docker compose up -d web`.
+
+Mail archived since the upgrade is not in that backup; the message files
+stay in `data/` and `./ma verify` lists them as orphans. Rolling back with
+`./ma migrate down` instead deletes the data of each migration it undoes
+and is meant for development.
+
 ### Versions
 
 Versions follow [semantic versioning](https://semver.org/), `X.Y.Z`, from
@@ -686,7 +801,8 @@ Versions follow [semantic versioning](https://semver.org/), `X.Y.Z`, from
 - a **major** release (`2.0.0`) has a breaking change that needs manual steps
   when upgrading (see the release notes);
 - a **minor** release (`1.5.0`) adds features and may change the database
-  schema; then it needs `./ma migrate`;
+  schema; then it needs `./ma migrate`, or a start with
+  [start-up migrations](#start-up-migrations) on;
 - a **patch** release (`1.4.3`) normally has fixes only, without a migration
   or a breaking change.
 
@@ -706,13 +822,14 @@ tags:
 | `latest` | The newest release. | Everything, breaking changes included. |
 
 Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build.
-Pinning an exact version is safer than `latest`, because migrations only run
-with `./ma migrate`. **Do not update images automatically** (Watchtower,
-Renovate, Diun, or a floating tag such as `latest` or a major tag like `1`):
-the web server does not run migrations, so after an automatic update it runs
-against a database that lacks them, and what needs them fails, until
-`./ma migrate` runs. A tool on `latest` also installs breaking changes
-without their upgrade steps. If a tool updates the image anyway, pin an exact
+Pinning an exact version is safer than `latest`. **Do not update images
+automatically** (Watchtower, Renovate, Diun, or a floating tag such as
+`latest` or a major tag like `1`): with
+[start-up migrations](#start-up-migrations) on, as in the bundled
+`docker-compose.yml`, the web server migrates the database at its next
+start, without the backup an upgrade needs before it; with them off, it
+refuses to start until `./ma migrate` runs. A tool on `latest` also installs
+breaking changes without their upgrade steps. If a tool updates the image anyway, pin an exact
 version or an `X.Y` tag such as `1.4`, which gets patch releases only. The
 images carry a provenance attestation and an SBOM.
 

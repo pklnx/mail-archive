@@ -51,6 +51,9 @@ type Store struct {
 	// blobPin is the generation of encryption at rest a writer started
 	// with (PinBlobGeneration).
 	blobPin atomic.Pointer[blobPin]
+	// migrations are the migration files goose runs: the embedded ones,
+	// or a test's (WithMigrationsFS).
+	migrations fs.FS
 }
 
 // Option configures Open.
@@ -64,6 +67,16 @@ type openConfig struct {
 	tracer pgx.QueryTracer
 	// dial replaces the dialer of every connection; only tests set it.
 	dial pgconn.DialFunc
+	// migrations replaces the embedded migration files; only tests set
+	// it (WithMigrationsFS).
+	migrations fs.FS
+}
+
+// WithMigrationsFS makes the store run the migration files in fsys (goose
+// files at its root) instead of the embedded ones. For tests only: a
+// database migrated with other files is not one this binary can serve.
+func WithMigrationsFS(fsys fs.FS) Option {
+	return func(c *openConfig) { c.migrations = fsys }
 }
 
 // ForMigrations sets up the store for `migrate` and `migrate down`, so
@@ -130,6 +143,12 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	if oc.dial != nil {
 		cfg.ConnConfig.DialFunc = oc.dial
 	}
+	migrations := oc.migrations
+	if migrations == nil {
+		if migrations, err = fs.Sub(migrationsFS, "migrations"); err != nil {
+			return nil, err
+		}
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -138,7 +157,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	return &Store{pool: pool, q: db.New(pool), blobWait: make(chan struct{}, blobWaiters)}, nil
+	return &Store{pool: pool, q: db.New(pool), blobWait: make(chan struct{}, blobWaiters), migrations: migrations}, nil
 }
 
 // SetGooseLockWait sets the function that Migrate and MigrateDown call
@@ -157,6 +176,11 @@ func (s *Store) Close() { s.pool.Close() }
 // The rebuild runs first because pending migrations would already write
 // through misordered indexes. If it fails, nothing is migrated. The
 // migrations run under goose's migration lock (withMigrations).
+//
+// goose runs each migration in a transaction of its own and stops at the
+// first that fails (TestMigrationsAreTransactional keeps it so). Then the
+// error is a *MigrationFailed: that migration was rolled back, and the
+// ones before it in this run, which Migrate also returns, stay applied.
 func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 	if _, err := s.RebuildIndexesIfNeeded(ctx, nil); err != nil {
 		return nil, err
@@ -164,6 +188,11 @@ func (s *Store) Migrate(ctx context.Context) ([]string, error) {
 	var applied []string
 	err := s.withMigrations(ctx, true, func(p *goose.Provider) error {
 		results, err := p.Up(ctx)
+		var partial *goose.PartialError
+		if errors.As(err, &partial) {
+			results = partial.Applied
+			err = s.migrationFailed(partial, results)
+		}
 		for _, r := range results {
 			applied = append(applied, r.Source.Path)
 		}
@@ -242,10 +271,6 @@ func (s *Store) MigrationStatus(ctx context.Context) ([]MigrationStatus, error) 
 // When ctx has ended, the error wraps ctx's error (withCtxErr), whichever
 // step of goose saw the cancel.
 func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.Provider) error) error {
-	sub, err := fs.Sub(migrationsFS, "migrations")
-	if err != nil {
-		return err
-	}
 	var opts []goose.ProviderOption
 	if locked {
 		opts = append(opts, goose.WithSessionLocker(gooseLocker{onWait: s.gooseLockWait}))
@@ -262,7 +287,7 @@ func (s *Store) withMigrations(ctx context.Context, locked bool, fn func(*goose.
 	}
 	sqlDB := stdlib.OpenDBFromPool(gp)
 	defer closeMigrationPool(ctx, gp, sqlDB)
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub, opts...)
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, s.migrations, opts...)
 	if err != nil {
 		return err
 	}
