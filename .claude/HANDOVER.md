@@ -3,12 +3,13 @@
 Current state only. At session end replace these sections; never append. History lives in PRs, issues and git.
 
 ## Last release
-- **v1.5.1** (2026-11-12, main f88e9d6, release run 43178182705, dry run 43177166920): Go toolchain 1.27.4 (GO-2026-6859, net/http) and golang.org/x/net 0.62.0 (GO-2026-6860 = CVE-2026-78661, GO-2026-6866), #524 / #525. Milestone 1.5.1 is closed. The maintainer waived the image rescan.
+- **v1.5.2** (2026-11-12, main 1be6464, release run 43219552949, dry run 43217591186): security fixes of advisory GHSA-w6jg-ffvw-q4f5 via #529: login/2FA/API-key limits under concurrency, 2FA at most 3 codes (migration 00038), served-HTML neutralising (link hints, referrer, crossorigin, frame src), `restore-dump --plaintext`, journaled-copy match on Message-ID+Date+From+Subject. Released as a patch despite `db-migration` (maintainer exception, 2026-11-12, `version` input). Milestone 1.5.2 closed.
+- **v1.5.1** (2026-11-12, main f88e9d6): Go 1.27.4, x/net 0.62.0 (#524/#525).
 - **v1.5.0** (2026-11-05, main 7482e83): encryption at rest (#392), auditor access (#393), GoBD export on the command line (#394). Migrations 00036 and 00037. Milestone 1.5.0 is closed. Release test #520 is open.
 - Earlier: v1.4.0 (main 774a2a0), customer groups (#470); release test #504 passed.
 
 ## Open PRs
-- Dependabot #527 (go-dependencies, based on a3609fd; it replaces #523 and #491): fxamacker/cbor/v2 2.9.6 → 2.10.0, go-pdfium 1.21.3 → 1.21.4 (PDFium engine 8057 → 8111), go.yaml.in/yaml/v3 3.0.5 → 3.0.6. Milestone 1.6.0. Neither the new PDFium nor the cbor minor has an advisory, so they are not patch material (coordinator, 2026-11-12). It needs green CI and one review. Check two things: the PDF text extraction (`internal/attachtext`), and cbor, which is direct only in `internal/web/passkeys_test.go` but which go-webauthn uses for passkeys. It gets `second-review` (auth).
+- Dependabot #527 (go-dependencies, based on a3609fd, needs `@dependabot rebase` onto main after #529; it replaces #523 and #491): fxamacker/cbor/v2 2.9.6 → 2.10.0, go-pdfium 1.21.3 → 1.21.4 (PDFium engine 8057 → 8111), go.yaml.in/yaml/v3 3.0.5 → 3.0.6. Milestone 1.6.0. Neither the new PDFium nor the cbor minor has an advisory, so they are not patch material (coordinator, 2026-11-12). It needs green CI and one review. Check two things: the PDF text extraction (`internal/attachtext`), and cbor, which is direct only in `internal/web/passkeys_test.go` but which go-webauthn uses for passkeys. It gets `second-review` (auth).
 - Dependabot #522 (vitepress alpha.20 → alpha.21, docs site only): milestone 1.6.0. It is behind main and needs `@dependabot rebase`, green CI and one review.
 
 ## Open tickets
@@ -19,10 +20,11 @@ Current state only. At session end replace these sections; never append. History
 - **1.6.0, in `plan`:** #397 operator/quotas/mail alerts (#446–#450), with the quota per customer group and alerts to admins only.
 - **Not planned yet:** #432 database encryption, #418 OCR for scanned PDFs.
 - **1.7.0 (Microsoft and Google):** #391 OAuth2 (`ready`, #426–#430); #475 journaling from Microsoft 365 (after #430, not planned).
-- **Follow-up:** #516, the demo auditor's grant window after `DOCS_NOW` + 90 days (before late January 2027).
+- **Follow-up:** #530 (private tracker numbers in 1.5.2 code comments → advisory id, comment-only); #516, the demo auditor's grant window after `DOCS_NOW` + 90 days (before late January 2027).
 - **Device checks:** #372 round 2, Android parts open; #520 is the 1.5.0 release test.
 
 ## Active decisions
+- **Undisclosed security work** (maintainer, 2026-11-12): fixes for unpublished vulnerabilities are built in a private repository with the same ticket flow and merged here as one PR right before the release; the advisory is the place for details. Open private follow-ups exist; ask the maintainer for access before planning 1.6.0 security items.
 - **Operating model** (maintainer, 2026-11-01): one shared instance in full-service mode, where the operator is its admin and manages the customers' users and accounts. Individual instances for single customers on request. Customer groups shipped in 1.4.0.
 - **Coordinator autonomy** (maintainer, 2026-10-31):
   - The coordinator decides alone on UI wording, technical trade-offs, small product details inside an approved goal, and tightening security, and records these decisions.
@@ -53,6 +55,8 @@ Current state only. At session end replace these sections; never append. History
   - Avoid "fix #N" and other closing keywords in PR bodies for issues that stay open. Conversely, check that "Closes #N" really closed the issue: #435 stayed open after #513.
 
 ## Maintainer actions
+- **Publish advisory GHSA-w6jg-ffvw-q4f5** (Security → Advisories), request a CVE there, and paste the operator notes into the v1.5.2 release (this session may not edit releases; text was handed over in chat).
+- 1.5.2 release check: WebKit and Firefox on HTML mail (link hints, referrer), three wrong 2FA codes in a browser, a fill against a real IMAP server.
 - #520 release test of 1.5.0.
 - Manual checks from #519, which no test covers: `./ma encryption rotate-key --new-key-file /keys/archive-2.key` through Compose (service `mail-archive-keys`: the new file owned by 65532 with mode 0400, then `.env` switched and `docker compose up -d`), and `./ma encryption rekey` on a real instance, including `--keep-key-file`.
 - On the shared instance:
