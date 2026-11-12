@@ -606,6 +606,17 @@ func sortBatch(metas []MessageMeta, locs []Location) ([]MessageMeta, []Location)
 // transaction. A fill that was cancelled meanwhile stays cancelled:
 // ErrFillNotRunning.
 func (s *Store) FinishFill(ctx context.Context, id int64, status, errText string) error {
+	return s.finishFill(ctx, id, status, errText, false)
+}
+
+// FinishFillUnhealthy is FinishFill, but a recurring fill's run counts as
+// a failure in its health whatever the status: a partial run that leaves
+// a folder stuck (a message over the size cap) must alert.
+func (s *Store) FinishFillUnhealthy(ctx context.Context, id int64, status, errText string) error {
+	return s.finishFill(ctx, id, status, errText, true)
+}
+
+func (s *Store) finishFill(ctx context.Context, id int64, status, errText string, unhealthy bool) error {
 	var e *string
 	if errText != "" {
 		e = &errText
@@ -618,11 +629,11 @@ func (s *Store) FinishFill(ctx context.Context, id int64, status, errText string
 		if err != nil || !keepRunning {
 			return err
 		}
-		switch status {
-		case FillOK, FillPartial:
-			return q.RecordFillSuccess(ctx, id)
-		case FillFailed:
+		switch {
+		case status == FillFailed, unhealthy && status != FillCancelled:
 			return q.RecordFillFailure(ctx, id)
+		case status == FillOK, status == FillPartial:
+			return q.RecordFillSuccess(ctx, id)
 		}
 		return nil
 	})

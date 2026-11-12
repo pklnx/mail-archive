@@ -210,6 +210,11 @@ func (r *Runner) syncOne(ctx context.Context, id int64, opts SyncOptions) {
 	switch {
 	case errors.Is(res.Err, ErrSyncRunning), errors.Is(res.Err, ErrAccountRemoved), errors.Is(res.Err, ErrNoServer):
 		log.Debug("sync skipped", "account", a.Name, "reason", res.Err)
+	case res.Resume:
+		// At its time limit with progress: the rest follows after the
+		// accounts waiting now.
+		log.Info("sync reached its time limit; queued again", "account", a.Name)
+		r.EnqueueWith(opts, id)
 	case res.Err != nil:
 		log.Error("sync failed", "account", a.Name, "err", res.Err)
 	}

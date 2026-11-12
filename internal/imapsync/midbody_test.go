@@ -392,3 +392,73 @@ func TestUnilateralNoticeLoneLF(t *testing.T) {
 		t.Errorf("read %d bytes, more than %d", n, most)
 	}
 }
+
+// A sink that stops inside the literal, or after exactly its Size() bytes
+// without reading EOF, and then fails with the context cancelled: more
+// messages are buffered behind it, and FetchAfter still returns. Guards
+// connErr's rule (wait for go-imap's reader only after a read error)
+// against a go-imap upgrade that changes when a literal's reader is
+// released.
+func TestSinkErrorAfterPartialReadCancel(t *testing.T) {
+	const size = 200
+	for _, tc := range []struct {
+		name string
+		read int
+	}{
+		{"half", size / 2},
+		{"exact size, no EOF", size},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := strings.Repeat("x", size)
+			s := imaptest.StartScript(t, func(c *imaptest.ScriptConn) error {
+				if err := c.Greet(""); err != nil {
+					return err
+				}
+				if err := c.Examine(5); err != nil {
+					return err
+				}
+				tag, err := c.Expect("UID FETCH")
+				if err != nil {
+					return err
+				}
+				var b strings.Builder
+				for i := 1; i <= 5; i++ {
+					fmt.Fprintf(&b, "* %d FETCH (UID %d BODY[] {%d}\r\n%s)\r\n", i, i, len(body), body)
+				}
+				b.WriteString(tag + " OK done\r\n")
+				if _, err := io.WriteString(c, b.String()); err != nil {
+					return err
+				}
+				return drain(c)
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn, err := imapsync.Dial(ctx, scriptConfig(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.Examine("INBOX"); err != nil {
+				t.Fatal(err)
+			}
+			errc := make(chan error, 1)
+			go func() {
+				errc <- imapsync.FetchAfter(conn, 0, func(r io.Reader) (int64, error) {
+					buf := make([]byte, tc.read)
+					if _, err := io.ReadFull(r, buf); err != nil {
+						return 0, err
+					}
+					cancel()
+					return 0, errors.New("disk full")
+				}, func(imapsync.Message[int64]) error {
+					t.Error("message handled")
+					return nil
+				})
+			}()
+			err = waitErr(t, errc)
+			wantCategory(t, err, imapsync.CategoryTimeout, true)
+			if !errors.Is(err, context.Canceled) || !conn.Broken() {
+				t.Errorf("err = %v, broken %v", err, conn.Broken())
+			}
+		})
+	}
+}

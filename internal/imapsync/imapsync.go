@@ -81,8 +81,11 @@ type Config struct {
 	// TLSConfig overrides the default TLS configuration (used in tests).
 	TLSConfig *tls.Config
 
-	// wrapConn wraps the raw TCP connection; a test seam.
-	wrapConn func(net.Conn) net.Conn
+	// WrapConn, if set, wraps the raw TCP connection below TLS and the
+	// meter. It is a test seam (imaptest.SpyWrap); production code leaves
+	// it nil.
+	WrapConn func(net.Conn) net.Conn
+
 	// noticesMax replaces the constant noticesMax if not 0; a test seam.
 	noticesMax int64
 }
@@ -145,8 +148,8 @@ func Dial(ctx context.Context, cfg Config) (*Conn, error) {
 		}
 		return nil, &Error{Category: cat, Op: "connect to " + addr, Err: err}
 	}
-	if cfg.wrapConn != nil {
-		raw = cfg.wrapConn(raw)
+	if cfg.WrapConn != nil {
+		raw = cfg.WrapConn(raw)
 	}
 	m := newMeteredConn(raw, idle, cfg.MaxRead)
 	if cfg.noticesMax > 0 {

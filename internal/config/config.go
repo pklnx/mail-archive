@@ -89,6 +89,39 @@ const (
 	EnvArchiveKeyFile = "MAIL_ARCHIVE_ARCHIVE_KEY_FILE"
 	// EnvArchiveKey is the archive key itself, base64.
 	EnvArchiveKey = "MAIL_ARCHIVE_ARCHIVE_KEY"
+	// EnvFillMaxFolderMessages caps the messages a fill lists of one IMAP
+	// folder per pass.
+	EnvFillMaxFolderMessages = "MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES"
+	// EnvReconcileMaxMessages caps the messages of a folder a reconcile
+	// compares with the server; larger folders are not reconciled.
+	EnvReconcileMaxMessages = "MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES"
+	// EnvIMAPMaxFolders caps the folders one IMAP account may list.
+	EnvIMAPMaxFolders = "MAIL_ARCHIVE_IMAP_MAX_FOLDERS"
+	// EnvIMAPIdleTimeout is how long an IMAP server may send nothing while
+	// a command is in flight.
+	EnvIMAPIdleTimeout = "MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT"
+)
+
+// IMAP limits an honest large mailbox can reach (EnvFillMaxFolderMessages,
+// EnvReconcileMaxMessages, EnvIMAPMaxFolders, EnvIMAPIdleTimeout): their
+// defaults fit the memory budget of a 4 GB machine; raising them costs
+// memory (docs/guide/operations.md, "IMAP limits").
+const (
+	DefaultFillMaxFolderMessages = 500_000
+	MinFillMaxFolderMessages     = 10_000
+	MaxFillMaxFolderMessages     = 10_000_000
+
+	DefaultReconcileMaxMessages = 2_000_000
+	MinReconcileMaxMessages     = 10_000
+	MaxReconcileMaxMessages     = 20_000_000
+
+	DefaultIMAPMaxFolders = 10_000
+	MinIMAPMaxFolders     = 100
+	MaxIMAPMaxFolders     = 200_000
+
+	DefaultIMAPIdleTimeout = 2 * time.Minute
+	MinIMAPIdleTimeout     = 30 * time.Second
+	MaxIMAPIdleTimeout     = 30 * time.Minute
 )
 
 // DefaultJobWorkers is used when EnvJobWorkers is not set.
@@ -180,6 +213,21 @@ type Config struct {
 	ArchiveKey []byte
 	// ArchiveKeySource says where ArchiveKey came from, for messages.
 	ArchiveKeySource string
+	// IMAP holds the IMAP limits an operator may raise.
+	IMAP IMAPLimits
+}
+
+// IMAPLimits are the IMAP limits an operator may raise, each checked
+// against its range at start.
+type IMAPLimits struct {
+	// FillMaxFolderMessages: messages a fill lists of one folder per pass.
+	FillMaxFolderMessages uint32
+	// ReconcileMaxMessages: larger folders are not reconciled.
+	ReconcileMaxMessages uint32
+	// MaxFolders: folders one account may list.
+	MaxFolders int
+	// IdleTimeout: how long a server may send nothing during a command.
+	IdleTimeout time.Duration
 }
 
 // AttestDir holds the attestation file, the leaves and the public keys:
@@ -290,6 +338,9 @@ func Load() (*Config, error) {
 	if cfg.JobWorkers, err = parseJobWorkers(os.Getenv(EnvJobWorkers)); err != nil {
 		return nil, err
 	}
+	if cfg.IMAP, err = ParseIMAPLimits(os.Getenv); err != nil {
+		return nil, err
+	}
 	if raw := os.Getenv(EnvSecretKey); raw != "" {
 		key, err := crypto.ParseKey(raw)
 		if err != nil {
@@ -392,6 +443,52 @@ func parseJobWorkers(v string) (int, error) {
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 || n > MaxJobWorkers {
 		return 0, fmt.Errorf("%s: want a number from 0 to %d, got %q", EnvJobWorkers, MaxJobWorkers, v)
+	}
+	return n, nil
+}
+
+// ParseIMAPLimits reads the four IMAP limits through getenv; an unset
+// variable gives the default, a value out of range is an error.
+func ParseIMAPLimits(getenv func(string) string) (IMAPLimits, error) {
+	var l IMAPLimits
+	fill, err := parseCount(EnvFillMaxFolderMessages, getenv(EnvFillMaxFolderMessages),
+		DefaultFillMaxFolderMessages, MinFillMaxFolderMessages, MaxFillMaxFolderMessages)
+	if err != nil {
+		return l, err
+	}
+	reconcile, err := parseCount(EnvReconcileMaxMessages, getenv(EnvReconcileMaxMessages),
+		DefaultReconcileMaxMessages, MinReconcileMaxMessages, MaxReconcileMaxMessages)
+	if err != nil {
+		return l, err
+	}
+	folders, err := parseCount(EnvIMAPMaxFolders, getenv(EnvIMAPMaxFolders),
+		DefaultIMAPMaxFolders, MinIMAPMaxFolders, MaxIMAPMaxFolders)
+	if err != nil {
+		return l, err
+	}
+	l.FillMaxFolderMessages, l.ReconcileMaxMessages = uint32(fill), uint32(reconcile) //nolint:gosec // range-checked above
+	l.MaxFolders = int(folders)
+	l.IdleTimeout = DefaultIMAPIdleTimeout
+	if v := strings.TrimSpace(getenv(EnvIMAPIdleTimeout)); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < MinIMAPIdleTimeout || d > MaxIMAPIdleTimeout {
+			return l, fmt.Errorf("%s: want a duration from %s to %s (like 5m), got %q",
+				EnvIMAPIdleTimeout, FormatDuration(MinIMAPIdleTimeout), FormatDuration(MaxIMAPIdleTimeout), v)
+		}
+		l.IdleTimeout = d
+	}
+	return l, nil
+}
+
+// parseCount reads a whole number from minimum to maximum.
+func parseCount(env, v string, def, minimum, maximum int64) (int64, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < minimum || n > maximum {
+		return 0, fmt.Errorf("%s: want a number from %d to %d, got %q", env, minimum, maximum, v)
 	}
 	return n, nil
 }

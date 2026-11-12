@@ -231,7 +231,7 @@ func TestReconcileFolderLimit(t *testing.T) {
 	f := newReconcileFixture(t)
 	f.syncer.MaxReconcileMessages = 2
 	r := f.reconcile()
-	if r.Err == nil || !strings.Contains(r.Err.Error(), "INBOX: reconcile: 3 messages, more than the limit of 2") {
+	if r.Err == nil || !strings.Contains(r.Err.Error(), "INBOX: reconcile: 3 messages, more than the limit of 2; raise MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES") {
 		t.Fatalf("err = %v", r.Err)
 	}
 	if r.Reconcile.Folders != 2 {

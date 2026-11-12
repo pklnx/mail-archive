@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -195,6 +196,37 @@ type Filler struct {
 	// Now returns the current time (default time.Now), for tests: a
 	// recurring fill measures the age of messages from it.
 	Now func() time.Time
+	// IMAP are the operator's IMAP limits.
+	IMAP IMAPSettings
+	// MaxFolderMessages caps the messages listed of one folder per pass
+	// (default config.DefaultFillMaxFolderMessages).
+	MaxFolderMessages uint32
+	// MaxRunTime limits one run (DefaultMaxRunTime in the web server);
+	// zero means no limit. A run at its limit that committed batches stays
+	// running and returns ErrRunTimeLimit, so that the FillRunner queues
+	// it again; without progress it fails.
+	MaxRunTime time.Duration
+
+	// limitRun replaces the run's time limit; a test seam.
+	limitRun func(context.Context) (context.Context, context.CancelFunc)
+	// afterList, if set, is called with the length and capacity of a
+	// folder's listing; a test seam.
+	afterList func(n, capacity int)
+}
+
+// maxIDBytesPerMessage is the Message-ID bytes a fill's listing keeps per
+// message of its limit on average (real ones have 40-80 B).
+const maxIDBytesPerMessage = 96
+
+// maxMessageID is the longest Message-ID a fill's listing keeps: the line
+// limit of RFC 5322. A longer one counts as missing.
+const maxMessageID = 998
+
+func (f *Filler) maxFolderMessages() uint32 {
+	if f.MaxFolderMessages > 0 {
+		return f.MaxFolderMessages
+	}
+	return config.DefaultFillMaxFolderMessages
 }
 
 func (f *Filler) now() time.Time {
@@ -273,12 +305,27 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	}
 	log := f.logger().With("fill", fill.ID, "account_id", fill.AccountID)
 	now := f.now() // a recurring fill's messages are as old as at the start
+	// The run's own context (ctx from the dial on) ends at its time
+	// limit; parent's end is a shutdown, after which the fill stays
+	// running.
+	parent := ctx
+	var (
+		// committed counts the batches this run committed; okFolders the
+		// folders filled without an error.
+		committed, okFolders int
+		// stuck: a folder waits behind a message over the size cap.
+		stuck bool
+	)
 	end := func(status string, cause error) (*store.Fill, error) {
 		text := ""
 		if cause != nil {
 			text = cause.Error()
 		}
-		err := f.Store.FinishFill(context.WithoutCancel(ctx), fill.ID, status, text)
+		finish := f.Store.FinishFill
+		if stuck && status == store.FillPartial {
+			finish = f.Store.FinishFillUnhealthy
+		}
+		err := finish(context.WithoutCancel(ctx), fill.ID, status, text)
 		if err != nil && !errors.Is(err, store.ErrFillNotRunning) {
 			return nil, err
 		}
@@ -294,6 +341,29 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 		return got, nil
 	}
 
+	// stopped ends the run before its last folder. A shutdown leaves the
+	// fill running. At the time limit a run that committed batches also
+	// stays running and returns ErrRunTimeLimit; without progress it
+	// fails. When the connection cannot be used again, the run is partial
+	// if earlier folders were filled, else failed.
+	stopped := func(folderErrs []error, cause error) (*store.Fill, error) {
+		if parent.Err() != nil {
+			return fill, parent.Err()
+		}
+		progress := okFolders > 0 || committed > 0
+		if atTimeLimit(parent, ctx) {
+			if committed > 0 {
+				log.Info("fill run reached its time limit; it continues in another run", "batches", committed)
+				return fill, ErrRunTimeLimit
+			}
+			cause, progress = timeLimitError(f.MaxRunTime), false
+		}
+		err := errors.Join(append(folderErrs, cause)...)
+		if progress {
+			return end(store.FillPartial, err)
+		}
+		return end(store.FillFailed, err)
+	}
 	a, err := f.Store.GetAccount(ctx, fill.AccountID)
 	if errors.Is(err, store.ErrNotFound) || err == nil && (a.RemovedAt != nil || a.Kind != store.KindSMTP) {
 		return end(store.FillFailed, errors.New("the account was removed"))
@@ -319,26 +389,29 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	if err != nil {
 		return end(store.FillFailed, err)
 	}
-	dial := f.Dial
-	if dial == nil {
-		dial = imapsync.Dial
+	ctx, cancelRun := runContext(parent, f.MaxRunTime, f.limitRun)
+	defer cancelRun()
+	dial := func() (*imapsync.Conn, error) {
+		dial := f.Dial
+		if dial == nil {
+			dial = imapsync.Dial
+		}
+		return dial(ctx, f.IMAP.config(fill.Host, fill.Port, string(fill.TLSMode), fill.Username, password))
 	}
-	conn, err := dial(ctx, imapsync.Config{
-		Host: fill.Host, Port: fill.Port, TLSMode: string(fill.TLSMode), Username: fill.Username, Password: password,
-	})
+	conn, err := dial()
 	if err != nil {
 		if ctx.Err() != nil {
-			return fill, ctx.Err()
+			return stopped(nil, err)
 		}
-		return end(store.FillFailed, err)
+		return end(store.FillFailed, nameSetting(err, ""))
 	}
 	defer func() { _ = conn.Close() }()
 	folders, err := conn.ListFolders()
 	if err != nil {
 		if ctx.Err() != nil {
-			return fill, ctx.Err()
+			return stopped(nil, err)
 		}
-		return end(store.FillFailed, err)
+		return end(store.FillFailed, nameSetting(err, ""))
 	}
 	// A recurring fill picks up new folders, but a trash or spam folder
 	// only if the user confirmed it: it has a row from the start, or the
@@ -364,22 +437,45 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	if fill.Recurring() {
 		if err := f.Store.SetFillUnconfirmed(ctx, fill.ID, unconfirmed); err != nil {
 			if ctx.Err() != nil {
-				return fill, ctx.Err()
+				return stopped(nil, err)
 			}
 			return end(store.FillFailed, err)
 		}
 	}
-	var folderErrs []error
+	var (
+		folderErrs []error
+		redial     redialer
+	)
 	for _, name := range selected {
-		err := f.fillFolder(ctx, conn, fill, now, name, log.With("folder", name))
+		if ctx.Err() != nil {
+			return stopped(folderErrs, ctx.Err())
+		}
+		// One bad folder must not fail the ones after it: a connection
+		// that broke (a cap, the idle deadline, a read error) is replaced.
+		if conn.Broken() {
+			nc, err := redial.again(conn, dial)
+			if err != nil {
+				log.Error("fill run stopped: no new connection", "err", err)
+				return stopped(folderErrs, nameSetting(err, ""))
+			}
+			conn = nc
+			log.Info("connected again after a broken connection", "redials", redial.n)
+		}
+		err := f.fillFolder(ctx, conn, fill, now, name, &committed, log.With("folder", name))
+		var st *StuckError
 		switch {
 		case errors.Is(err, errFillCancelled):
 			return end(store.FillCancelled, nil)
 		case ctx.Err() != nil:
-			return fill, ctx.Err()
+			return stopped(folderErrs, err)
 		case err != nil:
+			if errors.As(err, &st) {
+				stuck = true
+			}
 			log.Error("fill of a folder failed", "err", err)
 			folderErrs = append(folderErrs, fmt.Errorf("%s: %w", name, err))
+		default:
+			okFolders++
 		}
 	}
 	if len(folderErrs) > 0 {
@@ -389,9 +485,10 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 }
 
 // fillFolder copies what the fill's rule imports from one IMAP folder,
-// one transaction per batch of headers, with the progress.
+// one transaction per batch of headers, with the progress. It adds the
+// batches it committed to committed.
 func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, now time.Time, source string,
-	log *slog.Logger) (err error) {
+	committed *int, log *slog.Logger) (err error) {
 	ff, err := f.Store.FillFolder(ctx, fill, source)
 	if err != nil {
 		return err
@@ -418,11 +515,8 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 		}
 		ff.SourceUIDValidity, ff.LastUID = status.UIDValidity, 0
 	}
-	var headers []fillHeader
-	if err := imapsync.ListHeaders(conn, ff.LastUID, 0, func(h imapsync.Header) error {
-		headers = append(headers, newFillHeader(h))
-		return ctx.Err()
-	}); err != nil {
+	headers, err := f.listHeaders(ctx, conn, ff.LastUID)
+	if err != nil {
 		return err
 	}
 	// The watermark needs UID order, which servers do not promise.
@@ -444,7 +538,12 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 			return err
 		}
 		chunk := headers[start:min(start+batch, len(headers))]
-		if err := f.fillBatch(ctx, conn, fill, ff, &wm, now, chunk, start+len(chunk) == len(headers), log); err != nil {
+		err := f.fillBatch(ctx, conn, fill, ff, &wm, now, chunk, start+len(chunk) == len(headers), log)
+		var stuck *StuckError
+		if err == nil || errors.As(err, &stuck) {
+			*committed++ // fillBatch committed what came before the large message
+		}
+		if err != nil {
 			return err
 		}
 		if f.Progress != nil {
@@ -462,6 +561,41 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	log.Info("folder filled", "scanned", c.Scanned, "imported", c.Imported, "after_cutoff", c.AfterCutoff,
 		"journaled", c.Journaled, "present", c.Present, "waiting", c.Waiting)
 	return nil
+}
+
+// listHeaders lists the headers of the examined folder after the UID
+// after. It keeps at most the fill's limit of messages, each Message-ID of
+// at most maxMessageID bytes, and maxIDBytesPerMessage × the limit bytes of
+// Message-IDs in all; beyond the limit or that budget the folder fails
+// with an error that names the setting.
+func (f *Filler) listHeaders(ctx context.Context, conn *imapsync.Conn, after uint32) ([]fillHeader, error) {
+	limit := f.maxFolderMessages()
+	// ListHeaders accepts at most this many messages, so the slice never
+	// grows beyond it.
+	headers := make([]fillHeader, 0, min(int64(conn.Messages())+reconcileSlack, int64(limit)))
+	idBudget := int64(limit) * maxIDBytesPerMessage
+	var idBytes int64
+	err := imapsync.ListHeaders(conn, after, limit, func(h imapsync.Header) error {
+		fh := newFillHeader(h)
+		if len(fh.MessageID) > maxMessageID {
+			// Not a Message-ID any server sends: the message counts as one
+			// without, so it is imported, never left out as journaled.
+			fh.MessageID, fh.key, fh.keyOK = "", journalKey{}, false
+		}
+		if idBytes += int64(len(fh.MessageID)); idBytes > idBudget {
+			return &SettingError{Setting: config.EnvFillMaxFolderMessages,
+				Err: fmt.Errorf("the folder's Message-IDs take more than %d bytes", idBudget)}
+		}
+		headers = append(headers, fh)
+		return ctx.Err()
+	})
+	if f.afterList != nil {
+		f.afterList(len(headers), cap(headers))
+	}
+	if err != nil {
+		return nil, nameSetting(err, config.EnvFillMaxFolderMessages)
+	}
+	return headers, nil
 }
 
 // fillBatch decides about a batch of headers, fetches the messages to
@@ -532,7 +666,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		blob, created, err := f.Blobs.Put(r)
 		return storedBody{blob, created}, err
 	}
-	err = imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[storedBody]) error {
+	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[storedBody]) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -560,8 +694,16 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		next.Counts.Imported++
 		return nil
 	})
-	if err != nil {
-		return err
+	// A message over the size cap: what came before it is saved, and the
+	// watermark stops before it (it was requested and not fetched), so the
+	// folder waits for it from here on.
+	var stuck error
+	if lim, ok := oversized(fetchErr); ok {
+		stuck = &StuckError{UID: lim.UID, Err: fetchErr}
+		log.Warn("folder stops before a message over the size cap", "uid", lim.UID)
+		last = false
+	} else if fetchErr != nil {
+		return fetchErr
 	}
 	wm.advanceBatch(&next.LastUID, chunk, waiting, requested, fetched)
 	next.Done = last
@@ -569,7 +711,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		return err
 	}
 	*ff = next
-	return nil
+	return stuck
 }
 
 func (f *Filler) logger() *slog.Logger {
