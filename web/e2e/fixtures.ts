@@ -351,3 +351,21 @@ export async function animationsDone(target: Locator): Promise<void> {
     ).then(() => undefined),
   );
 }
+
+/**
+ * Waits until every finite animation and transition of the page's document
+ * has finished: a signal from the browser, not a delay. getAnimations()
+ * flushes pending style changes first, so a transition that a class change
+ * just started (a theme switch) is included. Repeating ones (Carbon's
+ * skeleton pulse) are left out, and a cancelled one counts as finished.
+ */
+export async function documentAnimationsDone(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ).then(() => undefined),
+  );
+}
