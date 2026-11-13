@@ -236,12 +236,14 @@ func (s *Server) handleListLegalHolds(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	holds, err := s.store.LegalHolds(r.Context(), r.URL.Query().Get("released") == "1")
+	caller := userID(r)
+	// Only the caller's holds are counted: the time of this request must
+	// not depend on what other holds' filters matched (#538).
+	holds, err := s.store.LegalHoldsCountingFor(r.Context(), r.URL.Query().Get("released") == "1", caller)
 	if err != nil {
 		s.failStore(w, r, err)
 		return
 	}
-	caller := userID(r)
 	out := make([]legalHoldJSON, 0, len(holds))
 	for _, h := range holds {
 		j := legalHoldJSON{
@@ -335,6 +337,34 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 		}
 		account = acc
 	}
+	by := userID(r)
+	var accountOwner *int64
+	if account != nil {
+		accountOwner = account.OwnerID
+	}
+	if h.Filter != nil {
+		// A filter decides which of the covered mail is kept, and so what
+		// deletion runs list: in the web UI an admin chooses one only over
+		// their own mail, the 1.5.3 rule of holdOwnedBy (#538). A filter
+		// over other users' mail is the operator's, on the command line.
+		// Nothing was done, so nothing is recorded.
+		if !holdOwnedBy(h.OwnerID, h.AccountID, accountOwner, by) {
+			s.log.Info("legal hold with a filter over other users' mail refused", "by", currentSession(r).UserName)
+			s.writeJSON(w, http.StatusForbidden, apiError{
+				Error: "A hold with a search filter over other users' mail is added by the operator: ./ma hold add --query",
+				Code:  errFilterHoldCLI,
+			})
+			return
+		}
+		// A filter hold on the caller's own account names the caller too,
+		// so it covers the account only while the caller owns it, and the
+		// account cannot move to another owner while the hold is active
+		// (ActiveHoldsOnOwner): the filter never runs over other users'
+		// mail.
+		if h.OwnerID == nil {
+			h.OwnerID = &by
+		}
+	}
 	var e *store.AuditEntry
 	switch {
 	case account != nil:
@@ -353,7 +383,6 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, "a hold without user, account, period or filter covers the whole archive; confirm with all", nil)
 		return
 	}
-	by := userID(r)
 	h.CreatedBy = &by
 	id, err := s.store.AddLegalHold(withAudit(r, e), h)
 	if errors.Is(err, store.ErrInvalidRetention) {
@@ -371,26 +400,22 @@ func (s *Server) handleCreateLegalHold(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("legal hold added", "id", id, "name", h.Name, "by", currentSession(r).UserName)
 	out := map[string]int64{"id": id}
 	if h.Filter != nil {
-		// The sum covers every active filter hold, other users' too: only
-		// logged.
-		n, err := s.store.MatchLegalHolds(r.Context())
+		// Only the new hold is matched, which is the caller's (checked
+		// above): the request's time depends on the caller's own mail
+		// only, not on other holds' filters (#538). Deletion runs, purges
+		// and the CLI still match every hold.
+		n, err := s.store.MatchLegalHold(r.Context(), id)
 		if err != nil {
 			// The hold covers its whole scope until it is matched; its
 			// count would be partial, so it is left out.
-			s.log.Error("matching legal holds failed", "err", err)
+			s.log.Error("matching the legal hold failed", "id", id, "err", err)
 		} else {
-			s.log.Info("legal holds matched", "added", n)
-			var accountOwner *int64
-			if account != nil {
-				accountOwner = account.OwnerID
-			}
-			if holdOwnedBy(h.OwnerID, h.AccountID, accountOwner, by) {
-				m, err := s.store.LegalHoldMatched(r.Context(), id)
-				if err != nil {
-					s.log.Error("counting a legal hold's matches failed", "id", id, "err", err)
-				} else {
-					out["matched"] = m
-				}
+			s.log.Info("legal hold matched", "id", id, "added", n)
+			m, err := s.store.LegalHoldMatched(r.Context(), id)
+			if err != nil {
+				s.log.Error("counting a legal hold's matches failed", "id", id, "err", err)
+			} else {
+				out["matched"] = m
 			}
 		}
 	}

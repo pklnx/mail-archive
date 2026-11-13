@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -376,4 +377,67 @@ func sharedReadsGeneric(t *testing.T) {
 		}
 		checkSharedReads(t, conn, plan, nil)
 	}
+}
+
+// The hold.add entry of a hold (#538, ./ma hold list) is looked up by its
+// time, which is the hold's created_at: the lookup reads that time's
+// partition only, through its primary key, never the whole log. Also as a
+// cached generic plan (pgx prepares its statements, and the list looks up
+// one entry per hold): the other partitions are pruned when it starts.
+func TestHoldAddEntryPlan(t *testing.T) {
+	_, url := storetest.NewWithURL(t)
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	base := auditPlanBase
+	// 6,000 rows 20 minutes apart: base to base + 83 days, three partitions.
+	seedAuditPlanLog(t, conn, base, 6000, 20*time.Minute)
+	at := base.AddDate(0, 1, 10)
+	partition := "audit_log_" + at.Format("2006_01")
+	check := func(t *testing.T, plan string) {
+		t.Helper()
+		if !strings.Contains(plan, "Index Scan using "+partition+"_pkey on "+partition) {
+			t.Errorf("plan does not read %s through its pkey:\n%s", partition, plan)
+		}
+		if got := regexp.MustCompile(`\bon (audit_log_\w+)`).FindAllStringSubmatch(plan, -1); len(got) != 1 {
+			t.Errorf("plan reads %d partitions, want 1:\n%s", len(got), plan)
+		}
+	}
+	explain := func(t *testing.T, sql string, args ...any) string {
+		t.Helper()
+		rows, err := conn.Query(ctx, sql, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(lines, "\n")
+	}
+	var rec explainer
+	_, err = db.New(&rec).HoldAddEntry(ctx, db.HoldAddEntryParams{At: at, HoldID: 7})
+	if !errors.Is(err, errRecorded) {
+		t.Fatalf("record: %v", err)
+	}
+	t.Run("custom", func(t *testing.T) {
+		check(t, explain(t, "EXPLAIN "+rec.sql, rec.args...))
+	})
+	t.Run("generic", func(t *testing.T) {
+		if _, err := conn.Exec(ctx, "SET plan_cache_mode = force_generic_plan"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _, _ = conn.Exec(ctx, "RESET plan_cache_mode") }()
+		if _, err := conn.Exec(ctx, "PREPARE hold_add_entry AS "+rec.sql); err != nil {
+			t.Fatal(err)
+		}
+		plan := explain(t, fmt.Sprintf("EXPLAIN EXECUTE hold_add_entry('%s', 7)", at.Format(time.RFC3339)))
+		if !strings.Contains(plan, "$1") || !strings.Contains(plan, "Subplans Removed") {
+			t.Errorf("not a generic plan with pruning:\n%s", plan)
+		}
+		check(t, plan)
+	})
 }

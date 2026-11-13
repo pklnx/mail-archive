@@ -9,7 +9,7 @@ import { day } from "./format";
 import { applySettings, messagesFor, t } from "./i18n";
 import { accountLabel, countMatches, holdScope, RetentionPage, runOpen } from "./RetentionPage";
 import { RunPage } from "./RetentionRun";
-import { retentionTextFor } from "./retentionText";
+import { retentionText, retentionTextFor } from "./retentionText";
 import { settingsTextFor } from "./settingsText";
 import { expectLoaded, expectLoading } from "./test/loading";
 
@@ -176,7 +176,8 @@ beforeEach(() => {
       return json({ holds: holdList.filter((h) => u.includes("released=1") || !h.releasedAt) });
     }
     if (method === "GET" && u === "/api/users") {
-      return json({ users: [{ name: "alice", group: defaultGroup }, { name: "kim", group: { id: 2, name: "Meier GmbH" } }] });
+      // demo is the logged-in admin, who owns the account personal.
+      return json({ users: [{ name: "alice", group: defaultGroup }, { name: "demo", group: defaultGroup, self: true }, { name: "kim", group: { id: 2, name: "Meier GmbH" } }] });
     }
     if (method === "GET" && u === "/api/retention/runs") return runsFail ? json({ error: "database unavailable" }, 503) : json({ runs });
     if (method === "GET" && u.startsWith("/api/retention/runs/")) {
@@ -749,15 +750,78 @@ describe("RetentionPage", () => {
       await screen.findByText("Case 4711");
       expect(screen.queryByText(t.holdAdded(1))).toBeNull();
 
-      // A filter scopes the hold: the box is gone and all is false.
+      // A filter on the admin's own account scopes the hold: the box is
+      // gone and all is false.
       fireEvent.click(screen.getByRole("button", { name: t.holdAdd }));
+      await screen.findByRole("option", { name: "demo" });
       fireEvent.change(screen.getByLabelText(t.holdName), { target: { value: "Court" } });
       fireEvent.change(screen.getByLabelText(t.holdReason), { target: { value: "Case" } });
+      fireEvent.change(screen.getByLabelText(t.holdAccount), { target: { value: "1" } });
       fireEvent.change(screen.getByLabelText(t.holdFilter), { target: { value: "from:registry@court.example" } });
       expect(screen.queryByLabelText(t.holdAll)).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: t.holdAdd }));
       await waitFor(() => expect(changes()).toHaveLength(2));
-      expect(changes()[1]!.body).toMatchObject({ name: "Court", filter: { from: "registry@court.example" }, all: false });
+      expect(changes()[1]!.body).toMatchObject({ name: "Court", accountId: 1, filter: { from: "registry@court.example" }, all: false });
+    });
+
+    // #538: a search filter over mail that is not the admin's is the
+    // operator's (./ma hold add --query); a period is not a filter.
+    it("takes a search filter only for the admin's own mail, and a period for any scope", async () => {
+      await show("&tab=holds&add=hold", t.holdAdd);
+      await screen.findByRole("option", { name: "demo" });
+      fireEvent.change(screen.getByLabelText(t.holdName), { target: { value: "Court" } });
+      fireEvent.change(screen.getByLabelText(t.holdReason), { target: { value: "Case" } });
+      const field = screen.getByLabelText(t.holdFilter) as HTMLInputElement;
+      const add = screen.getByRole("button", { name: t.holdAdd }) as HTMLButtonElement;
+      const scope = (user: string, account: string) => {
+        fireEvent.change(screen.getByLabelText(t.holdUser), { target: { value: user } });
+        fireEvent.change(screen.getByLabelText(t.holdAccount), { target: { value: account } });
+      };
+      const refused = () => {
+        expect(field.getAttribute("aria-invalid")).toBe("true");
+        expect(screen.getByText(retentionText().holdFilterOwnOnly)).toBeTruthy();
+        expect(add.disabled).toBe(true);
+      };
+      const taken = () => {
+        expect(field.getAttribute("aria-invalid")).not.toBe("true");
+        expect(screen.queryByText(retentionText().holdFilterOwnOnly)).toBeNull();
+        expect(screen.getByText(t.holdFilterHint)).toBeTruthy();
+        expect(add.disabled).toBe(false);
+      };
+      fireEvent.change(field, { target: { value: "falcon" } });
+      // No scope (the whole archive), another user, another user's account
+      // and an account without owner: refused. The hint says why.
+      refused();
+      for (const [user, account] of [["alice", ""], ["", "2"], ["alice", "1"]]) {
+        scope(user!, account!);
+        refused();
+      }
+      // The admin as the user, or the admin's own account: taken.
+      for (const [user, account] of [["demo", ""], ["", "1"], ["demo", "2"]]) {
+        scope(user!, account!);
+        taken();
+      }
+      // A period is not a filter: taken for another user too, with the hint.
+      scope("alice", "");
+      fireEvent.change(field, { target: { value: "after:2019-01-01 before:2024-01-01" } });
+      expect(field.getAttribute("aria-invalid")).not.toBe("true");
+      expect(screen.getByText(retentionText().holdFilterOwnOnly)).toBeTruthy();
+      expect(add.disabled).toBe(false);
+      fireEvent.click(add);
+      await waitFor(() => expect(changes()).toHaveLength(1));
+      expect(changes()[0]!.body).toMatchObject({ user: "alice", filter: null, since: expect.any(String), until: expect.any(String) });
+    });
+
+    it("says where a refused filter hold is added when the server refuses it", async () => {
+      answer = (method, url) => (method === "POST" && url === "/api/legal-holds" ? json({ error: "refused", code: "filter_hold_cli" }, 403) : undefined);
+      await show("&tab=holds&add=hold", t.holdAdd);
+      await screen.findByRole("option", { name: "demo" });
+      fireEvent.change(screen.getByLabelText(t.holdName), { target: { value: "Court" } });
+      fireEvent.change(screen.getByLabelText(t.holdReason), { target: { value: "Case" } });
+      fireEvent.change(screen.getByLabelText(t.holdAccount), { target: { value: "1" } });
+      fireEvent.change(screen.getByLabelText(t.holdFilter), { target: { value: "falcon" } });
+      fireEvent.click(screen.getByRole("button", { name: t.holdAdd }));
+      await waitFor(() => expect(document.querySelector(".app-text-error[role=alert]")?.textContent).toBe(retentionText().holdFilterOwnOnly));
     });
 
     it("drops the notice when another hold is being added", async () => {

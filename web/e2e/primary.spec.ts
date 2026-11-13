@@ -86,11 +86,13 @@ async function api(page: Page, method: string, url: string, data?: unknown): Pro
 
 // The entries the hold and run views make, and their cleanup removes again:
 // a hold whose filter matches nothing, and a rule with a run proposed for it.
+// The hold is on the logged-in admin: the web UI takes a search filter only
+// over the admin's own mail (#538).
 let holdId = 0;
 async function addHold(page: Page): Promise<string> {
   const name = unique("e2e-primary hold");
   holdId = ((await api(page, "POST", "/api/legal-holds", {
-    name, reason: "primary buttons", user: "", accountId: null, filter: { from: "nobody@primary.example" }, since: null, until: null, all: false,
+    name, reason: "primary buttons", user: "demo", accountId: null, filter: { from: "nobody@primary.example" }, since: null, until: null, all: false,
   })) as { id: number }).id;
   return name;
 }
