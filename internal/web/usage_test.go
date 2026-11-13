@@ -16,6 +16,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/quota"
+	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // usageWorld is a groupWorld (a, b and the admin x in "Default", k in
@@ -121,6 +122,20 @@ func TestUsageViews(t *testing.T) {
 	w.share("a/info", "b")
 	if body := w.getJSON(w.creds["b"], "/api/usage", http.StatusOK, nil); strings.TrimSpace(string(body)) != `{"state":"ok","accounts":[]}` {
 		t.Fatalf("b: %s", body)
+	}
+
+	// A group's persisted state and since when: B goes to warn.
+	if _, err := w.st.TransitionStorageState(context.Background(), &w.b.ID, func(string, store.ScopeFigure) (string, error) { return "warn", nil }); err != nil {
+		t.Fatal(err)
+	}
+	w.getJSON(w.creds["x"], "/api/usage", http.StatusOK, &admin)
+	for _, g := range admin.Groups {
+		if g.Name == "B" && (g.State != "warn" || g.StateSince == nil) {
+			t.Fatalf("B after warn: %+v", g)
+		}
+		if g.Name == "Default" && (g.State != "ok" || g.StateSince != nil) {
+			t.Fatalf("Default: %+v", g)
+		}
 	}
 
 	// API keys get no session route.
