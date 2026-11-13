@@ -255,14 +255,36 @@ func TestPgToolConn(t *testing.T) {
 			strings.ReplaceAll(key, " ", `\ `) + " channel_binding=require require_auth=scram-sha-256 sslsni=0", nil,
 			map[string]string{"PGHOST": "h", "PGPORT": "5432", "PGUSER": "u", "PGDATABASE": "db", "PGSSLMODE": "verify-ca",
 				"PGSSLROOTCERT": ca, "PGSSLCERT": cert, "PGSSLKEY": key, "PGCHANNELBINDING": "require", "PGREQUIREAUTH": "scram-sha-256", "PGSSLSNI": "0"}},
+		// pgx raises the default prefer to require for a direct
+		// negotiation; libpq would refuse prefer at connect time, after
+		// the audit entry.
 		{"sslnegotiation", "postgres://u@h/db?sslnegotiation=direct", nil,
-			map[string]string{"PGHOST": "h", "PGPORT": "5432", "PGUSER": "u", "PGDATABASE": "db", "PGSSLNEGOTIATION": "direct"}},
+			map[string]string{"PGHOST": "h", "PGPORT": "5432", "PGUSER": "u", "PGDATABASE": "db", "PGSSLNEGOTIATION": "direct", "PGSSLMODE": "require"}},
+		// pgx makes sslrootcert=system verify-full whatever the mode;
+		// libpq would refuse require at connect time.
+		{"sslrootcert=system", "postgres://u@h/db?sslrootcert=system&sslmode=require", nil,
+			map[string]string{"PGHOST": "h", "PGPORT": "5432", "PGUSER": "u", "PGDATABASE": "db", "PGSSLROOTCERT": "system", "PGSSLMODE": "verify-full"}},
+		// GSSAPI encryption stays off: the process cannot turn it on.
+		{"PGGSSENCMODE of the process", "postgres://u@h/db?sslmode=verify-full", map[string]string{"PGGSSENCMODE": "require"},
+			map[string]string{"PGHOST": "h", "PGPORT": "5432", "PGUSER": "u", "PGDATABASE": "db", "PGSSLMODE": "verify-full"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for name, value := range c.env {
 				t.Setenv(name, value)
 			}
-			got := pgVars(pgToolEnv(t, c.url))
+			env := pgToolEnv(t, c.url)
+			got := pgVars(env)
+			// Every tool gets GSSAPI encryption off, once.
+			c.want["PGGSSENCMODE"] = "disable"
+			n := 0
+			for _, kv := range env {
+				if strings.HasPrefix(kv, "PGGSSENCMODE=") {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Errorf("PGGSSENCMODE %d times: %v", n, env)
+			}
 			if len(got) != len(c.want) {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
@@ -292,6 +314,8 @@ func TestPgToolConn(t *testing.T) {
 		// Only the literal ssl=true of a URL is pgx's alias.
 		{"ssl=false", "postgres://u@h/db?ssl=false", nil, "sets ssl to something other than the URL alias"},
 		{"ssl in keyword/value", "host=h user=u ssl=true", nil, "sets ssl to something other than the URL alias"},
+		// pgx accepts it, libpq refuses it when the tool connects.
+		{"sslnegotiation=direct with allow", "postgres://u@h/db?sslnegotiation=direct&sslmode=allow", nil, "sets sslnegotiation=direct with a weaker sslmode"},
 		// pgx reads an empty sslrootcert as none, libpq as the default
 		// file: with the default file there, the cross-check refuses.
 		{"empty sslrootcert", "postgres://u@h/db?sslmode=require&sslrootcert=", map[string]string{"HOME": filepath.Join(home, "with-root")},
@@ -386,6 +410,9 @@ func TestComparePgConfigs(t *testing.T) {
 	for _, c := range []struct{ name, a, b, want string }{
 		// prefer adds a plaintext attempt to the TLS one of require.
 		{"prefer against require", "host=h sslmode=require", "host=h sslmode=prefer", "number of connection attempts"},
+		// The same single attempt, server name (SNI) and no root CA: only
+		// the verification itself differs.
+		{"require against verify-full", "host=db.example sslmode=verify-full", "host=db.example sslmode=require", "certificate verification"},
 		{"allow against prefer", "host=h sslmode=prefer", "host=h sslmode=allow", "attempt 1 differs (TLS on or off)"},
 		{"mode", "host=h sslmode=verify-full", "host=h sslmode=verify-ca", "attempt 1 differs"},
 		{"root CA", base, strings.Replace(base, ca1, ca2, 1), "root certificates"},

@@ -1302,7 +1302,9 @@ directory). A `MAIL_ARCHIVE_*` or `PG*` variable of the process is never
 passed on. For `pg_dump` and `pg_restore`, `pgToolConn` (`pgtools.go`,
 #540) builds those variables and a keyword/value string from one map: host,
 port, user, database and password from the app's `pgconn.ParseConfig`, the
-TLS and authentication keys from the connection string only. It refuses
+TLS and authentication keys from the connection string only (with the
+`sslmode` pgx derives for `sslnegotiation=direct` and `sslrootcert=system`),
+and always `PGGSSENCMODE=disable`. It refuses
 TLS `PG*` variables the string does not override, services and
 `sslpassword`, and parses the string with `pgconn.ParseConfig` to compare
 its ordered connection attempts with the app's; any difference refuses.

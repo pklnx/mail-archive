@@ -55,6 +55,16 @@ var pgToolConnKeys = []struct{ key, env string }{
 	{"password", "PGPASSWORD"},
 }
 
+// pgToolFixedKeys are settings the tools always get, whatever the
+// process or the connection string says. gssencmode=disable: libpq built
+// with GSSAPI prefers GSSAPI encryption to TLS, whatever sslmode says,
+// where Kerberos credentials and the server allow it; pgx, the app's
+// driver, never uses it. It is not in the cross-check string, which pgx
+// would send as a runtime parameter.
+var pgToolFixedKeys = []struct{ key, env, value string }{
+	{"gssencmode", "PGGSSENCMODE", "disable"},
+}
+
 // pgToolRefusedEnv are variables pgx reads that cannot reach the tools at
 // all: a service and its file (the tools would read other settings than the
 // app), and the client key's password (libpq has no variable for it, and
@@ -114,6 +124,12 @@ func resolvePgToolConn(tool, databaseURL string, environ []string) (*pgToolConn,
 			conn.settings[k.key] = v
 		}
 	}
+	if err := conn.derivePgxMode(tool); err != nil {
+		return nil, err
+	}
+	for _, k := range pgToolFixedKeys {
+		conn.settings[k.key] = k.value
+	}
 	tools, err := pgconn.ParseConfig(conn.checkString())
 	if err != nil {
 		return nil, fmt.Errorf("the connection settings of %s do not parse (%w); %s", tool, err, pgToolDocs)
@@ -122,6 +138,29 @@ func resolvePgToolConn(tool, databaseURL string, environ []string) (*pgToolConn,
 		return nil, fmt.Errorf("%s would connect differently from the app: %w; put the TLS settings into %s (%s)", tool, err, config.EnvDatabaseURL, pgToolDocs)
 	}
 	return conn, nil
+}
+
+// derivePgxMode gives the tools the sslmode pgx derives from other keys,
+// which libpq would refuse at connect time, after the audit entry:
+// sslnegotiation=direct raises prefer (the default) to require, and
+// sslrootcert=system makes every mode verify-full. A direct negotiation
+// with allow or disable, which pgx accepts and libpq refuses, is refused
+// here.
+func (c *pgToolConn) derivePgxMode(tool string) error {
+	mode := c.settings["sslmode"]
+	if c.settings["sslnegotiation"] == "direct" {
+		switch mode {
+		case "", "prefer":
+			c.settings["sslmode"] = "require"
+		case "allow", "disable":
+			return fmt.Errorf("%s sets sslnegotiation=direct with a weaker sslmode than require, which %s refuses; use sslmode=require, verify-ca or verify-full (%s)",
+				config.EnvDatabaseURL, tool, pgToolDocs)
+		}
+	}
+	if c.settings["sslrootcert"] == "system" {
+		c.settings["sslmode"] = "verify-full"
+	}
+	return nil
 }
 
 // refusePgToolInputs refuses what pgx reads for the app's connection but
@@ -185,11 +224,17 @@ func pgAttempts(cfg *pgconn.Config) []*pgconn.FallbackConfig {
 }
 
 // env is the whole environment of the tool: the allowlisted variables of
-// environ (config.ChildEnv), then the libpq variables of c. A TLS key c
-// does not hold is left out, so the tool takes libpq's default.
+// environ (config.ChildEnv), then the libpq variables of c, PGGSSENCMODE
+// included. A TLS key c does not hold is left out, so the tool takes
+// libpq's default.
 func (c *pgToolConn) env(environ []string) []string {
 	var libpq []string
 	for _, k := range append(append([]struct{ key, env string }{}, pgToolConnKeys...), pgToolTLSKeys...) {
+		if v, ok := c.settings[k.key]; ok {
+			libpq = append(libpq, k.env+"="+v)
+		}
+	}
+	for _, k := range pgToolFixedKeys {
 		if v, ok := c.settings[k.key]; ok {
 			libpq = append(libpq, k.env+"="+v)
 		}

@@ -77,8 +77,9 @@ copy them as root or with `sudo`.
 Without Docker Compose, `mail-archive backup DIR` runs the `pg_dump` in
 `PATH`, and `mail-archive restore-dump FILE` the `pg_restore` in `PATH`,
 each at least of the server's major version. They get exactly this, so no
-secret of the app reaches them and they never connect with weaker TLS or
-authentication than the app:
+secret of the app reaches them, and they get the TLS and authentication
+settings of the app's connection, with GSSAPI encryption off, or the
+command refuses to run (see below):
 
 - **Host, port, user, database and password** as the app's own connection
   resolves them: from `MAIL_ARCHIVE_DATABASE_URL`, and for what it leaves
@@ -90,9 +91,17 @@ authentication than the app:
   only:** `sslmode` (also as the URL alias `ssl=true`), `sslrootcert`,
   `sslcert`, `sslkey`, `sslsni`, `sslnegotiation`, `target_session_attrs`,
   `channel_binding` and `require_auth`. A key given twice counts with its
-  last value, as for the app. What the URL leaves out takes libpq's
-  default; `~/.postgresql/root.crt`, `postgresql.crt` and `postgresql.key`
-  are found through `HOME`, by the app and the tools alike.
+  last value, as for the app. Where the app's driver derives the mode from
+  another key, the tools get that mode too: `sslnegotiation=direct` without
+  `sslmode` is `require`, and `sslrootcert=system` is always `verify-full`.
+  What the URL leaves out takes libpq's default. The app finds
+  `~/.postgresql/root.crt`, `postgresql.crt` and `postgresql.key` through
+  `HOME`; recent libpq versions do too, older ones through the home
+  directory of the user account, so keep `HOME` that directory.
+- **`PGGSSENCMODE=disable`,** always: libpq built with GSSAPI would
+  otherwise prefer GSSAPI encryption to TLS, whatever `sslmode` says,
+  where Kerberos credentials and the server allow it. The app never uses
+  it, and a `PGGSSENCMODE` of the process cannot turn it on.
 - **These variables of the process,** when set: `PATH`, `HOME`, `TMPDIR`,
   `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LD_LIBRARY_PATH`,
   `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`, `KRB5CCNAME` and
@@ -100,10 +109,14 @@ authentication than the app:
 
 Nothing else is passed on: no `MAIL_ARCHIVE_*` variable, no other `PG*`
 variable of the process (such as `PGAPPNAME` or `PGCONNECT_TIMEOUT`), and
-no other parameter of the URL (such as `sslcrl` or `connect_timeout`).
+no other parameter of the URL (such as `sslcrl` or `connect_timeout`). The
+tools apply these settings with libpq and OpenSSL (`OPENSSL_CONF`
+included), the app with Go's TLS: the settings are the same, the TLS
+libraries are not.
 
-Both commands refuse, before they write an audit entry, decrypt or run
-anything, when:
+Both commands refuse before `backup` writes its audit entry or anything
+into `DIR`, before `restore-dump` opens the dump, and before either runs
+`pg_dump` or `pg_restore`, when:
 
 - the process sets `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`,
   `PGSSLSNI`, `PGSSLNEGOTIATION`, `PGTARGETSESSIONATTRS`,
@@ -116,7 +129,10 @@ anything, when:
   other settings than the app, and the password of a client key could only
   reach them on the command line. Put the settings into the URL, and use a
   client key without a password;
-- the URL sets `ssl` to anything but `true`: use `sslmode`;
+- the URL sets `ssl` to anything but `true`, or a keyword/value string
+  (`host=… sslmode=…`) sets `ssl` at all: use `sslmode`;
+- the URL sets `sslnegotiation=direct` with `sslmode=allow` or `disable`,
+  which libpq refuses;
 - the settings the tools would get do not give the same connection
   attempts as the app's connection (hosts, ports, TLS and its certificates,
   `target_session_attrs`, `channel_binding`, `require_auth`). An example is

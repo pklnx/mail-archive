@@ -339,7 +339,7 @@ func setEnvMarkers(t *testing.T) []string {
 // pgURLEnvNames are the variables pgToolConn.env derives from the database
 // URL.
 var pgURLEnvNames = []string{"PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY",
-	"PGSSLSNI", "PGSSLNEGOTIATION", "PGTARGETSESSIONATTRS", "PGCHANNELBINDING", "PGREQUIREAUTH"}
+	"PGSSLSNI", "PGSSLNEGOTIATION", "PGTARGETSESSIONATTRS", "PGCHANNELBINDING", "PGREQUIREAUTH", "PGGSSENCMODE"}
 
 // checkPgToolEnv reports what is wrong with env, the environment pg_dump or
 // pg_restore got after setEnvMarkers: a marker, a variable outside the
@@ -402,13 +402,14 @@ func TestPgEnvAllowlist(t *testing.T) {
 	t.Setenv("PATH", "/opt/pg/bin:/usr/bin")
 	env := pgToolEnv(t, "postgres://u:url-pw@db.example:6543/arch?sslmode=require&connect_timeout=5&application_name=x")
 	for _, p := range checkPgToolEnv(env, append(basics, "PATH=/opt/pg/bin:/usr/bin", "PGHOST=db.example", "PGPORT=6543", "PGUSER=u",
-		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require")...) {
+		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require", "PGGSSENCMODE=disable")...) {
 		t.Error(p)
 	}
-	// Every basic (PATH included) and the six URL variables; the other URL
-	// parameters are not passed on, as before, and neither is the parent's
-	// PGAPPNAME (setEnvMarkers). TestPgToolConn covers the other TLS keys.
-	if len(env) != len(pgToolEnvNames)+6 {
+	// Every basic (PATH included), the six URL variables and
+	// PGGSSENCMODE=disable; the other URL parameters are not passed on, as
+	// before, and neither is the parent's PGAPPNAME (setEnvMarkers).
+	// TestPgToolConn covers the other TLS keys.
+	if len(env) != len(pgToolEnvNames)+7 {
 		t.Errorf("%d variables: %v", len(env), env)
 	}
 
