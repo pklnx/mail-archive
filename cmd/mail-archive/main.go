@@ -46,6 +46,7 @@ func main() {
 		newAuditorCmd(),
 		newSyncCmd(),
 		newStatusCmd(),
+		newUsageCmd(),
 		newReindexCmd(),
 		newVerifyCmd(),
 		newExportCmd(),

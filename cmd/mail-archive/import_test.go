@@ -93,11 +93,19 @@ func TestImportCommand(t *testing.T) {
 	if accs, _ := st.ListAccounts(ctx); len(accs) != 0 {
 		t.Fatalf("dry run created %+v", accs)
 	}
+	if n := usageRequestSeq(t, connectDB(t, url)); n != 0 {
+		t.Errorf("dry run requested a usage snapshot (seq %d)", n)
+	}
 
+	// Each import that stored requests a usage snapshot at its end; a
+	// dry run does not.
+	conn := connectDB(t, url)
+	requests := usageRequestSeq(t, conn)
 	out, err = run("old", "--from", tbFixture, "--format", "mbox")
 	if err != nil || !strings.Contains(out, "ok: read 4, added 4 (4 new to the account)") {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "import", requests)
 	acc, err := st.GetOwnedAccount(ctx, anna.ID, "old")
 	if err != nil || acc.Kind != store.KindImport {
 		t.Fatalf("account %+v %v", acc, err)
@@ -312,11 +320,13 @@ func TestImportJournalCommand(t *testing.T) {
 		t.Fatalf("dry run recorded %d imports, %v", imports, err)
 	}
 
+	requests := usageRequestSeq(t, conn)
 	out, err = run("alice@example.com", "--journal", "--from", tbFixture, "--format", "mbox", "--label", "thunderbird")
 	if err != nil || !regexpMatch(`FOLDER\s+READ\s+ADDED\s+NEW\s+PRESENT\s+JOURNALED\s+SKIPPED`, out) ||
 		!strings.Contains(out, "ok: read 4, added 3 (3 new to the account), 0 already there, 1 already journaled, 0 skipped") {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "journal import", requests)
 	if n := accounts(); n != 3 {
 		t.Fatalf("%d accounts after the import", n)
 	}

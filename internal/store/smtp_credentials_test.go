@@ -440,11 +440,11 @@ func TestSMTPCredentialsMigration(t *testing.T) {
 	}
 }
 
-// downSMTPCredentialsMigration rolls back 00041_deletion_marks and
-// 00040_smtp_credentials.
+// downSMTPCredentialsMigration rolls back 00042_deletion_marks,
+// 00041_storage_usage and 00040_smtp_credentials.
 func downSMTPCredentialsMigration(t *testing.T, st *store.Store) {
 	t.Helper()
-	downDeletionMarksMigration(t, st)
+	downStorageUsageMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00040_smtp_credentials") {
 		t.Fatalf("down: %q %v", m, err)
 	}

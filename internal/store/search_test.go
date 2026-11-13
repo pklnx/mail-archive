@@ -223,6 +223,11 @@ type recordedRow struct{}
 
 func (recordedRow) Scan(...any) error { return errRecorded }
 
+// byHash is a lookup of messages by their hash through an index: the
+// primary key or the covering index messages_sha_size_idx (00041), which
+// the planner treats alike.
+const byHash = "Index Cond: (sha256 = ANY ("
+
 // The filters and reindex use their indexes on an archive of 50,000
 // messages, a quarter of them with attachments. The plans
 // are those of the generated query with the given parameters.
@@ -338,7 +343,7 @@ ANALYZE;`
 		// to: on To and Cc, or on the envelope matches found first by
 		// EnvelopeMatches: both arms through an index of messages.
 		{"to", db.SearchMessagesParams{ToPattern: str("%finanzamt%"), ToShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}},
-			"messages_rcpt_trgm_idx", []string{"messages_pkey"}, false, false},
+			"messages_rcpt_trgm_idx", []string{byHash}, false, false},
 		// With too many envelope matches it checks the envelopes of each
 		// message it walks, through their keys.
 		{"to walk", db.SearchMessagesParams{ToPattern: str("%example.com%"), ToWalk: true}, "messages_sort_idx",
@@ -350,7 +355,7 @@ ANALYZE;`
 		{"query", db.SearchMessagesParams{Query: str("Zahlungsziel"), Pattern: str("%Zahlungsziel%"), AttShas: []string{}},
 			"messages_search_idx", []string{"BitmapOr"}, false, true},
 		{"query with attachment matches", db.SearchMessagesParams{Query: str("Zahlungsziel"), Pattern: str("%Zahlungsziel%"),
-			AttShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}}, "messages_search_idx", []string{"BitmapOr", "messages_pkey"}, false, true},
+			AttShas: []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}}, "messages_search_idx", []string{"BitmapOr", byHash}, false, true},
 		// With too many attachment matches it checks the attachments of each
 		// message it walks, through their key.
 		{"attachment walk", db.SearchMessagesParams{Query: str("Rechnung"), Pattern: str("%Rechnung%"), AttWalk: true}, "messages_sort_idx",

@@ -342,6 +342,10 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 			res.Skipped = true
 			return nil
 		}
+		held, err := accountHeld(ctx, q, folder.ID, []MessageMeta{meta})
+		if err != nil {
+			return err
+		}
 		n, err := q.InsertMessage(ctx, insertMessageParams(&meta))
 		if err != nil {
 			return fmt.Errorf("insert message %s: %w", meta.SHA256, err)
@@ -371,6 +375,11 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 		})
 		if err != nil {
 			return fmt.Errorf("insert envelope: %w", err)
+		}
+		if !held[meta.SHA256] {
+			if err := recordGroupUsage(ctx, q, group, []*MessageMeta{&meta}); err != nil {
+				return err
+			}
 		}
 		res.UID, res.New, res.AddedRecipients = uint32(uid), true, len(rcpts) //nolint:gosec // UIDs stay below 2^32
 		return nil

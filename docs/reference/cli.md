@@ -380,7 +380,8 @@ retention has usually ended too, so the next deletion run lists it.
 | `sync` | Copy new messages from all enabled accounts. Prints a line per account with `fetched=N new=N`; `new` counts the messages the account did not hold before in any of its folders, even if the archive held the same bytes from another account. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
-| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. A line counts the [background jobs](../guide/operations#background-jobs) per kind: `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, also `retrying` for jobs that wait for another attempt, or `jobs: none`. A line shows encryption at rest: `on`, `off`, or an unfinished `encryption enable` or `disable` with its progress and the command that finishes it. Then a `schema:` line, and a `setup:` line: `complete since …`, waiting for the first admin from the [setup link](#setup-token) with the end of its window, its token expired, or no user yet; with `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` on an instance that is not set up, a second `setup:` line says that a new instance starts without encryption at rest. When the PDF reader could not be prepared in the process that ran them, a further line says `attachment text: PDF extractor unavailable for N message(s)`: the cause is in the log of the web server or worker; after fixing it and a restart, `jobs retry attachment_text`. |
+| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. Without `--user`, a line shows the storage of the instance, exact: `storage: 1234 unique messages, 5.6 GiB; per group and account: ./ma usage` ([`usage`](#usage) shows them per group and account). A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. A line counts the [background jobs](../guide/operations#background-jobs) per kind: `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, also `retrying` for jobs that wait for another attempt, or `jobs: none`. A line shows encryption at rest: `on`, `off`, or an unfinished `encryption enable` or `disable` with its progress and the command that finishes it. Then a `schema:` line, and a `setup:` line: `complete since …`, waiting for the first admin from the [setup link](#setup-token) with the end of its window, its token expired, or no user yet; with `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` on an instance that is not set up, a second `setup:` line says that a new instance starts without encryption at rest. When the PDF reader could not be prepared in the process that ran them, a further line says `attachment text: PDF extractor unavailable for N message(s)`: the cause is in the log of the web server or worker; after fixing it and a restart, `jobs retry attachment_text`. |
+| `usage [--json] [--group NAME]` | Show the storage used, in message bytes: the instance, each customer group with its quota and state, and each account with its owner and group. See [usage](#usage). |
 | `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed, or with `--journal` into the folder `JOURNAL` of the existing smtp account `NAME`. See below. |
 | `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Then it extracts the text of PDF and text attachments of every message that has none yet, in the foreground, newest first, until none is left, and prints `updated N message(s), extracted text of M attachment(s)`; `MAIL_ARCHIVE_JOB_WORKERS` (default 1; `0`, as set for a web server that leaves jobs to the worker, counts as 1 here) sets how many messages run at a time, PDFs one at a time. The web server or the worker does the same in the background; installations that run only `sync` or `import` from cron get attachment text only from `reindex`, so run it after them, for example in the same cron job. Messages that another process is extracting, or that wait for a retry, are left to it, and it says how many. Safe to interrupt and rerun, and to run alongside the web server, the worker and syncs; a second `reindex` at the same time exits with `reindex already running`. |
@@ -438,6 +439,63 @@ and `remove` work. Without `--journal`, an smtp account is refused; with it,
 anything but an existing smtp account is, and nothing is created. See
 [Importing mail](../guide/importing) and
 [Into an smtp account](../guide/importing#into-an-smtp-account).
+
+### usage
+
+```sh
+./ma usage
+./ma usage --group "Example Ltd" --json
+```
+
+Shows the storage used, in **message bytes**: the size of each unique
+message, counted once however many folders and accounts hold it. Read-only,
+not recorded in the audit log.
+
+```
+instance: 301234 messages, 21.4 GiB (exact), state ok
+groups and accounts counted at 2026-11-13 09:00:12; groups include what was archived since
+
+GROUP        MESSAGES  SIZE       QUOTA  STATE
+Default      151020    10.7 GiB   -      ok
+Example Ltd  10233     742.1 MiB  -      ok
+
+ACCOUNT  KIND  OWNER  GROUP        MESSAGES  SIZE       EXCLUSIVE
+anna     imap  anna   Default      52110     3.8 GiB    2.9 GiB
+billing  smtp  bob    Example Ltd  8120      610.4 MiB  598.0 MiB
+info     imap  bob    Example Ltd  2410      171.9 MiB  40.2 MiB
+```
+
+- **The first line** is the instance: exact at all times, and the same
+  figure as the `storage:` line of [`status`](#archive).
+- **Groups** count each message once per group: a message in two groups
+  counts fully in each. `QUOTA` is the group's quota (`-` without one),
+  `STATE` its quota state. A row `Without group` appears while accounts
+  without an owner exist, which happens only before the first user.
+- **Accounts** show their messages and bytes, and in `EXCLUSIVE` the bytes
+  no other account holds: what a [purge](#accounts) of the account
+  would free. A removed account is marked `(removed)`.
+- **When.** Groups and accounts are counted by a snapshot that a
+  [background job](../guide/operations#background-jobs) of `serve` or
+  `worker` takes every hour, and soon after a user or account moves to
+  another group, a purge or deletion run ends, or an import or
+  `restore-dump` ends. Between snapshots, a group's figure adds what was
+  archived since, and deletions show at the next snapshot: it is an upper
+  bound, with two exceptions until the next snapshot. Right after a user or
+  account moves between groups, the groups show the moved bytes only from
+  the snapshot the move requests (soon, while `serve` or `worker` runs).
+  And a message whose only other copy in the group is deleted while it is
+  being added is missing, one message per such race. Figures that no
+  snapshot has counted
+  yet show `-`; the second line then says `not counted yet`.
+- A `warning:` line appears if the last snapshot found the instance
+  counters off; the log of `serve` or `worker` names the figures.
+
+| Flag | |
+|---|---|
+| `--group NAME` | Only this group and its accounts (case does not matter). |
+| `--json` | The same as JSON: `messages`, `bytes`, `state`, `snapshotAt`, `counterDriftBytes`, `databaseBytes`, `relationBytes`, `groups` (`id`, `name`, `messages`, `bytes`, `quotaBytes`, `state`, `snapshotAt`), `withoutGroup` (only while it is shown) and `accounts` (`id`, `name`, `kind`, `removed`, `owner`, `group`, `messages`, `bytes`, `exclusiveBytes`, `snapshotAt`). |
+
+Names are shown: this is the admin's shell on the host.
 
 ### verify
 

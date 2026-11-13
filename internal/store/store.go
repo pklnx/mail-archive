@@ -734,6 +734,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err != nil {
 			return err
 		}
+		var added []*MessageMeta
 		for i := range metas {
 			m := &metas[i]
 			if skip[m.SHA256] {
@@ -747,6 +748,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if !held[m.SHA256] {
 				held[m.SHA256] = true
 				res.Added++
+				added = append(added, m)
 			}
 			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
 				return err
@@ -769,6 +771,9 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if err != nil {
 				return fmt.Errorf("insert location: %w", err)
 			}
+		}
+		if err := recordGroupUsage(ctx, q, group, added); err != nil {
+			return err
 		}
 		if err := q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)}); err != nil {
 			return err
@@ -801,6 +806,34 @@ func accountHeld(ctx context.Context, q *db.Queries, folderID int64, metas []Mes
 	rows, err := q.AccountHeldMessages(ctx, db.AccountHeldMessagesParams{FolderID: folderID, Shas: shas})
 	if err != nil {
 		return nil, fmt.Errorf("account held messages: %w", err)
+	}
+	for _, sha := range rows {
+		held[sha] = true
+	}
+	return held, nil
+}
+
+// key is the group's key in deletion marks and group lookups: the group's
+// id, or 0 for the accounts without an owner (group ids start at 1).
+func (g accountGroup) key() int64 {
+	if g.Group == nil {
+		return 0
+	}
+	return *g.Group
+}
+
+// groupHasLocations returns the hashes of shas that an account of the
+// group holds, the saving account included: one probe per folder of the
+// group and hash (GroupHasLocations), so its cost never depends on other
+// groups.
+func groupHasLocations(ctx context.Context, q *db.Queries, g accountGroup, shas []string) (map[string]bool, error) {
+	held := make(map[string]bool, len(shas))
+	if len(shas) == 0 {
+		return held, nil
+	}
+	rows, err := q.GroupHasLocations(ctx, db.GroupHasLocationsParams{Shas: shas, GroupID: g.key()})
+	if err != nil {
+		return nil, fmt.Errorf("group has locations: %w", err)
 	}
 	for _, sha := range rows {
 		held[sha] = true

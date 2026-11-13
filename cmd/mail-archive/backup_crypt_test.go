@@ -571,11 +571,14 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("add-key left generation %d", file.Generation())
 	}
 
-	st, _ := switchDatabase(t)
+	// The dump's request seq; restore-dump requests a snapshot on top.
+	requests := usageRequestSeq(t, connectDB(t, os.Getenv("MAIL_ARCHIVE_DATABASE_URL")))
+	st, conn := switchDatabase(t)
 	out, err = runRestoreDump(t, dumps[0])
 	if err != nil {
 		t.Fatalf("restore-dump: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "restore-dump", requests)
 	for _, want := range []string{
 		"restored the encrypted dump",
 		"restored database: encryption at rest on, keyring copy generation 1",
@@ -605,10 +608,13 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Errorf("the database copy lost the recovery key: %d slots, generation %d", len(dbRing.Slots()), dbRing.Generation())
 	}
 
-	// Again: the copies agree now.
+	// Again: the copies agree now; the reconciliation requests a snapshot
+	// too.
+	requests = usageRequestSeq(t, conn)
 	if out, err := runRestoreDump(t, "--reconcile-only"); err != nil || !strings.Contains(out, "agree") {
 		t.Errorf("reconcile again: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "restore-dump --reconcile-only", requests)
 }
 
 // TestRestoreDumpRefusals: restore-dump refuses while a writer runs, and

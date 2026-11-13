@@ -4,10 +4,12 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // Deletion marks per account and customer group (#539, part 1). Alice and
@@ -191,6 +193,26 @@ func TestDeletionMarksRetention(t *testing.T) {
 		t.Errorf("A, m1 once A holds it: %+v", res)
 	}
 
+	// The saving account itself counts as holding a copy: alice's account
+	// "inbox-only" has a rule on INBOX only; a run deletes m6 from INBOX,
+	// alice archives it again in the account's unruled Keep folder, and a
+	// save into INBOX then stores it (the group, this account included,
+	// holds it).
+	m6 := hashOf('6')
+	ownInbox := f.folder(f.alice, "inbox-only", "INBOX")
+	f.rule(ownInbox, "INBOX", 1)
+	f.save(ownInbox, m6, "same account", old, old)
+	f.deleteExpired()
+	if res := f.try(ownInbox, m6); !skipped(res) {
+		t.Errorf("own INBOX, m6 without a copy: %+v", res)
+	}
+	if res := f.try(f.folder(f.alice, "inbox-only", "Keep"), m6); !stored(res) {
+		t.Errorf("own Keep, m6: %+v", res)
+	}
+	if res := f.try(ownInbox, m6); res.Skipped != 0 || f.locations(ownInbox, m6) != 1 {
+		t.Errorf("own INBOX, m6 with a copy in the same account: %+v", res)
+	}
+
 	// SMTP: m5, deleted from A and archived again by B, is skipped (250) in
 	// a journal of A with an ended rule (main stores it: the row exists),
 	// and stored in one of C.
@@ -316,7 +338,7 @@ func TestDeletionMarksLegacyTombstone(t *testing.T) {
 	}
 }
 
-// 00041: the marks refuse UPDATE, DELETE and TRUNCATE; a second mark of a
+// 00042: the marks refuse UPDATE, DELETE and TRUNCATE; a second mark of a
 // tombstone is refused; Down drops the table, Up again works.
 func TestDeletionMarksMigration(t *testing.T) {
 	f := newMarksFixture(t)
@@ -350,11 +372,11 @@ func TestDeletionMarksMigration(t *testing.T) {
 	}
 }
 
-// downDeletionMarksMigration rolls back 00041_deletion_marks, the latest
+// downDeletionMarksMigration rolls back 00042_deletion_marks, the latest
 // migration.
 func downDeletionMarksMigration(t *testing.T, st *store.Store) {
 	t.Helper()
-	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00041_deletion_marks") {
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00042_deletion_marks") {
 		t.Fatalf("down: %q %v", m, err)
 	}
 }
@@ -398,8 +420,55 @@ func TestDeletionMarksSaveWaitsForMove(t *testing.T) {
 	if err := move.Commit(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	r := <-results
-	if r.err != nil || !skipped(r.res) {
-		t.Errorf("save after the move: %+v %v", r.res, r.err)
+	select {
+	case r := <-results:
+		if r.err != nil || !skipped(r.res) {
+			t.Errorf("save after the move: %+v %v", r.res, r.err)
+		}
+	case <-time.After(testwait.Limit(t)):
+		t.Fatal("the save did not end after the move committed")
+	}
+}
+
+// Group 0, the accounts without an owner, is a group of its own: a mark
+// from an unowned account names group 0, another unowned account skips the
+// message while group 0 holds no copy and stores it once one does, and
+// other groups store it (review 6849896483).
+func TestDeletionMarksGroupZero(t *testing.T) {
+	f := newMarksFixture(t)
+	unowned := func(name string, ruled bool) *store.Folder {
+		t.Helper()
+		a := &store.Account{Name: name, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}}
+		if err := f.st.CreateAccount(f.ctx, a); err != nil {
+			t.Fatal(err)
+		}
+		fo, err := f.st.GetOrCreateFolder(f.ctx, a.ID, "INBOX")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ruled {
+			f.rule(fo, "", 1)
+		}
+		return fo
+	}
+	m := hashOf('z')
+	f.save(unowned("imp1", true), m, "unowned", old, old)
+	f.deleteExpired()
+	var groups string
+	if err := f.conn.QueryRow(f.ctx, `SELECT group_ids::text FROM deletion_marks WHERE sha256 = $1`, m).Scan(&groups); err != nil || groups != "{0}" {
+		t.Fatalf("mark groups %q %v", groups, err)
+	}
+	second := unowned("imp2", true)
+	if res := f.try(second, m); !skipped(res) {
+		t.Errorf("group 0 without a copy: %+v", res)
+	}
+	if res := f.try(f.expired(f.dave, "old"), m); !stored(res) {
+		t.Errorf("group C: %+v", res)
+	}
+	if res := f.try(unowned("imp3", false), m); !stored(res) {
+		t.Errorf("group 0 unruled: %+v", res)
+	}
+	if res := f.try(second, m); res.Skipped != 0 {
+		t.Errorf("group 0 with a copy: %+v", res)
 	}
 }
