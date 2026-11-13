@@ -55,7 +55,8 @@ func (s *Store) CreateSMTPImport(ctx context.Context, imp *SMTPImport) error {
 		return err
 	}
 	return s.inTx(ctx, func(q *db.Queries) error {
-		a, err := q.GetAccount(ctx, imp.AccountID)
+		r, err := q.GetAccount(ctx, imp.AccountID)
+		a := r.Account
 		if isNoRows(err) {
 			return ErrNotFound
 		}

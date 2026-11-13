@@ -19,17 +19,19 @@ import (
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/smtpd"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // startSMTP starts the SMTP server for smtp accounts. The returned stop
 // shuts it down and waits until messages being stored are committed; it
-// must run before the store closes.
-func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (stop func(), err error) {
+// must run before the store closes. deferrals counts the recipients it
+// deferred for storage, for /api/metrics.
+func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, storage *quota.Gate, log *slog.Logger) (stop func(), deferrals func() uint64, err error) {
 	c := a.cfg.SMTP
 	srv := &smtpd.Server{
-		Store: a.store, Blobs: blobs, Logger: log, Allowed: c.AllowedNetworks,
+		Store: a.store, Blobs: blobs, Logger: log, Allowed: c.AllowedNetworks, Storage: storage,
 		Hostname: c.Hostname, MaxSize: c.MaxSize, Auth: c.Auth, MaxConnsPerAddr: c.MaxConnsPerAddr,
 	}
 	var certs *smtpd.CertReloader
@@ -37,7 +39,7 @@ func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 		// Reloaded within a minute of a change: renewals need no restart.
 		certs, err = smtpd.NewCertReloader(c.TLSCert, c.TLSKey, log)
 		if err != nil {
-			return nil, fmt.Errorf("%s/%s: %w", config.EnvSMTPTLSCert, config.EnvSMTPTLSKey, err)
+			return nil, nil, fmt.Errorf("%s/%s: %w", config.EnvSMTPTLSCert, config.EnvSMTPTLSKey, err)
 		}
 		srv.TLS = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
 	}
@@ -47,7 +49,7 @@ func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 	}
 	l, err := net.Listen("tcp", c.Listen)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", config.EnvSMTPListen, err)
+		return nil, nil, fmt.Errorf("%s: %w", config.EnvSMTPListen, err)
 	}
 	nets := make([]string, 0, len(c.AllowedNetworks))
 	for _, p := range c.AllowedNetworks {
@@ -79,7 +81,7 @@ func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 	return func() {
 		cancel()
 		<-done
-	}, nil
+	}, srv.StorageDeferrals, nil
 }
 
 func newAccountAddSMTPCmd() *cobra.Command {

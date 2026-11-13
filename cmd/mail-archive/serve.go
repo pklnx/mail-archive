@@ -103,10 +103,28 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	} else if n > 0 {
 		log.Info("stored passwords bound to the account ID", "accounts", n)
 	}
+	// The storage gate (#397): it reads the figures every 10 seconds, so
+	// that transitions are persisted also while nothing is stored. Syncs,
+	// fills and the SMTP server ask it before each message.
+	warnStorageConfig(ctx, a, log)
+	// After a transition, the notifier's Wake (afterSync) sends the
+	// storage alert at once.
+	storage, closeWriter := serveStorageGate(a, log, afterSync)
+	gateDone := make(chan struct{})
+	go func() {
+		storage.Run(ctx)
+		close(gateDone)
+	}()
+	defer func() {
+		cancel()
+		<-gateDone
+		closeWriter() // before the store closes
+	}()
 	// Background runs end at a time limit, so that a slow or
 	// silent server cannot hold the only sync or fill worker.
 	opts.Syncer = &archive.Syncer{
-		Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
+		Storage: storage,
+		Store:   a.store, Blobs: blobs, Sealer: sealer, Logger: log,
 		ReconcileInterval:    a.cfg.ReconcileInterval,
 		MaxReconcileMessages: a.cfg.IMAP.ReconcileMaxMessages, IMAP: imapSettings(a.cfg),
 		MaxRunTime: archive.DefaultMaxRunTime,
@@ -130,7 +148,7 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	// the mail server queued during an outage arrive first.
 	opts.Fills = &archive.FillRunner{
 		Filler: &archive.Filler{
-			Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
+			Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log, Storage: storage,
 			IMAP: imapSettings(a.cfg), MaxFolderMessages: a.cfg.IMAP.FillMaxFolderMessages,
 			MaxRunTime: archive.DefaultMaxRunTime,
 		},
@@ -166,10 +184,11 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	defer stopRetention()
 	opts.Retention = retention
 	if a.cfg.SMTP != nil {
-		stop, err := startSMTP(ctx, a, blobs, log)
+		stop, deferrals, err := startSMTP(ctx, a, blobs, storage, log)
 		if err != nil {
 			return err
 		}
+		opts.SMTPStorageDeferrals = deferrals
 		defer stop()
 		opts.SMTPListen = a.cfg.SMTP.Listen
 		opts.SMTPAuth = a.cfg.SMTP.Auth
@@ -195,7 +214,8 @@ func webOptions(cfg *config.Config) web.Options {
 	return web.Options{
 		AllowedHosts: cfg.AllowedHosts, Require2FA: cfg.Require2FA, SecretKey: cfg.SecretKey, PublicURL: cfg.PublicURL,
 		AlertAfterFailures: cfg.AlertAfterFailures, TrustedProxies: cfg.TrustedProxies,
-		Version:   version,
-		DiskUsage: func() (uint64, uint64, error) { return archive.DiskUsage(dataDir) },
+		Version:           version,
+		DiskUsage:         func() (uint64, uint64, error) { return archive.DiskUsage(dataDir) },
+		StorageQuotaBytes: cfg.Storage.Quota,
 	}
 }

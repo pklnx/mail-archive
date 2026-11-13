@@ -30,6 +30,9 @@ type FillHealth struct {
 	FailingSince  *time.Time
 	LastSuccessAt *time.Time
 	NotifiedState string
+	// GroupID is the account owner's customer group, nil without an
+	// owner: the storage gate pauses fills per group (#397).
+	GroupID *int64
 }
 
 // State is the fill's health, as SyncHealth.State: the time counts from
@@ -57,6 +60,7 @@ func (s *Store) FillHealth(ctx context.Context, owner *int64) (map[int64]*FillHe
 			Mailbox: r.Username, Interval: secondsToInterval(r.IntervalSeconds), RecurringSince: r.RecurringSince,
 			Running: r.Status == FillRunning, RunStartedAt: r.RunStartedAt,
 			FailureStreak: int(r.FailureStreak), LastSuccessAt: r.LastSuccessAt, NotifiedState: r.NotifiedState,
+			GroupID: r.GroupID,
 		}
 		if h.FailureStreak > 0 {
 			h.FailingSince = r.FailingSince

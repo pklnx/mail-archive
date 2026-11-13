@@ -68,6 +68,7 @@ func newNotifier(a *app, log *slog.Logger) *notify.Notifier {
 	}
 	return &notify.Notifier{
 		Store: a.store, Webhook: notify.NewWebhook(a.cfg.Webhook), AlertAfter: a.cfg.AlertAfterFailures, Logger: log,
+		StorageQuota: a.cfg.Storage.Quota,
 	}
 }
 

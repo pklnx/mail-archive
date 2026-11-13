@@ -229,8 +229,9 @@ func (q *Queries) RecordSyncSuccess(ctx context.Context, accountID int64) error 
 const syncHealth = `-- name: SyncHealth :many
 SELECT a.id, a.name, a.owner_id, a.enabled, a.created_at, a.sync_interval_seconds,
        coalesce(h.failure_streak, 0)::int AS failure_streak, h.failing_since, h.last_success_at,
-       coalesce(h.notified_state, 'ok')::text AS notified_state
+       coalesce(h.notified_state, 'ok')::text AS notified_state, o.group_id
 FROM accounts a LEFT JOIN account_sync_health h ON h.account_id = a.id
+LEFT JOIN users o ON o.id = a.owner_id
 WHERE a.kind = 'imap' AND a.removed_at IS NULL
   AND ($1::bigint IS NULL OR a.owner_id = $1::bigint)
 ORDER BY a.id
@@ -247,6 +248,7 @@ type SyncHealthRow struct {
 	FailingSince        *time.Time
 	LastSuccessAt       *time.Time
 	NotifiedState       string
+	GroupID             *int64
 }
 
 // The health of IMAP accounts that are not removed, of all users or one.
@@ -270,6 +272,7 @@ func (q *Queries) SyncHealth(ctx context.Context, owner *int64) ([]SyncHealthRow
 			&i.FailingSince,
 			&i.LastSuccessAt,
 			&i.NotifiedState,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}

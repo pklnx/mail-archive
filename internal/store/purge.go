@@ -244,7 +244,7 @@ func (s *Store) PurgePreview(ctx context.Context, accountID int64) (*PurgePrevie
 	if err != nil {
 		return nil, err
 	}
-	return purgePreview(ctx, s.q, r, syncing[accountID])
+	return purgePreview(ctx, s.q, r.Account, syncing[accountID])
 }
 
 func purgePreview(ctx context.Context, q *db.Queries, r db.Account, syncing bool) (*PurgePreview, error) {

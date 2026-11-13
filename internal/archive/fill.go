@@ -16,6 +16,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imapsync"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -206,6 +207,11 @@ type Filler struct {
 	// running and returns ErrRunTimeLimit, so that the FillRunner queues
 	// it again; without progress it fails.
 	MaxRunTime time.Duration
+	// Storage is the storage gate (#397); nil stores without a limit.
+	// While the account's group or the instance is full, a fill does not
+	// start, and a running one stops before the next message and stays
+	// running: it continues once space is freed. Its health is unchanged.
+	Storage *quota.Gate
 
 	// limitRun replaces the run's time limit; a test seam.
 	limitRun func(context.Context) (context.Context, context.CancelFunc)
@@ -266,6 +272,10 @@ func (f *Filler) Run(ctx context.Context, fillID int64) (*store.Fill, error) {
 		}
 		if err != nil {
 			return nil, err
+		}
+		// No new run while the storage limit is reached (#397).
+		if err := f.Storage.Admit(a.GroupID); err != nil {
+			return fill, err
 		}
 		switch err := f.Store.StartFillRun(ctx, fill.ID, f.now()); {
 		case errors.Is(err, store.ErrFillRunning):
@@ -375,6 +385,11 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 	if err != nil {
 		return nil, err
 	}
+	// While the storage limit is reached the fill stays running and waits
+	// (#397): nothing ends, nothing changes its health.
+	if err := f.Storage.Admit(a.GroupID); err != nil {
+		return fill, err
+	}
 	if fill.Recurring() && fill.FolderPrefix != "" {
 		// A fill from before #112 switched to recurring: its mail moves into
 		// the journal folder as locations, before the first run's scan.
@@ -465,11 +480,16 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 			conn = nc
 			log.Info("connected again after a broken connection", "redials", redial.n)
 		}
-		err := f.fillFolder(ctx, conn, fill, now, name, &committed, log.With("folder", name))
+		err := f.fillFolder(ctx, conn, fill, a.GroupID, now, name, &committed, log.With("folder", name))
 		var st *StuckError
 		switch {
 		case errors.Is(err, errFillCancelled):
 			return end(store.FillCancelled, nil)
+		case errors.Is(err, quota.ErrStorageFull):
+			// What came before is saved; the fill stays running and goes
+			// on from there once space is freed.
+			log.Info("fill paused: storage limit reached", "folder", name, "batches", committed)
+			return fill, err
 		case ctx.Err() != nil:
 			return stopped(folderErrs, err)
 		case err != nil:
@@ -491,7 +511,7 @@ func (f *Filler) RunLocked(ctx context.Context, fillID int64) (*store.Fill, erro
 // fillFolder copies what the fill's rule imports from one IMAP folder,
 // one transaction per batch of headers, with the progress. It adds the
 // batches it committed to committed.
-func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, now time.Time, source string,
+func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, group *int64, now time.Time, source string,
 	committed *int, log *slog.Logger) (err error) {
 	ff, err := f.Store.FillFolder(ctx, fill, source)
 	if err != nil {
@@ -502,7 +522,8 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	}
 	defer func() {
 		// Keep the folder's error for the report; the progress so far stays.
-		if err != nil && !errors.Is(err, errFillCancelled) && ctx.Err() == nil {
+		// A pause is not the folder's error.
+		if err != nil && !errors.Is(err, errFillCancelled) && !errors.Is(err, quota.ErrStorageFull) && ctx.Err() == nil {
 			ff.Error = DescribeError(err)
 			if uerr := f.Store.UpdateFillFolder(context.WithoutCancel(ctx), ff); uerr != nil {
 				log.Error("record the folder's error", "err", uerr)
@@ -543,10 +564,10 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 			return err
 		}
 		chunk := headers[start:min(start+batch, len(headers))]
-		err := f.fillBatch(ctx, conn, fill, ff, &wm, lookup, now, chunk, start+len(chunk) == len(headers), log)
+		err := f.fillBatch(ctx, conn, fill, group, ff, &wm, lookup, now, chunk, start+len(chunk) == len(headers), log)
 		var stuck *StuckError
-		if err == nil || errors.As(err, &stuck) {
-			*committed++ // fillBatch committed what came before the large message
+		if err == nil || errors.As(err, &stuck) || errors.Is(err, quota.ErrStorageFull) {
+			*committed++ // fillBatch committed what came before the large message or the pause
 		}
 		if err != nil {
 			return err
@@ -611,7 +632,8 @@ func (f *Filler) listHeaders(ctx context.Context, conn *imapsync.Conn, after uin
 // first leaves out, without fetching them, messages it imported before
 // (same Message-ID, INTERNALDATE and size): moved or seen again after a
 // rescan.
-func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder, wm *watermark, lookup *store.GroupLookup,
+func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, group *int64, ff *store.FillFolder, wm *watermark,
+	lookup *store.GroupLookup,
 	now time.Time, chunk []fillHeader, last bool, log *slog.Logger) error {
 	ids := make([]string, len(chunk))
 	var keys []journalKey
@@ -667,7 +689,23 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		locs  []store.Location
 		seen  = map[string]bool{}
 	)
-	sink := func(r io.Reader) (Stored, error) { return PutFor(ctx, f.Blobs, r, lookup) }
+	// The files of this batch count for the storage gate until the batch
+	// is saved: the fill stops within one message of a limit. A refusal
+	// caused by duplicates in the batch only pauses the fill until the
+	// runner's next check, a minute later.
+	pending := f.Storage.Pending(group)
+	defer pending.Settle()
+	sink := func(r io.Reader) (Stored, error) {
+		// Before each file: a full group or instance writes no more.
+		if err := f.Storage.Admit(group); err != nil {
+			return Stored{}, imapsync.Stop(err)
+		}
+		stored, err := PutFor(ctx, f.Blobs, r, lookup)
+		if err == nil {
+			pending.Add(stored.Blob.Size)
+		}
+		return stored, err
+	}
 	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[Stored]) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -704,6 +742,10 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		stuck = &StuckError{UID: lim.UID, Err: fetchErr}
 		log.Warn("folder stops before a message over the size cap", "uid", lim.UID)
 		last = false
+	} else if errors.Is(fetchErr, quota.ErrStorageFull) {
+		// Paused: what was fetched is saved, and the watermark stops before
+		// the first message requested and not fetched (#397).
+		stuck, last = fetchErr, false
 	} else if fetchErr != nil {
 		return fetchErr
 	}

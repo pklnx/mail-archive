@@ -134,36 +134,43 @@ func (q *Queries) DeleteAccountFolders(ctx context.Context, accountID int64) err
 }
 
 const getAccount = `-- name: GetAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE id = $1
+SELECT a.id, a.name, a.host, a.port, a.tls_mode, a.username, a.password_enc, a.included_folders, a.excluded_folders, a.enabled, a.created_at, a.updated_at, a.removed_at, a.owner_id, a.version, a.kind, a.sync_interval_seconds, o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id WHERE a.id = $1
 `
 
-func (q *Queries) GetAccount(ctx context.Context, id int64) (Account, error) {
+type GetAccountRow struct {
+	Account Account
+	GroupID *int64
+}
+
+func (q *Queries) GetAccount(ctx context.Context, id int64) (GetAccountRow, error) {
 	row := q.db.QueryRow(ctx, getAccount, id)
-	var i Account
+	var i GetAccountRow
 	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Host,
-		&i.Port,
-		&i.TlsMode,
-		&i.Username,
-		&i.PasswordEnc,
-		&i.IncludedFolders,
-		&i.ExcludedFolders,
-		&i.Enabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RemovedAt,
-		&i.OwnerID,
-		&i.Version,
-		&i.Kind,
-		&i.SyncIntervalSeconds,
+		&i.Account.ID,
+		&i.Account.Name,
+		&i.Account.Host,
+		&i.Account.Port,
+		&i.Account.TlsMode,
+		&i.Account.Username,
+		&i.Account.PasswordEnc,
+		&i.Account.IncludedFolders,
+		&i.Account.ExcludedFolders,
+		&i.Account.Enabled,
+		&i.Account.CreatedAt,
+		&i.Account.UpdatedAt,
+		&i.Account.RemovedAt,
+		&i.Account.OwnerID,
+		&i.Account.Version,
+		&i.Account.Kind,
+		&i.Account.SyncIntervalSeconds,
+		&i.GroupID,
 	)
 	return i, err
 }
 
 const getOwnedAccount = `-- name: GetOwnedAccount :one
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE owner_id = $1 AND name = $2
+SELECT a.id, a.name, a.host, a.port, a.tls_mode, a.username, a.password_enc, a.included_folders, a.excluded_folders, a.enabled, a.created_at, a.updated_at, a.removed_at, a.owner_id, a.version, a.kind, a.sync_interval_seconds, o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+WHERE a.owner_id = $1 AND a.name = $2
 `
 
 type GetOwnedAccountParams struct {
@@ -171,62 +178,74 @@ type GetOwnedAccountParams struct {
 	Name    string
 }
 
-func (q *Queries) GetOwnedAccount(ctx context.Context, arg GetOwnedAccountParams) (Account, error) {
+type GetOwnedAccountRow struct {
+	Account Account
+	GroupID *int64
+}
+
+func (q *Queries) GetOwnedAccount(ctx context.Context, arg GetOwnedAccountParams) (GetOwnedAccountRow, error) {
 	row := q.db.QueryRow(ctx, getOwnedAccount, arg.OwnerID, arg.Name)
-	var i Account
+	var i GetOwnedAccountRow
 	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Host,
-		&i.Port,
-		&i.TlsMode,
-		&i.Username,
-		&i.PasswordEnc,
-		&i.IncludedFolders,
-		&i.ExcludedFolders,
-		&i.Enabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.RemovedAt,
-		&i.OwnerID,
-		&i.Version,
-		&i.Kind,
-		&i.SyncIntervalSeconds,
+		&i.Account.ID,
+		&i.Account.Name,
+		&i.Account.Host,
+		&i.Account.Port,
+		&i.Account.TlsMode,
+		&i.Account.Username,
+		&i.Account.PasswordEnc,
+		&i.Account.IncludedFolders,
+		&i.Account.ExcludedFolders,
+		&i.Account.Enabled,
+		&i.Account.CreatedAt,
+		&i.Account.UpdatedAt,
+		&i.Account.RemovedAt,
+		&i.Account.OwnerID,
+		&i.Account.Version,
+		&i.Account.Kind,
+		&i.Account.SyncIntervalSeconds,
+		&i.GroupID,
 	)
 	return i, err
 }
 
 const listAccounts = `-- name: ListAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts ORDER BY name
+SELECT a.id, a.name, a.host, a.port, a.tls_mode, a.username, a.password_enc, a.included_folders, a.excluded_folders, a.enabled, a.created_at, a.updated_at, a.removed_at, a.owner_id, a.version, a.kind, a.sync_interval_seconds, o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id ORDER BY a.name
 `
 
-func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
+type ListAccountsRow struct {
+	Account Account
+	GroupID *int64
+}
+
+func (q *Queries) ListAccounts(ctx context.Context) ([]ListAccountsRow, error) {
 	rows, err := q.db.Query(ctx, listAccounts)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Account
+	var items []ListAccountsRow
 	for rows.Next() {
-		var i Account
+		var i ListAccountsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Host,
-			&i.Port,
-			&i.TlsMode,
-			&i.Username,
-			&i.PasswordEnc,
-			&i.IncludedFolders,
-			&i.ExcludedFolders,
-			&i.Enabled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RemovedAt,
-			&i.OwnerID,
-			&i.Version,
-			&i.Kind,
-			&i.SyncIntervalSeconds,
+			&i.Account.ID,
+			&i.Account.Name,
+			&i.Account.Host,
+			&i.Account.Port,
+			&i.Account.TlsMode,
+			&i.Account.Username,
+			&i.Account.PasswordEnc,
+			&i.Account.IncludedFolders,
+			&i.Account.ExcludedFolders,
+			&i.Account.Enabled,
+			&i.Account.CreatedAt,
+			&i.Account.UpdatedAt,
+			&i.Account.RemovedAt,
+			&i.Account.OwnerID,
+			&i.Account.Version,
+			&i.Account.Kind,
+			&i.Account.SyncIntervalSeconds,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -239,37 +258,46 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]Account, error) {
 }
 
 const listAccountsByName = `-- name: ListAccountsByName :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST
+SELECT a.id, a.name, a.host, a.port, a.tls_mode, a.username, a.password_enc, a.included_folders, a.excluded_folders, a.enabled, a.created_at, a.updated_at, a.removed_at, a.owner_id, a.version, a.kind, a.sync_interval_seconds, o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+WHERE a.name = $1 ORDER BY a.owner_id NULLS FIRST
 `
 
-// Accounts of all users with this name, for the CLI.
-func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]Account, error) {
+type ListAccountsByNameRow struct {
+	Account Account
+	GroupID *int64
+}
+
+// Accounts of all users with this name, for the CLI. Every account read
+// carries its owner's customer group (NULL without an owner), for the
+// storage gate (#397).
+func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]ListAccountsByNameRow, error) {
 	rows, err := q.db.Query(ctx, listAccountsByName, name)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Account
+	var items []ListAccountsByNameRow
 	for rows.Next() {
-		var i Account
+		var i ListAccountsByNameRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Host,
-			&i.Port,
-			&i.TlsMode,
-			&i.Username,
-			&i.PasswordEnc,
-			&i.IncludedFolders,
-			&i.ExcludedFolders,
-			&i.Enabled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RemovedAt,
-			&i.OwnerID,
-			&i.Version,
-			&i.Kind,
-			&i.SyncIntervalSeconds,
+			&i.Account.ID,
+			&i.Account.Name,
+			&i.Account.Host,
+			&i.Account.Port,
+			&i.Account.TlsMode,
+			&i.Account.Username,
+			&i.Account.PasswordEnc,
+			&i.Account.IncludedFolders,
+			&i.Account.ExcludedFolders,
+			&i.Account.Enabled,
+			&i.Account.CreatedAt,
+			&i.Account.UpdatedAt,
+			&i.Account.RemovedAt,
+			&i.Account.OwnerID,
+			&i.Account.Version,
+			&i.Account.Kind,
+			&i.Account.SyncIntervalSeconds,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -282,36 +310,43 @@ func (q *Queries) ListAccountsByName(ctx context.Context, name string) ([]Accoun
 }
 
 const listOwnedAccounts = `-- name: ListOwnedAccounts :many
-SELECT id, name, host, port, tls_mode, username, password_enc, included_folders, excluded_folders, enabled, created_at, updated_at, removed_at, owner_id, version, kind, sync_interval_seconds FROM accounts WHERE owner_id = $1 ORDER BY name
+SELECT a.id, a.name, a.host, a.port, a.tls_mode, a.username, a.password_enc, a.included_folders, a.excluded_folders, a.enabled, a.created_at, a.updated_at, a.removed_at, a.owner_id, a.version, a.kind, a.sync_interval_seconds, o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+WHERE a.owner_id = $1 ORDER BY a.name
 `
 
-func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]Account, error) {
+type ListOwnedAccountsRow struct {
+	Account Account
+	GroupID *int64
+}
+
+func (q *Queries) ListOwnedAccounts(ctx context.Context, ownerID *int64) ([]ListOwnedAccountsRow, error) {
 	rows, err := q.db.Query(ctx, listOwnedAccounts, ownerID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Account
+	var items []ListOwnedAccountsRow
 	for rows.Next() {
-		var i Account
+		var i ListOwnedAccountsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Host,
-			&i.Port,
-			&i.TlsMode,
-			&i.Username,
-			&i.PasswordEnc,
-			&i.IncludedFolders,
-			&i.ExcludedFolders,
-			&i.Enabled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.RemovedAt,
-			&i.OwnerID,
-			&i.Version,
-			&i.Kind,
-			&i.SyncIntervalSeconds,
+			&i.Account.ID,
+			&i.Account.Name,
+			&i.Account.Host,
+			&i.Account.Port,
+			&i.Account.TlsMode,
+			&i.Account.Username,
+			&i.Account.PasswordEnc,
+			&i.Account.IncludedFolders,
+			&i.Account.ExcludedFolders,
+			&i.Account.Enabled,
+			&i.Account.CreatedAt,
+			&i.Account.UpdatedAt,
+			&i.Account.RemovedAt,
+			&i.Account.OwnerID,
+			&i.Account.Version,
+			&i.Account.Kind,
+			&i.Account.SyncIntervalSeconds,
+			&i.GroupID,
 		); err != nil {
 			return nil, err
 		}

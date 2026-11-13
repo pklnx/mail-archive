@@ -54,6 +54,7 @@ Each event writes exactly one entry.
 | `auditor.grant`, `auditor.extend`, `auditor.revoke`, `auditor.grant_change` | An [auditor grant](#auditors) was created (`label`, the `accounts` with `all_folders` or `folders`, `period_from`, `period_until`, `starts_at`, `ends_at`), extended (`from`, `to`), revoked (`reason`: `owner`, `operator`, `group_change`, `account_move`, `account_purge` or `user_removed`) or lost an account to a move (`reason: account_move`, `account`). The target is the auditor; every entry has `auditor_grant` and is recorded under the grant's group. Group `auditor`. |
 | `auditor.select`, `auditor.denied`, `account.list` | An auditor picked the grant their session reads through (`auditor_grant`, `label`), had a request refused (`method`, `route`, `reason`: `not_allowed` outside the allowlist, `password_change_required`, `two_factor_required`, `grant_selection_required` before the setup or the grant choice is done, `admin_only` for a Log filter only admins may use; nothing was done), or listed the granted accounts (`accounts`, the number). |
 | `group.add`, `group.rename`, `group.remove` | A customer group was created, renamed (`from`) or removed; `group_id` and `group`. Group `users`, with the `user.*` actions. |
+| `group.quota` | A customer group's storage quota was set or removed (`./ma group set-quota`); `from` and `to` in bytes, `null` for none; `group_id` and `group`. Group `users`. |
 | `profile.password_change`, `profile.2fa_enable`, `profile.2fa_disable`, `profile.recovery_codes`, `profile.passkey_add`, `profile.passkey_remove` | Changes a user makes to their own login: password, 2FA and passkeys. |
 | `profile.change` | A user changed their own web UI settings. `fields` names them (`language`, `locale`), each with its old and new value (`from`, `to`). Saving an unchanged value records nothing. |
 | `retention.rule_add`, `retention.rule_remove`, `hold.add`, `hold.release` | [Retention rules and legal holds](../reference/cli#retention), with the account, folder and years, or the hold's name, scope, filter and release note. A hold's entries have the account or the user it names as target (`hold.release` from 1.4.0 on); a hold that names only a [customer group](./retention#holds-per-customer-group) has `group_id` and `group` in its details and is recorded under that group. Group `retention`. |
@@ -135,7 +136,7 @@ it belongs to, at the time it is written:
   user or account, `data.backup`, `audit.export`, `jobs.retry`,
   `instance.secret_key_accepted`, and failed
   logins of a name that is not a user.
-- `group.add`, `group.rename` and `group.remove` have the group they are
+- `group.add`, `group.rename`, `group.remove` and `group.quota` have the group they are
   about.
 - A GoBD export's `data.export` and `data.export_done` have the export's
   group, set explicitly, also when the export covers several users (and so

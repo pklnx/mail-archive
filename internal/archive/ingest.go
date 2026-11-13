@@ -6,6 +6,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/mime"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -128,6 +129,9 @@ type folderWriter struct {
 	skipped   int // deleted by retention and not archived again
 	// flushed is called after each committed batch.
 	flushed func(batch int)
+	// pending counts the files of the queued messages for the storage
+	// gate (#397); every flush settles it. Nil: no gate.
+	pending *quota.Pending
 }
 
 func newFolderWriter(st *store.Store, folderID int64, batchSize int, flushed func(batch int)) *folderWriter {
@@ -158,12 +162,32 @@ func (w *folderWriter) below(uid uint32) bool {
 	return true
 }
 
+// admit asks the storage gate whether the group may store another
+// message. When it may not while files of this batch are pending, these
+// may be duplicates or what crossed the limit: the batch is committed
+// first (the store then tells the gate what it really added) and the gate
+// is asked again, so that known mail never pauses a sync or import, and
+// new mail stops within one message of the limit.
+func (w *folderWriter) admit(ctx context.Context, gate *quota.Gate, group *int64) error {
+	err := gate.Admit(group)
+	if err == nil || w.pending.Bytes() == 0 {
+		return err
+	}
+	if ferr := w.flush(ctx); ferr != nil {
+		return ferr
+	}
+	return gate.Admit(group)
+}
+
 // flush commits the queued messages, if any.
 func (w *folderWriter) flush(ctx context.Context) error {
 	if len(w.metas) == 0 {
 		return nil
 	}
 	res, err := w.st.SaveBatch(ctx, w.folderID, w.maxUID, w.metas, w.locs)
+	// Committed (the store told the gate what it added) or failed: either
+	// way these files are no longer pending.
+	w.pending.Settle()
 	if err != nil {
 		return err
 	}

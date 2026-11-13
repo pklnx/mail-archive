@@ -392,8 +392,9 @@ func (q *Queries) LockFolderByID(ctx context.Context, id int64) (LockFolderByIDR
 }
 
 const lookupSMTPAddress = `-- name: LookupSMTPAddress :one
-SELECT a.id, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed
+SELECT a.id, a.enabled, (a.removed_at IS NOT NULL)::boolean AS removed, o.group_id
 FROM smtp_addresses s JOIN accounts a ON a.id = s.account_id
+LEFT JOIN users o ON o.id = a.owner_id
 WHERE s.address = $1
 `
 
@@ -401,12 +402,20 @@ type LookupSMTPAddressRow struct {
 	ID      int64
 	Enabled bool
 	Removed bool
+	GroupID *int64
 }
 
+// With the owner's customer group (NULL without an owner), for the storage
+// gate at RCPT (#397): no query of its own.
 func (q *Queries) LookupSMTPAddress(ctx context.Context, address string) (LookupSMTPAddressRow, error) {
 	row := q.db.QueryRow(ctx, lookupSMTPAddress, address)
 	var i LookupSMTPAddressRow
-	err := row.Scan(&i.ID, &i.Enabled, &i.Removed)
+	err := row.Scan(
+		&i.ID,
+		&i.Enabled,
+		&i.Removed,
+		&i.GroupID,
+	)
 	return i, err
 }
 

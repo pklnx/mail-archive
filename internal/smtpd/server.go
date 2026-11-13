@@ -6,6 +6,10 @@
 // retries. Mail servers drop a BCC copy that gets a 5xx without telling
 // anyone, so every 5xx is logged at error level.
 //
+// At a storage limit (#397) a recipient is deferred with 452 4.3.1, never
+// refused with a 5xx: from overflow on (the quota plus the SMTP overflow
+// share) of its customer group or the instance, and at disk_low.
+//
 // With Auth on (#395), a mail server logs in with the SMTP secret of one smtp
 // account over STARTTLS, and hands over mail only for that account. Without
 // it, the allowlist is the only gate.
@@ -23,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/emersion/go-smtp"
@@ -30,6 +35,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -98,6 +104,8 @@ type Server struct {
 	WriteTimeout   time.Duration
 	// Now is the clock of envelopes and of the expiry of SMTP secrets.
 	Now func() time.Time
+	// Storage is the storage gate (#397); nil accepts without a limit.
+	Storage *quota.Gate
 
 	// slotFreed, if set, is called after a connection's slot (MaxConns)
 	// is free again; tests set it.
@@ -113,6 +121,12 @@ type Server struct {
 	// inflight counts messages being stored, so that Serve can wait for
 	// them after closing the connections.
 	inflight sync.WaitGroup
+	// storageLog rate-limits the log lines of storage deferrals.
+	storageLog storageLog
+	// storageDeferrals counts the recipients deferred for storage.
+	storageDeferrals atomic.Uint64
+	// beforeData, if set, is called at the start of Data; tests set it.
+	beforeData func()
 }
 
 func (s *Server) defaults() {
@@ -230,6 +244,9 @@ func (s *Server) newSession(c *smtp.Conn) (smtp.Session, error) {
 type recipient struct {
 	account  int64
 	original string
+	// group is the account owner's customer group (nil without an
+	// owner), for the storage gate.
+	group *int64
 }
 
 type session struct {
@@ -360,8 +377,11 @@ func (ss *session) Rcpt(to string, _ *smtp.RcptOptions) error {
 //	   login: 451 4.7.1, so that a message for two accounts stays queued
 //	   for the other account's login instead of losing that copy
 //	d. the account is disabled: 451 4.2.1
-//
-// A quota check (#397) belongs after d.
+//	e. the account's group or the instance is at overflow, or the disk
+//	   at its reserve (#397): 452 4.3.1, for this recipient only; from
+//	   full on it is accepted with a warning in the log. Never a 5xx,
+//	   which mail servers take as permanent and drop a BCC copy for. With
+//	   Auth a transaction holds one account, so this defers all of it.
 func (ss *session) checkRcpt(to string) (recipient, error) {
 	if ss.s.Auth && (!ss.tls() || ss.cred == 0) {
 		ss.s.Logger.Warn("smtp recipient deferred", "code", 451, "client_ip", ss.ip.String(), "reason", "no_auth")
@@ -394,23 +414,100 @@ func (ss *session) checkRcpt(to string) (recipient, error) {
 			"recipient", to, "reason", "the smtp account is disabled")
 		return recipient{}, &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 2, 1}, Message: "mailbox disabled, try again later"}
 	}
-	// Quota (#397): here, after the account checks.
-	return recipient{account: route.AccountID, original: original}, nil
+	// e. Storage (#397): the state is in memory; the group came with the
+	// lookup.
+	switch st := ss.s.Storage.State(route.GroupID); {
+	case st.Deferred():
+		ss.s.storageDeferrals.Add(1)
+		ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "deferred", route.GroupID, st, "smtp recipient deferred",
+			"code", 452, "client_ip", ss.ip.String(), "sender", ss.from, "recipient", to,
+			"account_id", route.AccountID, "group_id", route.GroupID, "reason", "storage", "state", st.String())
+		return recipient{}, errStorage
+	case st.Paused():
+		ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "accepted", route.GroupID, st, "smtp recipient accepted above the storage quota",
+			"client_ip", ss.ip.String(), "account_id", route.AccountID, "group_id", route.GroupID, "state", st.String())
+	default:
+		ss.s.storageLog.reset(route.GroupID)
+	}
+	return recipient{account: route.AccountID, original: original, group: route.GroupID}, nil
+}
+
+// StorageDeferrals returns how many recipients the server deferred for
+// storage since it started (/api/metrics).
+func (s *Server) StorageDeferrals() uint64 { return s.storageDeferrals.Load() }
+
+// deferRecipients counts the recipients of an account deferred at DATA.
+func (ss *session) deferRecipients(account int64) {
+	for _, rc := range ss.rcpts {
+		if rc.account == account {
+			ss.s.storageDeferrals.Add(1)
+		}
+	}
+}
+
+// errStorage defers a recipient or a message at a storage limit.
+var errStorage = &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 3, 1}, Message: "insufficient system storage, try again later"}
+
+// storageDeferred returns the accounts of the transaction whose mail is
+// deferred now (#397): the gate is asked again at DATA, since the state
+// may have changed after RCPT.
+func (ss *session) storageDeferred(accounts []int64) map[int64]bool {
+	out := map[int64]bool{}
+	for _, a := range accounts {
+		if ss.s.Storage.State(ss.groupOf(a)).Deferred() {
+			out[a] = true
+		}
+	}
+	return out
+}
+
+// groupOf is the group of an accepted recipient's account.
+func (ss *session) groupOf(account int64) *int64 {
+	for _, rc := range ss.rcpts {
+		if rc.account == account {
+			return rc.group
+		}
+	}
+	return nil
 }
 
 func (ss *session) Data(r io.Reader) error {
 	ss.s.inflight.Add(1)
 	defer ss.s.inflight.Done()
+	if ss.s.beforeData != nil {
+		ss.s.beforeData()
+	}
 	log := ss.s.Logger.With("client_ip", ss.ip.String(), "sender", ss.from, "recipients", ss.raw)
 
-	// The group lookup runs as soon as the hash is known, once DATA is
-	// complete (archive.NewToGroup, #539 part 3), bounded by storeTimeout
-	// of its own.
-	var newToGroup bool
+	// The storage gate again, before anything is written (#397). go-smtp
+	// has sent 354, so the client sends the body before any answer: when
+	// every account is deferred, the body is dropped unread and nothing
+	// reaches the disk.
 	accounts := ss.accounts()
-	lookups := make([]*store.GroupLookup, len(accounts))
-	for i, a := range accounts {
-		lookups[i] = ss.s.Store.NewGroupLookup(a)
+	deferred := ss.storageDeferred(accounts)
+	if len(deferred) > 0 && len(deferred) == len(accounts) {
+		for _, a := range accounts {
+			ss.deferRecipients(a)
+			g := ss.groupOf(a)
+			st := ss.s.Storage.State(g)
+			ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "deferred", g, st, "smtp message deferred",
+				"code", 452, "client_ip", ss.ip.String(), "sender", ss.from, "account_id", a, "group_id", g,
+				"reason", "storage", "state", st.String())
+		}
+		return errStorage
+	}
+
+	// The group lookup runs as soon as the hash is known, once DATA is
+	// complete (archive.NewToGroup, #539 part 3), for the accounts that
+	// get the message, bounded by storeTimeout of its own.
+	var (
+		newToGroup bool
+		lookups    []*store.GroupLookup
+	)
+	for _, a := range accounts {
+		if !deferred[a] {
+			lookups = append(lookups, ss.s.Store.NewGroupLookup(a))
+		}
 	}
 	blob, created, err := ss.s.Blobs.Put(r, blobstore.SyncTempIf(func(sha string) (bool, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
@@ -448,8 +545,19 @@ func (ss *session) Data(r io.Reader) error {
 		return tempFail()
 	}
 	// One transaction per account; 250 only after all of them committed.
-	// A retry after a partial failure merges into what was stored.
+	// A retry after a partial failure merges into what was stored. An
+	// account deferred for storage gets nothing now; the 452 at the end
+	// makes the mail server retry, and the retry merges as well.
 	for _, account := range accounts {
+		if deferred[account] {
+			ss.deferRecipients(account)
+			g := ss.groupOf(account)
+			st := ss.s.Storage.State(g)
+			ss.s.storageLog.note(ss.s.Logger, ss.s.Now(), "deferred", g, st, "smtp message deferred",
+				"code", 452, "client_ip", ss.ip.String(), "sender", ss.from, "account_id", account, "group_id", g,
+				"reason", "storage", "state", st.String())
+			continue
+		}
 		env.RcptTo = env.RcptTo[:0]
 		for _, rc := range ss.rcpts {
 			if rc.account == account {
@@ -469,6 +577,9 @@ func (ss *session) Data(r io.Reader) error {
 		}
 		log.Info("smtp message received", "account_id", account, "uid", res.UID, "size", blob.Size,
 			"new_location", res.New, "added_recipients", res.AddedRecipients)
+	}
+	if len(deferred) > 0 {
+		return errStorage
 	}
 	return nil
 }
