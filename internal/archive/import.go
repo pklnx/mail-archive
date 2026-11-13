@@ -15,6 +15,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/mailbox"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -107,6 +108,12 @@ type Importer struct {
 	Now            func() time.Time
 	// Progress is called after every committed batch.
 	Progress func(ImportFolderResult)
+	// Storage is the storage gate (#397); nil stores without a limit.
+	// While the account's group or the instance is full, an import does
+	// not start, and a running one stops before the next message with a
+	// *quota.FullError, after saving what it read: running it again goes
+	// on from there.
+	Storage *quota.Gate
 }
 
 // ImportFolderResult counts what an import did in one folder.
@@ -203,6 +210,9 @@ func (im *Importer) Import(ctx context.Context, acc *store.Account, folders []ma
 	if err != nil {
 		return nil, err
 	}
+	if err := im.Storage.Admit(fresh.GroupID); err != nil {
+		return nil, err
+	}
 
 	run, err := im.Store.StartSyncRun(ctx, acc.ID)
 	if err != nil {
@@ -214,6 +224,10 @@ func (im *Importer) Import(ctx context.Context, acc *store.Account, folders []ma
 	runErr := im.importAll(ctx, fresh, folders, run, res, started, log)
 	t := res.Total()
 	switch {
+	case errors.Is(runErr, quota.ErrStorageFull):
+		// Paused: what was read is saved; the run names no limit.
+		res.Status = "partial"
+		run.Error = quota.PausedText
 	case runErr != nil:
 		res.Status = "failed"
 		run.Error = runErr.Error()
@@ -284,6 +298,9 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := im.Storage.Admit(acc.GroupID); err != nil {
+			return err
+		}
 		blob, created, ok, err := im.put(body, m, fr, log)
 		if !ok || err != nil {
 			return err
@@ -331,6 +348,11 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 	err = im.readSource(sf, fr, log, store1)
 	if err == nil {
 		err = w.flush(ctx)
+	} else if errors.Is(err, quota.ErrStorageFull) {
+		// Paused: save what was read, so a rerun goes on from there.
+		if ferr := w.flush(ctx); ferr != nil {
+			err = ferr
+		}
 	}
 	fr.Added -= w.skipped - fr.Deleted
 	fr.New, fr.Deleted = w.added, w.skipped

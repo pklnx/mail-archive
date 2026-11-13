@@ -38,14 +38,19 @@ DELETE FROM folders WHERE account_id = $1;
 DELETE FROM accounts WHERE id = $1;
 
 -- name: ListAccountsByName :many
--- Accounts of all users with this name, for the CLI.
-SELECT * FROM accounts WHERE name = $1 ORDER BY owner_id NULLS FIRST;
+-- Accounts of all users with this name, for the CLI. Every account read
+-- carries its owner's customer group (NULL without an owner), for the
+-- storage gate (#397).
+SELECT sqlc.embed(a), o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+WHERE a.name = $1 ORDER BY a.owner_id NULLS FIRST;
 
 -- name: GetOwnedAccount :one
-SELECT * FROM accounts WHERE owner_id = $1 AND name = $2;
+SELECT sqlc.embed(a), o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+WHERE a.owner_id = $1 AND a.name = $2;
 
 -- name: ListOwnedAccounts :many
-SELECT * FROM accounts WHERE owner_id = $1 ORDER BY name;
+SELECT sqlc.embed(a), o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+WHERE a.owner_id = $1 ORDER BY a.name;
 
 -- name: SetAccountOwner :execrows
 UPDATE accounts SET owner_id = $2, version = version + 1, updated_at = now() WHERE id = $1;
@@ -63,7 +68,7 @@ UPDATE accounts SET owner_id = $1, version = version + 1, updated_at = now() WHE
 SELECT owner_id, count(*) AS accounts FROM accounts WHERE owner_id IS NOT NULL GROUP BY owner_id;
 
 -- name: ListAccounts :many
-SELECT * FROM accounts ORDER BY name;
+SELECT sqlc.embed(a), o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id ORDER BY a.name;
 
 -- name: RemoveAccount :execrows
 -- Keeps the archived data; wipes the credentials.
@@ -72,7 +77,7 @@ SET removed_at = now(), enabled = FALSE, password_enc = ''::bytea, version = ver
 WHERE id = $1 AND removed_at IS NULL;
 
 -- name: GetAccount :one
-SELECT * FROM accounts WHERE id = $1;
+SELECT sqlc.embed(a), o.group_id FROM accounts a LEFT JOIN users o ON o.id = a.owner_id WHERE a.id = $1;
 
 -- name: UserOwnsAccounts :one
 SELECT EXISTS (SELECT 1 FROM accounts WHERE owner_id = $1);

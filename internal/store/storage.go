@@ -148,9 +148,21 @@ func lockAccountGroup(ctx context.Context, q *db.Queries, t lockTarget) (account
 // Two saves that add the same message to two accounts of one group at the
 // same time may both count it: the figure stays an upper bound, and the
 // next snapshot is exact.
-func recordGroupUsage(ctx context.Context, q *db.Queries, g accountGroup, added []*MessageMeta) error {
-	if g.Group == nil || len(added) == 0 {
-		return nil
+//
+// It returns the bytes the save adds to the group (without a group: to
+// the account), for the storage gate's local figures once the save has
+// committed (noteWrite): an upper bound of what it adds to the group and
+// to the instance.
+func recordGroupUsage(ctx context.Context, q *db.Queries, g accountGroup, added []*MessageMeta) (int64, error) {
+	if len(added) == 0 {
+		return 0, nil
+	}
+	if g.Group == nil {
+		var bytes int64
+		for _, m := range added {
+			bytes += m.Size
+		}
+		return bytes, nil
 	}
 	shas := make([]string, len(added))
 	for i, m := range added {
@@ -158,7 +170,7 @@ func recordGroupUsage(ctx context.Context, q *db.Queries, g accountGroup, added 
 	}
 	held, err := q.GroupHeldMessages(ctx, db.GroupHeldMessagesParams{Shas: shas, AccountID: g.Account, GroupID: *g.Group})
 	if err != nil {
-		return fmt.Errorf("group held messages: %w", err)
+		return 0, fmt.Errorf("group held messages: %w", err)
 	}
 	elsewhere := make(map[string]bool, len(held))
 	for _, sha := range held {
@@ -173,9 +185,9 @@ func recordGroupUsage(ctx context.Context, q *db.Queries, g accountGroup, added 
 		}
 	}
 	if n == 0 {
-		return nil
+		return 0, nil
 	}
-	return q.InsertGroupDelta(ctx, db.InsertGroupDeltaParams{GroupID: *g.Group, Messages: n, Bytes: bytes})
+	return bytes, q.InsertGroupDelta(ctx, db.InsertGroupDeltaParams{GroupID: *g.Group, Messages: n, Bytes: bytes})
 }
 
 // requestUsageRefresh requests a snapshot in the caller's transaction:

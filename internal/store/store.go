@@ -54,6 +54,8 @@ type Store struct {
 	// migrations are the migration files goose runs: the embedded ones,
 	// or a test's (WithMigrationsFS).
 	migrations fs.FS
+	// writes is told what each committed save added (SetWriteObserver).
+	writes atomic.Pointer[WriteObserver]
 }
 
 // Option configures Open.
@@ -406,6 +408,11 @@ type Account struct {
 	// SyncInterval is the account's own sync interval: nil uses the
 	// server's, 0 keeps it off the schedule. Only IMAP accounts have one.
 	SyncInterval *time.Duration
+	// GroupID is the customer group of the owner, read with the account
+	// (a join, no query of its own), for the storage gate (#397); nil
+	// without an owner. Only GetAccount, GetOwnedAccount and the account
+	// lists set it.
+	GroupID *int64
 }
 
 // secondsToInterval and intervalToSeconds convert the stored own sync
@@ -424,6 +431,13 @@ func intervalToSeconds(d *time.Duration) *int32 {
 	}
 	s := int32(min(*d/time.Second, 1<<31-1)) //nolint:gosec // clamped
 	return &s
+}
+
+// accountWithGroup is an account read with its owner's group.
+func accountWithGroup(r db.Account, group *int64) *Account {
+	a := accountFromDB(r)
+	a.GroupID = group
+	return a
 }
 
 func accountFromDB(r db.Account) *Account {
@@ -544,7 +558,7 @@ func (s *Store) GetAccount(ctx context.Context, id int64) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	return accountFromDB(r), nil
+	return accountWithGroup(r.Account, r.GroupID), nil
 }
 
 // GetOwnedAccount looks up one of a user's accounts by name.
@@ -556,26 +570,28 @@ func (s *Store) GetOwnedAccount(ctx context.Context, owner int64, name string) (
 	if err != nil {
 		return nil, err
 	}
-	return accountFromDB(r), nil
+	return accountWithGroup(r.Account, r.GroupID), nil
 }
 
 // ListAccountsByName returns the accounts of all users with this name.
 func (s *Store) ListAccountsByName(ctx context.Context, name string) ([]*Account, error) {
-	return accountsFromDB(s.q.ListAccountsByName(ctx, name))
+	rows, err := s.q.ListAccountsByName(ctx, name)
+	return accountsWithGroup(rows, err, func(r db.ListAccountsByNameRow) (db.Account, *int64) { return r.Account, r.GroupID })
 }
 
 // ListOwnedAccounts returns a user's accounts ordered by name.
 func (s *Store) ListOwnedAccounts(ctx context.Context, owner int64) ([]*Account, error) {
-	return accountsFromDB(s.q.ListOwnedAccounts(ctx, &owner))
+	rows, err := s.q.ListOwnedAccounts(ctx, &owner)
+	return accountsWithGroup(rows, err, func(r db.ListOwnedAccountsRow) (db.Account, *int64) { return r.Account, r.GroupID })
 }
 
-func accountsFromDB(rows []db.Account, err error) ([]*Account, error) {
+func accountsWithGroup[R any](rows []R, err error, split func(R) (db.Account, *int64)) ([]*Account, error) {
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*Account, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, accountFromDB(r))
+		out = append(out, accountWithGroup(split(r)))
 	}
 	return out, nil
 }
@@ -597,7 +613,8 @@ func (s *Store) CountOwnedAccounts(ctx context.Context) (map[int64]int64, error)
 
 // ListAccounts returns the accounts of all users ordered by name.
 func (s *Store) ListAccounts(ctx context.Context) ([]*Account, error) {
-	return accountsFromDB(s.q.ListAccounts(ctx))
+	rows, err := s.q.ListAccounts(ctx)
+	return accountsWithGroup(rows, err, func(r db.ListAccountsRow) (db.Account, *int64) { return r.Account, r.GroupID })
 }
 
 // Folder is the sync state of one IMAP folder.
@@ -714,9 +731,12 @@ func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location,
 	after func(*db.Queries, SaveResult) error) (SaveResult, error) {
 	metas, locs = sortBatch(metas, locs)
-	var res SaveResult
+	var (
+		res   SaveResult
+		wrote storageWrite
+	)
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
-		res = SaveResult{}
+		res, wrote = SaveResult{}, storageWrite{}
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
@@ -724,6 +744,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err != nil {
 			return err
 		}
+		wrote.group = group.Group
 		skip, err := skipDeleted(ctx, q, folderID, metas, locs)
 		if err != nil {
 			return err
@@ -770,7 +791,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 				return fmt.Errorf("insert location: %w", err)
 			}
 		}
-		if err := recordGroupUsage(ctx, q, group, added); err != nil {
+		if wrote.bytes, err = recordGroupUsage(ctx, q, group, added); err != nil {
 			return err
 		}
 		if err := q.AdvanceFolder(ctx, db.AdvanceFolderParams{ID: folderID, LastUid: int64(lastUID)}); err != nil {
@@ -784,6 +805,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 	if err != nil {
 		return SaveResult{}, err
 	}
+	s.noteWrite(wrote)
 	return res, nil
 }
 

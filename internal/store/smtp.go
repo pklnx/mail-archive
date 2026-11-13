@@ -225,6 +225,9 @@ type SMTPRoute struct {
 	AccountID int64
 	Enabled   bool
 	Removed   bool
+	// GroupID is the customer group of the account's owner, read in the
+	// same statement; nil without an owner (#397, the storage gate).
+	GroupID *int64
 }
 
 // LookupSMTPAddress returns the account that receives for a normalized
@@ -237,7 +240,7 @@ func (s *Store) LookupSMTPAddress(ctx context.Context, addr string) (SMTPRoute, 
 	if err != nil {
 		return SMTPRoute{}, err
 	}
-	return SMTPRoute{AccountID: r.ID, Enabled: r.Enabled, Removed: r.Removed}, nil
+	return SMTPRoute{AccountID: r.ID, Enabled: r.Enabled, Removed: r.Removed, GroupID: r.GroupID}, nil
 }
 
 // Envelope is the SMTP envelope of a received message.
@@ -279,9 +282,12 @@ type ReceiveResult struct {
 // it as an orphan; nor, for metadata that relied on an existing row
 // (meta.Known), the row. Otherwise it fails with ErrBlobGone.
 func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta MessageMeta, env Envelope, fileExists func() bool) (ReceiveResult, error) {
-	var res ReceiveResult
+	var (
+		res   ReceiveResult
+		wrote storageWrite
+	)
 	err := s.inWriteTx(ctx, true, func(q *db.Queries) error {
-		res = ReceiveResult{}
+		res, wrote = ReceiveResult{}, storageWrite{}
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
@@ -311,6 +317,7 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 		if err != nil {
 			return err
 		}
+		wrote.group = group.Group
 		folder, err := q.LockFolder(ctx, db.LockFolderParams{AccountID: accountID, Name: SMTPFolder})
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
@@ -377,13 +384,16 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 			return fmt.Errorf("insert envelope: %w", err)
 		}
 		if !held[meta.SHA256] {
-			if err := recordGroupUsage(ctx, q, group, []*MessageMeta{&meta}); err != nil {
+			if wrote.bytes, err = recordGroupUsage(ctx, q, group, []*MessageMeta{&meta}); err != nil {
 				return err
 			}
 		}
 		res.UID, res.New, res.AddedRecipients = uint32(uid), true, len(rcpts) //nolint:gosec // UIDs stay below 2^32
 		return nil
 	})
+	if err == nil {
+		s.noteWrite(wrote)
+	}
 	return res, err
 }
 

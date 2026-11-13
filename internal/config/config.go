@@ -250,6 +250,8 @@ type Config struct {
 	// serve only (SetupTokenFromEnv), empty without one. A secret: never
 	// log it.
 	SetupToken string
+	// Storage holds the instance quota and the disk reserve (#397).
+	Storage Storage
 }
 
 // IMAPLimits are the IMAP limits an operator may raise, each checked
@@ -394,6 +396,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.IMAP, err = ParseIMAPLimits(os.Getenv); err != nil {
+		return nil, err
+	}
+	if cfg.Storage, err = ParseStorage(os.Getenv); err != nil {
 		return nil, err
 	}
 	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, os.Getenv(EnvMigrateOnStart)); err != nil {

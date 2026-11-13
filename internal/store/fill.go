@@ -201,7 +201,8 @@ func (s *Store) CreateFill(ctx context.Context, f *Fill, seal func(id int64) ([]
 		since = &now
 	}
 	return s.inTx(ctx, func(q *db.Queries) error {
-		a, err := q.GetAccount(ctx, f.AccountID)
+		r, err := q.GetAccount(ctx, f.AccountID)
+		a := r.Account
 		if isNoRows(err) {
 			return ErrNotFound
 		}
@@ -487,9 +488,10 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 	var (
 		res     SaveResult
 		present int
+		wrote   storageWrite
 	)
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
-		res, present = SaveResult{}, 0
+		res, present, wrote = SaveResult{}, 0, storageWrite{}
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
@@ -497,6 +499,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 		if err != nil {
 			return err
 		}
+		wrote.group = group.Group
 		folder, err := q.LockFolderByID(ctx, folderID)
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
@@ -577,7 +580,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 				}
 			}
 		}
-		if err := recordGroupUsage(ctx, q, group, added); err != nil {
+		if wrote.bytes, err = recordGroupUsage(ctx, q, group, added); err != nil {
 			return err
 		}
 		if done != nil {
@@ -588,6 +591,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 	if err != nil {
 		return SaveResult{}, 0, err
 	}
+	s.noteWrite(wrote)
 	return res, present, nil
 }
 
@@ -670,6 +674,12 @@ func (s *Store) StartFillRun(ctx context.Context, id int64, now time.Time) error
 	})
 }
 
+// isForeignKeyViolation reports a foreign key that refused a write.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
@@ -728,7 +738,8 @@ func (s *Store) SetFillRecurring(ctx context.Context, id int64, interval *time.D
 		if err != nil {
 			return err
 		}
-		a, err := q.GetAccount(ctx, f.AccountID)
+		r, err := q.GetAccount(ctx, f.AccountID)
+		a := r.Account
 		if err != nil {
 			return err
 		}

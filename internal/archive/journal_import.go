@@ -10,6 +10,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/mailbox"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -64,6 +65,9 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 	if fresh.Kind != store.KindSMTP {
 		return nil, errors.New("not an smtp account")
 	}
+	if err := im.Storage.Admit(fresh.GroupID); err != nil {
+		return nil, err
+	}
 	folderID, err := im.Store.JournalFolderID(ctx, fresh.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("the account has no folder %s", store.SMTPFolder)
@@ -79,7 +83,8 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 	for _, sf := range folders {
 		res.Folders = append(res.Folders, ImportFolderResult{Folder: sf.Name})
 		fr := &res.Folders[len(res.Folders)-1]
-		j := &journalImport{im: im, accountID: fresh.ID, folderID: folderID, importID: imp.ID, fr: fr, log: log.With("folder", sf.Name)}
+		j := &journalImport{im: im, accountID: fresh.ID, group: fresh.GroupID, folderID: folderID, importID: imp.ID, fr: fr,
+			log: log.With("folder", sf.Name)}
 		if err := j.run(ctx, sf); err != nil {
 			runErr = fmt.Errorf("%s: %w", sf.Name, err)
 			break
@@ -87,6 +92,8 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 	}
 	t := res.Total()
 	switch {
+	case errors.Is(runErr, quota.ErrStorageFull):
+		res.Status = "partial" // paused; what was read is saved
 	case runErr != nil:
 		res.Status = "failed"
 	case t.Skipped > 0:
@@ -103,6 +110,7 @@ func (im *Importer) ImportJournal(ctx context.Context, acc *store.Account, imp *
 type journalImport struct {
 	im                            *Importer
 	accountID, folderID, importID int64
+	group                         *int64 // the account owner's, for the storage gate
 	fr                            *ImportFolderResult
 	log                           *slog.Logger
 	batch                         []journalPending
@@ -122,8 +130,18 @@ func (j *journalImport) run(ctx context.Context, sf mailbox.SourceFolder) error 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := j.im.Storage.Admit(j.group); err != nil {
+			return err
+		}
 		return j.add(ctx, body, m)
 	})
+	if errors.Is(err, quota.ErrStorageFull) {
+		// Paused: save what was read, so a rerun goes on from there.
+		if ferr := j.flush(ctx); ferr != nil {
+			return ferr
+		}
+		return err
+	}
 	if err != nil {
 		return err
 	}
