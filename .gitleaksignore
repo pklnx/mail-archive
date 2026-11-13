@@ -1,0 +1,13 @@
+# Findings in the git history that are not credentials, by fingerprint
+# (commit:file:rule:line). See docs/development/index.md, "Secret scanning".
+#
+# Fake test and demo values on the branches of closed pull requests; none of
+# these commits is on main. `make secrets` scans all local refs, so a full
+# clone reports them.
+# PR #548: base64 of a plain-text marker, a deliberately invalid key in a test.
+c430ddff037d9aee6b0f4f18bbb0e5591681626b:internal/config/secrets_test.go:generic-api-key:71
+# PR #514: base32 of the alphabet, the demo auditor's TOTP secret.
+52e0688ac8fc760249b33f6f125d30438cbe41cb:tools/demo/main.go:generic-api-key:79
+52e0688ac8fc760249b33f6f125d30438cbe41cb:docs/scripts/screenshots.mjs:generic-api-key:101
+# PR #506: base64 of a plain-text phrase, a deliberately too short secret in a test.
+d3ca6f8dfe9dc8c722013bca47e3e98661789f71:internal/blobcrypt/keyring_test.go:generic-api-key:336

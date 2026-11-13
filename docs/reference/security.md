@@ -165,18 +165,25 @@ secret key and one backup, and a message that several groups received is
 stored once and shown to each only through its own accounts.
 
 Sync, import and fill statistics count per account: a message is *new* when
-the account did not hold it before. Since 1.6.0, two more things do not
+the account did not hold it before. Since 1.6.0, three more things do not
 depend on what accounts of other customer groups hold or held:
 
 - whether a message deleted by retention or an account purge is archived
   again: it is skipped only in the accounts and groups it was deleted from,
-  and only while that group holds no copy of it.
+  and only while that group holds no copy of it;
 - when the text of its attachments becomes searchable: in each group, only
   after an extraction that started once that copy was stored (for a copy
   that moves into the group while its extraction runs: when it ends), or,
   when a user or account that could search it moves into the group, as soon
   as the move commits. From then on, other users of the group who save the
-  message can search it at once.
+  message can search it at once;
+- the work of storing a message new to the group: it is parsed, synced to
+  disk and indexed as for a message new to the archive. Only storing its
+  row and linking its file differ: a new file gets a directory entry and
+  its changed directory is synced, where an existing file is synced
+  itself; a new row is inserted, where an existing one is looked up. The
+  difference is of the order of one database insert and one directory sync
+  and has not been measured.
 
 Accepted:
 

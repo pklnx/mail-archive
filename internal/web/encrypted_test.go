@@ -59,7 +59,7 @@ func (f *apiFixture) addLarge(raw string) string {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true)
+	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true, true)
 	if err != nil {
 		f.t.Fatal(err)
 	}

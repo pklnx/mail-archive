@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
@@ -44,6 +45,21 @@ type Store struct {
 
 	// beforeOpen, for tests, runs before a message file is opened.
 	beforeOpen func(path string)
+	// tempSynced, for tests of callers (OnTempSync), runs after Put
+	// synchronized its temporary file.
+	tempSynced atomic.Pointer[func(hash string)]
+}
+
+// OnTempSync sets fn, for tests of Put's callers: Put calls it with the
+// hash after it synchronized its temporary file, so a test can tell
+// whether a caller's SyncTempIf predicate asked for the sync (#539, part
+// 3). nil removes it.
+func (s *Store) OnTempSync(fn func(hash string)) {
+	if fn == nil {
+		s.tempSynced.Store(nil)
+		return
+	}
+	s.tempSynced.Store(&fn)
 }
 
 // syncCloser is an open file or directory that can be synchronized.
@@ -192,9 +208,34 @@ const (
 // creates the final name and a removal takes it away again meanwhile.
 const publishAttempts = 3
 
+// PutOption configures one Put.
+type PutOption func(*putOptions)
+
+type putOptions struct {
+	syncTemp func(hash string) (bool, error)
+}
+
+// SyncTempIf makes Put call pred once with the hash, as soon as the hash is
+// known, for a new and an existing blob alike. When pred returns true, the
+// temporary file is synchronized and closed at once, so that a blob that
+// exists already costs the same file sync as a new one (#539, part 3: a
+// message new to the saving account's customer group). When it returns
+// false, Put works as without the option. An error from pred fails the
+// Put; nothing is published then.
+func SyncTempIf(pred func(hash string) (bool, error)) PutOption {
+	return func(o *putOptions) { o.syncTemp = pred }
+}
+
+// SyncTemp makes Put always synchronize the temporary file, also for a
+// blob that exists already: the work of a new blob, without a lookup
+// (./ma import, tools/demo).
+func SyncTemp() PutOption {
+	return SyncTempIf(func(string) (bool, error) { return true, nil })
+}
+
 // Put streams r to disk while hashing it. If a blob with the same hash
 // already exists in the form this store writes, the new copy is discarded
-// and created is false.
+// and created is false. Options (SyncTempIf) run once the hash is known.
 //
 // With encryption on (SetKeys), the bytes are encrypted while they are
 // hashed, under the keyring's current data key, and the blob is
@@ -221,7 +262,11 @@ const publishAttempts = 3
 // synchronized. The same holds for an existing file that fails that
 // read-back (damaged) while the other form exists: it is replaced, and
 // then the other form unlinked.
-func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
+func (s *Store) Put(r io.Reader, opts ...PutOption) (blob Blob, created bool, err error) {
+	var o putOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	tmp, err := os.CreateTemp(filepath.Join(s.root, "tmp"), "put-*")
 	if err != nil {
 		return Blob{}, false, err
@@ -266,7 +311,21 @@ func (s *Store) Put(r io.Reader) (blob Blob, created bool, err error) {
 			return err
 		}
 		synced = true
+		if fn := s.tempSynced.Load(); fn != nil {
+			(*fn)(hash)
+		}
 		return nil
+	}
+	if o.syncTemp != nil {
+		yes, err := o.syncTemp(hash)
+		if err != nil {
+			return Blob{}, false, err
+		}
+		if yes {
+			if err := syncTemp(); err != nil {
+				return Blob{}, false, err
+			}
+		}
 	}
 	for attempt := 1; ; attempt++ {
 		_, err := os.Lstat(final)

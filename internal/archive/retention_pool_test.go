@@ -69,7 +69,7 @@ func newWaitingWriters(t *testing.T, ctx context.Context, s *retentionSetup) *wa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.meta, err = BuildMeta(ctx, s.st, s.blobs, blob, created); err != nil {
+	if w.meta, err = BuildMeta(ctx, s.st, s.blobs, blob, created, true); err != nil {
 		t.Fatal(err)
 	}
 	return w

@@ -499,6 +499,9 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 		if err != nil {
 			return err
 		}
+		if err := checkLookupGroups(group, metas); err != nil {
+			return err
+		}
 		wrote.group = group.Group
 		folder, err := q.LockFolderByID(ctx, folderID)
 		if err != nil {

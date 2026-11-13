@@ -4,6 +4,9 @@ import "context"
 
 // Test hooks for archive_test.
 
+// MaxRedos is maxRedos, for tests of the redo bound.
+const MaxRedos = maxRedos
+
 func SetBeforeMove(o *VerifyOptions, f func()) { o.beforeMove = f }
 
 func SetAfterStart(o *ExportOptions, f func()) { o.afterStart = f }
