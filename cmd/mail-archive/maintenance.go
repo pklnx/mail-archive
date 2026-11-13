@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/cobra"
 
 	"github.com/pklnx/mail-archive/internal/archive"
@@ -390,7 +388,10 @@ Restore with restore-dump.
 
 Needs pg_dump in PATH, at least the server's major version. The Docker image
 has none: with Docker Compose use "./ma backup DIR", which runs pg_dump in
-the database container and writes DIR on the host.`,
+the database container and writes DIR on the host. pg_dump takes its TLS
+settings from ` + config.EnvDatabaseURL + ` only: a PGSSLMODE or other TLS
+variable it would not get makes backup refuse (see "Backups without Docker"
+in the operations guide).`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if noteOnly {
 				return cobra.MaximumNArgs(1)(cmd, args)
@@ -433,6 +434,16 @@ the database container and writes DIR on the host.`,
 			if err != nil {
 				return err
 			}
+			// Before the audit entry too: pg_dump's connection, its place
+			// in PATH and its version (#540), so a refused backup leaves no
+			// data.backup entry. ./ma backup runs pg_dump itself, in the
+			// database container: --note-only checks none of it.
+			var pgDump *pgTool
+			if !noteOnly {
+				if pgDump, err = findPgTool(cmd.Context(), a, "pg_dump", "./ma backup DIR"); err != nil {
+					return err
+				}
+			}
 			// A dump is an export of everything. ./ma backup runs pg_dump
 			// itself, after this command with --note-only.
 			e := cliInstance("data.backup")
@@ -460,22 +471,13 @@ the database container and writes DIR on the host.`,
 				fmt.Print(note)
 				return nil
 			}
-			pgDump, err := exec.LookPath("pg_dump")
-			if err != nil {
-				return errors.New("pg_dump not found; install the PostgreSQL client tools, or with Docker Compose use ./ma backup DIR")
-			}
-			major, err := a.store.ServerMajorVersion(cmd.Context())
-			if err != nil {
-				return err
-			}
 			attestBeforeBackup(cmd.Context(), a, cmd.OutOrStdout())
 			note, err := backupNote(cmd.Context(), a, name, ring, now)
 			if err != nil {
 				return err
 			}
 			path, err := runBackup(cmd.Context(), backupJob{
-				PgDump: pgDump, DatabaseURL: a.cfg.DatabaseURL, Dir: args[0], Name: name,
-				ServerMajor: major, Note: note, Seal: ring,
+				PgDump: pgDump, Dir: args[0], Name: name, Note: note, Seal: ring,
 			})
 			if err != nil {
 				return err
@@ -501,40 +503,24 @@ the database container and writes DIR on the host.`,
 const backupNoteName = "BACKUP-NOTE.txt"
 
 type backupJob struct {
-	PgDump      string
-	DatabaseURL string
-	Dir         string
-	Name        string // file name of the dump
-	ServerMajor int
-	Note        string
+	PgDump *pgTool // checked by checkPgTool
+	Dir    string
+	Name   string // file name of the dump
+	Note   string
 	// Seal, when set, is the opened keyring the dump is encrypted with
 	// (Name gets .enc); a copy of it is written next to the dump.
 	Seal *blobcrypt.Keyring
 }
 
-// runBackup checks the pg_dump version, dumps into Dir/Name.partial and
-// renames it when pg_dump succeeds, then writes the note. The connection is
-// passed in the environment, so the password is not in pg_dump's arguments.
+// runBackup dumps into Dir/Name.partial with the pg_dump checkPgTool
+// checked, and renames it when pg_dump succeeds, then writes the note. The
+// connection is passed in the environment, so the password is not in
+// pg_dump's arguments.
 // With Seal, pg_dump's output is encrypted on its way to the file, which
 // is finished only after pg_dump succeeded: a failed pg_dump never leaves
 // a complete encrypted dump. The keyring copy is written before the dump
 // gets its name, so a dump never exists without it.
 func runBackup(ctx context.Context, job backupJob) (string, error) {
-	env, err := pgEnv(job.DatabaseURL)
-	if err != nil {
-		return "", err
-	}
-	version, err := pgCommand(ctx, job.PgDump, env, "--version").Output()
-	if err != nil {
-		return "", fmt.Errorf("pg_dump --version: %w", err)
-	}
-	major, err := pgDumpMajor(string(version))
-	if err != nil {
-		return "", err
-	}
-	if major < job.ServerMajor {
-		return "", fmt.Errorf("pg_dump is version %d, the server %d: install pg_dump %d or newer", major, job.ServerMajor, job.ServerMajor)
-	}
 	if err := os.MkdirAll(job.Dir, 0o700); err != nil {
 		return "", err
 	}
@@ -560,7 +546,7 @@ func runBackup(ctx context.Context, job backupJob) (string, error) {
 		}
 		out = sealer
 	}
-	cmd := pgCommand(ctx, job.PgDump, env, "--format=custom", "--no-password")
+	cmd := pgCommand(ctx, job.PgDump.Path, job.PgDump.Env, "--format=custom", "--no-password")
 	cmd.Stdout, cmd.Stderr = out, &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("pg_dump: %w: %s", err, strings.TrimSpace(stderr.String()))
@@ -602,63 +588,12 @@ var pgToolEnvNames = []string{
 	"SSL_CERT_FILE", "SSL_CERT_DIR", "OPENSSL_CONF", "KRB5CCNAME", "KRB5_CONFIG",
 }
 
-// pgEnv builds the whole environment of pg_dump and pg_restore
-// (config.ChildEnv): when set in this process, the variables of
-// pgToolEnvNames, then the libpq variables of the database URL.
-func pgEnv(databaseURL string) ([]string, error) {
-	cfg, err := pgconn.ParseConfig(databaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", config.EnvDatabaseURL, err)
-	}
-	libpq := []string{
-		"PGHOST=" + cfg.Host,
-		"PGPORT=" + strconv.Itoa(int(cfg.Port)),
-		"PGUSER=" + cfg.User,
-		"PGDATABASE=" + cfg.Database,
-	}
-	if cfg.Password != "" {
-		libpq = append(libpq, "PGPASSWORD="+cfg.Password)
-	}
-	for key, value := range sslSettings(databaseURL) {
-		libpq = append(libpq, key+"="+value)
-	}
-	return config.ChildEnv(os.Environ(), pgToolEnvNames, libpq...), nil
-}
-
-// pgCommand runs pg_dump or pg_restore with env, the environment pgEnv
-// built, and nothing inherited from this process.
+// pgCommand runs pg_dump or pg_restore with env, the environment
+// pgToolConn.env built, and nothing inherited from this process.
 func pgCommand(ctx context.Context, tool string, env []string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, tool, args...) //nolint:gosec // pg_dump or pg_restore from PATH
 	cmd.Env = env
 	return cmd
-}
-
-// sslSettings reads the TLS parameters of a URL or key=value connection
-// string as libpq variables.
-func sslSettings(databaseURL string) map[string]string {
-	names := map[string]string{
-		"sslmode": "PGSSLMODE", "sslrootcert": "PGSSLROOTCERT", "sslcert": "PGSSLCERT", "sslkey": "PGSSLKEY",
-	}
-	out := map[string]string{}
-	if strings.HasPrefix(databaseURL, "postgres://") || strings.HasPrefix(databaseURL, "postgresql://") {
-		u, err := url.Parse(databaseURL)
-		if err != nil {
-			return out
-		}
-		for k, v := range u.Query() {
-			if name, ok := names[k]; ok && len(v) > 0 {
-				out[name] = v[0]
-			}
-		}
-		return out
-	}
-	for _, field := range strings.Fields(databaseURL) {
-		k, v, ok := strings.Cut(field, "=")
-		if name, known := names[k]; ok && known {
-			out[name] = strings.Trim(v, "'")
-		}
-	}
-	return out
 }
 
 var pgDumpVersion = regexp.MustCompile(`\(PostgreSQL\) (\d+)`)

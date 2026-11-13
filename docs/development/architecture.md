@@ -1297,8 +1297,15 @@ began before it ends with the handler it began with.
 Child processes get an environment built by `config.ChildEnv`: only the
 variables of an allowlist (`pgToolEnvNames` for `pg_dump` and `pg_restore`,
 `containerCheckEnvNames` for `prepare-data --check`) and what the caller
-adds (the libpq variables of the database URL, the data directory). A
-`MAIL_ARCHIVE_*` or `PG*` variable of the process is never passed on.
+adds (the libpq variables of the database connection, the data
+directory). A `MAIL_ARCHIVE_*` or `PG*` variable of the process is never
+passed on. For `pg_dump` and `pg_restore`, `pgToolConn` (`pgtools.go`,
+#540) builds those variables and a keyword/value string from one map: host,
+port, user, database and password from the app's `pgconn.ParseConfig`, the
+TLS and authentication keys from the connection string only. It refuses
+TLS `PG*` variables the string does not override, services and
+`sslpassword`, and parses the string with `pgconn.ParseConfig` to compare
+its ordered connection attempts with the app's; any difference refuses.
 
 Steps 3 to 7 (but 6) run under the lock, so starts and `migrate` at the
 same time apply each migration once: the first runs them, the others wait

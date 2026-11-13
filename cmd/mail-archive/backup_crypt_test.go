@@ -120,8 +120,8 @@ func TestBackupSealed(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "backups")
 	job := backupJob{
-		PgDump: pgDump, DatabaseURL: "postgres://u:p@h/db", Dir: dir, Name: "mailarchive-20261104T120000Z.dump",
-		ServerMajor: 18, Note: "the note\n", Seal: ring,
+		PgDump: testPgTool(t, pgDump, "postgres://u:p@h/db", 18), Dir: dir, Name: "mailarchive-20261104T120000Z.dump",
+		Note: "the note\n", Seal: ring,
 	}
 	path, err := runBackup(context.Background(), job)
 	if err != nil {
@@ -345,7 +345,7 @@ func TestRunRestore(t *testing.T) {
 
 	basics := setEnvMarkers(t)
 	pgRestore, logDir := fakePgRestore(t, "18.0")
-	job := restoreJob{PgRestore: pgRestore, DatabaseURL: "postgres://u:p@h/archive", ServerMajor: 18, In: open(sealed.Bytes()), Name: "x.dump.enc", Sealed: true}
+	job := restoreJob{PgRestore: testPgTool(t, pgRestore, "postgres://u:p@h/archive", 18), In: open(sealed.Bytes()), Name: "x.dump.enc", Sealed: true}
 	var out bytes.Buffer
 	if err := runRestore(context.Background(), job, &out); err != nil {
 		t.Fatal(err)
@@ -354,7 +354,7 @@ func TestRunRestore(t *testing.T) {
 		t.Errorf("pg_restore read %d bytes, want %d", len(got), len(plain))
 	}
 	args, _ := os.ReadFile(filepath.Join(logDir, "args"))
-	for _, want := range []string{"--no-owner", "--single-transaction", "--exit-on-error", "--dbname=archive"} {
+	for _, want := range []string{"--no-owner", "--single-transaction", "--exit-on-error", "--dbname=dbname='archive'"} {
 		if !strings.Contains(string(args), want+"\n") {
 			t.Errorf("args lack %s:\n%s", want, args)
 		}
@@ -378,8 +378,11 @@ func TestRunRestore(t *testing.T) {
 	}
 
 	old, oldLog := fakePgRestore(t, "16.4")
-	job.PgRestore, job.In = old, open(sealed.Bytes())
-	if err := runRestore(context.Background(), job, io.Discard); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
+	conn, err := resolvePgToolConn("pg_restore", "postgres://u:p@h/archive", os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkPgTool(context.Background(), "pg_restore", old, conn, 18); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
 		t.Errorf("old pg_restore: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(oldLog, "args")); !errors.Is(err, os.ErrNotExist) {
