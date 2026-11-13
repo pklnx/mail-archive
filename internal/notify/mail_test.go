@@ -9,6 +9,7 @@ import (
 	"mime/quotedprintable"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ import (
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
-// Alert mail (#397, part 5): the notifier enqueues one notify_mail job
-// per admin with a confirmed address at the claim, once per transition;
+// Alert mail (#397, part 5): the notifier's mail pass enqueues one
+// notify_mail job per admin with a confirmed address, once per transition;
 // the job pool delivers them through an in-process relay.
 
 // admin creates an admin with a confirmed notification address.
@@ -639,4 +640,217 @@ func TestStorageMailDuringWebhookBackoff(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNoMailForShortFailureAfterRecovery: the webhook delivered the
+// failing alert, mail sent the failing and the recovery mail, and the
+// webhook now answers 401 (or 503) to the recovery. A short failure below
+// the threshold starts a new streak and clears the webhook's retry time,
+// so the webhook claims a recovery of the new streak at once: mail sends
+// nothing for it, for syncs and for recurring fills.
+func TestNoMailForShortFailureAfterRecovery(t *testing.T) {
+	for _, kind := range []string{"sync", "fill"} {
+		for _, status := range []int{http.StatusUnauthorized, http.StatusServiceUnavailable} {
+			t.Run(kind+" "+strconv.Itoa(status), func(t *testing.T) {
+				e := newEnv(t)
+				e.admin("boss", "boss@example.com")
+				relay := mailtest.Start(t, mailtest.StartTLS)
+				statuses := []int{http.StatusOK}
+				for range 20 {
+					statuses = append(statuses, status)
+				}
+				rcv := newReceiver(t, statuses...)
+				n := e.mailNotifier(idsWebhook(t, rcv.srv.URL, ""))
+				var fail, ok func()
+				table := "account_sync_health"
+				if kind == "sync" {
+					acc := e.addAccount("büro", "u", "p")
+					fail, ok = func() { e.fail(acc, 1) }, func() { e.succeed(acc) }
+				} else {
+					finish := e.recurringFill()
+					fail, ok = func() { finish(store.FillFailed) }, func() { finish(store.FillOK) }
+					table = "smtp_fill_health"
+				}
+				for range 3 {
+					fail()
+				}
+				// The next streak must start in another second: event IDs
+				// count in seconds.
+				e.exec("UPDATE " + table + " SET failing_since = failing_since - interval '1 hour'")
+				e.deliver(n)
+				ok()
+				e.deliver(n)
+				e.sendMail(relay)
+				if got := subjects(t, relay); len(got) != 2 {
+					t.Fatalf("failing and recovered: mails %q", got)
+				}
+				var notified string
+				if err := e.conn.QueryRow(e.ctx, "SELECT notified_state FROM "+table).Scan(&notified); err != nil || notified != store.NotifiedFailing {
+					t.Fatalf("the webhook delivered the alert but not the recovery: %q %v", notified, err)
+				}
+
+				fail()
+				ok()
+				before := len(rcv.got())
+				e.deliver(n)
+				if len(rcv.got()) != before+1 {
+					t.Fatalf("the webhook did not claim the recovery of the short streak at once: %d requests, want %d", len(rcv.got()), before+1)
+				}
+				e.due()
+				e.deliver(n)
+				e.sendMail(relay)
+				if got := subjects(t, relay); len(got) != 2 {
+					t.Fatalf("mails after a short failure %q, want only the first 2; jobs %v", got, e.mailJobs())
+				}
+			})
+		}
+	}
+}
+
+// TestNoMailForUnseenStorageChange: warn and back to ok before any pass
+// sees it sends nothing, with and without a webhook; the webhook still
+// announces the state it claims.
+func TestNoMailForUnseenStorageChange(t *testing.T) {
+	for _, withWebhook := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no webhook", true: "webhook"}[withWebhook], func(t *testing.T) {
+			e := newEnv(t)
+			e.admin("boss", "boss@example.com")
+			g := e.group("Müller GmbH")
+			relay := mailtest.Start(t, mailtest.StartTLS)
+			var w *notify.Webhook
+			var rcv *receiver
+			if withWebhook {
+				rcv = newReceiver(t)
+				w = idsWebhook(t, rcv.srv.URL, "")
+			}
+			n := e.mailNotifier(w)
+			e.transition(g, "warn")
+			e.transition(g, "ok")
+			e.deliver(n)
+			e.deliver(n)
+			e.sendMail(relay)
+			if got := subjects(t, relay); len(got) != 0 {
+				t.Fatalf("mails %q for a change no pass saw", got)
+			}
+			if rcv != nil && len(rcv.got()) != 1 {
+				t.Fatalf("%d webhook requests, want 1", len(rcv.got()))
+			}
+		})
+	}
+}
+
+// TestMailOncePerEvent: what keeps an event from being mailed twice is the
+// row's mail state, which the enqueue moves on in the same transaction:
+// mailed_state for syncs and fills, mailed_seq for storage, and
+// mail_enqueued_event for loss alerts. The jobs table does not decide it:
+// after the done jobs are purged and a second admin confirmed an address,
+// another round mails nothing.
+func TestMailOncePerEvent(t *testing.T) {
+	e := newEnv(t)
+	e.admin("boss", "boss@example.com")
+	relay := mailtest.Start(t, mailtest.StartTLS)
+	n := e.mailNotifier(nil)
+	acc := e.addAccount("büro", "u", "p")
+	finish := e.recurringFill()
+	e.fail(acc, 3)
+	for range 3 {
+		finish(store.FillFailed)
+	}
+	e.lose(e.addAccount("archiv", "u", "p"), 200, 1000)
+	e.transition(0, "warn")
+	e.deliver(n)
+	if got := e.mailJobs(); len(got) != 4 {
+		t.Fatalf("jobs %v, want sync, fill, loss and storage", got)
+	}
+	e.sendMail(relay)
+
+	e.admin("second", "second@example.com")
+	e.exec("UPDATE jobs SET finished_at = now() - interval '2 hours' WHERE kind = 'notify_mail'")
+	if purged, err := e.store.DeleteDoneJobs(e.ctx, time.Hour); err != nil || purged != 4 {
+		t.Fatalf("purged %d: %v", purged, err)
+	}
+	e.deliver(n)
+	if got := e.mailJobs(); len(got) != 0 {
+		t.Fatalf("the same events enqueued again: %v", got)
+	}
+}
+
+// TestMailTurnedOn: the first round with mail announces the current state
+// once: a failing account, a group still at warn and a loss the webhook
+// already sent, but not a group back at ok. While no admin has a confirmed
+// address, rounds record the state and send nothing, so the first admin
+// to confirm gets only later changes.
+func TestMailTurnedOn(t *testing.T) {
+	t.Run("current state", func(t *testing.T) {
+		e := newEnv(t)
+		e.admin("boss", "boss@example.com")
+		rcv := newReceiver(t)
+		w := idsWebhook(t, rcv.srv.URL, "")
+		before := e.notifier(w)
+		acc := e.addAccount("büro", "u", "p")
+		e.fail(acc, 3)
+		e.lose(e.addAccount("archiv", "u", "p"), 200, 1000)
+		warn, back := e.group("Müller GmbH"), e.group("Lindqvist Design")
+		e.transition(warn, "warn")
+		e.transition(back, "warn")
+		e.deliver(before)
+		e.transition(back, "ok")
+		e.deliver(before)
+		if len(rcv.got()) == 0 || len(e.mailJobs()) != 0 {
+			t.Fatalf("before mail: %d webhook requests, jobs %v", len(rcv.got()), e.mailJobs())
+		}
+
+		e.deliver(e.mailNotifier(w))
+		got := e.mailJobs()
+		want := []string{
+			notify.EventID(acc.ID, failingSince(e, acc.ID), notify.EventFailing),
+			"storage:" + itoa(warn) + ":1",
+		}
+		if len(got) != 3 {
+			t.Fatalf("jobs %v, want the failing account, the loss and the group at warn", got)
+		}
+		gone := 0
+		for k := range got {
+			if strings.HasPrefix(k, "gone-") {
+				gone++
+			}
+		}
+		for _, w := range want {
+			if _, ok := got[w+":"+itoa(e.userID("boss"))]; !ok {
+				t.Errorf("no job for %s: %v", w, got)
+			}
+		}
+		if gone != 1 {
+			t.Errorf("%d loss jobs: %v", gone, got)
+		}
+	})
+	t.Run("no address yet", func(t *testing.T) {
+		e := newEnv(t)
+		n := e.mailNotifier(nil)
+		acc := e.addAccount("büro", "u", "p")
+		g := e.group("Müller GmbH")
+		e.fail(acc, 3)
+		e.transition(g, "warn")
+		e.deliver(n)
+		e.admin("boss", "boss@example.com")
+		e.deliver(n)
+		if got := e.mailJobs(); len(got) != 0 {
+			t.Fatalf("jobs %v for changes before the first address", got)
+		}
+		e.transition(g, "full")
+		e.deliver(n)
+		if got := e.mailJobs(); len(got) != 1 {
+			t.Fatalf("jobs %v, want the change after the address", got)
+		}
+	})
+}
+
+// userID returns the ID of the user name.
+func (e *env) userID(name string) int64 {
+	e.t.Helper()
+	var id int64
+	if err := e.conn.QueryRow(e.ctx, "SELECT id FROM users WHERE name = $1", name).Scan(&id); err != nil {
+		e.t.Fatal(err)
+	}
+	return id
 }

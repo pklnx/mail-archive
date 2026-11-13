@@ -53,7 +53,7 @@ WHERE h.fill_id = sf.id AND h.fill_id IN (
     FOR UPDATE OF c SKIP LOCKED)
 RETURNING h.fill_id, sf.account_id, a.name AS account_name, coalesce(u.name, '')::text AS owner_name,
     sf.username, h.failure_streak, h.failing_since, h.notified_state, h.notify_attempts, h.notify_first_error_at,
-    h.mail_enqueued_event, coalesce(sf.error, '')::text AS last_error;
+    coalesce(sf.error, '')::text AS last_error;
 
 -- name: FinishFillNotification :execrows
 UPDATE smtp_fill_health

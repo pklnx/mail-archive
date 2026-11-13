@@ -375,7 +375,7 @@ func TestCrashAfterSendResendsTheSameID(t *testing.T) {
 	rcv := newReceiver(t)
 	w := webhook(t, rcv.srv.URL, "", "")
 	// A notifier claims and sends, then dies before writing the state.
-	pending, err := e.store.ClaimNotifications(e.ctx, []byte("dead"), notify.LeaseDuration, 3, notify.BatchSize, nil)
+	pending, err := e.store.ClaimNotifications(e.ctx, []byte("dead"), notify.LeaseDuration, 3, notify.BatchSize)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("claim: %v %v", pending, err)
 	}

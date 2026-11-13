@@ -62,7 +62,7 @@ WHERE la.account_id = a.id AND la.id IN (
     LIMIT @max_rows
     FOR UPDATE OF c SKIP LOCKED)
 RETURNING la.id, la.sync_run_id, la.account_id, a.name AS account_name, coalesce(u.name, '')::text AS owner_name,
-    la.created_at, la.lost, la.present_before, la.folder_names, la.folder_lost, la.more_folders, la.notify_attempts, la.mail_enqueued_event;
+    la.created_at, la.lost, la.present_before, la.folder_names, la.folder_lost, la.more_folders, la.notify_attempts;
 
 -- name: FinishLossAlert :execrows
 -- Sent, or given up with an error. Only the notifier holding the lease may

@@ -47,13 +47,14 @@ const (
 type Notifier struct {
 	Store *store.Store
 	// Webhook receives the alerts; nil without one. A claim without a
-	// webhook is finished at once, after its mail is enqueued.
+	// webhook is finished at once; mail does not depend on it.
 	Webhook *Webhook
-	// Mail enqueues a notify_mail job per admin with a confirmed address
-	// at each claim, once per transition (#397, part 5), and after the
-	// claims the mail that is due by the mail's own state. Webhook and
-	// mail are independent: a failing webhook does not hold mail back, and
-	// the jobs run on their own.
+	// Mail turns on the mail pass after each webhook pass: it enqueues a
+	// notify_mail job per admin with a confirmed address for every
+	// transition that is due by the mail's own state, once per transition
+	// (#397, part 5). The claims enqueue no mail, so webhook and mail are
+	// independent: a failing webhook neither holds mail back nor adds any,
+	// and the jobs run on their own.
 	Mail bool
 	// AlertAfter is how many failed syncs in a row make an account failing.
 	AlertAfter int
@@ -110,8 +111,8 @@ func (n *Notifier) Run(ctx context.Context) {
 // failing syncs and recoveries first, then failing recurring fills and
 // theirs, then loss alerts, then storage transitions. It stops sending at
 // the first failed request; the retry waits for its time. With Mail, it
-// then enqueues the mail that is due by the mail's own state, which the
-// webhook's claims did not reach (deliverMail). It returns an error only
+// then enqueues the mail that is due by the mail's own state
+// (deliverMail), also after a failed request. It returns an error only
 // if the database fails.
 func (n *Notifier) Deliver(ctx context.Context) error {
 	if err := n.deliverWebhook(ctx); err != nil {
@@ -138,8 +139,8 @@ func (n *Notifier) deliverWebhook(ctx context.Context) error {
 // deliverMail enqueues, in batches of BatchSize, the alert mail that is
 // due whatever the webhook's delivery state: a recovery while the webhook
 // still fails to announce the alert, or a transition while it waits for
-// its retry. The webhook's claims enqueue mail too; the mail's own state
-// (store.EnqueueDueSyncMail) and mail_enqueued_event keep it to one mail
+// its retry. It is the only path that enqueues alert mail; the mail's own
+// state (store.EnqueueDueSyncMail) and mail_enqueued_event keep it to one mail
 // per transition and recipient.
 func (n *Notifier) deliverMail(ctx context.Context) error {
 	if !n.Mail {
@@ -175,10 +176,7 @@ func (n *Notifier) deliverMail(ctx context.Context) error {
 // healthKind is what pass announces: accounts whose syncs fail, or
 // recurring fills whose runs fail.
 type healthKind struct {
-	claim func(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int,
-		mail store.AlertMail[store.PendingNotification]) ([]store.PendingNotification, error)
-	// mail is the alert mail of a claimed transition.
-	mail     store.AlertMail[store.PendingNotification]
+	claim    func(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int) ([]store.PendingNotification, error)
 	build    func([]store.PendingNotification, bool) *Message
 	finish   func(ctx context.Context, id int64, lease []byte, state, errMsg string) error
 	postpone func(ctx context.Context, id int64, lease []byte, next time.Time, errMsg string) error
@@ -189,7 +187,7 @@ type healthKind struct {
 // false when the request failed.
 func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 	return n.passHealth(ctx, healthKind{
-		claim: n.Store.ClaimNotifications, build: BuildMessage, mail: mailIf(n.Mail, syncMailEvent),
+		claim: n.Store.ClaimNotifications, build: BuildMessage,
 		finish: n.Store.FinishNotification, postpone: n.Store.DeferNotification,
 		id: func(p store.PendingNotification) int64 { return p.AccountID },
 	})
@@ -199,7 +197,7 @@ func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 // fills.
 func (n *Notifier) passFill(ctx context.Context) (claimed int, ok bool, err error) {
 	return n.passHealth(ctx, healthKind{
-		claim: n.Store.ClaimFillNotifications, build: BuildFillMessage, mail: mailIf(n.Mail, fillMailEvent),
+		claim: n.Store.ClaimFillNotifications, build: BuildFillMessage,
 		finish: n.Store.FinishFillNotification, postpone: n.Store.DeferFillNotification,
 		id: func(p store.PendingNotification) int64 { return p.FillID },
 	})
@@ -208,7 +206,7 @@ func (n *Notifier) passFill(ctx context.Context) (claimed int, ok bool, err erro
 func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, ok bool, err error) {
 	lease := make([]byte, 16)
 	_, _ = rand.Read(lease)
-	pending, err := k.claim(ctx, lease, LeaseDuration, n.AlertAfter, BatchSize, k.mail)
+	pending, err := k.claim(ctx, lease, LeaseDuration, n.AlertAfter, BatchSize)
 	if err != nil || len(pending) == 0 {
 		return 0, true, err
 	}
@@ -228,7 +226,7 @@ func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, o
 				what = "recovery sent"
 			}
 			if n.Webhook == nil {
-				what = "alert recorded for mail"
+				what = "alert recorded without a webhook"
 			}
 			log.Info(what, "account", p.Account, "owner", p.Owner, "attempts", p.Attempts+1, "id", ev.ID)
 		}
@@ -490,7 +488,7 @@ func plural(n int, word string) string {
 }
 
 // send posts msg to the webhook; without one there is nothing to send and
-// the claim is finished at once (its mail was enqueued at the claim).
+// the claim is finished at once (mail follows in the mail pass).
 func (n *Notifier) send(ctx context.Context, msg *Message) (int, error) {
 	if n.Webhook == nil {
 		return 0, nil
@@ -517,7 +515,7 @@ func (n *Notifier) logger() *slog.Logger {
 func (n *Notifier) passLoss(ctx context.Context) (claimed int, ok bool, err error) {
 	lease := make([]byte, 16)
 	_, _ = rand.Read(lease)
-	pending, err := n.Store.ClaimLossAlerts(ctx, lease, LeaseDuration, store.LossAlertMaxAge, BatchSize, mailIf(n.Mail, lossMailEvent))
+	pending, err := n.Store.ClaimLossAlerts(ctx, lease, LeaseDuration, store.LossAlertMaxAge, BatchSize)
 	if err != nil || len(pending) == 0 {
 		return 0, true, err
 	}

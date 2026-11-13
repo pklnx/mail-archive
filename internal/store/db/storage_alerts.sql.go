@@ -22,7 +22,7 @@ WHERE s.id IN (
     ORDER BY c.id
     LIMIT $3
     FOR UPDATE OF c SKIP LOCKED)
-RETURNING s.id, s.group_id, s.state, s.state_since, s.event_seq, s.notify_attempts, s.notify_first_error_at, s.mail_enqueued_event,
+RETURNING s.id, s.group_id, s.state, s.state_since, s.event_seq, s.notify_attempts, s.notify_first_error_at,
     (SELECT g.quota_bytes FROM customer_groups g WHERE g.id = s.group_id) AS group_quota_bytes,
     (CASE WHEN s.group_id IS NULL THEN
         (SELECT b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0) FROM storage_counter_base b)
@@ -46,7 +46,6 @@ type ClaimStorageNotificationsRow struct {
 	EventSeq           int64
 	NotifyAttempts     int32
 	NotifyFirstErrorAt *time.Time
-	MailEnqueuedEvent  *string
 	GroupQuotaBytes    *int64
 	UsedBytes          int64
 }
@@ -76,7 +75,6 @@ func (q *Queries) ClaimStorageNotifications(ctx context.Context, arg ClaimStorag
 			&i.EventSeq,
 			&i.NotifyAttempts,
 			&i.NotifyFirstErrorAt,
-			&i.MailEnqueuedEvent,
 			&i.GroupQuotaBytes,
 			&i.UsedBytes,
 		); err != nil {

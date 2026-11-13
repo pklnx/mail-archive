@@ -80,7 +80,7 @@ ORDER BY u.id
 
 // Email alerts for admins (#397, part 5; internal/store/alert_mail.go):
 // the notification address of each admin, its confirmation code, and the
-// notify_mail jobs the notifier enqueues at its claim.
+// notify_mail jobs the notifier's mail pass enqueues.
 // The users who get alert mail: admins with a confirmed address who are
 // not locked.
 func (q *Queries) AlertMailRecipients(ctx context.Context) ([]int64, error) {
@@ -158,7 +158,7 @@ func (q *Queries) CountNotifyEmailCodeTry(ctx context.Context, arg CountNotifyEm
 }
 
 const dueFillMail = `-- name: DueFillMail :many
-SELECT h.fill_id, sf.account_id, h.failure_streak, h.failing_since, h.mailed_state, h.mail_enqueued_event
+SELECT h.fill_id, sf.account_id, h.failure_streak, h.failing_since, h.mailed_state
 FROM smtp_fill_health h JOIN smtp_fills sf ON sf.id = h.fill_id JOIN accounts a ON a.id = sf.account_id
 WHERE sf.keep_running AND a.enabled AND a.removed_at IS NULL
   AND ((h.failure_streak >= $1::int AND h.mailed_state = 'ok')
@@ -174,12 +174,11 @@ type DueFillMailParams struct {
 }
 
 type DueFillMailRow struct {
-	FillID            int64
-	AccountID         int64
-	FailureStreak     int32
-	FailingSince      *time.Time
-	MailedState       string
-	MailEnqueuedEvent *string
+	FillID        int64
+	AccountID     int64
+	FailureStreak int32
+	FailingSince  *time.Time
+	MailedState   string
 }
 
 // DueSyncMail for active recurring fills of enabled accounts that are not
@@ -199,7 +198,6 @@ func (q *Queries) DueFillMail(ctx context.Context, arg DueFillMailParams) ([]Due
 			&i.FailureStreak,
 			&i.FailingSince,
 			&i.MailedState,
-			&i.MailEnqueuedEvent,
 		); err != nil {
 			return nil, err
 		}
@@ -212,7 +210,7 @@ func (q *Queries) DueFillMail(ctx context.Context, arg DueFillMailParams) ([]Due
 }
 
 const dueLossMail = `-- name: DueLossMail :many
-SELECT la.id, la.sync_run_id, la.account_id, la.created_at, la.lost, la.present_before, la.mail_enqueued_event
+SELECT la.id, la.sync_run_id, la.account_id, la.created_at, la.lost, la.present_before
 FROM loss_alerts la JOIN accounts a ON a.id = la.account_id
 WHERE la.mail_enqueued_event IS NULL AND a.removed_at IS NULL
   AND la.created_at > now() - make_interval(secs => $1::float8)
@@ -227,17 +225,17 @@ type DueLossMailParams struct {
 }
 
 type DueLossMailRow struct {
-	ID                int64
-	SyncRunID         int64
-	AccountID         int64
-	CreatedAt         time.Time
-	Lost              int32
-	PresentBefore     int32
-	MailEnqueuedEvent *string
+	ID            int64
+	SyncRunID     int64
+	AccountID     int64
+	CreatedAt     time.Time
+	Lost          int32
+	PresentBefore int32
 }
 
 // Loss alerts younger than max_age, of accounts that were not removed,
-// whose mail was not enqueued, sent or not by the webhook.
+// whose mail was not enqueued, sent or not by the webhook. The age reads
+// loss_alerts_created_at_idx.
 func (q *Queries) DueLossMail(ctx context.Context, arg DueLossMailParams) ([]DueLossMailRow, error) {
 	rows, err := q.db.Query(ctx, dueLossMail, arg.MaxAgeSeconds, arg.MaxRows)
 	if err != nil {
@@ -254,7 +252,6 @@ func (q *Queries) DueLossMail(ctx context.Context, arg DueLossMailParams) ([]Due
 			&i.CreatedAt,
 			&i.Lost,
 			&i.PresentBefore,
-			&i.MailEnqueuedEvent,
 		); err != nil {
 			return nil, err
 		}
@@ -267,7 +264,7 @@ func (q *Queries) DueLossMail(ctx context.Context, arg DueLossMailParams) ([]Due
 }
 
 const dueStorageMail = `-- name: DueStorageMail :many
-SELECT s.id, s.group_id, s.state, s.state_since, s.event_seq, s.mail_enqueued_event,
+SELECT s.id, s.group_id, s.state, s.state_since, s.event_seq,
     (SELECT g.quota_bytes FROM customer_groups g WHERE g.id = s.group_id) AS group_quota_bytes,
     (CASE WHEN s.group_id IS NULL THEN
         (SELECT b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0) FROM storage_counter_base b)
@@ -283,14 +280,13 @@ FOR UPDATE OF s SKIP LOCKED
 `
 
 type DueStorageMailRow struct {
-	ID                int64
-	GroupID           *int64
-	State             string
-	StateSince        time.Time
-	EventSeq          int64
-	MailEnqueuedEvent *string
-	GroupQuotaBytes   *int64
-	UsedBytes         int64
+	ID              int64
+	GroupID         *int64
+	State           string
+	StateSince      time.Time
+	EventSeq        int64
+	GroupQuotaBytes *int64
+	UsedBytes       int64
 }
 
 // Scopes with a transition not mailed yet. A scope back at ok is mailed
@@ -312,7 +308,6 @@ func (q *Queries) DueStorageMail(ctx context.Context, maxRows int32) ([]DueStora
 			&i.State,
 			&i.StateSince,
 			&i.EventSeq,
-			&i.MailEnqueuedEvent,
 			&i.GroupQuotaBytes,
 			&i.UsedBytes,
 		); err != nil {
@@ -328,7 +323,7 @@ func (q *Queries) DueStorageMail(ctx context.Context, maxRows int32) ([]DueStora
 
 const dueSyncMail = `-- name: DueSyncMail :many
 
-SELECT h.account_id, h.failure_streak, h.failing_since, h.mailed_state, h.mail_enqueued_event
+SELECT h.account_id, h.failure_streak, h.failing_since, h.mailed_state
 FROM account_sync_health h JOIN accounts a ON a.id = h.account_id
 WHERE a.kind = 'imap' AND a.enabled AND a.removed_at IS NULL
   AND ((h.failure_streak >= $1::int AND h.mailed_state = 'ok')
@@ -344,18 +339,18 @@ type DueSyncMailParams struct {
 }
 
 type DueSyncMailRow struct {
-	AccountID         int64
-	FailureStreak     int32
-	FailingSince      *time.Time
-	MailedState       string
-	MailEnqueuedEvent *string
+	AccountID     int64
+	FailureStreak int32
+	FailingSince  *time.Time
+	MailedState   string
 }
 
-// Mail due by the mail's own state (mailed_state, mailed_seq,
-// mail_enqueued_event), whatever the webhook's delivery state says: the
-// notifier enqueues these after its webhook claims, so that a failing or
-// backed-off webhook holds no mail back. Each locks its rows for the
-// enqueue transaction and skips rows another one holds.
+// Mail due by the mail's own state (mailed_state, mailed_seq, and
+// mail_enqueued_event for loss alerts), whatever the webhook's delivery
+// state says: the notifier's mail pass, the only path that enqueues alert
+// mail, runs these after every webhook pass, so a failing or backed-off
+// webhook neither holds mail back nor adds any. Each locks its rows for
+// the enqueue transaction and skips rows another one holds.
 // Enabled IMAP accounts with a mail due: failing (the streak reached the
 // threshold, the last mail said ok) or recovered (the streak ended, the
 // last mail said failing).
@@ -373,7 +368,6 @@ func (q *Queries) DueSyncMail(ctx context.Context, arg DueSyncMailParams) ([]Due
 			&i.FailureStreak,
 			&i.FailingSince,
 			&i.MailedState,
-			&i.MailEnqueuedEvent,
 		); err != nil {
 			return nil, err
 		}

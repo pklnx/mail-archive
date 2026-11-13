@@ -4,19 +4,11 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
-// Alert mail (#397, part 5): at each claim the notifier hands the store
-// the event of every claimed transition, and the store enqueues one
+// Alert mail (#397, part 5): in its mail pass the notifier hands the store
+// the event of every row whose mail is due, and the store enqueues one
 // notify_mail job per recipient, once per event (store.AlertMailPayload).
 // The payload holds IDs, figures and the level only; the job reads the
 // names at delivery (internal/alertmail).
-
-// mailIf returns f if on, else nil: a claim without mail.
-func mailIf[T any](on bool, f store.AlertMail[T]) store.AlertMail[T] {
-	if !on {
-		return nil
-	}
-	return f
-}
 
 // healthMailEvent is the mail event of a failing or recovered sync or fill.
 func healthMailEvent(kind string, p store.PendingNotification, id string, level string) *store.AlertMailEvent {

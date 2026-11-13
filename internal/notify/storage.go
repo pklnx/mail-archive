@@ -69,7 +69,7 @@ func StorageEventID(groupID *int64, seq int64) string {
 func (n *Notifier) passStorage(ctx context.Context) (claimed int, ok bool, err error) {
 	lease := make([]byte, 16)
 	_, _ = rand.Read(lease)
-	pending, err := n.Store.ClaimStorageNotifications(ctx, lease, LeaseDuration, BatchSize, mailIf(n.Mail, n.storageMailEvent))
+	pending, err := n.Store.ClaimStorageNotifications(ctx, lease, LeaseDuration, BatchSize)
 	if err != nil || len(pending) == 0 {
 		return 0, true, err
 	}

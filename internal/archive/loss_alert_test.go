@@ -74,7 +74,7 @@ func (f *lossFixture) expunge(mailbox string, from, to uint32) {
 // now() as the next claim's check), so the next call claims them again.
 func (f *lossFixture) alerts() []store.PendingLossAlert {
 	f.t.Helper()
-	got, err := f.store.ClaimLossAlerts(f.ctx, []byte(time.Now().String()), -time.Second, store.LossAlertMaxAge, 50, nil)
+	got, err := f.store.ClaimLossAlerts(f.ctx, []byte(time.Now().String()), -time.Second, store.LossAlertMaxAge, 50)
 	if err != nil {
 		f.t.Fatal(err)
 	}

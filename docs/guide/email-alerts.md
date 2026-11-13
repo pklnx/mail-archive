@@ -84,8 +84,17 @@ The event ID is the one the [webhook](./operations#webhook-alerts) uses.
 
 Each change is mailed once to every admin with a confirmed address: a
 webhook that fails and retries does not repeat it, and `warn`, `ok` and
-`warn` again are three mails. Mail does not wait for the webhook: while
-the webhook fails, recoveries and new changes are still mailed when they
-happen. Whether you still get it is checked when the
+`warn` again are three mails. Mail keeps its own record of what it
+announced: while the webhook fails, recoveries and new changes are still
+mailed when they happen, and nothing is mailed twice or for a change that
+was undone before the archive looked (a group at `warn` and back at `ok`
+within half a minute gets no mail).
+
+When alert mail is first turned on, the first mails tell the current
+state once: accounts and recurring imports that keep failing, storage that
+is not at `ok`, and mail deleted on the server within the last 24 hours.
+Nothing at `ok` is announced. Until an admin confirms an address nothing
+is sent at all, and the first admin to confirm one gets only the changes
+after that. Whether you still get it is checked when the
 mail is sent: an admin who was demoted, locked or removed meanwhile, or
 whose new address is not confirmed yet, gets nothing.

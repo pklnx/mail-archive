@@ -13,20 +13,19 @@ import (
 	"github.com/pklnx/mail-archive/internal/store/db"
 )
 
-// Email alerts for admins (#397, part 5). When the notifier claims a
-// transition, it enqueues one notify_mail job per recipient in the same
-// transaction: admins with a confirmed notification address who are not
-// locked. The outbox row remembers the event in mail_enqueued_event, so a
-// webhook retry claims the same event again and enqueues nothing, and the
-// enqueue is insert-only, so a done mail is never sent again. The job
-// checks the recipient again at delivery (AlertMailRecipient).
-//
-// Mail keeps its own state beside the webhook's delivery state:
-// mailed_state for syncs and fills, mailed_seq for storage, and
-// mail_enqueued_event for loss alerts. After its webhook claims, the
-// notifier enqueues the mail that is due by that state alone
-// (EnqueueDue*Mail), so a webhook that fails or waits for its retry holds
-// no mail back.
+// Email alerts for admins (#397, part 5). Mail keeps its own state beside
+// the webhook's delivery state: mailed_state for syncs and fills,
+// mailed_seq for storage, and mail_enqueued_event for loss alerts. After
+// its webhook pass, the notifier runs the mail pass (EnqueueDue*Mail): it
+// locks the rows whose mail is due by that state alone and enqueues one
+// notify_mail job per recipient in the same transaction: admins with a
+// confirmed notification address who are not locked. This is the only
+// path that enqueues alert mail, so the webhook's state never decides
+// which mail goes out. The same transaction moves the row's mail state on
+// (mailed_state, mailed_seq; mail_enqueued_event, which also records the
+// event for all four outboxes), so the same event is never due twice, and
+// the enqueue is insert-only, so a done mail is never sent again. The job checks the
+// recipient again at delivery (AlertMailRecipient).
 
 // JobNotifyMail is the job kind of one alert mail to one admin.
 const JobNotifyMail = "notify_mail"
@@ -88,8 +87,8 @@ type AlertMailEvent struct {
 	Payload AlertMailPayload
 }
 
-// AlertMail turns a claimed transition into the event to mail, or nil for
-// none. A claim with a nil AlertMail enqueues no mail.
+// AlertMail turns a row whose mail is due into the event to mail, or nil
+// for none. A nil AlertMail enqueues no mail.
 type AlertMail[T any] func(T) *AlertMailEvent
 
 // alertMailKey is the job key of an event's mail to one user.
@@ -98,15 +97,12 @@ func alertMailKey(event string, userID int64) string {
 }
 
 // enqueueAlertMail enqueues the jobs of ev for every recipient in q's
-// transaction, unless enqueued is ev's ID already, and records ev with
-// mark either way, so the row's mail state follows ev. A job that exists
-// in any state stays as it is.
-func enqueueAlertMail(ctx context.Context, q *db.Queries, ev *AlertMailEvent, enqueued *string, mark func() error) error {
+// transaction and records ev with mark, which moves the row's mail state
+// on, so the row is not due again for ev. A job that exists in any state
+// stays as it is.
+func enqueueAlertMail(ctx context.Context, q *db.Queries, ev *AlertMailEvent, mark func() error) error {
 	if ev == nil {
 		return nil
-	}
-	if enqueued != nil && *enqueued == ev.ID {
-		return mark()
 	}
 	users, err := q.AlertMailRecipients(ctx)
 	if err != nil {
@@ -140,32 +136,34 @@ func enqueueAlertMail(ctx context.Context, q *db.Queries, ev *AlertMailEvent, en
 	return mark()
 }
 
-// claimWithMail runs claim, and with mail the enqueue of each claimed
-// row's mail, in one transaction.
-func claimWithMail[T any](s *Store, ctx context.Context, mail AlertMail[T],
-	claim func(q *db.Queries) ([]T, error), each func(q *db.Queries, p T, ev *AlertMailEvent) error) ([]T, error) {
+// enqueueDue locks the rows whose mail is due (due) and enqueues each
+// one's mail with each, in one transaction. It returns how many rows it
+// handled; without mail, none.
+func enqueueDue[T any](s *Store, ctx context.Context, mail AlertMail[T],
+	due func(q *db.Queries) ([]T, error), each func(q *db.Queries, p T, ev *AlertMailEvent) error) (int, error) {
 	if mail == nil {
-		return claim(s.q)
+		return 0, nil
 	}
-	var out []T
+	n := 0
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		var err error
-		if out, err = claim(q); err != nil {
+		rows, err := due(q)
+		if err != nil {
 			return err
 		}
-		for _, p := range out {
+		for _, p := range rows {
 			if err := each(q, p, mail(p)); err != nil {
 				return err
 			}
 		}
+		n = len(rows)
 		return nil
 	})
-	return out, err
+	return n, err
 }
 
 // mailedState is the mail state a health event leaves: ok after a
-// recovery, failing after a failing mail. p.NotifiedState is what was
-// last announced, so the event is the other state.
+// recovery, failing after a failing mail. p.NotifiedState is what the
+// last mail said, so the event is the other state.
 func mailedState(p PendingNotification) string {
 	if p.NotifiedState == NotifiedFailing {
 		return NotifiedOK
@@ -180,10 +178,7 @@ func mailedState(p PendingNotification) string {
 // have NotifiedState set to what the last mail said, so mail decides the
 // event as for a claim. It returns how many rows it handled.
 func (s *Store) EnqueueDueSyncMail(ctx context.Context, threshold, limit int, mail AlertMail[PendingNotification]) (int, error) {
-	if mail == nil {
-		return 0, nil
-	}
-	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
+	return enqueueDue(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
 		rows, err := q.DueSyncMail(ctx, db.DueSyncMailParams{Threshold: clampInt32(threshold), MaxRows: clampInt32(limit)})
 		if err != nil {
 			return nil, err
@@ -192,20 +187,16 @@ func (s *Store) EnqueueDueSyncMail(ctx context.Context, threshold, limit int, ma
 		for _, r := range rows {
 			out = append(out, PendingNotification{
 				AccountID: r.AccountID, FailureStreak: int(r.FailureStreak), FailingSince: r.FailingSince,
-				NotifiedState: r.MailedState, mailEnqueued: r.MailEnqueuedEvent,
+				NotifiedState: r.MailedState,
 			})
 		}
 		return out, nil
 	}, s.markSyncMail(ctx))
-	return len(out), err
 }
 
 // EnqueueDueFillMail is EnqueueDueSyncMail for recurring fills.
 func (s *Store) EnqueueDueFillMail(ctx context.Context, threshold, limit int, mail AlertMail[PendingNotification]) (int, error) {
-	if mail == nil {
-		return 0, nil
-	}
-	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
+	return enqueueDue(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
 		rows, err := q.DueFillMail(ctx, db.DueFillMailParams{Threshold: clampInt32(threshold), MaxRows: clampInt32(limit)})
 		if err != nil {
 			return nil, err
@@ -214,22 +205,18 @@ func (s *Store) EnqueueDueFillMail(ctx context.Context, threshold, limit int, ma
 		for _, r := range rows {
 			out = append(out, PendingNotification{
 				AccountID: r.AccountID, FillID: r.FillID, FailureStreak: int(r.FailureStreak), FailingSince: r.FailingSince,
-				NotifiedState: r.MailedState, mailEnqueued: r.MailEnqueuedEvent,
+				NotifiedState: r.MailedState,
 			})
 		}
 		return out, nil
 	}, s.markFillMail(ctx))
-	return len(out), err
 }
 
 // EnqueueDueLossMail enqueues the mail of up to limit loss alerts younger
 // than maxAge whose mail was not enqueued, whether the webhook sent them
 // or not. It returns how many rows it handled.
 func (s *Store) EnqueueDueLossMail(ctx context.Context, maxAge time.Duration, limit int, mail AlertMail[PendingLossAlert]) (int, error) {
-	if mail == nil {
-		return 0, nil
-	}
-	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingLossAlert, error) {
+	return enqueueDue(s, ctx, mail, func(q *db.Queries) ([]PendingLossAlert, error) {
 		rows, err := q.DueLossMail(ctx, db.DueLossMailParams{MaxAgeSeconds: maxAge.Seconds(), MaxRows: clampInt32(limit)})
 		if err != nil {
 			return nil, err
@@ -237,13 +224,12 @@ func (s *Store) EnqueueDueLossMail(ctx context.Context, maxAge time.Duration, li
 		out := make([]PendingLossAlert, 0, len(rows))
 		for _, r := range rows {
 			out = append(out, PendingLossAlert{
-				ID: r.ID, SyncRunID: r.SyncRunID, AccountID: r.AccountID, CreatedAt: r.CreatedAt, mailEnqueued: r.MailEnqueuedEvent,
+				ID: r.ID, SyncRunID: r.SyncRunID, AccountID: r.AccountID, CreatedAt: r.CreatedAt,
 				LossAlert: LossAlert{Lost: int(r.Lost), PresentBefore: int(r.PresentBefore)},
 			})
 		}
 		return out, nil
 	}, s.markLossMail(ctx))
-	return len(out), err
 }
 
 // EnqueueDueStorageMail enqueues the mail of up to limit scopes with a
@@ -251,10 +237,7 @@ func (s *Store) EnqueueDueLossMail(ctx context.Context, maxAge time.Duration, li
 // ok only after an earlier mail of it. It returns how many rows it
 // handled.
 func (s *Store) EnqueueDueStorageMail(ctx context.Context, limit int, mail AlertMail[PendingStorageNotification]) (int, error) {
-	if mail == nil {
-		return 0, nil
-	}
-	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingStorageNotification, error) {
+	return enqueueDue(s, ctx, mail, func(q *db.Queries) ([]PendingStorageNotification, error) {
 		rows, err := q.DueStorageMail(ctx, clampInt32(limit))
 		if err != nil {
 			return nil, err
@@ -263,19 +246,18 @@ func (s *Store) EnqueueDueStorageMail(ctx context.Context, limit int, mail Alert
 		for _, r := range rows {
 			out = append(out, PendingStorageNotification{
 				ID: r.ID, GroupID: r.GroupID, State: r.State, StateSince: r.StateSince, EventSeq: r.EventSeq,
-				GroupQuotaBytes: r.GroupQuotaBytes, UsedBytes: r.UsedBytes, mailEnqueued: r.MailEnqueuedEvent,
+				GroupQuotaBytes: r.GroupQuotaBytes, UsedBytes: r.UsedBytes,
 			})
 		}
 		return out, nil
 	}, s.markStorageMail(ctx))
-	return len(out), err
 }
 
 // The marks of each outbox: enqueue a row's mail and record it.
 
 func (s *Store) markSyncMail(ctx context.Context) func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
 	return func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+		return enqueueAlertMail(ctx, q, ev, func() error {
 			return q.SetSyncMailEnqueued(ctx, db.SetSyncMailEnqueuedParams{AccountID: p.AccountID, Event: &ev.ID, MailedState: mailedState(p)})
 		})
 	}
@@ -283,7 +265,7 @@ func (s *Store) markSyncMail(ctx context.Context) func(q *db.Queries, p PendingN
 
 func (s *Store) markFillMail(ctx context.Context) func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
 	return func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+		return enqueueAlertMail(ctx, q, ev, func() error {
 			return q.SetFillMailEnqueued(ctx, db.SetFillMailEnqueuedParams{FillID: p.FillID, Event: &ev.ID, MailedState: mailedState(p)})
 		})
 	}
@@ -291,7 +273,7 @@ func (s *Store) markFillMail(ctx context.Context) func(q *db.Queries, p PendingN
 
 func (s *Store) markLossMail(ctx context.Context) func(q *db.Queries, p PendingLossAlert, ev *AlertMailEvent) error {
 	return func(q *db.Queries, p PendingLossAlert, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+		return enqueueAlertMail(ctx, q, ev, func() error {
 			return q.SetLossMailEnqueued(ctx, db.SetLossMailEnqueuedParams{ID: p.ID, Event: &ev.ID})
 		})
 	}
@@ -299,7 +281,7 @@ func (s *Store) markLossMail(ctx context.Context) func(q *db.Queries, p PendingL
 
 func (s *Store) markStorageMail(ctx context.Context) func(q *db.Queries, p PendingStorageNotification, ev *AlertMailEvent) error {
 	return func(q *db.Queries, p PendingStorageNotification, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+		return enqueueAlertMail(ctx, q, ev, func() error {
 			return q.SetStorageMailEnqueued(ctx, db.SetStorageMailEnqueuedParams{ID: p.ID, Event: &ev.ID, EventSeq: p.EventSeq})
 		})
 	}

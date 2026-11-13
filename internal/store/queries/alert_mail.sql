@@ -1,6 +1,6 @@
 -- Email alerts for admins (#397, part 5; internal/store/alert_mail.go):
 -- the notification address of each admin, its confirmation code, and the
--- notify_mail jobs the notifier enqueues at its claim.
+-- notify_mail jobs the notifier's mail pass enqueues.
 
 -- name: AlertMailRecipients :many
 -- The users who get alert mail: admins with a confirmed address who are
@@ -37,17 +37,18 @@ UPDATE loss_alerts SET mail_enqueued_event = @event WHERE id = @id;
 -- The mail of the transitions up to event_seq was enqueued.
 UPDATE storage_states SET mail_enqueued_event = @event, mailed_seq = greatest(mailed_seq, @event_seq::bigint) WHERE id = @id;
 
--- Mail due by the mail's own state (mailed_state, mailed_seq,
--- mail_enqueued_event), whatever the webhook's delivery state says: the
--- notifier enqueues these after its webhook claims, so that a failing or
--- backed-off webhook holds no mail back. Each locks its rows for the
--- enqueue transaction and skips rows another one holds.
+-- Mail due by the mail's own state (mailed_state, mailed_seq, and
+-- mail_enqueued_event for loss alerts), whatever the webhook's delivery
+-- state says: the notifier's mail pass, the only path that enqueues alert
+-- mail, runs these after every webhook pass, so a failing or backed-off
+-- webhook neither holds mail back nor adds any. Each locks its rows for
+-- the enqueue transaction and skips rows another one holds.
 
 -- name: DueSyncMail :many
 -- Enabled IMAP accounts with a mail due: failing (the streak reached the
 -- threshold, the last mail said ok) or recovered (the streak ended, the
 -- last mail said failing).
-SELECT h.account_id, h.failure_streak, h.failing_since, h.mailed_state, h.mail_enqueued_event
+SELECT h.account_id, h.failure_streak, h.failing_since, h.mailed_state
 FROM account_sync_health h JOIN accounts a ON a.id = h.account_id
 WHERE a.kind = 'imap' AND a.enabled AND a.removed_at IS NULL
   AND ((h.failure_streak >= @threshold::int AND h.mailed_state = 'ok')
@@ -59,7 +60,7 @@ FOR UPDATE OF h SKIP LOCKED;
 -- name: DueFillMail :many
 -- DueSyncMail for active recurring fills of enabled accounts that are not
 -- removed.
-SELECT h.fill_id, sf.account_id, h.failure_streak, h.failing_since, h.mailed_state, h.mail_enqueued_event
+SELECT h.fill_id, sf.account_id, h.failure_streak, h.failing_since, h.mailed_state
 FROM smtp_fill_health h JOIN smtp_fills sf ON sf.id = h.fill_id JOIN accounts a ON a.id = sf.account_id
 WHERE sf.keep_running AND a.enabled AND a.removed_at IS NULL
   AND ((h.failure_streak >= @threshold::int AND h.mailed_state = 'ok')
@@ -70,8 +71,9 @@ FOR UPDATE OF h SKIP LOCKED;
 
 -- name: DueLossMail :many
 -- Loss alerts younger than max_age, of accounts that were not removed,
--- whose mail was not enqueued, sent or not by the webhook.
-SELECT la.id, la.sync_run_id, la.account_id, la.created_at, la.lost, la.present_before, la.mail_enqueued_event
+-- whose mail was not enqueued, sent or not by the webhook. The age reads
+-- loss_alerts_created_at_idx.
+SELECT la.id, la.sync_run_id, la.account_id, la.created_at, la.lost, la.present_before
 FROM loss_alerts la JOIN accounts a ON a.id = la.account_id
 WHERE la.mail_enqueued_event IS NULL AND a.removed_at IS NULL
   AND la.created_at > now() - make_interval(secs => @max_age_seconds::float8)
@@ -84,7 +86,7 @@ FOR UPDATE OF la SKIP LOCKED;
 -- only after an earlier mail of it, so mail switched on later does not
 -- announce every scope that once left ok. used_bytes as in
 -- ClaimStorageNotifications.
-SELECT s.id, s.group_id, s.state, s.state_since, s.event_seq, s.mail_enqueued_event,
+SELECT s.id, s.group_id, s.state, s.state_since, s.event_seq,
     (SELECT g.quota_bytes FROM customer_groups g WHERE g.id = s.group_id) AS group_quota_bytes,
     (CASE WHEN s.group_id IS NULL THEN
         (SELECT b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0) FROM storage_counter_base b)

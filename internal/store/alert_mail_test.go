@@ -60,6 +60,10 @@ func TestAlertMailMigration(t *testing.T) {
 	if cols != 0 || jobs != 0 {
 		t.Fatalf("after down: %d columns, %d jobs", cols, jobs)
 	}
+	var idxDown int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE indexname = 'loss_alerts_created_at_idx'").Scan(&idxDown); err != nil || idxDown != 0 {
+		t.Fatalf("after down: loss_alerts_created_at_idx %d: %v", idxDown, err)
+	}
 	if _, err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +73,10 @@ func TestAlertMailMigration(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
 		WHERE column_name IN ('mailed_state', 'mailed_seq')`).Scan(&cols); err != nil || cols != 3 {
 		t.Fatalf("after re-up: %d mail state columns, want 3: %v", cols, err)
+	}
+	var idx int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE indexname = 'loss_alerts_created_at_idx'").Scan(&idx); err != nil || idx != 1 {
+		t.Fatalf("after re-up: loss_alerts_created_at_idx %d: %v", idx, err)
 	}
 	if _, err := conn.Exec(ctx, "INSERT INTO user_notify_emails (user_id, notify_email_confirmed_at) VALUES ($1, now())", admin.ID); err == nil {
 		t.Fatal("a confirmed time without an address was accepted")
@@ -168,10 +176,10 @@ func TestNotifyEmailCode(t *testing.T) {
 	}
 }
 
-// TestAlertMailEnqueue: a claim enqueues one job per recipient (admins
-// with a confirmed address who are not locked), once per event: the same
-// event claimed again enqueues nothing, also after the job is done, and a
-// new event enqueues again.
+// TestAlertMailEnqueue: the mail pass enqueues one job per recipient
+// (admins with a confirmed address who are not locked), once per event:
+// another pass enqueues nothing, a done job is not queued again even when
+// the row's mail state is reset, and a new event enqueues again.
 func TestAlertMailEnqueue(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	conn := connect(t, url)
@@ -237,58 +245,60 @@ func TestAlertMailEnqueue(t *testing.T) {
 		}
 		return out
 	}
-	claim := func(seq *int64) int {
+	pass := func(seq *int64) int {
 		t.Helper()
-		got, err := st.ClaimStorageNotifications(ctx, []byte("lease-x"), time.Minute, 10, mail(seq))
+		n, err := st.EnqueueDueStorageMail(ctx, 10, mail(seq))
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Released without finishing: as after a failed webhook request.
-		if _, err := conn.Exec(ctx, "UPDATE storage_states SET notify_lease = NULL, notify_lease_until = NULL"); err != nil {
-			t.Fatal(err)
-		}
-		return len(got)
+		return n
 	}
 
 	var seq int64
 	transition("warn")
-	for range 3 {
-		if n := claim(&seq); n != 1 {
-			t.Fatalf("claimed %d", n)
+	for i, want := range []int{1, 0, 0} {
+		if n := pass(&seq); n != want {
+			t.Fatalf("pass %d handled %d, want %d", i+1, n, want)
 		}
 	}
 	want := map[string]string{"storage:instance:1:" + itoa(ids[0]): "queued", "storage:instance:1:" + itoa(ids[1]): "queued"}
 	if got := jobs(); !sameJobs(got, want) {
-		t.Fatalf("jobs after three claims %v, want %v", got, want)
+		t.Fatalf("jobs after three passes %v, want %v", got, want)
 	}
-	// A done job is not queued again by another claim of the event, also
-	// when the outbox forgot the event.
+	// A done job is not queued again by the event, also when the outbox
+	// forgot that it was mailed.
 	if _, err := conn.Exec(ctx, "UPDATE jobs SET state = 'done', finished_at = now() WHERE kind = 'notify_mail'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, "UPDATE storage_states SET mail_enqueued_event = NULL"); err != nil {
+	if _, err := conn.Exec(ctx, "UPDATE storage_states SET mail_enqueued_event = NULL, mailed_seq = 0"); err != nil {
 		t.Fatal(err)
 	}
-	claim(&seq)
+	if n := pass(&seq); n != 1 {
+		t.Fatalf("a forgotten event: %d due", n)
+	}
 	for k, s := range jobs() {
 		if s != "done" {
-			t.Fatalf("job %s %s after a repeated claim", k, s)
+			t.Fatalf("job %s %s after the event was handled again", k, s)
 		}
 	}
 	transition("ok")
-	claim(&seq)
+	pass(&seq)
 	transition("warn")
-	claim(&seq)
+	pass(&seq)
 	if got := jobs(); len(got) != 6 || got["storage:instance:3:"+itoa(ids[1])] != "queued" {
 		t.Fatalf("warn, ok, warn: %v", got)
 	}
 	// Without mail, nothing is enqueued.
 	transition("full")
-	if _, err := st.ClaimStorageNotifications(ctx, []byte("lease-y"), time.Minute, 10, nil); err != nil {
+	if n, err := st.EnqueueDueStorageMail(ctx, 10, nil); err != nil || n != 0 {
+		t.Fatalf("a pass without mail: %d %v", n, err)
+	}
+	// The webhook's claim enqueues no mail.
+	if _, err := st.ClaimStorageNotifications(ctx, []byte("lease-y"), time.Minute, 10); err != nil {
 		t.Fatal(err)
 	}
 	if got := jobs(); len(got) != 6 {
-		t.Fatalf("a claim without mail enqueued: %v", got)
+		t.Fatalf("a pass without mail or a claim enqueued: %v", got)
 	}
 }
 
@@ -302,97 +312,6 @@ func sameJobs(a, b map[string]string) bool {
 		}
 	}
 	return true
-}
-
-// TestAlertMailEnqueuedEvent: mail_enqueued_event alone keeps a webhook
-// retry from mailing an event again where the job key cannot: to an admin
-// who confirmed an address after the first claim, and after the event's
-// done jobs were purged. The mail's own state (mailed_seq) agrees: the
-// event is not due as mail either. A new transition is mailed to both.
-func TestAlertMailEnqueuedEvent(t *testing.T) {
-	st, url := storetest.NewWithURL(t)
-	conn := connect(t, url)
-	ctx := context.Background()
-	a1, err := st.CreateUser(ctx, "a1", "h", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a2, err := st.CreateUser(ctx, "a2", "h", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	confirmAddress(t, st, a1.ID, "a1@example.com")
-	mail := func(p store.PendingStorageNotification) *store.AlertMailEvent {
-		return &store.AlertMailEvent{ID: "storage:instance:" + itoa(p.EventSeq), Payload: store.AlertMailPayload{Kind: store.AlertMailStorage, Level: p.State}}
-	}
-	transition := func(state string) {
-		t.Helper()
-		if _, err := conn.Exec(ctx, "UPDATE storage_states SET state = $1, event_seq = event_seq + 1 WHERE group_id IS NULL", state); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// claim claims as a notifier whose webhook request then fails: the
-	// lease is released and the transition stays due.
-	claim := func() {
-		t.Helper()
-		got, err := st.ClaimStorageNotifications(ctx, []byte("lease-x"), time.Minute, 10, mail)
-		if err != nil || len(got) != 1 {
-			t.Fatalf("claimed %d: %v", len(got), err)
-		}
-		if _, err := conn.Exec(ctx, "UPDATE storage_states SET notify_lease = NULL, notify_lease_until = NULL"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	jobs := func(user int64) int {
-		t.Helper()
-		var n int
-		if err := conn.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE kind = 'notify_mail' AND key LIKE $1", "%:"+itoa(user)).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	notDue := func() {
-		t.Helper()
-		n, err := st.EnqueueDueStorageMail(ctx, 10, func(p store.PendingStorageNotification) *store.AlertMailEvent {
-			t.Errorf("storage transition %d due as mail", p.EventSeq)
-			return nil
-		})
-		if err != nil || n != 0 {
-			t.Fatalf("due as mail: %d %v", n, err)
-		}
-	}
-
-	transition("warn")
-	claim()
-	if jobs(a1.ID) != 1 || jobs(a2.ID) != 0 {
-		t.Fatalf("first claim: a1 %d, a2 %d jobs", jobs(a1.ID), jobs(a2.ID))
-	}
-	confirmAddress(t, st, a2.ID, "a2@example.com")
-	claim()
-	if n := jobs(a2.ID); n != 0 {
-		t.Fatalf("admin confirmed after the first claim got %d jobs for the same event", n)
-	}
-	notDue()
-
-	// The done job is purged while the webhook still retries the event.
-	if _, err := conn.Exec(ctx, "UPDATE jobs SET state = 'done', finished_at = now() - interval '2 hours' WHERE kind = 'notify_mail'"); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := st.DeleteDoneJobs(ctx, time.Hour); err != nil || n != 1 {
-		t.Fatalf("purged %d: %v", n, err)
-	}
-	claim()
-	if jobs(a1.ID) != 0 || jobs(a2.ID) != 0 {
-		t.Fatalf("after the purge: a1 %d, a2 %d jobs for the same event", jobs(a1.ID), jobs(a2.ID))
-	}
-	notDue()
-
-	transition("full")
-	claim()
-	if jobs(a1.ID) != 1 || jobs(a2.ID) != 1 {
-		t.Fatalf("new transition: a1 %d, a2 %d jobs", jobs(a1.ID), jobs(a2.ID))
-	}
-	notDue()
 }
 
 // TestAlertMailDueByOwnState: the mail that is due is decided by the
@@ -461,19 +380,5 @@ func TestAlertMailDueByOwnState(t *testing.T) {
 	want := "storage:instance:3:" + itoa(admin.ID) + " storage:instance:4:" + itoa(admin.ID)
 	if strings.Join(keys, " ") != want || strings.Join(seen, " ") != "warn ok" {
 		t.Fatalf("jobs %v (states %v), want %s", keys, seen, want)
-	}
-	// A due row whose event was enqueued already enqueues nothing but
-	// still records its mail state, so it does not stay due: a batch of
-	// such rows would make the notifier's mail pass loop.
-	set("UPDATE storage_states SET state = 'full', event_seq = 5, mail_enqueued_event = 'storage:instance:5' WHERE group_id IS NULL")
-	if n := due(); n != 1 {
-		t.Fatalf("enqueued event: %d due", n)
-	}
-	if n := due(); n != 0 {
-		t.Fatalf("enqueued event stays due: %d", n)
-	}
-	var jobs int
-	if err := conn.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE kind = 'notify_mail'").Scan(&jobs); err != nil || jobs != 2 {
-		t.Fatalf("%d jobs after an enqueued event: %v", jobs, err)
 	}
 }

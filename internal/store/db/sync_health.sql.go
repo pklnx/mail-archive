@@ -25,7 +25,7 @@ WHERE h.account_id = a.id AND h.account_id IN (
     LIMIT $4
     FOR UPDATE OF c SKIP LOCKED)
 RETURNING h.account_id, a.name AS account_name, coalesce(u.name, '')::text AS owner_name, h.failure_streak, h.failing_since,
-    h.notified_state, h.notify_attempts, h.notify_first_error_at, h.mail_enqueued_event,
+    h.notified_state, h.notify_attempts, h.notify_first_error_at,
     coalesce((SELECT r.error FROM sync_runs r WHERE r.account_id = h.account_id AND r.finished_at IS NOT NULL
               ORDER BY r.started_at DESC LIMIT 1), '')::text AS last_error
 `
@@ -46,7 +46,6 @@ type ClaimNotificationsRow struct {
 	NotifiedState      string
 	NotifyAttempts     int32
 	NotifyFirstErrorAt *time.Time
-	MailEnqueuedEvent  *string
 	LastError          string
 }
 
@@ -77,7 +76,6 @@ func (q *Queries) ClaimNotifications(ctx context.Context, arg ClaimNotifications
 			&i.NotifiedState,
 			&i.NotifyAttempts,
 			&i.NotifyFirstErrorAt,
-			&i.MailEnqueuedEvent,
 			&i.LastError,
 		); err != nil {
 			return nil, err

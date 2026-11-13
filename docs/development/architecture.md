@@ -31,7 +31,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files, and the signed statement of a GoBD export (`statement.go`). No database. |
 | `internal/gobd` | The GoBD export, [format v1](#gobd-export-format-v1): the writer with its directory and ZIP sinks, README.txt, index.xml, SHA256SUMS, and the offline `export verify`. No database. |
 | `internal/csvsafe` | The leading `'` that keeps spreadsheets from reading a CSV cell as a formula; used by the audit CSV, the deletion preview and the GoBD export. |
-| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote and the storage transitions of `storage_states`. With alert mail on, each claim also queues the `notify_mail` jobs of its transitions, and after the webhook's claims the mail that is due by the mail's own state, so a failing webhook holds no mail back (see [Alert mail](#alert-mail)). |
+| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote and the storage transitions of `storage_states`. With alert mail on, a mail pass after each webhook pass queues the `notify_mail` jobs of the transitions due by the mail's own state, so a failing webhook neither holds mail back nor adds any (see [Alert mail](#alert-mail)). |
 | `internal/alertmail` | Alert mail to admins (#397, part 5): the SMTP client for the configured relay (TLS required, timeouts), the composed message and its texts in German and English, and the `notify_mail` job. `mailtest` is an in-process relay for tests. |
 | `internal/jobs` | Background jobs on the queue in the `jobs` table: the registry of kinds and the bounded pool that `serve` and `worker` run (see [Background jobs](#background-jobs)). |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
@@ -1532,39 +1532,36 @@ notifier, so webhook and mail share the outboxes
 (`account_sync_health`, `smtp_fill_health`, `loss_alerts`,
 `storage_states`) but fail independently:
 
-- **Enqueue.** With `Notifier.Mail`, every claim (`ClaimNotifications`,
+- **Mail's own state.** The claims (`ClaimNotifications`,
   `ClaimFillNotifications`, `ClaimLossAlerts`, `ClaimStorageNotifications`)
-  runs in a transaction that, for each claimed row whose
-  `mail_enqueued_event` differs from the row's event ID, inserts one
-  `notify_mail` job per recipient (`AlertMailRecipients`: admins, not
-  locked, address confirmed) and sets `mail_enqueued_event`. The job key is
-  `<event id>:<user id>` and the insert is insert-only
-  (`EnqueueJobOnce`, `ON CONFLICT DO NOTHING`), unlike `EnqueueJobs`, which
-  queues a done job again: a webhook retry claims the same event and
-  queues nothing, a delivered mail is never sent twice by a claim, and a
-  new transition has a new event ID. The payload
-  (`store.AlertMailPayload`) holds IDs, figures and the level, never
-  names. Without a webhook the claim is finished at once.
-- **Mail's own state.** A claim follows the webhook's delivery state
-  (`notified_state`, `notified_seq`, `notify_next_at`), so a failing
-  webhook would hold mail back: a recovery is claimed only after the alert
-  was delivered, and a transition waits for the webhook's retry. Mail
-  therefore keeps its own state beside it: `mailed_state` on
-  `account_sync_health` and `smtp_fill_health` (what the last mail said),
-  `mailed_seq` on `storage_states` (the last transition mailed), and
-  `mail_enqueued_event` on `loss_alerts`. Every enqueue sets them with
-  `mail_enqueued_event`. After its webhook passes, `Deliver` runs
-  `deliverMail`: `EnqueueDueSyncMail`, `EnqueueDueFillMail`,
-  `EnqueueDueLossMail` and `EnqueueDueStorageMail` lock the rows whose mail
-  is due by that state alone (`FOR UPDATE SKIP LOCKED`, no lease), in
-  batches of 50, and enqueue as above in the same transaction. Due means: a
-  streak at the threshold with `mailed_state` ok, or an ended streak with
-  `mailed_state` failing; a loss alert younger than 24 hours without
-  `mail_enqueued_event`; `event_seq` above `mailed_seq`, where a scope back
-  at `ok` counts only after an earlier mail of it (mail switched on later
-  does not announce every scope that once left `ok`). A row whose event was
-  enqueued already enqueues nothing but still records its state, so no row
-  stays due.
+  serve the webhook only and follow its delivery state (`notified_state`,
+  `notified_seq`, `notify_next_at`). Mail keeps its own state beside it:
+  `mailed_state` on `account_sync_health` and `smtp_fill_health` (what the
+  last mail said), `mailed_seq` on `storage_states` (the last transition
+  mailed), and `mail_enqueued_event` on `loss_alerts`, which also records
+  the last event mailed in the other three.
+- **Enqueue.** With `Notifier.Mail`, `Deliver` runs `deliverMail` after
+  every webhook pass, also after a failed request and without a webhook;
+  it is the only path that enqueues alert mail. `EnqueueDueSyncMail`,
+  `EnqueueDueFillMail`, `EnqueueDueLossMail` and `EnqueueDueStorageMail`
+  lock the rows whose mail is due by the mail's state alone (`FOR UPDATE
+  SKIP LOCKED`, no lease, batches of 50) and, in the same transaction,
+  insert one `notify_mail` job per recipient (`AlertMailRecipients`:
+  admins, not locked, address confirmed) and move the row's mail state on.
+  Due means: a streak at the threshold with `mailed_state` ok, or an ended
+  streak with `mailed_state` failing; a loss alert younger than 24 hours
+  without `mail_enqueued_event` (read through `loss_alerts_created_at_idx`);
+  `event_seq` above `mailed_seq`, where a scope back at `ok` counts only
+  after an earlier mail of it. So a failing webhook neither holds mail back
+  nor adds any (a short failure after a mailed recovery is no news to
+  mail), and a change undone before a pass saw it is not mailed. That state
+  update is what keeps an event from being mailed twice; the job key
+  `<event id>:<user id>` and the insert-only `EnqueueJobOnce` (`ON CONFLICT
+  DO NOTHING`, unlike `EnqueueJobs`, which queues a done job again) are a
+  second guard while the job exists. With no recipient a pass still moves
+  the state on, so turning mail on announces the current state once and an
+  admin who confirms later gets only later changes. The payload
+  (`store.AlertMailPayload`) holds IDs, figures and the level, never names.
 - **Delivery.** The `notify_mail` kind runs in a pool of one of its own in
   the process that runs the notifier: `serve`, and `sync` at its end
   (`UntilIdle`, 2.5 minutes). The worker does not register it and needs no

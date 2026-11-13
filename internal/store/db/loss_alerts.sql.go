@@ -24,7 +24,7 @@ WHERE la.account_id = a.id AND la.id IN (
     LIMIT $4
     FOR UPDATE OF c SKIP LOCKED)
 RETURNING la.id, la.sync_run_id, la.account_id, a.name AS account_name, coalesce(u.name, '')::text AS owner_name,
-    la.created_at, la.lost, la.present_before, la.folder_names, la.folder_lost, la.more_folders, la.notify_attempts, la.mail_enqueued_event
+    la.created_at, la.lost, la.present_before, la.folder_names, la.folder_lost, la.more_folders, la.notify_attempts
 `
 
 type ClaimLossAlertsParams struct {
@@ -35,19 +35,18 @@ type ClaimLossAlertsParams struct {
 }
 
 type ClaimLossAlertsRow struct {
-	ID                int64
-	SyncRunID         int64
-	AccountID         int64
-	AccountName       string
-	OwnerName         string
-	CreatedAt         time.Time
-	Lost              int32
-	PresentBefore     int32
-	FolderNames       []string
-	FolderLost        []int32
-	MoreFolders       int32
-	NotifyAttempts    int32
-	MailEnqueuedEvent *string
+	ID             int64
+	SyncRunID      int64
+	AccountID      int64
+	AccountName    string
+	OwnerName      string
+	CreatedAt      time.Time
+	Lost           int32
+	PresentBefore  int32
+	FolderNames    []string
+	FolderLost     []int32
+	MoreFolders    int32
+	NotifyAttempts int32
 }
 
 // Leases up to max_rows unsent alerts that are due and younger than
@@ -80,7 +79,6 @@ func (q *Queries) ClaimLossAlerts(ctx context.Context, arg ClaimLossAlertsParams
 			&i.FolderLost,
 			&i.MoreFolders,
 			&i.NotifyAttempts,
-			&i.MailEnqueuedEvent,
 		); err != nil {
 			return nil, err
 		}
