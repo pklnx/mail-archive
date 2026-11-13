@@ -54,6 +54,8 @@ code. **Remove address** stops alert mail to you. Setting, confirming and
 removing the address are written to the [audit log](./audit-log), without
 the address.
 
+![Profile page, tab Notifications with a confirmed address](/screenshots/profile-notifications.png)
+
 If the relay refuses your address as unknown (a reply `5.1.x`), it is
 marked unconfirmed: a banner above the mail and the tab say so, and the
 address gets no alert mail until you confirm it again. Other refusals of
