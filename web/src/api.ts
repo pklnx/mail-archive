@@ -423,14 +423,17 @@ export class ApiError extends Error {
 export const UNAUTHORIZED_EVENT = "mail-archive:unauthorized";
 
 const sessionPath = "/api/session";
+const setupPath = "/api/setup";
 
 async function errorFor(path: string, res: Response): Promise<ApiError> {
   const err = await errorFrom(res);
   // The session ended, or the user still has to replace a generated
   // password: the login gate checks the session again.
   // An auditor's session without a grant (#393) likewise: the gate asks for one.
+  // A 401 of the login steps (a wrong password, a wrong setup token) is no
+  // ended session.
   const b = err.body;
-  if ((res.status === 401 && !path.startsWith(sessionPath)) || b.passwordChangeRequired === true || b.twoFactorSetupRequired === true || b.grantSelectionRequired === true) {
+  if ((res.status === 401 && !path.startsWith(sessionPath) && path !== setupPath) || b.passwordChangeRequired === true || b.twoFactorSetupRequired === true || b.grantSelectionRequired === true) {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
   return err;
@@ -614,10 +617,19 @@ export interface Session {
 }
 
 /**
+ * How the first admin is created (#396): "cli" with `user add`, "token"
+ * with the operator's setup link, "expired" when its token is too old,
+ * "complete" once a first user exists or existed.
+ */
+export type SetupState = "cli" | "token" | "expired" | "complete";
+
+const setupStates: readonly string[] = ["cli", "token", "expired", "complete"];
+
+/**
  * The login state: a user, or none and whether the first admin is missing.
  * passkeyOrigin is where passkey logins work, if the server offers them.
  */
-export type SessionState = Session | { user: null; setupRequired: boolean; passkeyOrigin?: string };
+export type SessionState = Session | { user: null; setupRequired: boolean; setup?: SetupState; passkeyOrigin?: string };
 
 export const sessionApi = {
   get: async (signal?: AbortSignal): Promise<SessionState> => {
@@ -625,7 +637,13 @@ export const sessionApi = {
     if (res.status === 401) {
       const err = await errorFrom(res);
       const origin = err.body.passkeyOrigin;
-      return { user: null, setupRequired: err.body.setupRequired === true, passkeyOrigin: typeof origin === "string" ? origin : undefined };
+      const setup = err.body.setup;
+      return {
+        user: null,
+        setupRequired: err.body.setupRequired === true,
+        ...(typeof setup === "string" && setupStates.includes(setup) ? { setup: setup as SetupState } : {}),
+        passkeyOrigin: typeof origin === "string" ? origin : undefined,
+      };
     }
     if (!res.ok) throw await errorFrom(res);
     return (await res.json()) as Session;
@@ -634,6 +652,9 @@ export const sessionApi = {
     (await send<Partial<Session> & { twoFactorRequired?: boolean; challenge?: string }>("POST", sessionPath, { username, password }))!,
   login2FA: async (challenge: string, code: string) => (await send<Session>("POST", "/api/session/2fa", { challenge, code }))!,
   logout: () => send("DELETE", sessionPath),
+  /** Creates the first admin with the setup link's token and logs in (#396). */
+  setup: async (token: string, username: string, password: string) =>
+    (await send<Session>("POST", setupPath, { token, username, password }))!,
 };
 
 /** A ceremony started on the server: options for the browser and a token. */

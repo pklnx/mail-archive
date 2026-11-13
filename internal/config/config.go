@@ -243,6 +243,13 @@ type Config struct {
 	// MigrateOnStart makes serve and worker apply pending migrations at
 	// start.
 	MigrateOnStart bool
+	// EncryptionAtSetup: a new instance turns encryption at rest on at its
+	// first start (EnvEncryptionAtSetup, default on; #396).
+	EncryptionAtSetup bool
+	// SetupToken is the setup token of a new instance (#396), set by
+	// serve only (SetupTokenFromEnv), empty without one. A secret: never
+	// log it.
+	SetupToken string
 }
 
 // IMAPLimits are the IMAP limits an operator may raise, each checked
@@ -390,6 +397,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, os.Getenv(EnvMigrateOnStart)); err != nil {
+		return nil, err
+	}
+	if cfg.EncryptionAtSetup, err = ParseEncryptionAtSetup(os.Getenv(EnvEncryptionAtSetup)); err != nil {
 		return nil, err
 	}
 	if cfg.SecretKey, cfg.SecretKeySource, err = LoadSecretKey(os.Getenv(EnvSecretKeyFile), os.Getenv(EnvSecretKey), cfg.DataDir); err != nil {

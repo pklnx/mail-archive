@@ -39,6 +39,7 @@ func main() {
 		newPrepareDataCmd(),
 		newKeygenCmd(),
 		newSecretKeyCmd(),
+		newSetupCmd(),
 		newAccountCmd(),
 		newUserCmd(),
 		newGroupCmd(),
@@ -93,6 +94,11 @@ func exitStatus(ctx context.Context, err error) (int, string) {
 	// A refused secret key (#396): its configuration or its check.
 	var keyErr *config.SecretKeyError
 	if errors.As(err, &keyErr) {
+		return exitStartRefused, err.Error()
+	}
+	// A refused setup token (#396, part 3).
+	var tokenErr *config.SetupTokenError
+	if errors.As(err, &tokenErr) {
 		return exitStartRefused, err.Error()
 	}
 	var exitErr *exitError

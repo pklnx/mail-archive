@@ -59,6 +59,9 @@ trap cleanup EXIT
 (cd "$repo" && CGO_ENABLED=0 go build -o "$work/imap-testserver" ./tools/imap-testserver)
 
 # No data directory: the first ./ma migrate creates it, as on a real first start.
+# A test instance: the web server's first start finds no user yet, and
+# MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off lets it start without an archive key;
+# the encryption commands are tested further down.
 mkdir -p "$work/import"
 cp -R "$repo/internal/archive/testdata/import/thunderbird" "$work/import/"
 chmod -R a+rX "$work/import"
@@ -72,6 +75,7 @@ SECRET_KEY_DIR=$work/secret-key
 POSTGRES_PORT=${SMOKE_POSTGRES_PORT:-0}
 WEB_PORT=${SMOKE_WEB_PORT:-0}
 MAIL_ARCHIVE_PUBLIC_URL=http://localhost
+MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off
 ENV
 
 # Remove what an interrupted previous run left behind.

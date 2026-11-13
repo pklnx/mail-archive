@@ -79,6 +79,15 @@ services:
       # docs/reference/configuration.md.
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
       MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
+      # The first admin from a setup link: a token from `./ma setup token`
+      # in SECRET_KEY_DIR, with
+      # MAIL_ARCHIVE_SETUP_TOKEN_FILE=/secret-key/setup.token. Web only.
+      # See docs/guide/getting-started.md, "Start from configuration".
+      MAIL_ARCHIVE_SETUP_TOKEN_FILE: ${MAIL_ARCHIVE_SETUP_TOKEN_FILE:-}
+      MAIL_ARCHIVE_SETUP_TOKEN: ${MAIL_ARCHIVE_SETUP_TOKEN:-}
+      # off: a new instance starts without encryption at rest (test
+      # instances only); by default it turns it on at its first start.
+      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       # Apply pending database migrations at start, under the same lock as
       # ./ma migrate; off: refuse to start while migrations are pending.
@@ -179,8 +188,10 @@ services:
       MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       # No secret key: the worker seals and opens no password.
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
-      # As for web: whichever starts first migrates, the other waits.
+      # As for web: whichever starts first migrates, the other waits; so with
+      # encryption at setup.
       MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-on}
+      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
       MAIL_ARCHIVE_JOB_WORKERS: ${WORKER_JOB_WORKERS:-1}
       # Go's heap limit: mem_limit minus 128 MiB of WebAssembly memory per worker
       # (outside the Go heap) minus 64 MiB of headroom. See operations.md.
@@ -215,6 +226,8 @@ services:
       # The secret key, as for web.
       MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
       MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
+      # Read by `./ma status` (its setup line).
+      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
       MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
       # `./ma status` shows when each account is due and whether it is
       # stale; `./ma account set-schedule` checks the floor.

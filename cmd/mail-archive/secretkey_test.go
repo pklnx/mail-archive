@@ -143,7 +143,9 @@ func TestStartSecretKey(t *testing.T) {
 		t.Fatalf("another key: exit %d: %s", code, msg)
 	}
 	noSecrets(t, "the refusal", msg+logs.String(), dbURL, a, b)
-	// The worker never checks the key (and Compose gives it none).
+	// The worker never checks the key (and Compose gives it none). A test
+	// instance: no encryption at setup.
+	t.Setenv(config.EnvEncryptionAtSetup, "off")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -351,6 +353,45 @@ func TestComposeSecretKey(t *testing.T) {
 	for _, v := range worker.Volumes {
 		if strings.Contains(v, "secret-key") {
 			t.Errorf("the worker mounts %s", v)
+		}
+	}
+}
+
+// TestComposeSetupToken (#396, part 3): the setup token goes to the web
+// server only, from the read-only /secret-key mount or the variable, neither
+// required; the worker and the command line never get it. Encryption at
+// setup reaches web and worker, which both run it, and the command line for
+// `status`.
+func TestComposeSetupToken(t *testing.T) {
+	data, err := os.ReadFile("../../docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Services map[string]struct {
+			Environment map[string]any `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	web := file.Services["web"].Environment
+	if web[config.EnvSetupTokenFile] != "${MAIL_ARCHIVE_SETUP_TOKEN_FILE:-}" || web[config.EnvSetupToken] != "${MAIL_ARCHIVE_SETUP_TOKEN:-}" {
+		t.Errorf("web: %v / %v", web[config.EnvSetupTokenFile], web[config.EnvSetupToken])
+	}
+	for name, svc := range file.Services {
+		if name == "web" {
+			continue
+		}
+		for v := range svc.Environment {
+			if strings.HasPrefix(v, config.EnvSetupToken) {
+				t.Errorf("%s gets %s", name, v)
+			}
+		}
+	}
+	for _, name := range []string{"web", "worker", "mail-archive"} {
+		if v := file.Services[name].Environment[config.EnvEncryptionAtSetup]; v != "${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}" {
+			t.Errorf("%s: %s = %v", name, config.EnvEncryptionAtSetup, v)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import { UNAUTHORIZED_EVENT, type User } from "./api";
 import { AuthGate } from "./Auth";
 import { applySettings, messagesFor, t } from "./i18n";
 import { expectLoaded, expectLoading } from "./test/loading";
+import { setupTextFor } from "./setupText";
 
 const user: User = {
   name: "kim", admin: false, mustChangePassword: false, twoFactorEnabled: true, twoFactorRequired: false, language: "auto", locale: "auto",
@@ -195,9 +196,9 @@ describe("login", () => {
   it("explains how to create the first admin", async () => {
     serve({ "GET /api/session": [{ status: 401, body: { error: "setup required", setupRequired: true } }] });
     renderGate();
-    expect(await screen.findByRole("heading", { name: t.setupTitle })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: setupTextFor("en").title })).toBeTruthy();
     expect(screen.getByText("./ma user add NAME --admin")).toBeTruthy();
-    expect(screen.getByRole("button", { name: t.checkAgain })).toBeTruthy();
+    expect(screen.getByRole("button", { name: setupTextFor("en").checkAgain })).toBeTruthy();
   });
 });
 
@@ -549,7 +550,7 @@ describe("login in German", () => {
     cleanup();
     serve({ "GET /api/session": [{ status: 401, body: { error: "setup required", setupRequired: true } }] });
     renderGate();
-    await screen.findByRole("heading", { name: de.setupTitle });
+    await screen.findByRole("heading", { name: setupTextFor("de").title });
     expect(document.body.innerHTML).toContain(de.carbon.copy);
     expectNoEnglish();
   });

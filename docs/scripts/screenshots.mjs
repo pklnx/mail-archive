@@ -8,6 +8,10 @@ import { chromium } from "playwright-core";
 import { bucket, describeUnpinned, minute, pinTimes } from "./pin-times.mjs";
 
 const base = process.env.DEMO_URL ?? "http://localhost:18080";
+// The demo's second, new instance (tools/demo -setup-listen, #396) and its
+// made-up setup token (demoSetupToken in tools/demo).
+const setupBase = process.env.DEMO_SETUP_URL ?? "http://localhost:18088";
+const setupToken = "demo-setup-".repeat(4);
 // DOCS_SCREENSHOTS_DIR sets the output folder; by default it is the docs' own.
 const out = process.env.DOCS_SCREENSHOTS_DIR || new URL("../public/screenshots/", import.meta.url).pathname;
 await mkdir(out, { recursive: true });
@@ -177,6 +181,20 @@ async function openMessage(p, subject, path = "/") {
   await p.getByRole("button", { name: "Log in" }).waitFor();
   await shot(p, "login");
   await p.context().close();
+}
+
+// The page of the setup link (#396), on the new instance: the form, with
+// the user name typed in. Nothing is sent.
+{
+  const ctx = await browser.newContext({ ...contextOptions, colorScheme: "light", viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2 });
+  await ctx.clock.setFixedTime(browserNow);
+  const p = await ctx.newPage();
+  p.on("pageerror", (e) => errors.push(String(e)));
+  await p.goto(`${setupBase}/#setup=${setupToken}`);
+  await p.getByLabel("User name").fill("patrick");
+  await p.getByRole("button", { name: "Create admin" }).waitFor();
+  await shot(p, "setup");
+  await ctx.close();
 }
 
 for (const scheme of ["light", "dark"]) {

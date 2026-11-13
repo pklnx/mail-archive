@@ -49,3 +49,46 @@ SELECT id, two_factor_secret FROM users
 WHERE two_factor_secret IS NOT NULL
 ORDER BY id
 LIMIT @max_rows::int;
+
+-- name: GetSetupState :one
+-- The setup of the first admin (#396, part 3) and whether a user exists.
+SELECT setup_token_hash, setup_token_since, setup_completed_at,
+       EXISTS (SELECT 1 FROM users)::boolean AS has_users
+FROM instance_state;
+
+-- name: LockSetupState :one
+-- serializes the creation of the first user: POST /api/setup and every
+-- other way to create a user lock this row first.
+SELECT setup_token_hash, setup_token_since, setup_completed_at
+FROM instance_state FOR UPDATE;
+
+-- name: SetSetupToken :execrows
+-- A start with a token while setup is not complete: a token of another
+-- hash replaces the stored one and starts a new window; the same token
+-- keeps its window.
+UPDATE instance_state
+SET setup_token_hash = @token_hash::bytea, setup_token_since = @since::timestamptz, updated_at = now()
+WHERE setup_completed_at IS NULL
+  AND setup_token_hash IS DISTINCT FROM @token_hash::bytea;
+
+-- name: ClearSetupToken :execrows
+-- A start without a token revokes a stored one.
+UPDATE instance_state
+SET setup_token_hash = NULL, setup_token_since = NULL, updated_at = now()
+WHERE setup_token_hash IS NOT NULL;
+
+-- name: CompleteSetup :execrows
+-- The first user completes the setup for good and consumes the token.
+UPDATE instance_state
+SET setup_completed_at = now(), setup_user_id = @user_id::bigint,
+    setup_token_hash = NULL, setup_token_since = NULL, updated_at = now()
+WHERE setup_completed_at IS NULL;
+
+-- name: FreshInstance :one
+-- A new instance (#396, revision 1): setup not complete, no user, no
+-- message and no state of encryption at rest recorded.
+SELECT (setup_completed_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM users)
+        AND NOT EXISTS (SELECT 1 FROM messages)
+        AND NOT EXISTS (SELECT 1 FROM blob_encryption))::boolean AS fresh
+FROM instance_state;

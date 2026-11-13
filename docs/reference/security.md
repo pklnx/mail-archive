@@ -14,6 +14,7 @@
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
 | API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A key reaches only the read and sync endpoints of its owner and the accounts shared with them. See [Login](#login). |
+| The setup token | Only its SHA-256 is stored, with the time of the first start with it. It creates the first admin once, only while no user exists and for 7 days, and is compared in constant time. It is never logged, never in the audit log, and never reaches the server in a URL. See [Login](#login). |
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
 | Retention and deletion | Nothing is deleted without a [retention rule](./cli#retention) and a reviewed, confirmed [deletion run](./cli#deletion); rules, legal holds and runs are admin-only and recorded in the audit log. Database triggers refuse to delete a location whose period has not ended or that is on hold, and a message row without its deletion record. A message stays while any location of it, in any user's account, has no rule or an unexpired one, or is on legal hold. |
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
@@ -23,18 +24,45 @@
 ## Login
 
 Every API request needs a login or an API key, except the login itself,
-`/healthz`, `/healthz/jobs` and the API description `/api/openapi.json`. The page code (`/`,
+the setup of the first admin (`POST /api/setup`, below), `/healthz`,
+`/healthz/jobs` and the API description `/api/openapi.json`. The page code (`/`,
 `/assets/`, the web app manifest and its icons) is public; it contains no
 data. Which route needs what is set in one table (`internal/web/routes.go`);
 a route not listed there, or a new one without an access level, needs a
 login.
 
 - **Users** are created by admins in the web UI or with `./ma user add NAME`
-  (`--admin` for admins). There is no self-registration. Passwords generated
+  (`--admin` for admins). There is no self-registration; the first admin of
+  a hosted instance is created once with the operator's setup link.
+  Passwords generated
   by the server (new users, resets) have about 99 bits of entropy, are shown
   once and must be replaced by the user at the first login; until then the
   server refuses every other request. Passwords need at least 12 characters; there are no
   other rules, so a long passphrase is fine.
+- **The setup link** creates the first admin of a new instance from
+  configuration ([Start from configuration](../guide/getting-started#start-from-configuration)).
+  The operator sets a setup token (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`: 32 to 256
+  printable characters, `./ma setup token` makes one of 256 random bits, not
+  one of the instance's keys) and sends the link `<public URL>/#setup=<token>`.
+  The token sits in the fragment, which browsers never send: it reaches no
+  server log, proxy log or `Referer`. The page removes it from the address
+  bar at once and sends it in the body of `POST /api/setup`, the only route
+  that takes it. That route creates exactly one admin, and only while no user
+  exists, setup was never completed, and the token matches and is under 7
+  days old, counted from the first start with it; in one transaction it
+  creates the admin, records the setup as complete for good and consumes the
+  token. The database keeps only the token's SHA-256, compared in constant
+  time. A start with another token starts a new window, a start without one
+  revokes it, and the first user created any other way (`./ma user add`)
+  completes the setup too, so a token set later never works. A wrong or
+  expired token counts as a failed login of the address (below). The answer
+  is a login, and the new admin must set up TOTP before anything else. The
+  token is never logged and never written to the audit log; the web server
+  logs that the link is waiting, never the link. **Remaining risk:** whoever
+  opens the link before the customer becomes the admin. The operator sees the
+  setup in `./ma status` (`setup: complete since …`) and in the audit log
+  (`user.setup`, with the client address), and sends the link only over a
+  channel the customer alone reads.
 - **Sessions** end after 7 days without use and after 30 days at the latest.
   Logging out, a new password (`./ma user set-password`), locking
   (`./ma user lock`) and removing a user end their sessions at once. The
@@ -80,7 +108,8 @@ login.
   minutes block that address for 15 minutes. Behind a reverse proxy, set
   `MAIL_ARCHIVE_TRUSTED_PROXIES` to it: otherwise every client counts as the
   proxy's address, and 20 failures from anyone block every login through
-  the proxy for 15 minutes. Failed passkey logins count for
+  the proxy for 15 minutes, and wrong setup tokens block the setup link for
+  everyone. Failed passkey logins and wrong setup tokens count for
   the address only (IPv6: per `/64`). An IPv6 client usually gets a whole
   `/64`, so changing addresses within it does not escape the limits. Logs and
   the audit log keep the full address. The server log, like the audit log,
@@ -801,7 +830,8 @@ the providers.
   and the write check of the data directory that `./ma migrate` runs as the
   container user (`prepare-data --check`) only the data directory and
   `PATH`, `TZ`, `LANG` and `LC_ALL`. No `MAIL_ARCHIVE_*` or `PG*` variable of
-  the app reaches a child process, apart from what it is given on purpose.
+  the app reaches a child process, apart from what it is given on purpose;
+  that includes the setup token.
 
 ## The archive key
 
@@ -823,6 +853,14 @@ hierarchy are in [Architecture](../development/architecture#encryption-at-rest).
   or others can read its file, and when it equals `MAIL_ARCHIVE_SECRET_KEY`.
   Keep the key file and the recovery key that `encryption keygen` prints
   apart from the data directory, its snapshots and its backups.
+- **New instances.** A new instance (no user, no message, no state of
+  encryption at rest recorded yet) turns encryption at rest on at its first
+  start, before anything is archived, and refuses to start without an
+  archive key (exit code 4). Without a keyring file it creates one with a
+  slot for the configured archive key alone; add a recovery key with
+  `./ma encryption add-key`. `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` starts a
+  new instance without encryption: for test instances only, never for a
+  customer's; `./ma status` says so.
 - **Loss.** Without the archive key and every recovery key, no encrypted
   message file can be read, backups included.
 - **Start.** While encryption is on, every command that reads or writes

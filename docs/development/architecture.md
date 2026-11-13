@@ -1273,7 +1273,7 @@ their kinds in the test only.
 
 `serve` and `worker` run `prepareInstance` (`cmd/mail-archive/startup.go`,
 #396) before they open their own store. The steps are numbered as in the
-plan of #396; part 3 adds the missing ones:
+plan of #396:
 
 | # | Step | serve | worker | other commands |
 |---|---|---|---|---|
@@ -1282,8 +1282,10 @@ plan of #396; part 3 adds the missing ones:
 | 2 | Open a short-lived store with `ForMigrations` and take the migration command lock (`LockMigrations`), logging once if it has to wait. | yes | yes | no |
 | 3 | With `MAIL_ARCHIVE_MIGRATE_ON_START=on`: refuse a migration whose failure is recorded with the same file (exit 3), log the pending migrations and the last `data.backup` audit entry (a warning when none is younger than 26 h), then run `applyMigrations`, the sequence `migrate` runs too (index rebuild, audit partitions, `Store.Migrate`, password upgrade). | yes | yes | `migrate` only, without the record check |
 | 4 | Schema check (`Store.SchemaState`): refuse when migrations are pending or the database has a newer migration than the binary (exit 4). | yes | yes | yes, in `openApp`; `backup` and `status` only warn |
-| 3b | Hook under the lock, on a current schema (part 3: encryption at setup). | yes | yes | no |
+| 3b | Encryption at setup (`encryptionAtSetup`, `archive.EnableAtSetup`), on a current schema: on a new instance (`Store.FreshInstance`: setup not complete, no user, no message, no `blob_encryption` row) it runs `encryption enable` on the empty archive, creating a keyring with a slot for the archive key when there is no keyring file. It takes the writers lock and the blob lock exclusively without waiting, as `enable` does, so a command-line writer (an import before the first user) makes it refuse with exit 4 and the holder; under those locks it checks again that the instance is new. Every writer of this version takes the writers lock only at step 8, so it starts with state `on`. Without an archive key it refuses (exit 4), unless `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` (test instances). | yes | yes | no |
 | 5 | Secret key (`checkSecretKey`): refuse another key than the one whose check value `instance_state.secret_key_check` holds (HMAC-SHA256 with the key over `mail-archive secret key check v1`, `crypto.KeyCheck`), exit 4 with both fingerprints. Without a check value, the key must open one of up to 5 sealed account passwords and 5 TOTP secrets if there are any; then the value is recorded. `secret-key accept` replaces it. | yes | no | no |
+| 6 | The start-up checks of encryption at rest (`archive.OpenAtRest`), when the process opens its store after step 8. | yes | yes | writers and readers of message files |
+| 7 | Setup token (`recordSetupToken`): while setup is not complete, store the SHA-256 of the configured token (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`, loaded at step 0 by `config.SetupTokenFromEnv`, a `config.SetupTokenError` is exit 4) with the time of the first start with it, or clear a stored one when none is configured. | yes | no | no |
 | 8 | Release the lock, close the store, then `openApp` and the process's own start; `serve` swaps the handler of its HTTP server to `web.Server`'s (`web.Swap`). | yes | yes | – |
 
 `serve` has one `http.Server` and one listener for its whole run
@@ -1298,9 +1300,25 @@ variables of an allowlist (`pgToolEnvNames` for `pg_dump` and `pg_restore`,
 adds (the libpq variables of the database URL, the data directory). A
 `MAIL_ARCHIVE_*` or `PG*` variable of the process is never passed on.
 
-Steps 3 to 5 run under the lock, so starts and `migrate` at the same time
-apply each migration once: the first runs them, the others wait and find
-nothing left. goose's own lock stays nested inside, as for `migrate`.
+Steps 3 to 7 (but 6) run under the lock, so starts and `migrate` at the
+same time apply each migration once: the first runs them, the others wait
+and find nothing left; so with encryption at setup and the setup token.
+goose's own lock stays nested inside, as for `migrate`.
+
+The setup link (`POST /api/setup`, `internal/web/setup.go`) creates the
+first admin in one transaction (`Store.CompleteSetup`): it locks the row of
+`instance_state` (`SELECT … FOR UPDATE`), requires that setup is not
+complete, that no user exists and that the SHA-256 of the token matches
+(`crypto/subtle`) within 7 days of `setup_token_since`, creates the admin,
+and sets `setup_completed_at` and `setup_user_id` and clears the token. Every
+other creation of a user (`createUser`) locks the same row first and
+completes the setup with the first user, so the two are serialized. Wrong
+or expired tokens count as failed logins of the address
+(`Limiter.BeginAddr`); the token is checked before the password is hashed.
+`GET /api/session` without a session reports `setup`: `cli`, `token`,
+`expired` or `complete`. The web UI reads the token from the URL fragment
+(`web/src/setupLink.ts`), removes it with `history.replaceState` and sends
+it in the request body.
 
 goose runs each migration in a transaction of its own and stops at the
 first failure; `Store.Migrate` turns its `PartialError` into
@@ -1314,7 +1332,9 @@ lock and serialization failures, lost connections, cancels) are not, so
 the next start retries them. Before `instance_state` exists, nothing is
 read or written. A successful `applyMigrations` clears the record.
 `Store.InstanceStatus` reports the binary and schema versions, the pending
-migrations and the record (numbers and times only, no error texts).
+migrations, the record, the setup state with its times and the state of
+encryption at rest (numbers, enums and times only, no error texts); the
+caller adds whether `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is configured.
 
 Exit codes come from `codedError` in `main`: `3` for a failed migration
 (also `migrate`), `4` for a refused start-up check (also any command that
