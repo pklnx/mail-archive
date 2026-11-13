@@ -153,7 +153,14 @@ group's users, accounts, audit log, retention rules and holds, but no mail
 except their own and what was shared with them: a hold's number of matched
 messages is shown only for a hold on the admin themselves or on one of their
 own accounts, and the preview of deleting an account completely names only
-the admin's own accounts that keep copies of its mail. Groups separate customers
+the admin's own accounts that keep copies of its mail. An admin adds a legal
+hold with a search filter in the web UI only over their own mail; a filter over
+other users', a customer group's or the whole archive's mail is the operator's,
+with `./ma hold add`. Deletion runs depend on every hold: a run's figures can
+show an admin which expired messages of other users a filter hold set by the
+operator keeps. Filter holds over other users' mail that an admin added in the
+web UI before version 1.6.0 stay in force; the operator lists them with
+`./ma hold list` and decides whether to keep them. Groups separate customers
 inside one instance: they share one database, one archive directory, one
 secret key and one backup, and a message that several groups received is
 stored once and shown to each only through its own accounts. Sync, import
