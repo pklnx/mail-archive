@@ -4,9 +4,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
@@ -82,4 +85,63 @@ func TestAttachmentRepairSchedule(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// TestReindexRepairsAttachmentText: `./ma reindex` runs the repair once
+// before it works off the queue, so installations that run only sync or
+// import from cron catch up on locations that a process before 1.6.0
+// stored after the upgrade: a done message's location without the flag
+// and without a job is extracted again and then shows the text; a
+// location of a message without an attachment gets the flag.
+func TestReindexRepairsAttachmentText(t *testing.T) {
+	st, conn := jobsEnv(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	blobs, err := blobstore.New(os.Getenv("MAIL_ARCHIVE_DATA_DIR"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "Subject: alt\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nbody\r\n" +
+		"--b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"liste.csv\"\r\n\r\nArtikel;Preis\r\n--b--\r\n"
+	blob, _, err := blobs.Put(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _, err := blobs.Put(strings.NewReader("Subject: ohne\r\n\r\nkein Anhang\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc := &store.Account{Kind: store.KindImport, Name: "alt"}
+	if err := st.CreateAccount(ctx, acc); err != nil {
+		t.Fatal(err)
+	}
+	fo, err := st.GetOrCreateFolder(ctx, acc.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO messages (sha256, size, stored_path, has_attachment, index_version) VALUES ($1, 1, $2, true, $5), ($3, 1, $4, false, $5)`,
+		blob.SHA256, blob.Path, plain.SHA256, plain.Path, store.IndexVersion)
+	// Done before the upgrade; then a 1.5.x process stored both
+	// locations without the column, and queued no job.
+	exec(`INSERT INTO attachment_index_state (message_sha256, version) VALUES ($1, $2)`, blob.SHA256, store.AttachmentIndexVersion)
+	exec(`INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid) VALUES ($1, $3, 1, 1), ($2, $3, 1, 2)`,
+		blob.SHA256, plain.SHA256, fo.ID)
+	if err := runCmd(t, newReindexCmd(), ""); err != nil {
+		t.Fatal(err)
+	}
+	var falseLocs int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM message_locations WHERE NOT attachment_text_ok`).Scan(&falseLocs); err != nil || falseLocs != 0 {
+		t.Errorf("%d locations without the flag after reindex, %v", falseLocs, err)
+	}
+	var state string
+	if err := conn.QueryRow(ctx, `SELECT state FROM jobs WHERE kind = $1 AND key = $2`, store.JobAttachmentText, blob.SHA256).Scan(&state); err != nil ||
+		state != store.JobDone {
+		t.Errorf("job %q, %v", state, err)
+	}
 }

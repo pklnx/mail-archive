@@ -1252,7 +1252,8 @@ default false without a job, and ends a job done without setting flags.
 `RepairAttachmentText` checks the invariant against the data at the start
 of every process that runs a job pool (`serve` with workers, `worker`)
 and every 15 minutes there (`attachmentRepair` in
-`cmd/mail-archive/jobs.go`): it sets the flag on false locations of
+`cmd/mail-archive/jobs.go`), and once at the start of `reindex`'s
+attachment pass (`reindexAttachments`): it sets the flag on false locations of
 messages without attachments, and queues the job at `PriorityBackfill` for
 every done message with a false location and no queued, running or failed
 job. Both walk the partial index `message_locations_attachment_pending_idx`
@@ -1340,8 +1341,20 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
   lease, a release and a continuation clear the flag (a crash is never
   rerun at once, and a failed job stays failed). `store.EnqueueJobs` runs in a transaction of its
   own; `enqueueJobs` runs in the caller's, so a job is queued together with
-  what caused it, and storing never waits for it: the key is new, so the
-  insert meets no conflict.
+  what caused it. For a message new to the archive the key is new, so the
+  insert meets no conflict and the save waits for nothing. A save that
+  queues the `attachment_text` job of a message the archive already held
+  (a location without the flag, see [Attachment text per
+  location](#attachment-text-per-location)) updates that message's
+  existing job row and holds its lock until the save commits: a
+  `FinishJob` of that row, or another save or backfill batch that queues
+  it, waits for it. Saves take these rows in hash order (`sortBatch`), the
+  attachment backfill newest first, so a save and a backfill batch that
+  share two such messages, which are not done yet, can deadlock: PostgreSQL
+  aborts one of them, and the sync, import or fill batch is retried at its
+  next run, the backfill by the queue; nothing is lost. This can happen
+  only while the backfill runs, after an upgrade or a new
+  `AttachmentIndexVersion`.
 - **Claim and lease.** `ClaimJobs` takes due rows of the pool's kinds by
   `priority, run_after, id` with `FOR UPDATE SKIP LOCKED`, sets a random
   lease token per claim and `lease_until` = now + 60 s on the database's

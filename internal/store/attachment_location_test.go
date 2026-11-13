@@ -14,6 +14,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/db"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // Attachment text per location (#539, part 2): a location shows its
@@ -322,7 +323,7 @@ func TestRequeueIfRunning(t *testing.T) {
 		got.startedAt != "" || got.leaseUntil != "" || !got.runAfterPast {
 		t.Errorf("after FinishJob: %+v", got)
 	}
-	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	wctx, cancel := context.WithTimeout(ctx, testwait.Limit(t))
 	defer cancel()
 	if n, err := listen.WaitForNotification(wctx); err != nil || n.Payload != "requeue_test" {
 		t.Errorf("notification: %v %v", n, err)
@@ -386,7 +387,9 @@ func attachmentScope(t *testing.T, st *store.Store, user int64) store.Scope {
 // TestAttachmentTextGate: every search entry point finds a message by its
 // attachment text only through a location of the scope that shows it:
 // SearchMessages with att_shas and with the walk, SearchThreads (both
-// arms), CountThreadMatches, AttachmentMatches, AttachmentSnippets and a
+// arms: the thread of X, whose body has a word that M, newer in the same
+// thread, has only in its PDF, keeps X as its row) and CountThreadMatches
+// (that thread counts 1), each in both modes, AttachmentMatches, AttachmentSnippets and a
 // filter hold. alice's location shows M's PDF text, bob's (another group)
 // does not until his extraction; a user moved into bob's group keeps
 // hers, and a save after the move in that group shows it at once. Both
@@ -397,27 +400,33 @@ func TestAttachmentTextGate(t *testing.T) {
 	alice := f.user("alice", f.defaultGroup())
 	bob := f.user("bob", gB)
 	fa, fb := f.folder(&alice.ID, "alice"), f.folder(&bob.ID, "bob")
-	// M matches only by its PDF; X, in M's thread, by its body.
+	// M matches only by its PDF; X, in M's thread and older, by its body.
 	m := attMsg(1, "Siehe Anhang", "t1")
 	x := attMsg(2, "Die Zahlungserinnerung kam an", "t1")
+	older, newer := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	x.SentAt, m.SentAt = &older, &newer
 	f.save(fa, m, x)
 	f.extracted(m.SHA256, pdfText(1, "Zahlungserinnerung Kundennummer"))
 	f.extracted(x.SHA256)
 	f.save(fb, known(m), known(x))
-	// Y, which both can search, so that the walk runs for both: it starts
-	// only when AttachmentMatches finds more than its limit.
+	// Y, which both can search for both words, so that the walk runs for
+	// both: it starts only when AttachmentMatches finds more than its
+	// limit.
 	y := attMsg(3, "Hallo", "t2")
 	f.save(fa, y)
-	f.extracted(y.SHA256, pdfText(1, "Kundennummer Lieferschein"))
+	f.extracted(y.SHA256, pdfText(1, "Kundennummer Zahlungserinnerung Lieferschein"))
 	f.save(fb, known(y))
 	f.extracted(y.SHA256)
 	const word = "Kundennummer"
 
 	type view struct {
 		messages, walk, threads, threadsWalk []string
-		count                                int64
-		matches, snippets                    int
-		hold                                 int64
+		// counts and countsWalk are the threads found by the word that X
+		// has in its body and M only in its PDF, as "representative/count":
+		// the newer-match arm of SearchThreads and CountThreadMatches.
+		counts, countsWalk []string
+		matches, snippets  int
+		hold               int64
 	}
 	look := func(user int64) view {
 		t.Helper()
@@ -443,23 +452,25 @@ func TestAttachmentTextGate(t *testing.T) {
 			}
 			return names(rows)
 		}
-		threads := func(q string) ([]string, int64) {
+		threads := func(q string) ([]string, []string) {
 			rows, err := f.st.SearchThreads(f.ctx, store.SearchFilter{Scope: sc, Query: q, Limit: 10})
 			if err != nil {
 				t.Fatal(err)
 			}
-			var c int64
+			counts := []string{}
 			for _, r := range rows {
-				c += r.Count
+				counts = append(counts, fmt.Sprintf("%s/%d", strings.TrimSpace(r.SHA256)[60:], r.Count))
 			}
-			return names(rows), c
+			slices.Sort(counts)
+			return names(rows), counts
 		}
 		v.messages = search()
 		v.threads, _ = threads(word)
-		_, v.count = threads("Zahlungserinnerung")
+		_, v.counts = threads("Zahlungserinnerung")
 		restore := store.SetMaxAttachmentMatches(0)
 		v.walk = search()
 		v.threadsWalk, _ = threads(word)
+		_, v.countsWalk = threads("Zahlungserinnerung")
 		restore()
 		var accounts []int64
 		for _, a := range sc.Accounts {
@@ -493,14 +504,19 @@ func TestAttachmentTextGate(t *testing.T) {
 	}
 	sees := func(name string, v view, yes bool) {
 		t.Helper()
+		// Without M's text: thread t1 through X, count 1.
+		counts := []string{x.SHA256[60:] + "/1", y.SHA256[60:] + "/1"}
 		want := view{messages: []string{y.SHA256}, walk: []string{y.SHA256}, threads: []string{y.SHA256}, threadsWalk: []string{y.SHA256},
-			count: 1, matches: 1, hold: 1}
+			counts: counts, countsWalk: counts, matches: 1, hold: 1}
 		if yes {
 			both := []string{m.SHA256, y.SHA256}
-			want = view{messages: both, walk: both, threads: both, threadsWalk: both, count: 2, matches: 2, snippets: 1, hold: 2}
+			counts := []string{m.SHA256[60:] + "/2", y.SHA256[60:] + "/1"}
+			want = view{messages: both, walk: both, threads: both, threadsWalk: both, counts: counts, countsWalk: counts,
+				matches: 2, snippets: 1, hold: 2}
 		}
 		if !slices.Equal(v.messages, want.messages) || !slices.Equal(v.walk, want.walk) || !slices.Equal(v.threads, want.threads) ||
-			!slices.Equal(v.threadsWalk, want.threadsWalk) || v.count != want.count || v.matches != want.matches ||
+			!slices.Equal(v.threadsWalk, want.threadsWalk) || !slices.Equal(v.counts, want.counts) ||
+			!slices.Equal(v.countsWalk, want.countsWalk) || v.matches != want.matches ||
 			v.snippets != want.snippets || v.hold != want.hold {
 			t.Errorf("%s:\n got  %+v\n want %+v", name, v, want)
 		}
