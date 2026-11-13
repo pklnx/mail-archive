@@ -123,15 +123,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 ## PDFium, compiled to WebAssembly
 
 The server binary embeds `internal/pdfium_wasm/pdfium.wasm` from the Go
-module `github.com/klippa-app/go-pdfium` v1.21.3 (5,754,045 bytes, SHA-256
-`d1dbc423597c0c65cd932cd1bb6a452fdc457a1f3b5009d3d5ec4ca768c47f53`). It
+module `github.com/klippa-app/go-pdfium` v1.21.4 (5,828,543 bytes, SHA-256
+`e6f77e01dce34de05ad62515114152da580b64c23871e3e3e2afef3f7bb88ade`). It
 reads PDF attachments for search (`internal/attachtext`). The module is
 PDFium built without V8 and XFA by jerbob92/pdfium-binaries, branch
 `wasm-standalone`, patch state `e33a1ef` of 2026-08-23, as go-pdfium's
 `NATIVE_VS_WEBASSEMBLY.md` states. Neither the module nor the go-pdfium
 module records the PDFium revision or the Emscripten version it was built
 with. The components below are those that PDFium's build files link into
-such a build at `chromium/8057` (commit `a5a7089`, the revision go-pdfium's
+such a build at `chromium/8111` (the revision go-pdfium's
 own CI tests against); the module's strings confirm libjpeg-turbo, OpenJPEG,
 FreeType, ICU, Little CMS and abseil.
 
