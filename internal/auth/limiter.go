@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -124,6 +125,24 @@ type Limiter struct {
 // NewLimiter creates an empty Limiter.
 func NewLimiter() *Limiter {
 	return &Limiter{users: map[string]*failures{}, addrs: map[string]*failures{}, now: time.Now, timeout: realTimeout}
+}
+
+// WithClock makes l read the time from now instead of the wall clock and
+// returns l, for tests in other packages. Call it before l is used.
+func (l *Limiter) WithClock(now func() time.Time) *Limiter {
+	l.now = now
+	return l
+}
+
+// LimitKey groups a client address for the limits: IPv6 by its /64, the
+// block one host or network usually gets, so that changing addresses within
+// it does not escape the limits; IPv4 (also IPv4-mapped IPv6) by address.
+func LimitKey(a netip.Addr) string {
+	a = a.Unmap().WithZone("")
+	if a.Is6() {
+		return netip.PrefixFrom(a, 64).Masked().String()
+	}
+	return a.String()
 }
 
 func realTimeout(d time.Duration) (<-chan time.Time, func()) {

@@ -1,0 +1,24 @@
+# The SMTP server's certificate for journaling with
+# MAIL_ARCHIVE_SMTP_AUTH=required (the default): mounts SMTP_TLS_DIR (default
+# ./tls) read-only as /tls into the web server. Kept out of
+# docker-compose.yml, so that an instance without SMTP needs no such
+# directory, and Docker never creates a missing one as root.
+#
+# Use it with every command that starts or updates the web server:
+#   docker compose -f docker-compose.yml -f docker-compose.smtp.yml up -d web
+# or once in .env: COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml
+# Then set MAIL_ARCHIVE_SMTP_TLS_CERT=/tls/fullchain.pem and
+# MAIL_ARCHIVE_SMTP_TLS_KEY=/tls/privkey.pem. The key must be readable by the
+# container user (UID 65532). Renewed files are picked up within a minute;
+# copy them in with a deploy hook (see docs/guide/operations.md, "SMTP
+# certificate").
+
+services:
+  web:
+    volumes:
+      - type: bind
+        source: ${SMTP_TLS_DIR:-./tls}
+        target: /tls
+        read_only: true
+        bind:
+          create_host_path: false

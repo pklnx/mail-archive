@@ -64,6 +64,12 @@ const (
 	// EnvSMTPHostname is the name in the SMTP greeting; default: the
 	// machine's host name.
 	EnvSMTPHostname = "MAIL_ARCHIVE_SMTP_HOSTNAME"
+	// EnvSMTPAuth is "required" (default: clients log in with an SMTP
+	// secret over STARTTLS) or "off" (the allowlist is the only gate).
+	EnvSMTPAuth = "MAIL_ARCHIVE_SMTP_AUTH"
+	// EnvSMTPMaxConnsPerAddr caps the connections of one client address
+	// (IPv6: one /64) with EnvSMTPAuth=required.
+	EnvSMTPMaxConnsPerAddr = "MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR"
 	// EnvTrustedProxies lists the reverse proxies (CIDR or single addresses)
 	// whose X-Forwarded-For names the client; empty trusts none.
 	EnvTrustedProxies = "MAIL_ARCHIVE_TRUSTED_PROXIES"
@@ -138,6 +144,18 @@ const DefaultSMTPMaxSize = 50 << 20
 
 // MaxSMTPMaxSize is the largest accepted EnvSMTPMaxSize.
 const MaxSMTPMaxSize = 1 << 30
+
+// Values of EnvSMTPAuth.
+const (
+	SMTPAuthRequired = "required"
+	SMTPAuthOff      = "off"
+)
+
+// EnvSMTPMaxConnsPerAddr: default and range.
+const (
+	DefaultSMTPMaxConnsPerAddr = 8
+	MaxSMTPMaxConnsPerAddr     = 64
+)
 
 // DefaultAlertAfterFailures is used when EnvAlertAfterFailures is not set.
 const DefaultAlertAfterFailures = 3
@@ -246,12 +264,33 @@ func (c *Config) AttestDir() string { return filepath.Join(c.DataDir, "attest") 
 
 // SMTP configures the SMTP server for smtp accounts.
 type SMTP struct {
-	Listen          string
+	Listen string
+	// AllowedNetworks is required with Auth off; with Auth on, empty
+	// means any address.
 	AllowedNetworks []netip.Prefix
 	MaxSize         int64
-	TLSCert         string // empty: no STARTTLS
+	TLSCert         string // empty: no STARTTLS; required with Auth
 	TLSKey          string
 	Hostname        string
+	// Auth is EnvSMTPAuth=required: clients log in with an SMTP secret,
+	// only over STARTTLS.
+	Auth bool
+	// MaxConnsPerAddr is the cap per client address with Auth; 0 without.
+	MaxConnsPerAddr int
+}
+
+// SMTPEnv holds the raw values of the SMTP variables, for ParseSMTP.
+type SMTPEnv struct {
+	Listen, AllowedNetworks, MaxSize, TLSCert, TLSKey, Hostname string
+	Auth, MaxConnsPerAddr                                       string
+}
+
+func smtpEnv() SMTPEnv {
+	return SMTPEnv{
+		Listen: os.Getenv(EnvSMTPListen), AllowedNetworks: os.Getenv(EnvSMTPAllowedNetworks),
+		MaxSize: os.Getenv(EnvSMTPMaxSize), TLSCert: os.Getenv(EnvSMTPTLSCert), TLSKey: os.Getenv(EnvSMTPTLSKey),
+		Hostname: os.Getenv(EnvSMTPHostname), Auth: os.Getenv(EnvSMTPAuth), MaxConnsPerAddr: os.Getenv(EnvSMTPMaxConnsPerAddr),
+	}
 }
 
 // Webhook is where alerts are sent. The URL and the authorization value
@@ -322,8 +361,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.SMTP, err = ParseSMTP(os.Getenv(EnvSMTPListen), os.Getenv(EnvSMTPAllowedNetworks), os.Getenv(EnvSMTPMaxSize),
-		os.Getenv(EnvSMTPTLSCert), os.Getenv(EnvSMTPTLSKey), os.Getenv(EnvSMTPHostname))
+	cfg.SMTP, err = ParseSMTP(smtpEnv())
 	if err != nil {
 		return nil, err
 	}
@@ -575,11 +613,16 @@ func ParseWebhook(rawURL, format, authorization string) (*Webhook, error) {
 // ParseSMTP checks the SMTP server settings. An empty listen address
 // turns the server off; then the other settings must be empty too, so that
 // a typo in the listen variable does not go unnoticed.
-func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, error) {
-	listen, networks, maxSize = strings.TrimSpace(listen), strings.TrimSpace(networks), strings.TrimSpace(maxSize)
-	cert, key, hostname = strings.TrimSpace(cert), strings.TrimSpace(key), strings.TrimSpace(hostname)
+//
+// With EnvSMTPAuth=required (the default) a certificate is required and the
+// allowlist is optional; with off the allowlist is required, as the only
+// gate.
+func ParseSMTP(e SMTPEnv) (*SMTP, error) {
+	listen, networks, maxSize := strings.TrimSpace(e.Listen), strings.TrimSpace(e.AllowedNetworks), strings.TrimSpace(e.MaxSize)
+	cert, key, hostname := strings.TrimSpace(e.TLSCert), strings.TrimSpace(e.TLSKey), strings.TrimSpace(e.Hostname)
+	authMode, perAddr := strings.TrimSpace(e.Auth), strings.TrimSpace(e.MaxConnsPerAddr)
 	if listen == "" {
-		if networks != "" || maxSize != "" || cert != "" || key != "" || hostname != "" {
+		if networks != "" || maxSize != "" || cert != "" || key != "" || hostname != "" || authMode != "" || perAddr != "" {
 			return nil, fmt.Errorf("SMTP settings are set, but %s is not", EnvSMTPListen)
 		}
 		return nil, nil
@@ -588,12 +631,20 @@ func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, er
 		return nil, fmt.Errorf("%s: want host:port or :port, got %q", EnvSMTPListen, listen)
 	}
 	c := &SMTP{Listen: listen, MaxSize: DefaultSMTPMaxSize, TLSCert: cert, TLSKey: key, Hostname: hostname}
+	switch authMode {
+	case "", SMTPAuthRequired:
+		c.Auth = true
+	case SMTPAuthOff:
+	default:
+		return nil, fmt.Errorf("%s: want %s or %s, got %q", EnvSMTPAuth, SMTPAuthRequired, SMTPAuthOff, authMode)
+	}
 	var err error
 	if c.AllowedNetworks, err = ParseNetworks(EnvSMTPAllowedNetworks, networks); err != nil {
 		return nil, err
 	}
-	if len(c.AllowedNetworks) == 0 {
-		return nil, fmt.Errorf("%s is set, so %s is required: the SMTP server accepts mail only from these networks", EnvSMTPListen, EnvSMTPAllowedNetworks)
+	if len(c.AllowedNetworks) == 0 && !c.Auth {
+		return nil, fmt.Errorf("%s=%s, so %s is required: the SMTP server then accepts mail only from these networks",
+			EnvSMTPAuth, SMTPAuthOff, EnvSMTPAllowedNetworks)
 	}
 	if maxSize != "" {
 		n, err := parseSize(maxSize)
@@ -604,6 +655,23 @@ func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, er
 	}
 	if (cert == "") != (key == "") {
 		return nil, fmt.Errorf("set both %s and %s, or neither", EnvSMTPTLSCert, EnvSMTPTLSKey)
+	}
+	if c.Auth && cert == "" {
+		return nil, fmt.Errorf("%s is %s (the default), so %s and %s are required: mail servers log in over STARTTLS only. "+
+			"For a mail server on a network you control, with %s as the only gate, set %s=%s",
+			EnvSMTPAuth, SMTPAuthRequired, EnvSMTPTLSCert, EnvSMTPTLSKey, EnvSMTPAllowedNetworks, EnvSMTPAuth, SMTPAuthOff)
+	}
+	switch {
+	case perAddr != "" && !c.Auth:
+		return nil, fmt.Errorf("%s applies only with %s=%s", EnvSMTPMaxConnsPerAddr, EnvSMTPAuth, SMTPAuthRequired)
+	case perAddr != "":
+		n, err := strconv.Atoi(perAddr)
+		if err != nil || n < 1 || n > MaxSMTPMaxConnsPerAddr {
+			return nil, fmt.Errorf("%s: want 1 to %d, got %q", EnvSMTPMaxConnsPerAddr, MaxSMTPMaxConnsPerAddr, perAddr)
+		}
+		c.MaxConnsPerAddr = n
+	case c.Auth:
+		c.MaxConnsPerAddr = DefaultSMTPMaxConnsPerAddr
 	}
 	if c.Hostname == "" {
 		h, err := os.Hostname()
