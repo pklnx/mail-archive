@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiKey } from "./api";
-import { apiKeyDetails, apiKeyError, ApiKeyItems, ApiKeyTable, NewKeyPanel } from "./ApiKeys";
+import { apiKeyDetails, apiKeyError, ApiKeyItems, ApiKeyTable, NewKeyPanel, toggleScope } from "./ApiKeys";
 import { t } from "./i18n";
 
 const key: ApiKey = {
@@ -10,6 +10,16 @@ const key: ApiKey = {
 };
 
 afterEach(cleanup);
+
+describe("toggleScope", () => {
+  it("keeps metrics alone in its key (#397)", () => {
+    expect(toggleScope(["read"], "sync", true)).toEqual(["read", "sync"]);
+    expect(toggleScope(["read", "sync"], "metrics", true)).toEqual(["metrics"]);
+    expect(toggleScope(["metrics"], "read", true)).toEqual(["read"]);
+    expect(toggleScope(["metrics"], "metrics", false)).toEqual([]);
+    expect(toggleScope(["read", "sync"], "read", false)).toEqual(["sync"]);
+  });
+});
 
 describe("NewKeyPanel", () => {
   it("shows the key once, with a copy button, and hides it when done", () => {

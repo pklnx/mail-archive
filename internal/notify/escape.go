@@ -60,6 +60,9 @@ func quoted(s string) piece   { return piece{text: s, value: true, quoted: true}
 type draft struct {
 	title   []piece
 	entries [][]piece
+	// more names the structured field that holds every entry, for the line
+	// counting left-out ones; "accounts" when empty.
+	more string
 }
 
 // apply renders d into m: Title and Body as plain text, Slack and Discord
@@ -151,7 +154,11 @@ func (d *draft) sequence(k int) []piece {
 		seq = append(seq, e...)
 	}
 	if more := len(d.entries) - k; more > 0 {
-		seq = append(seq, constant("\n\n… and "+strconv.Itoa(more)+" more (see accounts)"))
+		field := d.more
+		if field == "" {
+			field = "accounts"
+		}
+		seq = append(seq, constant("\n\n… and "+strconv.Itoa(more)+" more (see "+field+")"))
 	}
 	return seq
 }

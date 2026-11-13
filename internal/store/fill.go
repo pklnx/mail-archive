@@ -501,7 +501,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
 		}
-		skip, err := skipDeleted(ctx, q, folder.ID, metas, locs)
+		skip, err := skipDeleted(ctx, q, group, folder.ID, metas, locs)
 		if err != nil {
 			return err
 		}

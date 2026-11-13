@@ -193,8 +193,11 @@ export function DisplaySettings({ reload = () => location.reload() }: { reload?:
 type ProfileTab = "display" | "security" | "apiKeys";
 const tabs: ProfileTab[] = ["display", "security", "apiKeys"];
 
-/** auditor (#393): no API keys, and 2FA stays on (an admin resets it). */
-export function ProfilePage({ name, auditor = false }: { name: string; auditor?: boolean }) {
+/**
+ * auditor (#393): no API keys, and 2FA stays on (an admin resets it).
+ * admin: the API keys offer the metrics scope.
+ */
+export function ProfilePage({ name, auditor = false, admin = false }: { name: string; auditor?: boolean; admin?: boolean }) {
   const [changed, setChanged] = useState(false);
   const [tab, setTab] = useState<ProfileTab>("display");
   // Counts 2FA changes, so the sections that ask for a code read the status again.
@@ -247,7 +250,7 @@ export function ProfilePage({ name, auditor = false }: { name: string; auditor?:
             {!auditor && (
               <TabPanel className="profile-panel">
                 <Layer>
-                  <ApiKeySection twoFactorVersion={twoFactorVersion} />
+                  <ApiKeySection twoFactorVersion={twoFactorVersion} admin={admin} />
                 </Layer>
               </TabPanel>
             )}

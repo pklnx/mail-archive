@@ -213,7 +213,7 @@ func TestAttachmentTextCost(t *testing.T) {
 	}
 	t.Logf("repair with 10,000 false locations: %v queuing %d messages; %v when they are queued (%d)", first, res.Queued, time.Since(start), res2.Queued)
 
-	// The migration per million locations: down, then Up of 00042 alone.
+	// The migration per million locations: down, then Up of 00044 alone.
 	exec(`DELETE FROM jobs`)
 	var locations int64
 	if err := conn.QueryRow(ctx, "SELECT count(*) FROM message_locations").Scan(&locations); err != nil {
@@ -235,5 +235,5 @@ func TestAttachmentTextCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	took := time.Since(start)
-	t.Logf("migration 00042 Up over %d locations: %v, %v per million", locations, took, time.Duration(float64(took)*1e6/float64(locations)))
+	t.Logf("migration 00044 Up over %d locations: %v, %v per million", locations, took, time.Duration(float64(took)*1e6/float64(locations)))
 }

@@ -142,7 +142,9 @@ them all.
   SMTP, so a later fill or `import --journal` stores the other copy of it.
   Its retention period has ended too, so the next deletion run lists it
   again; nothing is lost. A message retention deleted itself is not stored
-  again.
+  again where it would already be expired, in the accounts and customer
+  groups that held it, while no account of that group holds it (see
+  [Deletion](../reference/cli#deletion)).
 
 ## Legal holds
 
@@ -273,7 +275,8 @@ A deleted message's rows go with it in the same transaction, the text
 extracted from its attachments and its queued background jobs included.
 The batches, the lock they wait for (up to 10 minutes each), the file grace
 period (`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, default 7 days), why a deleted
-message does not come back where it would already be expired, and what
+message does not come back where it would already be expired (in the
+accounts and customer groups it was deleted from), and what
 happens after restoring a dump older than a run are in
 [Deletion](../reference/cli#deletion).
 

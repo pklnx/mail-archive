@@ -35,8 +35,9 @@ Sources: [BMF-Schreiben of 11.03.2024](https://www.lfst.bayern.de/fileadmin/RESS
 ## Requesting an export
 
 Exports are made by the operator of the instance, on request; there is no
-export button in the web UI. Ask your operator, from your company's admin
-account or the contact you agreed on, and say:
+export button in the web UI, and the operator has no other access to your
+mail in the app. Ask your operator, from the contact your company agreed on
+with them, and say:
 
 - **what:** your whole company (all users of your customer group), or the
   users or accounts the audit covers, maybe only some folders;
@@ -60,7 +61,7 @@ get one export per company.
 
 **How the operator handles it.** While exporting, the operator handles your
 mail in plaintext: the export is not encrypted. The operator sends it only
-to your admin (for an auditor grant's scope: to the owner of the grant),
+to the contact you agreed on (for an auditor grant's scope: to the owner of the grant),
 over a channel you agree on, for example an encrypted archive with the
 password on another channel, and deletes their copy once you confirm that
 it arrived. Every export is in the audit log of your company, with the

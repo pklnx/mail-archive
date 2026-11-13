@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,101 @@ func TestNormalizeScopes(t *testing.T) {
 		if _, err := store.NormalizeScopes(bad); !errors.Is(err, store.ErrAPIKeyScope) {
 			t.Errorf("%v: %v", bad, err)
 		}
+	}
+	// metrics stands alone (#397, part 3).
+	if got, err := store.NormalizeScopes([]string{"metrics", "metrics"}); err != nil || fmt.Sprint(got) != "[metrics]" {
+		t.Errorf("metrics: %v %v", got, err)
+	}
+	for _, bad := range [][]string{{"metrics", "read"}, {"sync", "metrics"}, {"read", "sync", "metrics"}} {
+		if _, err := store.NormalizeScopes(bad); !errors.Is(err, store.ErrMetricsScopeAlone) {
+			t.Errorf("%v: %v", bad, err)
+		}
+	}
+}
+
+// TestMetricsKey: only an admin holds a metrics key; the database refuses
+// metrics beside another scope and an unknown scope, whoever writes.
+func TestMetricsKey(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	admin, err := st.CreateUser(ctx, "admin", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kim, err := st.CreateUser(ctx, "kim", "h", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, hash, hint, err := auth.NewAPIKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateAPIKey(ctx, kim.ID, store.NewAPIKey{Hash: hash, Hint: hint, Name: "m", Scopes: []string{store.ScopeMetrics}}); !errors.Is(err, store.ErrMetricsKeyAdmin) {
+		t.Fatalf("member's metrics key: %v", err)
+	}
+	key, k := newKey(t, st, admin.ID, "scrape", []string{store.ScopeMetrics}, nil)
+	sess, got, err := st.APIKeyLogin(ctx, auth.HashAPIKey(key))
+	if err != nil || !sess.IsAdmin || !got.HasScope(store.ScopeMetrics) || got.HasScope(store.ScopeRead) || got.ID != k.ID {
+		t.Fatalf("login %+v %+v %v", sess, got, err)
+	}
+	for _, scopes := range []string{"{metrics,read}", "{sync,metrics}", "{admin}", "{}"} {
+		_, err := conn.Exec(ctx, `INSERT INTO api_keys (user_id, key_hash, hint, name, scopes) VALUES ($1, $2, 'abcd', $3, $4::text[])`,
+			admin.ID, make([]byte, 32), "raw "+scopes, scopes)
+		if state, _ := store.SQLState(err); state != "23514" {
+			t.Errorf("%s: %v", scopes, err)
+		}
+	}
+}
+
+// TestMetricsKeyMigration: 00043's Down deletes the metrics keys and
+// keeps the others; Up again accepts metrics keys.
+func TestMetricsKeyMigration(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	admin, err := st.CreateUser(ctx, "admin", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey(t, st, admin.ID, "scrape", []string{store.ScopeMetrics}, nil)
+	readKey, _ := newKey(t, st, admin.ID, "cron", []string{store.ScopeRead, store.ScopeSync}, nil)
+	downMetricsKeyScopeMigration(t, st)
+	var names []string
+	rows, err := conn.Query(ctx, "SELECT name FROM api_keys ORDER BY name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, n)
+	}
+	if rows.Err() != nil || fmt.Sprint(names) != "[cron]" {
+		t.Fatalf("after Down: %v %v", names, rows.Err())
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO api_keys (user_id, key_hash, hint, name, scopes) VALUES ($1, $2, 'abcd', 'm', '{metrics}')`,
+		admin.ID, make([]byte, 32)); err == nil {
+		t.Fatal("the old check accepted a metrics key")
+	}
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.APIKeyLogin(ctx, auth.HashAPIKey(readKey)); err != nil {
+		t.Fatalf("read key after re-Up: %v", err)
+	}
+	newKey(t, st, admin.ID, "scrape", []string{store.ScopeMetrics}, nil)
+}
+
+// downMetricsKeyScopeMigration rolls back 00044_attachment_text_per_location
+// and 00043_metrics_key_scope.
+func downMetricsKeyScopeMigration(t *testing.T, st *store.Store) {
+	t.Helper()
+	downAttachmentTextPerLocationMigration(t, st)
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00043_metrics_key_scope") {
+		t.Fatalf("down: %q %v", m, err)
 	}
 }
 

@@ -20,10 +20,10 @@ import (
 // message's attachment text only when attachment_text_ok is set.
 
 // downAttachmentTextPerLocationMigration rolls back
-// 00042_attachment_text_per_location.
+// 00044_attachment_text_per_location.
 func downAttachmentTextPerLocationMigration(t *testing.T, st *store.Store) {
 	t.Helper()
-	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00042_attachment_text_per_location") {
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00044_attachment_text_per_location") {
 		t.Fatalf("down: %q %v", m, err)
 	}
 }
@@ -87,10 +87,10 @@ func (f *usageFixture) extracted(sha string, texts ...store.AttachmentText) {
 	f.exec("UPDATE jobs SET state = 'done', finished_at = now() WHERE kind = $1 AND key = $2", store.JobAttachmentText, sha)
 }
 
-// TestAttachmentTextMigration00042: existing locations keep showing their
+// TestAttachmentTextMigration00044: existing locations keep showing their
 // text (true), new ones default to false, jobs.requeue is false; down
 // drops both columns and the index; down and up turns false flags true.
-func TestAttachmentTextMigration00042(t *testing.T) {
+func TestAttachmentTextMigration00044(t *testing.T) {
 	f := newUsageFixture(t)
 	fo := f.folder(nil, "alt")
 	downAttachmentTextPerLocationMigration(t, f.st)

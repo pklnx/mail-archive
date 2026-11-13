@@ -951,6 +951,7 @@ migrations; the one-time steps of those versions are in the
 | When upgrading from | Run |
 |---|---|
 | A version before 1.6.0 | Nothing to run, if the web server has `MAIL_ARCHIVE_SECRET_KEY`. An instance that already has users counts as set up: a setup token never works on it, and encryption at setup leaves it alone. An instance with neither a user nor a message, on which encryption at rest was never turned on, counts as new: the web server and the worker refuse to start without an archive key (exit code `4`, `new instances start encrypted`). Then either configure the archive key (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`, see [The archive key](./getting-started#the-archive-key)), and the next start turns encryption at rest on; or create the first admin before the web server starts again (`./ma migrate`, then `./ma user add NAME --admin`), and the instance starts without encryption at rest until you turn it on (same section). `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is for test instances only. The first start of 1.6.0 checks the secret key: if accounts with stored passwords or users with TOTP exist, the key must open them, otherwise the start is refused with exit code `4` (then configure the key the instance used, or see [`secret-key accept`](../reference/cli#secret-key)); then the database keeps a check value of the key, and every later start with another key is refused. A web server without a secret key no longer starts in browse-only mode: create one with `./ma keygen`. The bundled `docker-compose.yml` no longer requires `MAIL_ARCHIVE_SECRET_KEY` in `.env`, because the key may come from a file instead (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see [Configuration](../reference/configuration#docker-compose-only)), and no longer gives it to the worker service. |
+| A version without deletion marks per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration only adds an empty table and is quick; it neither reads nor rewrites existing rows. Deliveries, syncs and search go on; retention runs and purges wait at most a moment while it adds its foreign keys (to `deleted_messages`, `deletion_runs` and `account_purges`). From then on a retention run marks every deleted message with the accounts and customer groups that held it, and a purge every purged message with the account and its group, so a deleted message is skipped only there (see [Deletion](../reference/cli#deletion) and [Security](../reference/security#login)). Deletions recorded before need no step: they count as deleted in every group that holds no copy. A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its syncs, fills and deliveries skip and store messages as before, and its retention runs and purges record their deletions without accounts and groups, so these count in every group, and a purge of a message that another account keeps is not recorded at all. Rolling back the migration drops the marks: every recorded deletion counts in every group again, and messages purged while another account kept them are archived again. |
 | A version without SMTP login (before 1.6.0) | Only with the SMTP server on (`MAIL_ARCHIVE_SMTP_LISTEN` set). `MAIL_ARCHIVE_SMTP_AUTH=required` is the new default: mail servers log in with an [SMTP secret](../reference/cli#smtp-secrets) over `STARTTLS`, and without `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY` the web server and every `./ma` command refuse to start, naming the variable. Add `MAIL_ARCHIVE_SMTP_AUTH=off` to `.env` **before** the upgrade: a setup that relies on the allowlist alone, such as a Postfix on the same host, then keeps working unchanged. To move to logins afterwards, in this order: upgrade with `off`; create a secret per smtp account (`./ma account smtp-secret NAME --new`, which needs the new version's migration); change the mail server ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)); put the certificate in place ([SMTP certificate](#smtp-certificate)); remove `off` from `.env` and run `docker compose up -d web`. A setup that already has a certificate starts in `required` mode and answers `451` to mail servers that do not log in yet: their copies wait in the queue (5 days by default) until they log in or `off` is set. The SMTP server now takes 16 connections at once instead of 10. |
 | A version without storage usage (before 1.6.0) | Nothing to run. The migration adds the storage counters and an index over the hashes and sizes of the messages, and holds back every write of messages (syncs, SMTP deliveries, fills, imports, `reindex`) until it is done; searches and reads go on. It reads the message table once, from disk if it is not in memory. Measured on PostgreSQL 16 with 2 cores and 300,000 messages (511 MB of message rows): about 0.6 seconds with the rows in memory, about 4.5 seconds with them on disk (138 MB/s); for 1,500,000 messages (about 2.6 GB) expect about 3 seconds in memory and 20 to 30 seconds from disk. `serve` and `worker` migrate before they work (`serve` answers `503` until then); a separate worker or a `./ma sync` from cron waits for the migration. With a large archive, stop the worker before the upgrade (`docker compose stop worker`). After the upgrade, `./ma usage` shows the groups and accounts as `-` until the background jobs of `serve` or `worker` have taken the first snapshot, soon after their start. Rolling the migration back (`./ma migrate down`) drops the storage figures and the group quotas. |
 | A version without attachment text per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration adds a column to the message locations and an index over the few locations that do not show their attachment text yet; every existing location keeps what it shows. Building the index reads every location and holds an exclusive lock on the locations until it is done: everything that reads or writes them waits, also a web server of the old version that still runs (its deliveries, syncs and search). Measured on PostgreSQL 16 with 2 cores: about 0.2 seconds per 1,000,000 locations with them in memory, longer when they are read from disk. From then on, each customer group searches a message's attachment text only after an extraction for that group, so a message that a second group receives is extracted once more in the background (see [Security](../reference/security#login)). A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its search shows attachment text as before, and the locations it stores show none until their extraction; the web server or worker of 1.6.0 queues those extractions at its start and every 15 minutes after the old processes have stopped. Rolling back the migration (`./ma migrate down`, for development) drops the column, and migrating up again shows the attachment text through every location. |
@@ -1348,7 +1349,13 @@ things make it visible:
   [Syncing](./syncing#alerts) for what counts. The same goes for the runs of a
   [recurring fill](./journaling#keep-importing-recurring-fill) of an smtp
   account. Another alert reports mail deleted on the server in bulk; see
-  [Reconcile](./syncing#alert-for-mail-deleted-on-the-server).
+  [Reconcile](./syncing#alert-for-mail-deleted-on-the-server). Storage
+  alerts report the quota state of the instance and of each customer
+  group ([Storage alerts](#storage-alerts)). By default an alert names
+  accounts, fills and groups by ID only ([Detail](#detail-ids-or-full)).
+- **`/api/metrics`** gives admins and their monitoring the instance's
+  figures in the Prometheus text format, IDs and counts only; see
+  [Metrics](#metrics).
 - **`/healthz`** answers `ok` once the web server is ready, and `503` with
   `{"status":"starting"}` while it starts (it waits for a running
   `./ma migrate` or applies migrations): a monitor tells starting from down.
@@ -1377,9 +1384,10 @@ MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL=https://ntfy.sh/mail-archive-k3v9q2x7w1
 MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
 ```
 
-Anyone who knows a topic on the public ntfy.sh server can read it, and the
-alerts name the accounts and their owners. Use a long random topic, or
-better a protected topic with an access token:
+Anyone who knows a topic on the public ntfy.sh server can read it. Alerts
+carry IDs only by default, but they still tell when and how often syncs
+fail. Use a long random topic, or better a protected topic with an access
+token:
 
 ```sh
 MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...
@@ -1397,7 +1405,25 @@ and the token travel unencrypted.
 with the format `json`. They show the `text` (Slack, Mattermost) or `content`
 (Discord) field.
 
-**How names and errors appear.** Account and owner names, mailboxes, sync
+### Detail: ids or full
+
+Webhook receivers are often services of third parties (ntfy.sh, Slack,
+Discord). So by default (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) an alert
+names accounts, fills and customer groups by their ID only: no account or
+owner names, no IMAP user names (`mailbox`), no folder names and no error
+texts, and `title` and `message` are fixed text with IDs, for example
+"Mail archive: sync of account 3 keeps failing" and "Account 3 failed 3
+syncs in a row since 2026-10-01 12:00 UTC.". The entries in `accounts` have
+no `account`, `owner`, `lastError`, `mailbox`, `folders` or `moreFolders`
+field. `./ma status` shows which account an ID is, and `./ma usage --json`
+which account or group.
+
+`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full` adds the names, mailboxes, folder
+names and the last error (up to 200 characters). That sends customer data
+to the webhook's operator: use it only for a receiver you run yourself, for
+example on a test instance. The examples below show `full`.
+
+**How names and errors appear** (with `full`). Account and owner names, mailboxes, sync
 errors and folder names come from users and mail servers, so alerts show
 them as literal text, never as formatting, links or mentions:
 
@@ -1436,7 +1462,7 @@ them as literal text, never as formatting, links or mentions:
 ```
 
 `event` is `failing`, `recovered`, `mixed` (alerts and recoveries in one
-message), `gone` (mail deleted on the server) or `test`.
+message), `gone` (mail deleted on the server), `storage` or `test`.
 
 A [recurring fill](./journaling#keep-importing-recurring-fill) whose runs
 keep failing, for example because the mailbox's password changed, is
@@ -1482,6 +1508,37 @@ never share a message. Several accounts that change at the same time go into
 one message (up to 50 per request). The `id` is also sent as the
 `X-Mail-Archive-Id` header.
 
+### Storage alerts
+
+When the quota state of the instance or of a customer group changes
+(`ok`, `warn`, `full`, `overflow`, and `disk_low` for the instance), one
+`storage` message is sent per change, in both detail modes with IDs and
+figures only:
+
+```json
+{
+  "id": "storage:4:2",
+  "event": "storage",
+  "title": "Mail archive: storage of group 4 at 82% of 50.0 GiB",
+  "message": "Storage of group 4: warn since 2026-10-01 12:00 UTC, 41.0 GiB used of 50.0 GiB (82%).",
+  "text": "…", "content": "…",
+  "accounts": [],
+  "storage": [{"id": "storage:4:2", "event": "storage", "level": "warn", "scope": "group", "groupId": 4,
+               "usedBytes": 44023414784, "quotaBytes": 53687091200, "percent": 82, "since": "2026-10-01T12:00:00Z"}]
+}
+```
+
+`scope` is `instance` (then `groupId` is `null`) or `group`. `usedBytes` is
+the scope's message bytes after deduplication when the alert is sent;
+`quotaBytes` and `percent` are `null` without a quota. The `id` names the
+scope (`instance` or the group ID) and counts its changes, so `warn`, `ok`
+and `warn` again are three messages with three IDs. Changes that follow
+each other faster than they can be sent go out once, with the latest
+state. A group that is deleted takes its pending alert with it. With ntfy a
+level other than `ok` has the priority `high` and the tag `warning`.
+`./ma usage --json` shows which group an ID is. The storage quota checks
+write the states; while every state stays `ok`, no storage alert is sent.
+
 Alerts are delivered **at least once**: if the server stops right after the
 receiver accepted a message, it is sent again with the same `id`. ntfy,
 Gotify and Slack do not drop such repeats; a receiver of your own can use
@@ -1492,8 +1549,67 @@ like `400` or `404` usually means a wrong URL, token or format: it is logged
 as an error and retried hourly. Redirects are not followed.
 
 The log records each alert (`alert sent`, `recovery sent`, `loss alert sent`)
-with the account and its owner. It never contains the webhook URL, the
-authorization or the message; failed attempts name only the scheme and host.
+with the account and its owner, also with the detail `ids`: logs are
+customer data ([Security](../reference/security#operator-admin-and-customer-groups)).
+`storage alert sent` names the scope by ID. The log never contains the
+webhook URL, the authorization or the message; failed attempts name only
+the scheme and host.
+
+### Metrics
+
+`GET /api/metrics` gives the instance's figures in the Prometheus text
+format (0.0.4) for a monitoring system. Only admins read it: with their
+session, or with an API key with the scope `metrics`, which only an admin
+can create (Profile → API keys, with the password and a 2FA code, like
+every key) and which has no other scope. Such a key opens no other route,
+and a `read` or `sync` key gets `403` here. The owner's role and lock are
+checked on every request: a key of an admin who is demoted gets `403`, of
+one who is locked `401`. Revoke it in the profile like any key.
+
+A Prometheus scrape job:
+
+```yaml
+scrape_configs:
+  - job_name: mail-archive
+    scheme: https
+    metrics_path: /api/metrics
+    authorization:
+      credentials_file: /etc/prometheus/mail-archive.key   # the ma_… key
+    static_configs:
+      - targets: ["archive.example.org"]
+```
+
+The answer is cached for 15 seconds, so a shorter scrape interval adds
+nothing. It holds IDs, counts, times and fixed values only, never a name,
+host, IMAP user name, address, folder, subject or error text, because
+scrapes often end in monitoring services of third parties:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `mail_archive_build_info` | `version` | Always 1. |
+| `mail_archive_schema_version`, `mail_archive_schema_latest_version`, `mail_archive_migrations_pending` | | The database's migration, this binary's newest, and how many are not applied. |
+| `mail_archive_storage_messages`, `mail_archive_storage_bytes` | `scope` (`instance`, `group`, `ungrouped`), `group_id` | Unique messages and their bytes: exact for the instance, as of the last snapshot plus what was added since for a group, at the last snapshot for the accounts without a group. |
+| `mail_archive_storage_quota_bytes` | `scope`, `group_id` | The quota; absent without one. |
+| `mail_archive_storage_state` | `scope`, `group_id`, `state` | 1 for the current quota state, 0 for the others. |
+| `mail_archive_storage_state_since_timestamp_seconds` | `scope`, `group_id` | Since when. |
+| `mail_archive_storage_snapshot_timestamp_seconds`, `mail_archive_storage_counter_drift_bytes` | | The last usage snapshot and its check of the counters (0 is right). |
+| `mail_archive_account_messages`, `mail_archive_account_bytes` | `account_id`, `group_id`, `kind` | Per account that is not removed, at the last snapshot. A message in several accounts counts in each. |
+| `mail_archive_account_enabled` | `account_id` | 1 when enabled. |
+| `mail_archive_account_health` | `account_id`, `health` (`ok`, `failing`, `stale`) | 1 for the current health, as in `/healthz/sync`. |
+| `mail_archive_account_last_success_timestamp_seconds` | `account_id` | The last successful sync of an IMAP account. |
+| `mail_archive_disk_free_bytes`, `mail_archive_disk_total_bytes` | | The data directory's file system. The PostgreSQL volume is not measured. |
+| `mail_archive_database_bytes`, `mail_archive_database_relation_bytes` | `table` | The database and its largest tables, at the last snapshot. |
+| `mail_archive_jobs` | `job_kind`, `state` (`queued`, `retrying`, `running`, `failed`) | Background jobs with work that is not done. |
+| `mail_archive_job_oldest_due_seconds` | `job_kind` | How long the oldest due job has waited. |
+| `mail_archive_users` | `kind` (`admin`, `member`, `auditor`), `state` (`active`, `locked`) | Users. |
+| `mail_archive_encryption_state` | `state` (`off`, `on`, `encrypting`, `decrypting`, `rekeying`) | Encryption at rest: 1 for the current state. |
+| `mail_archive_last_backup_timestamp_seconds` | | The newest `./ma backup` in the audit log; 0 when none in the last 30 days. |
+| `mail_archive_smtp_storage_deferrals_total` | | SMTP recipients deferred with `452` for storage since the start. |
+
+Exclusive bytes per account (what a purge would free) are computed across
+customer groups and are not in the metrics; `./ma usage` shows them. A
+label value that does not match its fixed pattern is left out with its
+sample, so a name can never end up in a label.
 
 ### /healthz/sync
 
@@ -1553,3 +1669,9 @@ docker compose logs web --tail 100
 ```
 
 Set `MAIL_ARCHIVE_LOG_LEVEL=debug` in `.env` for more detail.
+
+Logs contain customer data: SMTP senders and recipients, account, user and
+folder names, and the texts of server errors. On a hosted instance, treat
+them like the archive: limit who reads them, keep them only as long as
+needed, and cover both in the data processing agreement
+([Security](../reference/security#operator-admin-and-customer-groups)).

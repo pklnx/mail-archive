@@ -40,28 +40,28 @@ var testSince = time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
 // builders build a message of each kind with v in every value it shows.
 var builders = map[string]func(v string) *notify.Message{
 	"sync failing": func(v string) *notify.Message {
-		return notify.BuildMessage([]store.PendingNotification{syncPending(1, v, store.NotifiedOK)})
+		return notify.BuildMessage([]store.PendingNotification{syncPending(1, v, store.NotifiedOK)}, true)
 	},
 	"sync recovered": func(v string) *notify.Message {
-		return notify.BuildMessage([]store.PendingNotification{syncPending(1, v, store.NotifiedFailing)})
+		return notify.BuildMessage([]store.PendingNotification{syncPending(1, v, store.NotifiedFailing)}, true)
 	},
 	"sync mixed": func(v string) *notify.Message {
-		return notify.BuildMessage([]store.PendingNotification{syncPending(1, v, store.NotifiedOK), syncPending(2, v, store.NotifiedFailing)})
+		return notify.BuildMessage([]store.PendingNotification{syncPending(1, v, store.NotifiedOK), syncPending(2, v, store.NotifiedFailing)}, true)
 	},
 	"fill failing": func(v string) *notify.Message {
-		return notify.BuildFillMessage([]store.PendingNotification{fillPending(1, v, store.NotifiedOK)})
+		return notify.BuildFillMessage([]store.PendingNotification{fillPending(1, v, store.NotifiedOK)}, true)
 	},
 	"fill recovered": func(v string) *notify.Message {
-		return notify.BuildFillMessage([]store.PendingNotification{fillPending(1, v, store.NotifiedFailing)})
+		return notify.BuildFillMessage([]store.PendingNotification{fillPending(1, v, store.NotifiedFailing)}, true)
 	},
 	"fill mixed": func(v string) *notify.Message {
-		return notify.BuildFillMessage([]store.PendingNotification{fillPending(1, v, store.NotifiedOK), fillPending(2, v, store.NotifiedFailing)})
+		return notify.BuildFillMessage([]store.PendingNotification{fillPending(1, v, store.NotifiedOK), fillPending(2, v, store.NotifiedFailing)}, true)
 	},
 	"loss": func(v string) *notify.Message {
-		return notify.BuildLossMessage([]store.PendingLossAlert{lossPending(1, v)})
+		return notify.BuildLossMessage([]store.PendingLossAlert{lossPending(1, v)}, true)
 	},
 	"loss batch": func(v string) *notify.Message {
-		return notify.BuildLossMessage([]store.PendingLossAlert{lossPending(1, v), lossPending(2, v)})
+		return notify.BuildLossMessage([]store.PendingLossAlert{lossPending(1, v), lossPending(2, v)}, true)
 	},
 }
 
@@ -276,7 +276,7 @@ func TestLongValueStraddlesTheLimit(t *testing.T) {
 			v := strings.Repeat(c.char, n)
 			p := syncPending(1, v, store.NotifiedOK)
 			p.Owner, p.LastError = "kim", "e"
-			got := send(t, notify.BuildMessage([]store.PendingNotification{p}))
+			got := send(t, notify.BuildMessage([]store.PendingNotification{p}, true))
 			s := map[string]string{"content": got.content, "text": got.text}[c.field]
 			checkFitted(t, fmt.Sprintf("%s with %d×%s", c.field, n, c.char), s, c.limit)
 			if !strings.HasSuffix(s, "Last error: `e`") {
@@ -302,7 +302,7 @@ func TestBatchIsFittedByEntries(t *testing.T) {
 		pending[i] = syncPending(int64(i+1), fmt.Sprintf("acc%d", i), store.NotifiedOK)
 		pending[i].LastError = strings.Repeat("&<`", 66) + "&<" // 200 runes, the most kept
 	}
-	got := send(t, notify.BuildMessage(pending))
+	got := send(t, notify.BuildMessage(pending, true))
 	if n := len(got.json["accounts"].([]any)); n != 50 {
 		t.Fatalf("%d accounts", n)
 	}

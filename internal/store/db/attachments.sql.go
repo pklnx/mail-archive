@@ -297,7 +297,8 @@ type GroupAttachmentTextOKParams struct {
 // The hashes of a batch of which the customer group (0: the accounts
 // without an owner) holds a location that shows the attachment text
 // (attachment_text_ok), in any of its accounts, the saving one included
-// (#539, part 2). The shape of GroupHeldMessages: driven from the group's
+// (#539, part 2). GroupHasLocations (part 1) with the flag, in the shape
+// of GroupHeldMessages: driven from the group's
 // own folders, one probe of message_locations_folder_sha_idx per folder
 // and hash, so the cost depends only on the group's folders and the batch,
 // never on how many accounts of other groups hold the same bytes. LIMIT 1

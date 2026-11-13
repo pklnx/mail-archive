@@ -360,7 +360,7 @@ after two intervals without a successful run *stale*. The banner names the
 account with the mailbox, such as "journal (alice@example.com)",
 [`/healthz/sync`](../guide/operations#healthz-sync) lists the smtp account's
 ID, and the [webhook alert](../guide/operations#webhook-alerts) names the
-fill and its mailbox. Fills of a disabled account do not run, not even a run
+fill by its ID, and its mailbox with the detail `full`. Fills of a disabled account do not run, not even a run
 that was about to start, and count as healthy; they run again once the
 account is enabled.
 
@@ -698,11 +698,18 @@ restoring the last dump undoes a wrong deletion. The web server removes due
 files every hour; `retention sweep` does it by hand. A file whose message
 was archived again stays.
 
-A deleted message is not archived again where it would already be expired:
-a sync after a `UIDVALIDITY` change, a copy in another selected folder, an
-import or an SMTP delivery skips it (`sync` prints `deleted=N`, `import` a
-line, and SMTP answers 250). In an account without a rule, or with a longer
-one, it is archived again, as if that location had existed at deletion.
+A deleted message is not archived again where it would already be expired,
+in the accounts and customer groups it was deleted from: a sync after a
+`UIDVALIDITY` change, a copy in another selected folder, an import or an
+SMTP delivery skips it (`sync` prints `deleted=N`, `import` a line, and SMTP
+answers 250), as long as no account of that group holds it. A message
+deleted by a run counts as deleted from every account and group that held
+it; one removed by an [`account purge`](#accounts), also one that stays in
+other accounts, from that account and its group (accounts without an owner
+form one group). In other groups, once the group holds it again, and in an
+account without a rule or with a longer one, it is archived again, as if
+that location had existed at deletion. Messages deleted by a version before
+1.6.0 count as deleted in every group that holds no copy.
 
 After restoring a dump older than a run, its messages come back as rows;
 once their files are removed, `verify` reports them as `missing` and

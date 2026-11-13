@@ -17,6 +17,10 @@ const (
 	accessPublic                // no login: health checks, UI code, the spec
 	accessRead                  // a session or an API key with "read"
 	accessSync                  // a session or an API key with "sync"
+	// accessMetrics: an admin's session, or an API key with "metrics" (a
+	// scope no other key has, alone in its key) whose owner is still an
+	// admin and not locked (#397, part 3). Any other user gets 403.
+	accessMetrics
 )
 
 type route struct {
@@ -119,6 +123,8 @@ func (s *Server) routes() []route {
 		au("GET /api/audit", s.handleAudit, accessSession),
 
 		au("GET /api/status", s.handleStatus, accessRead),
+		// Instance metrics in Prometheus text: IDs and counts, no names.
+		h("GET /api/metrics", s.handleMetrics, accessMetrics),
 		au("GET /api/accounts", s.handleAccounts, accessRead),
 		h("POST /api/accounts", s.handleCreateAccount, accessSession),
 		h("PATCH /api/accounts/{name}", s.handleUpdateAccount, accessSession),

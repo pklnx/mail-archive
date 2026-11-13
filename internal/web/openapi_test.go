@@ -28,7 +28,7 @@ func expectedSecurity(a access) any {
 	switch a {
 	case accessPublic, accessLogin:
 		return []any{}
-	case accessRead, accessSync:
+	case accessRead, accessSync, accessMetrics:
 		return []any{session, map[string]any{"apiKey": []any{requiredScope(a)}}}
 	default:
 		return []any{session}

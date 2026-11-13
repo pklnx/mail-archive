@@ -35,6 +35,7 @@ are named on the guide pages: the default sync interval
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` | (none: no alerts) | Where alerts about failing syncs are posted. `http://` or `https://`, no `#fragment`. A secret: it often contains a topic or token, and is never logged. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT` | `json` | `json` (Gotify, Slack, Mattermost, Discord and generic receivers) or `ntfy` (plain text with `Title`, `Priority` and `Tags` headers). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
+| `MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL` | `ids` | `ids`: alerts name accounts, fills and customer groups by ID only, with no account, owner or group names, IMAP user names, folder names or error texts. `full`: with those, which sends customer data to the receiver; for receivers you run yourself. See [Detail](../guide/operations#detail-ids-or-full). |
 | `MAIL_ARCHIVE_TRUSTED_PROXIES` | (none) | Reverse proxies whose `X-Forwarded-For` header names the client, comma-separated networks or addresses like `172.18.0.1` or `10.0.0.0/8`. The audit log records that client, and the login limits count per client (IPv6 per `/64`). Their `X-Forwarded-Proto: https` also counts, as from loopback: the session cookie is then `__Host-` and `Secure`, and HSTS is sent. From other addresses the header is ignored and a warning is logged once. Under Docker Compose a proxy on the host connects from the Compose network's gateway: set this to that address. Every listed address may claim any client address: list only the proxy. See [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy) and [Network access](./security#network-access). |
 | `MAIL_ARCHIVE_ATTEST_KEY_FILE` | `MAIL_ARCHIVE_DATA_DIR/attest/signing.key` | The Ed25519 key that signs [attestations](./cli#attest). Created by `attest keygen`; must have mode 0600. The attestation file, the leaves and the public keys always stay in `MAIL_ARCHIVE_DATA_DIR/attest/`, also when the key is elsewhere. Without the key, attestations are off and the web server logs it. |
 | `MAIL_ARCHIVE_RETENTION_FILE_GRACE` | `168h` | How long the files of messages deleted by [retention](./cli#deletion) outlive their database rows. A backup (the dump first, then the files) made within it is complete, and restoring the last dump undoes a wrong deletion. At least `1h`, or `0` to remove them at the next sweep. |
@@ -112,7 +113,7 @@ The published ports listen on `127.0.0.1` only unless `WEB_BIND` or
 Changes to `.env` take effect with `docker compose up -d web` (`docker compose up -d web worker` with the worker service).
 
 Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`, `MAIL_ARCHIVE_RECONCILE_INTERVAL`,
-`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the three `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
+`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the four `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
 variables to both the web server and the CLI (`./ma`), so `./ma sync` from
 cron reconciles and sends alerts too.
 

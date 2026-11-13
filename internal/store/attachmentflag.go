@@ -9,7 +9,7 @@ import (
 
 // Attachment text per location (#539, part 2). A location shows its
 // message's attachment text in search only when its attachment_text_ok is
-// true (migration 00042), which holds when
+// true (migration 00044), which holds when
 //
 //   - an extraction started after the location existed: the job
 //     attachment_text reads the message's locations whose flag is false at
@@ -64,7 +64,7 @@ func newAttachmentText(ctx context.Context, q *db.Queries, g accountGroup, shas 
 	if len(probe) == 0 {
 		return a, nil
 	}
-	ok, err := q.GroupAttachmentTextOK(ctx, db.GroupAttachmentTextOKParams{Shas: probe, GroupID: groupKey(g)})
+	ok, err := q.GroupAttachmentTextOK(ctx, db.GroupAttachmentTextOKParams{Shas: probe, GroupID: g.key()})
 	if err != nil {
 		return nil, fmt.Errorf("group attachment text: %w", err)
 	}
@@ -72,15 +72,6 @@ func newAttachmentText(ctx context.Context, q *db.Queries, g accountGroup, shas 
 		a.known[sha] = true
 	}
 	return a, nil
-}
-
-// groupKey is the group of a save for GroupAttachmentTextOK: 0 for an
-// account without an owner.
-func groupKey(g accountGroup) int64 {
-	if g.Group == nil {
-		return 0
-	}
-	return *g.Group
 }
 
 // flag returns the flag of a new location of m, whose insert returned
