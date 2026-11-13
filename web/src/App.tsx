@@ -517,7 +517,7 @@ export function App({ user, logout, logoutError, auditor }: Props) {
       {state.view === "profile" ? (
         <main inert={pageInert} className="app-view">
           <LazyView key={state.view}>
-            <ProfilePage name={user.name} auditor={!!auditor} />
+            <ProfilePage name={user.name} auditor={!!auditor} admin={user.admin} />
           </LazyView>
         </main>
       ) : state.view === "users" && user.admin ? (

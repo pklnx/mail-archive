@@ -290,7 +290,7 @@ func TestBlobEncryptionMigrationDown(t *testing.T) {
 	}
 }
 
-// downBlobEncryptionMigration rolls back 00042_deletion_marks, 00041_storage_usage, 00040_smtp_credentials,
+// downBlobEncryptionMigration rolls back 00043_metrics_key_scope, 00042_deletion_marks, 00041_storage_usage, 00040_smtp_credentials,
 // 00039_instance_state, 00038_two_factor_challenge_attempts and
 // 00037_blob_encryption.
 func downBlobEncryptionMigration(t *testing.T, st *store.Store) {

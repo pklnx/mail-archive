@@ -24,16 +24,24 @@ const MaxAPIKeys = 20
 const (
 	ScopeRead = "read"
 	ScopeSync = "sync"
+	// ScopeMetrics opens only GET /api/metrics (#397, part 3). Only admins
+	// hold it, and it is alone in its key.
+	ScopeMetrics = "metrics"
 )
 
 // APIKeyScopes are all scopes, in the order they are stored.
-var APIKeyScopes = []string{ScopeRead, ScopeSync}
+var APIKeyScopes = []string{ScopeRead, ScopeSync, ScopeMetrics}
 
 // API key errors.
 var (
 	ErrAPIKeyLimit = errors.New("this user has the maximum number of API keys")
 	ErrAPIKeyName  = errors.New("an API key with this name exists")
 	ErrAPIKeyScope = errors.New("unknown API key scope")
+	// ErrMetricsScopeAlone: the metrics scope was combined with another.
+	ErrMetricsScopeAlone = errors.New("the metrics scope cannot be combined with another scope")
+	// ErrMetricsKeyAdmin: a user who is not an admin asked for a metrics
+	// key.
+	ErrMetricsKeyAdmin = errors.New("only admins can hold a metrics key")
 )
 
 // API key states.
@@ -72,7 +80,8 @@ func (k *APIKey) State(now time.Time) string {
 func (k *APIKey) HasScope(scope string) bool { return slices.Contains(k.Scopes, scope) }
 
 // NormalizeScopes removes duplicates and sorts scopes in their stored order.
-// It fails with ErrAPIKeyScope for an unknown one or none.
+// It fails with ErrAPIKeyScope for an unknown one or none, and with
+// ErrMetricsScopeAlone when metrics comes with another scope.
 func NormalizeScopes(scopes []string) ([]string, error) {
 	out := make([]string, 0, len(APIKeyScopes))
 	for _, s := range scopes {
@@ -88,6 +97,9 @@ func NormalizeScopes(scopes []string) ([]string, error) {
 	if len(out) == 0 {
 		return nil, ErrAPIKeyScope
 	}
+	if slices.Contains(out, ScopeMetrics) && len(out) > 1 {
+		return nil, ErrMetricsScopeAlone
+	}
 	return out, nil
 }
 
@@ -102,8 +114,12 @@ type NewAPIKey struct {
 
 // CreateAPIKey stores a key for a user, with the audit entry of ctx. It
 // fails with ErrAPIKeyLimit when the user has MaxAPIKeys active keys and
-// with ErrAPIKeyName when an active or expired key has the name, and with
-// ErrAuditorKey for an auditor (#393).
+// with ErrAPIKeyName when an active or expired key has the name, with
+// ErrAuditorKey for an auditor (#393), and with ErrMetricsKeyAdmin for a
+// metrics key of a user who is not an admin. The user row is locked, so a
+// concurrent demotion either waits for the key or is seen here; a key of a
+// user demoted later stays refused on every request (the owner's role is
+// read each time).
 func (s *Store) CreateAPIKey(ctx context.Context, userID int64, k NewAPIKey) (*APIKey, error) {
 	var out *APIKey
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -113,6 +129,9 @@ func (s *Store) CreateAPIKey(ctx context.Context, userID int64, k NewAPIKey) (*A
 		}
 		if u.IsAuditor {
 			return ErrAuditorKey
+		}
+		if slices.Contains(k.Scopes, ScopeMetrics) && !u.IsAdmin {
+			return ErrMetricsKeyAdmin
 		}
 		n, err := q.CountActiveAPIKeys(ctx, userID)
 		if err != nil {

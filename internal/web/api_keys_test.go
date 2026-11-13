@@ -197,7 +197,7 @@ func TestAPIKeyRouteAccess(t *testing.T) {
 		for kind, key := range keys {
 			got := f.keyStatus(key, method, path)
 			scope := requiredScope(rt.access)
-			allowed := scope != "" && (kind == "both" || kind == scope)
+			allowed := scope != "" && (kind == scope || kind == "both" && (scope == store.ScopeRead || scope == store.ScopeSync))
 			switch {
 			case allowed && (got == 401 || got == 403):
 				t.Errorf("%s with a %s key: %d, want access", rt.pattern, kind, got)

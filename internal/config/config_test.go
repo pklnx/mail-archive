@@ -193,6 +193,37 @@ func TestParseWebhook(t *testing.T) {
 	}
 }
 
+// TestWebhookDetail: ids is the default, full is opt-in, anything else is
+// refused, also without a webhook (Compose always passes a value).
+func TestWebhookDetail(t *testing.T) {
+	for v, want := range map[string]string{"": WebhookDetailIDs, "ids": WebhookDetailIDs, " IDS ": WebhookDetailIDs, "full": WebhookDetailFull} {
+		if got, err := ParseWebhookDetail(v); got != want || err != nil {
+			t.Errorf("%q: %q %v", v, got, err)
+		}
+	}
+	if _, err := ParseWebhookDetail("names"); err == nil || !strings.Contains(err.Error(), EnvNotifyWebhookDetail) {
+		t.Errorf("names: %v", err)
+	}
+	if w, err := ParseWebhook("https://ntfy.example.org/t", "", ""); err != nil || w.Detail != WebhookDetailIDs || w.Full() {
+		t.Errorf("parsed webhook: %+v %v", w, err)
+	}
+	t.Setenv(EnvDatabaseURL, "postgres://localhost/x")
+	t.Setenv(EnvNotifyWebhookURL, "https://ntfy.example.org/t")
+	cfg, err := Load()
+	if err != nil || cfg.Webhook.Detail != WebhookDetailIDs {
+		t.Fatalf("default: %+v %v", cfg, err)
+	}
+	t.Setenv(EnvNotifyWebhookDetail, "full")
+	if cfg, err = Load(); err != nil || !cfg.Webhook.Full() {
+		t.Fatalf("full: %+v %v", cfg, err)
+	}
+	t.Setenv(EnvNotifyWebhookURL, "")
+	t.Setenv(EnvNotifyWebhookDetail, "nope")
+	if _, err = Load(); err == nil {
+		t.Fatal("Load accepted nope without a webhook")
+	}
+}
+
 func TestParseSMTP(t *testing.T) {
 	c, err := ParseSMTP(SMTPEnv{})
 	if c != nil || err != nil {

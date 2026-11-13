@@ -16,7 +16,8 @@ info:
     Requests authenticate with the session cookie of the web UI or with an
     API key: `Authorization: Bearer ma_…`. A key is created in the profile
     and has the scope `read` (messages, search, accounts, status), `sync`
-    (starting syncs) or both; every other route is for sessions only. A key
+    (starting syncs) or both, or, for admins, `metrics` alone (only
+    `GET /api/metrics`); every other route is for sessions only. A key
     request never reads cookies. An invalid, revoked or expired key, or one
     whose owner is locked, answers `401`; a route outside the key's scopes
     `403`; more than 600 requests per key and minute `429`.
@@ -76,7 +77,7 @@ security:
 
 tags:
   - name: health
-    description: Health checks; no login needed.
+    description: Health checks, which need no login, and the admins' instance metrics.
   - name: session
     description: Login and logout.
   - name: profile
@@ -939,6 +940,12 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           description: Wrong password or code (counts like a failed login), or no session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The scope `metrics` asked for by a user who is not an admin.
           content:
             application/json:
               schema:
@@ -2296,6 +2303,44 @@ paths:
                     description: The background job queue per kind with work that is not done; for admins only, since it covers every user's mail.
                     items:
                       $ref: "#/components/schemas/JobStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/APIKeyScope"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      security:
+        - session: []
+        - apiKey: [metrics]
+      summary: Instance metrics for Prometheus (admins)
+      description: |
+        The instance's figures in the Prometheus text format 0.0.4, for an
+        admin's session or an API key with the scope `metrics` (which only
+        an admin can create, alone in its key). A `metrics` key opens no
+        other route, and `read` and `sync` keys get `403` here, as do users
+        who are not admins and keys of an owner who is no longer an admin.
+
+        Only IDs, counts, times and fixed values: storage of the instance,
+        of each customer group and of the accounts without a group (messages,
+        bytes, quota, quota state and since when), per account by ID (group
+        ID, kind, enabled, health, messages, bytes, last successful sync),
+        the data disk, the database by table, jobs per kind and state, users
+        per role and lock state, encryption at rest, the last backup, the
+        version, pending migrations and SMTP deferrals for storage. Never
+        names, hosts, IMAP user names, addresses, folders, subjects or error
+        texts. The answer is cached for 15 seconds.
+      responses:
+        "200":
+          description: The metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -4078,10 +4123,13 @@ components:
 
     APIKeyScope:
       type: string
-      enum: [read, sync]
+      enum: [read, sync, metrics]
       description: |
         `read`: messages, search, conversations, downloads, accounts and
         status. `sync`: starting syncs. Neither implies the other.
+        `metrics`: only `GET /api/metrics`; only admins create it, and it
+        is the key's only scope (`400` with another, `403` for a user who
+        is not an admin).
     APIKey:
       type: object
       required: [id, name, hint, scopes, createdAt, expiresAt, lastUsedAt, revokedAt, state]

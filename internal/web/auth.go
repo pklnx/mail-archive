@@ -388,6 +388,10 @@ func (s *Server) authenticate(mux *http.ServeMux, rules map[string]route) http.H
 				return
 			}
 		}
+		if adminOnlyLevel(a) && !sess.IsAdmin {
+			s.fail(w, r, http.StatusForbidden, adminOnlyMetrics, nil)
+			return
+		}
 		mux.ServeHTTP(w, r)
 	})
 }

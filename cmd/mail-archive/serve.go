@@ -191,8 +191,11 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 // webOptions are the options of the web server that come from the
 // configuration alone.
 func webOptions(cfg *config.Config) web.Options {
+	dataDir := cfg.DataDir
 	return web.Options{
 		AllowedHosts: cfg.AllowedHosts, Require2FA: cfg.Require2FA, SecretKey: cfg.SecretKey, PublicURL: cfg.PublicURL,
 		AlertAfterFailures: cfg.AlertAfterFailures, TrustedProxies: cfg.TrustedProxies,
+		Version:   version,
+		DiskUsage: func() (uint64, uint64, error) { return archive.DiskUsage(dataDir) },
 	}
 }

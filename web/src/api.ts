@@ -700,7 +700,8 @@ export const passkeyApi = {
   remove: async (id: number) => (await send<{ credentialId: string; rpId?: string }>("DELETE", `/api/profile/passkeys/${id}`))!,
 };
 
-export type ApiKeyScope = "read" | "sync";
+/** metrics: admins only, alone in its key (only GET /api/metrics). */
+export type ApiKeyScope = "read" | "sync" | "metrics";
 
 /** An API key as listed: never the key itself. */
 export interface ApiKey {
