@@ -22,18 +22,8 @@ A complete backup has three parts, made in this order:
    [encryption at rest](#encryption-at-rest) on, the dump is encrypted
    instead, see [Encrypted backups](#encrypted-backups). Without Docker
    Compose, `mail-archive backup DIR` does the same with the `pg_dump` in
-   `PATH`. `pg_dump` (and `pg_restore` in `restore-dump`) then gets only
-   the connection from `MAIL_ARCHIVE_DATABASE_URL` and the variables `PATH`,
-   `HOME`, `TMPDIR`, `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`,
-   `LD_LIBRARY_PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`,
-   `KRB5CCNAME` and `KRB5_CONFIG`, so no secret of the app reaches it. Put
-   client settings into `MAIL_ARCHIVE_DATABASE_URL`: `PG*` variables are
-   not passed on (one only counts where the app's own connection takes a
-   host, user or password from it that the URL leaves out). Of the URL's
-   parameters only `sslmode`, `sslrootcert`, `sslcert` and `sslkey` are
-   passed on; others, such as `sslcrl`, `sslpassword` or `connect_timeout`,
-   are not, as before.
-   `~/.pgpass` and `~/.postgresql/` keep working through `HOME`.
+   `PATH`; see [Backups without Docker](#backups-without-docker) for what
+   it gets.
 2. **The archive directory** (`data/`, or `ARCHIVE_DIR`): the message files.
    Copy it **after** the dump. Files are only added, so a copy made later
    covers every message in the dump.
@@ -81,6 +71,87 @@ checks the archive once a week:
 
 On Linux the files in `data/` belong to UID 65532 (the container user), so
 copy them as root or with `sudo`.
+
+### Backups without Docker
+
+Without Docker Compose, `mail-archive backup DIR` runs the `pg_dump` in
+`PATH`, and `mail-archive restore-dump FILE` the `pg_restore` in `PATH`,
+each at least of the server's major version. They get exactly this, so no
+secret of the app reaches them, and they get the TLS and authentication
+settings of the app's connection, with GSSAPI encryption off, or the
+command refuses to run (see below):
+
+- **Host, port, user, database and password** as the app's own connection
+  resolves them: from `MAIL_ARCHIVE_DATABASE_URL`, and for what it leaves
+  out from `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` and `PGPASSWORD` of
+  the process, the password also from `PGPASSFILE` (by default
+  `~/.pgpass`). A list of hosts keeps its order. The password is passed in
+  the environment, never on the command line.
+- **The TLS and authentication settings, from `MAIL_ARCHIVE_DATABASE_URL`
+  only:** `sslmode` (also as the URL alias `ssl=true`), `sslrootcert`,
+  `sslcert`, `sslkey`, `sslsni`, `sslnegotiation`, `target_session_attrs`,
+  `channel_binding` and `require_auth`. A key given twice counts with its
+  last value, as for the app. Where the app's driver derives the mode from
+  another key, the tools get that mode too: `sslnegotiation=direct` without
+  `sslmode` is `require`, and `sslrootcert=system` is always `verify-full`.
+  What the URL leaves out, the tools get named explicitly with the value
+  the app takes, so that it does not depend on the libpq version's own
+  defaults: `prefer`, `sslsni=1`, and for `sslrootcert`, `sslcert` and
+  `sslkey` the files the app looks at, `$HOME/.postgresql/root.crt`,
+  `postgresql.crt` and `postgresql.key` (a file that does not exist is
+  not used, by the app or the tools). Only an empty `require_auth` is
+  left out, which means the same in every libpq version.
+- **`PGGSSENCMODE=disable`,** always: libpq built with GSSAPI would
+  otherwise prefer GSSAPI encryption to TLS, whatever `sslmode` says,
+  where Kerberos credentials and the server allow it. The app never uses
+  it, and a `PGGSSENCMODE` of the process cannot turn it on.
+- **These variables of the process,** when set: `PATH`, `HOME`, `TMPDIR`,
+  `TZ`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LD_LIBRARY_PATH`,
+  `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`, `KRB5CCNAME` and
+  `KRB5_CONFIG`.
+
+Nothing else is passed on: no `MAIL_ARCHIVE_*` variable, no other `PG*`
+variable of the process (such as `PGAPPNAME` or `PGCONNECT_TIMEOUT`), and
+no other parameter of the URL (such as `sslcrl` or `connect_timeout`). The
+tools apply these settings with libpq and OpenSSL (`OPENSSL_CONF`
+included), the app with Go's TLS: the settings are the same, the TLS
+libraries are not.
+
+Both commands refuse before `backup` writes its audit entry or anything
+into `DIR`, before `restore-dump` decrypts the dump, and before either runs
+`pg_dump` or `pg_restore`, when:
+
+- the process sets `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`,
+  `PGSSLSNI`, `PGSSLNEGOTIATION`, `PGTARGETSESSIONATTRS`,
+  `PGCHANNELBINDING` or `PGREQUIREAUTH`, and the URL does not set the same
+  key: the app would use it, the tools would not get it. Move it into the
+  URL, for example
+  `postgres://mailarchive@db.example/mailarchive?sslmode=verify-full&sslrootcert=/etc/ssl/db-ca.pem`;
+- `PGSERVICE`, `PGSERVICEFILE` or `PGSSLPASSWORD` is set, or the URL sets
+  `service`, `servicefile` or `sslpassword`: a service would give the tools
+  other settings than the app, and the password of a client key could only
+  reach them on the command line. Put the settings into the URL, and use a
+  client key without a password;
+- `HOME` is not set, the connection uses TLS and the URL does not name
+  `sslrootcert`, `sslcert` and `sslkey`: the app then looks for no
+  certificate file, libpq in the home directory of the user account;
+- `$HOME/.postgresql` holds `postgresql.crt` without `postgresql.key` or
+  the other way round, which the app ignores and libpq refuses;
+- the URL sets `ssl` to anything but `true`, or a keyword/value string
+  (`host=… sslmode=…`) sets `ssl` at all: use `sslmode`;
+- the URL sets `sslnegotiation=direct` with `sslmode=allow` or `disable`,
+  which libpq refuses;
+- the settings the tools would get do not give the same connection
+  attempts as the app's connection (hosts, ports, TLS and its certificates,
+  `target_session_attrs`, `channel_binding`, `require_auth`). An example is
+  an empty `sslrootcert=` while `~/.postgresql/root.crt` exists: the app
+  reads it as no root certificate, libpq as that file;
+- `pg_dump` or `pg_restore` is too old for a setting, which it would ignore
+  without an error: `sslnegotiation=direct` needs 17, `require_auth` and
+  `sslrootcert=system` need 16.
+
+The error names the variable or key, never its value. With Docker Compose
+none of this applies: `./ma` runs the tools in the database container.
 
 ### Encrypted backups
 

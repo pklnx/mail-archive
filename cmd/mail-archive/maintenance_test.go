@@ -218,10 +218,10 @@ func TestBackup(t *testing.T) {
 	pgDump, logDir := fakePgDump(t, "18.1 (Debian 18.1-1)")
 	basics := setEnvMarkers(t)
 	dir := filepath.Join(t.TempDir(), "backups")
+	const dbURL = "postgres://mailarchive:s3cret-pw@db.internal:5433/archive?sslmode=require"
 	job := backupJob{
-		PgDump:      pgDump,
-		DatabaseURL: "postgres://mailarchive:s3cret-pw@db.internal:5433/archive?sslmode=require",
-		Dir:         dir, Name: "mailarchive-20261007T190102Z.dump", ServerMajor: 18, Note: "the note\n",
+		PgDump: testPgTool(t, pgDump, dbURL, 18),
+		Dir:    dir, Name: "mailarchive-20261007T190102Z.dump", Note: "the note\n",
 	}
 	path, err := runBackup(context.Background(), job)
 	if err != nil {
@@ -268,8 +268,11 @@ func TestBackup(t *testing.T) {
 
 	// An older pg_dump than the server is refused before it runs.
 	old, oldLog := fakePgDump(t, "16.4")
-	job.PgDump, job.Name = old, "third.dump"
-	if _, err := runBackup(context.Background(), job); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
+	conn, err := resolvePgToolConn("pg_dump", dbURL, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkPgTool(context.Background(), "pg_dump", old, conn, 18); err == nil || !strings.Contains(err.Error(), "version 16, the server 18") {
 		t.Errorf("old pg_dump: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(oldLog, "args")); !os.IsNotExist(err) {
@@ -333,8 +336,10 @@ func setEnvMarkers(t *testing.T) []string {
 	return basics
 }
 
-// pgURLEnvNames are the variables pgEnv derives from the database URL.
-var pgURLEnvNames = []string{"PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY"}
+// pgURLEnvNames are the variables pgToolConn.env derives from the database
+// URL.
+var pgURLEnvNames = []string{"PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY",
+	"PGSSLSNI", "PGSSLNEGOTIATION", "PGTARGETSESSIONATTRS", "PGCHANNELBINDING", "PGREQUIREAUTH", "PGGSSENCMODE"}
 
 // checkPgToolEnv reports what is wrong with env, the environment pg_dump or
 // pg_restore got after setEnvMarkers: a marker, a variable outside the
@@ -395,18 +400,19 @@ func TestPgEnvAllowlist(t *testing.T) {
 	}
 	basics := setEnvMarkers(t)
 	t.Setenv("PATH", "/opt/pg/bin:/usr/bin")
-	env, err := pgEnv("postgres://u:url-pw@db.example:6543/arch?sslmode=require&connect_timeout=5&application_name=x")
-	if err != nil {
-		t.Fatal(err)
-	}
+	env := pgToolEnv(t, "postgres://u:url-pw@db.example:6543/arch?sslmode=require&connect_timeout=5&application_name=x")
 	for _, p := range checkPgToolEnv(env, append(basics, "PATH=/opt/pg/bin:/usr/bin", "PGHOST=db.example", "PGPORT=6543", "PGUSER=u",
-		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require")...) {
+		"PGDATABASE=arch", "PGPASSWORD=url-pw", "PGSSLMODE=require", "PGGSSENCMODE=disable",
+		"PGSSLROOTCERT=basic-HOME/.postgresql/root.crt", "PGSSLCERT=basic-HOME/.postgresql/postgresql.crt", "PGSSLKEY=basic-HOME/.postgresql/postgresql.key",
+		"PGSSLSNI=1", "PGSSLNEGOTIATION=postgres", "PGTARGETSESSIONATTRS=any", "PGCHANNELBINDING=prefer")...) {
 		t.Error(p)
 	}
-	// Every basic (PATH included) and the six URL variables; the other URL
-	// parameters are not passed on, as before. TestSSLSettings covers the
-	// certificate parameters, which pgconn would read here.
-	if len(env) != len(pgToolEnvNames)+6 {
+	// Every basic (PATH included), the five connection variables, the TLS
+	// variables but the empty require_auth, and PGGSSENCMODE=disable; the
+	// other URL parameters are not passed on, as before, and neither is
+	// the parent's PGAPPNAME (setEnvMarkers). TestPgToolConn covers the
+	// TLS keys.
+	if len(env) != len(pgToolEnvNames)+5+8+1 {
 		t.Errorf("%d variables: %v", len(env), env)
 	}
 
@@ -419,25 +425,11 @@ func TestPgEnvAllowlist(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	env, err = pgEnv("postgres://u@db.example/arch")
-	if err != nil {
-		t.Fatal(err)
-	}
+	env = pgToolEnv(t, "postgres://u@db.example/arch")
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "TZ=") || strings.HasPrefix(kv, "PGPASSWORD=") || strings.Contains(kv, envMarker) {
 			t.Errorf("passed on: %s", kv)
 		}
-	}
-}
-
-func TestSSLSettings(t *testing.T) {
-	got := sslSettings("postgresql://u@h/db?sslmode=verify-full&sslrootcert=/ca.pem&application_name=x")
-	if len(got) != 2 || got["PGSSLMODE"] != "verify-full" || got["PGSSLROOTCERT"] != "/ca.pem" {
-		t.Errorf("URL: %v", got)
-	}
-	got = sslSettings("host=h dbname=db sslmode='verify-ca' sslkey=/k.pem")
-	if len(got) != 2 || got["PGSSLMODE"] != "verify-ca" || got["PGSSLKEY"] != "/k.pem" {
-		t.Errorf("key=value: %v", got)
 	}
 }
 
