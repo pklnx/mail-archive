@@ -211,6 +211,8 @@ describe("ProfilePage", () => {
           return new Response(null, { status: 204 });
         case "GET /api/profile/api-keys":
           return json({ max: 10, keys: apiKeys });
+        case "GET /api/profile/notifications":
+          return json({ available: false, email: null, confirmed: false, confirmedAt: null, bounced: false, codeExpiresAt: null });
         case "POST /api/profile/api-keys":
           return json({
             id: 1, name: "backup", hint: "wxyz", scopes: ["read"], createdAt: "2026-10-22T10:00:00Z",
@@ -377,6 +379,33 @@ describe("ProfilePage", () => {
     expect(screen.getByText("ma_secretkeyvaluewxyz")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: t.done }));
     expect(screen.queryByText("ma_secretkeyvaluewxyz")).toBeNull();
+  });
+
+  it("offers the metrics scope to admins only, alone in its key (#397)", async () => {
+    renderPage();
+    open(t.apiKeys);
+    await formOf(t.apiKeyName);
+    expect(screen.queryByLabelText(t.apiKeyScopeMetrics)).toBeNull();
+    cleanup();
+
+    render(<ProfilePage name="admin" admin />);
+    open(t.apiKeys);
+    const form = await formOf(t.apiKeyName);
+    const read = within(form).getByLabelText(t.apiKeyScopeRead) as HTMLInputElement;
+    const sync = within(form).getByLabelText(t.apiKeyScopeSync) as HTMLInputElement;
+    const metrics = within(form).getByLabelText(t.apiKeyScopeMetrics) as HTMLInputElement;
+    fireEvent.click(sync);
+    fireEvent.click(metrics);
+    expect([read.checked, sync.checked, metrics.checked]).toEqual([false, false, true]);
+    fireEvent.change(within(form).getByLabelText(t.apiKeyName), { target: { value: "scrape" } });
+    fireEvent.change(within(form).getByLabelText(t.currentPassword), { target: { value: "correct horse battery" } });
+    fireEvent.click(within(form).getByRole("button", { name: t.apiKeyCreate }));
+    await screen.findByText("ma_secretkeyvaluewxyz");
+    const create = requests.find((r) => r.method === "POST" && r.url === "/api/profile/api-keys");
+    expect((create?.body as { scopes: string[] }).scopes).toEqual(["metrics"]);
+    // Choosing read again clears metrics.
+    fireEvent.click(read);
+    expect([read.checked, metrics.checked]).toEqual([true, false]);
   });
 
   /** Opens the Add passkey Modal (on the security tab) and returns it. */

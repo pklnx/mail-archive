@@ -9,6 +9,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -301,6 +304,107 @@ func TestPasskeyBeginRateLimit(t *testing.T) {
 	}
 }
 
+// newProxiedPasskeyFixture trusts the test client as a reverse proxy, so
+// that beginFrom can start passkey logins from any address.
+func newProxiedPasskeyFixture(t *testing.T) *authFixture {
+	t.Helper()
+	return newAuthFixtureOpts(t, Options{PublicURL: testPublicURL, TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}})
+}
+
+// beginFrom starts a passkey login from addr and returns the status and
+// Retry-After.
+func (f *authFixture) beginFrom(addr string) (int, string) {
+	f.t.Helper()
+	req, _ := http.NewRequest("POST", f.srv.URL+"/api/session/passkey/begin", http.NoBody)
+	req.Header.Set("Origin", f.srv.URL)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", addr)
+	resp, err := f.client.Do(req)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode, resp.Header.Get("Retry-After")
+}
+
+// beginsFrom starts n passkey logins from addr that must succeed.
+func (f *authFixture) beginsFrom(addr string, n int) {
+	f.t.Helper()
+	for i := range n {
+		if status, _ := f.beginFrom(addr); status != 200 {
+			f.t.Fatalf("begin %d from %s: status %d", i+1, addr, status)
+		}
+	}
+}
+
+// expectRefused checks that a passkey login from addr gets 429 with
+// Retry-After retry.
+func (f *authFixture) expectRefused(addr, retry string) {
+	f.t.Helper()
+	if status, got := f.beginFrom(addr); status != 429 || got != retry {
+		f.t.Fatalf("begin from %s: status %d, Retry-After %q; want 429, %q", addr, status, got, retry)
+	}
+}
+
+// A handful of addresses at their rate limit cannot switch passkey login
+// off for others: 34 addresses start 1,020 logins, more than the old total
+// of 1,000.
+func TestPasskeyBeginFewAddressesCannotBlock(t *testing.T) {
+	f := newProxiedPasskeyFixture(t)
+	for i := range 34 {
+		f.beginsFrom(fmt.Sprintf("198.51.100.%d", i+1), passkeyBeginLimit)
+	}
+	f.beginsFrom("203.0.113.9", 1)
+}
+
+// An address holds at most passkeyOpenPerAddr logins started within the
+// ceremony lifetime, beyond the rate per minute; Retry-After is the exact
+// wait until its oldest expires.
+func TestPasskeyBeginCapPerAddress(t *testing.T) {
+	f := newProxiedPasskeyFixture(t)
+	const addr = "198.51.100.7"
+	f.beginsFrom(addr, passkeyBeginLimit)
+	f.clock.Advance(time.Minute)
+	f.beginsFrom(addr, passkeyOpenPerAddr-passkeyBeginLimit)
+	f.expectRefused(addr, "240")
+	f.beginsFrom("198.51.100.8", 1)
+	f.clock.Advance(4 * time.Minute)
+	f.beginsFrom(addr, passkeyBeginLimit)
+	f.clock.Advance(time.Minute)
+	f.beginsFrom(addr, 1)
+}
+
+// An IPv6 /48 holds at most passkeyOpenPer48 logins, across its /64s.
+func TestPasskeyBeginCapPer48(t *testing.T) {
+	f := newProxiedPasskeyFixture(t)
+	for i := range passkeyOpenPer48 / passkeyBeginLimit {
+		f.beginsFrom(fmt.Sprintf("2001:db8:1:%x::1", i), passkeyBeginLimit)
+	}
+	last := fmt.Sprintf("2001:db8:1:%x::1", passkeyOpenPer48/passkeyBeginLimit)
+	f.beginsFrom(last, passkeyOpenPer48%passkeyBeginLimit)
+	f.expectRefused(last, "300")
+	f.expectRefused("2001:db8:1:ffff::1", "300")
+	f.beginsFrom("2001:db8:2::1", 1)
+}
+
+// The slot of a passkey login is kept when it starts and freed when
+// storing it fails.
+func TestPasskeyBeginReleasesSlotOnError(t *testing.T) {
+	f := newProxiedPasskeyFixture(t)
+	f.beginsFrom("198.51.100.7", 1)
+	if live, _, keys := f.server.passkeyOpen.Len(); live != 1 || keys != 1 {
+		t.Fatalf("after a login started: %d held, %d keys", live, keys)
+	}
+	f.st.Close()
+	if status, _ := f.beginFrom("198.51.100.8"); status != 500 {
+		t.Fatalf("begin with the store closed: status %d", status)
+	}
+	if live, _, keys := f.server.passkeyOpen.Len(); live != 1 || keys != 1 {
+		t.Fatalf("after a failed start: %d held, %d keys; want the slot freed", live, keys)
+	}
+}
+
 // A passkey login ends in the same state as a password login: locks,
 // generated passwords and missing mandatory TOTP all still apply.
 func TestPasskeySessionStateMachine(t *testing.T) {
@@ -326,9 +430,9 @@ func TestPasskeySessionStateMachine(t *testing.T) {
 	}
 
 	// A locked user gets in neither way.
-	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": true}, 204)
+	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": true}, 200)
 	f.as().passkeyLogin(aliceKey, 403)
-	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": false}, 204)
+	f.expect("PATCH", "/api/users/alice", map[string]bool{"locked": false}, 200)
 
 	// An admin whose TOTP was reset must set it up again.
 	if err := f.st.ResetTwoFactor(t.Context(), mustUser(t, f, "admin").ID); err != nil {
@@ -498,4 +602,37 @@ func (f *authFixture) listedPasskeys() map[string]float64 {
 		out[m["name"].(string)], _ = m["passkeys"].(float64)
 	}
 	return out
+}
+
+// A passkey login still works after failures from its address and for its
+// user name, and it forgets the name's failures like a password login: the
+// limiter wiring of the passkey finish (BeginAddr, then Limiter.Succeed for
+// the name found by the passkey).
+func TestPasskeyLoginAfterFailures(t *testing.T) {
+	f := newPasskeyFixture(t)
+	f.addUser("alice", "correct horse battery", false)
+	f.loginOK("alice", "correct horse battery")
+	k := newSoftKey(t)
+	f.addPasskey(k, "Phone", "correct horse battery", "")
+
+	anon := f.as()
+	stranger := newSoftKey(t)
+	stranger.handle = []byte("x")
+	for range 10 {
+		anon.passkeyLogin(stranger, 401) // failures of the address
+	}
+	for range 4 {
+		if resp := anon.login("alice", wrongPassword); resp.StatusCode != 401 {
+			t.Fatalf("wrong password: %d", resp.StatusCode)
+		}
+	}
+	if u, _ := anon.passkeyLogin(k, 200)["user"].(map[string]any); u["name"] != "alice" {
+		t.Fatalf("passkey login after failures: %v", u)
+	}
+	// The name's failures are forgotten: without that, the 2nd is 429.
+	for i := range 4 {
+		if resp := f.as().login("alice", wrongPassword); resp.StatusCode != 401 {
+			t.Fatalf("wrong password %d after the passkey login: %d", i+1, resp.StatusCode)
+		}
+	}
 }

@@ -40,7 +40,8 @@ func attachmentIndexer(a *app, blobs *blobstore.Store, log *slog.Logger) *archiv
 	return &archive.AttachmentIndexer{Store: a.store, Blobs: blobs, Extractor: processExtractor(log), Logger: log}
 }
 
-// jobRegistry returns the job kinds that serve and worker run.
+// jobRegistry returns the job kinds that serve and worker run: the
+// attachment text kinds and those of storage usage.
 func jobRegistry(x *archive.AttachmentIndexer) (*jobs.Registry, error) {
 	r := &jobs.Registry{}
 	for _, k := range testJobKinds {
@@ -51,7 +52,149 @@ func jobRegistry(x *archive.AttachmentIndexer) (*jobs.Registry, error) {
 	if err := x.Register(r); err != nil {
 		return nil, err
 	}
+	for _, k := range jobs.StorageKinds(x.Store, x.Logger) {
+		if err := r.Register(k); err != nil {
+			return nil, err
+		}
+	}
 	return r, nil
+}
+
+// Intervals of the storage jobs (#397, part 1).
+const (
+	storageFoldEvery  = 5 * time.Minute
+	usageRefreshEvery = time.Hour
+)
+
+// storageSchedule enqueues the storage jobs in every process that runs a
+// job pool (serve with workers, worker): storage_fold at start and every
+// storageFoldEvery, usage_refresh every usageRefreshEvery. No job queues
+// itself again, so this is what keeps them going; several processes
+// enqueue the same singletons, which merge. Both pass retryFailed, so a
+// job that failed its attempts is queued again at the next tick.
+type storageSchedule struct {
+	store *store.Store
+	log   *slog.Logger
+	// fold and refresh deliver the ticks.
+	fold, refresh <-chan time.Time
+	// enqueued, if set, is called after each enqueue with the kind (tests).
+	enqueued func(kind string)
+}
+
+// startStorageSchedule runs the schedule with real tickers until the
+// returned stop is called.
+func startStorageSchedule(ctx context.Context, st *store.Store, log *slog.Logger) (stop func()) {
+	fold, refresh := time.NewTicker(storageFoldEvery), time.NewTicker(usageRefreshEvery)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	s := &storageSchedule{store: st, log: log, fold: fold.C, refresh: refresh.C}
+	go func() {
+		defer close(done)
+		s.run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+		fold.Stop()
+		refresh.Stop()
+	}
+}
+
+// run enqueues storage_fold at once, and usage_refresh too as long as no
+// snapshot was taken (after the upgrade to 00041), and then both on their
+// ticks, until ctx ends. A failed enqueue is logged and waits for the next
+// tick.
+func (s *storageSchedule) run(ctx context.Context) {
+	s.enqueue(ctx, store.StorageFoldJob())
+	if at, err := s.store.UsageSnapshotAt(ctx); err != nil && ctx.Err() == nil {
+		s.log.Warn("cannot read the time of the last usage snapshot", "err", err)
+	} else if err == nil && at == nil {
+		s.enqueue(ctx, store.UsageRefreshJob())
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.fold:
+			s.enqueue(ctx, store.StorageFoldJob())
+		case <-s.refresh:
+			s.enqueue(ctx, store.UsageRefreshJob())
+		}
+	}
+}
+
+func (s *storageSchedule) enqueue(ctx context.Context, j store.NewJob) {
+	if _, err := s.store.EnqueueJobs(ctx, []store.NewJob{j}, true); err != nil && ctx.Err() == nil {
+		s.log.Warn("cannot queue a storage job", "kind", j.Kind, "err", err)
+	}
+	if s.enqueued != nil {
+		s.enqueued(j.Kind)
+	}
+}
+
+// attachmentRepairEvery is how often a process that runs a job pool
+// checks the attachment text flags (#539, part 2).
+const attachmentRepairEvery = 15 * time.Minute
+
+// attachmentRepair runs the repair of the attachment text flags
+// (store.RepairAttachmentText) at start and every attachmentRepairEvery,
+// in every process that runs a job pool (serve with workers, worker),
+// next to the storage schedule. It catches locations and job ends that a
+// process before 1.6.0 writes after the upgrade, and removed done jobs.
+// Several processes may run it at once: it only sets flags of messages
+// without attachments and enqueues jobs, which merge.
+type attachmentRepair struct {
+	store *store.Store
+	log   *slog.Logger
+	// tick delivers the ticks.
+	tick <-chan time.Time
+	// repaired, if set, is called after each pass (tests).
+	repaired func(store.RepairResult, error)
+}
+
+// startAttachmentRepair runs the repair with a real ticker until the
+// returned stop is called.
+func startAttachmentRepair(ctx context.Context, st *store.Store, log *slog.Logger) (stop func()) {
+	t := time.NewTicker(attachmentRepairEvery)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r := &attachmentRepair{store: st, log: log, tick: t.C}
+	go func() {
+		defer close(done)
+		r.run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+		t.Stop()
+	}
+}
+
+// run repairs at once and then on every tick, until ctx ends. A failed
+// pass is logged and waits for the next tick.
+func (r *attachmentRepair) run(ctx context.Context) {
+	r.pass(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.tick:
+			r.pass(ctx)
+		}
+	}
+}
+
+func (r *attachmentRepair) pass(ctx context.Context) {
+	res, err := r.store.RepairAttachmentText(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		r.log.Warn("cannot check the attachment text of locations", "err", err)
+	case res.Queued > 0 || res.Cleared > 0:
+		r.log.Info("attachment text: repaired locations", "messages_queued", res.Queued, "locations_without_attachment", res.Cleared)
+	}
+	if r.repaired != nil {
+		r.repaired(res, err)
+	}
 }
 
 // attachmentsAtStart enqueues the attachment backfill (idempotent; a
@@ -91,9 +234,13 @@ func startJobs(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 			log.Error("jobs stopped", "err", err)
 		}
 	}()
+	stopSchedule := startStorageSchedule(ctx, a.store, log)
+	stopRepair := startAttachmentRepair(ctx, a.store, log)
 	log.Info("jobs on", "workers", a.cfg.JobWorkers, "kinds", strings.Join(kinds.Names(), ","))
 	return func() {
 		cancel()
+		stopSchedule()
+		stopRepair()
 		<-done
 	}, nil
 }
@@ -101,7 +248,7 @@ func startJobs(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 func newWorkerCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "worker",
-		Short: "Run only the background jobs (attachment text), without the web server",
+		Short: "Run only the background jobs (attachment text, storage usage), without the web server",
 		Long: `Run only the background jobs, such as extracting the text of attachments
 for search: no web server, SMTP, syncs, fills, attestations or retention.
 ` + config.EnvJobWorkers + ` (1 to 8, default 1) sets how many jobs run at a time.
@@ -109,28 +256,45 @@ Run it as a separate process with its own memory limit, and set
 ` + config.EnvJobWorkers + `=0 for serve, which otherwise runs them itself. Several
 workers, also on several hosts, share the queue safely. It stops on SIGTERM
 and hands running jobs back to the queue. See docs/guide/operations.md,
-"Background jobs".`,
+"Background jobs".
+
+At start it takes the migration lock, applies pending migrations with
+` + config.EnvMigrateOnStart + `=on and checks the schema, as serve does (exit
+codes 3 and 4).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if cfg.JobWorkers == 0 {
+				return errors.New(config.EnvJobWorkers + "=0: the worker would run no jobs; set it from 1 to 8")
+			}
+			log := newLogger(cfg.LogLevel)
+			// The migration lock, start-up migrations and the schema check
+			// (#396), as serve does.
+			if err := prepareInstance(cmd.Context(), cfg, log, "worker"); err != nil {
+				return err
+			}
+			a, err := openAppConfig(cmd.Context(), cfg, openNormal)
 			if err != nil {
 				return err
 			}
 			defer a.close()
-			if a.cfg.JobWorkers == 0 {
-				return errors.New(config.EnvJobWorkers + "=0: the worker would run no jobs; set it from 1 to 8")
-			}
 			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "worker", archive.RoleWriter)
 			if err != nil {
 				return err
 			}
 			defer ar.Close()
-			log := newLogger(a.cfg.LogLevel)
 			kinds, err := jobRegistry(attachmentIndexer(a, blobs, log))
 			if err != nil {
 				return err
 			}
 			attachmentsAtStart(cmd.Context(), a.store, log)
+			stopSchedule := startStorageSchedule(cmd.Context(), a.store, log)
+			defer stopSchedule()
+			stopRepair := startAttachmentRepair(cmd.Context(), a.store, log)
+			defer stopRepair()
 			log.Info("worker on", "workers", a.cfg.JobWorkers, "kinds", strings.Join(kinds.Names(), ","))
 			return (&jobs.Pool{Store: a.store, Kinds: kinds, Workers: a.cfg.JobWorkers, Logger: log}).Run(cmd.Context())
 		},

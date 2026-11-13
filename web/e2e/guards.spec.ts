@@ -1,11 +1,30 @@
 // The guards' exceptions for the sandboxed mail frame stay narrow. No
-// browser needed: these check the matcher on the messages Chromium logs.
+// browser needed: these check the matcher on the messages Chromium and
+// WebKit log.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test as base, expect, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { origin } from "./demo";
-import { formatConsoleError, formatFrameEvents, fromMailFrame, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo } from "./fixtures";
+import { accessDeniedFetchProblem, refusesFetchDuringNavigation } from "./engine";
+import {
+  escapeRegExp,
+  forgedRefusal,
+  formatConsoleError,
+  formatFrameEvents,
+  fromMailFrame,
+  fromWebKitStyleRefusal,
+  isNavigationFetchRefusal,
+  isResizeObserverLoop,
+  lostCharacter,
+  NavigationRefusals,
+  pageErrorText,
+  test,
+  type ConsoleErrorInfo,
+  type FrameEvent,
+  type FrameInfo,
+  type Guards,
+} from "./fixtures";
 
 const frame = `${origin}/api/messages/${"ab".repeat(32)}/html`;
 const pixel = "https://tracker.example/pixel.gif";
@@ -36,6 +55,34 @@ base("other CSP violations still fail", () => {
   // Inline script, fonts, connections.
   expect(fromMailFrame(frame, `Refused to execute inline script because it violates the following Content Security Policy directive: "script-src 'none'".`)).toBe(false);
   expect(fromMailFrame(frame, `Loading the font 'https://fonts.example/x.woff2' violates the following Content Security Policy directive: "font-src 'none'". The action has been blocked.`)).toBe(false);
+});
+
+// WebKit's wording (Playwright's WebKit 27.2, #398), logged with an empty
+// location: in the mail frame and on an app page alike, so the matcher takes
+// it by its words. An app page still fails through the guards' own listener
+// (the browser tests below).
+const refusedWebKit = `Refused to load ${pixel} because it does not appear in the img-src directive of the Content Security Policy.`;
+
+base("a remote image blocked in the mail frame is expected in WebKit's wording too", () => {
+  expect(fromMailFrame("", refusedWebKit)).toBe(true);
+  expect(fromMailFrame(frame, refusedWebKit)).toBe(true);
+  expect(fromMailFrame(`${frame}?images=1`, refusedWebKit)).toBe(true);
+});
+
+base("other CSP violations in WebKit's wording still fail", () => {
+  // A location that is not the mail frame: the app itself, a part.
+  expect(fromMailFrame(`${origin}/`, refusedWebKit)).toBe(false);
+  expect(fromMailFrame(`${origin}/api/messages/${"ab".repeat(32)}/parts/1`, refusedWebKit)).toBe(false);
+  expect(fromMailFrame("about:blank", refusedWebKit)).toBe(false);
+  // Another directive.
+  for (const directive of ["style-src", "font-src", "frame-src", "connect-src", "media-src"])
+    expect(fromMailFrame("", refusedWebKit.replace("img-src", directive))).toBe(false);
+  // An image from the demo server itself is not "remote".
+  expect(fromMailFrame("", refusedWebKit.replace(pixel, `${origin}/logo.png`))).toBe(false);
+  expect(fromMailFrame("", refusedWebKit.replace(pixel, "http://127.0.0.1:18181/logo.png"))).toBe(false);
+  // Not WebKit's whole sentence.
+  expect(fromMailFrame("", `${refusedWebKit} More.`)).toBe(false);
+  expect(fromMailFrame("", `Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.`)).toBe(false);
 });
 
 // The flaky "Blocked script execution in 'about:blank'" error (#260): the guard
@@ -106,7 +153,7 @@ base("the frame event log is one line per event, oldest first", () => {
 // The page is served from the demo origin, because the guards abort any other
 // host. The test reads what the fixture collected and takes the problem, so
 // it does not fail on purpose.
-test("a javascript: navigation of a sandboxed frame is reported with that frame", async ({ page, context, guards }) => {
+test("a javascript: navigation of a sandboxed frame is reported with that frame", async ({ page, context, guards, browserName }) => {
   await page.route(`${origin}/e2e/blocked-frame`, (route) =>
     route.fulfill({
       contentType: "text/html",
@@ -122,7 +169,8 @@ test("a javascript: navigation of a sandboxed frame is reported with that frame"
   const problems = guards.takeProblems();
   expect(problems).toHaveLength(1);
   const report = problems[0]!;
-  expect(report.split("\n")[0]).toBe(`console error: ${blockedBlank} (about:blank)`);
+  // Engine fact (#398, first WebKit run): WebKit logs it without a location.
+  expect(report.split("\n")[0]).toBe(`console error: ${blockedBlank} (${browserName === "webkit" ? "" : "about:blank"})`);
   // The snapshot shows the frame under the page. Chromium gives a frame
   // navigated to javascript: neither a name nor a URL, so the parent is what
   // places it.
@@ -153,9 +201,21 @@ async function logSentinel(page: Page, context: BrowserContext) {
   await logged;
 }
 
-test("a sandboxed frame that commits about:blank logs nothing while the trace records", async ({ page, context, guards }) => {
-  // The setting this test depends on: a change back to DOM snapshots fails here first.
-  expect(test.info().project.use.trace).toEqual({ mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: true } });
+/** The first lines of the problems so far, which it takes from the guard. */
+const takeFirstLines = (guards: Guards) => guards.takeProblems().map((p) => p.split("\n")[0]);
+/**
+ * The first line of a problem for a console.error the test evaluated in the
+ * page, whatever location the engine gives it. Chromium gives none; WebKit
+ * may give one (it locates the init scripts' lines at Playwright's
+ * web-inspector://bootstrap.js, #398 plan review).
+ */
+const evaluatedLine = (text: string) => expect.stringMatching(new RegExp(`^console error: ${escapeRegExp(text)} \\([^()]*\\)$`));
+const sentinelLine = evaluatedLine(sentinel);
+
+test("a sandboxed frame that commits about:blank logs nothing while the trace records", async ({ page, context, guards, browserName }) => {
+  // The setting this test depends on: a change back to DOM snapshots fails
+  // here first. WebKit's traces have no screenshots either (#343, #398).
+  expect(test.info().project.use.trace).toEqual({ mode: "retain-on-failure", snapshots: { dom: false, aria: true, screen: browserName !== "webkit" } });
   await page.route(`${origin}/e2e/outer`, (route) =>
     route.fulfill({ contentType: "text/html", body: `<!doctype html><button>go</button><iframe ${sandboxed} src="/e2e/inner"></iframe>` }),
   );
@@ -171,10 +231,10 @@ test("a sandboxed frame that commits about:blank logs nothing while the trace re
   );
   await page.getByRole("button", { name: "go" }).click();
   await logSentinel(page, context);
-  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([`console error: ${sentinel} ()`]);
+  expect(takeFirstLines(guards)).toEqual([sentinelLine]);
 });
 
-test("a script blocked in a sandboxed frame outside the mail frame still fails the guard", async ({ page, context, guards }) => {
+test("a script blocked in a sandboxed frame outside the mail frame still fails the guard", async ({ page, context, guards, browserName }) => {
   await page.route(`${origin}/e2e/outer`, (route) =>
     route.fulfill({ contentType: "text/html", body: `<!doctype html><button>go</button><iframe ${sandboxed} src="/e2e/inner"></iframe>` }),
   );
@@ -184,11 +244,446 @@ test("a script blocked in a sandboxed frame outside the mail frame still fails t
   await page.goto(`${origin}/e2e/outer`);
   await page.getByRole("button", { name: "go" }).click();
   await logSentinel(page, context);
-  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([
-    `console error: Blocked script execution in '${origin}/e2e/inner' because the document's frame is sandboxed and the 'allow-scripts' permission is not set. (${origin}/e2e/inner)`,
-    `console error: ${sentinel} ()`,
+  // Engine fact: WebKit logs it without a location (#398 plan review).
+  const location = browserName === "webkit" ? "" : `${origin}/e2e/inner`;
+  expect(takeFirstLines(guards)).toEqual([
+    `console error: Blocked script execution in '${origin}/e2e/inner' because the document's frame is sandboxed and the 'allow-scripts' permission is not set. (${location})`,
+    sentinelLine,
   ]);
   expect(await page.title()).toBe("");
+});
+
+// The app's own CSP violations fail the guards in every engine (#343, #398):
+// the guards make no exception for WebKit. In WebKit, Playwright's trace
+// screenshots add an inline style to the page, which the app's CSP refuses;
+// the webkit project records no screenshots instead. The app page is the
+// real one, with the app's CSP; the test changes its document and waits for
+// the browser's securitypolicyviolation event (the guards' listener, from
+// the init script, has run before), then for a console sentinel, so the
+// guard has seen every message before.
+async function violate(page: Page, what: { style: string } | { img: string }) {
+  await page.goto("/");
+  await expect(page.getByRole("list", { name: "Messages" }).getByRole("button").first()).toBeVisible();
+  await page.evaluate(
+    (what) =>
+      new Promise<void>((resolve) => {
+        document.addEventListener("securitypolicyviolation", () => resolve(), { once: true });
+        if ("style" in what) {
+          const style = document.createElement("style");
+          style.textContent = what.style;
+          document.head.append(style);
+        } else {
+          const img = document.createElement("img");
+          img.src = what.img;
+          document.body.append(img);
+        }
+      }),
+    what,
+  );
+}
+
+test("an inline style in the app page fails the guards", async ({ page, context, guards }) => {
+  await violate(page, { style: "body { outline: 1px solid red }" });
+  await logSentinel(page, context);
+  const problems = takeFirstLines(guards);
+  // The guards' listener names the directive: style-src-elem, or style-src.
+  expect(problems).toContainEqual(expect.stringMatching(/^console error: CSP violation: style-src(-elem)? blocked inline in /));
+  expect(problems).toContainEqual(sentinelLine);
+});
+
+test("a remote image in the app page fails the guards", async ({ page, context, guards }) => {
+  // The app's img-src refuses it before any request. WebKit's own console
+  // line for it has no location and matches the mail frame's exception
+  // (fixtures.ts); the guards' listener still reports it.
+  const host = "https://img.example";
+  await violate(page, { img: `${host}/app-page.png` });
+  await logSentinel(page, context);
+  const problems = takeFirstLines(guards);
+  // The blocked URI is the image's URL, or only its origin where the engine
+  // strips a cross-origin one for reports.
+  expect(problems).toContainEqual(expect.stringMatching(new RegExp(`^console error: CSP violation: img-src blocked ${escapeRegExp(host)}(/app-page\\.png)? in `)));
+  expect(problems).toContainEqual(sentinelLine);
+});
+
+// WebKit's own <select> style (#398): WebKit checks a style attribute in
+// the select's user-agent shadow tree against the page's CSP, and the guards
+// skip exactly that report (fixtures.ts). These run in both engines; in
+// Chromium no select reports anything. A style attribute that the page sets,
+// on a select or elsewhere, still fails. Each step ends on a marker: a style
+// attribute the test sets on its own element, which every engine refuses
+// and reports after the step's own reports.
+const styleAttrLines = (problems: string[]) => problems.filter((p) => p.startsWith("console error: CSP violation: style-src-attr ")).length;
+
+/** Runs the step in the page, then sets the marker and waits until the guards have its report; returns the style-src-attr reports. */
+async function styleAttrReports(page: Page, context: BrowserContext, guards: Guards, step: () => void): Promise<number> {
+  await page.evaluate(step);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const marker = document.createElement("p");
+        marker.id = "style-marker";
+        document.body.append(marker);
+        const done = (e: SecurityPolicyViolationEvent) => {
+          if (e.target !== marker) return;
+          document.removeEventListener("securitypolicyviolation", done);
+          resolve();
+        };
+        document.addEventListener("securitypolicyviolation", done);
+        marker.setAttribute("style", "color: red");
+      }),
+  );
+  await logSentinel(page, context);
+  // One report is the marker's.
+  return styleAttrLines(guards.takeProblems()) - 1;
+}
+
+async function appPage(page: Page) {
+  await page.goto("/");
+  await expect(page.getByRole("list", { name: "Messages" }).getByRole("button").first()).toBeVisible();
+}
+
+test("a select created by the page is no problem, attached or not", async ({ page, context, guards }) => {
+  await appPage(page);
+  expect(
+    await styleAttrReports(page, context, guards, () => {
+      const attached = document.createElement("select");
+      attached.append(new Option("a"));
+      document.body.append(attached);
+      document.createElement("select").append(new Option("b"));
+    }),
+  ).toBe(0);
+});
+
+test("a style attribute on a select still fails the guards", async ({ page, context, guards }) => {
+  await appPage(page);
+  // The select first, so its own WebKit report is settled.
+  expect(
+    await styleAttrReports(page, context, guards, () => {
+      const select = document.createElement("select");
+      select.id = "styled-select";
+      document.body.append(select);
+    }),
+  ).toBe(0);
+  expect(await styleAttrReports(page, context, guards, () => document.getElementById("styled-select")!.setAttribute("style", "color: red"))).toBe(1);
+});
+
+test("a style attribute on a new element right after a new select still fails the guards", async ({ page, context, guards }) => {
+  await appPage(page);
+  // Both reports target the document in WebKit: only the select's is skipped.
+  expect(
+    await styleAttrReports(page, context, guards, () => {
+      document.createElement("select");
+      document.createElement("div").setAttribute("style", "color: red");
+    }),
+  ).toBe(1);
+});
+
+base("WebKit's own style refusal line and the ResizeObserver loop are matched exactly", () => {
+  const refused = "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.";
+  expect(fromWebKitStyleRefusal(refused)).toBe(true);
+  expect(fromWebKitStyleRefusal(refused.replace("style-src", "script-src"))).toBe(false);
+  expect(fromWebKitStyleRefusal(`${refused} `)).toBe(false);
+  expect(fromWebKitStyleRefusal("Applying inline style violates the following Content Security Policy directive 'style-src 'self''.")).toBe(false);
+  const loop = "ResizeObserver loop completed with undelivered notifications.";
+  expect(isResizeObserverLoop({ message: loop, stack: "" })).toBe(true);
+  expect(isResizeObserverLoop({ message: loop })).toBe(true);
+  expect(isResizeObserverLoop({ message: loop, stack: "Error: x\n    at f (app.js:1:1)" })).toBe(false);
+  expect(isResizeObserverLoop({ message: "ResizeObserver loop limit exceeded" })).toBe(false);
+  expect(isResizeObserverLoop({ message: `${loop} ` })).toBe(false);
+});
+
+// Playwright 1.64.1's split of a WebKit console line into a page error's
+// name and message (splitErrorMessage, which wkPage.ts _onConsoleMessage
+// uses): at the first colon, dropping the character after it.
+function splitLikeWebKitPageError(text: string): { name: string; message: string } {
+  const i = text.indexOf(":");
+  return { name: i !== -1 ? text.slice(0, i) : "", message: i !== -1 && i + 2 <= text.length ? text.substring(i + 2) : text };
+}
+
+base("a page error is reported by its whole line, a WebKit one without a stack too", () => {
+  const url = `${origin}/api/groups`;
+  const line = `Fetch API cannot load ${url} due to access control checks.`;
+  // With a stack: the stack, whose first line is the whole line.
+  const stack = `${line}\n    at unknown (${origin}/assets/api.js:1:1)`;
+  expect(pageErrorText({ ...splitLikeWebKitPageError(line), stack }, true)).toBe(stack);
+  // Without one (WebKit's access-control failure of a fetch): the line
+  // rebuilt, the dropped "/" of "http://" marked, and a line that says so.
+  const [first, note] = pageErrorText({ ...splitLikeWebKitPageError(line), stack: "" }, true).split("\n");
+  expect(first).toBe(line.replace("http:/", `http:${lostCharacter}`));
+  expect(note).toContain("WebKit gave no stack");
+  expect(`page error: ${first}`).toBe(accessDeniedFetchProblem("webkit", url));
+  expect(pageErrorText({ ...splitLikeWebKitPageError("TypeError: null is not an object"), stack: "" }, true).split("\n")[0]).toBe(`TypeError:${lostCharacter}null is not an object`);
+  // No colon, or a colon at the end: the message is the whole line.
+  const loop = "ResizeObserver loop completed with undelivered notifications.";
+  expect(pageErrorText({ ...splitLikeWebKitPageError(loop), stack: "" }, true)).toBe(loop);
+  expect(pageErrorText({ ...splitLikeWebKitPageError("ends in a colon:"), stack: "" }, true)).toBe("ends in a colon:");
+  // Chromium: the name and the message, as Error's own text.
+  expect(pageErrorText({ name: "Error", message: "boom", stack: "" }, false)).toBe("Error: boom");
+  expect(pageErrorText({ name: "Error", message: "boom" }, false)).toBe("Error: boom");
+  expect(pageErrorText({ name: "", message: "thrown" }, false)).toBe("thrown");
+});
+
+// WebKit's refusal of a fetch that a document starts while its frame's
+// navigation is in flight (#552), as Playwright's WebKit reports it: the
+// whole line is the first line of the page error's stack.
+const refusal = `Fetch API cannot load ${origin}/api/groups due to access control checks.`;
+
+base("WebKit's fetch refusal is matched exactly, for an /api/ URL of the page's origin only", () => {
+  expect(isNavigationFetchRefusal(refusal, origin)).toBe(true);
+  expect(isNavigationFetchRefusal(`Fetch API cannot load ${origin}/api/messages?q=a%20b&limit=50 due to access control checks.`, origin)).toBe(true);
+  // Another origin: the page's, or the URL's.
+  expect(isNavigationFetchRefusal(refusal, "http://127.0.0.1:18181")).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace(origin, "http://127.0.0.1:18181"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace(origin, `${origin}0`), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace(origin, "https://tracker.example"), origin)).toBe(false);
+  // Another path.
+  expect(isNavigationFetchRefusal(refusal.replace("/api/groups", "/assets/api.js"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace("/api/", "/apix/"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace("/api/groups", "/e2e/api/groups"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace("/api/groups", "/api/a b"), origin)).toBe(false);
+  // Not exactly the line.
+  for (const line of [`${refusal} `, ` ${refusal}`, `Error: ${refusal}`, `Unhandled Promise Rejection: ${refusal}`, `TypeError: Load failed`, refusal.replace("access control checks", "an access control check")])
+    expect(isNavigationFetchRefusal(line, origin)).toBe(false);
+  expect(isNavigationFetchRefusal(`Origin ${origin} is not allowed by Access-Control-Allow-Origin. Status code: 200`, origin)).toBe(false);
+  // Playwright splits the line at the colon of "http:": neither half is it.
+  expect(isNavigationFetchRefusal(`/localhost:18181/api/groups due to access control checks.`, origin)).toBe(false);
+  expect(isNavigationFetchRefusal("Fetch API cannot load http", origin)).toBe(false);
+  // No stack, or an empty one.
+  expect(isNavigationFetchRefusal(undefined, origin)).toBe(false);
+  expect(isNavigationFetchRefusal("", origin)).toBe(false);
+});
+
+/** A NavigationRefusals and what it reported. */
+function refusals() {
+  const reported: string[] = [];
+  return { n: new NavigationRefusals((p) => reported.push(p)), reported };
+}
+
+base("a refusal during a navigation is accepted once the navigation commits a new document", () => {
+  const { n, reported } = refusals();
+  const request = {};
+  n.navigationRequest(request);
+  expect(n.hold("refused 1")).toBe(true);
+  expect(n.hold("refused 2")).toBe(true);
+  n.frameNavigated();
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual([]);
+  // A redirect's next request keeps the navigation in flight; the first request's end is not the navigation's.
+  const first = {};
+  const next = {};
+  n.navigationRequest(first);
+  n.navigationRequest(next);
+  expect(n.hold("refused 3")).toBe(true);
+  n.requestFailed(first);
+  n.frameNavigated();
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual([]);
+});
+
+base("a refusal is reported when its navigation fails or never commits a new document", () => {
+  // The navigation request fails; another request's failure does not count.
+  let { n, reported } = refusals();
+  const request = {};
+  n.navigationRequest(request);
+  n.hold("refused");
+  n.requestFailed({});
+  expect(reported).toEqual([]);
+  n.requestFailed(request);
+  expect(reported).toEqual(["refused"]);
+  n.frameNavigated();
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual(["refused"]);
+  // The test ends before the commit.
+  ({ n, reported } = refusals());
+  n.navigationRequest({});
+  n.hold("refused");
+  n.end();
+  expect(reported).toEqual(["refused"]);
+  // A framenavigated without a new document after it: a same-document navigation of the old one.
+  ({ n, reported } = refusals());
+  n.navigationRequest({});
+  n.hold("refused");
+  n.frameNavigated();
+  n.end();
+  expect(reported).toEqual(["refused"]);
+  // A domcontentloaded before the commit is not the new document's.
+  ({ n, reported } = refusals());
+  n.navigationRequest({});
+  n.hold("refused");
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual(["refused"]);
+});
+
+base("nothing is held outside a navigation in flight", () => {
+  const { n, reported } = refusals();
+  // Before any navigation.
+  expect(n.hold("x")).toBe(false);
+  // Same-document navigations only: framenavigated without a request.
+  n.frameNavigated();
+  expect(n.hold("x")).toBe(false);
+  n.domContentLoaded();
+  expect(n.hold("x")).toBe(false);
+  // After the commit, before and after the new document's domcontentloaded.
+  n.navigationRequest({});
+  n.frameNavigated();
+  expect(n.hold("x")).toBe(false);
+  n.domContentLoaded();
+  expect(n.hold("x")).toBe(false);
+  // After a failed navigation.
+  const request = {};
+  n.navigationRequest(request);
+  n.requestFailed(request);
+  expect(n.hold("x")).toBe(false);
+  n.end();
+  expect(reported).toEqual([]);
+});
+
+// The browser tests serve a page of the demo origin (the guards abort any
+// other host) whose document requests the test can hold, so a reload stays
+// in flight until the test answers it. Before the page unloads, it runs
+// window.duringNavigation in a task of its own: WebKit fires beforeunload
+// in the same run that makes the navigation provisional and sends its
+// request, so the task runs while the navigation is in flight. (Playwright's
+// evaluate does not reach the old document of a held navigation in
+// Chromium.)
+const navigationURL = `${origin}/e2e/navigation`;
+const navigationHTML = `<!doctype html><title>navigation</title><script>
+addEventListener("beforeunload", () => {
+  const task = window.duringNavigation;
+  if (!task) return;
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => task();
+  channel.port2.postMessage(null);
+});
+</script>`;
+type Navigating = { duringNavigation?: () => void };
+
+/** Opens the navigation page; holdNext() holds the next request for it until the test fulfills it. */
+async function navigationPage(page: Page) {
+  let hold: ((route: Route) => void) | undefined;
+  await page.route(navigationURL, (route) => {
+    if (!hold) return route.fulfill({ contentType: "text/html", body: navigationHTML });
+    hold(route);
+    hold = undefined;
+  });
+  await page.goto(navigationURL);
+  return {
+    holdNext: () => new Promise<Route>((resolve) => (hold = resolve)),
+    fulfill: (route: Route) => route.fulfill({ contentType: "text/html", body: navigationHTML }),
+  };
+}
+
+// The regression test of #552: in WebKit, the guards accept the refusal of
+// a fetch that the old document starts while its reload is in flight. It
+// also checks the order of events the exception depends on. Without the
+// exception, the guards' teardown fails it on the page error.
+test("a fetch that WebKit refuses while a reload is in flight is no problem", async ({ page, context, browserName }) => {
+  const doc = await navigationPage(page);
+  await page.evaluate(() => {
+    (window as Navigating).duringNavigation = () => void fetch("/api/groups").catch(() => undefined);
+  });
+  const order: string[] = [];
+  page.on("request", (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) order.push("navigation request");
+  });
+  page.on("framenavigated", (f) => {
+    if (f === page.mainFrame()) order.push("framenavigated");
+  });
+  page.on("domcontentloaded", () => order.push("domcontentloaded"));
+  context.on("weberror", () => order.push("page error"));
+  const refused = refusesFetchDuringNavigation(browserName);
+  // Registered after the fixture's own listeners, so the fixture has seen
+  // the event when this resolves.
+  const fetched = refused ? context.waitForEvent("weberror").then((e) => e.error().stack?.split("\n")[0]) : page.waitForRequest(`${origin}/api/groups`).then((r) => r.url());
+  const held = doc.holdNext();
+  const reloaded = page.reload();
+  const route = await held;
+  expect(await fetched).toBe(refused ? refusal : `${origin}/api/groups`);
+  await doc.fulfill(route);
+  await reloaded;
+  expect(order).toEqual(refused ? ["navigation request", "page error", "framenavigated", "domcontentloaded"] : ["navigation request", "framenavigated", "domcontentloaded"]);
+});
+
+/**
+ * Fetches /api/groups from the page, answered with an access-control
+ * failure, then logs the sentinel. The guards then hold exactly the
+ * failure's problem and the sentinel's console error; each later
+ * logSentinel adds one more.
+ */
+async function failFetch(page: Page, context: BrowserContext) {
+  await page.route(`${origin}/api/groups`, (route) => route.abort("accessdenied"));
+  expect(await page.evaluate(() => fetch("/api/groups").then(() => "answered", () => "failed"))).toBe("failed");
+  await page.unroute(`${origin}/api/groups`);
+  await logSentinel(page, context);
+}
+
+test("an access-control failure of a fetch with no navigation still fails the guards", async ({ page, context, guards, browserName }) => {
+  await navigationPage(page);
+  await failFetch(page, context);
+  expect(takeFirstLines(guards)).toEqual([accessDeniedFetchProblem(browserName, `${origin}/api/groups`), sentinelLine]);
+});
+
+test("an access-control failure of a fetch, then a reload, still fails the guards", async ({ page, context, guards, browserName }) => {
+  await navigationPage(page);
+  await failFetch(page, context);
+  await page.reload();
+  await logSentinel(page, context);
+  expect(takeFirstLines(guards)).toEqual([accessDeniedFetchProblem(browserName, `${origin}/api/groups`), sentinelLine, sentinelLine]);
+});
+
+test("an access-control failure of a fetch, then a pushState navigation, still fails the guards", async ({ page, context, guards, browserName }) => {
+  await navigationPage(page);
+  await failFetch(page, context);
+  const moved = page.waitForEvent("framenavigated");
+  await page.evaluate(() => history.pushState(null, "", "/e2e/navigation?moved"));
+  await moved;
+  await logSentinel(page, context);
+  expect(takeFirstLines(guards)).toEqual([accessDeniedFetchProblem(browserName, `${origin}/api/groups`), sentinelLine, sentinelLine]);
+});
+
+// The page's own code throws the refusal's exact line, with a stack, from a
+// task while a reload is in flight. Chromium: the guards' exception is
+// WebKit's only, so the page error fails the test. WebKit: the guards cannot
+// tell that page error from WebKit's own refusal and accept it (engine
+// fact), so the init script reports the uncaught exception as a console
+// error, which fails the test in both engines. The fetch is the trigger:
+// WebKit refuses it (and accepts that refusal); in Chromium the test answers
+// it once the reload is held.
+test("WebKit's refusal text thrown by the page while a reload is in flight still fails the guards", async ({ page, context, guards, browserName }) => {
+  const doc = await navigationPage(page);
+  await page.evaluate((text) => {
+    const forge = () => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        throw `${text}\n    at forged (${location.origin}/forged.js:1:1)`;
+      };
+      channel.port2.postMessage(null);
+    };
+    (window as Navigating).duringNavigation = () => void fetch("/api/groups").then(forge, forge);
+  }, refusal);
+  const refused = refusesFetchDuringNavigation(browserName);
+  let answer: Promise<Route> | undefined;
+  if (!refused) {
+    let found!: (route: Route) => void;
+    answer = new Promise<Route>((resolve) => (found = resolve));
+    await page.route(`${origin}/api/groups`, (route) => found(route));
+  }
+  const thrown = context.waitForEvent("weberror", { predicate: (e) => e.error().stack?.split("\n")[0] === refusal && (e.error().stack ?? "").includes(" at forged ") });
+  const held = doc.holdNext();
+  const reloaded = page.reload();
+  const route = await held;
+  if (answer) await (await answer).fulfill({ json: [] });
+  await thrown;
+  await doc.fulfill(route);
+  await reloaded;
+  await logSentinel(page, context);
+  const problems = takeFirstLines(guards);
+  expect(problems).toContainEqual(expect.stringMatching(new RegExp(`^console error: ${escapeRegExp(forgedRefusal)}: `)));
+  expect(problems.includes(`page error: ${refusal}`)).toBe(!refused);
 });
 
 // guards.takeProblems() empties the guard, so only the guards' own tests here
@@ -225,7 +720,7 @@ test("an expected console error logged more often than expected is a problem fro
   guards.expectConsoleError(new RegExp(`^${declared}`));
   await logError(page, context, `${declared} 1`);
   await logError(page, context, `${declared} 2`);
-  expect(guards.takeProblems().map((p) => p.split("\n")[0])).toEqual([`console error: ${declared} 2 ()`]);
+  expect(takeFirstLines(guards)).toEqual([evaluatedLine(`${declared} 2`)]);
 });
 
 // The teardown's problem is the failure this test expects; the body is only

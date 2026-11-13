@@ -16,6 +16,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/mailbox"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -46,7 +47,8 @@ interrupted import can simply be run again.
 
 With --journal, NAME is an existing smtp account, and the messages go into
 its JOURNAL folder like a fill's: without an envelope, and without the
-messages whose Message-ID the account received over SMTP. All source folders
+messages the account received over SMTP (the same Message-ID, Date, From
+addresses and Subject). All source folders
 are merged into JOURNAL, so --folder is not allowed. --label names the origin
 in the message view (default: the --from path). Nothing is created.
 
@@ -147,10 +149,14 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 	}
 	log.Info("import started", "owner", ownerName(names, acc.OwnerID), "format", o.format, "source", o.from, "folders", len(folders))
 	im := &archive.Importer{
-		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit,
+		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit, Storage: newStorageGate(a, log),
 		Progress: func(f archive.ImportFolderResult) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "%s: read %d, added %d\n", f.Folder, f.Read, f.Added)
 		},
+	}
+	// Refused before anything is recorded while the limit is reached.
+	if err := im.Storage.Admit(acc.GroupID); err != nil {
+		return pausedError(ctx, a, err, -1, "run it")
 	}
 	e := cliAccountTarget(cliTargeted("data.import"), acc)
 	e.Detail("format", o.format)
@@ -160,11 +166,20 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 		return err
 	}
 	res, err := im.Import(ctx, acc, folders)
+	finalStorageRead(ctx, im.Storage)
 	if errors.Is(err, archive.ErrSyncRunning) {
 		return fmt.Errorf("an import into %q is already running", acc.Name)
 	}
 	if res != nil {
 		printImportResult(cmd.OutOrStdout(), res, false)
+		requestUsageRefresh(ctx, a, log)
+	}
+	if errors.Is(err, quota.ErrStorageFull) {
+		stored := -1
+		if res != nil {
+			stored = res.Total().Added
+		}
+		return pausedError(ctx, a, err, stored, "run it")
 	}
 	if err != nil {
 		return err
@@ -230,6 +245,11 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	e.Detail("folders", len(folders))
 	e.Detail("into", store.SMTPFolder)
 	e.Detail("label", label)
+	storage := newStorageGate(a, log)
+	// Refused before the import is recorded while the limit is reached.
+	if err := storage.Admit(acc.GroupID); err != nil {
+		return pausedError(ctx, a, err, -1, "run it")
+	}
 	imp := &store.SMTPImport{AccountID: acc.ID, Label: label, Format: o.format, Source: o.from}
 	switch err := a.store.CreateSMTPImport(withCLIAudit(cmd, e), imp); {
 	case errors.Is(err, store.ErrNotFound):
@@ -240,12 +260,13 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	log.Info("import started", "owner", ownerName(names, acc.OwnerID), "format", o.format, "source", o.from,
 		"folders", len(folders), "into", store.SMTPFolder, "label", label, "import", imp.ID)
 	im := &archive.Importer{
-		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit,
+		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit, Storage: storage,
 		Progress: func(f archive.ImportFolderResult) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "%s: read %d, added %d, journaled %d\n", f.Folder, f.Read, f.Added, f.Journaled)
 		},
 	}
 	res, err := im.ImportJournal(ctx, acc, imp, folders)
+	finalStorageRead(ctx, im.Storage)
 	switch {
 	case errors.Is(err, archive.ErrSyncRunning):
 		return fmt.Errorf("the account %q is being filled, imported into or removed; try again later", acc.Name)
@@ -254,6 +275,14 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	}
 	if res != nil {
 		printImportResult(cmd.OutOrStdout(), res, true)
+		requestUsageRefresh(ctx, a, log)
+	}
+	if errors.Is(err, quota.ErrStorageFull) {
+		stored := -1
+		if res != nil {
+			stored = res.Total().Added
+		}
+		return pausedError(ctx, a, err, stored, "run it")
 	}
 	if err != nil {
 		return err
@@ -416,10 +445,10 @@ func printImportResult(out io.Writer, res *archive.ImportResult, journal bool) {
 	_ = w.Flush()
 	t := res.Total()
 	if journal {
-		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the archive), %d already there, %d already journaled, %d skipped\n",
+		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the account), %d already there, %d already journaled, %d skipped\n",
 			res.Status, t.Read, t.Added, t.New, t.Present, t.Journaled, t.Skipped)
 	} else {
-		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the archive), %d already there, %d skipped\n",
+		fmt.Fprintf(out, "\n%s: read %d, added %d (%d new to the account), %d already there, %d skipped\n",
 			res.Status, t.Read, t.Added, t.New, t.Present, t.Skipped)
 	}
 	if t.Deleted > 0 {
@@ -450,4 +479,13 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
 	return n * factor, nil
+}
+
+// requestUsageRefresh requests a usage snapshot at the end of an import
+// (#397, part 1): the groups' figures were kept as an upper bound while it
+// ran. A failure only warns: the hourly snapshot comes anyway.
+func requestUsageRefresh(ctx context.Context, a *app, log *slog.Logger) {
+	if err := a.store.RequestUsageRefresh(context.WithoutCancel(ctx)); err != nil {
+		log.Warn("cannot request a usage snapshot", "err", err)
+	}
 }

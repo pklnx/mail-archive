@@ -4,6 +4,7 @@
 // view loads by direct URL and on reload.
 import type { Page } from "@playwright/test";
 import { isChunkOf, lazyChunks } from "../scripts/lazyChunks.mjs";
+import { passkeysSupported } from "./engine";
 import { expect, test } from "./fixtures";
 
 const attr = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, "i"))?.[1];
@@ -65,6 +66,7 @@ const views = [
   // The owner's grants (#393).
   { view: "auditors", heading: "Auditor access" },
   { view: "retention", heading: "Retention" },
+  { view: "storage", heading: "Storage" },
   { view: "retention&tab=holds", heading: "Retention" },
   // The demo's one rule.
   { view: "retention&id=1", heading: "/ work /" },
@@ -135,13 +137,18 @@ const loadingStates = [
     url: "/?view=profile",
     tab: "Sign-in & security",
     held: /^\/api\/profile\/(2fa|passkeys)$/,
-    loaded: (p: Page) => p.getByRole("main").getByRole("tabpanel", { name: "Sign-in & security" }).getByRole("button", { name: "Add passkey" }),
+    // Without passkeys in the browser (Playwright's WebKit, engine.ts), the
+    // loaded panel says so instead of offering Add passkey.
+    loaded: (p: Page, passkeys: boolean) => {
+      const panel = p.getByRole("main").getByRole("tabpanel", { name: "Sign-in & security" });
+      return passkeys ? panel.getByRole("button", { name: "Add passkey" }) : panel.getByText("This browser does not support passkeys.");
+    },
   },
   { name: "the start-up gate", url: "/", held: /^\/api\/session$/, noSkeleton: true, loaded: (p: Page) => p.getByRole("list", { name: "Messages" }).getByRole("button").first() },
 ];
 
 for (const { name, url, tab, held, loaded, noSkeleton } of loadingStates) {
-  test(`${name}: one Loading… at a time while it loads, its skeletons hidden from screen readers`, async ({ page }) => {
+  test(`${name}: one Loading… at a time while it loads, its skeletons hidden from screen readers`, async ({ page, browserName }) => {
     await page.addInitScript((text) => {
       const w = window as unknown as { loadingMost: number; loadingAt: string[] };
       w.loadingMost = 0;
@@ -172,6 +179,7 @@ for (const { name, url, tab, held, loaded, noSkeleton } of loadingStates) {
     );
     const requested = page.waitForRequest((r) => r.method() === "GET" && held.test(new URL(r.url()).pathname));
     await page.goto(url);
+    const passkeys = await passkeysSupported(page, browserName);
     if (tab) await page.getByRole("main").getByRole("tab", { name: tab }).click();
     await requested;
 
@@ -189,7 +197,7 @@ for (const { name, url, tab, held, loaded, noSkeleton } of loadingStates) {
     expect(during.exposed).toEqual([]);
 
     release();
-    await expect(loaded(page)).toBeVisible();
+    await expect(loaded(page, passkeys)).toBeVisible();
     await expect(loading).toHaveCount(0);
     expect((await skeletons()).count).toBe(0);
     // At least one status was seen (the hold made it observable), and never two at once.

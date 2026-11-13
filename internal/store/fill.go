@@ -119,9 +119,9 @@ func (f *Fill) IntoJournal() bool { return f.FolderPrefix == "" || f.Recurring()
 type FillCounts struct {
 	Scanned     int // headers read
 	Imported    int // locations added
-	New         int // messages new to the archive
+	New         int // messages new to the account (SaveResult.Added)
 	AfterCutoff int // left to journaling
-	Journaled   int // same Message-ID received over SMTP
+	Journaled   int // the same message received over SMTP (Message-ID, Date, From, Subject)
 	Present     int // already in the target folder
 	Deleted     int // deleted by retention, not stored again
 	Waiting     int // recurring fills: younger than two hours, for the next run
@@ -201,7 +201,8 @@ func (s *Store) CreateFill(ctx context.Context, f *Fill, seal func(id int64) ([]
 		since = &now
 	}
 	return s.inTx(ctx, func(q *db.Queries) error {
-		a, err := q.GetAccount(ctx, f.AccountID)
+		r, err := q.GetAccount(ctx, f.AccountID)
+		a := r.Account
 		if isNoRows(err) {
 			return ErrNotFound
 		}
@@ -462,7 +463,7 @@ func (s *Store) SaveFillBatch(ctx context.Context, ff *FillFolder, metas []Messa
 			ff.Counts.Deleted += res.Skipped
 			ff.Counts.Present += present
 			ff.Counts.Imported -= res.Skipped + present
-			ff.Counts.New += res.New
+			ff.Counts.New += res.Added
 			return updateFillFolder(ctx, q, ff)
 		})
 	if err != nil {
@@ -487,25 +488,46 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 	var (
 		res     SaveResult
 		present int
+		wrote   storageWrite
 	)
 	err := s.inWriteTx(ctx, false, func(q *db.Queries) error {
-		res, present = SaveResult{}, 0
+		res, present, wrote = SaveResult{}, 0, storageWrite{}
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
+		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
+		if err != nil {
+			return err
+		}
+		if err := checkLookupGroups(group, metas); err != nil {
+			return err
+		}
+		wrote.group = group.Group
 		folder, err := q.LockFolderByID(ctx, folderID)
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
 		}
-		skip, err := skipDeleted(ctx, q, folder.ID, metas, locs)
+		skip, err := skipDeleted(ctx, q, group, folder.ID, metas, locs)
+		if err != nil {
+			return err
+		}
+		held, err := accountHeld(ctx, q, folder.ID, metas)
+		if err != nil {
+			return err
+		}
+		att, err := newAttachmentText(ctx, q, group, keptHashes(metas, skip))
 		if err != nil {
 			return err
 		}
 		type pending struct {
-			meta *MessageMeta
-			loc  Location
+			meta   *MessageMeta
+			loc    Location
+			textOK bool
 		}
-		var add []pending
+		var (
+			add   []pending
+			added []*MessageMeta
+		)
 		seen := map[string]bool{}
 		for i := range metas {
 			m := &metas[i]
@@ -529,11 +551,12 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 			if err != nil {
 				return fmt.Errorf("insert message %s: %w", m.SHA256, err)
 			}
-			res.New += int(n)
-			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
-				return err
+			if !held[m.SHA256] {
+				held[m.SHA256] = true
+				res.Added++
+				added = append(added, m)
 			}
-			add = append(add, pending{m, locs[i]})
+			add = append(add, pending{m, locs[i], att.flag(m, n)})
 		}
 		if len(add) > 0 {
 			last, err := q.AllocateUIDs(ctx, db.AllocateUIDsParams{ID: folder.ID, N: int64(len(add))})
@@ -555,12 +578,18 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 				}
 				err := q.InsertFilledLocation(ctx, db.InsertFilledLocationParams{
 					MessageSha256: p.meta.SHA256, FolderID: folder.ID, Uidvalidity: folder.Uidvalidity, Uid: first + int64(i),
-					Flags: flags, InternalDate: internal, FillID: fillID, ImportID: importID,
+					Flags: flags, InternalDate: internal, FillID: fillID, ImportID: importID, AttachmentTextOk: p.textOK,
 				})
 				if err != nil {
 					return fmt.Errorf("insert location: %w", err)
 				}
+				if err := att.inserted(ctx, q, p.meta.SHA256, p.textOK); err != nil {
+					return err
+				}
 			}
+		}
+		if wrote.bytes, err = recordGroupUsage(ctx, q, group, added); err != nil {
+			return err
 		}
 		if done != nil {
 			return done(q, res, present)
@@ -570,6 +599,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 	if err != nil {
 		return SaveResult{}, 0, err
 	}
+	s.noteWrite(wrote)
 	return res, present, nil
 }
 
@@ -599,6 +629,17 @@ func sortBatch(metas []MessageMeta, locs []Location) ([]MessageMeta, []Location)
 // transaction. A fill that was cancelled meanwhile stays cancelled:
 // ErrFillNotRunning.
 func (s *Store) FinishFill(ctx context.Context, id int64, status, errText string) error {
+	return s.finishFill(ctx, id, status, errText, false)
+}
+
+// FinishFillUnhealthy is FinishFill, but a recurring fill's run counts as
+// a failure in its health whatever the status: a partial run that leaves
+// a folder stuck (a message over the size cap) must alert.
+func (s *Store) FinishFillUnhealthy(ctx context.Context, id int64, status, errText string) error {
+	return s.finishFill(ctx, id, status, errText, true)
+}
+
+func (s *Store) finishFill(ctx context.Context, id int64, status, errText string, unhealthy bool) error {
 	var e *string
 	if errText != "" {
 		e = &errText
@@ -611,11 +652,11 @@ func (s *Store) FinishFill(ctx context.Context, id int64, status, errText string
 		if err != nil || !keepRunning {
 			return err
 		}
-		switch status {
-		case FillOK, FillPartial:
-			return q.RecordFillSuccess(ctx, id)
-		case FillFailed:
+		switch {
+		case status == FillFailed, unhealthy && status != FillCancelled:
 			return q.RecordFillFailure(ctx, id)
+		case status == FillOK, status == FillPartial:
+			return q.RecordFillSuccess(ctx, id)
 		}
 		return nil
 	})
@@ -639,6 +680,12 @@ func (s *Store) StartFillRun(ctx context.Context, id int64, now time.Time) error
 		}
 		return q.ResetFillRun(ctx, id)
 	})
+}
+
+// isForeignKeyViolation reports a foreign key that refused a write.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 func isUniqueViolation(err error) bool {
@@ -699,7 +746,8 @@ func (s *Store) SetFillRecurring(ctx context.Context, id int64, interval *time.D
 		if err != nil {
 			return err
 		}
-		a, err := q.GetAccount(ctx, f.AccountID)
+		r, err := q.GetAccount(ctx, f.AccountID)
+		a := r.Account
 		if err != nil {
 			return err
 		}
@@ -801,26 +849,42 @@ func (s *Store) FillStatus(ctx context.Context, id int64) (string, error) {
 	return st, err
 }
 
-// JournaledMessageIDs returns which of ids the account received over SMTP
-// (a location with an envelope). Empty IDs never match: messages without a
-// Message-ID store NULL.
-func (s *Store) JournaledMessageIDs(ctx context.Context, accountID int64, ids []string) (map[string]bool, error) {
+// JournaledCandidate is a message the account received over SMTP, with
+// the stored values the journaled check of a fill or a journal import
+// compares (archive.journalKey). A NULL Subject or From is "".
+type JournaledCandidate struct {
+	MessageID string
+	SentAt    *time.Time
+	From      string
+	Subject   string
+}
+
+// JournaledCandidates returns messages the account received over SMTP (a
+// location with an envelope) whose Message-ID is among ids and whose Date,
+// truncated to the second, is among dates; at most maxRows of them, so a
+// flood of copies cannot make a batch unbounded. The caller compares the
+// values; it passes dates truncated to the second. Empty IDs never match:
+// messages without a Message-ID store NULL.
+func (s *Store) JournaledCandidates(ctx context.Context, accountID int64, ids []string, dates []time.Time,
+	maxRows int) ([]JournaledCandidate, error) {
 	var want []string
 	for _, id := range ids {
 		if id != "" {
 			want = append(want, id)
 		}
 	}
-	out := map[string]bool{}
-	if len(want) == 0 {
-		return out, nil
+	if len(want) == 0 || len(dates) == 0 || maxRows <= 0 {
+		return nil, nil
 	}
-	got, err := s.q.JournaledMessageIDs(ctx, db.JournaledMessageIDsParams{AccountID: accountID, Ids: want})
+	rows, err := s.q.JournaledMatchCandidates(ctx, db.JournaledMatchCandidatesParams{
+		AccountID: accountID, Ids: want, Dates: dates, MaxRows: int32(min(maxRows, math.MaxInt32)),
+	})
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range got {
-		out[id] = true
+	out := make([]JournaledCandidate, len(rows))
+	for i, r := range rows {
+		out[i] = JournaledCandidate{MessageID: r.MessageID, SentAt: r.SentAt, From: deref(r.FromAddr), Subject: deref(r.Subject)}
 	}
 	return out, nil
 }
@@ -946,11 +1010,22 @@ func (s *Store) convertLegacyBatch(ctx context.Context, fillID, journal int64, l
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
 		}
-		got, err = q.ConvertLegacyFillBatch(ctx, db.ConvertLegacyFillBatchParams{
+		rows, err := q.ConvertLegacyFillBatch(ctx, db.ConvertLegacyFillBatchParams{
 			JournalID: journal, Uidvalidity: folder.Uidvalidity, LastUid: folder.LastUid, FillID: fillID,
 			Folders: legacy, After: after, MaxRows: convertBatch,
 		})
-		if err != nil || len(got) == 0 {
+		if err != nil || len(rows) == 0 {
+			return err
+		}
+		got = make([]string, len(rows))
+		var queue []string
+		for i, r := range rows {
+			got[i] = r.MessageSha256
+			if !r.AttachmentTextOk {
+				queue = append(queue, r.MessageSha256)
+			}
+		}
+		if err := queueCopies(ctx, q, queue); err != nil {
 			return err
 		}
 		last, err := q.AllocateUIDs(ctx, db.AllocateUIDsParams{ID: journal, N: int64(len(got))})

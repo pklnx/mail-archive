@@ -93,17 +93,25 @@ func TestImportCommand(t *testing.T) {
 	if accs, _ := st.ListAccounts(ctx); len(accs) != 0 {
 		t.Fatalf("dry run created %+v", accs)
 	}
+	if n := usageRequestSeq(t, connectDB(t, url)); n != 0 {
+		t.Errorf("dry run requested a usage snapshot (seq %d)", n)
+	}
 
+	// Each import that stored requests a usage snapshot at its end; a
+	// dry run does not.
+	conn := connectDB(t, url)
+	requests := usageRequestSeq(t, conn)
 	out, err = run("old", "--from", tbFixture, "--format", "mbox")
-	if err != nil || !strings.Contains(out, "ok: read 4, added 4 (4 new to the archive)") {
+	if err != nil || !strings.Contains(out, "ok: read 4, added 4 (4 new to the account)") {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "import", requests)
 	acc, err := st.GetOwnedAccount(ctx, anna.ID, "old")
 	if err != nil || acc.Kind != store.KindImport {
 		t.Fatalf("account %+v %v", acc, err)
 	}
 	out, err = run("old", "--from", tbFixture, "--format", "mbox")
-	if err != nil || !strings.Contains(out, "added 0 (0 new to the archive), 4 already there") {
+	if err != nil || !strings.Contains(out, "added 0 (0 new to the account), 4 already there") {
 		t.Fatalf("again: %v\n%s", err, out)
 	}
 	if _, err := run("old", "--from", tbFixture, "--format", "mbox", "--max-message-size", "200"); err == nil {
@@ -209,7 +217,7 @@ func TestImportEMLCommand(t *testing.T) {
 		t.Fatalf("dry run: %v\n%s", err, out)
 	}
 	out, err = run("piler", "--from", dir, "--format", "eml", "--folder", "piler")
-	if code := exitCodeOf(err); code != 1 || !strings.Contains(out, "partial: read 3, added 2 (2 new to the archive), 0 already there, 1 skipped") {
+	if code := exitCodeOf(err); code != 1 || !strings.Contains(out, "partial: read 3, added 2 (2 new to the account), 0 already there, 1 skipped") {
 		t.Fatalf("import: exit %d %v\n%s", code, err, out)
 	}
 }
@@ -237,16 +245,18 @@ func TestImportJournalCommand(t *testing.T) {
 	if err := st.CreateAccount(ctx, &store.Account{Name: "server", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", OwnerID: &anna.ID}); err != nil {
 		t.Fatal(err)
 	}
-	// tb2 of the fixture was journaled, with other bytes.
+	// tb2 of the fixture was journaled, with other bytes (the same
+	// Message-ID, From, Subject and Date).
 	blobs, err := openBlobs(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, created, err := blobs.Put(strings.NewReader("Received: by mx\r\nMessage-ID: <tb2@example.com>\r\nSubject: Second message\r\n\r\nx\r\n"))
+	blob, created, err := blobs.Put(strings.NewReader("Received: by mx\r\nMessage-ID: <tb2@example.com>\r\nFrom: Ben <ben@example.com>\r\n" +
+		"Subject: Second message\r\nDate: Tue, 6 Jan 2026 09:59:00 +0100\r\n\r\nx\r\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
+	meta, err := archive.BuildMeta(ctx, st, blobs, blob, created, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,11 +320,13 @@ func TestImportJournalCommand(t *testing.T) {
 		t.Fatalf("dry run recorded %d imports, %v", imports, err)
 	}
 
+	requests := usageRequestSeq(t, conn)
 	out, err = run("alice@example.com", "--journal", "--from", tbFixture, "--format", "mbox", "--label", "thunderbird")
 	if err != nil || !regexpMatch(`FOLDER\s+READ\s+ADDED\s+NEW\s+PRESENT\s+JOURNALED\s+SKIPPED`, out) ||
-		!strings.Contains(out, "ok: read 4, added 3 (3 new to the archive), 0 already there, 1 already journaled, 0 skipped") {
+		!strings.Contains(out, "ok: read 4, added 3 (3 new to the account), 0 already there, 1 already journaled, 0 skipped") {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
+	requireUsageRequested(t, conn, "journal import", requests)
 	if n := accounts(); n != 3 {
 		t.Fatalf("%d accounts after the import", n)
 	}
@@ -339,7 +351,7 @@ func TestImportJournalCommand(t *testing.T) {
 
 	// Again, with the default label: nothing added.
 	out, err = run("alice@example.com", "--journal", "--from", tbFixture, "--format", "mbox")
-	if err != nil || !strings.Contains(out, "added 0 (0 new to the archive), 3 already there, 1 already journaled") {
+	if err != nil || !strings.Contains(out, "added 0 (0 new to the account), 3 already there, 1 already journaled") {
 		t.Fatalf("again: %v\n%s", err, out)
 	}
 	if err := conn.QueryRow(ctx, "SELECT label FROM smtp_imports ORDER BY id DESC LIMIT 1").Scan(&label); err != nil || label != tbFixture {

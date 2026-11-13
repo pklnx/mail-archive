@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { lockedUser, timeStep, totp, twoFactorUser } from "./demo";
 import type { Page } from "@playwright/test";
+import { passkeysSupported } from "./engine";
 import { expect, test } from "./fixtures";
 
 // No session: these tests use the login page.
@@ -16,12 +17,21 @@ const passwordField = (page: Page) => page.getByLabel("Password", { exact: true 
 // (for its character counter), so the one alert with text is the error.
 const loginError = (page: Page) => page.getByRole("alert").filter({ hasText: /\S/ });
 
-// The demo's public URL is the test origin, so the login page offers passkeys.
+// The demo's public URL is the test origin, so the login page offers passkeys
+// where the browser has them.
 const passkeyButton = (page: Page) => page.getByRole("button", { name: "Sign in with a passkey" });
 
-test("login with password and authentication code", async ({ page }) => {
+/** The passkey button shows where the browser has passkeys (engine.ts), and only there. Call it once the login form shows. */
+async function expectPasskeyButton(page: Page, passkeys: boolean) {
+  if (passkeys) await expect(passkeyButton(page)).toBeVisible();
+  else await expect(passkeyButton(page)).toHaveCount(0);
+}
+
+test("login with password and authentication code", async ({ page, browserName }) => {
   await page.goto("/");
-  await expect(passkeyButton(page)).toBeVisible();
+  await expect(page.getByLabel("User name")).toBeVisible();
+  const passkeys = await passkeysSupported(page, browserName);
+  await expectPasskeyButton(page, passkeys);
   // Carbon's type scale applies: heading-04 for the app name (28px), not
   // body text. Its tokens are scoped inside Carbon's CSS, so a class that
   // relies on them silently falls back to 16px with line-height 1.
@@ -52,7 +62,7 @@ test("login with password and authentication code", async ({ page }) => {
   await page.getByRole("banner").getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page.getByLabel("User name")).toBeVisible();
   // After Log out the passkey option is back without a reload (#380).
-  await expect(passkeyButton(page)).toBeVisible();
+  await expectPasskeyButton(page, passkeys);
 });
 
 test("login errors: wrong password and locked user", async ({ page, guards }) => {

@@ -86,11 +86,13 @@ async function api(page: Page, method: string, url: string, data?: unknown): Pro
 
 // The entries the hold and run views make, and their cleanup removes again:
 // a hold whose filter matches nothing, and a rule with a run proposed for it.
+// The hold is on the logged-in admin: the web UI takes a search filter only
+// over the admin's own mail (#538).
 let holdId = 0;
 async function addHold(page: Page): Promise<string> {
   const name = unique("e2e-primary hold");
   holdId = ((await api(page, "POST", "/api/legal-holds", {
-    name, reason: "primary buttons", user: "", accountId: null, filter: { from: "nobody@primary.example" }, since: null, until: null, all: false,
+    name, reason: "primary buttons", user: "demo", accountId: null, filter: { from: "nobody@primary.example" }, since: null, until: null, all: false,
   })) as { id: number }).id;
   return name;
 }
@@ -200,6 +202,28 @@ const views: View[] = [
       const account = (await row.getByRole("rowheader").getByRole("link").textContent())?.trim() ?? "";
       expect(account).not.toBe("");
       return mainPage(page, `/?view=accounts&import=${encodeURIComponent(account)}`, "Import existing mail from IMAP");
+    },
+  },
+
+  {
+    // Count again is tertiary, Edit quota ghost (#397, part 4).
+    name: "Storage",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=storage", "Storage");
+      await expect(main.getByRole("table", { name: "Customer groups" })).toBeVisible();
+      return main;
+    },
+  },
+  {
+    name: "Storage, Edit quota dialog",
+    exactly: "Save quota",
+    open: async (page) => {
+      const main = await mainPage(page, "/?view=storage", "Storage");
+      await main.getByRole("button", { name: "Actions for group Lindqvist Design" }).click();
+      await page.getByRole("menuitem", { name: "Edit quota" }).click();
+      const dialog = page.getByRole("dialog", { name: "Storage quota of “Lindqvist Design”" });
+      await expect(dialog.getByRole("textbox", { name: "Quota" })).toBeVisible();
+      return dialog;
     },
   },
 

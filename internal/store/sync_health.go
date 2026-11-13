@@ -48,6 +48,9 @@ type SyncHealth struct {
 	FailingSince  *time.Time
 	LastSuccessAt *time.Time
 	NotifiedState string
+	// GroupID is the owner's customer group, nil without an owner: the
+	// storage gate pauses syncs per group (#397).
+	GroupID *int64
 }
 
 // State is the account's health: failing when the last alertAfter syncs
@@ -110,6 +113,7 @@ func (s *Store) SyncHealth(ctx context.Context, owner *int64) (map[int64]*SyncHe
 			AccountID: r.ID, Name: r.Name, OwnerID: r.OwnerID, Enabled: r.Enabled, CreatedAt: r.CreatedAt,
 			SyncInterval:  secondsToInterval(r.SyncIntervalSeconds),
 			FailureStreak: int(r.FailureStreak), LastSuccessAt: r.LastSuccessAt, NotifiedState: r.NotifiedState,
+			GroupID: r.GroupID,
 		}
 		if h.FailureStreak > 0 {
 			h.FailingSince = r.FailingSince

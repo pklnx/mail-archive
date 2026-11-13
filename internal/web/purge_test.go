@@ -149,16 +149,45 @@ func TestPurgeNotRemoved(t *testing.T) {
 	}
 }
 
+// The preview names the admin's own other accounts that keep copies, and
+// counts only the rest as kept by accounts the admin does not own.
+func TestPurgePreviewOwnAccounts(t *testing.T) {
+	f := newPurgeFixture(t)
+	f.loginOK("admin", keyPassword)
+	account := func(owner *store.User, name string) *store.Account {
+		t.Helper()
+		a, err := f.st.GetOwnedAccount(context.Background(), owner.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	inbox, live, work := f.folder(f.old, "INBOX"), f.folder(account(f.admin, "live"), "INBOX"), f.folder(account(f.alice, "work"), "INBOX")
+	// One more message is also in "live", another in "live" and alice's
+	// "work": both are kept by the admin's own account.
+	f.save(strings.Repeat("5", 64), 1, inbox, live)
+	f.save(strings.Repeat("6", 64), 1, inbox, live, work)
+	p := f.preview("old")
+	want := []purgeKeptJSON{{Owner: "admin", Account: "live", Messages: 2}}
+	if p.Kept != 3 || p.KeptByOthers != 1 || toJSON(p.KeptIn) != toJSON(want) {
+		t.Fatalf("preview: kept %d, by others %d, in %+v", p.Kept, p.KeptByOthers, p.KeptIn)
+	}
+}
+
 func TestPurgePreviewAndConfirm(t *testing.T) {
 	f := newPurgeFixture(t)
 	ctx := context.Background()
 	f.loginOK("admin", keyPassword)
 
 	p := f.preview("old")
+	// m2 is also in alice's "work": counted, never named.
 	if p.Kind != "imap" || p.Locations != 3 || p.Messages != 2 || p.Deleted != 1 || p.DeletedBytes != 100 || p.Kept != 1 ||
-		len(p.KeptIn) != 1 || p.KeptIn[0] != (purgeKeptJSON{Owner: "alice", Account: "work", Messages: 1}) ||
-		p.Grace != "48h0m0s" || p.Purge != nil {
+		len(p.KeptIn) != 0 || p.KeptByOthers != 1 || p.Grace != "48h0m0s" || p.Purge != nil {
 		t.Fatalf("preview %+v", p)
+	}
+	if raw := toJSON(f.expect("GET", "/api/accounts/old/purge", nil, 200)); strings.Contains(raw, "alice") || strings.Contains(raw, "work") ||
+		!strings.Contains(raw, `"keptIn":[]`) || !strings.Contains(raw, `"keptByOthers":1`) {
+		t.Fatalf("preview names other users' accounts: %s", raw)
 	}
 	if b := p.Blockers; b.NotRemoved || b.Syncing || b.PurgeOpen || len(b.Rules) != 0 || len(b.Holds) != 0 || len(b.Messages) != 0 {
 		t.Fatalf("blockers %+v", b)
@@ -328,5 +357,33 @@ func TestPurgeStaleAccount(t *testing.T) {
 	}
 	if open, err := f.st.OpenAccountPurge(ctx); err != nil || open != nil {
 		t.Fatalf("confirmed a stale account: %+v %v", open, err)
+	}
+}
+
+// A purge that finishes while GET /api/accounts runs never leaves its
+// account listed as removed and no longer purging: the page polls slowly
+// then and kept the deleted account for 30 s (#555 CI, accounts.spec.ts).
+func TestAccountsListPurgeFinishedMeanwhile(t *testing.T) {
+	f := newPurgeFixture(t)
+	ctx := context.Background()
+	f.loginOK("admin", keyPassword)
+	f.expect("POST", "/api/accounts/old/purge", map[string]any{"count": 1}, 202)
+	// The retention job finishes the purge right after the handler read the
+	// accounts. It runs in the handler's goroutine: no Fatal there.
+	f.server.afterAccountsListed = func() {
+		f.server.afterAccountsListed = nil
+		f.ret.RunOnce(ctx)
+	}
+	if o, ok := f.listed()["old"]; ok && !o.Purging {
+		t.Fatalf("old listed as removed and not purging after its purge: %+v", o)
+	}
+	if f.server.afterAccountsListed != nil {
+		t.Fatal("the purge did not run during the request")
+	}
+	if open, err := f.st.OpenAccountPurge(ctx); err != nil || open != nil {
+		t.Fatalf("purge still open: %+v %v", open, err)
+	}
+	if _, ok := f.listed()["old"]; ok {
+		t.Fatal("old still listed after its purge")
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
+	"net"
 	"os"
 	"regexp"
 	"slices"
@@ -24,7 +24,6 @@ import (
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/jobs"
 	"github.com/pklnx/mail-archive/internal/store"
-	"github.com/pklnx/mail-archive/internal/web"
 )
 
 type app struct {
@@ -33,8 +32,15 @@ type app struct {
 }
 
 // openApp opens the database for a command. It refuses while the database
-// needs a one-time index rebuild (see checkIndexRebuild).
-func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, true) }
+// needs a one-time index rebuild (see checkIndexRebuild), and while its
+// schema does not match this binary: migrations pending, or a newer
+// version migrated it (exit code 4, #396).
+func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, openNormal) }
+
+// openAppSchemaWarn is openApp for `backup` and `status`: a schema that does
+// not match is only a warning, so that the backup before an upgrade and a
+// look at the instance still work.
+func openAppSchemaWarn(ctx context.Context) (*app, error) { return openAppChecked(ctx, openSchemaWarn) }
 
 // openAppForMigrate opens the database without the index rebuild check and
 // without touching it, for `migrate` and `migrate down` (which take the
@@ -43,27 +49,65 @@ func openApp(ctx context.Context) (*app, error) { return openAppChecked(ctx, tru
 // connections let the server end a statement soon after the command was
 // killed (store.ForMigrations).
 func openAppForMigrate(ctx context.Context) (*app, error) {
-	return openAppChecked(ctx, false, store.ForMigrations())
+	return openAppChecked(ctx, openForMigrate, store.ForMigrations())
 }
 
-func openAppChecked(ctx context.Context, normal bool, opts ...store.Option) (*app, error) {
+// openMode says which checks openAppChecked runs.
+type openMode int
+
+const (
+	// openNormal: the index rebuild check, the schema check, which
+	// refuses, and the audit log partitions.
+	openNormal openMode = iota
+	// openSchemaWarn: the same, but the schema check only warns.
+	openSchemaWarn
+	// openForMigrate: none of them.
+	openForMigrate
+)
+
+func openAppChecked(ctx context.Context, mode openMode, opts ...store.Option) (*app, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
+	return openAppConfig(ctx, cfg, mode, opts...)
+}
+
+// openAppConfig is openAppChecked with the configuration already loaded.
+func openAppConfig(ctx context.Context, cfg *config.Config, mode openMode, opts ...store.Option) (*app, error) {
 	st, err := store.Open(ctx, cfg.DatabaseURL, opts...)
 	if err != nil {
 		return nil, err
 	}
-	if normal {
+	if mode != openForMigrate {
 		// Before anything else touches the database.
 		if err := checkIndexRebuild(ctx, st); err != nil {
+			st.Close()
+			return nil, err
+		}
+		if err := checkSchema(ctx, st, mode); err != nil {
 			st.Close()
 			return nil, err
 		}
 		ensureAuditPartitions(ctx, st)
 	}
 	return &app{cfg: cfg, store: st}, nil
+}
+
+// checkSchema refuses (openNormal) or warns (openSchemaWarn) when the
+// database's schema does not match this binary (#396, step 4). It does
+// not wait for a running migrate.
+func checkSchema(ctx context.Context, st *store.Store, mode openMode) error {
+	state, err := st.SchemaState(ctx)
+	if err != nil {
+		return err
+	}
+	err = schemaError(state, false)
+	if err != nil && mode == openSchemaWarn {
+		fmt.Fprintln(os.Stderr, "warning:", err)
+		return nil
+	}
+	return err
 }
 
 // checkIndexRebuild refuses while the database was created by the
@@ -103,37 +147,12 @@ func newMigrateCmd() *cobra.Command {
 			return err
 		}
 		defer unlock()
-		// The index rebuild first, before anything writes; Migrate checks
-		// again and finds nothing left to do.
-		if _, err := a.store.RebuildIndexesIfNeeded(cmd.Context(), func(c store.CollationState) {
-			fmt.Println(indexRebuildNotice(c))
-		}); err != nil {
-			return err
-		}
-		ensureAuditPartitions(cmd.Context(), a.store)
-		applied, err := a.store.Migrate(cmd.Context())
-		if err != nil {
-			return err
-		}
-		if len(applied) == 0 {
-			fmt.Println("database schema is up to date")
-		}
-		for _, m := range applied {
-			fmt.Println("applied", m)
-		}
-		if pending, err := a.store.HasUnindexed(cmd.Context()); err == nil && pending {
-			fmt.Println("some messages are not fully searchable yet: run `reindex` once")
-		}
-		if sealer, err := a.cfg.Sealer(); err == nil {
-			n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer)
-			if err != nil {
-				return err
-			}
-			if n > 0 {
-				fmt.Printf("stored passwords of %d account(s) bound to the account ID\n", n)
-			}
-		}
-		return nil
+		// The same sequence as serve and worker at start; unlike them,
+		// migrate also runs a migration again that failed before
+		// (the failure record), and clears the record when it passes.
+		return applyMigrations(cmd.Context(), a.store, a.cfg, func(line string) {
+			fmt.Fprintln(cmd.OutOrStdout(), line)
+		})
 	}
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -295,6 +314,7 @@ func newAccountCmd() *cobra.Command {
 		newAccountAddCmd(),
 		newAccountAddSMTPCmd(),
 		newAccountSMTPAddressesCmd(),
+		newAccountSMTPSecretCmd(),
 		newAccountFillCmd(),
 		newAccountListCmd(),
 		newAccountFoldersCmd(),
@@ -364,7 +384,7 @@ The login is verified before the account is saved unless --skip-check is set.`,
 			var folders []imapsync.Folder
 			if !skipCheck {
 				fmt.Fprintf(os.Stderr, "checking login at %s:%d ...\n", acc.Host, acc.Port)
-				folders, err = checkLogin(cmd.Context(), &acc, password)
+				folders, err = checkLogin(cmd.Context(), a.cfg, &acc, password)
 				if err != nil {
 					return fmt.Errorf("login check failed (use --skip-check to save anyway): %w", err)
 				}
@@ -402,15 +422,10 @@ The login is verified before the account is saved unless --skip-check is set.`,
 	return cmd
 }
 
-func checkLogin(ctx context.Context, acc *store.Account, password string) ([]imapsync.Folder, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	conn, err := imapsync.Dial(ctx, imapConfig(acc, password))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = conn.Close() }()
-	return conn.ListFolders()
+// checkLogin is the login check of the web server (Syncer.CheckLogin),
+// with the configured IMAP limits.
+func checkLogin(ctx context.Context, cfg *config.Config, acc *store.Account, password string) ([]imapsync.Folder, error) {
+	return (&archive.Syncer{IMAP: imapSettings(cfg)}).CheckLogin(ctx, acc, password)
 }
 
 // printExclusionHint suggests excluding junk and trash folders that the
@@ -453,10 +468,11 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func imapConfig(acc *store.Account, password string) imapsync.Config {
+func imapConfig(cfg *config.Config, acc *store.Account, password string) imapsync.Config {
 	return imapsync.Config{
 		Host: acc.Host, Port: acc.Port, TLSMode: string(acc.TLSMode),
 		Username: acc.Username, Password: password,
+		MaxFolders: cfg.IMAP.MaxFolders, IdleTimeout: cfg.IMAP.IdleTimeout,
 	}
 }
 
@@ -654,7 +670,7 @@ func newAccountFoldersCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, err := imapsync.Dial(cmd.Context(), imapConfig(acc, pw))
+			conn, err := imapsync.Dial(cmd.Context(), imapConfig(a.cfg, acc, pw))
 			if err != nil {
 				return err
 			}
@@ -879,9 +895,12 @@ failing, and their recovery, are sent at the end.`,
 			}
 			defer ar.Close()
 			log := newLogger(a.cfg.LogLevel)
+			// The command line runs without a time limit: it is interactive.
 			syncer := &archive.Syncer{
 				Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
-				ReconcileInterval: a.cfg.ReconcileInterval,
+				ReconcileInterval:    a.cfg.ReconcileInterval,
+				MaxReconcileMessages: a.cfg.IMAP.ReconcileMaxMessages, IMAP: imapSettings(a.cfg),
+				Storage: newStorageGate(a, log),
 			}
 			var owner *int64
 			if u, err := flagUser(cmd, a); err != nil {
@@ -897,13 +916,19 @@ failing, and their recovery, are sent at the end.`,
 				return err
 			}
 			results, err := syncer.SyncAll(cmd.Context(), only, owner, archive.SyncOptions{Reconcile: reconcile})
-			deliverAfterSync(cmd.Context(), newNotifier(a, log), log)
-			failed := 0
+			// A last read writes the transitions this run caused (without
+			// serve), so that the alerts below and ./ma usage show them.
+			finalStorageRead(cmd.Context(), syncer.Storage)
+			deliverAfterSync(cmd.Context(), a, newNotifier(a, log), log)
+			failed, paused := 0, 0
 			for _, r := range results {
 				status := "ok"
 				switch {
 				case errors.Is(r.Err, archive.ErrSyncRunning):
 					status = "skipped: already syncing (web server or another run)"
+				case r.IsPaused():
+					status = "paused: " + pausedMessage(cmd.Context(), a, r.Err) + "; run the same command again once space is freed"
+					paused++
 				case r.Err != nil:
 					status = "error: " + r.Err.Error()
 					failed++
@@ -930,6 +955,9 @@ failing, and their recovery, are sent at the end.`,
 			}
 			if failed > 0 {
 				return &exitError{msg: fmt.Sprintf("%d account(s) failed", failed)}
+			}
+			if paused > 0 {
+				return &exitError{msg: fmt.Sprintf("%d account(s) paused: storage limit reached", paused), code: exitPaused}
 			}
 			return nil
 		},
@@ -983,122 +1011,49 @@ rebinding; state-changing requests must come from the same origin. Use HTTPS
 network.
 
 With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
-(journaling from a mail server) from the networks in
-` + config.EnvSMTPAllowedNetworks + `.`,
+(journaling from a mail server): from mail servers that log in over STARTTLS
+(` + config.EnvSMTPAuth + `=required, the default), or with
+` + config.EnvSMTPAuth + `=off from the networks in
+` + config.EnvSMTPAllowedNetworks + `.
+
+It needs the secret key (` + config.EnvSecretKeyFile + ` or ` + config.EnvSecretKey + `)
+and refuses to start without it (exit code 4).
+
+It listens at once; until it is ready, /healthz answers 503 with
+{"status":"starting"} and every other request 503. At start it takes the
+migration lock, waiting while a migrate or another start holds it. With
+` + config.EnvMigrateOnStart + `=on it then applies pending migrations as migrate does;
+it refuses to start (exit code 4) while migrations are pending or a newer
+version migrated the database. A migration that fails ends it with exit
+code 3. It then checks the secret key against the instance and refuses
+another one (exit code 4; see secret-key accept). See
+docs/guide/operations.md, "Upgrades".
+
+On a new instance (no user, no message yet) it first turns encryption at
+rest on with the archive key, and refuses to start without one (exit code
+4), unless ` + config.EnvEncryptionAtSetup + `=off (test instances only).
+With a setup token (` + config.EnvSetupTokenFile + ` or ` + config.EnvSetupToken + `; see
+setup token), the link ` + config.EnvPublicURL + `/#setup=<token> creates the first
+admin once.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
-			defer a.close()
-			blobs, ar, err := openArchiveBlobs(cmd.Context(), a, "serve", archive.RoleWriter)
+			log := newLogger(cfg.LogLevel)
+			// Before it listens or migrates (#396, step 0).
+			if cfg.SecretKey == nil {
+				return missingSecretKeyError()
+			}
+			if cfg.SetupToken, err = config.SetupTokenFromEnv(cfg); err != nil {
+				return err
+			}
+			ln, err := (&net.ListenConfig{}).Listen(cmd.Context(), "tcp", listen)
 			if err != nil {
 				return err
 			}
-			defer ar.Close()
-			log := newLogger(a.cfg.LogLevel)
-			opts := web.Options{
-				AllowedHosts: a.cfg.AllowedHosts, Require2FA: a.cfg.Require2FA, SecretKey: a.cfg.SecretKey, PublicURL: a.cfg.PublicURL,
-				AlertAfterFailures: a.cfg.AlertAfterFailures, TrustedProxies: a.cfg.TrustedProxies,
-			}
-			// After a restore, attestations only the file has are imported
-			// before anything archives, so new messages are numbered past
-			// them.
-			archive.CatchUpAtStart(cmd.Context(), a.store, a.cfg.AttestDir(), log)
-			// Background jobs, beside the notifier and the schedule; stopped
-			// before the store closes, releasing running jobs.
-			stopJobs, err := startJobs(cmd.Context(), a, blobs, log)
-			if err != nil {
-				return err
-			}
-			defer stopJobs()
-			var afterSync func()
-			if n := newNotifier(a, log); n != nil {
-				ctx, cancel := context.WithCancel(cmd.Context())
-				notifierDone := make(chan struct{})
-				go func() {
-					n.Run(ctx)
-					close(notifierDone)
-				}()
-				// Stop it also when serve fails, and before the store closes.
-				defer func() {
-					cancel()
-					<-notifierDone
-				}()
-				log.Info("alerts on", "target", a.cfg.Webhook.Target(), "after_failures", a.cfg.AlertAfterFailures)
-				afterSync = n.Wake
-			} else {
-				log.Info("alerts off", "reason", config.EnvNotifyWebhookURL+" is not set")
-			}
-			if sealer, err := a.cfg.Sealer(); err != nil {
-				log.Warn("account management and sync are off", "reason", err)
-			} else {
-				opts.Sealer = sealer
-				if n, err := archive.UpgradePasswords(cmd.Context(), a.store, sealer); err != nil {
-					return err
-				} else if n > 0 {
-					log.Info("stored passwords bound to the account ID", "accounts", n)
-				}
-				opts.Syncer = &archive.Syncer{
-					Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
-					ReconcileInterval: a.cfg.ReconcileInterval,
-				}
-				opts.Runner = &archive.Runner{Syncer: opts.Syncer, Schedule: scheduleOf(a.cfg), AfterSync: afterSync}
-				runnerDone := make(chan struct{})
-				go func() {
-					opts.Runner.Run(cmd.Context())
-					close(runnerDone)
-				}()
-				// Let a running sync record its outcome before the store closes.
-				defer func() { <-runnerDone }()
-				// Recurring fills wait after the start, so that journal copies
-				// the mail server queued during an outage arrive first.
-				opts.Fills = &archive.FillRunner{
-					Filler:   &archive.Filler{Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log},
-					Schedule: opts.Runner.Schedule, HoldUntil: time.Now().Add(archive.RecurringStartHold), AfterRun: afterSync,
-				}
-				fillsDone := make(chan struct{})
-				go func() {
-					opts.Fills.Run(cmd.Context())
-					close(fillsDone)
-				}()
-				// A fill records its last batch before the store closes.
-				defer func() { <-fillsDone }()
-				if a.cfg.SyncInterval > 0 {
-					log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "min", a.cfg.SyncIntervalMin, "reconcile_interval", a.cfg.ReconcileInterval)
-				} else {
-					log.Info("sync schedule off")
-				}
-			}
-			if pending, err := a.store.HasUnindexed(cmd.Context()); err == nil && pending {
-				log.Warn("some messages are not fully searchable yet", "command", commandName()+" reindex")
-			}
-			if n, err := a.store.CountUsers(cmd.Context()); err != nil {
-				return err
-			} else if n == 0 {
-				log.Warn("no users yet; the web UI shows how to create the first admin", "command", commandName()+" user add NAME --admin")
-			}
-			// The first attestation of a large archive takes minutes; it runs
-			// in the background. Stopped before the store closes.
-			defer startAttester(cmd.Context(), a, log)()
-			retention, stopRetention := startRetention(cmd.Context(), a, blobs, log)
-			defer stopRetention()
-			opts.Retention = retention
-			if a.cfg.SMTP != nil {
-				stop, err := startSMTP(cmd.Context(), a, blobs, log)
-				if err != nil {
-					return err
-				}
-				defer stop()
-				opts.SMTPListen = a.cfg.SMTP.Listen
-			}
-			srv := web.New(a.store, blobs, log, opts)
-			log.Info("listening", "addr", listen)
-			if err := srv.ListenAndServe(cmd.Context(), listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return err
-			}
-			return nil
+			return runServe(cmd.Context(), cfg, log, ln)
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
@@ -1155,14 +1110,18 @@ the worker and syncs run.`,
 	}
 }
 
-// reindexAttachments enqueues the attachment backfill and works off the
-// attachment kinds in the foreground until none is due. It returns how
-// many attachments with text it stored and how many of the kinds' jobs
-// are left to other processes or to a retry.
+// reindexAttachments enqueues the attachment backfill, runs the repair of
+// the attachment text flags once (as serve and worker do at start and
+// every 15 minutes: installations that run only sync or import from cron
+// catch up here), and works off the attachment kinds in the foreground
+// until none is due. It returns how many attachments with text it stored
+// and how many of the kinds' jobs are left to other processes or to a
+// retry.
 func reindexAttachments(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (int64, int64, error) {
 	if _, err := a.store.EnqueueJobs(ctx, []store.NewJob{store.AttachmentBackfillJob()}, false); err != nil {
 		return 0, 0, err
 	}
+	(&attachmentRepair{store: a.store, log: log}).pass(ctx)
 	x := attachmentIndexer(a, blobs, log)
 	defer func() { _ = processExtractor(log).Close() }()
 	kinds := &jobs.Registry{}
@@ -1214,6 +1173,9 @@ schedule syncs it next ("due" when that has passed). HEALTH is "ok",
 server's queue, so an account waiting there may show "stale" here while the
 web UI shows it as queued.
 
+Without --user, a line shows the storage of the instance: unique messages
+and their bytes ("usage" shows them per group and account).
+
 A line counts the background jobs per kind (such as attachment text):
 queued (with how long the oldest has been due), retrying, running and
 failed; "jobs retry KIND" queues failed ones again. The last line shows
@@ -1221,7 +1183,7 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 "disable" with its progress and the command that finishes it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			a, err := openApp(cmd.Context())
+			a, err := openAppSchemaWarn(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -1289,6 +1251,11 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 				fmt.Printf("\nunique messages of this user: %d\n", unique)
 			} else {
 				fmt.Printf("\nunique messages in archive: %d\n", unique)
+				line, err := storageStatus(cmd.Context(), a)
+				if err != nil {
+					return err
+				}
+				fmt.Println(line)
 			}
 			line, err := attestStatus(cmd.Context(), a, time.Now())
 			if err != nil {
@@ -1307,6 +1274,18 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 				return err
 			}
 			fmt.Println(line)
+			if line, err = schemaStatus(cmd.Context(), a.store); err != nil {
+				return err
+			}
+			fmt.Println(line)
+			is, err := a.store.InstanceStatus(cmd.Context(), version)
+			if err != nil {
+				return err
+			}
+			is.EncryptionAtSetupOff = !a.cfg.EncryptionAtSetup
+			if line = setupStatus(is); line != "" {
+				fmt.Println(line)
+			}
 			return nil
 		},
 	}
@@ -1325,4 +1304,10 @@ func sourceLabel(k store.AccountKind) string {
 	default:
 		return "snapshot (IMAP)"
 	}
+}
+
+// imapSettings are the operator's IMAP limits for syncs, fills and login
+// checks.
+func imapSettings(cfg *config.Config) archive.IMAPSettings {
+	return archive.IMAPSettings{MaxFolders: cfg.IMAP.MaxFolders, IdleTimeout: cfg.IMAP.IdleTimeout}
 }

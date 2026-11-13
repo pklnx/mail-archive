@@ -232,7 +232,8 @@ func TestImportMaildirDeduplicatesWithIMAP(t *testing.T) {
 		t.Fatal(err)
 	}
 	tot := res.Total()
-	if res.Status != "ok" || tot.Read != 5 || tot.Added != 4 || tot.Present != 1 || tot.New != 2 {
+	// a1 is new to this account although alice's sync stored it.
+	if res.Status != "ok" || tot.Read != 5 || tot.Added != 4 || tot.Present != 1 || tot.New != 3 {
 		t.Fatalf("%s %+v %+v", res.Status, tot, res.Folders)
 	}
 	if n := f.countBlobFiles(); n != 3 {

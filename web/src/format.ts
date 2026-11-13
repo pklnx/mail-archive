@@ -105,6 +105,22 @@ export function fileSize(bytes: number): string {
   return `${v.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false })} ${units[i]}`;
 }
 
+/**
+ * A storage size in binary units, as the quotas are set (50 GiB): one
+ * decimal below 10, none above (#397, part 4).
+ */
+export function storageSize(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const digits = i > 0 && v < 10 ? 1 : 0;
+  return `${v.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits, useGrouping: false })} ${units[i]}`;
+}
+
 /** A number with up to two decimals in the user's number format, without grouping ("13,25" in German). */
 export function decimal(n: number): string {
   return n.toLocaleString(locale, { maximumFractionDigits: 2, useGrouping: false });

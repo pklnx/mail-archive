@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -49,17 +50,35 @@ type Server struct {
 	webauthn      *webauthn.WebAuthn
 	publicOrigin  string
 	passkeyBegins *auth.Rate
+	// passkeyOpen caps the passkey logins started per client and in total.
+	passkeyOpen *auth.Quota
 	// apiKeyRate limits requests per key, badKeyRate invalid keys per
 	// client address. Not the login limiter: behind a reverse proxy all
 	// clients may share an address, and a broken script must not block
 	// everyone's password logins.
 	apiKeyRate *auth.Rate
 	badKeyRate *auth.Rate
+	// checks limits the IMAP login checks (loginCheck).
+	checks *loginChecks
 	// alertAfter failed syncs in a row make an account failing.
 	alertAfter  int
 	healthCache syncHealthCache
 	// jobsHealthCache holds the answer of /healthz/jobs.
 	jobsHealthCache jobsHealthCache
+	// metricsCache holds the answer of /api/metrics.
+	metricsCache metricsCache
+	// version is the binary's version, for /api/metrics.
+	version string
+	// storageQuota is the instance quota in bytes, 0 without one.
+	storageQuota int64
+	// diskUsage measures the data directory's file system; nil leaves the
+	// disk out of /api/metrics.
+	diskUsage func() (free, total uint64, err error)
+	// smtpStorageDeferrals counts the SMTP recipients deferred for
+	// storage since the start; nil counts none.
+	smtpStorageDeferrals func() uint64
+	// alertMail mails confirmation codes; nil when alert mail is off.
+	alertMail AlertMailer
 	// trustedProxies may name the client in X-Forwarded-For.
 	trustedProxies []netip.Prefix
 	// retention executes confirmed deletion runs; nil leaves them to the
@@ -68,18 +87,32 @@ type Server struct {
 	// purgeGrace is how long the retention job keeps the files of deleted
 	// messages; nil without the job.
 	purgeGrace *time.Duration
+	// beforeVerify, for tests, runs before every password check
+	// (verifyPassword, verifyDummy).
+	beforeVerify func()
+	// beforeKeyLookup, for tests, runs before an API key is looked up.
+	beforeKeyLookup func()
 	// beforeConfirmPurge, for tests, runs after a purge's account was
 	// loaded and before it is confirmed.
 	beforeConfirmPurge func()
+	// afterAccountsListed, for tests, runs after GET /api/accounts read
+	// the user's accounts.
+	afterAccountsListed func()
 	// shareOnlyFails, for tests, makes the share-only lookup of shared
 	// reads fail with its error when it returns one.
 	shareOnlyFails func() error
 	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
 	// is off.
 	smtpListen string
+	// smtpAuth is MAIL_ARCHIVE_SMTP_AUTH=required.
+	smtpAuth bool
 	// forwardedProtoWarned is set once warnUntrustedForwardedProto has
 	// logged.
 	forwardedProtoWarned atomic.Bool
+	// plainHTTPWarned has a flag per allowed host that is not a loopback
+	// name, set once warnPlainHTTP has logged for it. Built in New and
+	// only read afterwards.
+	plainHTTPWarned map[string]*atomic.Bool
 }
 
 // Options configure a Server.
@@ -119,6 +152,24 @@ type Options struct {
 	// SMTPListen is where the SMTP server receives mail for smtp accounts
 	// (MAIL_ARCHIVE_SMTP_LISTEN); empty when it is off.
 	SMTPListen string
+	// SMTPAuth is MAIL_ARCHIVE_SMTP_AUTH=required: mail servers log in with
+	// an SMTP secret over STARTTLS.
+	SMTPAuth bool
+	// Version is the binary's version, shown in /api/metrics.
+	Version string
+	// StorageQuotaBytes is the instance quota (#397, part 2), 0 without
+	// one, shown in /api/metrics.
+	StorageQuotaBytes int64
+	// DiskUsage measures the data directory's file system for
+	// /api/metrics; nil leaves the disk out.
+	DiskUsage func() (free, total uint64, err error)
+	// SMTPStorageDeferrals counts the SMTP recipients deferred for
+	// storage since the start (#397, part 2), for /api/metrics.
+	SMTPStorageDeferrals func() uint64
+	// AlertMail mails the confirmation codes of admins' notification
+	// addresses (#397, part 5); nil when MAIL_ARCHIVE_MAIL_URL is not set,
+	// which hides Profile → Notifications.
+	AlertMail AlertMailer
 }
 
 // New creates a Server.
@@ -156,9 +207,15 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 	srv := &Server{
 		store: st, blobs: blobs, log: log, allowedHosts: hosts, syncer: opts.Syncer, runner: opts.Runner, fills: opts.Fills,
 		hasher: hasher, sealer: opts.Sealer, secretKey: opts.SecretKey, require2FA: opts.Require2FA, now: now, limiter: auth.NewLimiter(),
-		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow),
-		apiKeyRate: auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
-		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen,
+		webauthn: wa, publicOrigin: origin, passkeyBegins: auth.NewRate(passkeyBeginLimit, passkeyBeginWindow).WithClock(now),
+		passkeyOpen: auth.NewQuota(passkeyCeremonyTTL, passkeyOpenTotal, now),
+		apiKeyRate:  auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
+		checks:     newLoginChecks(),
+		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen, smtpAuth: opts.SMTPAuth,
+		plainHTTPWarned: plainHTTPWarnings(hosts),
+		version:         opts.Version, storageQuota: opts.StorageQuotaBytes, diskUsage: opts.DiskUsage,
+		smtpStorageDeferrals: opts.SMTPStorageDeferrals,
+		alertMail:            opts.AlertMail,
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention
@@ -203,21 +260,26 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 
 // ListenAndServe serves until ctx is cancelled, then shuts down gracefully.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
-	if _, err := openAPI(); err != nil {
+	if addr == "" {
+		addr = ":http"
+	}
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
 		return err
 	}
-	srv := newHTTPServer(addr, s.Handler())
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	go s.housekeeping(ctx)
-	select {
-	case err := <-errc:
+	return s.Serve(ctx, ln)
+}
+
+// Serve serves on ln until ctx is cancelled, then shuts down gracefully.
+// It closes ln. serve itself uses Starting, Swap and the package's Serve
+// instead, so that it answers while it starts (#396).
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	h, err := s.Start(ctx)
+	if err != nil {
+		_ = ln.Close()
 		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutdownCtx)
 	}
+	return Serve(ctx, ln, h)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
@@ -232,7 +294,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 
 // apiError is the body of every error answer. Code is a stable,
 // machine-readable reason where a client may need one (errOnHold,
-// errConflict, errReleased); HoldIDs names the legal holds of an on_hold
+// errConflict, errReleased, errFilterHoldCLI); HoldIDs names the legal holds of an on_hold
 // answer when they are known.
 type apiError struct {
 	Error   string  `json:"error"`
@@ -245,6 +307,9 @@ const (
 	errOnHold   = "on_hold"
 	errConflict = "conflict"
 	errReleased = "released"
+	// errFilterHoldCLI: a legal hold with a search filter over mail that is
+	// not the caller's is added by the operator on the command line (#538).
+	errFilterHoldCLI = "filter_hold_cli"
 )
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg string, err error) {

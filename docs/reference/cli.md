@@ -9,7 +9,7 @@ retention rules, holds and deletion runs, `jobs retry`, and `import`,
 [audit log](../guide/audit-log#the-fields); `migrate`, `reindex`,
 `attest` and `attest keygen`, the [`encryption`](#encryption) commands,
 `decrypt`, `seal-stream`, `unseal-stream`, `restore-dump` and `export verify`,
-`sync`, `verify`, `status`, `notify test` and the list commands do not.
+`sync`, `verify`, `status`, `notify test`, `notify mail-test` and the list commands do not.
 
 With Docker Compose, run every command through the wrapper, for example
 `./ma status`. The binary itself is called `mail-archive`. Every command has
@@ -19,10 +19,12 @@ With Docker Compose, run every command through the wrapper, for example
 
 | Command | Purpose |
 |---|---|
-| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. Waits for another running `migrate`, and after a killed `migrate` for goose's migration lock; see below. |
+| `migrate` (or `migrate up`) | Create or upgrade the database schema. With `./ma`, it also creates the data directory and makes it writable for the container. On a database created by the `postgres:18-alpine` image (26.10-6 and earlier), it first rebuilds all database indexes once; until then the other commands that use the database (`serve` included, `migrate status` excepted) refuse to run. This index rebuild is not [`reindex`](#archive), which extracts message text for search. Waits for another running `migrate` or a starting `serve` or `worker`, and after a killed `migrate` for goose's migration lock; see below. While migrations are pending, the other commands that use the database refuse with exit code `4` (`backup` and `status` only warn), and so do `serve` and `worker` unless `MAIL_ARCHIVE_MIGRATE_ON_START=on` lets them migrate at start. A failed migration is rolled back and ends `migrate` with exit code `3`. Unlike a start, `migrate` also runs a migration again whose failure was recorded (see [When a migration fails](../guide/operations#when-a-migration-fails)). |
 | `migrate status` | Show applied and pending migrations. Does not wait for a running migration. |
 | `migrate down --yes` | Roll back the latest migration. Usually deletes data; for development. Waits for another running `migrate`, also during its one-time index rebuild, and, like `migrate`, for goose's migration lock. Refuses, like the other commands, while no `migrate` has done that rebuild. |
-| `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` (not the attestation key, see [`attest keygen`](#attest)). |
+| `keygen` | Print a random secret key for `MAIL_ARCHIVE_SECRET_KEY` or `MAIL_ARCHIVE_SECRET_KEY_FILE` (not the attestation key, see [`attest keygen`](#attest)). |
+| `secret-key accept --yes` | Make the configured secret key the instance's key after an intended change, so that `serve` starts with it. See [below](#secret-key). |
+| `setup token` | Print a new setup token (256 random bits, base64url) for `MAIL_ARCHIVE_SETUP_TOKEN_FILE`; it stores nothing. See [below](#setup-token). |
 
 ### migrate
 
@@ -50,9 +52,52 @@ The wait has no time limit; Ctrl-C stops it (same 15 second limit). If no
 `pg_terminate_backend` calls that stop the holder. Statements of the killed
 command outside goose's lock (the index rebuild, the audit log partitions,
 the password upgrade) are not waited for: within those 10 seconds a new
-command can start next to such a statement. The web server is not covered:
-it neither waits for nor blocks a migration, so stop it before `./ma migrate`
+command can start next to such a statement.
+
+`serve` and `worker` take the same lock when they start, until they have
+checked the schema (see [Start-up migrations](../guide/operations#start-up-migrations)):
+a start waits for a running `migrate`, and `migrate` waits for a start
+that migrates. A web server that is already running is not covered: it
+neither waits for nor blocks a migration, so stop it before `./ma migrate`
 when the release notes say so (see [Upgrades](../guide/operations#upgrades)).
+
+### secret-key
+
+The database keeps a check value of the secret key (HMAC-SHA256 with the
+key, never the key). `serve` refuses to start, with exit code `4`, without a
+key and with another key than the one recorded, and names the fingerprints
+of both, never a key. On the first start of 1.6.0 nothing is recorded yet:
+the key must open at least one of the stored IMAP passwords and TOTP secrets
+it tries (up to 5 of each), if there are any, and is then recorded. See
+[The secret key](./security#the-secret-key).
+
+`secret-key accept` prints how many of the stored IMAP passwords and TOTP
+secrets it tried open with the configured key; with `--yes` it records the
+key as the instance's (audit log `instance.secret_key_accepted`, with the
+fingerprints of the old and the new key). Those that do not open must be
+set again: `account set-password` and `user reset-2fa`. Without `--yes` it
+changes nothing.
+
+Every refusal of the secret key ends a command with exit code `4`: both
+`MAIL_ARCHIVE_SECRET_KEY_FILE` and `MAIL_ARCHIVE_SECRET_KEY` set, a key file
+that group or others may access, that is not a regular file or lies inside
+the data directory, and a key that is not 32 bytes of base64.
+
+### setup token
+
+A new instance can get its first admin from a setup link instead of
+`user add` (see [Start from configuration](../guide/getting-started#start-from-configuration)).
+`setup token` prints a token; put it into the file that
+`MAIL_ARCHIVE_SETUP_TOKEN_FILE` names (Compose: `secret-key/setup.token`,
+owned by UID 65532, mode 0400) and start the web server. While no user
+exists, it stores the token's SHA-256 and logs `waiting for the first admin`
+with the link's form, never the token; the link
+`MAIL_ARCHIVE_PUBLIC_URL/#setup=<token>` then creates the first admin, once,
+within 7 days of the first start with that token. A start with another
+token starts a new window; a start without one revokes the stored one.
+Once a first user exists, also one from `user add`, no token works again.
+`status` shows the state in its `setup:` line: waiting with the end of the
+window, expired, or complete with its time.
 
 ## Encryption
 
@@ -116,7 +161,7 @@ characters and are prompted twice, or read once from stdin with
 | `user revoke-api-keys NAME` | Revoke all API keys of a user, for example when no admin can log in. |
 | `user reset-2fa NAME` | Turn off the user's 2FA, for example after a lost phone. Ends the user's sessions; admins set it up again at the next login. |
 | `user promote NAME`, `user demote NAME` | Grant or take away the admin role. |
-| `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. |
+| `user lock NAME`, `user unlock NAME` | Stop a user from logging in, or allow it again. Locking ends the user's sessions. It does not stop the [SMTP secrets](#smtp-secrets) of the user's smtp accounts: the mail server keeps delivering. `user lock` names each smtp account with usable secrets and the command that rotates them. |
 | `user remove NAME` | Delete the user. Refused while the user owns accounts, also removed ones; hand them over with `account move` first. An auditor's unrevoked grants are revoked first and printed; they stay in their owners' lists as history. |
 
 The last admin who can log in cannot be locked, removed or demoted. Admins
@@ -132,7 +177,8 @@ case; commands find a group by its name in any case.
 | Command | Purpose |
 |---|---|
 | `group add NAME` | Create a group. |
-| `group list` | List groups with their number of users, the accounts those users own (removed ones too), and when each was created. |
+| `group list` | List groups with their number of users, the accounts those users own (removed ones too), their storage quota (`QUOTA`), the storage they use (`USED`, as in [`usage`](#usage); `-` before the first snapshot), their quota state (`STATE`) and when each was created. |
+| `group set-quota NAME SIZE\|none` | Set a group's storage quota in message bytes, deduplicated within the group, like `50GiB`, `500GB` or `2TiB`; `none` removes it. Refused above the instance quota (`MAIL_ARCHIVE_STORAGE_QUOTA`). Takes effect within 10 seconds. Audited as `group.quota` with the old and new value in bytes. See [Storage and quotas](../guide/operations#storage-and-quotas). |
 | `group rename NAME NEW-NAME` | Rename a group. |
 | `group remove NAME` | Remove a group. Refused while it has users, while a legal hold names it (also a released one), and for the last group. |
 
@@ -157,6 +203,7 @@ customers gets one auditor login per group.
 | `account add NAME` | Add an account. Flags: `--host` and `--username` (required), `--port`, `--tls tls\|starttls\|none` (default `tls`), `--include FOLDER`, `--exclude FOLDER` (repeatable), `--password-stdin`, `--skip-check`. The login is checked before saving unless `--skip-check` is set. |
 | `account add-smtp NAME --address ADDRESS` | Add an smtp account that receives copies of every message from a mail server (`--address` repeatable, at least one). An address has no `+`: the part after `+` encodes the original recipient. See [Journaling with Postfix](../guide/journaling). |
 | `account smtp-addresses NAME` | Show the addresses of an smtp account; `--add ADDRESS` and `--remove ADDRESS` (repeatable) change them. An address belongs to one account; the account keeps at least one. |
+| `account smtp-secret NAME` | List, create or revoke the [SMTP secrets](#smtp-secrets) a mail server logs in with. |
 | `account fill NAME --host HOST --username USER` | Copy an IMAP mailbox into an smtp account, into its folder `JOURNAL`: the mail from before journaling, once up to a cut-off or, with `--keep-running`, recurring. See below. |
 | `account list` | List accounts with owner, the owner's group, server, login, state (enabled, disabled, removed, removed (being deleted), import) and folder filters. For smtp accounts, SERVER is `smtp` and LOGIN lists the addresses. |
 | `account folders NAME` | Connect and show which folders will be archived, with their role (trash, junk, sent, …). |
@@ -167,7 +214,7 @@ customers gets one auditor login per group.
 | `account enable NAME`, `account disable NAME` | Include or exclude the account from automatic syncs. Archived mail is kept. A disabled smtp account answers `451`: the mail server keeps the copies queued for `maximal_queue_lifetime` (5 days by default) and then drops them. |
 | `account remove NAME` | Remove the account. Archived mail is kept; see [Disabling and removing](../guide/accounts#disabling-and-removing). Refused while the account is being synced or imported into. Prints how to delete it completely with `account purge`. |
 | `account purge NAME` | Delete a removed account completely: its locations, folders and the account; the name is free again. Messages also in another account stay there; messages whose last location is in this account are deleted like a retention deletion (record, attestation entry, file removed after `MAIL_ARCHIVE_RETENTION_FILE_GRACE`). Refused, naming the reason, for an account that is not removed, has a retention rule, is named by a legal hold (also a released one) or has mail covered by an active hold, is being synced, filled or imported into, or while another purge is open. Shows the locations to remove, the messages to delete and those kept (by owner and account), then asks for the number of messages to delete; `--count N` gives it instead and must match, `--dry-run` stops after the preview. Runs in batches (`--lock-timeout`, default 10 minutes, per batch); an interrupted purge resumes with the same command or when the web server starts. `--cancel` cancels an open purge: what it deleted stays deleted, the account stays removed. See [Deleting a removed account completely](../guide/accounts#deleting-a-removed-account-completely). |
-| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. The account leaves the old owner's [auditor grants](#auditors); a grant left without accounts is revoked; each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. |
+| `account move NAME --to USER` | Hand the account and its archived mail to another user. Also for removed accounts; refused if the user already has an account with that name. A user of another customer group needs `--other-group`; the account's shares then end, and each is printed. The account leaves the old owner's [auditor grants](#auditors); a grant left without accounts is revoked; each is printed. Warns when the account has a recurring fill: it goes on importing the same mailbox, now for the new owner. For an smtp account with usable [SMTP secrets](#smtp-secrets), prints that the old owner may know them and the command that rotates them. |
 
 Account changes work while the account is being synced and apply from the
 next sync; only `account remove` waits for the sync to finish. A command
@@ -183,6 +230,43 @@ unless `--user` is given.
 
 Folder filters: with `--include`, only those folders are archived; `--exclude`
 then removes folders from what is left. Names are matched case-insensitively.
+
+### SMTP secrets
+
+A mail server logs in to the SMTP server of an smtp account with the user
+name `smtp-` and the account's ID, for example `smtp-42`, and a secret that
+starts with `mas_`. The user name never changes. The secret is shown once;
+the archive stores only its SHA-256 and its last 4 characters.
+
+```sh
+./ma account smtp-secret journal               # the user name and the secrets
+./ma account smtp-secret journal --new         # a new secret, printed once
+./ma account smtp-secret journal --new --grace 0
+./ma account smtp-secret journal --revoke 12
+```
+
+- Without a flag, the command prints the user name and lists the secrets:
+  ID, last characters, created, expires, last used and state (`active`,
+  `expiring`, `expired` or `revoked`). Revoked and expired secrets stay
+  listed for 30 days.
+- `--new` prints the user name, the secret and the line for the mail
+  server's SASL password map. The current secret stays usable for
+  `--grace` (whole days, default `7d`, at most `30d`), so the mail server
+  can switch to the new one without losing mail. `--grace 0` revokes it at
+  once. A secret that was already expiring is revoked: an account has at
+  most two usable secrets.
+- `--revoke ID` revokes a secret at once: the SMTP server refuses it at the
+  mail server's next message, also on a connection that is already logged
+  in.
+- Each change is recorded in the [audit log](../guide/audit-log)
+  (`smtp_credential.create`, `smtp_credential.revoke`), never with the
+  secret.
+
+The account's owner, who must be an admin, also manages the secrets in the
+web UI, and every admin can list and revoke all of them
+([API](./api#smtp-secrets)). Locking the owner or moving the account to
+another user does not stop the secrets: rotate them with `--new --grace 0`
+when someone who knows a secret should no longer deliver mail.
 
 ### account fill
 
@@ -202,7 +286,7 @@ then removes folders from what is left. Names are matched case-insensitively.
 | `--password-stdin` | asked for | Read the password from stdin. It is kept, encrypted with `MAIL_ARCHIVE_SECRET_KEY`, only while the fill runs; for a recurring fill as long as it keeps running, like the password of an IMAP account, and deleted when the fill is stopped. |
 | `--include FOLDER`, `--exclude FOLDER` | all folders | Which folders to copy (repeatable; see [Folder filters](#accounts)). |
 | `--confirm-folders` | off | Copy trash and spam folders too. |
-| `--before DATE` | now | The cut-off of a one-time fill: RFC 3339, or `YYYY-MM-DD` for midnight UTC. A message is imported when its INTERNALDATE is before the cut-off plus one hour and the account did not receive its Message-ID over SMTP. Not with `--keep-running`. |
+| `--before DATE` | now | The cut-off of a one-time fill: RFC 3339, or `YYYY-MM-DD` for midnight UTC. A message is imported when its INTERNALDATE is before the cut-off plus one hour and the account did not receive the [same message](../guide/journaling#bring-in-the-mail-from-before-journaling) over SMTP (the same Message-ID, Date, From and Subject). Not with `--keep-running`. |
 | `--keep-running` | off | A recurring fill: no cut-off, and after the first run here the web server runs it every `--interval`. On an existing fill, switches an ended fill on: the password is asked for again; the first run scans the fill's IMAP folders again from the start and imports what the cut-off left out, what the fill imported before is recognised without downloading it again. A fill from before `JOURNAL` first copies the messages of its own folders into `JOURNAL`, as locations, without storing any message file again; its old folders stay. |
 | `--interval D` | `default` | How often a recurring fill runs: `default` (`MAIL_ARCHIVE_SYNC_INTERVAL`, 6 hours unless set) or a duration of whole minutes from `5m` to `720h`, not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`. Alone, it changes the interval of a recurring fill. The next run is due that long after the last one started. With the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) there are no scheduled runs, and no fill is stale; a fill just started, switched on, resumed or interrupted still finishes its current run. The fills of all accounts share one queue in the web server, one at a time; a long one-time fill delays the recurring runs behind it. |
 | `--cancel` | | Stop a running or recurring fill (after its current batch if it runs) and delete its password. What it imported stays. |
@@ -213,18 +297,28 @@ then removes folders from what is left. Names are matched case-insensitively.
 Without flags it lists the fills, with the schedule, health and waiting
 messages of recurring ones. The first run happens in the foreground and
 prints the first message the account received over SMTP and then the
-progress per folder; exit code `1` when some folders failed. The web UI
+progress per folder; exit code `1` when some folders failed, `75` when the
+account's group or the instance reached its
+[storage limit](../guide/operations#storage-and-quotas): the fill then stays
+running with what it stored, and the web server continues it once space is
+freed. In the counts
+per folder, `NEW` is the part of `IMPORTED` the account did not hold before
+in any of its folders, even if the archive held the same bytes from another
+account. The web UI
 offers the same on the account's page; see
 [Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling)
 and [Keep importing](../guide/journaling#keep-importing-recurring-fill). A
 recurring fill behaves as follows.
 
 **Which messages.** A recurring fill has no cut-off. A message is imported
-when the account did not receive its Message-ID over SMTP **and** its
-INTERNALDATE is at least **two hours** old. A younger message waits for the
-next run: its journal copy may still be in the mail server's queue. A message
-without a Message-ID cannot be matched with a journal copy; it is imported
-once it is two hours old (a duplicate beats a gap). A date more than a day in
+when the account did not receive the same message over SMTP (the same
+Message-ID, Date, From and Subject; see
+[Journaling](../guide/journaling#bring-in-the-mail-from-before-journaling))
+**and** its INTERNALDATE is at least **two hours** old. A younger message
+waits for the next run: its journal copy may still be in the mail server's
+queue. A message without a Message-ID, a Date or a From cannot be matched
+with a journal copy; it is imported once it is two hours old (a duplicate
+beats a gap). A date more than a day in
 the future, from a server with a wrong clock, counts as old.
 
 **After a restart.** The web server starts no run of a recurring fill in the
@@ -271,7 +365,7 @@ after two intervals without a successful run *stale*. The banner names the
 account with the mailbox, such as "journal (alice@example.com)",
 [`/healthz/sync`](../guide/operations#healthz-sync) lists the smtp account's
 ID, and the [webhook alert](../guide/operations#webhook-alerts) names the
-fill and its mailbox. Fills of a disabled account do not run, not even a run
+fill by its ID, and its mailbox with the detail `full`. Fills of a disabled account do not run, not even a run
 that was about to start, and count as healthy; they run again once the
 account is enabled.
 
@@ -288,19 +382,21 @@ retention has usually ended too, so the next deletion run lists it.
 
 | Command | Purpose |
 |---|---|
-| `sync` | Copy new messages from all enabled accounts. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
+| `sync` | Copy new messages from all enabled accounts. Prints a line per account with `fetched=N new=N`; `new` counts the messages the account did not hold before in any of its folders, even if the archive held the same bytes from another account. Exits non-zero if any account failed. Accounts that are being synced elsewhere are skipped. An account whose customer group or the instance reached its [storage limit](../guide/operations#storage-and-quotas) is not synced, or its sync stops before the next message and keeps what it fetched: its line ends `paused:` with the limit, and without failures the command exits with `75`. With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL` set, sends the alerts that became due at the end (for up to 15 seconds; failed deliveries are retried by the next sync or the web server). |
 | `sync --account NAME` | Only these accounts (repeatable), also when disabled. `--user USER` limits to one user's accounts. |
 | `sync --reconcile` | Also compare every selected folder with the server now, not only those due by `MAIL_ARCHIVE_RECONCILE_INTERVAL`. A plain `sync` reconciles due folders. The output adds `gone=N back=N flags=N` for accounts that were reconciled. See [Reconcile](../guide/syncing#reconcile). |
-| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. A line counts the [background jobs](../guide/operations#background-jobs) per kind: `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, also `retrying` for jobs that wait for another attempt, or `jobs: none`. The last line shows encryption at rest: `on`, `off`, or an unfinished `encryption enable` or `disable` with its progress and the command that finishes it. When the PDF reader could not be prepared in the process that ran them, a further line says `attachment text: PDF extractor unavailable for N message(s)`: the cause is in the log of the web server or worker; after fixing it and a restart, `jobs retry attachment_text`. |
+| `status` | Distinct messages per account with its ID, SOURCE, owner and the last sync result (`--user USER` for one user). SOURCE is `snapshot (IMAP)`, `complete (SMTP)` or `import`. Import accounts show `import` instead of enabled. `GONE` counts the account's messages that are no longer on its server (`-` for import and smtp accounts). For smtp accounts, LAST SYNC is when the account last received a message. `EVERY` is how often the web server's schedule syncs an IMAP account (`6h (default)`, `30m`, `15m (min)` when the floor raised it, `manual`, or `off` when the schedule is off), `NEXT SYNC` when it does next (`due` when that has passed, `-` when disabled or not scheduled), and `HEALTH` is `ok`, `failing` or `stale` as in `/healthz/sync`; this command cannot see the web server's queue, so an account waiting there may show `stale`. `FAILED` shows `-`, or how many syncs in a row failed and since when (`4x since 2026-10-01 12:00`). The ID is what [`/healthz/sync`](../guide/operations#healthz-sync) and alerts name. Without `--user`, a line shows the storage of the instance, exact: `storage: 1234 unique messages, 5.6 GiB; per group and account: ./ma usage` ([`usage`](#usage) shows them per group and account). A line shows the newest [attestation](#attest), another the number of [retention rules and legal holds](#retention), `off` without a key, or `overdue` when it is older than twice `MAIL_ARCHIVE_ATTEST_INTERVAL`. A line counts the [background jobs](../guide/operations#background-jobs) per kind: `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, also `retrying` for jobs that wait for another attempt, or `jobs: none`. A line shows encryption at rest: `on`, `off`, or an unfinished `encryption enable` or `disable` with its progress and the command that finishes it. Then a `schema:` line, and a `setup:` line: `complete since …`, waiting for the first admin from the [setup link](#setup-token) with the end of its window, its token expired, or no user yet; with `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` on an instance that is not set up, a second `setup:` line says that a new instance starts without encryption at rest. When the PDF reader could not be prepared in the process that ran them, a further line says `attachment text: PDF extractor unavailable for N message(s)`: the cause is in the log of the web server or worker; after fixing it and a restart, `jobs retry attachment_text`. |
+| `usage [--json] [--group NAME]` | Show the storage used, in message bytes: the instance, each customer group with its quota and state, and each account with its owner and group. See [usage](#usage). |
 | `notify test` | Send a test message to `MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL`. Prints the HTTP status (never the URL) and exits non-zero if the receiver did not accept it. See [Monitoring and alerts](../guide/operations#monitoring-and-alerts). |
+| `notify mail-test --to ADDRESS` | Send one test mail to ADDRESS through the relay in `MAIL_ARCHIVE_MAIL_URL`, as [alert mail](../guide/email-alerts) goes (TLS required). Prints the relay and its reply code (`SMTP 250 2.0.0`), never the password or the reply's text, and exits non-zero if the relay did not take the mail. See [Email alerts](../guide/operations#email-alerts). |
 | `import NAME --from PATH --format mbox\|maildir\|eml` | Import mbox files, a Maildir or a directory of `.eml` files into the import account `NAME`, created if needed, or with `--journal` into the folder `JOURNAL` of the existing smtp account `NAME`. See below. |
-| `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Then it extracts the text of PDF and text attachments of every message that has none yet, in the foreground, newest first, until none is left, and prints `updated N message(s), extracted text of M attachment(s)`; `MAIL_ARCHIVE_JOB_WORKERS` (default 1; `0`, as set for a web server that leaves jobs to the worker, counts as 1 here) sets how many messages run at a time, PDFs one at a time. The web server or the worker does the same in the background; installations that run only `sync` or `import` from cron get attachment text only from `reindex`, so run it after them, for example in the same cron job. Messages that another process is extracting, or that wait for a retry, are left to it, and it says how many. Safe to interrupt and rerun, and to run alongside the web server, the worker and syncs; a second `reindex` at the same time exits with `reindex already running`. |
+| `reindex` | Extract body text, To and Cc recipients, attachment names and the links between replies from messages archived by an older version, so search, its filters and conversations find them. Needed once after an upgrade that says so; see [Upgrades](../guide/operations#one-time-steps). Then it extracts the text of PDF and text attachments of every message that has none yet, and of every message that a customer group holds without being able to search its attachment text yet (see [Background jobs](../guide/operations#background-jobs)), in the foreground, newest first, until none is left, and prints `updated N message(s), extracted text of M attachment(s)`; `MAIL_ARCHIVE_JOB_WORKERS` (default 1; `0`, as set for a web server that leaves jobs to the worker, counts as 1 here) sets how many messages run at a time, PDFs one at a time. The web server or the worker does the same in the background; installations that run only `sync` or `import` from cron get attachment text only from `reindex`, so run it after them, for example in the same cron job. Messages that another process is extracting, or that wait for a retry, are left to it, and it says how many. Safe to interrupt and rerun, and to run alongside the web server, the worker and syncs; a second `reindex` at the same time exits with `reindex already running`. |
 | `verify` | Check the whole archive: the attestations, every message file is present and matches its hash, and no files lie around without a database row. See below. |
 | `export --format mbox\|maildir --out DIR` | Write archived mail for a mail client, for `--user USER`, or `--account NAME` with an optional `--folder NAME`. See below. |
 | `export --format gobd --out PATH` | Write a GoBD export of one customer group for a tax audit: the original messages, CSV tables, a checksum manifest and a signed statement, as a directory or a ZIP. See [export --format gobd](#export-format-gobd). |
 | `export verify PATH` | Check a GoBD export (a directory or a ZIP) offline, without a database or configuration. See [export verify](#export-verify). |
-| `backup DIR` | Dump the database into `DIR` with `pg_dump` (`mailarchive-<time>.dump`), next to `BACKUP-NOTE.txt`. With [encryption at rest](#encryption) on, the dump is encrypted while it is written (`mailarchive-<time>.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring (`mailarchive-<time>.keyring`, wrapped under the archive keys); the note names the fingerprints of the keys that open it, never a key. With Docker Compose: `./ma backup DIR`. See [Backups](../guide/operations#backups). |
-| `restore-dump FILE [--keyring PATH]` | Load a dump written by `backup` into a new, empty database, in one transaction (`pg_restore --no-owner --single-transaction --exit-on-error`); it refuses a database that holds anything, since `pg_restore --clean` cannot replace this schema (the partitions of the audit log); an encrypted dump is decrypted on its way, with the keyring copy next to it (or `--keyring`). A damaged or cut dump leaves the database as it was. Then it reconciles the keyring and the state of encryption at rest with the data directory and prints what it changed: the newer of the dump's keyring and the keyring file wins and is written to the other (a recovery key added after the backup stays), the data keys of both are kept, copies of different archives are refused (for an encrypted dump before anything is restored, by its keyring copy), and encrypted files next to a dump that says off make the state `encrypting`, finished by `encryption enable`. `--reconcile-only` does only the second step, for example after `migrate` on a dump older than the schema. Refuses while a writer runs, and holds the writers lock until the reconciliation is done, also under `./ma`, so that no writer starts during the restore. With Docker Compose: `./ma restore-dump FILE`. See [Restore](../guide/operations#restore). |
+| `backup DIR` | Dump the database into `DIR` with `pg_dump` (`mailarchive-<time>.dump`), next to `BACKUP-NOTE.txt`. With [encryption at rest](#encryption) on, the dump is encrypted while it is written (`mailarchive-<time>.dump.enc`, the plaintext only passes through a pipe), next to a copy of the keyring (`mailarchive-<time>.keyring`, wrapped under the archive keys); the note names the fingerprints of the keys that open it, never a key. With Docker Compose: `./ma backup DIR`; without it, see [Backups without Docker](../guide/operations#backups-without-docker) for the connection `pg_dump` gets. See [Backups](../guide/operations#backups). |
+| `restore-dump FILE [--keyring PATH] [--plaintext]` | Load a dump written by `backup` into a new, empty database, in one transaction (`pg_restore --no-owner --single-transaction --exit-on-error`); it refuses a database that holds anything, since `pg_restore --clean` cannot replace this schema (the partitions of the audit log); an encrypted dump is decrypted on its way, with the keyring copy next to it (or `--keyring`). A damaged or cut dump leaves the database as it was. Only an encrypted dump is authenticated: a dump without encryption is refused before anything is restored when the archive shows a sign of encryption at rest (an archive key is configured, the data directory has a keyring, the name ends in `.enc`, or a keyring copy lies next to it or `--keyring` is given), unless `--plaintext` is passed; check where such a dump came from first. `--plaintext` on an encrypted dump is refused. Without any of these signs, a dump without encryption is restored as it is. Then it reconciles the keyring and the state of encryption at rest with the data directory and prints what it changed: the newer of the dump's keyring and the keyring file wins and is written to the other (a recovery key added after the backup stays), the data keys of both are kept, copies of different archives are refused (before anything is restored when a keyring copy lies next to the dump, encrypted or not), and encrypted files next to a dump that says off make the state `encrypting`, finished by `encryption enable`. `--reconcile-only` does only the second step, for example after `migrate` on a dump older than the schema; `--plaintext` with it is refused. Refuses while a writer runs, and holds the writers lock and the migration lock until the reconciliation is done, also under `./ma`, so that no writer starts during the restore and a starting `serve` or `worker` waits for it instead of migrating the empty database. With Docker Compose: `./ma restore-dump [--plaintext] FILE`, which needs the image of the same release; without it, `pg_restore` gets the connection described in [Backups without Docker](../guide/operations#backups-without-docker). See [Restore](../guide/operations#restore). |
 | `audit --since DATE --format csv\|jsonl` | Write the [audit log](../guide/audit-log) of a period to stdout or `--out FILE`, oldest first. `DATE` is `YYYY-MM-DD`, a day in UTC, or RFC 3339 with an offset for another zone (`2026-10-01T00:00:00+02:00`). `--until DATE` (exclusive; a plain date includes the day), `--user NAME`, `--group NAME` (the entries of a [customer group](#groups)), `--group-id N` (by the group's id, also of a removed group) or `--without-group` (those without one: before 1.4.0, or instance-level), and `--action` with a group (`login`, `search`, `read`, `export`, `accounts`, `users`, `profile`, `api_keys`, `sync`, `retention`) or an action, repeatable. See [Writing it out](../guide/audit-log#writing-it-out). |
 | `attest` | Write a signed attestation over the archived messages now. See below. |
 | `attest keygen [--rotate]` | Create the key that signs attestations, or replace it. See below. |
@@ -309,11 +405,11 @@ retention has usually ended too, so the next deletion run lists it.
 | `hold add\|list\|release` | Legal holds: no deletion of what they cover. See below. |
 | `retention preview\|show\|confirm\|cancel\|runs\|sweep` | Delete mail whose retention period has ended, in a reviewed run. See below. |
 | `attest check [--file FILE] [--public-key FILE] [--offline]` | Check only the attestations, fast. See below. |
-| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule, attestations and, unless `MAIL_ARCHIVE_JOB_WORKERS=0`, the [background jobs](../guide/operations#background-jobs). Default `127.0.0.1:8080`. |
-| `worker` | Run only the background jobs, `MAIL_ARCHIVE_JOB_WORKERS` (1 to 8) at a time: no web server, SMTP, syncs, fills, attestations or retention. For a separate process with its own memory limit, with `MAIL_ARCHIVE_JOB_WORKERS=0` for `serve`; with Compose, the `worker` service. Stops on SIGTERM and hands running jobs back to the queue. Refuses `MAIL_ARCHIVE_JOB_WORKERS=0`. |
+| `serve [--listen ADDR]` | Run the web server: UI, JSON API, sync schedule, attestations and, unless `MAIL_ARCHIVE_JOB_WORKERS=0`, the [background jobs](../guide/operations#background-jobs). Default `127.0.0.1:8080`. Needs the secret key (`MAIL_ARCHIVE_SECRET_KEY_FILE` or `MAIL_ARCHIVE_SECRET_KEY`) and refuses to start without it with exit code `4`, before it listens. It listens at once; until it is ready, `/healthz` answers `503` with `{"status":"starting"}` and every other request `503` with `Retry-After: 5`. At start it waits for a running `migrate`, applies pending migrations with `MAIL_ARCHIVE_MIGRATE_ON_START=on`, and refuses with exit code `4` while migrations are pending or a newer version migrated the database; a failed migration ends it with exit code `3` ([Start-up migrations](../guide/operations#start-up-migrations)). Then it checks the secret key against the instance and refuses another one with exit code `4` ([`secret-key`](#secret-key)). |
+| `worker` | Run only the background jobs, `MAIL_ARCHIVE_JOB_WORKERS` (1 to 8) at a time: no web server, SMTP, syncs, fills, attestations or retention. For a separate process with its own memory limit, with `MAIL_ARCHIVE_JOB_WORKERS=0` for `serve`; with Compose, the `worker` service. Stops on SIGTERM and hands running jobs back to the queue. Refuses `MAIL_ARCHIVE_JOB_WORKERS=0`. Starts like `serve`: start-up migrations, schema check, exit codes `3` and `4`; it does not listen and does not need or check the secret key (Compose gives it none). |
 | `jobs retry KIND` | Queue the failed background jobs of `KIND` (for example `attachment_text`) again, with their attempts reset, and print how many. `status` shows how many failed. Recorded in the audit log as `jobs.retry`. |
 
-Commands that change users or accounts, `jobs retry`, and `import`, `export`, `backup`
+Commands that change users or accounts, `jobs retry`, `secret-key accept`, and `import`, `export`, `backup`
 and `audit`, write an entry to the [audit log](../guide/audit-log) first;
 if it cannot be written they do nothing. A GoBD export also records its end
 (`data.export_done`). `sync`, `status`, `verify`, `export verify` and the
@@ -335,20 +431,83 @@ list commands are not recorded.
 | `--format` | | `mbox`, `maildir` or `eml` (only files ending in `.eml`). |
 | `--folder NAME` | from the files | The folder name of a single-folder source, or a prefix (`NAME/…`) for several folders. Required for `.eml` files directly in `--from`. Not with `--journal`. |
 | `--user USER` | the only user | The owner of the account. |
-| `--journal` | off | Import into the folder `JOURNAL` of the existing smtp account `NAME`, like a fill: no envelope, and messages whose Message-ID the account received over SMTP are left out (counted as `JOURNALED`). Source folders are merged. |
+| `--journal` | off | Import into the folder `JOURNAL` of the existing smtp account `NAME`, like a fill: no envelope, and messages the account received over SMTP are left out (counted as `JOURNALED`): the [same message](../guide/journaling#bring-in-the-mail-from-before-journaling), with the same Message-ID, Date, From and Subject. Source folders are merged. |
 | `--label TEXT` | the `--from` path; a longer one needs `--label` | With `--journal`: the origin the message view shows ("Imported from files: TEXT"), 1 to 200 characters. |
 | `--max-message-size SIZE` | `256MiB` | Larger messages are skipped; the import then exits `1` (`partial`). |
 | `--dry-run` | off | List folders and message counts, store nothing. |
 
 Running the same import again adds only what is missing. Progress goes to
 stderr after every batch, a summary per folder to stdout. Exit codes: `0`
-done, `1` messages skipped or an error. Import accounts are never synced:
+done, `1` messages skipped or an error, `75` paused at a
+[storage limit](../guide/operations#storage-and-quotas): the import refuses
+to start, or stops with "storage quota of group NAME reached after N
+messages" and keeps what it read; run the same command again once space is
+freed. Import accounts are never synced:
 `sync --account NAME` refuses them, and `account enable`, `disable`,
 `set-password`, `set-folders` and `folders` do not apply. `rename`, `move`
 and `remove` work. Without `--journal`, an smtp account is refused; with it,
 anything but an existing smtp account is, and nothing is created. See
 [Importing mail](../guide/importing) and
 [Into an smtp account](../guide/importing#into-an-smtp-account).
+
+### usage
+
+```sh
+./ma usage
+./ma usage --group "Example Ltd" --json
+```
+
+Shows the storage used, in **message bytes**: the size of each unique
+message, counted once however many folders and accounts hold it. Read-only,
+not recorded in the audit log.
+
+```
+instance: 301234 messages, 21.4 GiB (exact), state ok
+groups and accounts counted at 2026-11-13 09:00:12; groups include what was archived since
+
+GROUP        MESSAGES  SIZE       QUOTA  STATE
+Default      151020    10.7 GiB   -      ok
+Example Ltd  10233     742.1 MiB  -      ok
+
+ACCOUNT  KIND  OWNER  GROUP        MESSAGES  SIZE       EXCLUSIVE
+anna     imap  anna   Default      52110     3.8 GiB    2.9 GiB
+billing  smtp  bob    Example Ltd  8120      610.4 MiB  598.0 MiB
+info     imap  bob    Example Ltd  2410      171.9 MiB  40.2 MiB
+```
+
+- **The first line** is the instance: exact at all times, and the same
+  figure as the `storage:` line of [`status`](#archive).
+- **Groups** count each message once per group: a message in two groups
+  counts fully in each. `QUOTA` is the group's quota (`-` without one),
+  `STATE` its quota state (see
+  [Storage and quotas](../guide/operations#storage-and-quotas); set quotas
+  with [`group set-quota`](#groups)). A row `Without group` appears while accounts
+  without an owner exist, which happens only before the first user.
+- **Accounts** show their messages and bytes, and in `EXCLUSIVE` the bytes
+  no other account holds: what a [purge](#accounts) of the account
+  would free. A removed account is marked `(removed)`.
+- **When.** Groups and accounts are counted by a snapshot that a
+  [background job](../guide/operations#background-jobs) of `serve` or
+  `worker` takes every hour, and soon after a user or account moves to
+  another group, a purge or deletion run ends, or an import or
+  `restore-dump` ends. Between snapshots, a group's figure adds what was
+  archived since, and deletions show at the next snapshot: it is an upper
+  bound, with two exceptions until the next snapshot. Right after a user or
+  account moves between groups, the groups show the moved bytes only from
+  the snapshot the move requests (soon, while `serve` or `worker` runs).
+  And a message whose only other copy in the group is deleted while it is
+  being added is missing, one message per such race. Figures that no
+  snapshot has counted
+  yet show `-`; the second line then says `not counted yet`.
+- A `warning:` line appears if the last snapshot found the instance
+  counters off; the log of `serve` or `worker` names the figures.
+
+| Flag | |
+|---|---|
+| `--group NAME` | Only this group and its accounts (case does not matter). |
+| `--json` | The same as JSON: `messages`, `bytes`, `state`, `snapshotAt`, `counterDriftBytes`, `databaseBytes`, `relationBytes`, `groups` (`id`, `name`, `messages`, `bytes`, `quotaBytes`, `state`, `snapshotAt`), `withoutGroup` (only while it is shown) and `accounts` (`id`, `name`, `kind`, `removed`, `owner`, `group`, `messages`, `bytes`, `exclusiveBytes`, `snapshotAt`). |
+
+Names are shown: this is the admin's shell on the host.
 
 ### verify
 
@@ -501,7 +660,9 @@ later; a `--user` or `--account` must be in it), `--since` and
 inside), and a search filter (`--query`, `--sender`, `--recipient`,
 `--attachment`, `--has-attachment`). A filter is matched by search, as the
 mail's owner sees it, when the hold is added and again before every
-deletion; matches are only ever added. Until the first match, a filter hold
+deletion; matches are only ever added. It never searches SMTP envelopes:
+`--recipient` matches the To and Cc headers only, not envelope (BCC)
+recipients; hold the smtp account to keep journal mail by its envelope. Until the first match, a filter hold
 covers its whole scope. Without any condition the hold covers the whole
 archive and needs `--all`.
 
@@ -512,7 +673,8 @@ is kept as removed instead of being deleted. A user cannot leave a group
 whose active hold covers their accounts (`user set-group`), an account
 cannot move into another group while such a hold covers it, and a group that
 a hold names stays (`group remove` is refused). `hold list` shows a group
-hold as `group NAME`.
+hold as `group NAME`, and every hold's number of matched messages; the web
+interface shows that number only for an admin's own holds.
 
 ### deletion
 
@@ -548,11 +710,18 @@ restoring the last dump undoes a wrong deletion. The web server removes due
 files every hour; `retention sweep` does it by hand. A file whose message
 was archived again stays.
 
-A deleted message is not archived again where it would already be expired:
-a sync after a `UIDVALIDITY` change, a copy in another selected folder, an
-import or an SMTP delivery skips it (`sync` prints `deleted=N`, `import` a
-line, and SMTP answers 250). In an account without a rule, or with a longer
-one, it is archived again, as if that location had existed at deletion.
+A deleted message is not archived again where it would already be expired,
+in the accounts and customer groups it was deleted from: a sync after a
+`UIDVALIDITY` change, a copy in another selected folder, an import or an
+SMTP delivery skips it (`sync` prints `deleted=N`, `import` a line, and SMTP
+answers 250), as long as no account of that group holds it. A message
+deleted by a run counts as deleted from every account and group that held
+it; one removed by an [`account purge`](#accounts), also one that stays in
+other accounts, from that account and its group (accounts without an owner
+form one group). In other groups, once the group holds it again, and in an
+account without a rule or with a longer one, it is archived again, as if
+that location had existed at deletion. Messages deleted by a version before
+1.6.0 count as deleted in every group that holds no copy.
 
 After restoring a dump older than a run, its messages come back as rows;
 once their files are removed, `verify` reports them as `missing` and

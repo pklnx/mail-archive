@@ -134,6 +134,11 @@ var auditActionClasses = map[string][]AuditClass{
 	"profile.recovery_codes":  {AuditSelf},
 	"profile.passkey_add":     {AuditSelf},
 	"profile.passkey_remove":  {AuditSelf},
+	// The admin's address for alert mail (#397, part 5); the entries
+	// never carry the address.
+	"profile.notify_email_set":     {AuditSelf},
+	"profile.notify_email_confirm": {AuditSelf},
+	"profile.notify_email_remove":  {AuditSelf},
 
 	"api_key.create": {AuditTargeted},
 	"api_key.revoke": {AuditTargeted},
@@ -146,10 +151,14 @@ var auditActionClasses = map[string][]AuditClass{
 	"user.2fa_reset":        {AuditTargeted},
 	"user.passkeys_removed": {AuditTargeted},
 	"user.group_change":     {AuditTargeted},
+	// The first admin from the setup link (#396): about the new admin.
+	"user.setup": {AuditTargeted},
 
 	"group.add":    {AuditTargeted},
 	"group.rename": {AuditTargeted},
 	"group.remove": {AuditTargeted},
+	// A group's storage quota set or removed (#397): from and to in bytes.
+	"group.quota": {AuditTargeted},
 
 	"account.add":          {AuditTargeted},
 	"account.change":       {AuditTargeted},
@@ -161,6 +170,11 @@ var auditActionClasses = map[string][]AuditClass{
 	"account.purge_batch":  {AuditTargeted},
 	"account.purge_finish": {AuditTargeted},
 	"account.purge_cancel": {AuditTargeted},
+
+	// SMTP credentials of smtp accounts (#395): about the account. Logins
+	// over SMTP are logged, not audited.
+	"smtp_credential.create": {AuditTargeted},
+	"smtp_credential.revoke": {AuditTargeted},
 
 	"message.search":       {AuditSelf},
 	"message.list":         {AuditSelf},
@@ -195,6 +209,9 @@ var auditActionClasses = map[string][]AuditClass{
 	"data.backup":      {AuditInstance},
 	"audit.export":     {AuditInstance},
 	"jobs.retry":       {AuditInstance},
+
+	// The instance's secret key (#396): `secret-key accept`.
+	"instance.secret_key_accepted": {AuditInstance},
 
 	"retention.rule_add":    {AuditTargeted},
 	"retention.rule_remove": {AuditTargeted},
@@ -520,7 +537,7 @@ var auditGroups = map[string][]string{
 	"search":    {"message.search", "message.list", "message.page"},
 	"read":      {"message.open", "message.html", "message.raw", "message.part", "message.conversation"},
 	"export":    {"data.%", "audit.export"},
-	"accounts":  {"account.%"},
+	"accounts":  {"account.%", "smtp_credential.%"},
 	"users":     {"user.%", "group.%"},
 	"profile":   {"profile.%"},
 	"api_keys":  {"api_key.%"},

@@ -25,7 +25,8 @@ go build -o bin/demo ./tools/demo
 (cd docs && pnpm install --frozen-lockfile)
 
 # A fixed IMAP port: the account pages show it.
-bin/demo -db "$DEMO_DATABASE_URL" -listen 127.0.0.1:18080 -imap-listen 127.0.0.1:18043 -now "$DOCS_NOW" &
+# A fixed port for the new instance whose setup link the setup page shows.
+bin/demo -db "$DEMO_DATABASE_URL" -listen 127.0.0.1:18080 -imap-listen 127.0.0.1:18043 -setup-listen 127.0.0.1:18088 -now "$DOCS_NOW" &
 demo=$!
 trap 'kill $demo 2>/dev/null; wait $demo 2>/dev/null || true' EXIT INT TERM
 

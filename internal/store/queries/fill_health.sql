@@ -26,9 +26,10 @@ ON CONFLICT (fill_id) DO UPDATE SET
 SELECT sf.id, sf.account_id, a.name AS account_name, a.owner_id, a.enabled, sf.username, sf.interval_seconds,
        sf.recurring_since::timestamptz AS recurring_since, sf.status, sf.run_started_at,
        coalesce(h.failure_streak, 0)::int AS failure_streak, h.failing_since, h.last_success_at,
-       coalesce(h.notified_state, 'ok')::text AS notified_state
+       coalesce(h.notified_state, 'ok')::text AS notified_state, o.group_id
 FROM smtp_fills sf JOIN accounts a ON a.id = sf.account_id
 LEFT JOIN smtp_fill_health h ON h.fill_id = sf.id
+LEFT JOIN users o ON o.id = a.owner_id
 WHERE sf.keep_running AND a.removed_at IS NULL
   AND (sqlc.narg(owner)::bigint IS NULL OR a.owner_id = sqlc.narg(owner)::bigint)
 ORDER BY sf.id;

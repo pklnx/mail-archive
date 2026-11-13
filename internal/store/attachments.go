@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -51,18 +52,6 @@ func attachmentTextJob(sha string, priority int) NewJob {
 	}
 }
 
-// enqueueAttachmentText queues the extraction of a message that was just
-// inserted (inserted is the row count of its insert) in the caller's
-// transaction, if it has attachments: one more row in that transaction,
-// with a new key, so it meets no conflict and waits on nothing.
-func enqueueAttachmentText(ctx context.Context, q *db.Queries, m *MessageMeta, inserted int64) error {
-	if inserted != 1 || !m.HasAttachment {
-		return nil
-	}
-	_, err := enqueueJobs(ctx, q, []NewJob{attachmentTextJob(m.SHA256, PriorityNew)}, false)
-	return err
-}
-
 // AttachmentBackfillJob is the backfill job that serve, worker and reindex
 // enqueue at start: from the newest message (an empty payload), after its
 // children. A backfill that is queued keeps its cursor.
@@ -90,14 +79,32 @@ type AttachmentText struct {
 	Text string
 }
 
-// SaveAttachmentTexts marks a message done at the current version and
-// stores its texts, replacing those of an older version, in one
-// transaction. It returns false without an error when another writer
-// finished the message first (the texts are dropped) or the message is
-// gone.
-func (s *Store) SaveAttachmentTexts(ctx context.Context, sha256 string, texts []AttachmentText) (bool, error) {
+// AttachmentTextNeeded returns the ids of the message's locations that do
+// not show its attachment text yet (attachment_text_ok false). The job
+// reads them at its start: an extraction that starts afterwards may set
+// them (SaveAttachmentTexts).
+func (s *Store) AttachmentTextNeeded(ctx context.Context, sha256 string) ([]int64, error) {
+	return s.q.AttachmentTextNeeded(ctx, sha256)
+}
+
+// SaveAttachmentTexts stores the result of an extraction that started
+// after the locations needed existed, in one transaction: those locations
+// show the attachment text from now on (the ones deleted meanwhile are
+// left out), and, unless the message is done at the current version
+// already, it is marked done with its texts, which replace those of an
+// older version. It returns whether the texts were stored: false without
+// an error when another writer finished the message first (the texts are
+// dropped, the flags are set all the same) or the message is gone
+// (nothing is written).
+func (s *Store) SaveAttachmentTexts(ctx context.Context, sha256 string, texts []AttachmentText, needed []int64) (bool, error) {
 	stored := false
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		stored = false
+		// The locations first, as a deletion locks them before the
+		// message and its state row.
+		if err := setAttachmentTextOK(ctx, q, needed); err != nil {
+			return err
+		}
 		n, err := q.MarkAttachmentsIndexed(ctx, db.MarkAttachmentsIndexedParams{Sha256: sha256, Version: AttachmentIndexVersion})
 		if err != nil || n == 0 {
 			return err
@@ -124,6 +131,143 @@ func (s *Store) SaveAttachmentTexts(ctx context.Context, sha256 string, texts []
 		return false, nil
 	}
 	return stored, err
+}
+
+func setAttachmentTextOK(ctx context.Context, q *db.Queries, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := q.SetAttachmentTextOK(ctx, ids); err != nil {
+		return fmt.Errorf("set attachment text flags: %w", err)
+	}
+	return nil
+}
+
+// ErrAttachmentTextUnreadable is returned by AttachmentTextUnreadable for
+// a message whose stored attachment text could be searched but whose file
+// cannot be read: no new extraction can start, so the locations needed
+// stay as they are.
+var ErrAttachmentTextUnreadable = errors.New("message file unreadable")
+
+// errAttachmentTextRace: another writer marked the message done during
+// AttachmentTextUnreadable; nothing was written.
+var errAttachmentTextRace = errors.New("attachment text: the message was done meanwhile; try again")
+
+// AttachmentTextUnreadable records, in one transaction, that a message's
+// file could not be read for the extraction that should cover the
+// locations needed. A message that is not done is marked done without
+// text, as before, and a done message without searchable text needs none:
+// in both cases nothing can be searched, so those locations show the
+// (empty) text from now on. A done message with searchable text returns
+// ErrAttachmentTextUnreadable and changes nothing.
+func (s *Store) AttachmentTextUnreadable(ctx context.Context, sha256 string, needed []int64) error {
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		v, err := q.AttachmentIndexVersion(ctx, sha256)
+		if err != nil {
+			return err
+		}
+		if v >= AttachmentIndexVersion {
+			searchable, err := q.AttachmentTextSearchable(ctx, sha256)
+			if err != nil {
+				return err
+			}
+			if searchable {
+				return ErrAttachmentTextUnreadable
+			}
+		}
+		if err := setAttachmentTextOK(ctx, q, needed); err != nil {
+			return err
+		}
+		if v >= AttachmentIndexVersion {
+			return nil
+		}
+		n, err := q.MarkAttachmentsIndexed(ctx, db.MarkAttachmentsIndexedParams{Sha256: sha256, Version: AttachmentIndexVersion})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			// Another writer finished it since the version was read: undo,
+			// and the job's retry decides again.
+			return errAttachmentTextRace
+		}
+		// Texts of an older version cannot be searched any more.
+		return q.DeleteAttachmentTexts(ctx, sha256)
+	})
+	if state, ok := SQLState(err); ok && state == "23503" {
+		return nil // the message was deleted meanwhile
+	}
+	return err
+}
+
+// Batches of the repair.
+const (
+	repairNoAttachmentBatch = 10000
+	repairQueueBatch        = 1000
+)
+
+// RepairResult tells what one pass of RepairAttachmentText did.
+type RepairResult struct {
+	// Cleared counts the locations of messages without attachments that
+	// now show their (empty) attachment text.
+	Cleared int64
+	// Queued counts the messages whose attachment_text job was queued.
+	Queued int
+}
+
+// RepairAttachmentText checks the invariant of the attachment text flags
+// against the data (#539, part 2): every location with
+// attachment_text_ok false belongs to a message whose attachment_text job
+// is queued, running or failed, or that is not done at the current version
+// (the backfill's). It runs at the start of every process that runs the
+// attachment jobs and every 15 minutes there. It
+//
+//   - sets the flag on the locations of messages without attachments, as
+//     an insert does, since there is nothing to show; and
+//   - queues the job at PriorityBackfill for every message that breaks the
+//     invariant: a location or a job end written by a process before
+//     1.6.0, or a done job that was removed. Failed jobs stay failed.
+//
+// Both walk only message_locations_attachment_pending_idx, which in
+// steady state holds the few locations whose job is pending or failed.
+func (s *Store) RepairAttachmentText(ctx context.Context) (RepairResult, error) {
+	var res RepairResult
+	for {
+		n, err := s.q.RepairAttachmentTextNoAttachment(ctx, repairNoAttachmentBatch)
+		res.Cleared += n
+		if err != nil {
+			return res, fmt.Errorf("attachment text repair: %w", err)
+		}
+		if n < repairNoAttachmentBatch {
+			break
+		}
+	}
+	after := ""
+	for {
+		var shas []string
+		err := s.inTx(ctx, func(q *db.Queries) error {
+			var err error
+			shas, err = q.ListAttachmentTextRepair(ctx, db.ListAttachmentTextRepairParams{
+				After: after, Version: AttachmentIndexVersion, RowLimit: repairQueueBatch,
+			})
+			if err != nil || len(shas) == 0 {
+				return err
+			}
+			jobs := make([]NewJob, len(shas))
+			for i, sha := range shas {
+				jobs[i] = attachmentTextJob(sha, PriorityBackfill)
+			}
+			_, err = enqueueJobs(ctx, q, jobs, false)
+			return err
+		})
+		if err != nil {
+			return res, fmt.Errorf("attachment text repair: %w", err)
+		}
+		res.Queued += len(shas)
+		if len(shas) < repairQueueBatch {
+			return res, nil
+		}
+		after = shas[len(shas)-1]
+	}
 }
 
 // AttachmentCursor is the position of the backfill: the last message it

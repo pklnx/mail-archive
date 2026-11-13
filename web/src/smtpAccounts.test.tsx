@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Account, AccountsResponse } from "./api";
 import { addressList } from "./accountParts";
 import { AccountsPage } from "./AccountsPage";
-import { t } from "./i18n";
+import { languages, messagesFor, t } from "./i18n";
+import { smtpText } from "./smtpText";
 import { findAlert } from "./test/alerts";
 
 function smtpAccount(more: Partial<Account> = {}): Account {
@@ -16,7 +17,7 @@ function smtpAccount(more: Partial<Account> = {}): Account {
   };
 }
 
-const data = (accounts: Account[] = [], smtp: AccountsResponse["smtp"] = {}): AccountsResponse => ({
+const data = (accounts: Account[] = [], smtp: AccountsResponse["smtp"] = { auth: "off" }): AccountsResponse => ({
   accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp,
 });
 
@@ -47,6 +48,17 @@ function page(admin: boolean, d = data()) {
 }
 
 describe("adding an smtp account", () => {
+  it("names both ways to turn the SMTP server on", () => {
+    // The default needs a certificate (MAIL_ARCHIVE_SMTP_AUTH=required);
+    // the allowlist alone only with off.
+    for (const lang of languages) {
+      const text = messagesFor(lang).smtpServerOff;
+      for (const name of ["MAIL_ARCHIVE_SMTP_LISTEN", "MAIL_ARCHIVE_SMTP_TLS_CERT", "MAIL_ARCHIVE_SMTP_TLS_KEY", "MAIL_ARCHIVE_SMTP_AUTH=off", "MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS"]) {
+        expect(text, lang).toContain(name);
+      }
+    }
+  });
+
   it("offers the source only to admins", () => {
     page(false);
     fireEvent.click(screen.getByRole("button", { name: t.addAccount }));
@@ -55,6 +67,8 @@ describe("adding an smtp account", () => {
   });
 
   it("creates the account and shows the mail server setup", async () => {
+    // The server is off: the lines are those of its default, with a login.
+    answer = () => new Response(JSON.stringify({ name: "journal", username: "smtp-7", credentials: [] }), { status: 201, headers: { "Content-Type": "application/json" } });
     const reload = page(true, data([], null));
     fireEvent.click(screen.getByRole("button", { name: t.addAccount }));
     fireEvent.click(screen.getByLabelText(new RegExp(t.sourceSMTP)));
@@ -65,9 +79,12 @@ describe("adding an smtp account", () => {
     fireEvent.change(screen.getByLabelText(`${t.fieldAddresses} 2`), { target: { value: "  " } });
     fireEvent.click(screen.getByRole("button", { name: t.save }));
     expect(await screen.findByText(t.smtpAccountAdded("journal"))).toBeTruthy();
-    expect(requests).toEqual([{ method: "POST", url: "/api/accounts", body: { kind: "smtp", name: "journal", addresses: ["Archive@Archive.local"] } }]);
+    expect(requests[0]).toEqual({ method: "POST", url: "/api/accounts", body: { kind: "smtp", name: "journal", addresses: ["Archive@Archive.local"] } });
     expect(reload).toHaveBeenCalled();
-    expect(screen.getByText(/archive\.local\s+smtp:\[127\.0\.0\.1\]:2525/)).toBeTruthy();
+    // The new account's user name, for the password map line.
+    await waitFor(() => expect(screen.getByText(/\[archive\.customer\.example\]:587\s+smtp-7:mas_…/)).toBeTruthy());
+    expect(requests.slice(1)).toEqual([{ method: "GET", url: "/api/accounts/journal/smtp-credentials", body: undefined }]);
+    expect(screen.getByText(/archive\.local\s+archive:\[archive\.customer\.example\]:587/)).toBeTruthy();
     expect(screen.queryByText(t.sourceChoice)).toBeNull();
   });
 
@@ -108,13 +125,15 @@ describe("the smtp account's page", () => {
     fireEvent.change(screen.getByLabelText(`${t.fieldAddresses} 2`), { target: { value: "more@archive.local" } });
     fireEvent.click(screen.getByRole("button", { name: t.removeAddress("archive@archive.local") }));
     fireEvent.click(screen.getByRole("button", { name: t.save }));
-    await waitFor(() => expect(requests).toHaveLength(1));
-    expect(requests[0]!.body).toEqual({ addresses: ["more@archive.local"] });
+    // An admin's page also loads the account's SMTP secrets.
+    const changes = () => requests.filter((r) => r.method !== "GET");
+    await waitFor(() => expect(changes()).toHaveLength(1));
+    expect(changes()[0]!.body).toEqual({ addresses: ["more@archive.local"] });
   });
 
   it("shows the mail server setup in its own section", () => {
     detail(false, { addresses: ["journal@example.com"] });
-    expect(screen.getByText(t.setupNotDedicated("archive@archive.local"))).toBeTruthy();
+    expect(screen.getByText(smtpText().setupNotDedicated("archive@archive.local"))).toBeTruthy();
     // The section is the region; the panel inside it is none of its own.
     expect(screen.getAllByRole("region", { name: t.mailServerSetup })).toHaveLength(1);
   });

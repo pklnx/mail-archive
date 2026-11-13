@@ -64,7 +64,17 @@ WHERE
          AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
-       OFFSET 0))
+       OFFSET 0)
+       -- Only through a location of the scope that shows the
+       -- message's attachment text (attachment_text_ok, #539), as
+       -- AttachmentMatches checks for att_shas.
+       AND EXISTS (
+           SELECT 1 FROM message_locations al
+           JOIN folders af ON af.id = al.folder_id
+           WHERE al.message_sha256 = m.sha256 AND al.attachment_text_ok
+             AND af.account_id = ANY (sqlc.arg(accounts)::bigint[])
+             AND (af.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(af.account_id, af.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
+           OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   -- An auditor's scope also names the folders (#393).
   AND EXISTS (
@@ -192,7 +202,17 @@ WHERE
          AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
-       OFFSET 0))
+       OFFSET 0)
+       -- Only through a location of the scope that shows the
+       -- message's attachment text (attachment_text_ok, #539), as
+       -- AttachmentMatches checks for att_shas.
+       AND EXISTS (
+           SELECT 1 FROM message_locations al
+           JOIN folders af ON af.id = al.folder_id
+           WHERE al.message_sha256 = m.sha256 AND al.attachment_text_ok
+             AND af.account_id = ANY (sqlc.arg(accounts)::bigint[])
+             AND (af.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(af.account_id, af.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
+           OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   -- An auditor's scope also names the folders (#393).
   AND EXISTS (
@@ -272,7 +292,17 @@ WHERE
                AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                                  websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                                  websearch_to_tsquery('english', sqlc.narg(query)::text))
-             OFFSET 0))
+             OFFSET 0)
+             -- Only through a location of the scope that shows the
+             -- message's attachment text (attachment_text_ok, #539), as
+             -- AttachmentMatches checks for att_shas.
+             AND EXISTS (
+                 SELECT 1 FROM message_locations al
+                 JOIN folders af ON af.id = al.folder_id
+                 WHERE al.message_sha256 = n.sha256 AND al.attachment_text_ok
+                   AND af.account_id = ANY (sqlc.arg(accounts)::bigint[])
+                   AND (af.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(af.account_id, af.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
+                 OFFSET 0))
         -- Only messages found in one of the scope's accounts (own or shared).
         -- An auditor's scope also names the folders (#393).
         AND EXISTS (
@@ -360,7 +390,17 @@ WHERE COALESCE(t.thread_id, t.sha256) = ANY(sqlc.arg(thread_keys)::text[])
          AND ax.search @@ (websearch_to_tsquery('simple', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('german', sqlc.narg(query)::text) ||
                            websearch_to_tsquery('english', sqlc.narg(query)::text))
-       OFFSET 0))
+       OFFSET 0)
+       -- Only through a location of the scope that shows the
+       -- message's attachment text (attachment_text_ok, #539), as
+       -- AttachmentMatches checks for att_shas.
+       AND EXISTS (
+           SELECT 1 FROM message_locations al
+           JOIN folders af ON af.id = al.folder_id
+           WHERE al.message_sha256 = t.sha256 AND al.attachment_text_ok
+             AND af.account_id = ANY (sqlc.arg(accounts)::bigint[])
+             AND (af.account_id = ANY (sqlc.arg(scope_all_folder_accounts)::bigint[]) OR scope_folder_granted(af.account_id, af.id, sqlc.arg(scope_folder_accounts)::bigint[], sqlc.arg(scope_folders)::bigint[]))
+           OFFSET 0))
   -- Only messages found in one of the scope's accounts (own or shared).
   -- An auditor's scope also names the folders (#393).
   AND EXISTS (

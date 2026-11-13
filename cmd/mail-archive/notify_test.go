@@ -126,7 +126,8 @@ func TestSyncSendsOneAlert(t *testing.T) {
 	}
 }
 
-// `sync` reconciles the due folders and sends the loss alert at its end.
+// `sync` reconciles the due folders and sends the loss alert at its end,
+// with the webhook's default detail: IDs only (#397, part 3).
 func TestSyncSendsLossAlert(t *testing.T) {
 	user := imapmemserver.NewUser("alice", "pw")
 	imaptest.CreateMailboxes(t, user, "INBOX")
@@ -173,7 +174,10 @@ func TestSyncSendsLossAlert(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(got) != 1 || got[0]["event"] != "gone" || !strings.Contains(fmt.Sprint(got[0]["title"]), "15 messages deleted on the server (work)") {
+	// The default detail (ids) names the account by its ID only.
+	want := fmt.Sprintf("15 messages deleted on the server (account %d)", acc.ID)
+	if len(got) != 1 || got[0]["event"] != "gone" || !strings.Contains(fmt.Sprint(got[0]["title"]), want) ||
+		strings.Contains(fmt.Sprint(got[0]), "work") || strings.Contains(fmt.Sprint(got[0]), "INBOX") {
 		t.Fatalf("messages: %v", got)
 	}
 }

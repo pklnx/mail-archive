@@ -46,6 +46,7 @@ import {
 } from "@carbon/react";
 import { Add, Filter } from "@carbon/icons-react";
 import {
+  ApiError,
   retentionApi,
   usersApi,
   type DeletionRun,
@@ -89,7 +90,7 @@ export function holdScope(h: LegalHold): string {
     const f = h.filter;
     const terms = [f.q ?? "", f.from ? `from:${f.from}` : "", f.to ? `to:${f.to}` : "", f.attachment ? `attachment:${f.attachment}` : ""];
     if (f.hasAttachment) terms.push("has:attachment");
-    parts.push(`${terms.filter(Boolean).join(" ")} (${h.matchedAt ? t.holdMatched(h.matched) : t.holdNotMatched})`);
+    parts.push(`${terms.filter(Boolean).join(" ")} (${h.matchedAt ? (h.matched === null ? t.holdMatchedHidden : t.holdMatched(h.matched)) : t.holdNotMatched})`);
   }
   return parts.length ? parts.join(", ") : t.holdScopeAll;
 }
@@ -1272,7 +1273,12 @@ function RuleForm({ data, cancel, added }: { data: RetentionRules; cancel: () =>
 /**
  * The Add hold page's form: a hold without user, account, group or filter
  * needs the box for the whole archive. With two or more customer groups it
- * has a group (#470), which narrows the users and accounts to choose.
+ * has a group (#470), which narrows the users and accounts to choose. A
+ * search filter is only for the admin's own mail (#538): the hold names
+ * them, or names no user and one of their accounts. For any other scope
+ * the field takes only the period (after:, before:), and a filter in it
+ * keeps the form from being sent; the operator adds such a hold on the
+ * command line.
  */
 function HoldForm({
   accounts,
@@ -1305,6 +1311,11 @@ function HoldForm({
     ? { q: p.text, from: p.from, to: p.to, attachment: p.attachment, hasAttachment: p.hasAttachment }
     : null;
   const unscoped = !user && !accountId && !group && !filter && !p.after && !p.before;
+  // The server's rule (holdOwnedBy): the admin is the hold's user, or it
+  // names no user and one of the admin's accounts.
+  const self = users.find((u) => u.self)?.name;
+  const own = !!self && (user ? user === self : !!accountId && accounts.find((a) => String(a.id) === accountId)?.owner === self);
+  const filterRefused = !!filter && !own;
   // Only the users and accounts of the chosen group can be in its hold.
   const inGroup = (g: GroupRef | null | undefined) => !group || String(g?.id) === group;
   const groupUsers = users.filter((u) => inGroup(u.group));
@@ -1318,7 +1329,7 @@ function HoldForm({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (busy || (unscoped && !all)) return;
+    if (busy || (unscoped && !all) || filterRefused) return;
     setBusy(true);
     setError("");
     try {
@@ -1336,7 +1347,7 @@ function HoldForm({
       });
       added(res.matched);
     } catch (err) {
-      setError(message(err));
+      setError(err instanceof ApiError && err.body.code === "filter_hold_cli" ? rt.holdFilterOwnOnly : message(err));
       setBusy(false);
     }
   };
@@ -1367,7 +1378,15 @@ function HoldForm({
           {accountOptions(groupAccounts, group ? [] : groups)}
         </Select>
       </div>
-      <TextInput id={`${id}-filter`} labelText={t.holdFilter} helperText={t.holdFilterHint} value={query} onChange={(e) => setQuery(e.target.value)} />
+      <TextInput
+        id={`${id}-filter`}
+        labelText={t.holdFilter}
+        helperText={own ? t.holdFilterHint : rt.holdFilterOwnOnly}
+        invalid={filterRefused}
+        invalidText={rt.holdFilterOwnOnly}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
       {unscoped && (
         <Checkbox
           id={`${id}-all`}
@@ -1386,7 +1405,7 @@ function HoldForm({
         <Button kind="secondary" onClick={cancel} disabled={busy}>
           {t.cancel}
         </Button>
-        <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || (unscoped && !all)}>
+        <Button type="submit" kind="primary" renderIcon={Add} disabled={busy || (unscoped && !all) || filterRefused}>
           {t.holdAdd}
         </Button>
       </div>

@@ -17,6 +17,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -47,8 +48,9 @@ mail, whatever their IMAP folder; they have no envelope, and the message
 view names the mailbox they came from.
 
 A one-time fill imports a message when its INTERNALDATE is before the
-cut-off plus one hour, unless the account already received a message with
-the same Message-ID over SMTP. The cut-off is now by default; --before sets
+cut-off plus one hour, unless the account already received the same
+message over SMTP: the same Message-ID, Date, From addresses and Subject.
+The cut-off is now by default; --before sets
 an earlier one (RFC 3339, or YYYY-MM-DD for midnight UTC).
 
 A recurring fill (--keep-running) has no cut-off: it imports a message
@@ -214,7 +216,7 @@ func startFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) err
 	}
 	src := &store.Account{Host: fl.host, Port: port, TLSMode: tlsMode, Username: fl.username}
 	fmt.Fprintf(out, "checking login at %s:%d ...\n", fl.host, port)
-	folders, err := checkLogin(ctx, src, password)
+	folders, err := checkLogin(ctx, a.cfg, src, password)
 	if err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
@@ -375,7 +377,7 @@ func resumeFill(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlags) er
 		return err
 	}
 	src := &store.Account{Host: last.Host, Port: last.Port, TLSMode: last.TLSMode, Username: last.Username}
-	if _, err := checkLogin(ctx, src, password); err != nil {
+	if _, err := checkLogin(ctx, a.cfg, src, password); err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
 	e := cliAccountTarget(cliTargeted("data.fill_resume"), acc)
@@ -431,7 +433,7 @@ func keepFillRunning(cmd *cobra.Command, a *app, acc *store.Account, fl fillFlag
 		return err
 	}
 	src := &store.Account{Host: fill.Host, Port: fill.Port, TLSMode: fill.TLSMode, Username: fill.Username}
-	folders, err := checkLogin(ctx, src, password)
+	folders, err := checkLogin(ctx, a.cfg, src, password)
 	if err != nil {
 		return fmt.Errorf("login check failed: %w", err)
 	}
@@ -494,8 +496,10 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 	ctx := cmd.Context()
 	bg := context.WithoutCancel(ctx)
 	out := cmd.ErrOrStderr()
+	log := newLogger(a.cfg.LogLevel).With("account", acc.Name)
 	filler := &archive.Filler{
-		Store: a.store, Blobs: blobs, Sealer: sealer, Logger: newLogger(a.cfg.LogLevel).With("account", acc.Name),
+		Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log, Storage: newStorageGate(a, log),
+		IMAP: imapSettings(a.cfg), MaxFolderMessages: a.cfg.IMAP.FillMaxFolderMessages,
 		Progress: func(ff store.FillFolder) {
 			c := ff.Counts
 			fmt.Fprintf(out, "%s: scanned %d, imported %d, after cut-off %d, journaled %d, waiting %d\n",
@@ -503,9 +507,15 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 		},
 	}
 	fill, err := filler.RunLocked(ctx, id)
+	finalStorageRead(ctx, filler.Storage)
 	if errors.Is(err, archive.ErrFillSkipped) {
 		fmt.Fprintf(out, "%q is disabled: the web server runs the fill once it is enabled\n", acc.Name)
 		return nil
+	}
+	if errors.Is(err, quota.ErrStorageFull) {
+		// The fill stays running and keeps what it stored; the web
+		// server goes on with it once space is freed.
+		return pausedError(ctx, a, err, -1, "the fill stays running; the web server continues it")
 	}
 	if err != nil && ctx.Err() != nil {
 		if fill != nil && fill.Recurring() {

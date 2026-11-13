@@ -53,6 +53,7 @@ if grep -q 'build:' "$dir/docker-compose.yml" || ! grep -q "$image:$version" "$d
 fi
 
 cp "$repo/.env.example" "$dir/.env.example"
+cp "$repo/docker-compose.smtp.yml" "$dir/docker-compose.smtp.yml"
 cp "$repo/ma" "$dir/ma"
 chmod 0755 "$dir/ma"
 cat > "$dir/README.txt" <<EOF
@@ -76,6 +77,10 @@ and data/:
 
 Optional worker service for background jobs (attachment text) with its own
 memory limit: COMPOSE_PROFILES=worker and WEB_JOB_WORKERS=0 in .env.
+
+Journaling over SMTP with login (MAIL_ARCHIVE_SMTP_AUTH=required): the
+certificate is mounted by docker-compose.smtp.yml; set
+COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml in .env.
 EOF
 
 # Numeric owner 0/0, not the build machine's user.

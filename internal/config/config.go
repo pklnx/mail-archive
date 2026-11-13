@@ -49,6 +49,9 @@ const (
 	EnvNotifyWebhookFormat = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT"
 	// EnvNotifyWebhookAuthorization is sent as the Authorization header.
 	EnvNotifyWebhookAuthorization = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION"
+	// EnvNotifyWebhookDetail is "ids" (default: IDs and counts only) or
+	// "full" (names, mailboxes, errors and folders too).
+	EnvNotifyWebhookDetail = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL"
 	// EnvSMTPListen is the address the SMTP server for smtp accounts
 	// listens on, like ":2525"; empty turns it off.
 	EnvSMTPListen = "MAIL_ARCHIVE_SMTP_LISTEN"
@@ -64,6 +67,12 @@ const (
 	// EnvSMTPHostname is the name in the SMTP greeting; default: the
 	// machine's host name.
 	EnvSMTPHostname = "MAIL_ARCHIVE_SMTP_HOSTNAME"
+	// EnvSMTPAuth is "required" (default: clients log in with an SMTP
+	// secret over STARTTLS) or "off" (the allowlist is the only gate).
+	EnvSMTPAuth = "MAIL_ARCHIVE_SMTP_AUTH"
+	// EnvSMTPMaxConnsPerAddr caps the connections of one client address
+	// (IPv6: one /64) with EnvSMTPAuth=required.
+	EnvSMTPMaxConnsPerAddr = "MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR"
 	// EnvTrustedProxies lists the reverse proxies (CIDR or single addresses)
 	// whose X-Forwarded-For names the client; empty trusts none.
 	EnvTrustedProxies = "MAIL_ARCHIVE_TRUSTED_PROXIES"
@@ -89,6 +98,42 @@ const (
 	EnvArchiveKeyFile = "MAIL_ARCHIVE_ARCHIVE_KEY_FILE"
 	// EnvArchiveKey is the archive key itself, base64.
 	EnvArchiveKey = "MAIL_ARCHIVE_ARCHIVE_KEY"
+	// EnvFillMaxFolderMessages caps the messages a fill lists of one IMAP
+	// folder per pass.
+	EnvFillMaxFolderMessages = "MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES"
+	// EnvReconcileMaxMessages caps the messages of a folder a reconcile
+	// compares with the server; larger folders are not reconciled.
+	EnvReconcileMaxMessages = "MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES"
+	// EnvIMAPMaxFolders caps the folders one IMAP account may list.
+	EnvIMAPMaxFolders = "MAIL_ARCHIVE_IMAP_MAX_FOLDERS"
+	// EnvIMAPIdleTimeout is how long an IMAP server may send nothing while
+	// a command is in flight.
+	EnvIMAPIdleTimeout = "MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT"
+	// EnvMigrateOnStart ("on" or "off", default off) makes serve and
+	// worker apply pending migrations at start, as `migrate` does (#396).
+	EnvMigrateOnStart = "MAIL_ARCHIVE_MIGRATE_ON_START"
+)
+
+// IMAP limits an honest large mailbox can reach (EnvFillMaxFolderMessages,
+// EnvReconcileMaxMessages, EnvIMAPMaxFolders, EnvIMAPIdleTimeout): their
+// defaults fit the memory budget of a 4 GB machine; raising them costs
+// memory (docs/guide/operations.md, "IMAP limits").
+const (
+	DefaultFillMaxFolderMessages = 500_000
+	MinFillMaxFolderMessages     = 10_000
+	MaxFillMaxFolderMessages     = 10_000_000
+
+	DefaultReconcileMaxMessages = 2_000_000
+	MinReconcileMaxMessages     = 10_000
+	MaxReconcileMaxMessages     = 20_000_000
+
+	DefaultIMAPMaxFolders = 10_000
+	MinIMAPMaxFolders     = 100
+	MaxIMAPMaxFolders     = 200_000
+
+	DefaultIMAPIdleTimeout = 2 * time.Minute
+	MinIMAPIdleTimeout     = 30 * time.Second
+	MaxIMAPIdleTimeout     = 30 * time.Minute
 )
 
 // DefaultJobWorkers is used when EnvJobWorkers is not set.
@@ -103,6 +148,18 @@ const DefaultSMTPMaxSize = 50 << 20
 // MaxSMTPMaxSize is the largest accepted EnvSMTPMaxSize.
 const MaxSMTPMaxSize = 1 << 30
 
+// Values of EnvSMTPAuth.
+const (
+	SMTPAuthRequired = "required"
+	SMTPAuthOff      = "off"
+)
+
+// EnvSMTPMaxConnsPerAddr: default and range.
+const (
+	DefaultSMTPMaxConnsPerAddr = 8
+	MaxSMTPMaxConnsPerAddr     = 64
+)
+
 // DefaultAlertAfterFailures is used when EnvAlertAfterFailures is not set.
 const DefaultAlertAfterFailures = 3
 
@@ -113,6 +170,16 @@ const MaxAlertAfterFailures = 100
 const (
 	WebhookFormatJSON = "json"
 	WebhookFormatNtfy = "ntfy"
+)
+
+// Webhook detail modes (#397, part 3). With ids, the default, alerts name
+// accounts, fills and groups by ID only: no account or owner names, IMAP
+// user names, folder names or error texts, and title and body are fixed
+// text with IDs. Receivers are often third-party services. full sends
+// those values too, for the operator's own test instances.
+const (
+	WebhookDetailIDs  = "ids"
+	WebhookDetailFull = "full"
 )
 
 // DefaultSyncInterval is used when EnvSyncInterval is not set.
@@ -143,8 +210,12 @@ const DefaultRetentionFileGrace = 7 * 24 * time.Hour
 type Config struct {
 	DatabaseURL string
 	DataDir     string
-	SecretKey   []byte // nil if not configured
-	LogLevel    string
+	// SecretKey is nil if not configured (#396: from EnvSecretKeyFile or
+	// EnvSecretKey). A secret: never log it.
+	SecretKey []byte
+	// SecretKeySource says where SecretKey came from, for messages.
+	SecretKeySource string
+	LogLevel        string
 	// AllowedHosts for the web server; empty means the server's defaults.
 	AllowedHosts []string
 	// SyncInterval of the web server's schedule, the default for accounts
@@ -163,6 +234,9 @@ type Config struct {
 	AlertAfterFailures int
 	// Webhook for alerts; nil turns them off.
 	Webhook *Webhook
+	// Mail is the relay for alert mail to admins (#397, part 5); nil turns
+	// alert mail off.
+	Mail *Mail
 	// SMTP is the server for smtp accounts; nil turns it off.
 	SMTP *SMTP
 	// TrustedProxies may name the client in X-Forwarded-For.
@@ -180,6 +254,33 @@ type Config struct {
 	ArchiveKey []byte
 	// ArchiveKeySource says where ArchiveKey came from, for messages.
 	ArchiveKeySource string
+	// IMAP holds the IMAP limits an operator may raise.
+	IMAP IMAPLimits
+	// MigrateOnStart makes serve and worker apply pending migrations at
+	// start.
+	MigrateOnStart bool
+	// EncryptionAtSetup: a new instance turns encryption at rest on at its
+	// first start (EnvEncryptionAtSetup, default on; #396).
+	EncryptionAtSetup bool
+	// SetupToken is the setup token of a new instance (#396), set by
+	// serve only (SetupTokenFromEnv), empty without one. A secret: never
+	// log it.
+	SetupToken string
+	// Storage holds the instance quota and the disk reserve (#397).
+	Storage Storage
+}
+
+// IMAPLimits are the IMAP limits an operator may raise, each checked
+// against its range at start.
+type IMAPLimits struct {
+	// FillMaxFolderMessages: messages a fill lists of one folder per pass.
+	FillMaxFolderMessages uint32
+	// ReconcileMaxMessages: larger folders are not reconciled.
+	ReconcileMaxMessages uint32
+	// MaxFolders: folders one account may list.
+	MaxFolders int
+	// IdleTimeout: how long a server may send nothing during a command.
+	IdleTimeout time.Duration
 }
 
 // AttestDir holds the attestation file, the leaves and the public keys:
@@ -188,12 +289,33 @@ func (c *Config) AttestDir() string { return filepath.Join(c.DataDir, "attest") 
 
 // SMTP configures the SMTP server for smtp accounts.
 type SMTP struct {
-	Listen          string
+	Listen string
+	// AllowedNetworks is required with Auth off; with Auth on, empty
+	// means any address.
 	AllowedNetworks []netip.Prefix
 	MaxSize         int64
-	TLSCert         string // empty: no STARTTLS
+	TLSCert         string // empty: no STARTTLS; required with Auth
 	TLSKey          string
 	Hostname        string
+	// Auth is EnvSMTPAuth=required: clients log in with an SMTP secret,
+	// only over STARTTLS.
+	Auth bool
+	// MaxConnsPerAddr is the cap per client address with Auth; 0 without.
+	MaxConnsPerAddr int
+}
+
+// SMTPEnv holds the raw values of the SMTP variables, for ParseSMTP.
+type SMTPEnv struct {
+	Listen, AllowedNetworks, MaxSize, TLSCert, TLSKey, Hostname string
+	Auth, MaxConnsPerAddr                                       string
+}
+
+func smtpEnv() SMTPEnv {
+	return SMTPEnv{
+		Listen: os.Getenv(EnvSMTPListen), AllowedNetworks: os.Getenv(EnvSMTPAllowedNetworks),
+		MaxSize: os.Getenv(EnvSMTPMaxSize), TLSCert: os.Getenv(EnvSMTPTLSCert), TLSKey: os.Getenv(EnvSMTPTLSKey),
+		Hostname: os.Getenv(EnvSMTPHostname), Auth: os.Getenv(EnvSMTPAuth), MaxConnsPerAddr: os.Getenv(EnvSMTPMaxConnsPerAddr),
+	}
 }
 
 // Webhook is where alerts are sent. The URL and the authorization value
@@ -202,7 +324,12 @@ type Webhook struct {
 	URL           *url.URL
 	Format        string
 	Authorization string
+	// Detail is WebhookDetailIDs or WebhookDetailFull.
+	Detail string
 }
+
+// Full reports whether alerts carry names, mailboxes, errors and folders.
+func (w *Webhook) Full() bool { return w.Detail == WebhookDetailFull }
 
 // DataDirFromEnv returns the data directory, ./data unless set.
 func DataDirFromEnv() string {
@@ -264,8 +391,17 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.SMTP, err = ParseSMTP(os.Getenv(EnvSMTPListen), os.Getenv(EnvSMTPAllowedNetworks), os.Getenv(EnvSMTPMaxSize),
-		os.Getenv(EnvSMTPTLSCert), os.Getenv(EnvSMTPTLSKey), os.Getenv(EnvSMTPHostname))
+	detail, err := ParseWebhookDetail(os.Getenv(EnvNotifyWebhookDetail))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Webhook != nil {
+		cfg.Webhook.Detail = detail
+	}
+	if cfg.Mail, err = ParseMail(os.Getenv(EnvMailURL), os.Getenv(EnvMailPasswordFile), os.Getenv(EnvMailFrom), cfg.DataDir); err != nil {
+		return nil, err
+	}
+	cfg.SMTP, err = ParseSMTP(smtpEnv())
 	if err != nil {
 		return nil, err
 	}
@@ -290,12 +426,20 @@ func Load() (*Config, error) {
 	if cfg.JobWorkers, err = parseJobWorkers(os.Getenv(EnvJobWorkers)); err != nil {
 		return nil, err
 	}
-	if raw := os.Getenv(EnvSecretKey); raw != "" {
-		key, err := crypto.ParseKey(raw)
-		if err != nil {
-			return nil, errors.New(EnvSecretKey + ": " + err.Error())
-		}
-		cfg.SecretKey = key
+	if cfg.IMAP, err = ParseIMAPLimits(os.Getenv); err != nil {
+		return nil, err
+	}
+	if cfg.Storage, err = ParseStorage(os.Getenv); err != nil {
+		return nil, err
+	}
+	if cfg.MigrateOnStart, err = parseOnOff(EnvMigrateOnStart, os.Getenv(EnvMigrateOnStart)); err != nil {
+		return nil, err
+	}
+	if cfg.EncryptionAtSetup, err = ParseEncryptionAtSetup(os.Getenv(EnvEncryptionAtSetup)); err != nil {
+		return nil, err
+	}
+	if cfg.SecretKey, cfg.SecretKeySource, err = LoadSecretKey(os.Getenv(EnvSecretKeyFile), os.Getenv(EnvSecretKey), cfg.DataDir); err != nil {
+		return nil, err
 	}
 	cfg.ArchiveKey, cfg.ArchiveKeySource, err = LoadArchiveKey(os.Getenv(EnvArchiveKeyFile), os.Getenv(EnvArchiveKey),
 		cfg.DataDir, cfg.SecretKey)
@@ -336,6 +480,17 @@ func ParsePublicURL(v string) (origin, rpID string, err error) {
 		}
 	}
 	return origin, host, nil
+}
+
+// parseOnOff reads a switch: "on" or "off", in any case; empty is off.
+func parseOnOff(name, v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s: want on or off, got %q", name, v)
 }
 
 func parseSyncInterval(v string) (time.Duration, error) {
@@ -396,6 +551,57 @@ func parseJobWorkers(v string) (int, error) {
 	return n, nil
 }
 
+// ParseIMAPLimits reads the four IMAP limits through getenv; an unset
+// variable gives the default, a value out of range is an error.
+func ParseIMAPLimits(getenv func(string) string) (IMAPLimits, error) {
+	var l IMAPLimits
+	fill, err := parseCount(EnvFillMaxFolderMessages, getenv(EnvFillMaxFolderMessages),
+		DefaultFillMaxFolderMessages, MinFillMaxFolderMessages, MaxFillMaxFolderMessages)
+	if err != nil {
+		return l, err
+	}
+	reconcile, err := parseCount(EnvReconcileMaxMessages, getenv(EnvReconcileMaxMessages),
+		DefaultReconcileMaxMessages, MinReconcileMaxMessages, MaxReconcileMaxMessages)
+	if err != nil {
+		return l, err
+	}
+	folders, err := parseCount(EnvIMAPMaxFolders, getenv(EnvIMAPMaxFolders),
+		DefaultIMAPMaxFolders, MinIMAPMaxFolders, MaxIMAPMaxFolders)
+	if err != nil {
+		return l, err
+	}
+	l.FillMaxFolderMessages, l.ReconcileMaxMessages = fill, reconcile
+	if folders > MaxIMAPMaxFolders { // parseCount checked it; repeated so the int conversion is visibly bounded
+		return l, fmt.Errorf("%s: want at most %d", EnvIMAPMaxFolders, MaxIMAPMaxFolders)
+	}
+	l.MaxFolders = int(folders)
+	l.IdleTimeout = DefaultIMAPIdleTimeout
+	if v := strings.TrimSpace(getenv(EnvIMAPIdleTimeout)); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < MinIMAPIdleTimeout || d > MaxIMAPIdleTimeout {
+			return l, fmt.Errorf("%s: want a duration from %s to %s (like 5m), got %q",
+				EnvIMAPIdleTimeout, FormatDuration(MinIMAPIdleTimeout), FormatDuration(MaxIMAPIdleTimeout), v)
+		}
+		l.IdleTimeout = d
+	}
+	return l, nil
+}
+
+// parseCount reads a whole number from minimum to maximum. It parses a
+// count that fits in 32 bits, so callers may convert it to uint32 or int
+// without a further check.
+func parseCount(env, v string, def, minimum, maximum uint32) (uint32, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil || n < uint64(minimum) || n > uint64(maximum) {
+		return 0, fmt.Errorf("%s: want a number from %d to %d, got %q", env, minimum, maximum, v)
+	}
+	return uint32(n), nil
+}
+
 func parseAlertAfter(v string) (int, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -447,17 +653,35 @@ func ParseWebhook(rawURL, format, authorization string) (*Webhook, error) {
 			return nil, fmt.Errorf("%s: contains a control character", EnvNotifyWebhookAuthorization)
 		}
 	}
-	return &Webhook{URL: u, Format: format, Authorization: authorization}, nil
+	return &Webhook{URL: u, Format: format, Authorization: authorization, Detail: WebhookDetailIDs}, nil
+}
+
+// ParseWebhookDetail checks EnvNotifyWebhookDetail: empty is ids. It is
+// checked also without a webhook, so a typo does not go unnoticed (Compose
+// always passes a value).
+func ParseWebhookDetail(v string) (string, error) {
+	switch v = strings.ToLower(strings.TrimSpace(v)); v {
+	case "", WebhookDetailIDs:
+		return WebhookDetailIDs, nil
+	case WebhookDetailFull:
+		return WebhookDetailFull, nil
+	}
+	return "", fmt.Errorf("%s: want %s or %s, got %q", EnvNotifyWebhookDetail, WebhookDetailIDs, WebhookDetailFull, v)
 }
 
 // ParseSMTP checks the SMTP server settings. An empty listen address
 // turns the server off; then the other settings must be empty too, so that
 // a typo in the listen variable does not go unnoticed.
-func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, error) {
-	listen, networks, maxSize = strings.TrimSpace(listen), strings.TrimSpace(networks), strings.TrimSpace(maxSize)
-	cert, key, hostname = strings.TrimSpace(cert), strings.TrimSpace(key), strings.TrimSpace(hostname)
+//
+// With EnvSMTPAuth=required (the default) a certificate is required and the
+// allowlist is optional; with off the allowlist is required, as the only
+// gate.
+func ParseSMTP(e SMTPEnv) (*SMTP, error) {
+	listen, networks, maxSize := strings.TrimSpace(e.Listen), strings.TrimSpace(e.AllowedNetworks), strings.TrimSpace(e.MaxSize)
+	cert, key, hostname := strings.TrimSpace(e.TLSCert), strings.TrimSpace(e.TLSKey), strings.TrimSpace(e.Hostname)
+	authMode, perAddr := strings.TrimSpace(e.Auth), strings.TrimSpace(e.MaxConnsPerAddr)
 	if listen == "" {
-		if networks != "" || maxSize != "" || cert != "" || key != "" || hostname != "" {
+		if networks != "" || maxSize != "" || cert != "" || key != "" || hostname != "" || authMode != "" || perAddr != "" {
 			return nil, fmt.Errorf("SMTP settings are set, but %s is not", EnvSMTPListen)
 		}
 		return nil, nil
@@ -466,12 +690,20 @@ func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, er
 		return nil, fmt.Errorf("%s: want host:port or :port, got %q", EnvSMTPListen, listen)
 	}
 	c := &SMTP{Listen: listen, MaxSize: DefaultSMTPMaxSize, TLSCert: cert, TLSKey: key, Hostname: hostname}
+	switch authMode {
+	case "", SMTPAuthRequired:
+		c.Auth = true
+	case SMTPAuthOff:
+	default:
+		return nil, fmt.Errorf("%s: want %s or %s, got %q", EnvSMTPAuth, SMTPAuthRequired, SMTPAuthOff, authMode)
+	}
 	var err error
 	if c.AllowedNetworks, err = ParseNetworks(EnvSMTPAllowedNetworks, networks); err != nil {
 		return nil, err
 	}
-	if len(c.AllowedNetworks) == 0 {
-		return nil, fmt.Errorf("%s is set, so %s is required: the SMTP server accepts mail only from these networks", EnvSMTPListen, EnvSMTPAllowedNetworks)
+	if len(c.AllowedNetworks) == 0 && !c.Auth {
+		return nil, fmt.Errorf("%s=%s, so %s is required: the SMTP server then accepts mail only from these networks",
+			EnvSMTPAuth, SMTPAuthOff, EnvSMTPAllowedNetworks)
 	}
 	if maxSize != "" {
 		n, err := parseSize(maxSize)
@@ -482,6 +714,23 @@ func ParseSMTP(listen, networks, maxSize, cert, key, hostname string) (*SMTP, er
 	}
 	if (cert == "") != (key == "") {
 		return nil, fmt.Errorf("set both %s and %s, or neither", EnvSMTPTLSCert, EnvSMTPTLSKey)
+	}
+	if c.Auth && cert == "" {
+		return nil, fmt.Errorf("%s is %s (the default), so %s and %s are required: mail servers log in over STARTTLS only. "+
+			"For a mail server on a network you control, with %s as the only gate, set %s=%s",
+			EnvSMTPAuth, SMTPAuthRequired, EnvSMTPTLSCert, EnvSMTPTLSKey, EnvSMTPAllowedNetworks, EnvSMTPAuth, SMTPAuthOff)
+	}
+	switch {
+	case perAddr != "" && !c.Auth:
+		return nil, fmt.Errorf("%s applies only with %s=%s", EnvSMTPMaxConnsPerAddr, EnvSMTPAuth, SMTPAuthRequired)
+	case perAddr != "":
+		n, err := strconv.Atoi(perAddr)
+		if err != nil || n < 1 || n > MaxSMTPMaxConnsPerAddr {
+			return nil, fmt.Errorf("%s: want 1 to %d, got %q", EnvSMTPMaxConnsPerAddr, MaxSMTPMaxConnsPerAddr, perAddr)
+		}
+		c.MaxConnsPerAddr = n
+	case c.Auth:
+		c.MaxConnsPerAddr = DefaultSMTPMaxConnsPerAddr
 	}
 	if c.Hostname == "" {
 		h, err := os.Hostname()

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -276,6 +277,19 @@ func (r *FillRunner) runClaimed(ctx context.Context, id int64) bool {
 	case ctx.Err() != nil:
 		// Shutting down: the fill stays running and continues at the next start.
 		log.Info("fill interrupted; it continues at the next start")
+		return true
+	case errors.Is(err, quota.ErrStorageFull):
+		// The storage limit is reached (#397): a running fill stays running
+		// and is picked up again every CheckEvery, a recurring one is due
+		// again; both go on once space is freed. Logged by the Filler when
+		// a run pauses.
+		log.Debug("fill paused: storage limit reached")
+		return true
+	case errors.Is(err, ErrRunTimeLimit):
+		// At its time limit with progress, still running: the rest follows
+		// after the fills waiting now.
+		log.Info("fill run reached its time limit; queued again")
+		r.Enqueue(id, fill.AccountID)
 		return true
 	case err != nil:
 		log.Error("fill failed", "err", err)

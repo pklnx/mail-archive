@@ -374,8 +374,9 @@ jobs:
       # Node 25+ no longer bundles corepack; keep the version in sync with the Dockerfile.
       - run: npm install -g corepack@0.36.0 && corepack enable
       - run: pnpm install --frozen-lockfile
-      # The headless Chromium of the pinned Playwright, without apt unless
-      # the runner image lacks one of its libraries (then with a warning).
+      # The headless shell and the full Chromium (web/e2e/hints.spec.ts) of
+      # the pinned Playwright, without apt unless the runner image lacks one
+      # of their libraries (then with a warning).
       - run: sh ../scripts/ci-playwright-chromium-test.sh
       - run: sh ../scripts/ci-playwright-chromium.sh
       # The config builds the UI, then builds and starts the demo (it embeds
@@ -397,17 +398,22 @@ jobs:
           if-no-files-found: ignore
 
   web-e2e-webkit:
-    # The mail frame's link spec (web/e2e/frame-links.spec.ts) in Playwright's
-    # WebKit (#459): WebKit does not run the listeners the web UI adds to the
-    # sandboxed mail frame, so this shows that the server's link rewrite holds
-    # there. One spec until #398 runs the suite in WebKit. Not a required
-    # check; a red result still blocks merging. The same `if:` as web-e2e.
+    # The e2e suite in Playwright's WebKit (#398), the Linux port, not Safari:
+    # every test but those tagged @cdp (DevTools protocol), @chromium-layer
+    # (the web UI's frame blocker, which WebKit does not run, #459) and
+    # @chromium-launch (they launch their own Chromium); web/playwright.config.ts.
+    # A job of its own, not a matrix on web-e2e: a matrix would rename the
+    # required check web-e2e, and each engine needs its own demo. Not a
+    # required check; a red result still blocks merging. The same `if:` as
+    # web-e2e.
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') }}
     runs-on: ubuntu-latest
-    # `playwright install --with-deps webkit` always runs apt: 8-13 min when
-    # the mirror is slow (scripts/ci-playwright-chromium.sh:5-8), then the
-    # build and one spec.
+    # `playwright install --with-deps webkit` always runs apt: usually under
+    # a minute, 8 min once and 8-13 min with web-e2e's fallback when the
+    # mirror was slow (scripts/ci-playwright-chromium.sh:7-10). Then the
+    # suite, estimated at 1.2-1.5 times web-e2e's (about 12 min). The 30 are
+    # about 2 times the estimate; lower them after 20 runs.
     timeout-minutes: 30
     env:
       # Second guard against the telemetry postinstall of the Carbon packages;
@@ -444,7 +450,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # WebKit of the pinned Playwright and its system libraries, which the
       # runner image does not have.
-      - run: pnpm exec playwright install --with-deps webkit
+      - name: WebKit and its system libraries (apt)
+        run: pnpm exec playwright install --with-deps webkit
       # As in web-e2e: the config builds the UI and the demo, starts it and
       # stops it at the end. E2E_BROWSER=webkit runs only the WebKit project.
       - run: pnpm e2e:webkit

@@ -141,7 +141,7 @@ func TestAtRestWriterEncryptsWhenOn(t *testing.T) {
 	if err != nil || bytes.Contains(data, []byte("Zebrafink")) {
 		t.Fatalf("plaintext on disk: %v", err)
 	}
-	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, b, true)
+	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, b, true, true)
 	if err != nil || meta.Subject != "Kontoauszug Zebrafink" {
 		t.Fatalf("BuildMeta from the encrypted file: %q, %v", meta.Subject, err)
 	}

@@ -3,18 +3,13 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/pklnx/mail-archive/internal/blobcrypt"
-	"github.com/pklnx/mail-archive/internal/crypto"
 )
-
-// maxArchiveKeyFile is the largest key file read; a key is 44 characters.
-const maxArchiveKeyFile = 4 << 10
 
 // LoadArchiveKey reads the archive key (KEK) from the key file (preferred)
 // or the value of EnvArchiveKey. Both empty means not configured (nil key,
@@ -51,46 +46,21 @@ func LoadArchiveKey(file, value, dataDir string, secretKey []byte) (kek []byte, 
 }
 
 // ArchiveKeyFromEnv is LoadArchiveKey with every input from the
-// environment, for commands that run without a database.
+// environment, for commands that run without a database. The secret key
+// (SecretKeyFromEnv, its file or its variable) is read only to refuse an
+// archive key equal to it.
 func ArchiveKeyFromEnv() (kek []byte, source string, err error) {
-	var secret []byte
-	if raw := os.Getenv(EnvSecretKey); raw != "" {
-		if secret, err = crypto.ParseKey(raw); err != nil {
-			return nil, "", errors.New(EnvSecretKey + ": " + err.Error())
-		}
+	secret, _, err := SecretKeyFromEnv()
+	if err != nil {
+		return nil, "", err
 	}
 	return LoadArchiveKey(os.Getenv(EnvArchiveKeyFile), os.Getenv(EnvArchiveKey), DataDirFromEnv(), secret)
 }
 
 func readArchiveKeyFile(path, dataDir string) ([]byte, error) {
-	inside, err := KeyInDataDir(path, dataDir)
+	data, err := readKeyFile(path, dataDir, "the archive key")
 	if err != nil {
 		return nil, err
-	}
-	if inside {
-		return nil, fmt.Errorf("%s is inside the data directory %s; keep the archive key apart from the data it protects", path, dataDir)
-	}
-	f, err := os.Open(path) //nolint:gosec // the configured key file
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close() //nolint:errcheck // read-only
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return nil, fmt.Errorf("%s has mode %04o: group or others may access it; allow only its owner (chmod 0400)", path, perm)
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxArchiveKeyFile+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxArchiveKeyFile {
-		return nil, fmt.Errorf("%s is too large for a key file", path)
 	}
 	return blobcrypt.ParseKEK(string(data))
 }

@@ -70,7 +70,7 @@ func (e *reindexEnv) store(raw string) string {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true)
+	meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true, true)
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestBuildMetaFillsIndexData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true)
+	m, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func TestReindexCost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true)
+		meta, err := archive.BuildMeta(e.ctx, e.st, e.blobs, blob, true, true)
 		if err != nil {
 			t.Fatal(err)
 		}

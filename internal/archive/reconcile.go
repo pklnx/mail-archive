@@ -10,14 +10,31 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
 // DefaultMaxReconcileMessages caps the folders a reconcile lists. Listing
-// keeps one UID and one interned flag string per message, about 50 MB at
-// the cap.
-const DefaultMaxReconcileMessages = 2_000_000
+// keeps one UID and one interned flag string per message, about 46 MiB at
+// the cap (docs/guide/operations.md, "IMAP limits").
+const DefaultMaxReconcileMessages = config.DefaultReconcileMaxMessages
+
+// maxFlagSets caps the memory of the distinct flag combinations one
+// reconcile keeps: real folders have a few hundred of under 100 B. Each
+// combination is charged its bytes plus flagSetOverhead.
+const maxFlagSets = 4 << 20
+
+// flagSetOverhead is what one entry of the intern map costs besides its
+// key bytes: measured at about 85 B live per entry for keys of 1-4 bytes
+// (Go 1.27, the map's two string headers, its slack and the key's
+// allocation), rounded up.
+const flagSetOverhead = 88
+
+// reconcileSlack is how many more messages than the folder held (EXISTS)
+// a reconcile's listing accepts: imapsync's slack for messages that
+// arrive meanwhile.
+const reconcileSlack = 1000
 
 // SyncOptions change what one sync does beyond copying new messages.
 type SyncOptions struct {
@@ -52,26 +69,50 @@ func (s *Syncer) reconcileFolder(ctx context.Context, conn *imapsync.Conn, folde
 		limit = DefaultMaxReconcileMessages
 	}
 	if n > limit {
-		return store.FolderReconcile{}, fmt.Errorf("%d messages, more than the limit of %d", n, limit)
+		return store.FolderReconcile{}, &SettingError{Setting: config.EnvReconcileMaxMessages,
+			Err: fmt.Errorf("%d messages, more than the limit of %d", n, limit)}
 	}
-	uids := make([]int64, 0, n)
-	flags := make([]string, 0, n)
+	var (
+		uids  []int64
+		flags []string
+	)
 	if n > 0 {
+		// ListFlags accepts at most this many responses, so the slices
+		// never grow beyond it.
+		most := min(int64(n)+reconcileSlack, int64(limit))
+		uids, flags = make([]int64, 0, most), make([]string, 0, most)
 		// Most messages share a few flag combinations: keep one string each.
 		intern := map[string]string{}
-		var key []byte
-		err := imapsync.ListFlags(conn, func(uid uint32, fl []imap.Flag) {
+		var (
+			key      []byte
+			setBytes int
+			tooMany  bool
+		)
+		err := imapsync.ListFlags(conn, limit, func(uid uint32, fl []imap.Flag) {
+			if tooMany {
+				return
+			}
 			key = flagKey(key[:0], fl)
 			k, ok := intern[string(key)]
 			if !ok {
+				if setBytes += len(key) + flagSetOverhead; setBytes > maxFlagSets {
+					tooMany = true
+					return
+				}
 				k = string(key)
 				intern[k] = k
 			}
 			uids = append(uids, int64(uid))
 			flags = append(flags, k)
 		})
+		if s.afterListFlags != nil {
+			s.afterListFlags(len(uids), cap(uids))
+		}
 		if err != nil {
 			return store.FolderReconcile{}, err
+		}
+		if tooMany {
+			return store.FolderReconcile{}, fmt.Errorf("the folder's distinct flag combinations take more than %d MiB", maxFlagSets>>20)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -125,11 +166,15 @@ func (s *Syncer) reconcileVanished(ctx context.Context, a *store.Account, listed
 	if err != nil {
 		return err
 	}
+	names := make(map[string]struct{}, len(listed))
+	for _, l := range listed {
+		names[l.Name] = struct{}{}
+	}
 	for _, f := range states {
 		if !FolderSelected(f.Name, a.IncludedFolders, a.ExcludedFolders) || !s.reconcileDue(f.LastReconciledAt, opts, now) {
 			continue
 		}
-		if slices.ContainsFunc(listed, func(l imapsync.Folder) bool { return l.Name == f.Name }) {
+		if _, ok := names[f.Name]; ok {
 			continue
 		}
 		if f.LastReconciledAt == nil {

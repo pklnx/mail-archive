@@ -83,6 +83,7 @@ func (s *Server) protect(next http.Handler) http.Handler {
 		// After the host check: a scanner or a client with a wrong Host must
 		// not use up the one warning and get its address named as the proxy.
 		s.warnUntrustedForwardedProto(r)
+		s.warnPlainHTTP(r)
 		// Before the routes: a refused request writes no audit entry.
 		if !fetchMetadataAllowed(r) {
 			s.log.Debug("request refused by its fetch metadata", "path", r.URL.Path,

@@ -24,7 +24,8 @@ The navigation on the left lists **All mail**, **Only in archive** (once
 there is such mail), [Accounts](./accounts), **Log** (your
 [audit log](./audit-log)) and **Profile**; admins also find [Users](./users)
 (with the [customer groups](./users#customer-groups) once there are two or
-more) and [Retention](./retention) there and see everyone's log entries. On a
+more, and the [SMTP secrets](./users#managing-users) of every smtp account
+once there are any) and [Retention](./retention) there and see everyone's log entries. On a
 large screen the navigation is a narrow column of icons that shows its
 labels on hover or focus.
 
@@ -147,6 +148,51 @@ where each user with failing accounts is marked; only the owner, or the
 operator with `./ma status`, shows which accounts they are. See
 [Syncing](./syncing#alerts) for what counts as failing.
 
+An admin whose address for [alert mail](./email-alerts) was refused by the
+mail server sees an amber line "Alert mail to your address was refused"
+with **Open profile**: the address gets no alert mail until it is
+confirmed again on the profile's **Notifications** tab.
+
+## Storage
+
+When new mail of your customer group is not archived because a storage
+limit is reached, a red banner above the mail says so: *New mail is not
+being archived; mail deleted on the server meanwhile is not archived.* Your
+syncs and imports pause until an admin frees space or raises the quota;
+reading and searching go on. The banner does not say which limit was
+reached, and nobody but admins sees another group's usage or quota. Each of
+your accounts shows its **Size** on its [account page](./accounts): the
+bytes of its messages at the last count, each message once, where a message
+in several accounts counts for each.
+
+Admins see a banner for every limit that is nearly full (amber) or full
+(red): the instance, the disk reserve, or a customer group by name; while
+only one group exists, it counts as the instance. **Open storage** leads to
+the **Storage** page in the navigation, which shows:
+
+- **Instance:** the usage against the instance quota as a bar, the state
+  and since when, the free space of the data disk and the reserve, the
+  database, the last backup and encryption at rest. The instance quota is
+  set by the operator (`MAIL_ARCHIVE_STORAGE_QUOTA`).
+- **Customer groups** (with two or more): each group's usage against its
+  quota, its state, and **Edit quota**. The dialog takes a size in MiB, GiB
+  or TiB, or *No quota*; it refuses a quota above the instance quota or
+  above 1 EiB and says what the new quota means for the group now, for
+  example that its syncs pause at once. Group quotas may add up to more
+  than the instance quota; the page then says so. Accounts without an
+  owner show as *Without group*.
+- **Accounts:** every account with its owner, group, messages, size and
+  *Only here*, the bytes no other account holds: what deleting the account
+  completely would free.
+
+The accounts and groups are counted every hour, and after purges, deletion
+runs, imports and group moves; the page says when the last count ran, and
+**Count again** starts one. Between counts a group's figure includes what
+was added since and may be slightly too high. The instance figure is
+always exact. See [Storage and quotas](./operations#storage-and-quotas).
+
+![The Storage page](/screenshots/storage.png)
+
 ## Only in archive
 
 The [account page](./accounts) shows for each IMAP account how many of its
@@ -187,7 +233,12 @@ height of the visible area and scroll inside it. HTML mail is rendered like
 in other mail clients: with a doctype in standards mode, without in quirks
 mode. **Remote images stay blocked** because they tell the sender that you
 opened the message (tracking pixels); **Load remote images** allows them
-for one message. Images embedded in the message (`cid:`) are always shown if
+for one message. Images a mail sets through CSS (backgrounds, list bullets)
+stay empty even then, and a mail with inline SVG or MathML (pictures or
+formulas written into the mail) gets no remote images at all: after
+**Load remote images** it shows **Remote images stay blocked for this
+message**, with the reason (see [HTML mail](../reference/security#html-mail)).
+Images embedded in the message (`cid:`) are always shown if
 they are PNG, JPEG, GIF or WebP, up to 10 MiB per message; other types such
 as SVG, and images past that limit, show as a broken image. In dark mode
 the mail keeps its own colors on a white sheet, since most HTML mail is
@@ -275,7 +326,11 @@ nearly every message you received.
 The text of attachments is extracted in the background shortly after a
 message is stored, newest first; after an upgrade, older messages follow one
 at a time (see [One-time steps](./operations#one-time-steps)). Until then a
-message is found only by its own text. Limits:
+message is found only by its own text. On an instance with several customer
+groups, a message that another group's account already holds is extracted
+again for your group when it is first stored there, and found by its
+attachments shortly after that; once a user of your group can find it that
+way, others of the group who receive it can at once. Limits:
 
 - **Words, not parts of words.** Attachment text is matched by words, in
   German and English forms, not by substrings.

@@ -16,7 +16,7 @@ func TestBuildFillMessage(t *testing.T) {
 		AccountID: 4, Account: "journal", Owner: "kim", FillID: 7, Mailbox: "ak@example.com",
 		FailureStreak: 3, FailingSince: &since, NotifiedState: store.NotifiedOK, LastError: "LOGIN failed",
 	}
-	m := notify.BuildFillMessage([]store.PendingNotification{failing})
+	m := notify.BuildFillMessage([]store.PendingNotification{failing}, true)
 	ev := m.Accounts[0]
 	if m.Event != notify.EventFailing || m.Title != "Mail archive: import of ak@example.com into journal keeps failing" ||
 		m.ID != "fill-7-1792483200-failing" || m.ID != notify.FillEventID(7, &since, notify.EventFailing) ||
@@ -30,7 +30,7 @@ func TestBuildFillMessage(t *testing.T) {
 
 	recovered := failing
 	recovered.NotifiedState, recovered.FailureStreak = store.NotifiedFailing, 0
-	m = notify.BuildFillMessage([]store.PendingNotification{recovered})
+	m = notify.BuildFillMessage([]store.PendingNotification{recovered}, true)
 	if m.Event != notify.EventRecovered || m.Title != "Mail archive: ak@example.com imports into journal again" ||
 		m.Accounts[0].LastError != "" || !strings.HasSuffix(m.ID, "-recovered") || !strings.Contains(m.Body, "ran successfully again") {
 		t.Errorf("recovery %+v", m)
@@ -38,11 +38,11 @@ func TestBuildFillMessage(t *testing.T) {
 
 	other := failing
 	other.FillID, other.Mailbox = 8, "bob@example.com"
-	m = notify.BuildFillMessage([]store.PendingNotification{failing, other, recovered})
+	m = notify.BuildFillMessage([]store.PendingNotification{failing, other, recovered}, true)
 	if m.Event != notify.EventMixed || m.Title != "Mail archive: 2 imports failing, 1 recovered" || !strings.HasPrefix(m.ID, "batch-") {
 		t.Errorf("mixed %+v", m)
 	}
-	m = notify.BuildFillMessage([]store.PendingNotification{failing, other})
+	m = notify.BuildFillMessage([]store.PendingNotification{failing, other}, true)
 	if m.Title != "Mail archive: imports of 2 mailboxes keep failing" {
 		t.Errorf("two failing %q", m.Title)
 	}

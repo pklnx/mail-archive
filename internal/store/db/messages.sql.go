@@ -10,6 +10,46 @@ import (
 	"time"
 )
 
+const accountHeldMessages = `-- name: AccountHeldMessages :many
+SELECT DISTINCT l.message_sha256::text AS sha256
+FROM folders f
+JOIN LATERAL (
+    SELECT ml.message_sha256 FROM message_locations ml
+    WHERE ml.folder_id = f.id AND ml.message_sha256 = ANY ($1::bpchar[])
+) l ON true
+WHERE f.account_id = (SELECT a.account_id FROM folders a WHERE a.id = $2)
+`
+
+type AccountHeldMessagesParams struct {
+	Shas     []string
+	FolderID int64
+}
+
+// Hashes of a batch that the account of the folder holds already, in any
+// of its folders (gone locations included). Driven from the account's
+// folders: one probe of message_locations_folder_sha_idx per folder and
+// hash, so the cost does not depend on how many other accounts hold the
+// same bytes.
+func (q *Queries) AccountHeldMessages(ctx context.Context, arg AccountHeldMessagesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, accountHeldMessages, arg.Shas, arg.FolderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countMessages = `-- name: CountMessages :one
 SELECT count(*) FROM messages
 `
@@ -34,6 +74,61 @@ func (q *Queries) CountOwnedMessages(ctx context.Context, ownerID *int64) (int64
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const foldersHoldMessages = `-- name: FoldersHoldMessages :many
+SELECT DISTINCT h.sha::text AS sha256
+FROM (
+    SELECT s.sha, gf.id
+    FROM unnest($1::bpchar[]) AS s (sha)
+    CROSS JOIN (SELECT unnest($2::bigint[]) AS id OFFSET 0) gf
+    JOIN LATERAL (
+        SELECT 1 FROM message_locations ml
+        WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha
+        LIMIT 1
+    ) held ON true
+    OFFSET 0
+) h
+JOIN folders f ON f.id = h.id
+JOIN accounts a ON a.id = f.account_id
+LEFT JOIN users o ON o.id = a.owner_id
+WHERE coalesce(o.group_id, 0) = $3::bigint
+`
+
+type FoldersHoldMessagesParams struct {
+	Shas      []string
+	FolderIds []int64
+	GroupID   int64
+}
+
+// The hashes of shas with a location (gone ones too) in one of the folders
+// that still belongs to the group: GroupHasLocations with the group's
+// folder list given (GroupFolderIDs, read once per run), so a message's
+// lookup does not build it again (#539, part 3). One probe of
+// message_locations_folder_sha_idx per folder and hash; the LATERAL's
+// LIMIT 1 keeps the planner from turning the probes into a lookup by hash
+// in message_locations_sha_idx, in the custom and the generic plan
+// (TestFoldersHoldMessagesPlan). Only the folders that hold a hash are
+// then checked against the group, so a folder whose account left the
+// group since the list was read never counts.
+func (q *Queries) FoldersHoldMessages(ctx context.Context, arg FoldersHoldMessagesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, foldersHoldMessages, arg.Shas, arg.FolderIds, arg.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getMessage = `-- name: GetMessage :one
@@ -64,6 +159,37 @@ func (q *Queries) GetMessage(ctx context.Context, sha256 string) (GetMessageRow,
 		&i.StoredPath,
 	)
 	return i, err
+}
+
+const groupFolderIDs = `-- name: GroupFolderIDs :many
+SELECT f.id FROM folders f
+JOIN accounts a ON a.id = f.account_id
+LEFT JOIN users o ON o.id = a.owner_id
+WHERE coalesce(o.group_id, 0) = $1::bigint
+ORDER BY f.id
+`
+
+// The folders of a customer group (0: the accounts without an owner), for
+// FoldersHoldMessages; read once per folder run of a sync or fill and per
+// SMTP delivery, and again when the account's group changed.
+func (q *Queries) GroupFolderIDs(ctx context.Context, groupID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, groupFolderIDs, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const hasUnindexed = `-- name: HasUnindexed :one
@@ -227,32 +353,39 @@ func (q *Queries) SetIndexData(ctx context.Context, arg SetIndexDataParams) (int
 	return result.RowsAffected(), nil
 }
 
-const upsertLocation = `-- name: UpsertLocation :exec
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date)
-VALUES ($1, $2, $3, $4, $5, $6)
+const upsertLocation = `-- name: UpsertLocation :one
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, attachment_text_ok)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (folder_id, uidvalidity, uid)
 DO UPDATE SET flags = EXCLUDED.flags, last_seen_at = now(), gone_at = NULL
+RETURNING (xmax = 0)::boolean AS inserted
 `
 
 type UpsertLocationParams struct {
-	MessageSha256 string
-	FolderID      int64
-	Uidvalidity   int64
-	Uid           int64
-	Flags         []string
-	InternalDate  *time.Time
+	MessageSha256    string
+	FolderID         int64
+	Uidvalidity      int64
+	Uid              int64
+	Flags            []string
+	InternalDate     *time.Time
+	AttachmentTextOk bool
 }
 
 // A location stored again (a UIDVALIDITY that returned to an old value) is
-// on the server again.
-func (q *Queries) UpsertLocation(ctx context.Context, arg UpsertLocationParams) error {
-	_, err := q.db.Exec(ctx, upsertLocation,
+// on the server again. It keeps its attachment_text_ok: the conflict
+// never changes the message (store/attachmentflag.go decides the flag of
+// a new one). Returns whether the location is new.
+func (q *Queries) UpsertLocation(ctx context.Context, arg UpsertLocationParams) (bool, error) {
+	row := q.db.QueryRow(ctx, upsertLocation,
 		arg.MessageSha256,
 		arg.FolderID,
 		arg.Uidvalidity,
 		arg.Uid,
 		arg.Flags,
 		arg.InternalDate,
+		arg.AttachmentTextOk,
 	)
-	return err
+	var inserted bool
+	err := row.Scan(&inserted)
+	return inserted, err
 }

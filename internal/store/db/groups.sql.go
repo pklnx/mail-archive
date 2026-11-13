@@ -157,38 +157,53 @@ func (q *Queries) FirstGroups(ctx context.Context) ([]int64, error) {
 }
 
 const getGroupByID = `-- name: GetGroupByID :one
-SELECT id, name, created_at FROM customer_groups WHERE id = $1
+SELECT id, name, created_at, quota_bytes FROM customer_groups WHERE id = $1
 `
 
 func (q *Queries) GetGroupByID(ctx context.Context, id int64) (CustomerGroup, error) {
 	row := q.db.QueryRow(ctx, getGroupByID, id)
 	var i CustomerGroup
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.QuotaBytes,
+	)
 	return i, err
 }
 
 const getGroupByName = `-- name: GetGroupByName :one
-SELECT id, name, created_at FROM customer_groups WHERE lower(name) = lower($1)
+SELECT id, name, created_at, quota_bytes FROM customer_groups WHERE lower(name) = lower($1)
 `
 
 // Group names are unique regardless of case.
 func (q *Queries) GetGroupByName(ctx context.Context, name string) (CustomerGroup, error) {
 	row := q.db.QueryRow(ctx, getGroupByName, name)
 	var i CustomerGroup
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.QuotaBytes,
+	)
 	return i, err
 }
 
 const insertGroup = `-- name: InsertGroup :one
 
-INSERT INTO customer_groups (name) VALUES ($1) RETURNING id, name, created_at
+INSERT INTO customer_groups (name) VALUES ($1) RETURNING id, name, created_at, quota_bytes
 `
 
 // Customer groups (#470).
 func (q *Queries) InsertGroup(ctx context.Context, name string) (CustomerGroup, error) {
 	row := q.db.QueryRow(ctx, insertGroup, name)
 	var i CustomerGroup
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.QuotaBytes,
+	)
 	return i, err
 }
 
@@ -236,14 +251,19 @@ func (q *Queries) ListGroups(ctx context.Context) ([]ListGroupsRow, error) {
 }
 
 const lockGroup = `-- name: LockGroup :one
-SELECT id, name, created_at FROM customer_groups WHERE id = $1 FOR UPDATE
+SELECT id, name, created_at, quota_bytes FROM customer_groups WHERE id = $1 FOR UPDATE
 `
 
 // The row stays locked until the transaction ends.
 func (q *Queries) LockGroup(ctx context.Context, id int64) (CustomerGroup, error) {
 	row := q.db.QueryRow(ctx, lockGroup, id)
 	var i CustomerGroup
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.QuotaBytes,
+	)
 	return i, err
 }
 

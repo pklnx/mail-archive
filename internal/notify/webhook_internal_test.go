@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pklnx/mail-archive/internal/config"
 )
@@ -58,5 +60,28 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("abc", 3); got != "abc" {
 		t.Fatal(got)
+	}
+}
+
+// TestShortenCutsConstantsLast: when values cut to an ellipsis still do
+// not fit, constant text is cut, the line break after the title and the
+// closing line stay, and every span stays closed.
+func TestShortenCutsConstantsLast(t *testing.T) {
+	d := &draft{
+		title:   []piece{constant("Mail archive: sync of "), value("work"), constant(" keeps failing")},
+		entries: [][]piece{{constant("Account "), quoted("work"), constant(" (owner "), value("anna"), constant(", ID 3) failed.")}, {constant("x")}},
+	}
+	for _, limit := range []int{112, 80, 60} {
+		got := d.fit(styleSlack, limit)
+		if n := utf8.RuneCountInString(got); n > limit || strings.Count(got, "`")%2 != 0 ||
+			!strings.Contains(got, "\n") || !strings.HasSuffix(got, "\n\n… and 1 more (see accounts)") {
+			t.Errorf("limit %d: %q (%d runes)", limit, got, n)
+		}
+	}
+	// 115 runes in full: the values are cut first, to the longest common
+	// length that fits, and the constants stay.
+	if got := d.fit(styleSlack, 112); !strings.Contains(got, "`wo…`") || !strings.Contains(got, "`an…`") || !strings.Contains(got, " keeps failing\nAccount `") ||
+		!strings.Contains(got, ", ID 3) failed.") {
+		t.Errorf("values are not cut before constants: %q", got)
 	}
 }

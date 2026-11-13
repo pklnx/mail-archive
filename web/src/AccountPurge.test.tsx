@@ -15,7 +15,8 @@ const preview = (p: Partial<PurgePreview> = {}): PurgePreview => ({
   deleted: 3,
   deletedBytes: 2048,
   kept: 1,
-  keptIn: [{ owner: "alice", account: "work", messages: 1 }],
+  keptIn: [{ owner: "admin", account: "live", messages: 1 }],
+  keptByOthers: 0,
   grace: "168h0m0s",
   blockers: { notRemoved: false, syncing: false, purgeOpen: false, rules: [], holds: [], messages: [] },
   purge: null,
@@ -47,7 +48,8 @@ describe("PurgeReview", () => {
     expect(screen.getByText((_, el) => el?.tagName === "LI" && (el.textContent ?? "").startsWith(deleted))).toBeTruthy();
     expect(screen.getByText((_, el) => el?.tagName === "LI" && (el.textContent ?? "").endsWith(t.purgeFiles(3, "7 days")))).toBeTruthy();
     expect(screen.getByText(t.purgeKept(1, "1"))).toBeTruthy();
-    expect(screen.getByText("alice / work")).toBeTruthy();
+    expect(screen.getByText("admin / live")).toBeTruthy();
+    expect(screen.queryByText(t.purgeKeptByOthers(0, "0"))).toBeNull();
 
     const field = screen.getByLabelText(t.purgeTypeCount(3));
     expect(confirmButton().disabled).toBe(true);
@@ -61,6 +63,20 @@ describe("PurgeReview", () => {
     expect(confirmButton().disabled).toBe(false);
     fireEvent.click(confirmButton());
     expect(onConfirm).toHaveBeenCalledWith(3);
+  });
+
+  it("names only the admin's own accounts and counts the rest without names", () => {
+    const p = preview({ kept: 3, keptIn: [{ owner: "admin", account: "live", messages: 1 }], keptByOthers: 2 });
+    render(<PurgeReview preview={p} busy={false} error="" onConfirm={() => {}} onCancel={() => {}} />);
+    const kept = screen.getByText(t.purgeKept(3, "3")).closest("li")!;
+    const lines = within(kept).getAllByRole("listitem").map((li) => li.textContent);
+    expect(lines).toEqual([`admin / live: ${t.messageCount(1, "1")}`, t.purgeKeptByOthers(2, "2")]);
+  });
+
+  it("shows the line in German", () => {
+    expect(messagesFor("de").purgeKeptByOthers(2, "2")).toBe("2 Nachrichten nur in Konten, die Ihnen nicht gehören");
+    expect(messagesFor("de").purgeKeptByOthers(1, "1")).toBe("1 Nachricht nur in Konten, die Ihnen nicht gehören");
+    expect(t.purgeKeptByOthers(1, "1")).toBe("1 message only in accounts you do not own");
   });
 
   it("needs a typed 0 when nothing is deleted", () => {

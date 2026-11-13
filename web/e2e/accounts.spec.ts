@@ -178,7 +178,11 @@ test("the smtp account's page: the mail server setup from the row's menu, and th
   // The focus goes to that section, not to the page's h1.
   const setup = main.getByRole("heading", { name: "Mail server setup", level: 2 });
   await expect(setup).toBeFocused();
-  await expect(main.getByRole("region", { name: "Mail server setup" }).getByText(/^Postfix, recipient_bcc_maps/)).toBeVisible();
+  // The demo's SMTP server wants a login (#395): the lines log in as the
+  // account's user name, with a placeholder for the secret.
+  const lines = main.getByRole("region", { name: "Mail server setup" });
+  await expect(lines.getByText(/^Postfix with a login over TLS, recipient_bcc_maps/)).toBeVisible();
+  await expect(lines.getByText(/\[archive\.customer\.example\]:587\s+smtp-\d+:mas_…/)).toBeVisible();
   const imports = main.getByRole("region", { name: "Imports from IMAP" });
   await imports.getByRole("button", { name: "Import existing mail from IMAP" }).click();
   await expect(page).toHaveURL(/\?view=accounts&import=journal$/);

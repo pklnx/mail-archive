@@ -96,6 +96,20 @@ func (q *Queries) CreateTwoFactorChallenge(ctx context.Context, arg CreateTwoFac
 	return err
 }
 
+const deleteExhaustedTwoFactorChallenge = `-- name: DeleteExhaustedTwoFactorChallenge :exec
+DELETE FROM two_factor_challenges WHERE id = $1 AND attempts >= $2::smallint
+`
+
+type DeleteExhaustedTwoFactorChallengeParams struct {
+	ID          []byte
+	MaxAttempts int16
+}
+
+func (q *Queries) DeleteExhaustedTwoFactorChallenge(ctx context.Context, arg DeleteExhaustedTwoFactorChallengeParams) error {
+	_, err := q.db.Exec(ctx, deleteExhaustedTwoFactorChallenge, arg.ID, arg.MaxAttempts)
+	return err
+}
+
 const deleteExpiredTwoFactorChallenges = `-- name: DeleteExpiredTwoFactorChallenges :exec
 DELETE FROM two_factor_challenges WHERE expires_at <= now()
 `
@@ -190,7 +204,7 @@ func (q *Queries) InsertRecoveryCode(ctx context.Context, arg InsertRecoveryCode
 }
 
 const lockTwoFactorChallenge = `-- name: LockTwoFactorChallenge :one
-SELECT id, user_id, two_factor_version, created_at, expires_at FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE
+SELECT id, user_id, two_factor_version, created_at, expires_at, attempts FROM two_factor_challenges WHERE id = $1 AND expires_at > now() FOR UPDATE
 `
 
 // Only challenges that have not expired.
@@ -203,6 +217,7 @@ func (q *Queries) LockTwoFactorChallenge(ctx context.Context, id []byte) (TwoFac
 		&i.TwoFactorVersion,
 		&i.CreatedAt,
 		&i.ExpiresAt,
+		&i.Attempts,
 	)
 	return i, err
 }
@@ -237,4 +252,43 @@ func (q *Queries) LockUser(ctx context.Context, id int64) (User, error) {
 		&i.IsAuditor,
 	)
 	return i, err
+}
+
+const reserveTwoFactorAttempt = `-- name: ReserveTwoFactorAttempt :one
+UPDATE two_factor_challenges SET attempts = attempts + 1
+WHERE id = $1 AND expires_at > now() AND attempts < $2::smallint
+RETURNING attempts
+`
+
+type ReserveTwoFactorAttemptParams struct {
+	ID          []byte
+	MaxAttempts int16
+}
+
+// Autocommit, before the login transaction: the count survives its
+// rollback, and the row lock orders parallel requests on one challenge.
+func (q *Queries) ReserveTwoFactorAttempt(ctx context.Context, arg ReserveTwoFactorAttemptParams) (int16, error) {
+	row := q.db.QueryRow(ctx, reserveTwoFactorAttempt, arg.ID, arg.MaxAttempts)
+	var attempts int16
+	err := row.Scan(&attempts)
+	return attempts, err
+}
+
+const twoFactorChallengeExhausted = `-- name: TwoFactorChallengeExhausted :one
+SELECT EXISTS (
+    SELECT 1 FROM two_factor_challenges
+    WHERE id = $1 AND expires_at > now() AND attempts >= $2::smallint
+)
+`
+
+type TwoFactorChallengeExhaustedParams struct {
+	ID          []byte
+	MaxAttempts int16
+}
+
+func (q *Queries) TwoFactorChallengeExhausted(ctx context.Context, arg TwoFactorChallengeExhaustedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, twoFactorChallengeExhausted, arg.ID, arg.MaxAttempts)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

@@ -25,8 +25,11 @@ import { accountsApi, folderQuestion, type Account, type AccountInput, type Acco
 import { suggestName } from "./accountName";
 import { durationMinutes, formatCount, formatEvery, formatInterval, relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
-import { postfixSetup } from "./journalSetup";
+import { errorMessage } from "./imapText";
+import { postfixSetup, usernamePlaceholder } from "./journalSetup";
 import { Loading } from "./lazyView";
+import { useSmtpCredentials } from "./SmtpCredentials";
+import { smtpText } from "./smtpText";
 
 // The parts of the Accounts pages (#285 part 2) that the list and the
 // account's detail page share: the status texts and tags, and the forms.
@@ -324,7 +327,7 @@ export function AccountForm({ account, section = false, locked, onCancel, onSave
     } catch (err) {
       const folders = folderQuestion(err);
       if (folders) setQuestion(folders);
-      else setError(err instanceof Error ? err.message : String(err));
+      else setError(errorMessage(err));
       setBusy(false);
     }
   };
@@ -411,9 +414,11 @@ const guideURL = "https://pklnx.github.io/mail-archive/guide/journaling";
  * The "Add account" form: admins first choose where the mail comes from,
  * an IMAP mailbox or SMTP journaling; everyone else adds an IMAP account.
  */
-export function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved, onFill }: {
+export function NewAccount({ admin, smtpOn, login = true, onCancel, onCreated, onSaved, onFill }: {
   admin: boolean;
   smtpOn: boolean;
+  /** Mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required, the default): the setup lines log in. */
+  login?: boolean;
   onCancel: () => void;
   /** An smtp account exists; its form still shows the mail server setup. */
   onCreated: () => void;
@@ -455,6 +460,7 @@ export function NewAccount({ admin, smtpOn, onCancel, onCreated, onSaved, onFill
         <SMTPAccountForm
           admin={admin}
           smtpOn={smtpOn}
+          login={login}
           onCancel={onCancel}
           onCreated={() => {
             setCreated(true);
@@ -478,7 +484,7 @@ export function addressList(values: string[]): string[] {
  * addresses (addresses: admins only). A new account shows the mail server
  * setup before the page closes.
  */
-export function SMTPAccountForm({ account, section = false, locked, admin, smtpOn, onCancel, onCreated, onSaved, onFill }: {
+export function SMTPAccountForm({ account, section = false, locked, admin, smtpOn, login = true, onCancel, onCreated, onSaved, onFill }: {
   account?: Account;
   /** In a section of the account's page (#285): no primary button. */
   section?: boolean;
@@ -486,6 +492,8 @@ export function SMTPAccountForm({ account, section = false, locked, admin, smtpO
   locked?: boolean;
   admin: boolean;
   smtpOn: boolean;
+  /** Mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required, the default): the setup lines log in. */
+  login?: boolean;
   onCancel: () => void;
   onCreated?: () => void;
   /** Called with the saved account's name. */
@@ -530,7 +538,7 @@ export function SMTPAccountForm({ account, section = false, locked, admin, smtpO
     return (
       <div className="page-form">
         <Notice kind="success" text={t.smtpAccountAdded(name.trim())} />
-        <PostfixPanel addresses={created} />
+        <NewAccountSetup name={name.trim()} addresses={created} login={login} />
         <div className="form-actions">
           {onFill && (
             <Button kind="secondary" onClick={() => onFill(name.trim())}>
@@ -596,16 +604,31 @@ export function SMTPAccountForm({ account, section = false, locked, admin, smtpO
   );
 }
 
+/** The setup for a new smtp account: with a login, its user name (it has no secret yet). */
+function NewAccountSetup({ name, addresses, login }: { name: string; addresses: string[]; login: boolean }) {
+  const { list } = useSmtpCredentials(name, login);
+  return <PostfixPanel addresses={addresses} login={login} username={list?.username} />;
+}
+
 /**
  * What Postfix needs to send an smtp account its copies, with Carbon's copy
- * button. Inside a section named for it, it is no region of its own.
+ * button. Inside a section named for it, it is no region of its own. login:
+ * mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required), as the account's
+ * user name (a placeholder while it is not known); the secret is always a
+ * placeholder, since it is shown only once.
  */
-export function PostfixPanel({ addresses, inSection = false }: { addresses: string[]; inSection?: boolean }) {
-  const setup = postfixSetup(addresses);
+export function PostfixPanel({ addresses, login, username, inSection = false }: {
+  addresses: string[];
+  login: boolean;
+  username?: string;
+  inSection?: boolean;
+}) {
+  const st = smtpText();
+  const setup = postfixSetup(addresses, login ? (username ?? usernamePlaceholder) : null);
   const content = (
     <>
-      {!setup.dedicated && <Notice kind="warning" text={t.setupNotDedicated(setup.address)} />}
-      <p>{t.setupIntro}</p>
+      {!setup.dedicated && <Notice kind="warning" text={st.setupNotDedicated(setup.address)} />}
+      <p>{login ? st.setupIntroLogin : st.setupIntro}</p>
       <CodeSnippet
         type="multi"
         className="postfix__code"
@@ -614,13 +637,13 @@ export function PostfixPanel({ addresses, inSection = false }: { addresses: stri
         feedback={t.carbon.copied}
         showMoreText={t.carbon.showMore}
         showLessText={t.carbon.showLess}
-        maxCollapsedNumberOfRows={20}
+        maxCollapsedNumberOfRows={32}
       >
         {setup.text}
       </CodeSnippet>
       <p className="app-text-secondary app-text-small">
-        {t.setupTarget}{" "}
-        <Link href={guideURL} target="_blank" rel="noreferrer" inline size="sm">
+        {login ? st.setupTargetLogin : st.setupTarget}{" "}
+        <Link href={login ? `${guideURL}#log-in-with-an-smtp-secret` : guideURL} target="_blank" rel="noreferrer" inline size="sm">
           {t.journalingGuide}
         </Link>
       </p>
@@ -638,7 +661,7 @@ export function PostfixPanel({ addresses, inSection = false }: { addresses: stri
 /** The result of a section's save, for its status line: an explicit state, never a comparison of texts (#310). */
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
-const failure = (err: unknown): SaveResult => ({ ok: false, error: t.failed(err instanceof Error ? err.message : String(err)) });
+const failure = (err: unknown): SaveResult => ({ ok: false, error: t.failed(errorMessage(err)) });
 
 /**
  * Sets how often the schedule syncs the account. It sends only a changed

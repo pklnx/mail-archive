@@ -1936,6 +1936,13 @@ select,
   flex-direction: column;
   gap: 1rem;
 }
+/* Edit quota (#397): the size and its unit side by side. */
+.storage-quota-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(6rem, max-content);
+  gap: 1rem;
+  align-items: start;
+}
 /* The grant dialog (#393): a group of fields, and an account's folders under it. */
 .grant-section {
   display: flex;
