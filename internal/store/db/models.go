@@ -238,6 +238,18 @@ type DeletionCandidate struct {
 	State         string
 }
 
+type DeletionMark struct {
+	ID          int64
+	Sha256      string
+	ArchivedAt  time.Time
+	AccountIds  []int64
+	GroupIds    []int64
+	RunID       *int64
+	PurgeID     *int64
+	TombstoneID *int64
+	MarkedAt    time.Time
+}
+
 type DeletionRun struct {
 	ID          int64
 	State       string

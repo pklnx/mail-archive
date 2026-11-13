@@ -191,7 +191,8 @@ func (s *Store) PendingCandidates(ctx context.Context, runID int64, after string
 
 // DeleteBatch deletes those of shas, candidates of the confirmed run, that
 // are still deletable, and marks the others kept. In one transaction it
-// writes the tombstones and the deletion records of the attestation chain,
+// writes the tombstones, the deletion marks of every account and customer
+// group that held them (#539) and the deletion records of the attestation chain,
 // deletes the locations and the messages, and schedules their files for
 // removal after grace. The caller holds the blob lock exclusively, so no
 // writer stores one of these messages meanwhile. An audit entry from
@@ -227,6 +228,11 @@ func (s *Store) DeleteBatch(ctx context.Context, runID int64, shas []string, gra
 		if len(deletable) > 0 {
 			if _, err := q.InsertTombstones(ctx, db.InsertTombstonesParams{RunID: runID, Shas: deletable}); err != nil {
 				return fmt.Errorf("tombstones: %w", err)
+			}
+			// The marks name the accounts and groups that hold the
+			// messages, so they come before the locations go (#539).
+			if _, err := q.InsertRetentionMarks(ctx, db.InsertRetentionMarksParams{RunID: runID, Shas: deletable}); err != nil {
+				return fmt.Errorf("deletion marks: %w", err)
 			}
 			if _, err := q.InsertRetentionDeletions(ctx, deletable); err != nil {
 				return fmt.Errorf("deletion records: %w", err)

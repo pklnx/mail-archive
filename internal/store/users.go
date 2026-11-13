@@ -158,10 +158,13 @@ func createUser(ctx context.Context, q *db.Queries, nu NewUser) (*User, error) {
 		if nu.Auditor {
 			return nil, ErrFirstUserAuditor
 		}
-		// The unowned accounts are locked first: the adoption waits for
-		// saves in flight into them (lockAccountGroup). Adopted accounts
-		// leave "Without group" for the user's group: a snapshot moves
-		// their bytes.
+		// The unowned accounts are locked first, in id order. The
+		// adoption's UPDATE of owner_id, a column of the unique key
+		// (owner_id, name), takes FOR UPDATE anyway and so already waits
+		// for saves in flight into them (their FOR KEY SHARE,
+		// lockAccountGroup); the explicit lock only fixes the order.
+		// Adopted accounts leave "Without group" for the user's group: a
+		// snapshot moves their bytes.
 		if _, err := q.LockUnownedAccounts(ctx); err != nil {
 			return nil, err
 		}
