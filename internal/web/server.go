@@ -95,6 +95,10 @@ type Server struct {
 	// forwardedProtoWarned is set once warnUntrustedForwardedProto has
 	// logged.
 	forwardedProtoWarned atomic.Bool
+	// plainHTTPWarned has a flag per allowed host that is not a loopback
+	// name, set once warnPlainHTTP has logged for it. Built in New and
+	// only read afterwards.
+	plainHTTPWarned map[string]*atomic.Bool
 }
 
 // Options configure a Server.
@@ -179,6 +183,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		apiKeyRate:  auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
 		checks:     newLoginChecks(),
 		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen, smtpAuth: opts.SMTPAuth,
+		plainHTTPWarned: plainHTTPWarnings(hosts),
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention

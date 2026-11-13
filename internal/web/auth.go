@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/auth"
@@ -94,6 +96,66 @@ func (s *Server) warnUntrustedForwardedProto(r *http.Request) {
 	}
 	s.log.Warn("X-Forwarded-Proto from a peer that is neither loopback nor a trusted proxy is ignored: the session cookie is not "+
 		"__Host-/Secure and no HSTS is sent; behind a reverse proxy set "+config.EnvTrustedProxies+" to its address", "peer", peer)
+}
+
+// plainHTTPWarnings returns, for each of the allowed hosts that is not a
+// loopback name (isLoopbackName), a flag for warnPlainHTTP. The map is built
+// once and only read afterwards: its size is fixed by the configuration, and
+// no request can make it grow.
+func plainHTTPWarnings(hosts []string) map[string]*atomic.Bool {
+	m := make(map[string]*atomic.Bool)
+	for _, h := range hosts {
+		if !isLoopbackName(h) {
+			m[h] = new(atomic.Bool)
+		}
+	}
+	return m
+}
+
+// isLoopbackName reports whether a host name (lowercase, without port and
+// brackets) names this computer for a browser: localhost, a name under
+// .localhost, or a loopback address (also IPv4-mapped). Browsers send Fetch
+// Metadata there over plain HTTP, as over HTTPS. A trailing dot is ignored.
+func isLoopbackName(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Unmap().IsLoopback()
+}
+
+// warnPlainHTTP logs once per allowed host name when a browser uses the web
+// UI over plain HTTP under a name that is not a loopback name: browsers
+// send no Fetch Metadata (Sec-Fetch-*) there, so fetchMetadataAllowed lets
+// everything through and the guard against requests from HTML mail does
+// nothing ("Plain LAN access" in docs/reference/security.md).
+//
+// It runs after the Host check, so the host is an allowed one and the
+// warnings are at most one per configured host. A browser is a Mozilla/
+// user agent without an API key; one that sends Fetch Metadata treats the
+// origin as trustworthy and needs no warning. X-Forwarded-Proto: https
+// means HTTPS to a proxy: from loopback or a trusted proxy it counts, and
+// from anybody else warnUntrustedForwardedProto covers it. Only the
+// configured host name is logged, nothing the client sent.
+func (s *Server) warnPlainHTTP(r *http.Request) {
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" ||
+		!strings.HasPrefix(r.Header.Get("User-Agent"), "Mozilla/") ||
+		r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("Sec-Fetch-Mode") != "" {
+		return
+	}
+	if _, key := bearerKey(r); key {
+		return
+	}
+	host := hostName(r.Host)
+	warned, ok := s.plainHTTPWarned[host]
+	if !ok || warned.Load() || !warned.CompareAndSwap(false, true) {
+		return
+	}
+	s.log.Warn("the web UI is used over plain HTTP under a host name other than localhost or a loopback address: browsers send "+
+		"no Fetch Metadata (Sec-Fetch-*) there, so the guard against requests from HTML mail does nothing; use HTTPS (a reverse proxy or "+
+		"tailscale serve, with "+config.EnvTrustedProxies+" where it does not connect from loopback) or http://localhost "+
+		"on this computer; see \"Plain LAN access\" in the security docs", "host", host)
 }
 
 // sessionTokenKey holds the token of the request's valid session, as found
