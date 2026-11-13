@@ -189,34 +189,23 @@ func (s *Server) trustedProxy(a netip.Addr) bool {
 
 // clientAddr is the key the login limits, the invalid-key limit and the
 // passkey-begin limits count per client: clientIP, behind a trusted proxy per
-// client again. An IPv6 address counts per /64 (limitKey). Logs and the
+// client again. An IPv6 address counts per /64 (auth.LimitKey). Logs and the
 // audit log keep the full address (clientIP).
 func (s *Server) clientAddr(r *http.Request) string {
 	if a := s.clientIP(r); a.IsValid() {
-		return limitKey(a)
+		return auth.LimitKey(a)
 	}
 	return r.RemoteAddr
 }
 
-// limitKey groups an address for the limits: IPv6 by its /64, the block
-// one host or network usually gets, so that changing addresses within it
-// does not escape the limits; IPv4 (also IPv4-mapped IPv6) by address.
-func limitKey(a netip.Addr) string {
-	a = a.Unmap().WithZone("")
-	if a.Is6() {
-		return netip.PrefixFrom(a, 64).Masked().String()
-	}
-	return a.String()
-}
-
 // limitKeys are the keys of a for limits that also cap a whole network:
-// limitKey(a) and, for IPv6, the /48 that a site usually gets.
+// auth.LimitKey(a) and, for IPv6, the /48 that a site usually gets.
 func limitKeys(a netip.Addr) []string {
 	a = a.Unmap().WithZone("")
 	if a.Is6() {
-		return []string{limitKey(a), netip.PrefixFrom(a, 48).Masked().String()}
+		return []string{auth.LimitKey(a), netip.PrefixFrom(a, 48).Masked().String()}
 	}
-	return []string{limitKey(a)}
+	return []string{auth.LimitKey(a)}
 }
 
 // Paging of GET /api/audit.

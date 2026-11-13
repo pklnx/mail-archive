@@ -254,7 +254,9 @@ the archive stores only its SHA-256 and its last 4 characters.
   can switch to the new one without losing mail. `--grace 0` revokes it at
   once. A secret that was already expiring is revoked: an account has at
   most two usable secrets.
-- `--revoke ID` revokes a secret at once.
+- `--revoke ID` revokes a secret at once: the SMTP server refuses it at the
+  mail server's next message, also on a connection that is already logged
+  in.
 - Each change is recorded in the [audit log](../guide/audit-log)
   (`smtp_credential.create`, `smtp_credential.revoke`), never with the
   secret.

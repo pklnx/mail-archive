@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"runtime"
 	"strings"
 	"sync"
@@ -325,5 +326,43 @@ func TestLimiterPendingNeverNegative(t *testing.T) {
 	}
 	if l.waiting != 0 {
 		t.Errorf("waiting %d", l.waiting)
+	}
+}
+
+// LimitKey groups IPv6 per /64 and keeps IPv4 (also IPv4-mapped) per
+// address, without a zone.
+func TestLimitKey(t *testing.T) {
+	for _, c := range []struct{ addr, want string }{
+		{"2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"},
+		{"2001:db8:1:2::1", "2001:db8:1:2::/64"},
+		{"2001:db8:1:3::1", "2001:db8:1:3::/64"},
+		{"fe80::1%eth0", "fe80::/64"},
+		{"192.0.2.1", "192.0.2.1"},
+		{"::ffff:192.0.2.1", "192.0.2.1"},
+	} {
+		if got := LimitKey(netip.MustParseAddr(c.addr)); got != c.want {
+			t.Errorf("%s: %s, want %s", c.addr, got, c.want)
+		}
+	}
+}
+
+// WithClock moves the limiter's window with the given clock: a block ends
+// when the clock passes it.
+func TestLimiterWithClock(t *testing.T) {
+	now := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	l := NewLimiter().WithClock(func() time.Time { return now })
+	for range addrFailures {
+		a, wait, err := l.BeginAddr(context.Background(), "192.0.2.1")
+		if a == nil || wait != 0 || err != nil {
+			t.Fatalf("begin: %v %v %v", a, wait, err)
+		}
+		a.Fail()
+	}
+	if wait := l.AddrBlocked("192.0.2.1"); wait != addrBlockTime {
+		t.Fatalf("blocked for %v, want %v", wait, addrBlockTime)
+	}
+	now = now.Add(addrBlockTime)
+	if wait := l.AddrBlocked("192.0.2.1"); wait != 0 {
+		t.Fatalf("still blocked for %v", wait)
 	}
 }

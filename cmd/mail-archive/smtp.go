@@ -30,14 +30,20 @@ func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 	c := a.cfg.SMTP
 	srv := &smtpd.Server{
 		Store: a.store, Blobs: blobs, Logger: log, Allowed: c.AllowedNetworks,
-		Hostname: c.Hostname, MaxSize: c.MaxSize,
+		Hostname: c.Hostname, MaxSize: c.MaxSize, Auth: c.Auth, MaxConnsPerAddr: c.MaxConnsPerAddr,
 	}
+	var certs *smtpd.CertReloader
 	if c.TLSCert != "" {
-		cert, err := tls.LoadX509KeyPair(c.TLSCert, c.TLSKey)
+		// Reloaded within a minute of a change: renewals need no restart.
+		certs, err = smtpd.NewCertReloader(c.TLSCert, c.TLSKey, log)
 		if err != nil {
 			return nil, fmt.Errorf("%s/%s: %w", config.EnvSMTPTLSCert, config.EnvSMTPTLSKey, err)
 		}
-		srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+		srv.TLS = &tls.Config{GetCertificate: certs.GetCertificate, MinVersion: tls.VersionTLS12}
+	}
+	if c.Auth {
+		// Its own limiter: failed SMTP logins never block the web login.
+		srv.Limiter = auth.NewLimiter()
 	}
 	l, err := net.Listen("tcp", c.Listen)
 	if err != nil {
@@ -47,10 +53,21 @@ func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 	for _, p := range c.AllowedNetworks {
 		nets = append(nets, p.String())
 	}
+	mode := config.SMTPAuthOff
+	if c.Auth {
+		mode = config.SMTPAuthRequired
+	}
+	attrs := []any{"addr", l.Addr().String(), "auth", mode, "allowed_networks", nets, "max_size", c.MaxSize,
+		"starttls", srv.TLS != nil}
+	if certs != nil {
+		attrs = append(attrs, "cert_not_after", certs.NotAfter())
+	}
+	if c.Auth {
+		attrs = append(attrs, "max_conns_per_addr", c.MaxConnsPerAddr)
+	}
 	// Postfix drops a journal copy the archive refuses as too large, so its
 	// message_size_limit must not be larger.
-	log.Info("smtp on", "addr", l.Addr().String(), "allowed_networks", nets, "max_size", c.MaxSize,
-		"starttls", srv.TLS != nil, "hint", "Postfix message_size_limit must not exceed max_size")
+	log.Info("smtp on", append(attrs, "hint", "Postfix message_size_limit must not exceed max_size")...)
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -103,8 +120,9 @@ stores alice@example.com as the recipient.`,
 			}
 			fmt.Printf("smtp account %q added for %s\n", acc.Name, strings.Join(addresses, ", "))
 			if a.cfg.SMTP == nil {
-				fmt.Printf("\nhint: set %s and %s for the web server to receive mail.\n",
-					config.EnvSMTPListen, config.EnvSMTPAllowedNetworks)
+				fmt.Printf("\nhint: set %s, and %s and %s (or %s=%s with %s), for the web server to receive mail.\n",
+					config.EnvSMTPListen, config.EnvSMTPTLSCert, config.EnvSMTPTLSKey,
+					config.EnvSMTPAuth, config.SMTPAuthOff, config.EnvSMTPAllowedNetworks)
 			}
 			fmt.Printf("hint: create the mail server's SMTP login (user name %s) with: %s account smtp-secret %s%s --new\n",
 				auth.SMTPUsername(acc.ID), commandName(), shellQuote(acc.Name), userArg(cmd))

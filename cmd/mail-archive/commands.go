@@ -1001,7 +1001,9 @@ rebinding; state-changing requests must come from the same origin. Use HTTPS
 network.
 
 With ` + config.EnvSMTPListen + ` set, it also receives mail for smtp accounts
-(journaling from a mail server) from the networks in
+(journaling from a mail server): from mail servers that log in over STARTTLS
+(` + config.EnvSMTPAuth + `=required, the default), or with
+` + config.EnvSMTPAuth + `=off from the networks in
 ` + config.EnvSMTPAllowedNetworks + `.
 
 It needs the secret key (` + config.EnvSecretKeyFile + ` or ` + config.EnvSecretKey + `)

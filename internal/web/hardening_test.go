@@ -527,20 +527,14 @@ func newTestHoldError(ids ...int64) error {
 	return fmt.Errorf("%w; lock the user instead", st)
 }
 
-func TestLimitKey(t *testing.T) {
-	for _, c := range []struct{ addr, want string }{
-		{"2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"},
-		{"2001:db8:1:2::1", "2001:db8:1:2::/64"},
-		{"fe80::1%eth0", "fe80::/64"},
-		{"192.0.2.1", "192.0.2.1"},
-		{"::ffff:192.0.2.1", "192.0.2.1"},
-	} {
-		if got := limitKey(netip.MustParseAddr(c.addr)); got != c.want {
-			t.Errorf("%s: %s, want %s", c.addr, got, c.want)
-		}
-	}
+// The grouping itself is tested with auth.LimitKey (TestLimitKey there).
+func TestClientAddr(t *testing.T) {
 	s := &Server{}
 	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "[2001:db8:1:2:3:4:5:6]:4711"
+	if got := s.clientAddr(r); got != "2001:db8:1:2::/64" {
+		t.Errorf("IPv6: %q", got)
+	}
 	r.RemoteAddr = "pipe"
 	if got := s.clientAddr(r); got != "pipe" {
 		t.Errorf("no address: %q", got)

@@ -194,11 +194,12 @@ func TestParseWebhook(t *testing.T) {
 }
 
 func TestParseSMTP(t *testing.T) {
-	c, err := ParseSMTP("", "", "", "", "", "")
+	c, err := ParseSMTP(SMTPEnv{})
 	if c != nil || err != nil {
 		t.Fatalf("off: %+v, %v", c, err)
 	}
-	c, err = ParseSMTP(":2525", "172.16.0.0/12, 192.0.2.10,::ffff:198.51.100.0/120, 2001:db8::/32", "", "", "", "archive.example")
+	c, err = ParseSMTP(SMTPEnv{Listen: ":2525", AllowedNetworks: "172.16.0.0/12, 192.0.2.10,::ffff:198.51.100.0/120, 2001:db8::/32",
+		Hostname: "archive.example", Auth: "off"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,27 +210,54 @@ func TestParseSMTP(t *testing.T) {
 	if got := strings.Join(nets, " "); got != "172.16.0.0/12 192.0.2.10/32 198.51.100.0/24 2001:db8::/32" {
 		t.Errorf("networks %s", got)
 	}
-	if c.MaxSize != DefaultSMTPMaxSize || c.Hostname != "archive.example" || c.Listen != ":2525" {
+	if c.MaxSize != DefaultSMTPMaxSize || c.Hostname != "archive.example" || c.Listen != ":2525" || c.Auth || c.MaxConnsPerAddr != 0 {
 		t.Errorf("config %+v", c)
 	}
 	for in, want := range map[string]int64{"50M": 50 << 20, "52428800": 52428800, "1g": 1 << 30, "20MiB": 20 << 20, "2048K": 2 << 20} {
-		c, err := ParseSMTP(":2525", "127.0.0.1", in, "", "", "")
+		c, err := ParseSMTP(SMTPEnv{Listen: ":2525", AllowedNetworks: "127.0.0.1", MaxSize: in, Auth: "off"})
 		if err != nil || c.MaxSize != want {
 			t.Errorf("max size %q: %+v, %v", in, c, err)
 		}
 	}
-	for _, bad := range [][6]string{
-		{"", "127.0.0.1", "", "", "", ""},              // settings without listen
-		{"2525", "127.0.0.1", "", "", "", ""},          // no host:port
-		{":2525", "", "", "", "", ""},                  // no allowlist
-		{":2525", "10.0.0.0/33", "", "", "", ""},       // bad network
-		{":2525", "127.0.0.1", "100K", "", "", ""},     // too small
-		{":2525", "127.0.0.1", "2G", "", "", ""},       // too large
-		{":2525", "127.0.0.1", "fifty", "", "", ""},    // not a size
-		{":2525", "127.0.0.1", "", "cert.pem", "", ""}, // cert without key
+
+	// required, the default: a certificate, no allowlist needed.
+	for _, mode := range []string{"", "required", " required "} {
+		c, err := ParseSMTP(SMTPEnv{Listen: ":587", TLSCert: "/tls/cert.pem", TLSKey: "/tls/key.pem", Auth: mode})
+		if err != nil || !c.Auth || len(c.AllowedNetworks) != 0 || c.MaxConnsPerAddr != DefaultSMTPMaxConnsPerAddr {
+			t.Errorf("auth %q: %+v, %v", mode, c, err)
+		}
+	}
+	c, err = ParseSMTP(SMTPEnv{Listen: ":587", AllowedNetworks: "192.0.2.0/24", TLSCert: "c", TLSKey: "k", MaxConnsPerAddr: "64"})
+	if err != nil || !c.Auth || len(c.AllowedNetworks) != 1 || c.MaxConnsPerAddr != 64 {
+		t.Errorf("required with an allowlist: %+v, %v", c, err)
+	}
+	// The default without a certificate names the way out.
+	_, err = ParseSMTP(SMTPEnv{Listen: ":2525", AllowedNetworks: "127.0.0.1"})
+	if err == nil || !strings.Contains(err.Error(), "MAIL_ARCHIVE_SMTP_AUTH=off") || !strings.Contains(err.Error(), EnvSMTPTLSCert) {
+		t.Errorf("required without a certificate: %v", err)
+	}
+
+	for _, bad := range []SMTPEnv{
+		{AllowedNetworks: "127.0.0.1"}, // settings without listen
+		{Auth: "off"},                  // auth without listen
+		{MaxConnsPerAddr: "8"},         // cap without listen
+		{Listen: "2525", AllowedNetworks: "127.0.0.1", Auth: "off"},    // no host:port
+		{Listen: ":2525", Auth: "off"},                                 // off without an allowlist
+		{Listen: ":2525", AllowedNetworks: "10.0.0.0/33", Auth: "off"}, // bad network
+		{Listen: ":2525", AllowedNetworks: "127.0.0.1", MaxSize: "100K", Auth: "off"},
+		{Listen: ":2525", AllowedNetworks: "127.0.0.1", MaxSize: "2G", Auth: "off"},
+		{Listen: ":2525", AllowedNetworks: "127.0.0.1", MaxSize: "fifty", Auth: "off"},
+		{Listen: ":2525", AllowedNetworks: "127.0.0.1", TLSCert: "cert.pem", Auth: "off"}, // cert without key
+		{Listen: ":2525", TLSCert: "c", TLSKey: "k", Auth: "on"},                          // not a mode
+		{Listen: ":2525", TLSCert: "c", TLSKey: "k", Auth: "Required"},                    // case matters
+		{Listen: ":2525", TLSCert: "c"},                                                   // required, key missing
+		{Listen: ":2525", TLSCert: "c", TLSKey: "k", MaxConnsPerAddr: "0"},
+		{Listen: ":2525", TLSCert: "c", TLSKey: "k", MaxConnsPerAddr: "65"},
+		{Listen: ":2525", TLSCert: "c", TLSKey: "k", MaxConnsPerAddr: "eight"},
+		{Listen: ":2525", AllowedNetworks: "127.0.0.1", Auth: "off", MaxConnsPerAddr: "8"}, // the cap needs auth
 	} {
-		if _, err := ParseSMTP(bad[0], bad[1], bad[2], bad[3], bad[4], bad[5]); err == nil {
-			t.Errorf("accepted %q", bad)
+		if c, err := ParseSMTP(bad); err == nil {
+			t.Errorf("accepted %+v: %+v", bad, c)
 		}
 	}
 }
