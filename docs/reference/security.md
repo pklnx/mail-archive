@@ -367,6 +367,13 @@ and CSP, the server's link rewrite and, in Chromium, the web UI's link
 blocker. HTTPS, as above, or `http://localhost` on the computer itself
 restores the guard.
 
+So that this does not go unnoticed, the server logs a warning ("the web UI
+is used over plain HTTP under a name other than localhost") the first time a
+browser uses it this way under each allowed host name, with that name as
+`host`. It does not warn for `localhost`, names under `.localhost`, loopback
+addresses, or HTTPS, direct or through a proxy whose `X-Forwarded-Proto`
+counts.
+
 ## The SMTP server
 
 With `MAIL_ARCHIVE_SMTP_LISTEN` set, the web server accepts mail for
