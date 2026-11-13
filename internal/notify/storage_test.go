@@ -1,10 +1,15 @@
 package notify_test
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"mime"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pklnx/mail-archive/internal/notify"
@@ -208,3 +213,44 @@ func decodeTitle(t *testing.T, raw string) string {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// TestStorageTransitionDuringDelivery: a transition written while the
+// request for the previous one is in flight stays due and is sent next,
+// with its own ID (finishing records the claimed event_seq, not the
+// row's). The receiver writes it while it handles the first request.
+func TestStorageTransitionDuringDelivery(t *testing.T) {
+	e := newEnv(t)
+	var mu sync.Mutex
+	var ids []string
+	var writeErr error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var j map[string]any
+		_ = json.Unmarshal(body, &j)
+		mu.Lock()
+		ids = append(ids, fmt.Sprint(j["id"]))
+		first := len(ids) == 1
+		mu.Unlock()
+		if first {
+			// The gate writes the next transition before the receiver answers.
+			_, err := e.conn.Exec(e.ctx, "UPDATE storage_states SET state = 'ok', state_since = now(), event_seq = event_seq + 1 WHERE group_id IS NULL")
+			mu.Lock()
+			writeErr = err
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	n := e.notifier(idsWebhook(t, srv.URL, ""))
+	e.transition(0, "warn")
+	e.deliver(n)
+	e.deliver(n)
+	mu.Lock()
+	defer mu.Unlock()
+	if writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if len(ids) != 2 || ids[0] != "storage:instance:1" || ids[1] != "storage:instance:2" {
+		t.Fatalf("ids %v, want storage:instance:1 then storage:instance:2", ids)
+	}
+}
