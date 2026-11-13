@@ -326,7 +326,7 @@ func TestSharedMessageAcrossOwners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, created)
+	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, created, true)
 	if err != nil || meta.SHA256 != rich {
 		t.Fatalf("smtp copy %s, %v", meta.SHA256, err)
 	}

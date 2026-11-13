@@ -180,7 +180,7 @@ func (f *fixture) deliver(acc *store.Account, raw []byte) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(f.ctx, f.store, f.blobs, blob, created)
+	meta, err := archive.BuildMeta(f.ctx, f.store, f.blobs, blob, created, true)
 	if err != nil {
 		f.t.Fatal(err)
 	}

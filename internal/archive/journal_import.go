@@ -240,7 +240,7 @@ func (j *journalImport) flush(ctx context.Context) error {
 			}
 			continue
 		}
-		meta, err := BuildMeta(ctx, j.im.Store, j.im.Blobs, p.blob, p.created)
+		meta, err := BuildMeta(ctx, j.im.Store, j.im.Blobs, p.blob, p.created, true) // as Import: always the full work
 		if err != nil {
 			return err
 		}

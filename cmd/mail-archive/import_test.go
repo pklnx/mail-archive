@@ -256,7 +256,7 @@ func TestImportJournalCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
+	meta, err := archive.BuildMeta(ctx, st, blobs, blob, created, true)
 	if err != nil {
 		t.Fatal(err)
 	}

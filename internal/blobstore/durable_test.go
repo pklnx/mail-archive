@@ -327,6 +327,82 @@ func TestPutBarrierOrder(t *testing.T) {
 	assertNoTemp(t, root)
 }
 
+// SyncTempIf (#539, part 3): the predicate is asked once, with the hash,
+// before any file operation, for a new and an existing blob alike. For an
+// existing blob it decides whether the temporary file is synchronized
+// before the existing file is used, as for a new blob; a new blob is
+// synchronized either way. An error from the predicate fails the Put
+// before anything is published.
+func TestPutSyncTempIf(t *testing.T) {
+	const content = "Subject: group\r\n\r\nbody\r\n"
+	s, rec, root := newRecorded(t)
+	var hooked []string // OnTempSync, for the callers' tests
+	s.OnTempSync(func(hash string) { hooked = append(hooked, hash) })
+	var asked []string
+	ask := func(answer bool, err error) PutOption {
+		return SyncTempIf(func(hash string) (bool, error) {
+			asked = append(asked, hash)
+			if got := rec.take(); len(got) != 0 {
+				t.Errorf("file operations before the predicate: %q", got)
+			}
+			return answer, err
+		})
+	}
+	// New blob, predicate false: synchronized and published as without it.
+	blob, created, err := s.Put(strings.NewReader(content), ask(false, nil))
+	if err != nil || !created {
+		t.Fatalf("new: %v created=%v", err, created)
+	}
+	final := filepath.Join(root, filepath.FromSlash(blob.Path))
+	newBlob := append([]string{"sync:TEMP", "close:TEMP", "link:" + final}, barrier(shardDirs(root, blob.SHA256)...)...)
+	equal(t, "new blob, false", rec.take(), newBlob)
+	existing := append(barrier(final), barrier(shardDirs(root, blob.SHA256)...)...)
+
+	// Existing blob, predicate true: the temporary file first, then the
+	// existing file and its directories.
+	if _, created, err := s.Put(strings.NewReader(content), ask(true, nil)); err != nil || created {
+		t.Fatalf("existing, true: %v created=%v", err, created)
+	}
+	equal(t, "existing blob, true", rec.take(), append([]string{"sync:TEMP", "close:TEMP"}, existing...))
+
+	// Existing blob, predicate false: the temporary file is not synchronized.
+	if _, created, err := s.Put(strings.NewReader(content), ask(false, nil)); err != nil || created {
+		t.Fatalf("existing, false: %v created=%v", err, created)
+	}
+	equal(t, "existing blob, false", rec.take(), existing)
+
+	// SyncTemp: always, without a predicate.
+	if _, created, err := s.Put(strings.NewReader(content), SyncTemp()); err != nil || created {
+		t.Fatalf("existing, SyncTemp: %v created=%v", err, created)
+	}
+	equal(t, "existing blob, SyncTemp", rec.take(), append([]string{"sync:TEMP", "close:TEMP"}, existing...))
+
+	// New blob, predicate true: the temporary file is synchronized once.
+	other, created, err := s.Put(strings.NewReader(content+"more\r\n"), ask(true, nil))
+	if err != nil || !created {
+		t.Fatalf("new, true: %v created=%v", err, created)
+	}
+	otherFinal := filepath.Join(root, filepath.FromSlash(other.Path))
+	equal(t, "new blob, true", rec.take(), append([]string{"sync:TEMP", "close:TEMP", "link:" + otherFinal}, barrier(shardDirs(root, other.SHA256)...)...))
+
+	equal(t, "predicate calls", asked, []string{blob.SHA256, blob.SHA256, blob.SHA256, other.SHA256})
+	equal(t, "OnTempSync calls", hooked, []string{blob.SHA256, blob.SHA256, blob.SHA256, other.SHA256})
+
+	// A failing predicate fails the Put: nothing is published or synchronized.
+	third := content + "third\r\n"
+	if _, _, err := s.Put(strings.NewReader(third), ask(true, errInjected)); !errors.Is(err, errInjected) {
+		t.Fatalf("failing predicate: %v", err)
+	}
+	if got := rec.take(); len(got) != 0 {
+		t.Errorf("file operations after a failing predicate: %q", got)
+	}
+	if s.Exists(asked[len(asked)-1]) {
+		t.Error("a failing predicate published the blob")
+	}
+	assertContent(t, s, blob, content)
+	assertNoTemp(t, root)
+}
+
 func TestPutFailures(t *testing.T) {
 	const content = "Subject: fail\r\n\r\nbody\r\n"
 	probe, _, _ := newRecorded(t)

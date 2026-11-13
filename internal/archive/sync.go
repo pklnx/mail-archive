@@ -432,11 +432,6 @@ func (s *Syncer) ListFolders(ctx context.Context, a *store.Account) ([]imapsync.
 	return s.CheckLogin(ctx, a, password)
 }
 
-type storedBody struct {
-	blob    blobstore.Blob
-	created bool
-}
-
 // syncFolder copies new messages of one folder and leaves it examined.
 // progress is called after each committed batch with the folder's counts
 // so far.
@@ -468,29 +463,32 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 	w.pending = s.Storage.Pending(a.GroupID)
 	defer w.pending.Settle() // files of messages that were not saved
 
-	sink := func(r io.Reader) (storedBody, error) {
+	lookup := s.Store.NewGroupLookup(a.ID) // once per folder run
+	w.blobs, w.lookup = s.Blobs, lookup
+	sink := func(r io.Reader) (Stored, error) {
 		// Before each file: a full group or instance writes no more.
 		if err := w.admit(ctx, s.Storage, a.GroupID); err != nil {
 			if errors.Is(err, quota.ErrStorageFull) {
-				return storedBody{}, imapsync.Stop(err)
+				return Stored{}, imapsync.Stop(err)
 			}
-			return storedBody{}, err
+			return Stored{}, err
 		}
-		blob, created, err := s.Blobs.Put(r)
+		stored, err := PutFor(ctx, s.Blobs, r, lookup)
 		if err == nil {
-			w.pending.Add(blob.Size)
+			w.pending.Add(stored.Blob.Size)
 		}
-		return storedBody{blob, created}, err
+		return stored, err
 	}
-	err = imapsync.FetchAfter(conn, folder.LastUID, sink, func(m imapsync.Message[storedBody]) error {
+	err = imapsync.FetchAfter(conn, folder.LastUID, sink, func(m imapsync.Message[Stored]) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		fetched++
-		meta, err := BuildMeta(ctx, s.Store, s.Blobs, m.Body.blob, m.Body.created)
+		meta, err := BuildMeta(ctx, s.Store, s.Blobs, m.Body.Blob, m.Body.Created, m.Body.NewToGroup)
 		if err != nil {
 			return err
 		}
+		meta.LookupGroup = m.Body.Group
 		return w.add(ctx, meta, store.Location{
 			FolderID: folder.ID, UIDValidity: folder.UIDValidity, UID: m.UID,
 			Flags: storedFlags(m.Flags), InternalDate: m.InternalDate,

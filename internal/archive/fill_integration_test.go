@@ -44,7 +44,7 @@ func (f *fixture) journal(acc *store.Account, id string) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(f.ctx, f.store, f.blobs, blob, created)
+	meta, err := archive.BuildMeta(f.ctx, f.store, f.blobs, blob, created, true)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func (c *cleanupFixture) expired(id string, uid uint32) string {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(c.ctx, c.store, c.blobs, blob, created)
+	meta, err := archive.BuildMeta(c.ctx, c.store, c.blobs, blob, created, true)
 	if err != nil {
 		c.t.Fatal(err)
 	}

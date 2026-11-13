@@ -612,11 +612,12 @@ func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now t
 			"billing@printshop.example", []string{"alex@example.com"}, now.Add(-50 * time.Hour),
 		},
 	} {
-		blob, created, err := blobs.Put(strings.NewReader(m.raw))
+		// Always the full work of a new message, without a group lookup.
+		blob, created, err := blobs.Put(strings.NewReader(m.raw), blobstore.SyncTemp())
 		if err != nil {
 			return nil, err
 		}
-		meta, err := archive.BuildMeta(ctx, st, blobs, blob, created)
+		meta, err := archive.BuildMeta(ctx, st, blobs, blob, created, true)
 		if err != nil {
 			return nil, err
 		}
