@@ -387,3 +387,201 @@ func TestNewToGroupAfterGroupPurged(t *testing.T) {
 		t.Errorf("after H's purge: temporary file synchronized %d times, want 1", len(got))
 	}
 }
+
+// moveFixture is a sync fixture with alice (group A) and carol (group B);
+// carol's account holds groupRaw (M), and the IMAP server has M and then
+// N (another message nobody holds) in alice@example.com's INBOX.
+type moveFixture struct {
+	*fixture
+	probe        *insertProbe
+	alice, carol *store.User
+	m, n         string
+}
+
+var secondRaw = strings.Replace(groupRaw, "Message-ID: <grant@", "Message-ID: <second@", 1)
+
+func newMoveFixture(t *testing.T) *moveFixture {
+	t.Helper()
+	at := time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)
+	mailbox := imapmemserver.NewUser("alice@example.com", "secret")
+	imaptest.CreateMailboxes(t, mailbox, "INBOX")
+	imaptest.AppendAt(t, mailbox, "INBOX", []byte(groupRaw), at)
+	imaptest.AppendAt(t, mailbox, "INBOX", []byte(secondRaw), at.Add(time.Minute))
+	mf := &moveFixture{fixture: newFixture(t, mailbox)}
+	f := mf.fixture
+	var err error
+	if mf.alice, err = f.store.CreateUser(f.ctx, "alice", "h", false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.store.CreateGroup(f.ctx, "B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mf.carol, err = f.store.CreateUserInGroup(f.ctx, store.NewUser{Name: "carol", PasswordHash: "h", GroupID: b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	kept := &store.Account{Name: "kept", Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "u", PasswordEnc: []byte{1}, OwnerID: &mf.carol.ID}
+	if err := f.store.CreateAccount(f.ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := f.store.GetOrCreateFolder(f.ctx, kept.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := archive.PutFor(f.ctx, f.blobs, strings.NewReader(groupRaw), f.store.NewGroupLookup(kept.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := archive.BuildMeta(f.ctx, f.store, f.blobs, stored.Blob, stored.Created, stored.NewToGroup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.SaveBatch(f.ctx, inbox.ID, 1, []store.MessageMeta{meta}, []store.Location{{FolderID: inbox.ID, UID: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	mf.m = stored.Blob.SHA256
+	sum := sha256.Sum256([]byte(secondRaw))
+	mf.n = hex.EncodeToString(sum[:])
+	mf.probe = newInsertProbe(t, f.dbURL)
+	return mf
+}
+
+// onFirstTempSync runs fn once, at the first temporary-file sync of the
+// blob store from now on: between a message's group lookup and the save of
+// its batch. It returns the number of temporary-file syncs so far.
+func (mf *moveFixture) onFirstTempSync(fn func() error) func() int {
+	var (
+		mu    sync.Mutex
+		n     int
+		moved error
+	)
+	mf.blobs.OnTempSync(func(string) {
+		mu.Lock()
+		n++
+		first := n == 1
+		mu.Unlock()
+		if first {
+			moved = fn()
+		}
+	})
+	mf.t.Cleanup(func() { mf.blobs.OnTempSync(nil) })
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		if moved != nil {
+			mf.t.Errorf("the move: %v", moved)
+		}
+		return n
+	}
+}
+
+// moveTo gives the account to owner, in another group.
+func (mf *moveFixture) moveTo(id int64, owner *store.User) error {
+	a, err := mf.store.GetAccount(mf.ctx, id)
+	if err != nil {
+		return err
+	}
+	return mf.store.SetAccountOwner(mf.ctx, a.Ref(), owner.ID, true)
+}
+
+// expectInserts checks the inserts of M and N: M unparsed (group B holds
+// it), N parsed (new to every group).
+func (mf *moveFixture) expectInserts(step string) {
+	mf.t.Helper()
+	got := map[string]probed{}
+	for _, p := range mf.probe.take() {
+		got[p.sha] = p
+	}
+	want := map[string]probed{
+		mf.m: {sha: mf.m},
+		mf.n: {sha: mf.n, subject: "Foerderbescheid", attachment: true},
+	}
+	if len(got) != 2 || got[mf.m] != want[mf.m] || got[mf.n] != want[mf.n] {
+		mf.t.Errorf("%s: inserts %+v, want %+v", step, got, want)
+	}
+}
+
+// TestNewToGroupMoveDuringSync: alice's account moves to carol's group B
+// after M's lookup for group A (new there: temporary file synchronized,
+// parsed) and before the save of M's batch. The save refuses the batch
+// (store.ErrGroupChanged), the sync redoes M's work for group B, which
+// holds M (nothing synchronized or parsed), and stores it; the next batch
+// (N) is looked up for group B. Without the save's check, M was stored
+// with group A's work.
+func TestNewToGroupMoveDuringSync(t *testing.T) {
+	mf := newMoveFixture(t)
+	f := mf.fixture
+	f.syncer.BatchSize = 1
+	a := &store.Account{Name: "work", Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", Enabled: true, OwnerID: &mf.alice.ID}
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(f.sealer, id, "secret") }
+	if err := f.store.CreateAccountSealed(f.ctx, a, seal); err != nil {
+		t.Fatal(err)
+	}
+	syncs := mf.onFirstTempSync(func() error { return mf.moveTo(a.ID, mf.carol) })
+	if r := f.syncer.SyncAccount(f.ctx, a); r.Err != nil || r.New != 2 {
+		t.Fatalf("sync: %+v", r)
+	}
+	// M's first lookup (group A) and N's (group B); M's redo syncs nothing.
+	if n := syncs(); n != 2 {
+		t.Errorf("temporary files synchronized %d times, want 2", n)
+	}
+	mf.expectInserts("sync")
+}
+
+// TestNewToGroupMoveDuringFill: the same through a fill into an smtp
+// account of alice that moves to carol's group during the batch.
+func TestNewToGroupMoveDuringFill(t *testing.T) {
+	mf := newMoveFixture(t)
+	f := mf.fixture
+	j := &store.Account{Name: "journal", Enabled: true, OwnerID: &mf.alice.ID}
+	if err := f.store.CreateSMTPAccount(f.ctx, j, []string{"alice@archive.local"}); err != nil {
+		t.Fatal(err)
+	}
+	syncs := mf.onFirstTempSync(func() error { return mf.moveTo(j.ID, mf.carol) })
+	got, err := f.filler().Run(f.ctx, f.createFill(j, "secret").ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := folderOf(got, "INBOX").Counts; c.Imported != 2 {
+		t.Fatalf("fill: %+v", c)
+	}
+	// The fill's batch holds M and N: the first pass synchronized M (group
+	// A) and N, the redo for group B synchronizes N again.
+	if n := syncs(); n != 3 {
+		t.Errorf("temporary files synchronized %d times, want 3", n)
+	}
+	mf.expectInserts("fill")
+}
+
+// TestNewToGroupAdoptionDuringSync: an account without an owner (group 0)
+// is adopted into the first user's group between M's lookup and the save.
+// The save refuses the batch and the sync redoes M's work for the new
+// group: its temporary file is synchronized a second time.
+func TestNewToGroupAdoptionDuringSync(t *testing.T) {
+	at := time.Date(2010, 3, 5, 10, 0, 0, 0, time.UTC)
+	mailbox := imapmemserver.NewUser("alice@example.com", "secret")
+	imaptest.CreateMailboxes(t, mailbox, "INBOX")
+	imaptest.AppendAt(t, mailbox, "INBOX", []byte(groupRaw), at)
+	f := newFixture(t, mailbox)
+	probe := newInsertProbe(t, f.dbURL)
+	a := &store.Account{Name: "cli", Host: f.host, Port: f.port, TLSMode: store.TLSModeNone, Username: "alice@example.com", Enabled: true}
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(f.sealer, id, "secret") }
+	if err := f.store.CreateAccountSealed(f.ctx, a, seal); err != nil {
+		t.Fatal(err)
+	}
+	mf := &moveFixture{fixture: f}
+	syncs := mf.onFirstTempSync(func() error {
+		_, err := f.store.CreateUser(f.ctx, "first", "h", true) // adopts the account
+		return err
+	})
+	if r := f.syncer.SyncAccount(f.ctx, a); r.Err != nil || r.New != 1 {
+		t.Fatalf("sync: %+v", r)
+	}
+	if got, err := f.store.GetAccount(f.ctx, a.ID); err != nil || got.OwnerID == nil {
+		t.Fatalf("not adopted: %+v %v", got, err)
+	}
+	if n := syncs(); n != 2 {
+		t.Errorf("temporary files synchronized %d times, want 2 (group 0, then the new group)", n)
+	}
+	probe.expect("adopted", true)
+}

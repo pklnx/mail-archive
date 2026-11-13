@@ -317,6 +317,9 @@ func (s *Store) ReceiveMessage(ctx context.Context, accountID int64, meta Messag
 		if err != nil {
 			return err
 		}
+		if err := checkLookupGroups(group, []MessageMeta{meta}); err != nil {
+			return err
+		}
 		wrote.group = group.Group
 		folder, err := q.LockFolder(ctx, db.LockFolderParams{AccountID: accountID, Name: SMTPFolder})
 		if err != nil {

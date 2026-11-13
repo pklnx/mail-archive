@@ -188,10 +188,6 @@ Accepted:
 
 - Within one group, a user who holds the exact bytes of a message can tell
   from these that another account of the group archived it before.
-- A message stored while its account moves to another customer group can
-  get the work for the group the account belonged to until then: what
-  that group held decides, never what a group the account was never in
-  holds.
 - Messages deleted by a version before 1.6.0 count as deleted in every group
   that holds no copy.
 - A purge by a version before 1.6.0 recorded a message only when no other

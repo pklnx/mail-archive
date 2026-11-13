@@ -2,6 +2,8 @@ package archive
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 
 	"github.com/pklnx/mail-archive/internal/blobstore"
@@ -26,29 +28,93 @@ type Stored struct {
 	// NewToGroup tells that the customer group of a saving account holds
 	// no location of the message, this account included.
 	NewToGroup bool
+	// Group is the group key the lookup used (store.MessageMeta.LookupGroup).
+	Group *int64
 }
 
-// PutFor writes r into the blob store for a save into the accounts of
-// the lookups (one, or the recipients' accounts of an SMTP delivery). As
-// soon as the hash is known it asks NewToGroup, for a new and an existing
-// blob alike, so that the lookup costs the same on both paths. If the
-// message is new to a group, the temporary file is synchronized as for a
-// new blob (blobstore.SyncTempIf) and NewToGroup is set, so that BuildMeta
-// parses it: whether another customer group already archived the same
-// bytes changes nothing in the work of the save (#539, part 3).
-func PutFor(ctx context.Context, blobs *blobstore.Store, r io.Reader, lookups ...*store.GroupLookup) (Stored, error) {
-	var newToGroup bool
+// PutFor writes r into the blob store for a save into the lookup's
+// account. As soon as the hash is known it asks the lookup
+// (store.GroupLookup.Holds), for a new and an existing blob alike, so that
+// the lookup costs the same on both paths. If the message is new to the
+// account's group, the temporary file is synchronized as for a new blob
+// (blobstore.SyncTempIf) and NewToGroup is set, so that BuildMeta parses
+// it: whether another customer group already archived the same bytes
+// changes nothing in the work of the save (#539, part 3). Group names the
+// group the answer is for; the save refuses the message if the account is
+// in another group by then (store.ErrGroupChanged, redoWork).
+func PutFor(ctx context.Context, blobs *blobstore.Store, r io.Reader, lookup *store.GroupLookup) (Stored, error) {
+	var (
+		newToGroup bool
+		group      *int64
+	)
 	blob, created, err := blobs.Put(r, blobstore.SyncTempIf(func(sha string) (bool, error) {
-		n, err := NewToGroup(ctx, sha, lookups...)
-		newToGroup = n
-		return n, err
+		held, err := lookup.Holds(ctx, sha)
+		if err != nil {
+			return false, err
+		}
+		if k, ok := lookup.Group(); ok {
+			group = &k
+		}
+		newToGroup = !held
+		return newToGroup, nil
 	}))
-	return Stored{Blob: blob, Created: created, NewToGroup: newToGroup}, err
+	return Stored{Blob: blob, Created: created, NewToGroup: newToGroup, Group: group}, err
+}
+
+// maxRedos bounds how often a sync or fill redoes a batch that a save
+// refused because the account moved to another group (store.ErrGroupChanged).
+const maxRedos = 3
+
+// redoWork does the lookup and the work of a queued message again, for the
+// group the account is in now, after a save refused its batch
+// (store.ErrGroupChanged): its stored file goes through PutFor and
+// BuildMeta as the fetched bytes did, so the save gets the work of the new
+// group, never of the old one.
+func redoWork(ctx context.Context, st *store.Store, blobs *blobstore.Store, lookup *store.GroupLookup, sha string) (store.MessageMeta, error) {
+	f, err := blobs.OpenMessage(sha)
+	if err != nil {
+		return store.MessageMeta{}, err
+	}
+	defer func() { _ = f.Close() }()
+	stored, err := PutFor(ctx, blobs, f, lookup)
+	if err != nil {
+		return store.MessageMeta{}, err
+	}
+	if stored.Blob.SHA256 != sha {
+		return store.MessageMeta{}, fmt.Errorf("stored file of %s reads as %s", sha, stored.Blob.SHA256)
+	}
+	meta, err := BuildMeta(ctx, st, blobs, stored.Blob, stored.Created, stored.NewToGroup)
+	meta.LookupGroup = stored.Group
+	return meta, err
+}
+
+// saveRedoing calls save and, while it refuses the batch because the
+// account moved to another group, redoes the work of each message for the
+// new group (redoWork) and saves again, at most maxRedos times. After that
+// it returns the refusal: the run stops, and the next one fetches the
+// batch again.
+func saveRedoing(ctx context.Context, st *store.Store, blobs *blobstore.Store, lookup *store.GroupLookup, metas []store.MessageMeta, save func() error) error {
+	err := save()
+	for redo := 0; errors.Is(err, store.ErrGroupChanged) && lookup != nil; redo++ {
+		if redo == maxRedos {
+			return fmt.Errorf("the batch is stored by the next run: %w", err)
+		}
+		for i := range metas {
+			m, rerr := redoWork(ctx, st, blobs, lookup, metas[i].SHA256)
+			if rerr != nil {
+				return rerr
+			}
+			metas[i] = m
+		}
+		err = save()
+	}
+	return err
 }
 
 // NewToGroup reports whether the group of one of the lookups' accounts
-// does not hold the message (store.GroupLookup.Holds). Every lookup is
-// asked, whatever the answers before.
+// does not hold the message (store.GroupLookup.Holds): the recipients'
+// accounts of an SMTP delivery. Every lookup is asked, whatever the
+// answers before; each lookup's Group names its account's group.
 func NewToGroup(ctx context.Context, sha string, lookups ...*store.GroupLookup) (bool, error) {
 	newToGroup := false
 	for _, l := range lookups {
@@ -132,6 +198,11 @@ type folderWriter struct {
 	// pending counts the files of the queued messages for the storage
 	// gate (#397); every flush settles it. Nil: no gate.
 	pending *quota.Pending
+	// blobs and lookup, set by a sync, redo the batch's work when a save
+	// refuses it because the account moved to another group
+	// (saveRedoing). Nil lookup: no redo (import, no lookup).
+	blobs  *blobstore.Store
+	lookup *store.GroupLookup
 }
 
 func newFolderWriter(st *store.Store, folderID int64, batchSize int, flushed func(batch int)) *folderWriter {
@@ -184,7 +255,12 @@ func (w *folderWriter) flush(ctx context.Context) error {
 	if len(w.metas) == 0 {
 		return nil
 	}
-	res, err := w.st.SaveBatch(ctx, w.folderID, w.maxUID, w.metas, w.locs)
+	var res store.SaveResult
+	err := saveRedoing(ctx, w.st, w.blobs, w.lookup, w.metas, func() error {
+		var err error
+		res, err = w.st.SaveBatch(ctx, w.folderID, w.maxUID, w.metas, w.locs)
+		return err
+	})
 	// Committed (the store told the gate what it added) or failed: either
 	// way these files are no longer pending.
 	w.pending.Settle()

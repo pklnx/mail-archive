@@ -2,6 +2,9 @@ package smtpd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -88,5 +91,92 @@ func TestReceiveNewToGroup(t *testing.T) {
 		if n, want := synced.Swap(0), map[bool]int64{true: 1, false: 0}[step.want[0].subject != ""]; n != want {
 			t.Errorf("%s: temporary file synchronized %d times, want %d", step.name, n, want)
 		}
+	}
+}
+
+// TestReceiveMoveDuringDelivery: the journal account moves to bob's group
+// B after the delivery's group lookup for its group A (new there) and
+// before its save. The save refuses the message (store.ErrGroupChanged):
+// 451, nothing stored. The retry looks up for group B, which holds the
+// message, and stores it without parsing it.
+func TestReceiveMoveDuringDelivery(t *testing.T) {
+	type got struct {
+		account int64
+		subject string
+		err     error
+	}
+	var (
+		mu    sync.Mutex
+		saves []got
+	)
+	f := newFixture(t, func(s *Server) {
+		s.receive = func(ctx context.Context, account int64, meta store.MessageMeta, env store.Envelope, fileExists func() bool) (store.ReceiveResult, error) {
+			res, err := s.Store.ReceiveMessage(ctx, account, meta, env, fileExists)
+			mu.Lock()
+			saves = append(saves, got{account, meta.Subject, err})
+			mu.Unlock()
+			return res, err
+		}
+	})
+	ctx := context.Background()
+	g, err := f.st.CreateGroup(ctx, "group-bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := f.st.CreateUserInGroup(ctx, store.NewUser{Name: "bob", PasswordHash: "h", GroupID: g.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobAccount := &store.Account{Name: "bob", Enabled: true, OwnerID: &bob.ID}
+	if err := f.st.CreateSMTPAccount(ctx, bobAccount, []string{"bob@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	const raw = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: Foerderbescheid\r\n" +
+		"Message-ID: <moved@example.com>\r\n\r\nDer Bescheid liegt bei.\r\n"
+	if err := f.send("sender@example.com", []string{"bob@archive.test"}, raw); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(raw))
+	sha := hex.EncodeToString(sum[:])
+	mu.Lock()
+	saves = nil
+	mu.Unlock()
+
+	var once sync.Once
+	var moveErr error
+	f.srv.Blobs.OnTempSync(func(string) {
+		once.Do(func() {
+			a, err := f.st.GetAccount(ctx, f.journal.ID)
+			if err == nil {
+				err = f.st.SetAccountOwner(ctx, a.Ref(), bob.ID, true)
+			}
+			moveErr = err
+		})
+	})
+	t.Cleanup(func() { f.srv.Blobs.OnTempSync(nil) })
+	if err := f.send("sender@example.com", []string{"archive@archive.test"}, raw); code(err) != 451 {
+		t.Fatalf("delivery during the move: %v, want 451", err)
+	}
+	if moveErr != nil {
+		t.Fatal(moveErr)
+	}
+	folder, err := f.st.GetOrCreateFolder(ctx, f.journal.ID, store.SMTPFolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if there, err := f.st.LocationInFolder(ctx, folder.ID, sha); err != nil || there {
+		t.Fatalf("stored after the refusal: %v %v", there, err)
+	}
+	if err := f.send("sender@example.com", []string{"archive@archive.test"}, raw); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if there, err := f.st.LocationInFolder(ctx, folder.ID, sha); err != nil || !there {
+		t.Fatalf("not stored by the retry: %v %v", there, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(saves) != 2 || !errors.Is(saves[0].err, store.ErrGroupChanged) || saves[0].subject != "Foerderbescheid" ||
+		saves[1].err != nil || saves[1].subject != "" {
+		t.Errorf("saves %+v, want the refused one parsed for group A, then the retry unparsed for group B", saves)
 	}
 }

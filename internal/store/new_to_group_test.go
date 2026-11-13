@@ -2,8 +2,11 @@ package store_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -215,5 +218,111 @@ CREATE TEMP TABLE probe (k int PRIMARY KEY, body text,
 	var body string
 	if err := conn.QueryRow(ctx, `SELECT body FROM probe WHERE k = 1`).Scan(&body); err != nil || body != "first" {
 		t.Errorf("row after the conflict: %q %v", body, err)
+	}
+}
+
+// TestSaveRefusesMovedGroup: a save whose message was looked up for
+// another group than the account is in now stores nothing and returns
+// ErrGroupChanged; with the account's group it is stored. Messages without
+// a lookup (import) are not checked.
+func TestSaveRefusesMovedGroup(t *testing.T) {
+	f := newMarksFixture(t)
+	inbox := f.folder(f.alice, "work", "INBOX")
+	l := f.st.NewGroupLookup(inbox.AccountID)
+	if _, err := l.Holds(f.ctx, hashOf('m')); err != nil {
+		t.Fatal(err)
+	}
+	a, ok := l.Group()
+	if !ok {
+		t.Fatal("no group")
+	}
+	other := a + 1000
+	save := func(sha string, group *int64) error {
+		f.uid++
+		_, err := f.st.SaveBatch(f.ctx, inbox.ID, f.uid, []store.MessageMeta{{SHA256: sha, Size: 1, StoredPath: "x", LookupGroup: group}},
+			[]store.Location{{FolderID: inbox.ID, UID: f.uid}})
+		return err
+	}
+	if err := save(hashOf('m'), &other); !errors.Is(err, store.ErrGroupChanged) {
+		t.Fatalf("stale group: %v, want ErrGroupChanged", err)
+	}
+	if n := f.locations(inbox, hashOf('m')); n != 0 || countOf(t, f.conn, `SELECT count(*) FROM messages WHERE sha256 = $1`, hashOf('m')) != 0 {
+		t.Errorf("stored after the refusal: %d locations", n)
+	}
+	if err := save(hashOf('m'), &a); err != nil || f.locations(inbox, hashOf('m')) != 1 {
+		t.Fatalf("the account's group: %v", err)
+	}
+	if err := save(hashOf('n'), nil); err != nil {
+		t.Fatalf("without a lookup: %v", err)
+	}
+
+	// An SMTP delivery: the same check.
+	journal := &store.Account{Name: "journal", Enabled: true, OwnerID: &f.alice.ID}
+	if err := f.st.CreateSMTPAccount(f.ctx, journal, []string{"journal@archive.test"}); err != nil {
+		t.Fatal(err)
+	}
+	env := store.Envelope{MailFrom: "a@example.com", RcptTo: []string{"journal@archive.test"}, ReceivedAt: time.Now(), HELO: "mx"}
+	meta := store.MessageMeta{SHA256: hashOf('s'), Size: 1, StoredPath: "x", LookupGroup: &other}
+	if _, err := f.st.ReceiveMessage(f.ctx, journal.ID, meta, env, func() bool { return true }); !errors.Is(err, store.ErrGroupChanged) {
+		t.Fatalf("delivery with a stale group: %v", err)
+	}
+	meta.LookupGroup = &a
+	if _, err := f.st.ReceiveMessage(f.ctx, journal.ID, meta, env, func() bool { return true }); err != nil {
+		t.Fatalf("delivery: %v", err)
+	}
+}
+
+// TestSaveAndMoveConcurrently: saves with a group lookup and moves of the
+// account between two groups, at the same time, never deadlock (no 40P01):
+// a save either commits or is refused with ErrGroupChanged, and every move
+// commits. The check takes no lock beyond lockAccountGroup.
+func TestSaveAndMoveConcurrently(t *testing.T) {
+	f := newMarksFixture(t)
+	inbox := f.folder(f.alice, "work", "INBOX")
+	const rounds = 30
+	var wg sync.WaitGroup
+	moveErrs := make(chan error, rounds)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		owners := []int64{f.carol.ID, f.alice.ID}
+		for i := range rounds {
+			a, err := f.st.GetAccount(f.ctx, inbox.AccountID)
+			if err == nil {
+				err = f.st.SetAccountOwner(f.ctx, a.Ref(), owners[i%2], true)
+			}
+			moveErrs <- err
+		}
+	}()
+	saveErrs := make(chan error, rounds)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		l := f.st.NewGroupLookup(inbox.AccountID)
+		for i := range rounds {
+			sha := fmt.Sprintf("%064x", i+1)
+			if _, err := l.Holds(f.ctx, sha); err != nil {
+				saveErrs <- err
+				continue
+			}
+			k, _ := l.Group()
+			_, err := f.st.SaveBatch(f.ctx, inbox.ID, uint32(i+1), //nolint:gosec // small
+				[]store.MessageMeta{{SHA256: sha, Size: 1, StoredPath: "x", LookupGroup: &k}},
+				[]store.Location{{FolderID: inbox.ID, UID: uint32(i + 1)}}) //nolint:gosec // small
+			saveErrs <- err
+		}
+	}()
+	wg.Wait()
+	close(moveErrs)
+	close(saveErrs)
+	for err := range moveErrs {
+		if err != nil {
+			t.Errorf("move: %v", err)
+		}
+	}
+	for err := range saveErrs {
+		if err != nil && !errors.Is(err, store.ErrGroupChanged) {
+			t.Errorf("save: %v", err)
+		}
 	}
 }

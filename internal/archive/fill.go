@@ -729,6 +729,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		if err != nil {
 			return err
 		}
+		meta.LookupGroup = m.Body.Group
 		metas = append(metas, meta)
 		locs = append(locs, store.Location{FolderID: ff.FolderID, Flags: storedFlags(m.Flags), InternalDate: m.InternalDate})
 		next.Counts.Imported++
@@ -751,7 +752,15 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 	}
 	wm.advanceBatch(&next.LastUID, chunk, waiting, requested, fetched)
 	next.Done = last
-	if _, err := f.Store.SaveFillBatch(ctx, &next, metas, locs); err != nil {
+	// SaveFillBatch resets next's counts when it fails; a redo saves the
+	// same counts again.
+	counted := next
+	err = saveRedoing(ctx, f.Store, f.Blobs, lookup, metas, func() error {
+		next = counted
+		_, err := f.Store.SaveFillBatch(ctx, &next, metas, locs)
+		return err
+	})
+	if err != nil {
 		return err
 	}
 	*ff = next

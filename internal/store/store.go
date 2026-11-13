@@ -683,7 +683,33 @@ type MessageMeta struct {
 	// does the work of a new row up to the conflict (#539, part 3);
 	// otherwise only SHA256, Size and StoredPath are set.
 	Known bool
+	// LookupGroup is the customer group key whose holdings decided the
+	// work for this message (GroupLookup.Group), nil without a lookup
+	// (./ma import, tools/demo). A save into an account whose group is
+	// another one by now refuses the batch (ErrGroupChanged).
+	LookupGroup *int64
 	IndexData
+}
+
+// ErrGroupChanged is returned by a save whose account moved to another
+// customer group after the group lookup of one of its messages: the work
+// done for the message followed the old group's holdings. Nothing is
+// stored; sync and fill redo the lookup and the work (archive), an SMTP
+// delivery answers 451 and is retried (#539, part 3).
+var ErrGroupChanged = errors.New("the account moved to another customer group since its group lookup")
+
+// checkLookupGroups refuses a batch with a message whose group lookup ran
+// for another group than g, the account's group read under
+// lockAccountGroup: from there until the commit no move can change it, so
+// a batch that passes is stored with the work for the group it is stored
+// into.
+func checkLookupGroups(g accountGroup, metas []MessageMeta) error {
+	for i := range metas {
+		if k := metas[i].LookupGroup; k != nil && *k != g.key() {
+			return ErrGroupChanged
+		}
+	}
+	return nil
 }
 
 // Location is where a message was found on a server.
@@ -747,6 +773,9 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		}
 		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
 		if err != nil {
+			return err
+		}
+		if err := checkLookupGroups(group, metas); err != nil {
 			return err
 		}
 		wrote.group = group.Group
@@ -897,15 +926,23 @@ func groupHasLocations(ctx context.Context, q *db.Queries, g accountGroup, shas 
 // Holds and again when the account's group changed. A folder that left
 // the group meanwhile never counts, one that joined it counts from the
 // next folder run (more work, never less). Holds runs before the save's
-// transaction, without its lock: when the account moves to another group
-// between the lookup and the save, the save does the work for the group
-// it belonged to at the lookup, never for a group it was never in.
+// transaction, without its lock; the save checks under lockAccountGroup
+// that the account is still in the group the lookup used
+// (MessageMeta.LookupGroup, ErrGroupChanged).
 type GroupLookup struct {
 	s       *Store
 	account int64
 	group   int64
 	folders []int64
 	loaded  bool // folders belong to group
+	last    int64
+	lastOK  bool
+}
+
+// Group returns the group key the last Holds looked up, for
+// MessageMeta.LookupGroup; ok is false when it found no account.
+func (l *GroupLookup) Group() (key int64, ok bool) {
+	return l.last, l.lastOK
 }
 
 // NewGroupLookup returns the lookup for saves into the account; it reads
@@ -918,6 +955,7 @@ func (s *Store) NewGroupLookup(accountID int64) *GroupLookup {
 // included, has a location of the message (gone locations count). A gone
 // account holds nothing; the save then fails as without the lookup.
 func (l *GroupLookup) Holds(ctx context.Context, sha256 string) (bool, error) {
+	l.lastOK = false
 	owner, err := l.s.q.AccountGroupID(ctx, l.account)
 	if isNoRows(err) {
 		return false, nil
@@ -926,6 +964,7 @@ func (l *GroupLookup) Holds(ctx context.Context, sha256 string) (bool, error) {
 		return false, fmt.Errorf("group of account %d: %w", l.account, err)
 	}
 	group := accountGroup{Account: l.account, Group: owner}.key()
+	l.last, l.lastOK = group, true
 	if !l.loaded || l.group != group {
 		folders, err := l.s.q.GroupFolderIDs(ctx, group)
 		if err != nil {

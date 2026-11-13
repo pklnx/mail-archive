@@ -204,13 +204,29 @@ bytes before (#539, part 3):
     from the next folder run (more work, never less).
   - The lookup runs before the save's transaction, without its lock. A
     save or deletion of the group in between changes how much work the
-    save does, never what it stores. When the saving account moves to
-    another group between its lookup and its save, the save does the work
-    for the group the account belonged to at the lookup: what that group
-    holds decides, never what a group the account was never in holds
-    (accepted in `security.md`). For the same reason `skipDeleted` does
-    not reuse the answer: it decides what is stored, under
-    `lockAccountGroup`, and looks up only hashes with a deletion mark.
+    save does, never what it stores. A move of the account to another
+    group in between is caught by the save: each message carries the
+    group key its lookup used (`MessageMeta.LookupGroup`), and the save
+    compares it, right after `lockAccountGroup`, with the account's group;
+    from that lock to the commit no move can change it. On a difference
+    the save stores nothing and returns `store.ErrGroupChanged`. Sync and
+    fill then redo the batch in the run: each message's stored file goes
+    through `PutFor` and `BuildMeta` again, with a fresh lookup for the new
+    group, and the batch is saved again, at most three times; after that
+    the folder run stops with the error and the next run fetches the batch
+    again. An SMTP delivery answers 451, and the mail server's retry looks
+    up again. So every save commits with the work for the group it commits
+    into, and moves (`SetUserGroup`, `SetAccountOwner` across groups, the
+    adoption) never wait for a sync: the check adds no lock. A lock held
+    from the lookup to the save was the alternative: row locks on the
+    account and owner would block every `FOR UPDATE` on the user (2FA,
+    passkeys, API keys, settings) for a whole batch, and an advisory lock
+    would hold a pool connection per batch and per delivery and need moves
+    to take it before their row locks, or the save and the move would
+    deadlock across connections where PostgreSQL cannot see it. For the
+    same reason `skipDeleted` does not reuse the lookup's answer: it
+    decides what is stored, under `lockAccountGroup`, and looks up only
+    hashes with a deletion mark.
 - **File.** For a message new to the group, `Put` synchronizes and closes
   its temporary file before it uses an existing file, as it does before it
   links a new one.

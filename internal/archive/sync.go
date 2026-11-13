@@ -464,6 +464,7 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 	defer w.pending.Settle() // files of messages that were not saved
 
 	lookup := s.Store.NewGroupLookup(a.ID) // once per folder run
+	w.blobs, w.lookup = s.Blobs, lookup
 	sink := func(r io.Reader) (Stored, error) {
 		// Before each file: a full group or instance writes no more.
 		if err := w.admit(ctx, s.Storage, a.GroupID); err != nil {
@@ -487,6 +488,7 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 		if err != nil {
 			return err
 		}
+		meta.LookupGroup = m.Body.Group
 		return w.add(ctx, meta, store.Location{
 			FolderID: folder.ID, UIDValidity: folder.UIDValidity, UID: m.UID,
 			Flags: storedFlags(m.Flags), InternalDate: m.InternalDate,

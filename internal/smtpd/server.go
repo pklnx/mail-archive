@@ -503,10 +503,13 @@ func (ss *session) Data(r io.Reader) error {
 	var (
 		newToGroup bool
 		lookups    []*store.GroupLookup
+		lookupOf   = map[int64]*store.GroupLookup{}
 	)
 	for _, a := range accounts {
 		if !deferred[a] {
-			lookups = append(lookups, ss.s.Store.NewGroupLookup(a))
+			l := ss.s.Store.NewGroupLookup(a)
+			lookups = append(lookups, l)
+			lookupOf[a] = l
 		}
 	}
 	blob, created, err := ss.s.Blobs.Put(r, blobstore.SyncTempIf(func(sha string) (bool, error) {
@@ -564,7 +567,14 @@ func (ss *session) Data(r io.Reader) error {
 				env.RcptTo = append(env.RcptTo, rc.original)
 			}
 		}
-		res, err := ss.s.receive(ctx, account, meta, env, func() bool { return ss.s.Blobs.Exists(blob.SHA256) })
+		// The save refuses the message if the account moved to another
+		// group since its lookup (store.ErrGroupChanged): 451, and the
+		// retry looks up again.
+		m := meta
+		if k, ok := lookupOf[account].Group(); ok {
+			m.LookupGroup = &k
+		}
+		res, err := ss.s.receive(ctx, account, m, env, func() bool { return ss.s.Blobs.Exists(blob.SHA256) })
 		if err != nil {
 			log.Error("smtp message not stored", "code", 451, "account_id", account, "err", err)
 			return tempFail()
