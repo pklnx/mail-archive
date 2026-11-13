@@ -1617,6 +1617,13 @@ paths:
         recipients. Until then the hold covers its whole scope. Without any condition the hold covers the
         whole archive, which needs `all`. With `group`, a `user` or
         `accountId` must be in that customer group (`400` otherwise).
+        A `filter` is taken only over the caller's own mail: the hold names
+        the caller as `user`, or names no user and one of the caller's own
+        accounts; such a hold on an account is stored with the caller as
+        its user too. A filter over other users' mail, an account without
+        owner, a customer group or the whole archive is `403` with code
+        `filter_hold_cli`: the operator adds it with `./ma hold add`.
+        Nothing is stored or recorded then.
       requestBody:
         required: true
         content:
@@ -1675,14 +1682,20 @@ paths:
                     format: int64
                     description: >-
                       Messages the new hold's filter matched; only with a
-                      filter, only for a hold on the caller or on one of
-                      their own accounts, and absent if matching failed.
+                      filter, and absent if matching failed. Only the new
+                      hold is matched.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
-          $ref: "#/components/responses/AdminOnly"
+          description: >-
+            The user is not an admin, or (code `filter_hold_cli`) the hold
+            has a filter over mail that is not the caller's.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/legal-holds/{id}/release:
     parameters:
@@ -3679,13 +3692,15 @@ components:
           type: string
         code:
           type: string
-          enum: [on_hold, conflict, released, imap_connect, imap_tls, imap_login, imap_timeout, imap_server, imap_protocol, imap_limit]
+          enum: [on_hold, conflict, released, filter_hold_cli, imap_connect, imap_tls, imap_login, imap_timeout, imap_server, imap_protocol, imap_limit]
           description: |
             A stable, machine-readable reason, for clients that explain the
             error in their own words; `error` is English text that may
             change. `on_hold`: a legal hold names what the request would
             remove. `conflict`: the thing already exists. `released`: the
-            legal hold is released already. `imap_*`: the category of a
+            legal hold is released already. `filter_hold_cli`: a legal
+            hold with a search filter over other users' mail is added by
+            the operator on the command line. `imap_*`: the category of a
             failed IMAP login check (`LoginFailed`).
         holdIds:
           type: array

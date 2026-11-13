@@ -15,6 +15,7 @@ SELECT h.id, h.owner_id, h.account_id, a.name AS account, a.owner_id AS account_
 FROM legal_holds h
 LEFT JOIN accounts a ON a.id = h.account_id
 WHERE h.released_at IS NULL AND h.filter IS NOT NULL
+  AND ($1::bigint IS NULL OR h.id = $1::bigint)
 ORDER BY h.id
 `
 
@@ -29,9 +30,9 @@ type ActiveFilterHoldsRow struct {
 }
 
 // The active holds whose filter is matched by search, with the owner of
-// their account and the group they name.
-func (q *Queries) ActiveFilterHolds(ctx context.Context) ([]ActiveFilterHoldsRow, error) {
-	rows, err := q.db.Query(ctx, activeFilterHolds)
+// their account and the group they name; with id, only that hold (#538).
+func (q *Queries) ActiveFilterHolds(ctx context.Context, id *int64) ([]ActiveFilterHoldsRow, error) {
+	rows, err := q.db.Query(ctx, activeFilterHolds, id)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +212,33 @@ func (q *Queries) DeleteRetentionRule(ctx context.Context, id int64) (DeleteRete
 	return i, err
 }
 
+const holdAddEntry = `-- name: HoldAddEntry :one
+SELECT actor, user_name FROM audit_log
+WHERE at = $1::timestamptz AND action = 'hold.add' AND details->>'hold_id' = ($2::bigint)::text
+ORDER BY id
+LIMIT 1
+`
+
+type HoldAddEntryParams struct {
+	At     time.Time
+	HoldID int64
+}
+
+type HoldAddEntryRow struct {
+	Actor    string
+	UserName *string
+}
+
+// The audit entry of a hold's creation (#538). It is written in the
+// hold's transaction, so its at is the hold's created_at: the lookup reads
+// one partition through the primary key, never the whole log.
+func (q *Queries) HoldAddEntry(ctx context.Context, arg HoldAddEntryParams) (HoldAddEntryRow, error) {
+	row := q.db.QueryRow(ctx, holdAddEntry, arg.At, arg.HoldID)
+	var i HoldAddEntryRow
+	err := row.Scan(&i.Actor, &i.UserName)
+	return i, err
+}
+
 const holdsNamingAccount = `-- name: HoldsNamingAccount :many
 SELECT id FROM legal_holds WHERE account_id = $1::bigint ORDER BY id
 `
@@ -368,7 +396,9 @@ SELECT h.id, h.name, h.reason, h.owner_id, ou.name AS owner, h.account_id, a.nam
        a.owner_id AS account_owner_id,
        h.filter, h.period_start, h.period_end, h.matched_at, h.created_at, cu.name AS created_by,
        h.released_at, ru.name AS released_by, h.release_note,
-       (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id)::bigint AS matched,
+       CASE WHEN $1::bigint IS NULL OR h.owner_id = $1::bigint
+                 OR (h.owner_id IS NULL AND a.owner_id = $1::bigint)
+            THEN (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id) ELSE 0 END::bigint AS matched,
        h.group_id, hg.name AS group_name, cg.id AS covered_group_id, cg.name AS covered_group_name
 FROM legal_holds h
 LEFT JOIN users ou ON ou.id = h.owner_id
@@ -378,9 +408,14 @@ LEFT JOIN customer_groups hg ON hg.id = h.group_id
 LEFT JOIN customer_groups cg ON cg.id = coalesce(h.group_id, ou.group_id, au.group_id)
 LEFT JOIN users cu ON cu.id = h.created_by
 LEFT JOIN users ru ON ru.id = h.released_by
-WHERE $1::boolean OR h.released_at IS NULL
+WHERE $2::boolean OR h.released_at IS NULL
 ORDER BY h.id
 `
+
+type ListLegalHoldsParams struct {
+	CountFor *int64
+	Released bool
+}
 
 type ListLegalHoldsRow struct {
 	ID               int64
@@ -410,9 +445,13 @@ type ListLegalHoldsRow struct {
 
 // group_id is the group the hold names (#470); covered_group_id the group
 // whose mail it covers: that one, or the group of its user or of its
-// account's owner. NULL: every group.
-func (q *Queries) ListLegalHolds(ctx context.Context, released bool) ([]ListLegalHoldsRow, error) {
-	rows, err := q.db.Query(ctx, listLegalHolds, released)
+// account's owner. NULL: every group. With count_for, matched is counted
+// only for the holds of that user (the hold names them, or names no user
+// and one of their accounts) and is 0 for the others (#538): the
+// subquery runs only for them, so the list's time does not depend on how
+// much other holds' filters matched.
+func (q *Queries) ListLegalHolds(ctx context.Context, arg ListLegalHoldsParams) ([]ListLegalHoldsRow, error) {
+	rows, err := q.db.Query(ctx, listLegalHolds, arg.CountFor, arg.Released)
 	if err != nil {
 		return nil, err
 	}

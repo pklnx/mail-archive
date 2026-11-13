@@ -362,19 +362,48 @@ func newHoldListCmd() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tSCOPE\tCREATED\tSTATE\tREASON")
+			fmt.Fprintln(w, "ID\tNAME\tSCOPE\tCREATED\tCREATED BY\tSTATE\tREASON")
 			for _, h := range holds {
 				state := "active"
 				if h.ReleasedAt != nil {
 					state = "released " + h.ReleasedAt.Local().Format(time.DateOnly) + ": " + h.ReleaseNote
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", h.ID, h.Name, holdScope(&h), h.CreatedAt.Local().Format(time.DateOnly), state, h.Reason)
+				by, err := holdCreator(cmd.Context(), a.store, &h)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", h.ID, h.Name, holdScope(&h), h.CreatedAt.Local().Format(time.DateOnly), by, state, h.Reason)
 			}
 			return w.Flush()
 		},
 	}
 	cmd.Flags().BoolVar(&released, "released", false, "also list released holds")
 	return cmd
+}
+
+// holdCreator says who added a hold (#538): the web user who did, by
+// their name; for a web user removed since, the name in the hold.add audit
+// entry, marked "(removed)"; "cli" for the command line, which never sets
+// created_by. Without either it is "unknown": the entry's audit partition
+// is gone or the row was written by hand. The operator reviews filter
+// holds that admins added in the web UI, and unknown ones like them.
+func holdCreator(ctx context.Context, st *store.Store, h *store.LegalHold) (string, error) {
+	if h.CreatedBy != "" {
+		return h.CreatedBy, nil
+	}
+	e, err := st.LegalHoldAddEntry(ctx, h.ID, h.CreatedAt)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case e == nil:
+		return "unknown", nil
+	case e.Actor == store.ActorCLI:
+		return "cli", nil
+	case e.Actor == store.ActorSession && e.UserName != "":
+		return e.UserName + " (removed)", nil
+	}
+	return "unknown", nil
 }
 
 // holdScope describes what a hold covers.

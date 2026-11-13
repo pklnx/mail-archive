@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/store/db"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
 )
 
@@ -479,5 +482,109 @@ func TestRetentionMigrationDown(t *testing.T) {
 	}
 	if _, err := f.st.MigrateDown(f.ctx); err == nil || !strings.Contains(err.Error(), "legal holds exist") {
 		t.Fatalf("down with a hold: %v", err)
+	}
+}
+
+// The web UI matches only the hold an admin adds, and its list counts only
+// the caller's holds (#538): neither the request's answer nor its time
+// depends on what other holds' filters match in mail the caller cannot
+// read. The command line and deletion runs still match and count every
+// hold.
+func TestLegalHoldsOfCaller(t *testing.T) {
+	f := newRetentionFixture(t)
+	work := f.folder(f.alice, "work", "INBOX")
+	bobs := f.folder(f.bob, "mail", "INBOX")
+	f.save(work, hashOf('a'), "Falcon contract", nil, nil)
+	f.save(bobs, hashOf('b'), "Falcon notes", nil, nil)
+	falcon := &store.HoldFilter{Query: "falcon"}
+	aliceUser := f.hold(store.NewLegalHold{Name: "alice", OwnerID: &f.alice.ID, Filter: falcon})
+	aliceAcc := f.hold(store.NewLegalHold{Name: "alice's account", AccountID: &work.AccountID, Filter: falcon})
+	bobAcc := f.hold(store.NewLegalHold{Name: "bob's account", AccountID: &bobs.AccountID, Filter: falcon})
+	instance := f.hold(store.NewLegalHold{Name: "instance", Filter: falcon})
+	plain := f.hold(store.NewLegalHold{Name: "plain", OwnerID: &f.alice.ID})
+	released := f.hold(store.NewLegalHold{Name: "released", AccountID: &work.AccountID, Filter: falcon})
+	if err := f.st.ReleaseLegalHold(f.ctx, released, nil, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	type state struct {
+		matched int64
+		at      bool
+	}
+	list := func(holds []store.LegalHold, err error) map[int64]state {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[int64]state{}
+		for _, h := range holds {
+			out[h.ID] = state{h.Matched, h.MatchedAt != nil}
+		}
+		return out
+	}
+	all := func() map[int64]state { return list(f.st.LegalHolds(f.ctx, false)) }
+
+	// One hold is matched, the others are not touched.
+	if n, err := f.st.MatchLegalHold(f.ctx, aliceAcc); err != nil || n != 1 {
+		t.Fatalf("matching alice's account hold: %d %v", n, err)
+	}
+	if got, want := all(), map[int64]state{aliceUser: {}, aliceAcc: {1, true}, bobAcc: {}, instance: {}, plain: {}}; !maps.Equal(got, want) {
+		t.Errorf("after matching one hold %v, want %v", got, want)
+	}
+	for name, id := range map[string]int64{"unknown": 999, "released": released, "without a filter": plain} {
+		if n, err := f.st.MatchLegalHold(f.ctx, id); !errors.Is(err, store.ErrNotFound) || n != 0 {
+			t.Errorf("matching a hold %s: %d %v", name, n, err)
+		}
+	}
+
+	if _, err := f.st.MatchLegalHolds(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	every := map[int64]state{aliceUser: {1, true}, aliceAcc: {1, true}, bobAcc: {1, true}, instance: {2, true}, plain: {}}
+	if got := all(); !maps.Equal(got, every) {
+		t.Errorf("command line list %v, want %v", got, every)
+	}
+	// alice's holds name her, or name no user and her account; bob's
+	// count and the instance's are 0 for her.
+	if got, want := list(f.st.LegalHoldsCountingFor(f.ctx, false, f.alice.ID)),
+		map[int64]state{aliceUser: {1, true}, aliceAcc: {1, true}, bobAcc: {0, true}, instance: {0, true}, plain: {}}; !maps.Equal(got, want) {
+		t.Errorf("alice's list %v, want %v", got, want)
+	}
+	if got, want := list(f.st.LegalHoldsCountingFor(f.ctx, false, f.bob.ID)),
+		map[int64]state{aliceUser: {0, true}, aliceAcc: {0, true}, bobAcc: {1, true}, instance: {0, true}, plain: {}}; !maps.Equal(got, want) {
+		t.Errorf("bob's list %v, want %v", got, want)
+	}
+
+	// The count runs only for the caller's holds, as EXPLAIN ANALYZE shows
+	// by the loops of its subplan: once per listed hold for the command
+	// line, once per hold naming alice or her account for her (the hold
+	// without a filter names her too), once for bob.
+	conn, err := pgx.Connect(f.ctx, f.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(f.ctx) }()
+	loops := regexp.MustCompile(`SubPlan \d+\s*\n\s*->  Aggregate \(actual rows=\S+ loops=(\d+)\)`)
+	for _, c := range []struct {
+		name     string
+		countFor *int64
+		want     string
+	}{{"command line", nil, "5"}, {"alice", &f.alice.ID, "3"}, {"bob", &f.bob.ID, "1"}} {
+		var rec explainer
+		if _, err := db.New(&rec).ListLegalHolds(f.ctx, db.ListLegalHoldsParams{CountFor: c.countFor}); !errors.Is(err, errRecorded) {
+			t.Fatalf("record: %v", err)
+		}
+		rows, err := conn.Query(f.ctx, "EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) "+rec.sql, rec.args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := strings.Join(lines, "\n")
+		if m := loops.FindStringSubmatch(plan); m == nil || m[1] != c.want {
+			t.Errorf("%s: the count runs %v times, want %s:\n%s", c.name, m, c.want, plan)
+		}
 	}
 }

@@ -262,7 +262,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 
 // apiError is the body of every error answer. Code is a stable,
 // machine-readable reason where a client may need one (errOnHold,
-// errConflict, errReleased); HoldIDs names the legal holds of an on_hold
+// errConflict, errReleased, errFilterHoldCLI); HoldIDs names the legal holds of an on_hold
 // answer when they are known.
 type apiError struct {
 	Error   string  `json:"error"`
@@ -275,6 +275,9 @@ const (
 	errOnHold   = "on_hold"
 	errConflict = "conflict"
 	errReleased = "released"
+	// errFilterHoldCLI: a legal hold with a search filter over mail that is
+	// not the caller's is added by the operator on the command line (#538).
+	errFilterHoldCLI = "filter_hold_cli"
 )
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg string, err error) {

@@ -37,12 +37,18 @@ RETURNING id, created_at;
 -- name: ListLegalHolds :many
 -- group_id is the group the hold names (#470); covered_group_id the group
 -- whose mail it covers: that one, or the group of its user or of its
--- account's owner. NULL: every group.
+-- account's owner. NULL: every group. With count_for, matched is counted
+-- only for the holds of that user (the hold names them, or names no user
+-- and one of their accounts) and is 0 for the others (#538): the
+-- subquery runs only for them, so the list's time does not depend on how
+-- much other holds' filters matched.
 SELECT h.id, h.name, h.reason, h.owner_id, ou.name AS owner, h.account_id, a.name AS account, au.name AS account_owner,
        a.owner_id AS account_owner_id,
        h.filter, h.period_start, h.period_end, h.matched_at, h.created_at, cu.name AS created_by,
        h.released_at, ru.name AS released_by, h.release_note,
-       (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id)::bigint AS matched,
+       CASE WHEN sqlc.narg(count_for)::bigint IS NULL OR h.owner_id = sqlc.narg(count_for)::bigint
+                 OR (h.owner_id IS NULL AND a.owner_id = sqlc.narg(count_for)::bigint)
+            THEN (SELECT count(*) FROM legal_hold_messages hm WHERE hm.hold_id = h.id) ELSE 0 END::bigint AS matched,
        h.group_id, hg.name AS group_name, cg.id AS covered_group_id, cg.name AS covered_group_name
 FROM legal_holds h
 LEFT JOIN users ou ON ou.id = h.owner_id
@@ -57,12 +63,22 @@ ORDER BY h.id;
 
 -- name: ActiveFilterHolds :many
 -- The active holds whose filter is matched by search, with the owner of
--- their account and the group they name.
+-- their account and the group they name; with id, only that hold (#538).
 SELECT h.id, h.owner_id, h.account_id, a.name AS account, a.owner_id AS account_owner, h.group_id, h.filter
 FROM legal_holds h
 LEFT JOIN accounts a ON a.id = h.account_id
 WHERE h.released_at IS NULL AND h.filter IS NOT NULL
+  AND (sqlc.narg(id)::bigint IS NULL OR h.id = sqlc.narg(id)::bigint)
 ORDER BY h.id;
+
+-- name: HoldAddEntry :one
+-- The audit entry of a hold's creation (#538). It is written in the
+-- hold's transaction, so its at is the hold's created_at: the lookup reads
+-- one partition through the primary key, never the whole log.
+SELECT actor, user_name FROM audit_log
+WHERE at = @at::timestamptz AND action = 'hold.add' AND details->>'hold_id' = (@hold_id::bigint)::text
+ORDER BY id
+LIMIT 1;
 
 -- name: AddLegalHoldMessages :execrows
 -- Only while the hold is active.
