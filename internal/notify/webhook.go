@@ -1,6 +1,8 @@
 // Package notify tells the operator when syncs of an account or runs of a
-// recurring fill keep failing, when they work again, and when many of an account's messages were
-// deleted on the server, through a webhook.
+// recurring fill keep failing, when they work again, when many of an account's messages were
+// deleted on the server, and when the storage quota state of the instance
+// or of a customer group changes, through a webhook. By default
+// (config.WebhookDetailIDs) the webhook gets IDs and counts only.
 package notify
 
 import (
@@ -33,6 +35,8 @@ const (
 	EventTest      = "test"
 	// EventGone: many messages of an account were deleted on the server.
 	EventGone = "gone"
+	// EventStorage: the storage quota state of a scope changed (#397).
+	EventStorage = "storage"
 )
 
 // AccountEvent is the part of a message about one account.
@@ -78,6 +82,8 @@ type Message struct {
 	Slack    string
 	Discord  string
 	Accounts []AccountEvent
+	// Storage holds the transitions of an EventStorage message.
+	Storage []StorageEvent
 }
 
 // jsonBody covers Gotify (title, message, extras), Slack and Mattermost
@@ -92,7 +98,33 @@ type jsonBody struct {
 	Content         string          `json:"content"`
 	AllowedMentions allowedMentions `json:"allowed_mentions"`
 	Extras          extras          `json:"extras"`
-	Accounts        []AccountEvent  `json:"accounts"`
+	Accounts        any             `json:"accounts"`
+	Storage         []StorageEvent  `json:"storage,omitempty"`
+}
+
+// idsAccountEvent is AccountEvent as the ids detail mode sends it: the
+// fields that can hold names, mailboxes, errors or folder names are not
+// there at all, whatever the builder put into the AccountEvent.
+type idsAccountEvent struct {
+	ID            string     `json:"id"`
+	Event         string     `json:"event"`
+	AccountID     int64      `json:"accountId"`
+	FailureStreak int        `json:"failureStreak"`
+	FailingSince  *time.Time `json:"failingSince"`
+	FillID        int64      `json:"fillId,omitempty"`
+	Lost          int        `json:"lost,omitempty"`
+	PresentBefore int        `json:"presentBefore,omitempty"`
+}
+
+func idsAccounts(accounts []AccountEvent) []idsAccountEvent {
+	out := make([]idsAccountEvent, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, idsAccountEvent{
+			ID: a.ID, Event: a.Event, AccountID: a.AccountID, FailureStreak: a.FailureStreak, FailingSince: a.FailingSince,
+			FillID: a.FillID, Lost: a.Lost, PresentBefore: a.PresentBefore,
+		})
+	}
+	return out
 }
 
 // allowedMentions with an empty Parse makes Discord ping no one.
@@ -127,6 +159,10 @@ func NewWebhook(cfg *config.Webhook) *Webhook {
 
 // Target names the scheme and host, for logs.
 func (w *Webhook) Target() string { return w.cfg.Target() }
+
+// Full reports whether alerts carry names, mailboxes, errors and folders
+// (config.WebhookDetailFull); by default they carry IDs only.
+func (w *Webhook) Full() bool { return w.cfg.Full() }
 
 // DeliveryError is a failed webhook request. Its text never contains the
 // URL.
@@ -170,13 +206,18 @@ func (w *Webhook) Send(ctx context.Context, m *Message) (int, error) {
 		if discord == "" {
 			discord = m.Title + "\n" + m.Body
 		}
-		accounts := m.Accounts
-		if accounts == nil {
-			accounts = []AccountEvent{}
+		var accounts any = idsAccounts(m.Accounts)
+		if w.cfg.Full() {
+			full := m.Accounts
+			if full == nil {
+				full = []AccountEvent{}
+			}
+			accounts = full
 		}
 		jb := jsonBody{
 			ID: m.ID, Event: m.Event, Title: m.Title, Message: m.Body,
 			Text: slack, Content: discord, AllowedMentions: allowedMentions{Parse: []string{}}, Accounts: accounts,
+			Storage: m.Storage,
 		}
 		jb.Extras.ClientDisplay.ContentType = "text/plain"
 		var err error
@@ -203,6 +244,10 @@ func (w *Webhook) Send(ctx context.Context, m *Message) (int, error) {
 			priority, tags = "high", "warning"
 		case EventGone:
 			priority, tags = "high", "wastebasket"
+		case EventStorage:
+			if m.storageAlert() {
+				priority, tags = "high", "warning"
+			}
 		}
 		if m.Event == EventTest {
 			tags = "test_tube"
@@ -225,6 +270,17 @@ func (w *Webhook) Send(ctx context.Context, m *Message) (int, error) {
 		return resp.StatusCode, nil
 	}
 	return resp.StatusCode, &DeliveryError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+}
+
+// storageAlert reports whether a storage message holds a level other than
+// ok.
+func (m *Message) storageAlert() bool {
+	for _, ev := range m.Storage {
+		if ev.Level != LevelOK {
+			return true
+		}
+	}
+	return false
 }
 
 // retryAfter parses a Retry-After value in seconds or as an HTTP date.
@@ -256,6 +312,6 @@ func TestMessage(now time.Time) *Message {
 		ID:    fmt.Sprintf("test-%d", now.Unix()),
 		Event: EventTest,
 		Title: "Mail archive: test notification",
-		Body:  "This is a test from mail-archive. Alerts about failing syncs and about mail deleted on the server will arrive here.",
+		Body:  "This is a test from mail-archive. Alerts about failing syncs, mail deleted on the server and storage will arrive here.",
 	}
 }

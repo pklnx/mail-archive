@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -60,9 +61,20 @@ func requiredScope(a access) string {
 		return store.ScopeRead
 	case accessSync:
 		return store.ScopeSync
+	case accessMetrics:
+		return store.ScopeMetrics
 	}
 	return ""
 }
+
+// adminOnlyMetrics is the 403 answer of the metrics route to a user who is
+// not an admin, with a session or a key.
+const adminOnlyMetrics = "only admins can read the metrics"
+
+// adminOnlyLevel reports whether access a needs an admin, with a session
+// as with a key: checked in authenticate, before the handler, so that no
+// handler of such a route runs for anyone else.
+func adminOnlyLevel(a access) bool { return a == accessMetrics }
 
 // authenticateKey checks the key of a key request for a route with access
 // a. It answers the request and returns nil when the key is refused.
@@ -129,6 +141,12 @@ func (s *Server) authenticateKey(w http.ResponseWriter, r *http.Request, key str
 	if !k.HasScope(scope) {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="mail-archive", error="insufficient_scope", scope=%q`, scope))
 		s.writeJSON(w, http.StatusForbidden, scopeJSON{Error: "this API key lacks the " + scope + " scope", Scope: scope})
+		return nil
+	}
+	// A metrics key of an owner who is no longer an admin opens nothing:
+	// the role is read on every request, as for a session.
+	if adminOnlyLevel(a) && !sess.IsAdmin {
+		s.fail(w, r, http.StatusForbidden, adminOnlyMetrics, nil)
 		return nil
 	}
 	if k.LastUsedAt == nil || s.currentTime().Sub(*k.LastUsedAt) > touchInterval {
@@ -242,8 +260,18 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scopes, err := store.NormalizeScopes(in.Scopes)
-	if err != nil {
-		s.fail(w, r, http.StatusBadRequest, "choose the scopes read, sync or both", nil)
+	switch {
+	case errors.Is(err, store.ErrMetricsScopeAlone):
+		s.fail(w, r, http.StatusBadRequest, "the metrics scope must be the key's only scope", nil)
+		return
+	case err != nil:
+		s.fail(w, r, http.StatusBadRequest, "choose the scopes read, sync or both, or metrics alone", nil)
+		return
+	}
+	// Only admins hold metrics keys; refused before the password check, as
+	// the answer depends on nothing but the session's own role.
+	if slices.Contains(scopes, store.ScopeMetrics) && !currentSession(r).IsAdmin {
+		s.fail(w, r, http.StatusForbidden, "only admins can create a metrics key", nil)
 		return
 	}
 	var expires *time.Time
@@ -280,6 +308,10 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, store.ErrAPIKeyName):
 		s.fail(w, r, http.StatusConflict, "you already have an API key with this name", nil)
+		return
+	case errors.Is(err, store.ErrMetricsKeyAdmin):
+		// Demoted between the check above and the store's locked read.
+		s.fail(w, r, http.StatusForbidden, "only admins can create a metrics key", nil)
 		return
 	case err != nil:
 		s.failStore(w, r, err)

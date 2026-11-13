@@ -69,12 +69,25 @@ func (r *receiver) got() []received {
 	return append([]received(nil), r.requests...)
 }
 
+// webhook is a webhook with the detail full: the alerts name accounts,
+// owners, mailboxes, errors and folders. idsWebhook is the default.
 func webhook(t *testing.T, rawURL, format, auth string) *notify.Webhook {
+	t.Helper()
+	return webhookDetail(t, rawURL, format, auth, config.WebhookDetailFull)
+}
+
+func idsWebhook(t *testing.T, rawURL, format string) *notify.Webhook {
+	t.Helper()
+	return webhookDetail(t, rawURL, format, "", config.WebhookDetailIDs)
+}
+
+func webhookDetail(t *testing.T, rawURL, format, auth, detail string) *notify.Webhook {
 	t.Helper()
 	cfg, err := config.ParseWebhook(rawURL, format, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.Detail = detail
 	return notify.NewWebhook(cfg)
 }
 
@@ -366,7 +379,7 @@ func TestCrashAfterSendResendsTheSameID(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("claim: %v %v", pending, err)
 	}
-	if _, err := w.Send(e.ctx, notify.BuildMessage(pending)); err != nil {
+	if _, err := w.Send(e.ctx, notify.BuildMessage(pending, true)); err != nil {
 		t.Fatal(err)
 	}
 	n := e.notifier(w)

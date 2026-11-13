@@ -13,7 +13,7 @@
 | User passwords | Only stored as Argon2id hashes (64 MiB, 3 passes). |
 | TOTP secrets | Encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`, bound to the user ID. Recovery codes are stored only as keyed HMAC-SHA-256 hashes. |
 | Passkeys | Only the public keys are stored; the private keys never leave the user's devices. |
-| API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A key reaches only the read and sync endpoints of its owner and the accounts shared with them. See [Login](#login). |
+| API keys | Only their SHA-256 and last 4 characters are stored; the key is shown once. A `read` or `sync` key reaches only the read and sync endpoints of its owner and the accounts shared with them. A `metrics` key, which only an admin can create and which has no other scope, reaches only `GET /api/metrics` (IDs and counts, no names). See [Login](#login). |
 | The setup token | Only its SHA-256 is stored, with the time of the first start with it. It creates the first admin once, only while no user exists and for 7 days, and is compared in constant time. It is never logged, never in the audit log, and never reaches the server in a URL. See [Login](#login). |
 | The audit log | Every search, read, export, login and change is recorded; the trigger refuses changes and deletions for every role. See [Audit log](../guide/audit-log) for what it covers and what it cannot stop. |
 | Retention and deletion | Nothing is deleted without a [retention rule](./cli#retention) and a reviewed, confirmed [deletion run](./cli#deletion); rules, legal holds and runs are admin-only and recorded in the audit log. Database triggers refuse to delete a location whose period has not ended or that is on hold, and a message row without its deletion record. A message stays while any location of it, in any user's account, has no rule or an unexpired one, or is on legal hold. |
@@ -85,9 +85,7 @@ login.
   started in 5 minutes only bounds memory and the table. Like the other
   limits, these counters are kept in memory, and a restart resets them.
   Passwords stay: an account never depends on passkeys alone.
-- **API keys** let scripts read mail (`read`) or start syncs (`sync`), and
-  nothing else: logins, the profile, users and account changes stay with
-  the session and the command line. Creating a key needs the password and,
+- **API keys** let scripts read mail (`read`), start syncs (`sync`) or, for admins, read the instance metrics (`metrics`, alone in its key: only `GET /api/metrics`, with IDs and counts and no names), and nothing else: logins, the profile, users and account changes stay with the session and the command line. Creating a key needs the password and,
   with 2FA on, a code; using it needs nothing else. A key is 256 random bits
   (`ma_` and 52 base32 characters), shown once; the database stores its
   SHA-256 and the last 4 characters, so a database copy contains no usable
@@ -259,6 +257,53 @@ after its start or after its latest extension.
   the search terms, without the auditor's address, browser or key name, and
   sees revocations by others with "operator" instead of the actor's name. See
   [Audit log](../guide/audit-log).
+
+## Operator, admin and customer groups
+
+A hosted instance runs in full-service mode: the operator holds the host
+(environment, command line, keys, backups) and is the instance's admin in
+the web UI; the first admin from the setup link is the operator. The
+customers' people are members of their customer group and are never
+admins: an admin sees every group's users, accounts and audit log. An
+individual instance is one group, with the operator as its only admin.
+
+- **What admins see.** Every group's storage usage, quota and quota state,
+  every account's size and name, and the instance's disk and database, in
+  the web UI and with `./ma usage`, but no mail except their own and what
+  was shared with them (above). Members see the size of their own accounts
+  and, when new mail is not archived, that storage is full, never whose
+  usage caused it.
+- **Metrics.** `GET /api/metrics` is for admins only: a session, or an API
+  key with the scope `metrics` alone. It holds IDs, counts, times and fixed
+  values: storage of the instance, of each group and per account by ID,
+  the disk, the database by table, jobs, users per role and lock state,
+  encryption at rest, the last backup, the version, pending migrations and
+  SMTP deferrals for storage. It never holds names, hosts, IMAP user names,
+  addresses, folders, subjects or error texts, and no exclusive bytes per
+  account, which are computed across groups. A label value that does not
+  match its fixed pattern is not written. The answer is cached for 15
+  seconds. See [Metrics](../guide/operations#metrics).
+- **Webhook alerts** carry IDs only by default
+  (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`; see
+  [Health endpoints and alerts](#health-endpoints-and-alerts)): webhook
+  receivers are often third parties.
+- **The shell.** Whoever holds the host, the database or the archive key can
+  technically read all mail; no app path is meant for it, and the
+  [archive key](#the-archive-key) does not protect against the operator.
+  Exports and imports at the command line are audited, but someone with the
+  shell can bypass that. Command-line entries in the audit log carry the
+  operating system user and `MAIL_ARCHIVE_OPERATOR`, which the app does not
+  verify.
+- **Support.** The operator has no support access to customers' mail in the
+  app. A [GoBD export](../guide/gobd-export) is run by the operator at the
+  command line on the customer's request, under a legal hold or an auditor
+  grant where there is one; it is recorded in the group's audit log as a
+  command-line entry. Anything else that involves mail content goes through
+  the customer's own users, for example by screen sharing.
+- **Logs** of a hosted instance contain customer data: SMTP senders and
+  recipients, account, user and folder names, and the texts of server
+  errors. The operator treats logs as customer data and covers who reads
+  them and how long they are kept in the data processing agreement.
 
 ## Network access
 
@@ -818,14 +863,23 @@ name only the scheme and host. Redirects are not followed, so the
 authorization and the message never reach another host. A request times out
 after 10 seconds and at most 4 KiB of the answer is read.
 
-Alerts name the account, its owner, its ID and the last sync error (up to
-200 characters). For an error from the IMAP server or the network, that is a
-fixed sentence of its category, never the server's own text. Alerts about mail deleted on the server name the account,
-its owner and ID, the number of messages and the names of up to 20 folders,
-never subjects, addresses or UIDs. Treat the receiver like `./ma status`, which shows the same:
-on the public ntfy.sh server, use a protected topic or a long random one.
+By default (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) alerts name accounts,
+recurring fills and customer groups by their ID only: no account, owner or
+group names, no IMAP user names, no folder names and no error texts, and
+their title and text are fixed text with IDs. The JSON entries have no field
+that could hold such a value. Storage alerts carry the level, the group ID,
+the bytes used, the quota and the percentage, in every mode.
 
-Names, mailboxes, errors and folder names in an alert are shown as literal
+With `MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full`, which sends customer data to
+the receiver and is meant for receivers the operator runs, alerts name the
+account, its owner, its ID and the last sync error (up to
+200 characters). For an error from the IMAP server or the network, that is a
+fixed sentence of its category, never the server's own text. Alerts about mail deleted on the server then name the account,
+its owner and ID, the number of messages and the names of up to 20 folders,
+never subjects, addresses or UIDs. Treat the receiver like `./ma status`, which shows the same;
+in either mode, on the public ntfy.sh server, use a protected topic or a long random one.
+
+With `full`, names, mailboxes, errors and folder names in an alert are shown as literal
 text in every receiver, so whoever controls them (a user, a mail server)
 cannot add formatting, links or mentions to the alert, or forge a line.
 In the `text` (Slack, Mattermost) and `content` (Discord) fields each value

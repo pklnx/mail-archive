@@ -49,6 +49,9 @@ const (
 	EnvNotifyWebhookFormat = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT"
 	// EnvNotifyWebhookAuthorization is sent as the Authorization header.
 	EnvNotifyWebhookAuthorization = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION"
+	// EnvNotifyWebhookDetail is "ids" (default: IDs and counts only) or
+	// "full" (names, mailboxes, errors and folders too).
+	EnvNotifyWebhookDetail = "MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL"
 	// EnvSMTPListen is the address the SMTP server for smtp accounts
 	// listens on, like ":2525"; empty turns it off.
 	EnvSMTPListen = "MAIL_ARCHIVE_SMTP_LISTEN"
@@ -167,6 +170,16 @@ const MaxAlertAfterFailures = 100
 const (
 	WebhookFormatJSON = "json"
 	WebhookFormatNtfy = "ntfy"
+)
+
+// Webhook detail modes (#397, part 3). With ids, the default, alerts name
+// accounts, fills and groups by ID only: no account or owner names, IMAP
+// user names, folder names or error texts, and title and body are fixed
+// text with IDs. Receivers are often third-party services. full sends
+// those values too, for the operator's own test instances.
+const (
+	WebhookDetailIDs  = "ids"
+	WebhookDetailFull = "full"
 )
 
 // DefaultSyncInterval is used when EnvSyncInterval is not set.
@@ -308,7 +321,12 @@ type Webhook struct {
 	URL           *url.URL
 	Format        string
 	Authorization string
+	// Detail is WebhookDetailIDs or WebhookDetailFull.
+	Detail string
 }
+
+// Full reports whether alerts carry names, mailboxes, errors and folders.
+func (w *Webhook) Full() bool { return w.Detail == WebhookDetailFull }
 
 // DataDirFromEnv returns the data directory, ./data unless set.
 func DataDirFromEnv() string {
@@ -369,6 +387,13 @@ func Load() (*Config, error) {
 		os.Getenv(EnvNotifyWebhookAuthorization))
 	if err != nil {
 		return nil, err
+	}
+	detail, err := ParseWebhookDetail(os.Getenv(EnvNotifyWebhookDetail))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Webhook != nil {
+		cfg.Webhook.Detail = detail
 	}
 	cfg.SMTP, err = ParseSMTP(smtpEnv())
 	if err != nil {
@@ -622,7 +647,20 @@ func ParseWebhook(rawURL, format, authorization string) (*Webhook, error) {
 			return nil, fmt.Errorf("%s: contains a control character", EnvNotifyWebhookAuthorization)
 		}
 	}
-	return &Webhook{URL: u, Format: format, Authorization: authorization}, nil
+	return &Webhook{URL: u, Format: format, Authorization: authorization, Detail: WebhookDetailIDs}, nil
+}
+
+// ParseWebhookDetail checks EnvNotifyWebhookDetail: empty is ids. It is
+// checked also without a webhook, so a typo does not go unnoticed (Compose
+// always passes a value).
+func ParseWebhookDetail(v string) (string, error) {
+	switch v = strings.ToLower(strings.TrimSpace(v)); v {
+	case "", WebhookDetailIDs:
+		return WebhookDetailIDs, nil
+	case WebhookDetailFull:
+		return WebhookDetailFull, nil
+	}
+	return "", fmt.Errorf("%s: want %s or %s, got %q", EnvNotifyWebhookDetail, WebhookDetailIDs, WebhookDetailFull, v)
 }
 
 // ParseSMTP checks the SMTP server settings. An empty listen address

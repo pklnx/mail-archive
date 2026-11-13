@@ -365,7 +365,7 @@ after two intervals without a successful run *stale*. The banner names the
 account with the mailbox, such as "journal (alice@example.com)",
 [`/healthz/sync`](../guide/operations#healthz-sync) lists the smtp account's
 ID, and the [webhook alert](../guide/operations#webhook-alerts) names the
-fill and its mailbox. Fills of a disabled account do not run, not even a run
+fill by its ID, and its mailbox with the detail `full`. Fills of a disabled account do not run, not even a run
 that was about to start, and count as healthy; they run again once the
 account is enabled.
 
