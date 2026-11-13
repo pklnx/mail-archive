@@ -267,10 +267,11 @@ codes 3 and 4).`,
 			if err != nil {
 				return err
 			}
+			log := newLogger(cfg.LogLevel)
+			logMoveNotice(log)
 			if cfg.JobWorkers == 0 {
 				return errors.New(config.EnvJobWorkers + "=0: the worker would run no jobs; set it from 1 to 8")
 			}
-			log := newLogger(cfg.LogLevel)
 			// The migration lock, start-up migrations and the schema check
 			// (#396), as serve does.
 			if err := prepareInstance(cmd.Context(), cfg, log, "worker"); err != nil {

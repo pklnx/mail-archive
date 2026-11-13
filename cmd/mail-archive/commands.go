@@ -1042,6 +1042,7 @@ admin once.`,
 				return err
 			}
 			log := newLogger(cfg.LogLevel)
+			logMoveNotice(log)
 			// Before it listens or migrates (#396, step 0).
 			if cfg.SecretKey == nil {
 				return missingSecretKeyError()
