@@ -162,6 +162,7 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 		}
 		defer stop()
 		opts.SMTPListen = a.cfg.SMTP.Listen
+		opts.SMTPAuth = a.cfg.SMTP.Auth
 	}
 	srv := web.New(a.store, blobs, log, opts)
 	h, err := srv.Start(ctx)

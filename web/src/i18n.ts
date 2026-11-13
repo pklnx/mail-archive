@@ -259,11 +259,6 @@ const en = {
   journalingGuide: "Journaling guide",
   smtpAccountAdded: (name: string) => `Account ${name} added. Set up the mail server to send it the copies:`,
   mailServerSetup: "Mail server setup",
-  setupIntro: "Postfix, recipient_bcc_maps (the guide's variant B):",
-  setupTarget:
-    "[127.0.0.1]:2525 is the guide's Docker Compose default (SMTP_BIND, SMTP_PORT): put the address and port at which Postfix reaches the archive.",
-  setupNotDedicated: (address: string) =>
-    `No address of this account is in a domain used only for the archive. The transport line routes a whole domain to the archive, so these lines use ${address}: add it to the account, or another address in such a domain.`,
   removedNote: "Removed. Its mail stays in the archive.",
   removedAccounts: "Removed accounts",
   // Shared accounts (#389): in the sidebar "info · anna", on a message "info (anna)".
@@ -951,11 +946,6 @@ const de: Messages = {
   journalingGuide: "Anleitung zum Journaling",
   smtpAccountAdded: (name) => `Konto ${name} angelegt. Richte den Mailserver ein, damit er ihm die Kopien schickt:`,
   mailServerSetup: "Mailserver einrichten",
-  setupIntro: "Postfix, recipient_bcc_maps (Variante B der Anleitung):",
-  setupTarget:
-    "[127.0.0.1]:2525 ist der Docker-Compose-Standard der Anleitung (SMTP_BIND, SMTP_PORT): Trage Adresse und Port ein, unter denen Postfix das Archiv erreicht.",
-  setupNotDedicated: (address) =>
-    `Keine Adresse dieses Kontos liegt in einer Domain, die nur das Archiv empfängt. Die Transport-Zeile leitet eine ganze Domain zum Archiv, deshalb verwenden diese Zeilen ${address}: Füge sie dem Konto hinzu oder eine andere Adresse in einer solchen Domain.`,
   removedNote: "Entfernt. Die Mails bleiben im Archiv.",
   removedAccounts: "Entfernte Konten",
   sharedName: (name, owner) => `${name} · ${owner}`,

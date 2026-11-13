@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -279,8 +280,10 @@ func run(dbURL, listen, imapListen string, now time.Time, log *slog.Logger) erro
 	srv := web.New(st, blobs, log, web.Options{
 		Syncer: syncer, Runner: runner, Fills: fills, Sealer: sealer, SecretKey: key, PublicURL: publicURL,
 		// The demo stores its journal messages directly; the UI shows the
-		// SMTP server as on, as in a real journaling setup.
+		// SMTP server as on, in the default mode with a login (#395), as in
+		// a real journaling setup.
 		SMTPListen: ":2525",
+		SMTPAuth:   true,
 		Retention:  retention,
 	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
@@ -525,6 +528,16 @@ func journal(ctx context.Context, st *store.Store, blobs *blobstore.Store, now t
 		if _, err := st.ReceiveMessage(ctx, acc.ID, meta, env, func() bool { return blobs.Exists(blob.SHA256) }); err != nil {
 			return nil, err
 		}
+	}
+	// A secret the mail server logs in with (#395), three days old, as
+	// `account smtp-secret journal --new` creates it: the account page and
+	// the Users page list it. Only the hash of a fixed text is stored, which
+	// is no secret of the SMTP format, so it lets no one log in.
+	hash := sha256.Sum256([]byte("mail-archive demo: a listed SMTP secret"))
+	if _, _, err := st.CreateSMTPCredential(ctx, acc.Ref(), store.NewSMTPCredential{
+		Hash: hash[:], Hint: "x7qm", Now: now.Add(-72 * time.Hour),
+	}); err != nil {
+		return nil, err
 	}
 	return acc, nil
 }
