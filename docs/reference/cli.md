@@ -479,8 +479,13 @@ info     imap  bob    Example Ltd  2410      171.9 MiB  40.2 MiB
   `worker` takes every hour, and soon after a user or account moves to
   another group, a purge or deletion run ends, or an import or
   `restore-dump` ends. Between snapshots, a group's figure adds what was
-  archived since: it may be slightly too high, never too low, and
-  deletions show at the next snapshot. Figures that no snapshot has counted
+  archived since, and deletions show at the next snapshot: it is an upper
+  bound, with two exceptions until the next snapshot. Right after a user or
+  account moves between groups, the groups show the moved bytes only from
+  the snapshot the move requests (soon, while `serve` or `worker` runs).
+  And a message whose only other copy in the group is deleted while it is
+  being added is missing, one message per such race. Figures that no
+  snapshot has counted
   yet show `-`; the second line then says `not counted yet`.
 - A `warning:` line appears if the last snapshot found the instance
   counters off; the log of `serve` or `worker` names the figures.

@@ -1281,7 +1281,7 @@ hold it. Migration 00041 holds the schema; the code is in
 | Figure | How exact | Where |
 |---|---|---|
 | Instance (messages, bytes) | exact at all times | the counters: `storage_counter_base` plus `storage_counter_deltas` |
-| Customer group (messages, bytes, deduplicated within the group) | exact after each snapshot, then an upper bound | the snapshot in `storage_usage_groups`, plus `storage_group_deltas` |
+| Customer group (messages, bytes, deduplicated within the group) | exact after each snapshot, then an upper bound with two exceptions (below) | the snapshot in `storage_usage_groups`, plus `storage_group_deltas` |
 | Account (messages, bytes, exclusive bytes) | as of the last snapshot | `storage_usage_accounts` |
 
 - **Counters.** Statement triggers on `messages` (`AFTER INSERT` and
@@ -1297,7 +1297,7 @@ hold it. Migration 00041 holds the schema; the code is in
   query per batch (`GroupHeldMessages`) finds the hashes new to the account
   that another account of the group already holds; the rest go into one
   delta row. It probes `message_locations_folder_sha_idx` once per folder
-  of the group and hash, fenced (`OFFSET 0`, `LIMIT 1`) so that neither the
+  of the group and hash, fenced (`LIMIT 1` per probe, plus `OFFSET 0`) so that neither the
   custom nor the generic plan looks the hashes up by
   `message_locations_sha_idx` (`TestUsageRefreshPlan`). So its time depends
   only on the group's own folders and the batch, never on how many accounts
@@ -1307,10 +1307,16 @@ hold it. Migration 00041 holds the schema; the code is in
   `TestGroupUsageGuardCallers` keep every writer of `message_locations` on
   this path or on the exempt list (`ConvertLegacyFillBatch`, which adds no
   hash new to the account). Two saves that add the same message to two
-  accounts of one group at the same time may both count it; a message whose
-  only other copy in the group is deleted while it is added is missing
-  until the next snapshot. Deletions (retention, purges) lower a group's
-  figure only at the next snapshot.
+  accounts of one group at the same time may both count it, and deletions
+  (retention, purges) lower a group's figure only at the next snapshot: so
+  between snapshots the figure is an upper bound, with two exceptions until
+  the next snapshot (#397 revision 4, point 5). Right after a user or
+  account moves between groups (or the adoption), the groups show the moved
+  bytes only from the snapshot the move requests; this includes a save
+  whose probe found the message in an account that moved out of the group
+  before the save committed. And a message whose only other copy in the
+  group is deleted while it is being added is missing, one message per
+  such race.
 - **Locks of a save.** Every save first locks its account and the
   account's owner `FOR KEY SHARE` (`lockAccountGroup`), before the folder
   lock, and reads the owner's group. Moving a user to another group
@@ -1329,8 +1335,11 @@ hold it. Migration 00041 holds the schema; the code is in
   takes the storage advisory lock for its transaction, adds the counter
   deltas to the base and the group deltas to `added_*` of their group's
   row, and then enqueues `usage_refresh` while
-  `storage_refresh_requests.seq` is above `storage_snapshot.covered_seq`,
-  so that no request waits more than one fold. A refresh that failed in
+  `storage_refresh_requests.seq` is above `storage_snapshot.covered_seq`.
+  A request is therefore covered within about two fold periods (about 10
+  minutes) while a job pool runs and no retry backoff is pending: the
+  fold's check can fall between a snapshot's last read of `seq` and the end
+  of its job. A refresh that failed in
   the last hour is left alone by the fold.
 - **`usage_refresh`** (hourly, on request, and at the start of a job pool
   while no snapshot exists): on a connection of its own it takes the
@@ -1344,7 +1353,9 @@ hold it. Migration 00041 holds the schema; the code is in
   `storage_snapshot` last, with that `seq` as `covered_seq`. If `seq` grew
   meanwhile, or the transaction failed with `40001` (an account or group
   changed during it), the job runs again at once (`jobs.Continue`).
-  `work_mem` is 32 MB, and each statement may take 5 minutes.
+  `work_mem` is 32 MB, so each hash node may use up to 64 MB
+  (`hash_mem_multiplier` 2, PostgreSQL's default) before it spills; each
+  statement may take 5 minutes.
 - **Priority.** Both jobs run at `store.PriorityStorage` (50): after the
   work of new mail and before backfills, so that a long attachment
   backfill does not hold back a requested snapshot.

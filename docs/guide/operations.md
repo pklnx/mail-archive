@@ -1076,7 +1076,7 @@ PostgreSQL 16 pinned to 2 cores, with 300,000 messages in 166 accounts and
 | Row locks of a save (account and owner, `FOR KEY SHARE`) | every save transaction | under 0.03 ms and about 120 bytes of WAL |
 | Group lookup of a save (`GroupHeldMessages`) | every sync, fill or import batch of up to 100 messages new to the account | grows with the folders of the account's group: 6 ms with 40 folders, 71 ms with 400, 239 ms with 1,500 (50 accounts × 30 folders; 364 ms at the 95th percentile) |
 | The same | every message received over SMTP | 0.9 ms with 40 folders, 2.7 ms with 400, 7 ms with 1,500 |
-| Snapshot (`usage_refresh`) | hourly, and after moves, purges, deletion runs, imports and restores | 4 seconds of one core, up to 175 MiB of PostgreSQL memory (`work_mem` 32 MB per hash) and 220 MiB of temporary files; at 1,500,000 messages about 12 seconds and 650 MiB of temporary files, the same memory |
+| Snapshot (`usage_refresh`) | hourly, and after moves, purges, deletion runs, imports and restores | 4 seconds of one core, up to 175 MiB of PostgreSQL memory (`work_mem` 32 MB; each hash may use up to 64 MB, as PostgreSQL's `hash_mem_multiplier` is 2) and 220 MiB of temporary files; at 1,500,000 messages about 12 seconds and 650 MiB of temporary files, the same memory |
 | Fold (`storage_fold`) | every 5 minutes | under 25 ms |
 | The index over hashes and sizes | on disk | about 100 bytes per message: 30 MB per 300,000 messages |
 

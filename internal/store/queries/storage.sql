@@ -144,9 +144,11 @@ SET computed_at = now(), ungrouped_messages = @ungrouped_messages, ungrouped_byt
 -- message_locations_folder_sha_idx per folder and hash, so the cost
 -- depends only on the group's folders and the batch, never on how many
 -- accounts of other groups hold the same bytes (#539; TestUsageRefreshPlan
--- checks the custom and the generic plan). OFFSET 0 and LIMIT 1 keep the
--- planner from flattening the probes into a lookup by hash
--- (message_locations_sha_idx).
+-- checks the custom and the generic plan). LIMIT 1 is the fence that
+-- matters: it keeps each probe a subquery of its own, so the planner cannot
+-- flatten the probes into a lookup by hash (message_locations_sha_idx);
+-- without it the test fails. OFFSET 0 on the group's folders only keeps
+-- that list from being merged into the probes, belt and braces.
 SELECT DISTINCT s.sha::text AS sha256
 FROM unnest(@shas::bpchar[]) AS s (sha)
 CROSS JOIN (
@@ -189,7 +191,8 @@ SELECT state, state_since FROM storage_states WHERE group_id IS NULL;
 
 -- name: GroupStorageUsage :many
 -- Each group's figure: its snapshot, the folded deltas and the deltas not
--- folded yet; an upper bound between snapshots.
+-- folded yet; an upper bound between snapshots, except right after a move
+-- and for the deletion race (store/storage.go).
 SELECT g.id, g.name, g.quota_bytes,
        (coalesce(u.messages, 0) + coalesce(u.added_messages, 0) + coalesce(d.messages, 0))::bigint AS messages,
        (coalesce(u.bytes, 0) + coalesce(u.added_bytes, 0) + coalesce(d.bytes, 0))::bigint AS bytes,

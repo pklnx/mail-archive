@@ -163,9 +163,11 @@ type GroupHeldMessagesParams struct {
 // message_locations_folder_sha_idx per folder and hash, so the cost
 // depends only on the group's folders and the batch, never on how many
 // accounts of other groups hold the same bytes (#539; TestUsageRefreshPlan
-// checks the custom and the generic plan). OFFSET 0 and LIMIT 1 keep the
-// planner from flattening the probes into a lookup by hash
-// (message_locations_sha_idx).
+// checks the custom and the generic plan). LIMIT 1 is the fence that
+// matters: it keeps each probe a subquery of its own, so the planner cannot
+// flatten the probes into a lookup by hash (message_locations_sha_idx);
+// without it the test fails. OFFSET 0 on the group's folders only keeps
+// that list from being merged into the probes, belt and braces.
 func (q *Queries) GroupHeldMessages(ctx context.Context, arg GroupHeldMessagesParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, groupHeldMessages, arg.Shas, arg.GroupID, arg.AccountID)
 	if err != nil {
@@ -210,7 +212,8 @@ type GroupStorageUsageRow struct {
 }
 
 // Each group's figure: its snapshot, the folded deltas and the deltas not
-// folded yet; an upper bound between snapshots.
+// folded yet; an upper bound between snapshots, except right after a move
+// and for the deletion race (store/storage.go).
 func (q *Queries) GroupStorageUsage(ctx context.Context) ([]GroupStorageUsageRow, error) {
 	rows, err := q.db.Query(ctx, groupStorageUsage)
 	if err != nil {

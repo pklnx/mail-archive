@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"regexp"
@@ -229,5 +230,36 @@ func TestStorageSchedule(t *testing.T) {
 	}
 	if state(store.JobUsageRefresh) != store.JobDone {
 		t.Errorf("refresh %s", state(store.JobUsageRefresh))
+	}
+}
+
+// usageRequestSeq is storage_refresh_requests.seq: how many usage snapshots
+// were requested.
+func usageRequestSeq(t *testing.T, conn *pgx.Conn) int64 {
+	t.Helper()
+	var seq int64
+	if err := conn.QueryRow(context.Background(), "SELECT seq FROM storage_refresh_requests").Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	return seq
+}
+
+// usageRefreshState is the state of the usage_refresh job ("" without one).
+func usageRefreshState(t *testing.T, conn *pgx.Conn) string {
+	t.Helper()
+	var state string
+	err := conn.QueryRow(context.Background(), "SELECT state FROM jobs WHERE kind = 'usage_refresh' AND key = 'singleton'").Scan(&state)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// requireUsageRequested fails unless exactly one usage snapshot was
+// requested since before and the job is queued.
+func requireUsageRequested(t *testing.T, conn *pgx.Conn, what string, before int64) {
+	t.Helper()
+	if got, state := usageRequestSeq(t, conn), usageRefreshState(t, conn); got != before+1 || state != store.JobQueued {
+		t.Errorf("%s: request seq %d (was %d), usage_refresh %q", what, got, before, state)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -341,12 +342,20 @@ func TestUsageRefreshFigures(t *testing.T) {
 	f.exec("UPDATE message_locations SET gone_at = now() WHERE message_sha256 = $1", usageMsg(3, 0).SHA256)
 	// Between snapshots: deltas for what is new to each group. The
 	// adopted account's bytes stay "Without group" until the snapshot the
-	// adoption requested.
+	// adoption requested. A fold keeps the deltas of a group that has no
+	// usage row yet ("Other", created after the last snapshot), and moves
+	// those of a group with one.
+	if _, err := f.st.FoldStorage(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.int64Of("SELECT count(*) FROM storage_usage_groups WHERE group_id = $1", g2); n != 0 {
+		t.Fatalf("group 2 has a usage row before its first snapshot")
+	}
 	if got := f.groupUsage(g1); got != (store.Usage{Messages: 3, Bytes: 111}) {
 		t.Errorf("group 1 before the snapshot: %+v", got)
 	}
 	if got := f.groupUsage(g2); got != (store.Usage{Messages: 1, Bytes: 100}) {
-		t.Errorf("group 2 before the snapshot: %+v", got)
+		t.Errorf("group 2 (no usage row) after a fold, before the snapshot: %+v", got)
 	}
 	f.refresh()
 	u := f.usage()
@@ -508,6 +517,129 @@ func TestUsageRequests(t *testing.T) {
 	if _, err := f.st.FoldStorage(f.ctx); err != nil || jobState() != store.JobQueued {
 		t.Errorf("fold with an old failure: %v %s", err, jobState())
 	}
+}
+
+// TestUsageRequestsAtRunEnds: the end of a deletion run, the end of a
+// purge and the cancel of a purge each bump the request seq and queue
+// usage_refresh, a failed one too: deletions lower a group's figure only
+// at a snapshot.
+func TestUsageRequestsAtRunEnds(t *testing.T) {
+	f := newUsageFixture(t)
+	seq := func() int64 { return f.int64Of("SELECT seq FROM storage_refresh_requests") }
+	jobState := func() string {
+		t.Helper()
+		var s string
+		if err := f.conn.QueryRow(f.ctx, "SELECT state FROM jobs WHERE kind = 'usage_refresh' AND key = 'singleton'").Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	// arm marks the snapshot job failed and returns the seq: a request
+	// must queue it again.
+	arm := func() int64 {
+		t.Helper()
+		f.exec("UPDATE jobs SET state = 'failed', finished_at = now() WHERE kind = 'usage_refresh'")
+		return seq()
+	}
+	requested := func(what string, before int64) {
+		t.Helper()
+		if got := seq(); got != before+1 || jobState() != store.JobQueued {
+			t.Errorf("%s: seq %d (was %d), job %s", what, got, before, jobState())
+		}
+	}
+	if err := f.st.RequestUsageRefresh(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	alice := f.user("alice", f.defaultGroup())
+	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	saveOld := func(fo *store.Folder, metas ...store.MessageMeta) {
+		t.Helper()
+		locs := f.locs(fo, len(metas))
+		for i := range metas {
+			metas[i].SentAt = &old
+			locs[i].InternalDate = old
+		}
+		if _, err := f.st.SaveBatch(f.ctx, fo.ID, f.uid, metas, locs); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A deletion run.
+	a := f.folder(&alice.ID, "a")
+	if _, err := f.st.AddRetentionRule(f.ctx, store.NewRetentionRule{AccountID: a.AccountID, Years: 1}); err != nil {
+		t.Fatal(err)
+	}
+	saveOld(a, usageMsg(1, 10), usageMsg(2, 20))
+	run, err := f.st.ProposeDeletion(f.ctx, nil)
+	if err != nil || run.Candidates != 2 {
+		t.Fatalf("propose: %+v %v", run, err)
+	}
+	if err := f.st.ConfirmDeletionRun(f.ctx, run.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	shas, err := f.st.PendingCandidates(f.ctx, run.ID, "", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.st.DeleteBatch(f.ctx, run.ID, shas, 0); err != nil {
+		t.Fatal(err)
+	}
+	n := arm()
+	if err := f.st.FinishDeletionRun(f.ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	requested("end of a deletion run", n)
+
+	// A purge to its end, and one cancelled.
+	confirmPurge := func(name string, msg int) *store.AccountPurge {
+		t.Helper()
+		fo := f.folder(&alice.ID, name)
+		saveOld(fo, usageMsg(msg, 30))
+		acc, err := f.st.GetAccount(f.ctx, fo.AccountID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.st.DeleteOrRemoveAccount(f.ctx, acc.Ref()); err != nil {
+			t.Fatal(err)
+		}
+		p, err := f.st.PurgePreview(f.ctx, fo.AccountID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acc, err = f.st.GetAccount(f.ctx, fo.AccountID); err != nil {
+			t.Fatal(err)
+		}
+		purge, err := f.st.ConfirmPurge(f.ctx, acc.Ref(), p.Deleted, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return purge
+	}
+	purge := confirmPurge("purged", 3)
+	if err := f.st.CheckPurgeCount(f.ctx, purge.ID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		res, err := f.st.PurgeBatch(f.ctx, purge.ID, 100, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Done {
+			break
+		}
+	}
+	n = arm()
+	if _, err := f.st.FinishPurge(f.ctx, purge.ID); err != nil {
+		t.Fatal(err)
+	}
+	requested("end of a purge", n)
+
+	purge = confirmPurge("cancelled", 4)
+	n = arm()
+	if err := f.st.CancelPurge(f.ctx, purge.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	requested("cancel of a purge", n)
 }
 
 // TestUsageRefreshPlan: the snapshot aggregates with hashes and no

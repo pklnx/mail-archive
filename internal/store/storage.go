@@ -20,9 +20,14 @@ import (
 //   - Customer groups: exact after each snapshot (usage_refresh),
 //     deduplicated within the group; between snapshots every save adds a
 //     group delta for the messages new to the group (recordGroupUsage). In
-//     between, a group's figure is an upper bound, with one exception: a
-//     message whose only other copy in the group is deleted while it is
-//     being added is missing until the next snapshot.
+//     between, a group's figure is an upper bound, with two exceptions
+//     until the next snapshot: right after a move of a user or account
+//     between groups (and the adoption), the groups show the moved bytes
+//     only from the snapshot the move requests, which includes a save whose
+//     probe found the message in an account that moved out before the save
+//     committed; and a message whose only other copy in the group is
+//     deleted while it is being added is missing, one message per such
+//     race (#397 revision 4, point 5).
 //   - Accounts: messages, bytes and exclusive bytes per snapshot.
 //
 // Every save locks its account and the account's owner FOR KEY SHARE first
@@ -264,8 +269,9 @@ func foldStorage(ctx context.Context, q *db.Queries) (deltas, groups int64, err 
 // usageRefreshTimeout bounds each statement of the snapshot.
 const usageRefreshTimeout = "5min"
 
-// usageRefreshWorkMem is the memory of each hash of the snapshot before it
-// spills to temporary files.
+// usageRefreshWorkMem is the work_mem of the snapshot: each sort may use
+// it, each hash node twice that (PostgreSQL's hash_mem_multiplier, 2 by
+// default), before it spills to temporary files.
 const usageRefreshWorkMem = "32MB"
 
 // RefreshResult tells what RefreshUsage found.
@@ -416,7 +422,8 @@ type Usage struct {
 }
 
 // GroupUsage is one customer group's usage: the last snapshot plus what
-// was added since (an upper bound until the next snapshot).
+// was added since (an upper bound until the next snapshot, with the two
+// exceptions in the package comment of storage.go).
 type GroupUsage struct {
 	ID         int64
 	Name       string

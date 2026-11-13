@@ -39,8 +39,12 @@ purging it would free).
 Accounts and groups are counted by a snapshot that a background job takes
 every hour, and soon after a user or account moves to another group, a purge
 or deletion run ends, or an import or restore ends (serve or worker must
-run). Between snapshots, a group's figure adds what was archived since, so it
-may be slightly too high, never too low, until the next snapshot. A snapshot
+run). Between snapshots, a group's figure adds what was archived since, and
+deletions show at the next snapshot: it is an upper bound, with two
+exceptions until the next snapshot. Right after a user or account moves
+between groups, the groups show the moved bytes only from the snapshot the
+move requests. And a message whose only other copy in the group is deleted
+while it is being added is missing, one message per such race. A snapshot
 that a job pool has not taken yet shows "-".
 
 --group NAME shows that group and its accounts only. --json prints the same

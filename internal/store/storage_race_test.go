@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/store"
+	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
 // Race tests of storage usage (#397, part 1, revisions 4 and 5): each one
@@ -51,10 +52,17 @@ func async(fn func() error) <-chan error {
 	return done
 }
 
+// wait waits for done, at most testwait.Limit: a hang fails the test
+// with what instead of running into the whole run's timeout.
 func (f *usageFixture) wait(done <-chan error, what string) {
 	f.t.Helper()
-	if err := <-done; err != nil {
-		f.t.Fatalf("%s: %v", what, err)
+	select {
+	case err := <-done:
+		if err != nil {
+			f.t.Fatalf("%s: %v", what, err)
+		}
+	case <-time.After(testwait.Limit(f.t)):
+		f.t.Fatalf("%s: no result within %v", what, testwait.Limit(f.t))
 	}
 }
 
