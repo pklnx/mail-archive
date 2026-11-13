@@ -236,10 +236,22 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// The open purge is read before the accounts: a purge that finishes in
+	// between deletes its account, so the list never shows it removed and
+	// no longer purging, a state it never had. The page would then poll
+	// slowly and keep the deleted account for 30 s (#555 CI).
+	purge, err := s.store.OpenAccountPurge(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	accounts, err := s.store.ListOwnedAccounts(ctx, userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
+	}
+	if s.afterAccountsListed != nil {
+		s.afterAccountsListed()
 	}
 	sc, ok := s.requestScope(w, r)
 	if !ok {
@@ -283,11 +295,6 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fillHealth, err := s.store.FillHealth(ctx, &me)
-	if err != nil {
-		s.failStore(w, r, err)
-		return
-	}
-	purge, err := s.store.OpenAccountPurge(ctx)
 	if err != nil {
 		s.failStore(w, r, err)
 		return

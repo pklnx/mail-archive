@@ -52,11 +52,25 @@ export interface AdminSMTPCredential extends SMTPCredential {
 /** Whether a secret still lets a mail server log in. */
 export const usable = (c: SMTPCredential) => c.state === "active" || c.state === "expiring";
 
+/**
+ * The list of an answer. An answer without one (a proxy's page, an older
+ * server) is a failed request, not "no secrets": the caller shows its error
+ * or leaves its section out, and the page around it keeps working.
+ */
+function listOf<T>(body: { credentials?: unknown } | null | undefined): T[] {
+  if (!Array.isArray(body?.credentials)) throw new Error("the answer has no list of SMTP secrets");
+  return body.credentials as T[];
+}
+
 const path = (account: string) => `/api/accounts/${encodeURIComponent(account)}/smtp-credentials`;
 
 export const smtpApi = {
   /** The secrets of the own smtp account (admins). */
-  list: (account: string, signal?: AbortSignal) => getJSON<SMTPCredentialList>(path(account), signal),
+  list: async (account: string, signal?: AbortSignal) => {
+    const body = await getJSON<SMTPCredentialList>(path(account), signal);
+    listOf<SMTPCredential>(body);
+    return body;
+  },
   /**
    * A new secret; the current one stays usable for graceDays (0: revoked at
    * once). Needs the password and, with 2FA on, a code.
@@ -65,6 +79,6 @@ export const smtpApi = {
     (await send<NewSMTPCredential>("POST", path(account), input))!,
   revoke: (account: string, id: number) => send("DELETE", `${path(account)}/${id}`),
   /** Every smtp account's secrets, for admins (#395 Q2). */
-  listAll: async (signal?: AbortSignal) => (await getJSON<{ credentials: AdminSMTPCredential[] }>("/api/admin/smtp-credentials", signal)).credentials,
+  listAll: async (signal?: AbortSignal) => listOf<AdminSMTPCredential>(await getJSON<{ credentials?: unknown }>("/api/admin/smtp-credentials", signal)),
   revokeAny: (id: number) => send("DELETE", `/api/admin/smtp-credentials/${id}`),
 };

@@ -2,6 +2,7 @@
 // admin adds an smtp account, creates its secret with the password and a
 // code, sees it once (copy, then gone after Done and after a reload),
 // finds it in the admins' list on the Users page and revokes it.
+import { randomUUID } from "node:crypto";
 import type { APIRequestContext } from "@playwright/test";
 import { origin, timeStep, totp, unique } from "./demo";
 import { expect, test } from "./fixtures";
@@ -28,7 +29,8 @@ test("an admin creates an SMTP secret, sees it once, and revokes it", async ({ p
   const adminCtx = await browser.newContext({ baseURL: origin, storageState: adminState, locale: "en-US", timezoneId: "Europe/Berlin" });
   try {
     const user = await newAdmin(adminCtx.request);
-    const password = "a-new-admin-password-1";
+    // Made at run time, so that no literal in the repository is a password.
+    const password = `pw-${randomUUID()}`;
     const account = unique("journal");
     const address = `archive@${account}.archive.local`;
 

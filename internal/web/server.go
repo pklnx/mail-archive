@@ -81,6 +81,9 @@ type Server struct {
 	// beforeConfirmPurge, for tests, runs after a purge's account was
 	// loaded and before it is confirmed.
 	beforeConfirmPurge func()
+	// afterAccountsListed, for tests, runs after GET /api/accounts read
+	// the user's accounts.
+	afterAccountsListed func()
 	// shareOnlyFails, for tests, makes the share-only lookup of shared
 	// reads fail with its error when it returns one.
 	shareOnlyFails func() error

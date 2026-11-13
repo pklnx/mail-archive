@@ -1,6 +1,6 @@
 // The demo server the end-to-end tests run against (tools/demo), and its
 // made-up logins. The values match tools/demo/main.go.
-import { createHmac } from "node:crypto";
+import { createHmac, randomInt } from "node:crypto";
 
 export const port = 18181;
 export const imapPort = 18143;
@@ -74,7 +74,10 @@ export function totp(secret: string, step: number): string {
   return String((mac.readUInt32BE(off) & 0x7fffffff) % 1000000).padStart(6, "0");
 }
 
-/** A name no earlier run has used, for things a test creates. */
+/**
+ * A name no earlier run has used, for things a test creates. Its random part
+ * comes from node:crypto: such names also become user names (#555, CodeQL).
+ */
 export function unique(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+  return `${prefix}-${Date.now().toString(36)}${randomInt(1296).toString(36)}`;
 }

@@ -117,6 +117,15 @@ describe("the SMTP secrets of an smtp account", () => {
     expect(region(t.mailServerSetup).getByText(/\[archive\.customer\.example\]:587\s+smtp-7:mas_…/)).toBeTruthy();
   });
 
+  it("says when the answer has no list, and keeps the page and its setup", async () => {
+    // JSON drops an undefined field: the server answers {"username": "smtp-7"}.
+    listed = undefined as unknown as SMTPCredential[];
+    accountPage();
+    expect(await region(smtpText().title).findByText(/no list of SMTP secrets/)).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "journal" })).toBeTruthy();
+    expect(region(t.mailServerSetup).getByText(/smtp-…:mas_…/)).toBeTruthy();
+  });
+
   it("is only on an admin's page", async () => {
     accountPage({ auth: "required" }, false);
     expect(screen.queryByRole("region", { name: smtpText().title })).toBeNull();
@@ -277,6 +286,16 @@ describe("the admins' list of SMTP secrets", () => {
   it("is not there without secrets", async () => {
     usersPage();
     await screen.findByRole("rowheader", { name: /bob/ });
+    expect(screen.queryByRole("region", { name: smtpText().title })).toBeNull();
+  });
+
+  it("leaves the list out, and keeps the users, when the answer has no list", async () => {
+    // JSON drops an undefined field: the server answers {}. The page once
+    // read its length and crashed as a whole (CI on #555).
+    all = undefined as unknown as AdminSMTPCredential[];
+    usersPage();
+    expect(await screen.findByRole("button", { name: t.userActions("bob") })).toBeTruthy();
+    await waitFor(() => expect(requests.some((r) => r.url === "/api/admin/smtp-credentials")).toBe(true));
     expect(screen.queryByRole("region", { name: smtpText().title })).toBeNull();
   });
 
