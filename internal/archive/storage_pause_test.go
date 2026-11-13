@@ -356,3 +356,108 @@ func TestFillPauses(t *testing.T) {
 		t.Fatalf("INBOX %+v, %d locations", inbox.Counts, p.locations(acc.ID))
 	}
 }
+
+// A pause with messages queued in the folder's batch (here the disk
+// reserve, reached while the third message comes in): the queued ones are
+// saved and the folder's last UID covers exactly them.
+func TestSyncPauseSavesTheBatch(t *testing.T) {
+	ua := imapmemserver.NewUser("a", "pw")
+	createMailboxes(t, ua, "INBOX")
+	for i := range 5 {
+		appendMsg(t, ua, "INBOX", rawMessage(fmt.Sprintf("q%d@example.com", i), "q"))
+	}
+	p := newPauseFixture(t, ua)
+	acc := p.ownedAccount("a", "a", p.ann)
+	p.syncer.BatchSize = 10 // nothing is saved before the pause
+	gate := p.diskGate(4)
+	p.syncer.Storage = gate
+	res := p.sync()
+	var fe *quota.FullError
+	if !errors.As(res["a"].Err, &fe) || fe.Scope != quota.ScopeDisk || res["a"].New != 2 {
+		t.Fatalf("a: %+v", res["a"])
+	}
+	if n := p.locations(acc.ID); n != 2 {
+		t.Fatalf("%d locations, want the two queued before the pause", n)
+	}
+	if last := p.int(`SELECT last_uid FROM folders WHERE account_id = $1 AND name = 'INBOX'`, acc.ID); last != 2 {
+		t.Fatalf("INBOX last UID %d", last)
+	}
+}
+
+// diskGate is a gate that reads the figures at every check (its clock
+// moves an hour each time) and finds the disk below its reserve from the
+// n-th read of the free space on: with n = 4, at the third message after
+// the check at the start.
+func (p *pauseFixture) diskGate(n int) *quota.Gate {
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		p.now = p.now.Add(time.Hour)
+		return p.now
+	}
+	free := func() (int64, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls >= n {
+			return 1, nil
+		}
+		return 1 << 40, nil
+	}
+	g := quota.New(quota.Config{Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}, MinFreeDisk: 1 << 30,
+		Interval: time.Minute}, p.store, free, clock, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p.store.SetWriteObserver(g.Wrote)
+	return g
+}
+
+// An import and an import into the journal folder that pause with
+// messages read but not saved yet save them first.
+func TestImportPauseSavesTheBatch(t *testing.T) {
+	p := newPauseFixture(t)
+	imp := &store.Account{Kind: store.KindImport, Name: "old", OwnerID: &p.ann.ID}
+	if err := p.store.CreateAccount(p.ctx, imp); err != nil {
+		t.Fatal(err)
+	}
+	jnl := &store.Account{Name: "journal", Enabled: true, OwnerID: &p.ann.ID}
+	if err := p.store.CreateSMTPAccount(p.ctx, jnl, []string{"archive@archive.local"}); err != nil {
+		t.Fatal(err)
+	}
+	newImporter := func(n int) *archive.Importer {
+		return &archive.Importer{Store: p.store, Blobs: p.blobs, BatchSize: 10, Storage: p.diskGate(n),
+			Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	}
+	folders, _, err := archive.ImportFolders("mbox", writeMbox(t, "bat", 5), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc, err := p.store.GetAccount(p.ctx, imp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := newImporter(4).Import(p.ctx, acc, folders); !errors.Is(err, quota.ErrStorageFull) || res.Total().Added != 2 {
+		t.Fatalf("import: %+v, %v", res, err)
+	}
+	if n := p.locations(imp.ID); n != 2 {
+		t.Fatalf("import: %d locations, want the two read before the pause", n)
+	}
+	jfolders, _, err := archive.JournalImportFolders("mbox", writeMbox(t, "jbat", 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	si := &store.SMTPImport{AccountID: jnl.ID, Label: "old", Format: "mbox", Source: "x"}
+	if err := p.store.CreateSMTPImport(p.ctx, si); err != nil {
+		t.Fatal(err)
+	}
+	// The first read of this gate also ends the disk_low the first one
+	// persisted, with a second statfs under the row lock: one read more.
+	if res, err := newImporter(5).ImportJournal(p.ctx, jnl, si, jfolders); !errors.Is(err, quota.ErrStorageFull) || res.Total().Added != 2 {
+		t.Fatalf("journal import: %+v, %v", res, err)
+	}
+	if n := p.locations(jnl.ID); n != 2 {
+		t.Fatalf("journal import: %d locations", n)
+	}
+}

@@ -408,6 +408,11 @@ func TestStorageWithAuth(t *testing.T) {
 	sf.set(quota.Overflow, quota.OK)
 	before := sf.files()
 	ca, _ := sf.af.login(auth.SMTPUsername(sf.journal.ID), secretA)
+	ca.must(250, "MAIL FROM:<sender@example.com>")
+	if code, msg := ca.cmd("RCPT TO:<%s>", rcptA); code != 452 || !strings.HasPrefix(msg, "4.3.1") {
+		t.Fatalf("login of the full group, RCPT: %d %s", code, msg)
+	}
+	ca.must(250, "RSET")
 	if code, msg := ca.deliver("sender@example.com", []string{rcptA}, message("dingo")); code != 452 || !strings.HasPrefix(msg, "4.3.1") {
 		t.Fatalf("login of the full group: %d %s", code, msg)
 	}

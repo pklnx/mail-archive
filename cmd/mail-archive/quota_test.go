@@ -79,6 +79,7 @@ func TestGroupSetQuota(t *testing.T) {
 	if len(recs) != 3 {
 		t.Fatalf("%d group.quota entries, want 3", len(recs))
 	}
+	seen := map[string]bool{}
 	for _, r := range recs {
 		var d map[string]any
 		if err := json.Unmarshal(r.Details, &d); err != nil {
@@ -87,13 +88,17 @@ func TestGroupSetQuota(t *testing.T) {
 		if r.GroupID == nil || *r.GroupID != meier.ID || d["group"] != "Meier" {
 			t.Fatalf("entry %+v %s", r, r.Details)
 		}
-		if d["to"] == nil && d["from"] == nil {
-			continue // none to none
-		}
-		from, to := d["from"], d["to"]
-		if !(from == nil && to == float64(50<<30)) && !(from == float64(50<<30) && to == nil) {
+		from, hasFrom := d["from"]
+		to, hasTo := d["to"]
+		if !hasFrom || !hasTo {
 			t.Fatalf("entry details %s", r.Details)
 		}
+		seen[fmt.Sprint(from, "->", to)] = true
+	}
+	want := fmt.Sprint(nil, "->", float64(50<<30))
+	back := fmt.Sprint(float64(50<<30), "->", nil)
+	if !seen[want] || !seen[back] || !seen[fmt.Sprint(nil, "->", nil)] {
+		t.Fatalf("entries %v", seen)
 	}
 }
 
