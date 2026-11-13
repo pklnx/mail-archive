@@ -41,8 +41,10 @@ import (
 	"github.com/pklnx/mail-archive/internal/attachtext/pdftest"
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/jobs"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/web"
 )
@@ -271,6 +273,13 @@ func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog
 		return fmt.Errorf("attachment text: %w", err)
 	}
 
+	gate, err := demoStorage(ctx, st, log)
+	if err != nil {
+		return fmt.Errorf("storage: %w", err)
+	}
+	syncer.Storage, filler.Storage = gate, gate
+	go gate.Run(ctx)
+
 	runner := &archive.Runner{Syncer: syncer, Schedule: archive.Schedule{Sync: 6 * time.Hour, SyncMin: 5 * time.Minute}}
 	go runner.Run(ctx)
 	fills := &archive.FillRunner{Filler: filler}
@@ -287,6 +296,9 @@ func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog
 		SMTPListen: ":2525",
 		SMTPAuth:   true,
 		Retention:  retention,
+		// The Storage page (#397): the quota, and the data disk.
+		StorageQuotaBytes: demoInstanceQuota,
+		DiskUsage:         demoDisk,
 	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
 		publicURL, loginName, loginPassword, loginTOTPSecret)
@@ -496,6 +508,46 @@ func shareUsers(ctx context.Context, st *store.Store, sealer *crypto.Sealer, syn
 // groups the users page shows its group column, filter and section, and
 // web/e2e/accounts.spec.ts checks that pat cannot share with kim.
 const secondGroup = "Lindqvist Design"
+
+// The demo's storage limits (#397): an instance quota of 1 GiB, and a quota
+// of 512 MiB for the second group, so the Storage page shows both bars.
+const (
+	demoInstanceQuota int64 = 1 << 30
+	demoGroupQuota    int64 = 512 << 20
+)
+
+// demoDisk stands in for the data disk: made-up, fixed figures, so the
+// Storage page shows no figure of the machine the demo runs on and two
+// runs of the docs screenshots give the same image.
+func demoDisk() (free, total uint64, err error) {
+	return 180 << 30, 250 << 30, nil
+}
+
+// demoStorage counts the usage once, as the hourly job would, gives the
+// second group its quota and returns the storage gate the syncs, fills and
+// the web UI ask (#397). It has no disk reserve: the demo's temporary
+// directory shares its disk with everything else.
+func demoStorage(ctx context.Context, st *store.Store, log *slog.Logger) (*quota.Gate, error) {
+	g, err := st.GetGroupByName(ctx, secondGroup)
+	if err != nil {
+		return nil, err
+	}
+	q := demoGroupQuota
+	if _, err := st.SetGroupQuota(ctx, g.ID, &q); err != nil {
+		return nil, err
+	}
+	if _, err := st.RefreshUsage(ctx); err != nil {
+		return nil, err
+	}
+	gate := quota.New(quota.Config{
+		InstanceQuota: demoInstanceQuota,
+		Thresholds:    quota.Thresholds{WarnPercent: config.DefaultStorageWarnPercent, OverflowPercent: config.DefaultStorageSMTPOverflowPercent},
+		Persist:       true,
+	}, st, nil, nil, log)
+	st.SetWriteObserver(gate.Wrote)
+	gate.Refresh(ctx)
+	return gate, nil
+}
 
 // demoGroups creates the second group and moves kim, lee and sam into it.
 // They have no shares, so nothing ends.

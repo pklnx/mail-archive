@@ -24,7 +24,7 @@ import { Add } from "@carbon/icons-react";
 import { ApiKeyItems } from "./ApiKeys";
 import { ApiError, apiKeyApi, usersApi, type ApiKey, type GeneratedPassword, type ManagedUser } from "./api";
 import { AppModal, DangerModal } from "./DangerModal";
-import { relativeTime, shortDate } from "./format";
+import { relativeTime, shortDate, storageSize } from "./format";
 import { t } from "./i18n";
 import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
 import { settingsText } from "./settingsText";
@@ -924,7 +924,7 @@ function GroupsSection({
         </Button>
       </div>
       <p className="app-text-secondary">
-        {us.groupsHelp} {us.groupHasUsers}
+        {us.groupsHelp} {us.groupHasUsers} {us.quotaHelp}
       </p>
       <TableContainer className="users-table app-table">
         <Table aria-label={us.groupsTitle} size="lg" overflowMenuOnHover={false}>
@@ -933,6 +933,7 @@ function GroupsSection({
               <TableHeader>{t.colName}</TableHeader>
               <TableHeader>{us.colUsers}</TableHeader>
               <TableHeader>{t.colAccounts}</TableHeader>
+              <TableHeader className="app-wide-only">{us.colQuota}</TableHeader>
               <TableHeader className="app-wide-only">{s.created}</TableHeader>
               <TableHeader>
                 <span className="cds--visually-hidden">{t.colActions}</span>
@@ -947,6 +948,7 @@ function GroupsSection({
                 </TableHeader>
                 <TableCell className="app-tabular">{g.users}</TableCell>
                 <TableCell className="app-tabular">{g.accounts}</TableCell>
+                <TableCell className="app-wide-only app-tabular">{g.quotaBytes === null ? us.noQuota : storageSize(g.quotaBytes)}</TableCell>
                 <TableCell className="app-wide-only">{shortDate(g.createdAt)}</TableCell>
                 <TableCell className="cds--table-column-menu">{menu(g)}</TableCell>
               </TableRow>

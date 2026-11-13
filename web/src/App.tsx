@@ -15,6 +15,7 @@ import { headerActions, lg, twoPane, useMediaQuery } from "./breakpoints";
 import { noList, pager, type ListNav } from "./pager";
 import { ProductMark } from "./ProductMark";
 import { useAccounts } from "./useAccounts";
+import { useUsage } from "./useUsage";
 import { useFrameFocusClose } from "./useFrameFocusClose";
 import { useCollapsed } from "./sidebarState";
 import { railWidth, useSidebarCap, useSidebarLayout } from "./sidebarLayout";
@@ -30,6 +31,7 @@ import type { Session, SessionGrant, User } from "./api";
 const AccountsPage = lazyNamed(() => import("./AccountsPage"), "AccountsPage");
 const UsersPage = lazyNamed(() => import("./UsersPage"), "UsersPage");
 const RetentionPage = lazyNamed(() => import("./RetentionPage"), "RetentionPage");
+const StoragePage = lazyNamed(() => import("./StoragePage"), "StoragePage");
 const LogPage = lazyNamed(() => import("./LogPage"), "LogPage");
 const ProfilePage = lazyNamed(() => import("./Profile"), "ProfilePage");
 // Auditor access (#393): the owner's page, and the auditor's banner.
@@ -103,6 +105,9 @@ export function App({ user, logout, logoutError, auditor }: Props) {
   // An auditor's account list does not change, and every request of it is
   // a logged read in the owner's Log (#393): it loads once, without polls.
   const accounts = useAccounts(!auditor);
+  // Storage usage and states (#397, part 4): the banner, the account page
+  // and the Storage page. Auditors are refused there.
+  const usage = useUsage(!auditor);
   const collapsed = useCollapsed(user.name, accounts.data);
   // The sidebar's usable maximum follows the mail view's width (#310).
   const [sidebarCap, mailViewRef] = useSidebarCap();
@@ -158,7 +163,7 @@ export function App({ user, logout, logoutError, auditor }: Props) {
     state.view === "profile" ||
     state.view === "log" ||
     (!auditor && (state.view === "accounts" || state.view === "auditors")) ||
-    (user.admin && (state.view === "users" || state.view === "retention"));
+    (user.admin && (state.view === "users" || state.view === "retention" || state.view === "storage"));
   const mailView = !page;
 
   // Previous and next message in list order. Paging replaces the history
@@ -509,9 +514,11 @@ export function App({ user, logout, logoutError, auditor }: Props) {
         )}
         <HealthBanner
           data={accounts.data}
+          usage={auditor ? null : usage.data}
           admin={user.admin}
           openAccounts={() => update({ view: "accounts", m: "" })}
           openUsers={() => update({ view: "users", m: "" })}
+          openStorage={() => update({ view: "storage", m: "" })}
         />
       </div>
       {state.view === "profile" ? (
@@ -532,6 +539,12 @@ export function App({ user, logout, logoutError, auditor }: Props) {
             <RetentionPage />
           </LazyView>
         </main>
+      ) : state.view === "storage" && user.admin ? (
+        <main inert={pageInert} className="app-view">
+          <LazyView key={state.view}>
+            <StoragePage usage={usage} />
+          </LazyView>
+        </main>
       ) : state.view === "auditors" && !auditor ? (
         <main inert={pageInert} className="app-view">
           <LazyView key={state.view}>
@@ -550,6 +563,7 @@ export function App({ user, logout, logoutError, auditor }: Props) {
             <AccountsPage
               admin={user.admin}
               accounts={accounts}
+              usage={usage.data}
               renamed={(from, to) => {
                 collapsed.rename(from, to);
                 if (state.account === from) update({ account: to }, { replace: true });

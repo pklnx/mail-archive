@@ -411,8 +411,10 @@ type StorageUsage struct {
 	// Messages and Bytes are exact (the counters).
 	Messages, Bytes int64
 	// State is the instance's persisted quota state (ok, warn, full,
-	// overflow or disk_low; internal/quota).
-	State string
+	// overflow or disk_low; internal/quota), StateSince when it was
+	// entered.
+	State      string
+	StateSince time.Time
 	// SnapshotAt is when the last snapshot ran; nil before the first.
 	SnapshotAt *time.Time
 	// CounterDrift is the last snapshot's difference in bytes between the
@@ -443,6 +445,9 @@ type GroupUsage struct {
 	QuotaBytes *int64
 	Usage
 	State string
+	// StateSince is when the group entered State; nil before its first
+	// transition (State is then ok).
+	StateSince *time.Time
 	// SnapshotAt is nil before the first snapshot that saw the group.
 	SnapshotAt *time.Time
 }
@@ -476,7 +481,7 @@ func (s *Store) StorageUsage(ctx context.Context) (*StorageUsage, error) {
 	if err != nil {
 		return nil, err
 	}
-	u.State = st.State
+	u.State, u.StateSince = st.State, st.StateSince
 	snap, err := s.q.StorageSnapshot(ctx)
 	if err != nil {
 		return nil, err
@@ -490,29 +495,49 @@ func (s *Store) StorageUsage(ctx context.Context) (*StorageUsage, error) {
 			return nil, fmt.Errorf("storage snapshot relation sizes: %w", err)
 		}
 	}
+	if u.Groups, err = s.GroupsUsage(ctx); err != nil {
+		return nil, err
+	}
+	if u.Accounts, err = s.AccountsUsage(ctx); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// GroupsUsage returns each customer group's usage, quota and persisted
+// state, ordered by name.
+func (s *Store) GroupsUsage(ctx context.Context) ([]GroupUsage, error) {
 	groups, err := s.q.GroupStorageUsage(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var out []GroupUsage
 	for _, g := range groups {
-		u.Groups = append(u.Groups, GroupUsage{
+		out = append(out, GroupUsage{
 			ID: g.ID, Name: g.Name, QuotaBytes: g.QuotaBytes, Usage: Usage{Messages: g.Messages, Bytes: g.Bytes},
-			State: g.State, SnapshotAt: g.ComputedAt,
+			State: g.State, StateSince: g.StateSince, SnapshotAt: g.ComputedAt,
 		})
 	}
+	return out, nil
+}
+
+// AccountsUsage returns each account's usage at the last snapshot, with
+// its owner and group.
+func (s *Store) AccountsUsage(ctx context.Context) ([]AccountUsage, error) {
 	accounts, err := s.q.AccountStorageUsage(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var out []AccountUsage
 	for _, a := range accounts {
-		u.Accounts = append(u.Accounts, AccountUsage{
+		out = append(out, AccountUsage{
 			ID: a.ID, Name: a.Name, Kind: AccountKind(a.Kind), Removed: a.Removed, OwnerID: a.OwnerID,
 			Owner: deref(a.OwnerName), GroupID: a.GroupID,
 			Usage:          Usage{Messages: deref64(a.Messages), Bytes: deref64(a.Bytes)},
 			ExclusiveBytes: deref64(a.ExclusiveBytes), SnapshotAt: a.ComputedAt,
 		})
 	}
-	return &u, nil
+	return out, nil
 }
 
 func deref64(v *int64) int64 {

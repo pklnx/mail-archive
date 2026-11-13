@@ -45,6 +45,9 @@ const en = {
   removeGroupTitle: (group: string) => `Remove “${group}”?`,
   removeGroupText: "The group has no users. This cannot be undone.",
   groupHasUsers: "Groups with users cannot be removed; move them to another group first.",
+  colQuota: "Storage quota",
+  noQuota: "None",
+  quotaHelp: "Quotas are set on the Storage page.",
 };
 
 const de: typeof en = {
@@ -87,6 +90,9 @@ const de: typeof en = {
   removeGroupTitle: (group) => `„${group}“ entfernen?`,
   removeGroupText: "Die Gruppe hat keine Benutzer. Das lässt sich nicht rückgängig machen.",
   groupHasUsers: "Gruppen mit Benutzern lassen sich nicht entfernen; verschiebe sie zuerst in eine andere Gruppe.",
+  colQuota: "Speicherkontingent",
+  noQuota: "Keins",
+  quotaHelp: "Kontingente werden auf der Seite Speicher festgelegt.",
 };
 
 const dictionaries = { en, de } satisfies Record<Lang, typeof en>;

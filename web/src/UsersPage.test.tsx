@@ -20,7 +20,7 @@ function user(name: string, more: Partial<ManagedUser> = {}): ManagedUser {
   };
 }
 
-const defaultGroup: CustomerGroup = { id: 1, name: "Default", users: 4, accounts: 4, createdAt: "2026-09-01T00:00:00Z" };
+const defaultGroup: CustomerGroup = { id: 1, name: "Default", users: 4, accounts: 4, createdAt: "2026-09-01T00:00:00Z", quotaBytes: null, bytes: 0, state: "ok" };
 /** The groups GET /api/groups answers: one, so the group UI is hidden, unless a test sets more (#470). */
 let groups: CustomerGroup[];
 
@@ -567,8 +567,8 @@ describe("UsersPage", () => {
 
 describe("customer groups (#470)", () => {
   const us = usersTextFor("en");
-  const b: CustomerGroup = { id: 2, name: "Meier", users: 2, accounts: 3, createdAt: "2026-10-02T00:00:00Z" };
-  const empty: CustomerGroup = { id: 3, name: "Empty", users: 0, accounts: 0, createdAt: "2026-10-03T00:00:00Z" };
+  const b: CustomerGroup = { id: 2, name: "Meier", users: 2, accounts: 3, createdAt: "2026-10-02T00:00:00Z", quotaBytes: null, bytes: 0, state: "ok" };
+  const empty: CustomerGroup = { id: 3, name: "Empty", users: 0, accounts: 0, createdAt: "2026-10-03T00:00:00Z", quotaBytes: null, bytes: 0, state: "ok" };
   let saved: ManagedUser[];
   beforeEach(() => {
     saved = [...users];
@@ -790,8 +790,19 @@ describe("German", () => {
     }
   });
 
+  it("shows each group's storage quota (#397, part 4)", async () => {
+    groups = [defaultGroup, { id: 2, name: "Meier", users: 0, accounts: 0, createdAt: "2026-10-02T00:00:00Z", quotaBytes: 40 * 1024 ** 3, bytes: 0, state: "ok" }];
+    render(<UsersPage />);
+    const table = await screen.findByRole("table", { name: usersTextFor("en").groupsTitle });
+    expect(within(table).getByRole("columnheader", { name: "Storage quota" })).toBeTruthy();
+    const meier = within(table).getByRole("rowheader", { name: "Meier" }).closest("tr")!;
+    expect(within(meier).getByText("40 GiB")).toBeTruthy();
+    const def = within(table).getByRole("rowheader", { name: "Default" }).closest("tr")!;
+    expect(within(def).getByText("None")).toBeTruthy();
+  });
+
   it("shows the groups in German (#470)", async () => {
-    groups = [defaultGroup, { id: 2, name: "Meier", users: 0, accounts: 0, createdAt: "2026-10-02T00:00:00Z" }];
+    groups = [defaultGroup, { id: 2, name: "Meier", users: 0, accounts: 0, createdAt: "2026-10-02T00:00:00Z", quotaBytes: null, bytes: 0, state: "ok" }];
     applySettings({ language: "de", locale: "de" });
     try {
       const de = messagesFor("de");
@@ -799,6 +810,8 @@ describe("German", () => {
       render(<UsersPage />);
       await screen.findByRole("table", { name: ude.groupsTitle });
       expect(screen.getByRole("columnheader", { name: ude.colGroup })).toBeTruthy();
+      expect(screen.getByRole("columnheader", { name: ude.colQuota })).toBeTruthy();
+      expect(screen.getAllByText(ude.noQuota)).toHaveLength(2);
       expect(screen.getByRole("button", { name: ude.addGroup })).toBeTruthy();
       noEnglish();
       fireEvent.click(screen.getByRole("button", { name: de.userActions("bob") }));
@@ -838,7 +851,7 @@ describe("German", () => {
 
 describe("auditor logins (#393 part 3)", () => {
   const us = usersTextFor("en");
-  const b: CustomerGroup = { id: 2, name: "Meier", users: 1, accounts: 0, createdAt: "2026-10-02T00:00:00Z" };
+  const b: CustomerGroup = { id: 2, name: "Meier", users: 1, accounts: 0, createdAt: "2026-10-02T00:00:00Z", quotaBytes: null, bytes: 0, state: "ok" };
   const auditor = user("stb-meyer", { auditor: true, accounts: 0, twoFactorEnabled: true });
   beforeEach(() => {
     users.push(auditor);

@@ -66,6 +66,7 @@ const views = [
   // The owner's grants (#393).
   { view: "auditors", heading: "Auditor access" },
   { view: "retention", heading: "Retention" },
+  { view: "storage", heading: "Storage" },
   { view: "retention&tab=holds", heading: "Retention" },
   // The demo's one rule.
   { view: "retention&id=1", heading: "/ work /" },
