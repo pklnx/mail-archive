@@ -4,9 +4,25 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test as base, expect, type BrowserContext, type Page, type Route } from "@playwright/test";
 import { origin } from "./demo";
-import { escapeRegExp, formatConsoleError, formatFrameEvents, fromMailFrame, fromWebKitStyleRefusal, isResizeObserverLoop, test, type ConsoleErrorInfo, type FrameEvent, type FrameInfo, type Guards } from "./fixtures";
+import { accessDeniedFetchProblem, refusesFetchDuringNavigation } from "./engine";
+import {
+  escapeRegExp,
+  forgedRefusal,
+  formatConsoleError,
+  formatFrameEvents,
+  fromMailFrame,
+  fromWebKitStyleRefusal,
+  isNavigationFetchRefusal,
+  isResizeObserverLoop,
+  NavigationRefusals,
+  test,
+  type ConsoleErrorInfo,
+  type FrameEvent,
+  type FrameInfo,
+  type Guards,
+} from "./fixtures";
 
 const frame = `${origin}/api/messages/${"ab".repeat(32)}/html`;
 const pixel = "https://tracker.example/pixel.gif";
@@ -372,6 +388,264 @@ base("WebKit's own style refusal line and the ResizeObserver loop are matched ex
   expect(isResizeObserverLoop({ message: loop, stack: "Error: x\n    at f (app.js:1:1)" })).toBe(false);
   expect(isResizeObserverLoop({ message: "ResizeObserver loop limit exceeded" })).toBe(false);
   expect(isResizeObserverLoop({ message: `${loop} ` })).toBe(false);
+});
+
+// WebKit's refusal of a fetch that a document starts while its frame's
+// navigation is in flight (#552), as Playwright's WebKit reports it: the
+// whole line is the first line of the page error's stack.
+const refusal = `Fetch API cannot load ${origin}/api/groups due to access control checks.`;
+
+base("WebKit's fetch refusal is matched exactly, for an /api/ URL of the page's origin only", () => {
+  expect(isNavigationFetchRefusal(refusal, origin)).toBe(true);
+  expect(isNavigationFetchRefusal(`Fetch API cannot load ${origin}/api/messages?q=a%20b&limit=50 due to access control checks.`, origin)).toBe(true);
+  // Another origin: the page's, or the URL's.
+  expect(isNavigationFetchRefusal(refusal, "http://127.0.0.1:18181")).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace(origin, "http://127.0.0.1:18181"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace(origin, `${origin}0`), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace(origin, "https://tracker.example"), origin)).toBe(false);
+  // Another path.
+  expect(isNavigationFetchRefusal(refusal.replace("/api/groups", "/assets/api.js"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace("/api/", "/apix/"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace("/api/groups", "/e2e/api/groups"), origin)).toBe(false);
+  expect(isNavigationFetchRefusal(refusal.replace("/api/groups", "/api/a b"), origin)).toBe(false);
+  // Not exactly the line.
+  for (const line of [`${refusal} `, ` ${refusal}`, `Error: ${refusal}`, `Unhandled Promise Rejection: ${refusal}`, `TypeError: Load failed`, refusal.replace("access control checks", "an access control check")])
+    expect(isNavigationFetchRefusal(line, origin)).toBe(false);
+  expect(isNavigationFetchRefusal(`Origin ${origin} is not allowed by Access-Control-Allow-Origin. Status code: 200`, origin)).toBe(false);
+  // Playwright splits the line at the colon of "http:": neither half is it.
+  expect(isNavigationFetchRefusal(`/localhost:18181/api/groups due to access control checks.`, origin)).toBe(false);
+  expect(isNavigationFetchRefusal("Fetch API cannot load http", origin)).toBe(false);
+  // No stack, or an empty one.
+  expect(isNavigationFetchRefusal(undefined, origin)).toBe(false);
+  expect(isNavigationFetchRefusal("", origin)).toBe(false);
+});
+
+/** A NavigationRefusals and what it reported. */
+function refusals() {
+  const reported: string[] = [];
+  return { n: new NavigationRefusals((p) => reported.push(p)), reported };
+}
+
+base("a refusal during a navigation is accepted once the navigation commits a new document", () => {
+  const { n, reported } = refusals();
+  const request = {};
+  n.navigationRequest(request);
+  expect(n.hold("refused 1")).toBe(true);
+  expect(n.hold("refused 2")).toBe(true);
+  n.frameNavigated();
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual([]);
+  // A redirect's next request keeps the navigation in flight; the first request's end is not the navigation's.
+  const first = {};
+  const next = {};
+  n.navigationRequest(first);
+  n.navigationRequest(next);
+  expect(n.hold("refused 3")).toBe(true);
+  n.requestFailed(first);
+  n.frameNavigated();
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual([]);
+});
+
+base("a refusal is reported when its navigation fails or never commits a new document", () => {
+  // The navigation request fails; another request's failure does not count.
+  let { n, reported } = refusals();
+  const request = {};
+  n.navigationRequest(request);
+  n.hold("refused");
+  n.requestFailed({});
+  expect(reported).toEqual([]);
+  n.requestFailed(request);
+  expect(reported).toEqual(["refused"]);
+  n.frameNavigated();
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual(["refused"]);
+  // The test ends before the commit.
+  ({ n, reported } = refusals());
+  n.navigationRequest({});
+  n.hold("refused");
+  n.end();
+  expect(reported).toEqual(["refused"]);
+  // A framenavigated without a new document after it: a same-document navigation of the old one.
+  ({ n, reported } = refusals());
+  n.navigationRequest({});
+  n.hold("refused");
+  n.frameNavigated();
+  n.end();
+  expect(reported).toEqual(["refused"]);
+  // A domcontentloaded before the commit is not the new document's.
+  ({ n, reported } = refusals());
+  n.navigationRequest({});
+  n.hold("refused");
+  n.domContentLoaded();
+  n.end();
+  expect(reported).toEqual(["refused"]);
+});
+
+base("nothing is held outside a navigation in flight", () => {
+  const { n, reported } = refusals();
+  // Before any navigation.
+  expect(n.hold("x")).toBe(false);
+  // Same-document navigations only: framenavigated without a request.
+  n.frameNavigated();
+  expect(n.hold("x")).toBe(false);
+  n.domContentLoaded();
+  expect(n.hold("x")).toBe(false);
+  // After the commit, before and after the new document's domcontentloaded.
+  n.navigationRequest({});
+  n.frameNavigated();
+  expect(n.hold("x")).toBe(false);
+  n.domContentLoaded();
+  expect(n.hold("x")).toBe(false);
+  // After a failed navigation.
+  const request = {};
+  n.navigationRequest(request);
+  n.requestFailed(request);
+  expect(n.hold("x")).toBe(false);
+  n.end();
+  expect(reported).toEqual([]);
+});
+
+// The browser tests serve a page of the demo origin (the guards abort any
+// other host) whose document requests the test can hold, so a reload stays
+// in flight until the test answers it. Before the page unloads, it runs
+// window.duringNavigation in a task of its own: WebKit fires beforeunload
+// in the same run that makes the navigation provisional and sends its
+// request, so the task runs while the navigation is in flight. (Playwright's
+// evaluate does not reach the old document of a held navigation in
+// Chromium.)
+const navigationURL = `${origin}/e2e/navigation`;
+const navigationHTML = `<!doctype html><title>navigation</title><script>
+addEventListener("beforeunload", () => {
+  const task = window.duringNavigation;
+  if (!task) return;
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => task();
+  channel.port2.postMessage(null);
+});
+</script>`;
+type Navigating = { duringNavigation?: () => void };
+
+/** Opens the navigation page; holdNext() holds the next request for it until the test fulfills it. */
+async function navigationPage(page: Page) {
+  let hold: ((route: Route) => void) | undefined;
+  await page.route(navigationURL, (route) => {
+    if (!hold) return route.fulfill({ contentType: "text/html", body: navigationHTML });
+    hold(route);
+    hold = undefined;
+  });
+  await page.goto(navigationURL);
+  return {
+    holdNext: () => new Promise<Route>((resolve) => (hold = resolve)),
+    fulfill: (route: Route) => route.fulfill({ contentType: "text/html", body: navigationHTML }),
+  };
+}
+
+// The regression test of #552: in WebKit, the guards accept the refusal of
+// a fetch that the old document starts while its reload is in flight. It
+// also checks the order of events the exception depends on. Without the
+// exception, the guards' teardown fails it on the page error.
+test("a fetch that WebKit refuses while a reload is in flight is no problem", async ({ page, context, browserName }) => {
+  const doc = await navigationPage(page);
+  await page.evaluate(() => {
+    (window as Navigating).duringNavigation = () => void fetch("/api/groups").catch(() => undefined);
+  });
+  const order: string[] = [];
+  page.on("request", (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) order.push("navigation request");
+  });
+  page.on("framenavigated", (f) => {
+    if (f === page.mainFrame()) order.push("framenavigated");
+  });
+  page.on("domcontentloaded", () => order.push("domcontentloaded"));
+  context.on("weberror", () => order.push("page error"));
+  const refused = refusesFetchDuringNavigation(browserName);
+  // Registered after the fixture's own listeners, so the fixture has seen
+  // the event when this resolves.
+  const fetched = refused ? context.waitForEvent("weberror").then((e) => e.error().stack?.split("\n")[0]) : page.waitForRequest(`${origin}/api/groups`).then((r) => r.url());
+  const held = doc.holdNext();
+  const reloaded = page.reload();
+  const route = await held;
+  expect(await fetched).toBe(refused ? refusal : `${origin}/api/groups`);
+  await doc.fulfill(route);
+  await reloaded;
+  expect(order).toEqual(refused ? ["navigation request", "page error", "framenavigated", "domcontentloaded"] : ["navigation request", "framenavigated", "domcontentloaded"]);
+});
+
+/** Fetches /api/groups from the page, answered with an access-control failure, then logs the sentinel. */
+async function failFetch(page: Page, context: BrowserContext) {
+  await page.route(`${origin}/api/groups`, (route) => route.abort("accessdenied"));
+  expect(await page.evaluate(() => fetch("/api/groups").then(() => "answered", () => "failed"))).toBe("failed");
+  await page.unroute(`${origin}/api/groups`);
+  await logSentinel(page, context);
+}
+
+test("an access-control failure of a fetch with no navigation still fails the guards", async ({ page, context, guards, browserName }) => {
+  await navigationPage(page);
+  await failFetch(page, context);
+  expect(takeFirstLines(guards)).toContainEqual(accessDeniedFetchProblem(browserName, `${origin}/api/groups`));
+});
+
+test("an access-control failure of a fetch, then a reload, still fails the guards", async ({ page, context, guards, browserName }) => {
+  await navigationPage(page);
+  await failFetch(page, context);
+  await page.reload();
+  await logSentinel(page, context);
+  expect(takeFirstLines(guards)).toContainEqual(accessDeniedFetchProblem(browserName, `${origin}/api/groups`));
+});
+
+test("an access-control failure of a fetch, then a pushState navigation, still fails the guards", async ({ page, context, guards, browserName }) => {
+  await navigationPage(page);
+  await failFetch(page, context);
+  const moved = page.waitForEvent("framenavigated");
+  await page.evaluate(() => history.pushState(null, "", "/e2e/navigation?moved"));
+  await moved;
+  await logSentinel(page, context);
+  expect(takeFirstLines(guards)).toContainEqual(accessDeniedFetchProblem(browserName, `${origin}/api/groups`));
+});
+
+// The page's own code throws the refusal's exact line, with a stack, from a
+// task while a reload is in flight. Chromium: the guards' exception is
+// WebKit's only, so the page error fails the test. WebKit: the guards cannot
+// tell that page error from WebKit's own refusal and accept it (engine
+// fact), so the init script reports the uncaught exception as a console
+// error, which fails the test in both engines. The fetch is the trigger:
+// WebKit refuses it (and accepts that refusal); in Chromium the test answers
+// it once the reload is held.
+test("WebKit's refusal text thrown by the page while a reload is in flight still fails the guards", async ({ page, context, guards, browserName }) => {
+  const doc = await navigationPage(page);
+  await page.evaluate((text) => {
+    const forge = () => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        throw `${text}\n    at forged (${location.origin}/forged.js:1:1)`;
+      };
+      channel.port2.postMessage(null);
+    };
+    (window as Navigating).duringNavigation = () => void fetch("/api/groups").then(forge, forge);
+  }, refusal);
+  const refused = refusesFetchDuringNavigation(browserName);
+  let answer: Promise<Route> | undefined;
+  if (!refused) {
+    let found!: (route: Route) => void;
+    answer = new Promise<Route>((resolve) => (found = resolve));
+    await page.route(`${origin}/api/groups`, (route) => found(route));
+  }
+  const thrown = context.waitForEvent("weberror", { predicate: (e) => e.error().stack?.split("\n")[0] === refusal && (e.error().stack ?? "").includes(" at forged ") });
+  const held = doc.holdNext();
+  const reloaded = page.reload();
+  const route = await held;
+  if (answer) await (await answer).fulfill({ json: [] });
+  await thrown;
+  await doc.fulfill(route);
+  await reloaded;
+  await logSentinel(page, context);
+  const problems = takeFirstLines(guards);
+  expect(problems).toContainEqual(expect.stringMatching(new RegExp(`^console error: ${escapeRegExp(forgedRefusal)}: `)));
+  expect(problems.includes(`page error: ${refusal}`)).toBe(!refused);
 });
 
 // guards.takeProblems() empties the guard, so only the guards' own tests here
