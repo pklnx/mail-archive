@@ -57,12 +57,13 @@ curl -H "Authorization: Bearer $KEY" -o mail.eml http://localhost:8080/api/messa
 curl -X POST -H "Authorization: Bearer $KEY" http://localhost:8080/api/sync
 ```
 
-A key has one or both scopes:
+A key has `read`, `sync` or both, or, for admins, `metrics` alone:
 
 | Scope | Endpoints |
 |---|---|
 | `read` | `GET /api/status`, `GET /api/accounts`, `GET /api/messages` (list and search) and every `GET /api/messages/{id}…` endpoint |
 | `sync` | `POST /api/sync`, `POST /api/accounts/{name}/sync` |
+| `metrics` | `GET /api/metrics` only. Only an admin creates it (`403` for anyone else), and it is the key's only scope (`400` with another). It works while its owner is an admin: a demoted owner's key gets `403`. |
 
 `sync` does not include `read`: a cron job that only starts syncs needs no
 access to mail. Everything else (logins, the profile, users, adding and
@@ -122,7 +123,7 @@ own group only on the command line or through another admin.
 | `POST /api/profile/passkeys/finish` | `{"token", "credential"}` → `201 {"name"}`. `409` for a passkey that is already registered or the limit, `400` for an expired token or a passkey that is not accepted. |
 | `DELETE /api/profile/passkeys/{id}` | Remove an own passkey; all other sessions end. Answers `{"credentialId", "rpId"}` for `PublicKeyCredential.signalUnknownCredential()`. |
 | `GET /api/profile/api-keys` | Own API keys, also revoked and expired ones for 30 days: `{"max", "keys": [{"id", "name", "hint", "scopes", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`. `hint` is the last 4 characters, `state` is `active`, `expired` or `revoked`. |
-| `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope. |
+| `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope or `metrics` with another scope, `403` for `metrics` from a user who is not an admin (before the password is checked). |
 | `DELETE /api/profile/api-keys/{id}` | Revoke an own key (`204`). No password needed. |
 | `PATCH /api/profile` | Change the own web UI settings: `{"language": "de", "locale": "de-AT"}`, one or both. `language` is `auto` or a language code (`de`, `pt-BR`), `locale` is `auto` or a BCP 47 tag for dates and numbers. The UI treats values it has no use for like `auto`. Answers `204`, also when nothing changed; `400` for an empty body, an unknown field or an invalid value. The settings are read from `user` in `GET /api/session`. |
 | `PUT /api/profile/password` | Every user: `{"current": "...", "new": "..."}`. `401` for a wrong current password (counts like a failed login, then `429`), `400` for a new password that is too short or unchanged. Other sessions end. |
@@ -639,6 +640,7 @@ only.
 |---|---|
 | `POST /api/accounts/{name}/sync` | Queue a sync of one account, also a disabled one. Answers `202`. With the body `{"reconcile": true}` the sync also reconciles every folder not reconciled in the last 5 minutes. A sync already waiting is upgraded, not queued twice. `409` for import and removed accounts. |
 | `POST /api/sync` | Queue all enabled IMAP accounts. Answers `202` with `{"queued": n}`. |
+| `GET /api/metrics` | Admins only, with a session or a `metrics` key: the instance's figures in the Prometheus text format 0.0.4 (`text/plain; version=0.0.4`), IDs and counts only, cached for 15 seconds. `403` for other users and for `read` and `sync` keys. The metrics are listed in [Metrics](../guide/operations#metrics). |
 | `GET /api/status` | Messages per account with its `kind`, the last sync or import, `failureStreak`, `health` and `goneMessages`, like `./ma status`. For admins also `jobs`: the [background job](../guide/operations#background-jobs) queue per kind with work that is not done, `[{"kind":"attachment_text","queued":12,"retrying":0,"running":1,"failed":2,"oldestDueSeconds":180,"oldestNewSeconds":180}]` (`oldestNewSeconds` for jobs of new mail); other users do not get it, since it covers every user's mail. |
 
 ## Health checks

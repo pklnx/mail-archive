@@ -65,6 +65,18 @@ type Server struct {
 	healthCache syncHealthCache
 	// jobsHealthCache holds the answer of /healthz/jobs.
 	jobsHealthCache jobsHealthCache
+	// metricsCache holds the answer of /api/metrics.
+	metricsCache metricsCache
+	// version is the binary's version, for /api/metrics.
+	version string
+	// storageQuota is the instance quota in bytes, 0 without one.
+	storageQuota int64
+	// diskUsage measures the data directory's file system; nil leaves the
+	// disk out of /api/metrics.
+	diskUsage func() (free, total uint64, err error)
+	// smtpStorageDeferrals counts the SMTP recipients deferred for
+	// storage since the start; nil counts none.
+	smtpStorageDeferrals func() uint64
 	// trustedProxies may name the client in X-Forwarded-For.
 	trustedProxies []netip.Prefix
 	// retention executes confirmed deletion runs; nil leaves them to the
@@ -141,6 +153,17 @@ type Options struct {
 	// SMTPAuth is MAIL_ARCHIVE_SMTP_AUTH=required: mail servers log in with
 	// an SMTP secret over STARTTLS.
 	SMTPAuth bool
+	// Version is the binary's version, shown in /api/metrics.
+	Version string
+	// StorageQuotaBytes is the instance quota (#397, part 2), 0 without
+	// one, shown in /api/metrics.
+	StorageQuotaBytes int64
+	// DiskUsage measures the data directory's file system for
+	// /api/metrics; nil leaves the disk out.
+	DiskUsage func() (free, total uint64, err error)
+	// SMTPStorageDeferrals counts the SMTP recipients deferred for
+	// storage since the start (#397, part 2), for /api/metrics.
+	SMTPStorageDeferrals func() uint64
 }
 
 // New creates a Server.
@@ -184,6 +207,8 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		checks:     newLoginChecks(),
 		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen, smtpAuth: opts.SMTPAuth,
 		plainHTTPWarned: plainHTTPWarnings(hosts),
+		version:         opts.Version, storageQuota: opts.StorageQuotaBytes, diskUsage: opts.DiskUsage,
+		smtpStorageDeferrals: opts.SMTPStorageDeferrals,
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention

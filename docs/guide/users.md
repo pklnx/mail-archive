@@ -428,6 +428,11 @@ one if it is lost.
   shared with you, download messages and attachments, and see your
   accounts and their status.
 - **sync** lets it start syncs of your accounts.
+- **metrics** (admins only) lets a monitoring system read the instance
+  metrics, `GET /api/metrics`: IDs and counts, no names and no mail. It
+  is a key's only scope; choosing it clears read and sync. It stops working
+  when its owner is no longer an admin. See
+  [Metrics](./operations#metrics).
 
 A key can do nothing else: no logins, no profile or account changes, no
 user management, also for an admin. How to use a key is described in the

@@ -372,10 +372,11 @@ func TestDeletionMarksMigration(t *testing.T) {
 	}
 }
 
-// downDeletionMarksMigration rolls back 00042_deletion_marks, the latest
-// migration.
+// downDeletionMarksMigration rolls back 00043_metrics_key_scope and
+// 00042_deletion_marks.
 func downDeletionMarksMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downMetricsKeyScopeMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00042_deletion_marks") {
 		t.Fatalf("down: %q %v", m, err)
 	}
