@@ -115,7 +115,11 @@ image that cron and the web server use.
 
 cron runs with a minimal `PATH`. If `docker` is not found, add a line such as
 `PATH=/usr/local/bin:/usr/bin:/bin` at the top of the crontab. `sync` exits
-non-zero if any account failed.
+non-zero if any account failed, and with 75 when a
+[storage limit](#paused-at-a-storage-limit) paused it. Without the web
+server, `sync` also writes the storage states and sends their alerts at its
+end, with the other alerts (see
+[Which process writes the states](./operations#how-exact-the-limits-are)).
 
 ## Reconcile
 

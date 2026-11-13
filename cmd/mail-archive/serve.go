@@ -109,7 +109,7 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	warnStorageConfig(ctx, a, log)
 	// After a transition, the notifier's Wake (afterSync) sends the
 	// storage alert at once.
-	storage := serveStorageGate(a, log, afterSync)
+	storage, closeWriter := serveStorageGate(a, log, afterSync)
 	gateDone := make(chan struct{})
 	go func() {
 		storage.Run(ctx)
@@ -118,6 +118,7 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 	defer func() {
 		cancel()
 		<-gateDone
+		closeWriter() // before the store closes
 	}()
 	// Background runs end at a time limit, so that a slow or
 	// silent server cannot hold the only sync or fill worker.

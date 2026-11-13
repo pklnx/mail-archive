@@ -532,7 +532,9 @@ In both modes:
   itself (in `serve` the background read usually comes first): that read
   covers every group, so its time grows with the number of groups and of
   their changes not yet folded, instance-wide, and never depends on which
-  group is asked or on any one group's state.
+  group is asked or on any one group's state, apart from a state change
+  being written: when some group or the instance changes state, the read
+  that writes it takes a few milliseconds more.
 - **The MIME parser sees mail nobody filtered.** Display and search read at
   most 1000 parts, 20 levels of nesting, 1 MiB of top-level header and 256
   MiB of decoded content per message; a message beyond that is stored whole,

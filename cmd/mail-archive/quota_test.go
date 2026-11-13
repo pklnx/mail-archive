@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,5 +172,60 @@ func TestSyncPausedExit(t *testing.T) {
 	out = captureStdout(t, func() { err = runCmd(t, newSyncCmd(), "") })
 	if exitCodeOf(err) != exitPaused || !regexpMatch(`(?m)^work\s+fetched=0\s+new=0\s+paused:`, out) {
 		t.Fatalf("sync while paused: %v\n%s", err, out)
+	}
+}
+
+// A cron setup without the web server: ./ma sync reaches the instance
+// quota, its gate writes the transition (no serve holds the writer lock),
+// and the sync's notifier sends the storage alert at its end.
+func TestSyncSendsStorageAlert(t *testing.T) {
+	user := imapmemserver.NewUser("alice", "pw")
+	imaptest.CreateMailboxes(t, user, "INBOX")
+	for i := range 3 {
+		imaptest.Append(t, user, "INBOX", []byte(fmt.Sprintf("Subject: s%d\r\n\r\nbody %d\r\n", i, i)))
+	}
+	host, port := imaptest.Start(t, user)
+	st, url := storetest.NewWithURL(t)
+	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv("MAIL_ARCHIVE_STORAGE_QUOTA", "1")
+	t.Setenv("MAIL_ARCHIVE_MIN_FREE_DISK", "0")
+	keyStr, _ := crypto.GenerateKey()
+	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	key, _ := crypto.ParseKey(keyStr)
+	sealer, _ := crypto.NewSealer(key)
+	acc := &store.Account{Name: "work", Host: host, Port: port, TLSMode: store.TLSModeNone, Username: "alice", Enabled: true}
+	seal := func(id int64) ([]byte, error) { return archive.SealPassword(sealer, id, "pw") }
+	if err := st.CreateAccountSealed(context.Background(), acc, seal); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu     sync.Mutex
+		events []map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		mu.Lock()
+		defer mu.Unlock()
+		if list, ok := m["storage"].([]any); ok {
+			for _, ev := range list {
+				events = append(events, ev.(map[string]any))
+			}
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", srv.URL)
+
+	var err error
+	captureStdout(t, func() { err = runCmd(t, newSyncCmd(), "") })
+	if exitCodeOf(err) != exitPaused {
+		t.Fatalf("sync: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 || events[0]["level"] != "full" && events[0]["level"] != "overflow" || events[0]["scope"] != "instance" {
+		t.Fatalf("storage events: %v", events)
 	}
 }

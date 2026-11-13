@@ -171,30 +171,46 @@ func TestGroupTransitions(t *testing.T) {
 func ptr(v int64) *int64 { return &v }
 
 // Two processes with different limits (a command run with a newer .env
-// before the web server restarts): only serve's gate persists, so the
-// persisted state follows serve's limits and is never flipped back and
-// forth, while the command's gate decides with its own limits in memory.
+// before the web server restarts): serve holds the storage state writer
+// lock, so only it persists; the persisted state follows serve's limits
+// and is never flipped back and forth, while the command decides with its
+// own limits in memory. Once serve is gone, the command writes.
 func TestGatesWithDifferentLimits(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	ctx := context.Background()
 	admin := connect(t, url)
 	exec(t, admin, `UPDATE storage_counter_base SET bytes = 1500`)
-	serve := newGate(st, quota.Config{InstanceQuota: 1000})
-	cfg := quota.Config{InstanceQuota: 4000, Thresholds: quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}}
-	command := quota.New(cfg, st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	th := quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}
+	serveWriter := st.StorageWriter(true)
+	defer serveWriter.Close()
+	serve := quota.New(quota.Config{InstanceQuota: 1000, Thresholds: th, Persist: true, Writer: serveWriter, ClaimWriter: true},
+		st, nil, nil, quiet)
+	command := quota.New(quota.Config{InstanceQuota: 4000, Thresholds: th, Persist: true, Writer: st.StorageWriter(false)},
+		st, nil, nil, quiet)
+	persisted := func() (string, int64) {
+		t.Helper()
+		var state string
+		var seq int64
+		if err := admin.QueryRow(ctx, `SELECT state, event_seq FROM storage_states WHERE group_id IS NULL`).Scan(&state, &seq); err != nil {
+			t.Fatal(err)
+		}
+		return state, seq
+	}
 	for range 5 {
 		serve.Refresh(ctx)
 		command.Refresh(ctx)
 	}
-	var state string
-	var seq int64
-	if err := admin.QueryRow(ctx, `SELECT state, event_seq FROM storage_states WHERE group_id IS NULL`).Scan(&state, &seq); err != nil {
-		t.Fatal(err)
-	}
-	if state != "overflow" || seq != 1 {
+	if state, seq := persisted(); state != "overflow" || seq != 1 {
 		t.Fatalf("persisted %s with event_seq %d, want overflow after one transition", state, seq)
 	}
 	if serve.State(nil) != quota.Overflow || command.State(nil) != quota.OK {
 		t.Fatalf("serve %s, command %s", serve.State(nil), command.State(nil))
+	}
+	// serve stops: the command writes the state its limits call for.
+	serveWriter.Close()
+	command.Refresh(ctx)
+	if state, seq := persisted(); state != "ok" || seq != 2 {
+		t.Fatalf("without serve: persisted %s with event_seq %d, want ok after a second transition", state, seq)
 	}
 }

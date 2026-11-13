@@ -25,16 +25,30 @@ type Config struct {
 	MinFreeDisk int64
 	// Interval between reads (default DefaultInterval).
 	Interval time.Duration
-	// Persist makes this gate write the transitions its figures call for
-	// (serve). A gate without it (the commands) decides the same states
-	// from the persisted ones and the figures, in memory only: processes
-	// whose limits differ (a command run with a newer .env before the web
-	// server restarts) then never flip the persisted state back and forth,
-	// and every alert comes from one process.
+	// Persist makes this gate write the transitions its figures call for;
+	// without it (tests of a reader) it decides them in memory only. With
+	// Writer set, it writes only while it holds the writer lock.
 	Persist bool
+	// Writer is the storage state writer lock (store.StorageWriter); nil:
+	// no lock, the gate writes whenever Persist is set. serve holds the
+	// lock for its run (ClaimWriter); a command takes it only for a read
+	// that has a transition to write, and only if no serve holds it. So
+	// while serve runs, a command with other limits (a newer .env before
+	// the web server restarts) decides the states in memory and never
+	// flips the persisted state back and forth; without serve, the
+	// commands write the transitions.
+	Writer WriterLock
+	// ClaimWriter makes the gate try to take the writer lock at every
+	// read, and keep it (serve).
+	ClaimWriter bool
 	// OnTransition, if set, is called after this gate persisted a
 	// transition (the notifier's Wake).
 	OnTransition func()
+}
+
+// WriterLock is the storage state writer lock (store.StorageWriter).
+type WriterLock interface {
+	TryLock(ctx context.Context) (unlock func(), ok bool, err error)
 }
 
 // Source is where a gate reads figures and persists transitions: the
@@ -52,13 +66,14 @@ type Source interface {
 // import cannot overshoot between reads; the next read contains them.
 //
 // When a scope's figures call for another state than the persisted one,
-// a gate with Persist (serve) persists the transition from the database
-// figures alone (and statfs, for disk_low): under the row lock of the
-// scope's state, with the figures read again (store.TransitionStorageState).
-// Two gates that see a crossing at once make one transition. Gates without
-// Persist (the commands) decide the same states in memory. The local and
-// pending bytes only make this process pause earlier; they are never
-// persisted.
+// a gate that holds the storage state writer lock (serve for its whole
+// run, a command only while no serve runs; Config.Writer) persists the
+// transition from the database figures alone (and statfs, for disk_low):
+// under the row lock of the scope's state, with the figures read again
+// (store.TransitionStorageState). Two gates that see a crossing at once
+// make one transition. A gate without the lock decides the same states in
+// memory. The local and pending bytes only make this process pause
+// earlier; they are never persisted.
 //
 // The checks themselves (State, Admit) are lookups in memory: their time
 // does not depend on other groups' figures.
@@ -218,14 +233,19 @@ func (g *Gate) refreshLocked(ctx context.Context) {
 		return
 	}
 	free := g.statfs()
+	w := g.writer(ctx)
+	defer w.done()
+	if g.cfg.ClaimWriter {
+		w.may()
+	}
 	inst := scope{state: parseOr(figs.Instance.State, g.log), bytes: figs.Instance.Bytes, quota: g.cfg.InstanceQuota}
-	if next := g.decideInstance(inst.state, inst.bytes, free); next != inst.state && g.cfg.Persist {
+	if next := g.decideInstance(inst.state, inst.bytes, free); next != inst.state && w.may() {
 		inst = g.transition(ctx, nil, inst)
 	}
 	groups := make(map[int64]scope, len(figs.Groups))
 	for _, fg := range figs.Groups {
 		sc := scope{state: parseOr(fg.State, g.log), bytes: fg.Bytes, quota: deref(fg.Quota)}
-		if next := g.decideGroup(sc.state, sc.bytes, sc.quota, figs.Counted); next != sc.state && g.cfg.Persist {
+		if next := g.decideGroup(sc.state, sc.bytes, sc.quota, figs.Counted); next != sc.state && w.may() {
 			sc = g.transition(ctx, fg.Group, sc)
 		}
 		groups[*fg.Group] = sc
@@ -240,6 +260,48 @@ func (g *Gate) refreshLocked(ctx context.Context) {
 		if g.localGroups[id] -= n; g.localGroups[id] <= 0 {
 			delete(g.localGroups, id)
 		}
+	}
+}
+
+// readWriter decides, once per read and only when asked, whether this
+// gate may write transitions: Persist, and the writer lock if there is
+// one.
+type readWriter struct {
+	g       *Gate
+	ctx     context.Context
+	decided bool
+	ok      bool
+	unlock  func()
+}
+
+func (g *Gate) writer(ctx context.Context) *readWriter { return &readWriter{g: g, ctx: ctx} }
+
+func (w *readWriter) may() bool {
+	if w.decided {
+		return w.ok
+	}
+	w.decided = true
+	switch {
+	case !w.g.cfg.Persist:
+	case w.g.cfg.Writer == nil:
+		w.ok = true
+	default:
+		unlock, ok, err := w.g.cfg.Writer.TryLock(w.ctx)
+		if err != nil {
+			w.g.log.Error("storage gate: take the state writer lock", "err", err)
+		}
+		w.ok, w.unlock = ok, unlock
+		if !ok && err == nil {
+			w.g.log.Debug("storage gate: another process writes the states (serve); deciding in memory")
+		}
+	}
+	return w.ok
+}
+
+// done frees a writer lock taken for this read.
+func (w *readWriter) done() {
+	if w.unlock != nil {
+		w.unlock()
 	}
 }
 

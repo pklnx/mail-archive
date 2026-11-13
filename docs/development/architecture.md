@@ -1433,11 +1433,17 @@ are `customer_groups.quota_bytes`, the states `storage_states` (00041).
   it above. The effective state of a group's account is the worst of the
   group's (only with a quota and after the first snapshot), the
   instance's and the disk's.
-- **Transitions** are written only by `serve`'s gate (`Config.Persist`;
-  the commands' gates decide in memory, so a command with other limits
-  cannot flip the persisted state), and wake the notifier
-  (`Config.OnTransition`), which claims them as `storage` alerts (part 3).
-  They come from the database figures alone: under
+- **Transitions** are written by the gate that holds the storage state
+  writer lock (`store.StorageWriter`, a session-level advisory lock):
+  `serve` takes it at its first read and holds it for its run
+  (`Config.ClaimWriter`); a command's gate tries it only for a read with a
+  transition to write, so it writes only while no `serve` runs, and reads
+  once more at its end (`finalStorageRead`). While `serve` runs, the
+  commands decide in memory, so a command with other limits cannot flip
+  the persisted state. `serve`'s gate wakes the notifier after each
+  transition (`Config.OnTransition`); without `serve`, `./ma sync` sends
+  the `storage` alerts (part 3) at its end. They come from the database
+  figures alone: under
   `SELECT … FROM storage_states … FOR UPDATE` the scope's figures are read
   again (and `statfs` for the instance), and the row is updated with
   `state_since` and `event_seq + 1` only if the state changes. Event IDs are

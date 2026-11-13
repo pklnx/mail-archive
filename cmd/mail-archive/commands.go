@@ -916,6 +916,9 @@ failing, and their recovery, are sent at the end.`,
 				return err
 			}
 			results, err := syncer.SyncAll(cmd.Context(), only, owner, archive.SyncOptions{Reconcile: reconcile})
+			// A last read writes the transitions this run caused (without
+			// serve), so that the alerts below and ./ma usage show them.
+			finalStorageRead(cmd.Context(), syncer.Storage)
 			deliverAfterSync(cmd.Context(), newNotifier(a, log), log)
 			failed, paused := 0, 0
 			for _, r := range results {

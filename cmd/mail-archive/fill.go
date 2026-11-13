@@ -507,6 +507,7 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 		},
 	}
 	fill, err := filler.RunLocked(ctx, id)
+	finalStorageRead(ctx, filler.Storage)
 	if errors.Is(err, archive.ErrFillSkipped) {
 		fmt.Fprintf(out, "%q is disabled: the web server runs the fill once it is enabled\n", acc.Name)
 		return nil

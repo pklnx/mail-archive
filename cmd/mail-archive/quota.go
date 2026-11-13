@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -25,21 +26,25 @@ import (
 const exitPaused = 75
 
 // newStorageGate returns a command's storage gate and makes every save of
-// the store tell it what it stored. It decides the states in memory and
-// never persists a transition: serve does (serveStorageGate), so that a
-// command run with other limits (a newer .env before the web server
-// restarts) cannot flip the persisted state and send an alert each time.
+// the store tell it what it stored. It writes a transition only while no
+// serve runs (the storage state writer lock, store.StorageWriter): with
+// serve running, a command run with other limits (a newer .env before the
+// web server restarts) decides in memory and cannot flip the persisted
+// state and send an alert each time; without serve (cron), the commands
+// write the transitions and ./ma sync sends the alerts at its end.
 func newStorageGate(a *app, log *slog.Logger) *quota.Gate {
-	return storageGate(a, log, false, nil)
+	return storageGate(a, log, a.store.StorageWriter(false), false, nil)
 }
 
-// serveStorageGate is serve's gate: it persists the transitions and calls
-// onTransition (the notifier's Wake) after each.
-func serveStorageGate(a *app, log *slog.Logger, onTransition func()) *quota.Gate {
-	return storageGate(a, log, true, onTransition)
+// serveStorageGate is serve's gate: it takes the writer lock at its first
+// read and holds it for the run (close frees it), writes the transitions
+// and calls onTransition (the notifier's Wake) after each.
+func serveStorageGate(a *app, log *slog.Logger, onTransition func()) (g *quota.Gate, closeWriter func()) {
+	w := a.store.StorageWriter(true)
+	return storageGate(a, log, w, true, onTransition), w.Close
 }
 
-func storageGate(a *app, log *slog.Logger, persist bool, onTransition func()) *quota.Gate {
+func storageGate(a *app, log *slog.Logger, w *store.StorageWriter, claim bool, onTransition func()) *quota.Gate {
 	s := a.cfg.Storage
 	dir := a.cfg.DataDir
 	free := func() (int64, error) {
@@ -49,10 +54,24 @@ func storageGate(a *app, log *slog.Logger, persist bool, onTransition func()) *q
 	g := quota.New(quota.Config{
 		InstanceQuota: s.Quota, MinFreeDisk: s.MinFreeDisk,
 		Thresholds: quota.Thresholds{WarnPercent: s.WarnPercent, OverflowPercent: s.OverflowPercent},
-		Persist:    persist, OnTransition: onTransition,
+		Persist:    true, Writer: w, ClaimWriter: claim, OnTransition: onTransition,
 	}, a.store, free, nil, log)
 	a.store.SetWriteObserver(g.Wrote)
 	return g
+}
+
+// finalStorageRead reads the figures once more at the end of a command:
+// the gate reads only every 10 seconds, so without it the transitions a
+// short run caused (a pause, a new warn) would not be written while no
+// serve runs, and ./ma sync's alerts at its end would miss them. With
+// serve running, serve writes them within 10 seconds instead.
+func finalStorageRead(ctx context.Context, g *quota.Gate) {
+	if g == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	g.Refresh(rctx)
 }
 
 // warnStorageConfig logs at start what the storage settings mean, and

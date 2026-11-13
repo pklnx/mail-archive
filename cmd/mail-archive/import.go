@@ -166,6 +166,7 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 		return err
 	}
 	res, err := im.Import(ctx, acc, folders)
+	finalStorageRead(ctx, im.Storage)
 	if errors.Is(err, archive.ErrSyncRunning) {
 		return fmt.Errorf("an import into %q is already running", acc.Name)
 	}
@@ -265,6 +266,7 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 		},
 	}
 	res, err := im.ImportJournal(ctx, acc, imp, folders)
+	finalStorageRead(ctx, im.Storage)
 	switch {
 	case errors.Is(err, archive.ErrSyncRunning):
 		return fmt.Errorf("the account %q is being filled, imported into or removed; try again later", acc.Name)

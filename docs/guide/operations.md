@@ -954,7 +954,7 @@ migrations; the one-time steps of those versions are in the
 | A version without deletion marks per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration only adds an empty table and is quick; it neither reads nor rewrites existing rows. Deliveries, syncs and search go on; retention runs and purges wait at most a moment while it adds its foreign keys (to `deleted_messages`, `deletion_runs` and `account_purges`). From then on a retention run marks every deleted message with the accounts and customer groups that held it, and a purge every purged message with the account and its group, so a deleted message is skipped only there (see [Deletion](../reference/cli#deletion) and [Security](../reference/security#login)). Deletions recorded before need no step: they count as deleted in every group that holds no copy. A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its syncs, fills and deliveries skip and store messages as before, and its retention runs and purges record their deletions without accounts and groups, so these count in every group, and a purge of a message that another account keeps is not recorded at all. Rolling back the migration drops the marks: every recorded deletion counts in every group again, and messages purged while another account kept them are archived again. |
 | A version without SMTP login (before 1.6.0) | Only with the SMTP server on (`MAIL_ARCHIVE_SMTP_LISTEN` set). `MAIL_ARCHIVE_SMTP_AUTH=required` is the new default: mail servers log in with an [SMTP secret](../reference/cli#smtp-secrets) over `STARTTLS`, and without `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY` the web server and every `./ma` command refuse to start, naming the variable. Add `MAIL_ARCHIVE_SMTP_AUTH=off` to `.env` **before** the upgrade: a setup that relies on the allowlist alone, such as a Postfix on the same host, then keeps working unchanged. To move to logins afterwards, in this order: upgrade with `off`; create a secret per smtp account (`./ma account smtp-secret NAME --new`, which needs the new version's migration); change the mail server ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)); put the certificate in place ([SMTP certificate](#smtp-certificate)); remove `off` from `.env` and run `docker compose up -d web`. A setup that already has a certificate starts in `required` mode and answers `451` to mail servers that do not log in yet: their copies wait in the queue (5 days by default) until they log in or `off` is set. The SMTP server now takes 16 connections at once instead of 10. |
 | A version without storage usage (before 1.6.0) | Nothing to run. The migration adds the storage counters and an index over the hashes and sizes of the messages, and holds back every write of messages (syncs, SMTP deliveries, fills, imports, `reindex`) until it is done; searches and reads go on. It reads the message table once, from disk if it is not in memory. Measured on PostgreSQL 16 with 2 cores and 300,000 messages (511 MB of message rows): about 0.6 seconds with the rows in memory, about 4.5 seconds with them on disk (138 MB/s); for 1,500,000 messages (about 2.6 GB) expect about 3 seconds in memory and 20 to 30 seconds from disk. `serve` and `worker` migrate before they work (`serve` answers `503` until then); a separate worker or a `./ma sync` from cron waits for the migration. With a large archive, stop the worker before the upgrade (`docker compose stop worker`). After the upgrade, `./ma usage` shows the groups and accounts as `-` until the background jobs of `serve` or `worker` have taken the first snapshot, soon after their start. Rolling the migration back (`./ma migrate down`) drops the storage figures and the group quotas. |
-| A version without storage quotas (before 1.6.0) | Nothing to run. The disk reserve is on by default: while the file system of `MAIL_ARCHIVE_DATA_DIR` has less than 1 GiB free (`MAIL_ARCHIVE_MIN_FREE_DISK`), syncs, fills and imports pause and the SMTP server defers new mail with `452` instead of failing on a full disk. Set `MAIL_ARCHIVE_MIN_FREE_DISK=0` to turn it off. Quotas apply only once you set them (`MAIL_ARCHIVE_STORAGE_QUOTA`, `./ma group set-quota`); see [Storage and quotas](#storage-and-quotas). Scripts that run `./ma sync` or `./ma import` should treat exit code 75 as "paused", not as a failure. |
+| A version without storage quotas (before 1.6.0) | Nothing to run. The disk reserve is on by default: while the file system of `MAIL_ARCHIVE_DATA_DIR` has less than 1 GiB free (`MAIL_ARCHIVE_MIN_FREE_DISK`), syncs, fills and imports pause and the SMTP server defers new mail with `452` instead of failing on a full disk. Set `MAIL_ARCHIVE_MIN_FREE_DISK=0` to turn it off. Quotas apply only once you set them (`MAIL_ARCHIVE_STORAGE_QUOTA`, `./ma group set-quota`); see [Storage and quotas](#storage-and-quotas). Scripts that run `./ma sync` or `./ma import` should treat exit code 75 as "paused", not as a failure. Storage states and their alerts come from `serve`; a cron setup without it gets them from `./ma sync` (see [Which process writes the states](#how-exact-the-limits-are)). |
 | A version without customer groups | Nothing to run. The migration puts every user, and with them every account, into one group, `Default`; existing shares stay. It adds a column and an index on the audit log, which every existing entry leaves empty: like the shared accounts index below, building it reads every partition and holds back audit log writes until it is done, about 0.1 seconds per 1,000,000 entries with the log in memory. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). For a shared instance, create a group per customer afterwards and move its users (see [Customer groups](./users#customer-groups)). Rolling back the migration refuses while more than one group exists. |
 | A version without attachment search | Nothing to run. The migration only adds two empty tables and is quick; it neither reads nor rewrites the message rows, so deliveries and syncs go on (they wait at most a moment while it adds its foreign keys). Afterwards the web server, or the worker service if you run it, extracts the text of PDF and text attachments of older messages in the background, one message at a time and newest first, and logs at start how many are pending; new mail becomes searchable shortly after it is stored. About 17 ms per message with a typical PDF invoice (26 ms on average over a test corpus of 1,412 varied PDFs), and about 52 MB of database space per 10,000 PDFs with 3.5 KB of text each. `./ma reindex` does the same at once in the foreground; it can run while the web server and syncs run, and can be interrupted and run again. Installations without the web server, which run only `./ma sync` or `./ma import` from cron, get attachment text only from `./ma reindex` or from the worker service: run it after those commands, for example in the same cron job. While it extracts, the process needs up to 224 MiB more memory per worker (see [Hardware and budgets](#hardware-and-budgets)), and the first PDF after a start takes about 3 seconds once (see [Security](../reference/security#the-smtp-server)). Message rows are not rewritten, so no `VACUUM` is needed. With [legal holds](./retention#legal-holds) that use a search filter, run `./ma reindex` before relying on them over attachment text: the background extraction goes newest first, so the oldest mail, which retention deletes first, is extracted last. |
 | A version without shared accounts | Nothing to run. The migration adds an empty table and an index on the audit log. Building the index reads every partition of the audit log and holds back audit log writes until it is done, and with them the web server's reads and logins: about 0.1 seconds for 1,000,000 entries (253 MB) on PostgreSQL 18 with the log in memory, longer when it has to be read from disk. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). |
@@ -1174,16 +1174,27 @@ every 10 seconds, in one statement, and adds what it stored since. A sync,
 fill or import counts each message as soon as it is written, before its
 batch is saved, so it stops within one message of a limit. Messages the
 group already holds count only until their batch is saved, and a refusal
-they cause saves the batch and asks again, so known mail never pauses a
-sync or an import (a fill waits for the next check, a minute later).
+they cause saves the batch and asks again, so a sync's or an import's own
+known mail never pauses it (a fill waits for the next check, a minute
+later). This holds per writer: another writer's files that are not saved
+yet, in the same process (in `serve`, a fill next to a sync) and near a
+limit, can pause a sync or import once, early, never late; the next run
+goes on.
 
-Only `serve` persists the states, from the database figures alone, under a
-row lock; they are logged as `storage state changed`, and each transition
-is a [storage alert](#monitoring-and-alerts). The commands decide the same
-states in memory from the persisted ones and the figures, with their own
-settings. So a command run with a changed `.env` before `serve` restarts
-pauses by its own limits but never changes the persisted state or sends
-an alert.
+**Which process writes the states.** One process at a time writes the
+states, from the database figures alone, under a row lock; it logs each
+transition as `storage state changed`, and each transition is a
+[storage alert](#storage-alerts). `serve` takes this role (an advisory lock,
+the storage state writer) at its first read and keeps it while it runs,
+and wakes its notifier after each transition, so the alert goes out at
+once. A command (`./ma sync`, `./ma import`, `./ma account fill`) writes
+the states only while no `serve` runs, at its reads every 10 seconds and
+once more at its end; `./ma sync` then sends the alerts at its end, the
+others leave them to the next `./ma sync` or `serve`. While `serve` runs,
+the commands decide the same states in memory from the persisted ones and
+the figures, with their own settings: a command run with a changed `.env`
+before `serve` restarts pauses by its own limits but never changes the
+persisted state or sends an alert.
 
 - **The instance** figure is exact at all times. A process stops at most
   one message past the quota, plus what other processes stored in the last
@@ -1493,7 +1504,10 @@ things make it visible:
 
 Set the URL in `.env` and restart the web server
 (`docker compose up -d web`). Alerts are sent by the web server, and at the
-end of `./ma sync`, so a cron setup without the web server gets them too.
+end of `./ma sync`, so a cron setup without the web server gets them too,
+storage alerts included: without the web server, the commands write the
+storage transitions and `./ma sync` sends them at its end (an import or a
+fill run by hand leaves its transitions to the next `./ma sync`).
 Check the settings with:
 
 ```sh
@@ -1662,8 +1676,12 @@ and `warn` again are three messages with three IDs. Changes that follow
 each other faster than they can be sent go out once, with the latest
 state. A group that is deleted takes its pending alert with it. With ntfy a
 level other than `ok` has the priority `high` and the tag `warning`.
-`./ma usage --json` shows which group an ID is. The storage quota checks
-write the states; while every state stays `ok`, no storage alert is sent.
+`./ma usage --json` shows which group an ID is. The process that writes the
+states (`serve`, or without it `./ma sync`, `./ma import` and
+`./ma account fill`; see [Which process writes the states](#how-exact-the-limits-are))
+writes the transitions; `serve` sends their alerts at once, and without it
+`./ma sync` sends them at its end. While every state stays `ok`, no storage
+alert is sent.
 
 Alerts are delivered **at least once**: if the server stops right after the
 receiver accepted a message, it is sent again with the same `id`. ntfy,
