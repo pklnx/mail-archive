@@ -1159,6 +1159,9 @@ schedule syncs it next ("due" when that has passed). HEALTH is "ok",
 server's queue, so an account waiting there may show "stale" here while the
 web UI shows it as queued.
 
+Without --user, a line shows the storage of the instance: unique messages
+and their bytes ("usage" shows them per group and account).
+
 A line counts the background jobs per kind (such as attachment text):
 queued (with how long the oldest has been due), retrying, running and
 failed; "jobs retry KIND" queues failed ones again. The last line shows
@@ -1234,6 +1237,11 @@ encryption at rest: on, off, or an unfinished "encryption enable" or
 				fmt.Printf("\nunique messages of this user: %d\n", unique)
 			} else {
 				fmt.Printf("\nunique messages in archive: %d\n", unique)
+				line, err := storageStatus(cmd.Context(), a)
+				if err != nil {
+					return err
+				}
+				fmt.Println(line)
 			}
 			line, err := attestStatus(cmd.Context(), a, time.Now())
 			if err != nil {

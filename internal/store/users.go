@@ -158,8 +158,21 @@ func createUser(ctx context.Context, q *db.Queries, nu NewUser) (*User, error) {
 		if nu.Auditor {
 			return nil, ErrFirstUserAuditor
 		}
-		if _, err := q.AdoptUnownedAccounts(ctx, &u.ID); err != nil {
+		// The unowned accounts are locked first: the adoption waits for
+		// saves in flight into them (lockAccountGroup). Adopted accounts
+		// leave "Without group" for the user's group: a snapshot moves
+		// their bytes.
+		if _, err := q.LockUnownedAccounts(ctx); err != nil {
 			return nil, err
+		}
+		adopted, err := q.AdoptUnownedAccounts(ctx, &u.ID)
+		if err != nil {
+			return nil, err
+		}
+		if adopted > 0 {
+			if err := requestUsageRefresh(ctx, q); err != nil {
+				return nil, err
+			}
 		}
 		if state {
 			if _, err := q.CompleteSetup(ctx, u.ID); err != nil {

@@ -140,3 +140,24 @@ func (s *Store) AttachmentSnippetsOf(ctx context.Context, sc Scope, query string
 		Query: &query, Accounts: sc.ids(), ScopeAllFolderAccounts: all, ScopeFolderAccounts: folderAccounts, ScopeFolders: folders,
 	}, shas, rows)
 }
+
+// RequestUsageRefreshInTxForTest requests a usage snapshot in tx, as a
+// move or a purge does in its own transaction: the test keeps tx open to
+// play a requester that commits late (#397, part 1).
+func RequestUsageRefreshInTxForTest(ctx context.Context, tx pgx.Tx) error {
+	return requestUsageRefresh(ctx, db.New(tx))
+}
+
+// FoldStorageInTxForTest takes the storage lock in tx and folds there, as
+// storage_fold does, so that the test decides when the fold commits.
+func FoldStorageInTxForTest(ctx context.Context, tx pgx.Tx) error {
+	q := db.New(tx)
+	if err := q.LockStorageXact(ctx, storageLockClass); err != nil {
+		return err
+	}
+	_, _, err := foldStorage(ctx, q)
+	return err
+}
+
+// StorageLockClassForTest is the first key of the storage lock.
+const StorageLockClassForTest = storageLockClass

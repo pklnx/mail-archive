@@ -807,6 +807,11 @@ func reconcileRestored(ctx context.Context, a *app, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("reconcile encryption at rest after the restore: %w", err)
 	}
+	// The restored usage figures are those of the dump's snapshot: the
+	// next job pool takes a new one.
+	if err := a.store.RequestUsageRefresh(ctx); err != nil {
+		return fmt.Errorf("request a usage snapshot after the restore: %w", err)
+	}
 	if !rep.Derived {
 		fmt.Fprintf(out, "next: `%s migrate`, then `%s attest` if attestations are on, then `%s sync` and `%s verify`\n",
 			commandName(), commandName(), commandName(), commandName())

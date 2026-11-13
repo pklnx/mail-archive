@@ -698,8 +698,9 @@ func (s *Store) CheckPurgeCount(ctx context.Context, purgeID int64) error {
 // transaction it re-checks the account, its rules and the holds naming it
 // (as PurgeBatch does; deleting the account would drop its rules), deletes
 // its folders and the account row with everything that belongs to it,
-// and marks the purge done. The account's name is free again. An audit
-// entry from WithAudit in ctx is written with it.
+// and marks the purge done. The account's name is free again. It requests
+// a usage snapshot (requestUsageRefresh). An audit entry from WithAudit in
+// ctx is written with it.
 func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, error) {
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		if err := q.LockRetentionChanges(ctx, retentionLockClass); err != nil {
@@ -736,6 +737,10 @@ func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, 
 		if err := one(q.FinishAccountPurge(ctx, purgeID)); err != nil {
 			return err
 		}
+		// The group's figure drops only at a snapshot.
+		if err := requestUsageRefresh(ctx, q); err != nil {
+			return err
+		}
 		if e := auditFrom(ctx); e != nil {
 			r, err := q.GetAccountPurge(ctx, purgeID)
 			if err != nil {
@@ -759,9 +764,9 @@ func (s *Store) FinishPurge(ctx context.Context, purgeID int64) (*AccountPurge, 
 
 // CancelPurge cancels a confirmed purge, with a note on why. What its
 // batches deleted stays deleted; the account stays removed, with the mail
-// that is left. Unknown IDs are ErrNotFound, a purge that is not confirmed
-// is ErrPurgeState. An audit entry from WithAudit in ctx is written with
-// it.
+// that is left, and a usage snapshot is requested. Unknown IDs are
+// ErrNotFound, a purge that is not confirmed is ErrPurgeState. An audit
+// entry from WithAudit in ctx is written with it.
 func (s *Store) CancelPurge(ctx context.Context, purgeID int64, note string) error {
 	note = strings.TrimSpace(note)
 	if note == "" {
@@ -781,6 +786,10 @@ func (s *Store) CancelPurge(ctx context.Context, purgeID int64, note string) err
 		}
 		if n == 0 {
 			return fmt.Errorf("purge %d is %s and cannot be cancelled: %w", purgeID, r.State, ErrPurgeState)
+		}
+		// What its batches deleted leaves the group's figure at a snapshot.
+		if err := requestUsageRefresh(ctx, q); err != nil {
+			return err
 		}
 		if e := auditFrom(ctx); e != nil {
 			setPurgeTarget(e, r.AccountID, r.AccountName)

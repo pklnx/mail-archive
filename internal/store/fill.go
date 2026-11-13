@@ -493,6 +493,10 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
+		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
+		if err != nil {
+			return err
+		}
 		folder, err := q.LockFolderByID(ctx, folderID)
 		if err != nil {
 			return fmt.Errorf("lock folder: %w", err)
@@ -509,7 +513,10 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 			meta *MessageMeta
 			loc  Location
 		}
-		var add []pending
+		var (
+			add   []pending
+			added []*MessageMeta
+		)
 		seen := map[string]bool{}
 		for i := range metas {
 			m := &metas[i]
@@ -536,6 +543,7 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 			if !held[m.SHA256] {
 				held[m.SHA256] = true
 				res.Added++
+				added = append(added, m)
 			}
 			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
 				return err
@@ -568,6 +576,9 @@ func (s *Store) saveIntoJournal(ctx context.Context, folderID int64, folderName 
 					return fmt.Errorf("insert location: %w", err)
 				}
 			}
+		}
+		if err := recordGroupUsage(ctx, q, group, added); err != nil {
+			return err
 		}
 		if done != nil {
 			return done(q, res, present)
