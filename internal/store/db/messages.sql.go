@@ -386,32 +386,39 @@ func (q *Queries) SetIndexData(ctx context.Context, arg SetIndexDataParams) (int
 	return result.RowsAffected(), nil
 }
 
-const upsertLocation = `-- name: UpsertLocation :exec
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date)
-VALUES ($1, $2, $3, $4, $5, $6)
+const upsertLocation = `-- name: UpsertLocation :one
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, attachment_text_ok)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (folder_id, uidvalidity, uid)
 DO UPDATE SET flags = EXCLUDED.flags, last_seen_at = now(), gone_at = NULL
+RETURNING (xmax = 0)::boolean AS inserted
 `
 
 type UpsertLocationParams struct {
-	MessageSha256 string
-	FolderID      int64
-	Uidvalidity   int64
-	Uid           int64
-	Flags         []string
-	InternalDate  *time.Time
+	MessageSha256    string
+	FolderID         int64
+	Uidvalidity      int64
+	Uid              int64
+	Flags            []string
+	InternalDate     *time.Time
+	AttachmentTextOk bool
 }
 
 // A location stored again (a UIDVALIDITY that returned to an old value) is
-// on the server again.
-func (q *Queries) UpsertLocation(ctx context.Context, arg UpsertLocationParams) error {
-	_, err := q.db.Exec(ctx, upsertLocation,
+// on the server again. It keeps its attachment_text_ok: the conflict
+// never changes the message (store/attachmentflag.go decides the flag of
+// a new one). Returns whether the location is new.
+func (q *Queries) UpsertLocation(ctx context.Context, arg UpsertLocationParams) (bool, error) {
+	row := q.db.QueryRow(ctx, upsertLocation,
 		arg.MessageSha256,
 		arg.FolderID,
 		arg.Uidvalidity,
 		arg.Uid,
 		arg.Flags,
 		arg.InternalDate,
+		arg.AttachmentTextOk,
 	)
-	return err
+	var inserted bool
+	err := row.Scan(&inserted)
+	return inserted, err
 }

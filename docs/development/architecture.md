@@ -53,7 +53,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `accounts` | Account: `kind` (`imap`, or `import` for mail from files), owner (`owner_id`), server, login, encrypted password, folder filters, `enabled`, `removed_at`. Names are unique per owner. Import accounts have port 0 and are never enabled; check constraints enforce both. |
 | `folders` | Folder of an account, with its `UIDVALIDITY`, last archived UID, last sync time and `last_reconciled_at`. |
 | `messages` | Unique message content (by SHA-256): size, subject, sender, recipients, date, path of the file, body text and search vector, attachment names, the links to other messages (`in_reply_to`, `reference_ids`, `thread_id`) and `index_version`. |
-| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. `fill_id` names the fill that imported a location into an smtp account (`NULL` otherwise). |
+| `message_locations` | Place where a message was seen: folder, `UIDVALIDITY`, UID, flags, internal date, `last_seen_at`, and `gone_at` once a reconcile found it missing on the server. `fill_id` names the fill that imported a location into an smtp account (`NULL` otherwise). `attachment_text_ok`: whether the location shows its message's attachment text in search (see [Attachment text per location](#attachment-text-per-location)). |
 | `smtp_fills` | Fill of an smtp account from an IMAP mailbox: server, login, the password (encrypted, only while it runs or keeps running), folder filters, the cut-off of a one-time fill, status. A recurring fill has `recurring_since`, `keep_running`, its own `interval_seconds` (`NULL` for the server's), `run_started_at` and the trash and spam folders its last run skipped (`unconfirmed_folders`). `folder_prefix` is set only for fills from before fills wrote into `JOURNAL`. One running fill per account (partial unique index). |
 | `smtp_fill_folders` | A fill's progress in one IMAP folder: the server's `UIDVALIDITY` and last UID, the archive folder it writes into, `done`, the counts (of the last run for a recurring fill, `waiting` included) and the error. |
 | `smtp_fill_health` | The failure streak of a recurring fill and what the notifier last announced about it, like `account_sync_health` for IMAP accounts. |
@@ -1228,7 +1228,10 @@ copies in `queries/search.sql`) then also matches `m.sha256 = ANY
 matches, `att_walk` checks each walked message's attachments through
 `attachment_texts_pkey` instead, as `to_walk` does for envelopes. So a
 match is per document: all words in the message, or all in one attachment,
-negations included. There are no trigram indexes on attachment text, so it
+negations included. Both arms, and `AttachmentSnippets`, match only through
+a location of the scope whose `attachment_text_ok` is set (see
+[Attachment text per location](#attachment-text-per-location)); a filter
+hold matches as its owner (`OwnerScope`), so the owner's locations decide. There are no trigram indexes on attachment text, so it
 matches words, not substrings.
 
 Both listing queries also return `text_match`: the query arm without its
@@ -1241,14 +1244,21 @@ attachment as `matchedAttachment`.
 
 The text is extracted by two job kinds (`internal/archive/attachments.go`):
 - **`attachment_text`** (key and `message_sha256` = the message,
-  `MaxAttempts` 3, the crash-loop guard). The three insert sites (sync and
-  import, fills, SMTP) enqueue it with `PriorityNew` in the transaction that
-  inserts a new row with `has_attachment`. The handler skips a message that
-  is done, reads its file, runs `attachtext.Extractor.Message` and writes
-  the state and the texts in one transaction with a conditional
-  `MarkAttachmentsIndexed`: the second of two writers changes nothing. An
-  unreadable file is done without text; a message deleted meanwhile is
-  done (foreign key error). Extraction results (a damaged PDF, a timeout,
+  `MaxAttempts` 3, the crash-loop guard). The insert sites (sync and
+  import, fills, SMTP, the conversion of old fills) enqueue it with
+  `PriorityNew` and `RequeueIfRunning` in the transaction that inserts a
+  location with `attachment_text_ok` false. The handler first reads the
+  message's locations with the flag false (`needed`) and ends when the
+  message is done and none is needed; otherwise it reads the file, runs
+  `attachtext.Extractor.Message` (also for a done message) and in one
+  transaction sets the flag on `needed` (the locations first, in id order,
+  as a deletion locks them before the message) and writes the state and
+  the texts with a conditional `MarkAttachmentsIndexed`: the second of two
+  writers stores no texts. An unreadable file marks a message that is not
+  done as done without text and sets the flags, as it does for a done
+  message without searchable text; a done message with searchable text
+  fails at once with `message file unreadable`. A message deleted
+  meanwhile is done (foreign key error). Extraction results (a damaged PDF, a timeout,
   a password) are statuses, not errors; a PDF module that did not compile
   in the process fails the job at once with `extractor unavailable`. PDFs wait for their turn (one per process) without using up the message's 60 s, and one whose caller's deadline passes while it waits is retried (`pdf busy`), not stored as `timeout`.
 - **`attachment_backfill`** (key `v<AttachmentIndexVersion>`, priority
@@ -1267,6 +1277,82 @@ Neither ever writes a `messages` row. `reindex` enqueues the backfill and
 runs a pool of the two kinds with `UntilIdle` until none is due. Raising
 `AttachmentIndexVersion` extracts everything again: the backfill gets a new
 key, and its enqueues then need `RetryFailed`.
+
+### Attachment text per location
+
+Since 1.6.0 (#539, part 2; migration 00044), whether a customer group can
+search a message's attachment text does not depend on what other groups
+hold. The texts stay one set per message; each location has
+`attachment_text_ok`, and a location shows them only when it is set
+(`store/attachmentflag.go`). It is set when
+
+- an extraction started after the location existed: the job reads
+  `needed` at its start and sets it on those ids at its end, whatever group
+  the location is in by then; or
+- at its insert, the location's group (the account owner's; 0 for accounts
+  without an owner) already had a location of the message with the flag
+  set, or the message has no attachment.
+
+Nothing else sets it, and no move touches it: `SetUserGroup`,
+`SetAccountOwner` and the adoption carry it with the locations. The insert
+check runs only for messages whose row existed before the save
+(`MessagesWithAttachment`, by primary key) and that have an attachment.
+`GroupAttachmentTextOK` then probes the group's own folders with the shape
+of #446's `GroupHeldMessages`: one equality probe per folder and hash on
+`message_locations_folder_sha_idx`, fenced by `LIMIT 1` (and `OFFSET 0` on
+the folder list), so neither the custom nor the generic plan looks a hash
+up over the whole archive (`message_locations_sha_idx`), whose cost would
+depend on other groups' copies (`TestGroupAttachmentTextOKPlan`, on 400
+folders). A location inserted with the flag false queues the job in the
+same transaction with `RequeueIfRunning` (see [Background
+jobs](#background-jobs)): the `EnqueueJob` takes the job row's lock, so it
+is ordered against `FinishJob`, and a run that read `needed` before the
+location existed runs once more. The conversion of fills from before #112
+copies locations within one account and takes the flag of a copied
+location in SQL (`ConvertLegacyFillBatch`). `TestAttachmentTextWriters`
+fails for a statement that inserts locations without naming the column.
+
+**Cost on the target** (PostgreSQL 16 on 2 cores, warm cache, a batch of
+100 known messages with attachments, generic plans, medians;
+`TestAttachmentTextCost`, `MAIL_ARCHIVE_BENCH=1`):
+
+| Folders in the group | `MessagesWithAttachment` | `GroupAttachmentTextOK` | `GroupHeldMessages` (#446) | Sum per batch |
+|---|---|---|---|---|
+| 40 | 0.6 ms | 6 ms | 5 ms | 11 ms |
+| 400 | 0.4 ms | 53 ms | 60 ms | 113 ms |
+| 1,500 | 0.5 ms | 194 ms | 226 ms | 420 ms |
+| 5,000 (group 0) | | 643 ms | not run (no group) | 643 ms |
+
+The probes cost about 1.3 µs per folder and hash and grow linearly with
+the group's folders; they do not depend on other groups. An import of 100
+known messages with attachments into an account without an owner, with
+5,000 folders in group 0, took 652 ms per batch (`SaveBatch`), almost all
+of it this lookup. The lookup runs only for messages the archive already
+held; a batch of new mail needs none. Memory is constant.
+
+**Invariant and repair.** Every location with the flag false belongs to a
+message whose job is queued, running or failed, or that is not done at
+the current version (the backfill's). A process of a version before 1.6.0
+can break it after the upgrade: it inserts locations with the column's
+default false without a job, and ends a job done without setting flags.
+`RepairAttachmentText` checks the invariant against the data at the start
+of every process that runs a job pool (`serve` with workers, `worker`)
+and every 15 minutes there (`attachmentRepair` in
+`cmd/mail-archive/jobs.go`), and once at the start of `reindex`'s
+attachment pass (`reindexAttachments`): it sets the flag on false locations of
+messages without attachments, and queues the job at `PriorityBackfill` for
+every done message with a false location and no queued, running or failed
+job. Both walk the partial index `message_locations_attachment_pending_idx`
+(`WHERE NOT attachment_text_ok`), which in steady state holds only
+locations whose job is pending or failed. Measured on the target: a pass
+over 10,000 false locations of done messages without a job takes 11.5 s
+and queues them, one `EnqueueJob` per message in transactions of 1,000;
+the next pass, with their jobs queued, takes 47 ms.
+
+**Failed jobs** stay failed for every group: `EnqueueJob` leaves them
+alone, the repair and the backfill skip them, and only `jobs retry
+attachment_text` queues them again, so a message whose extraction crashes
+the process is still claimed at most three times in all.
 
 ## Conversations
 
@@ -1334,10 +1420,27 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
   only moves it forward (lower priority, earlier `run_after`; a pending
   retry keeps its time), queues a done row again with the caller's payload
   and `attempts = 0`, and leaves running and failed rows alone (failed ones
-  unless `RetryFailed`). `store.EnqueueJobs` runs in a transaction of its
+  unless `RetryFailed`). A job enqueued with `RequeueIfRunning` (opt-in, so
+  far only `attachment_text` from a save) gives a running row only
+  `requeue = true` and the lower priority; `FinishJob` then queues it again
+  at once with `attempts = 0` and wakes the pools, while a retry, a lost
+  lease, a release and a continuation clear the flag (a crash is never
+  rerun at once, and a failed job stays failed). `store.EnqueueJobs` runs in a transaction of its
   own; `enqueueJobs` runs in the caller's, so a job is queued together with
-  what caused it, and storing never waits for it: the key is new, so the
-  insert meets no conflict.
+  what caused it. For a message new to the archive the key is new, so the
+  insert meets no conflict and the save waits for nothing. A save that
+  queues the `attachment_text` job of a message the archive already held
+  (a location without the flag, see [Attachment text per
+  location](#attachment-text-per-location)) updates that message's
+  existing job row and holds its lock until the save commits: a
+  `FinishJob` of that row, or another save or backfill batch that queues
+  it, waits for it. Saves take these rows in hash order (`sortBatch`), the
+  attachment backfill newest first, so a save and a backfill batch that
+  share two such messages, which are not done yet, can deadlock: PostgreSQL
+  aborts one of them, and the sync, import or fill batch is retried at its
+  next run, the backfill by the queue; nothing is lost. This can happen
+  only while the backfill runs, after an upgrade or a new
+  `AttachmentIndexVersion`.
 - **Claim and lease.** `ClaimJobs` takes due rows of the pool's kinds by
   `priority, run_after, id` with `FOR UPDATE SKIP LOCKED`, sets a random
   lease token per claim and `lease_until` = now + 60 s on the database's

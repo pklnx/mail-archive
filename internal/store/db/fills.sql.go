@@ -50,11 +50,14 @@ WITH p AS (
     ORDER BY l.message_sha256, l.folder_id, l.uid
     LIMIT (SELECT max_rows FROM p)
 )
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, attachment_text_ok)
 SELECT b.message_sha256, p.journal_id, p.uidvalidity, p.last_uid + row_number() OVER (ORDER BY b.message_sha256),
-       b.flags, b.internal_date, p.fill_id
+       b.flags, b.internal_date, p.fill_id,
+       EXISTS (SELECT 1 FROM message_locations o
+               WHERE o.folder_id = ANY (p.folders) AND o.message_sha256 = b.message_sha256 AND o.attachment_text_ok)
+       OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.sha256 = b.message_sha256 AND m.has_attachment)
 FROM batch b, p
-RETURNING message_sha256
+RETURNING message_sha256, attachment_text_ok
 `
 
 type ConvertLegacyFillBatchParams struct {
@@ -67,12 +70,20 @@ type ConvertLegacyFillBatchParams struct {
 	MaxRows     int32
 }
 
+type ConvertLegacyFillBatchRow struct {
+	MessageSha256    string
+	AttachmentTextOk bool
+}
+
 // Copies the locations of a fill's own folders into the journal folder,
 // one per message and none for a message the journal folder holds, in
 // the order of the hashes after @after. The copies take the journal
 // folder's UIDVALIDITY and UIDs after @last_uid; the caller holds its row
-// lock and reserves the UIDs (AllocateUIDs).
-func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyFillBatchParams) ([]string, error) {
+// lock and reserves the UIDs (AllocateUIDs). A copy shows its message's
+// attachment text (attachment_text_ok) when a location it is copied from
+// does, since they are in the same account and group, or when the message
+// has no attachment; the caller queues the extraction of the others.
+func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyFillBatchParams) ([]ConvertLegacyFillBatchRow, error) {
 	rows, err := q.db.Query(ctx, convertLegacyFillBatch,
 		arg.JournalID,
 		arg.Uidvalidity,
@@ -86,13 +97,13 @@ func (q *Queries) ConvertLegacyFillBatch(ctx context.Context, arg ConvertLegacyF
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []ConvertLegacyFillBatchRow
 	for rows.Next() {
-		var message_sha256 string
-		if err := rows.Scan(&message_sha256); err != nil {
+		var i ConvertLegacyFillBatchRow
+		if err := rows.Scan(&i.MessageSha256, &i.AttachmentTextOk); err != nil {
 			return nil, err
 		}
-		items = append(items, message_sha256)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

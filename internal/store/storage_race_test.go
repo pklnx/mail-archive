@@ -436,7 +436,7 @@ func TestUsageRequestAfterLastRead(t *testing.T) {
 	}
 	_ = hold.Rollback(f.ctx)
 	waitForRow(t, watch, job, "FinishJob waiting for the requester", `SELECT count(*) FROM pg_stat_activity
-		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%SET state = ''done''%'`)
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%name: FinishJob %'`)
 	if err := requester.Commit(f.ctx); err != nil {
 		t.Fatal(err)
 	}

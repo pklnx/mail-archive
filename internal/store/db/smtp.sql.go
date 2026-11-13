@@ -170,19 +170,20 @@ func (q *Queries) InsertEnvelope(ctx context.Context, arg InsertEnvelopeParams) 
 }
 
 const insertFilledLocation = `-- name: InsertFilledLocation :exec
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, import_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, import_id, attachment_text_ok)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertFilledLocationParams struct {
-	MessageSha256 string
-	FolderID      int64
-	Uidvalidity   int64
-	Uid           int64
-	Flags         []string
-	InternalDate  *time.Time
-	FillID        *int64
-	ImportID      *int64
+	MessageSha256    string
+	FolderID         int64
+	Uidvalidity      int64
+	Uid              int64
+	Flags            []string
+	InternalDate     *time.Time
+	FillID           *int64
+	ImportID         *int64
+	AttachmentTextOk bool
 }
 
 // A location a fill or an import of files added to the journal folder: no
@@ -198,22 +199,24 @@ func (q *Queries) InsertFilledLocation(ctx context.Context, arg InsertFilledLoca
 		arg.InternalDate,
 		arg.FillID,
 		arg.ImportID,
+		arg.AttachmentTextOk,
 	)
 	return err
 }
 
 const insertReceivedLocation = `-- name: InsertReceivedLocation :one
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, internal_date)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, internal_date, attachment_text_ok)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id
 `
 
 type InsertReceivedLocationParams struct {
-	MessageSha256 string
-	FolderID      int64
-	Uidvalidity   int64
-	Uid           int64
-	InternalDate  *time.Time
+	MessageSha256    string
+	FolderID         int64
+	Uidvalidity      int64
+	Uid              int64
+	InternalDate     *time.Time
+	AttachmentTextOk bool
 }
 
 func (q *Queries) InsertReceivedLocation(ctx context.Context, arg InsertReceivedLocationParams) (int64, error) {
@@ -223,6 +226,7 @@ func (q *Queries) InsertReceivedLocation(ctx context.Context, arg InsertReceived
 		arg.Uidvalidity,
 		arg.Uid,
 		arg.InternalDate,
+		arg.AttachmentTextOk,
 	)
 	var id int64
 	err := row.Scan(&id)
