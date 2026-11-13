@@ -16,7 +16,7 @@ function smtpAccount(f: Fill | null, more: Partial<Account> = {}): Account {
 }
 
 const data = (accounts: Account[]): AccountsResponse => ({
-  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: {},
+  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "", alertAfter: 3, smtp: { auth: "off" },
 });
 
 let requests: { method: string; url: string; body: unknown }[];

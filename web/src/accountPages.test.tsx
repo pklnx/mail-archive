@@ -13,6 +13,7 @@ import { fill } from "./fillFixture";
 import { applySettings, messagesFor, t } from "./i18n";
 import { imapTextFor } from "./imapText";
 import { settingsText, settingsTextFor } from "./settingsText";
+import { smtpText } from "./smtpText";
 import { expectLoaded, expectLoading } from "./test/loading";
 
 /** A promise and its resolve, for a request left pending. */
@@ -56,7 +57,7 @@ const busy = (a: Account): Account => ({ ...a, sync: { ...a.sync, state: "runnin
 const purge = { id: 1, expected: 10, locations: 2, deleted: 4, kept: 0 };
 
 const data = (accounts: Account[], more: Partial<AccountsResponse> = {}): AccountsResponse => ({
-  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: {}, ...more,
+  accounts, manage: true, shared: [], syncInterval: "6h0m0s", syncIntervalMin: "5m0s", reconcileInterval: "24h0m0s", alertAfter: 3, smtp: { auth: "off" }, ...more,
 });
 
 let requests: { method: string; url: string; body: unknown }[];
@@ -792,7 +793,7 @@ describe("the account's page", () => {
     const s = settingsText();
     expect(section(s.connection).getByText("journal@archive.local")).toBeTruthy();
     expect(section(s.connection).queryByRole("button", { name: t.edit })).toBeNull();
-    expect(section(t.mailServerSetup).getByText(t.setupIntro)).toBeTruthy();
+    expect(section(t.mailServerSetup).getByText(smtpText().setupIntro)).toBeTruthy();
     expect(screen.queryByRole("region", { name: s.imports })).toBeNull();
     const tiles = [...document.querySelectorAll(".app-summary dt")].map((d) => d.textContent);
     expect(tiles).toEqual([t.messages, s.foldersArchived, s.lastReceived]);
@@ -961,9 +962,11 @@ describe("German", () => {
       noEnglish();
       cleanup();
 
-      render(<PostfixPanel addresses={["journal@example.com"]} />);
-      noEnglish();
-      cleanup();
+      for (const login of [false, true]) {
+        render(<PostfixPanel addresses={["journal@example.com"]} login={login} />);
+        noEnglish();
+        cleanup();
+      }
 
       render(<PurgeReview preview={preview()} busy error="" onConfirm={() => {}} onCancel={() => {}} />);
       expect(screen.getByRole("button", { name: de.cancel })).toBeTruthy();

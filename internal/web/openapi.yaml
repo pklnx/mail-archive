@@ -4323,10 +4323,18 @@ components:
         smtp:
           type: [object, "null"]
           additionalProperties: false
+          required: [auth]
           description: >-
             Null when the SMTP server is off (`MAIL_ARCHIVE_SMTP_LISTEN`
-            empty): smtp accounts then receive nothing. An empty object when
-            it is on.
+            empty): smtp accounts then receive nothing.
+          properties:
+            auth:
+              type: string
+              enum: [required, "off"]
+              description: >-
+                `MAIL_ARCHIVE_SMTP_AUTH`: `required` (mail servers log in with
+                an SMTP secret after STARTTLS) or `off` (the allowlist alone).
+                The mail server setup shows the Postfix lines of this mode.
     Account:
       type: object
       required: [name, kind, enabled, removed, purging, purge, host, port, tls, username, includedFolders, excludedFolders, syncInterval, folders, sync, goneMessages, lastReconciledAt, addresses, lastReceivedAt, fill, fills, firstReceived, sharedWith]

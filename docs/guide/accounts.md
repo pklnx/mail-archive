@@ -126,11 +126,37 @@ last message received; import: the last import).
 
 Then come the sections. IMAP: **Connection** (name, server, security, port,
 user name), **Schedule** and **Folders**. smtp: **Connection** (name and
-addresses), **Mail server setup** and *Imports from IMAP*. Import: its
-folders. Each section has its own **Edit**, which opens its form in place,
+addresses), **SMTP secrets** (admins), **Mail server setup** and *Imports
+from IMAP*. Import: its folders. Each section has its own **Edit**, which opens its form in place,
 with **Save** and **Cancel**; saving one section sends only its own fields
 and keeps what you typed in the others. Without `MAIL_ARCHIVE_SECRET_KEY`
 the page only shows the account.
+
+**SMTP secrets** is where the mail server's login comes from
+(`MAIL_ARCHIVE_SMTP_AUTH=required`, the default; see
+[Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)). The
+account's owner, who is an admin, sees the user name (`smtp-` and the
+account's ID) and the secrets: the last four characters (`mas_…x7qm`), the
+state (*active*, *expiring*, *expired*, *revoked*), when each was created,
+until when it is valid and when it was last used. **New secret** asks for
+your password, and with 2FA on a code, and for how long the current secret
+stays valid (7 days by default; *No, revoke it at once*, or up to 30 days).
+The dialog then shows the user name, the secret and the line for Postfix's
+password map, each with a copy button. The secret is shown only there and
+only once: closing the dialog removes it, and neither the page nor a reload
+shows it again. **Revoke** ends a secret at once, after asking; the mail
+server's next message is refused and stays in its queue. With
+`MAIL_ARCHIVE_SMTP_AUTH=off` the section says that mail servers need no
+secret.
+
+**Mail server setup** shows the Postfix lines filled in with the account's
+address. With logins (`required`) they add the archive's own transport and
+the password map line with the account's user name; put the secret in place
+of `mas_…` and the name and port of the archive's SMTP server in place of
+`[archive.customer.example]:587`. With `off` they send to
+`[127.0.0.1]:2525`, the guide's local default.
+
+![The page of the smtp account journal: Connection, SMTP secrets with one active secret, and the Mail server setup with the login lines](/screenshots/account-smtp.png)
 
 The last section, **Shared with** (not for smtp accounts), lists the users
 who may read the account's mail, each with the day it was shared and

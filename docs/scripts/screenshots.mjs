@@ -364,6 +364,20 @@ for (const scheme of ["light", "dark"]) {
 }
 
 {
+  // The page of the smtp account "journal" (#395): Connection, its SMTP
+  // secrets with the demo's one secret, and the Mail server setup with the
+  // login lines. A taller window shows the setup's lines.
+  const p = await page("light", { width: 1280, height: 1500 });
+  await p.goto(base + "/?view=accounts&id=journal");
+  const main = p.getByRole("main");
+  await main.getByRole("heading", { name: "journal", level: 1 }).waitFor();
+  await main.getByRole("region", { name: "SMTP secrets" }).getByRole("cell", { name: "mas_…x7qm", exact: true }).waitFor();
+  await main.getByRole("region", { name: "Mail server setup" }).getByText(/smtp-\d+:mas_…/).waitFor();
+  await shot(p, "account-smtp");
+  await p.context().close();
+}
+
+{
   // pat's Accounts page: the own account team, and under it the account the
   // demo admin shared with pat (#389).
   const p = await page("light", desktop, { as: shareOwner });
@@ -418,6 +432,13 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("heading", { name: "kim", level: 1 }).waitFor();
   await main.getByRole("region", { name: "API keys" }).waitFor();
   await shot(p, "user-detail");
+
+  // The SMTP secrets of every smtp account under the users table (#395).
+  await p.goto(base + "/?view=users");
+  const secrets = main.getByRole("region", { name: "SMTP secrets" });
+  await secrets.getByRole("rowheader", { name: "journal" }).waitFor();
+  await secrets.scrollIntoViewIfNeeded();
+  await shot(p, "user-smtp-secrets");
 
   // The customer groups under the users table (#470): the demo has two.
   await p.goto(base + "/?view=users");

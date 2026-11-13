@@ -28,6 +28,8 @@ import { relativeTime, shortDate } from "./format";
 import { t } from "./i18n";
 import { AppLink, DetailHeader, RowMenu, SummaryTiles, useMenuButtons, usePageFocus } from "./settingsParts";
 import { settingsText } from "./settingsText";
+import { LockHint, SmtpCredentialsAdmin } from "./SmtpCredentials";
+import { smtpApi, type AdminSMTPCredential } from "./smtpApi";
 import { TableSkeleton } from "./tableSkeleton";
 import { formatState, parseState, useViewState } from "./urlState";
 import { groupsApi, userAdminApi, type CustomerGroup } from "./userAdminApi";
@@ -98,9 +100,15 @@ export function UsersPage() {
   const [groupAsking, setGroupAsking] = useState<GroupAsking>(null);
   const [groupFilter, setGroupFilter] = useState("");
   const [done, setDone] = useState("");
+  // Every smtp account's SMTP secrets (#395 Q2), and after a lock how many
+  // of the locked user's still work, with a link to them.
+  const [secrets, setSecrets] = useState<AdminSMTPCredential[]>([]);
+  const [lockHint, setLockHint] = useState<{ user: string; count: number } | null>(null);
+  const [toSecrets, setToSecrets] = useState(false);
   const menus = useMenuButtons();
   const heading = useRef<HTMLHeadingElement>(null);
   const groupsHeading = useRef<HTMLHeadingElement>(null);
+  const secretsHeading = useRef<HTMLHeadingElement>(null);
   const us = usersText();
 
   const reload = useCallback(async () => {
@@ -114,6 +122,7 @@ export function UsersPage() {
       ),
       apiKeyApi.listAll().then(setKeys, () => setKeys([])),
       groupsApi.list().then(setGroups, () => setGroups([])),
+      smtpApi.listAll().then(setSecrets, () => setSecrets([])),
     ]);
     return listed;
   }, []);
@@ -129,6 +138,7 @@ export function UsersPage() {
   const run = async (action: () => Promise<unknown>) => {
     setError("");
     setDone("");
+    setLockHint(null);
     let failure = "";
     try {
       await action();
@@ -147,6 +157,24 @@ export function UsersPage() {
     if (unknown) update({ id: "" }, { replace: true });
   }, [unknown, update]);
   usePageFocus(users === null ? null : detail ? `user:${detail.name}` : "list", heading);
+  // The lock hint's link: the list's SMTP secrets get the focus once shown.
+  // A passive effect, so it runs after the page change's focus on the h1.
+  const secretsShown = !detail && users !== null && secrets.length > 0;
+  useEffect(() => {
+    if (!toSecrets || !secretsShown) return;
+    secretsHeading.current?.focus();
+    secretsHeading.current?.scrollIntoView?.({ block: "start" });
+    setToSecrets(false);
+  }, [toSecrets, secretsShown]);
+
+  // The section reports the revoke itself; the list reloads either way.
+  const revokeSecret = async (c: AdminSMTPCredential) => {
+    try {
+      await smtpApi.revokeAny(c.id);
+    } finally {
+      void reload();
+    }
+  };
 
   const ask = (kind: NonNullable<Asking>["kind"], user: ManagedUser) => setAsking({ kind, user });
   const focusBack = () => (asking && menus.button(asking.user.name)) ?? heading.current;
@@ -172,6 +200,17 @@ export function UsersPage() {
     <>
       {generated && <GeneratedPanel value={generated} done={() => setGenerated(null)} />}
       {done && <p role="status">{done}</p>}
+      {lockHint && (
+        <LockHint
+          user={lockHint.user}
+          count={lockHint.count}
+          href={hrefOf()}
+          open={() => {
+            if (state.id) toList();
+            setToSecrets(true);
+          }}
+        />
+      )}
       {error && (
         <p role="alert" className="app-text-error">
           {error}
@@ -257,6 +296,7 @@ export function UsersPage() {
                 )}
               />
             )}
+            {secretsShown && <SmtpCredentialsAdmin credentials={secrets} heading={secretsHeading} revoke={revokeSecret} />}
             {users && multi && (
               <GroupsSection
                 groups={groups}
@@ -354,7 +394,12 @@ export function UsersPage() {
             const { kind, user } = asking;
             setAsking(null);
             const name = user.name;
-            if (kind === "lock") void run(() => userAdminApi.setLocked(name, true));
+            if (kind === "lock")
+              void run(async () => {
+                // A lock does not stop the user's SMTP secrets (#395 decision 9).
+                const count = await userAdminApi.setLocked(name, true);
+                if (count > 0) setLockHint({ user: name, count });
+              });
             else if (kind === "twoFactor") void run(() => userAdminApi.reset2FA(name));
             else if (kind === "passkeys") void run(() => userAdminApi.removePasskeys(name));
             else {

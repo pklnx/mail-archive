@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/imapsync"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -125,9 +126,15 @@ type folderJSON struct {
 	Delimiter *string `json:"delimiter"`
 }
 
-// smtpServerJSON says the SMTP server is on. Where Postfix reaches it (host
-// and published port) only the admin knows, so it carries no address.
-type smtpServerJSON struct{}
+// smtpServerJSON says the SMTP server is on, and whether mail servers log
+// in (#395): the mail server setup shows the lines of that mode. Where
+// Postfix reaches it (host and published port) only the admin knows, so it
+// carries no address.
+type smtpServerJSON struct {
+	// Auth is "required" (MAIL_ARCHIVE_SMTP_AUTH=required, the default:
+	// STARTTLS and an SMTP secret) or "off" (the allowlist alone).
+	Auth string `json:"auth"`
+}
 
 type accountsResponse struct {
 	Accounts []accountJSON `json:"accounts"`
@@ -229,10 +236,22 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// The open purge is read before the accounts: a purge that finishes in
+	// between deletes its account, so the list never shows it removed and
+	// no longer purging, a state it never had. The page would then poll
+	// slowly and keep the deleted account for 30 s (#555 CI).
+	purge, err := s.store.OpenAccountPurge(ctx)
+	if err != nil {
+		s.failStore(w, r, err)
+		return
+	}
 	accounts, err := s.store.ListOwnedAccounts(ctx, userID(r))
 	if err != nil {
 		s.failStore(w, r, err)
 		return
+	}
+	if s.afterAccountsListed != nil {
+		s.afterAccountsListed()
 	}
 	sc, ok := s.requestScope(w, r)
 	if !ok {
@@ -280,11 +299,6 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		s.failStore(w, r, err)
 		return
 	}
-	purge, err := s.store.OpenAccountPurge(ctx)
-	if err != nil {
-		s.failStore(w, r, err)
-		return
-	}
 	shares, err := s.store.OwnerShares(ctx, me)
 	if err != nil {
 		s.failStore(w, r, err)
@@ -325,7 +339,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	out := accountsResponse{Accounts: make([]accountJSON, 0, len(accounts)), Shared: shared, Manage: s.syncer != nil && s.runner != nil, AlertAfter: s.alertAfter}
 	if s.smtpListen != "" {
-		out.SMTP = &smtpServerJSON{}
+		out.SMTP = &smtpServerJSON{Auth: config.SMTPAuthOff}
+		if s.smtpAuth {
+			out.SMTP.Auth = config.SMTPAuthRequired
+		}
 	}
 	if sess := currentSession(r); sess != nil && sess.IsAdmin {
 		failing, err := s.store.CountFailingByOwner(ctx, s.alertAfter)

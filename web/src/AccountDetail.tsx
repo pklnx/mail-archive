@@ -25,6 +25,7 @@ import {
   usePurgeCancelled,
 } from "./accountParts";
 import { AppLink, DetailHeader, RowMenu, SummaryTiles } from "./settingsParts";
+import { SmtpCredentialsSection, useSmtpCredentials } from "./SmtpCredentials";
 import { settingsText } from "./settingsText";
 
 export interface AccountDetailProps {
@@ -76,6 +77,10 @@ export function AccountDetail(p: AccountDetailProps) {
   // menu has no item left) or closed (back to the menu's button).
   const left = useRef<"confirmed" | "closed" | null>(null);
   const setupHeading = useRef<HTMLHeadingElement>(null);
+  // SMTP secrets (#395): the owner manages them, and must be an admin.
+  const secrets = admin && a.kind === "smtp" && !a.removed;
+  const credentials = useSmtpCredentials(a.name, secrets);
+  const login = data.smtp?.auth !== "off";
 
   useEffect(() => {
     // A purge confirmed elsewhere drops the dialog.
@@ -286,6 +291,7 @@ export function AccountDetail(p: AccountDetailProps) {
                 locked={p.renaming}
                 admin={admin}
                 smtpOn={data.smtp != null}
+                login={login}
                 onCancel={() => close(false)}
                 onSaved={(name) => {
                   close(true);
@@ -295,8 +301,9 @@ export function AccountDetail(p: AccountDetailProps) {
               />
             )}
           />
+          {secrets && <SmtpCredentialsSection account={a.name} off={!login} state={credentials} />}
           {/* Without management too, as on the list before (#285). */}
-          <SetupSection account={a} heading={setupHeading} />
+          <SetupSection account={a} login={login} username={credentials.list?.username} heading={setupHeading} />
           {(manage || a.fills.length > 0) && (
             <PlainSection title={s.imports}>
               <FillSection account={a} data={data} manage={manage} onChanged={reload} />
@@ -503,10 +510,15 @@ function PlainSection({ title, heading, children }: { title: string; heading?: R
   );
 }
 
-function SetupSection({ account: a, heading }: { account: Account; heading: RefObject<HTMLHeadingElement | null> }) {
+function SetupSection({ account: a, login, username, heading }: {
+  account: Account;
+  login: boolean;
+  username?: string;
+  heading: RefObject<HTMLHeadingElement | null>;
+}) {
   return (
     <PlainSection title={t.mailServerSetup} heading={heading}>
-      <PostfixPanel addresses={a.addresses} inSection />
+      <PostfixPanel addresses={a.addresses} login={login} username={username} inSection />
     </PlainSection>
   );
 }
