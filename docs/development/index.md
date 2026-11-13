@@ -491,4 +491,7 @@ branches and tags.
 fixture's exact path and a regex for the fake value, and a comment saying why
 it is safe. Global regexes and path globs are not allowed. Better still,
 build fake credentials at runtime in tests, so nothing in the repository
-matches a rule (see `scripts/secret-scan-test.sh`).
+matches a rule (see `scripts/secret-scan-test.sh`). A fake value that is only
+in the history and not on `main` (for example on the branch of a closed pull
+request, which `make secrets` scans in a full clone) gets its fingerprint in
+`.gitleaksignore` with a comment instead.
