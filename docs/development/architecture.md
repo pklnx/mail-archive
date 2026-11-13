@@ -64,6 +64,7 @@ internal/web (JSON API, UI from web/) ──────────────
 | `attachment_texts` | Extracted text of one attachment of a message (`message_sha256`, `part_index` as in the parts API): file name, status (`ok`, `truncated`, `no_text`, `encrypted`, `too_large`, `failed`, `timeout`), the text for `ok` and `truncated`, and a generated `tsvector` with a GIN index. Deleted with its message. |
 | `attachment_index_state` | Extraction state of a message with attachments: `version`; the message is done at `store.AttachmentIndexVersion`, also without text (no readable attachment, an unreadable file). Deleted with its message. |
 | `jobs` | Background job (see [Background jobs](#background-jobs)). |
+| `storage_*` | Storage usage (see [Storage usage](#storage-usage)): the instance counters (`storage_counter_base`, `storage_counter_deltas`), the group deltas between snapshots (`storage_group_deltas`), the last snapshot per group and account (`storage_usage_groups`, `storage_usage_accounts`) and of the instance (`storage_snapshot`), the refresh requests (`storage_refresh_requests`), and the quota states with their alert outbox (`storage_states`). `customer_groups.quota_bytes` is a group's quota. |
 
 Deduplication is by exact content: the same bytes in two folders or accounts
 give one `messages` row and two `message_locations`. The same mail delivered
@@ -1268,6 +1269,88 @@ with `Kind.NewJob(key, priority)` through `store.EnqueueJobs`, or
 for a job about one message. Return `jobs.Permanent` for errors a retry
 cannot fix and `jobs.Code` to name an error in `last_error`. Tests register
 their kinds in the test only.
+
+## Storage usage
+
+What counts is **message bytes**: the plaintext size of each unique
+message (`messages.size`), counted once however many folders and accounts
+hold it. Migration 00041 holds the schema; the code is in
+`internal/store/storage.go` and `queries/storage.sql`, the jobs in
+`internal/jobs/storage.go`, the schedule in `cmd/mail-archive/jobs.go`.
+
+| Figure | How exact | Where |
+|---|---|---|
+| Instance (messages, bytes) | exact at all times | the counters: `storage_counter_base` plus `storage_counter_deltas` |
+| Customer group (messages, bytes, deduplicated within the group) | exact after each snapshot, then an upper bound | the snapshot in `storage_usage_groups`, plus `storage_group_deltas` |
+| Account (messages, bytes, exclusive bytes) | as of the last snapshot | `storage_usage_accounts` |
+
+- **Counters.** Statement triggers on `messages` (`AFTER INSERT` and
+  `AFTER DELETE` with transition tables) append one delta row per
+  statement. An `INSERT … ON CONFLICT DO NOTHING` lists only the rows it
+  inserted, and a rollback takes the delta with it. Writers never update a
+  shared row, so they never wait for each other. `StorageTotals` reads the
+  base plus the deltas in one statement. A row trigger
+  `BEFORE UPDATE OF size, sha256 … WHEN …` refuses a change of either
+  column; updates of the search columns do not run it.
+- **Group deltas.** Every save that adds locations calls
+  `recordGroupUsage` in its transaction, after the location writes: one
+  query per batch (`GroupHeldMessages`) finds the hashes new to the account
+  that another account of the group already holds; the rest go into one
+  delta row. It probes `message_locations_folder_sha_idx` once per folder
+  of the group and hash, fenced (`OFFSET 0`, `LIMIT 1`) so that neither the
+  custom nor the generic plan looks the hashes up by
+  `message_locations_sha_idx` (`TestUsageRefreshPlan`). So its time depends
+  only on the group's own folders and the batch, never on how many accounts
+  of other groups hold the same message (#539); it grows with the group's
+  folders (see [Hardware and budgets](../guide/operations#hardware-and-budgets)). Callers: `saveBatch` (syncs), `saveIntoJournal` (fills and journal
+  imports) and `ReceiveMessage` (SMTP). `TestGroupUsageGuardSQL` and
+  `TestGroupUsageGuardCallers` keep every writer of `message_locations` on
+  this path or on the exempt list (`ConvertLegacyFillBatch`, which adds no
+  hash new to the account). Two saves that add the same message to two
+  accounts of one group at the same time may both count it; a message whose
+  only other copy in the group is deleted while it is added is missing
+  until the next snapshot. Deletions (retention, purges) lower a group's
+  figure only at the next snapshot.
+- **Locks of a save.** Every save first locks its account and the
+  account's owner `FOR KEY SHARE` (`lockAccountGroup`), before the folder
+  lock, and reads the owner's group. Moving a user to another group
+  (`SetUserGroup`, `FOR UPDATE` on the user), changing an account's owner
+  (`SetAccountOwner`) and the adoption of unowned accounts by the first
+  user (`LockUnownedAccounts`, `FOR UPDATE`) therefore wait until the open
+  saves of that owner or account end, and a save that starts during a move
+  waits for it and then reads the new group. `KEY SHARE` does not conflict
+  with ordinary updates of either row (logins, settings, account edits).
+- **Refresh requests.** A move, the adoption, the end of a purge
+  (`FinishPurge`, `CancelPurge`), of a deletion run and of an import,
+  `restore-dump` and `RequestUsageRefresh` bump
+  `storage_refresh_requests.seq` and enqueue `usage_refresh` (also a
+  failed one) in their transaction, last.
+- **`storage_fold`** (every 5 minutes, and at the start of a job pool)
+  takes the storage advisory lock for its transaction, adds the counter
+  deltas to the base and the group deltas to `added_*` of their group's
+  row, and then enqueues `usage_refresh` while
+  `storage_refresh_requests.seq` is above `storage_snapshot.covered_seq`,
+  so that no request waits more than one fold. A refresh that failed in
+  the last hour is left alone by the fold.
+- **`usage_refresh`** (hourly, on request, and at the start of a job pool
+  while no snapshot exists): on a connection of its own it takes the
+  storage advisory lock for its session, folds, and then, in one
+  `REPEATABLE READ` transaction, reads `seq` with a plain `SELECT`, writes
+  every account's and group's figures in one statement (hash aggregates
+  over `message_locations ⋈ folders`; the sizes come from the covering
+  index `messages_sha_size_idx` by an index-only scan, not from the message
+  heap), compares the counters with an exact count (a difference is logged
+  as an error), deletes the group deltas it saw and writes
+  `storage_snapshot` last, with that `seq` as `covered_seq`. If `seq` grew
+  meanwhile, or the transaction failed with `40001` (an account or group
+  changed during it), the job runs again at once (`jobs.Continue`).
+  `work_mem` is 32 MB, and each statement may take 5 minutes.
+- **Priority.** Both jobs run at `store.PriorityStorage` (50): after the
+  work of new mail and before backfills, so that a long attachment
+  backfill does not hold back a requested snapshot.
+- **No per-user figures.** Usage is shown per instance, group and account
+  (`./ma usage`). The measured costs are in
+  [Hardware and budgets](../guide/operations#hardware-and-budgets).
 
 ## Start-up of serve and worker
 

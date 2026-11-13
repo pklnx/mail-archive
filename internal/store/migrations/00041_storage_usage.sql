@@ -155,9 +155,13 @@ CREATE TRIGGER messages_storage_guard BEFORE UPDATE OF size, sha256 ON messages
     EXECUTE FUNCTION storage_refuse_size_change();
 
 -- The snapshot reads hashes and sizes from this index (index-only), not
--- from the message heap. The base is filled after it, so that the fill
--- can read the index instead of the heap a second time (the order is to
--- be confirmed by the cold measurement in operations.md).
+-- from the message heap. The index comes first and the base is filled
+-- from it by an index-only scan, so that the heap is read once. Measured
+-- cold (#446): with 300,000 messages both orders read the heap from disk
+-- once (the second pass finds it in the page cache); where the heap does
+-- not fit in the page cache (1.5M messages, about 2.6 GB, on a 4 GB host)
+-- filling first reads it twice: estimated from the measured disk rate
+-- (138 MB/s), about 40 s instead of about 23 s.
 CREATE INDEX messages_sha_size_idx ON messages (sha256) INCLUDE (size);
 INSERT INTO storage_counter_base (messages, bytes)
 SELECT count(*), coalesce(sum(size), 0) FROM messages;
