@@ -353,6 +353,33 @@ func (q *Queries) LockAccount(ctx context.Context, id int64) (Account, error) {
 	return i, err
 }
 
+const lockUnownedAccounts = `-- name: LockUnownedAccounts :many
+SELECT id FROM accounts WHERE owner_id IS NULL ORDER BY id FOR UPDATE
+`
+
+// The accounts without an owner, which the first user adopts, locked in id
+// order: the adoption waits for saves in flight into them (their FOR KEY
+// SHARE, store.lockAccountGroup).
+func (q *Queries) LockUnownedAccounts(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, lockUnownedAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const removeAccount = `-- name: RemoveAccount :execrows
 UPDATE accounts
 SET removed_at = now(), enabled = FALSE, password_enc = ''::bytea, version = version + 1, updated_at = now()

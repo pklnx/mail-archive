@@ -693,16 +693,18 @@ type SaveResult struct {
 	// on what other accounts hold: deduplication across accounts stays
 	// invisible.
 	Added int
-	// Skipped counts messages deleted by retention that were not archived
-	// again, because they would already be expired in this folder.
+	// Skipped counts messages deleted by retention or a purge from the
+	// account or its customer group that were not archived again, because
+	// they would already be expired in this folder (skipDeleted).
 	Skipped int
 }
 
 // SaveBatch stores message metadata and locations for a batch and advances
 // the folder's last UID, all in one transaction, in the order of the
 // hashes (sortBatch). A message deleted by
-// retention is stored again only where it would not already be expired;
-// otherwise it is skipped and its file scheduled for removal. The caller
+// retention or a purge from the account or its customer group is stored
+// again only where it would not already be expired, or once the group
+// holds it again; otherwise it is skipped (skipDeleted). The caller
 // holds the blob lock (sync and import take it for the whole run), so the
 // transaction takes only the attestation fence.
 func (s *Store) SaveBatch(ctx context.Context, folderID int64, lastUID uint32, metas []MessageMeta, locs []Location) (SaveResult, error) {
@@ -720,7 +722,11 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err := s.checkBlobGeneration(ctx, q); err != nil {
 			return err
 		}
-		skip, err := skipDeleted(ctx, q, folderID, metas, locs)
+		group, err := lockAccountGroup(ctx, q, byFolder(folderID))
+		if err != nil {
+			return err
+		}
+		skip, err := skipDeleted(ctx, q, group, folderID, metas, locs)
 		if err != nil {
 			return err
 		}
@@ -802,42 +808,65 @@ func accountHeld(ctx context.Context, q *db.Queries, folderID int64, metas []Mes
 	return held, nil
 }
 
-// skipDeleted returns the hashes of a batch to skip: messages deleted by
-// retention (a tombstone and no row) that would already be expired in the
-// folder, and that no hold covers there. Their files are scheduled for
-// removal at once. A message not skipped is archived again, as if this
-// location had existed when it was deleted.
-func skipDeleted(ctx context.Context, q *db.Queries, folderID int64, metas []MessageMeta, locs []Location) (map[string]bool, error) {
+// skipDeleted returns the hashes of a batch to skip: messages deleted from
+// the folder's account or its customer group g (DeletionMarksOf) that
+// no account of the group holds now, that would already be expired in the
+// folder, and that no hold covers there. Whether another group holds or
+// held the message never changes the answer (#539). The files of those
+// without a message row are scheduled for removal at once; with a row, the
+// file belongs to another group's copy. A message not skipped is archived
+// again, as if this location had existed when it was deleted. g comes
+// from lockAccountGroup, so a move of the account or its owner to another
+// group waits for the save.
+func skipDeleted(ctx context.Context, q *db.Queries, g accountGroup, folderID int64, metas []MessageMeta, locs []Location) (map[string]bool, error) {
 	shas := make([]string, len(metas))
 	for i := range metas {
 		shas[i] = metas[i].SHA256
 	}
-	deleted, err := q.TombstonedOf(ctx, shas)
+	deleted, err := q.DeletionMarksOf(ctx, db.DeletionMarksOfParams{Shas: shas, AccountID: g.Account, GroupID: g.key()})
 	if err != nil || len(deleted) == 0 {
 		return nil, err
 	}
-	archivedAt := make(map[string]time.Time, len(deleted))
+	marked := make([]string, len(deleted))
+	for i, d := range deleted {
+		marked[i] = d.Sha256
+	}
+	// Only for the marked hashes: a group that holds a copy stores the
+	// message again, whatever its marks.
+	inGroup, err := groupHasLocations(ctx, q, g, marked)
+	if err != nil {
+		return nil, err
+	}
+	type mark struct {
+		at       time.Time
+		archived bool
+	}
+	marks := make(map[string]mark, len(deleted))
 	for _, d := range deleted {
-		archivedAt[d.Sha256] = d.ArchivedAt
+		if !inGroup[d.Sha256] {
+			marks[d.Sha256] = mark{d.ArchivedAt, d.Archived}
+		}
 	}
 	skip := map[string]bool{}
 	var remove []string
 	for i := range metas {
-		at, ok := archivedAt[metas[i].SHA256]
-		if !ok {
+		m, ok := marks[metas[i].SHA256]
+		if !ok || skip[metas[i].SHA256] {
 			continue
 		}
 		var internal *time.Time
 		if !locs[i].InternalDate.IsZero() {
 			internal = &locs[i].InternalDate
 		}
-		yes, err := q.SkipRearchive(ctx, db.SkipRearchiveParams{FolderID: folderID, SentAt: metas[i].SentAt, InternalDate: internal, ArchivedAt: at})
+		yes, err := q.SkipRearchive(ctx, db.SkipRearchiveParams{FolderID: folderID, SentAt: metas[i].SentAt, InternalDate: internal, ArchivedAt: m.at})
 		if err != nil {
 			return nil, err
 		}
-		if yes && !skip[metas[i].SHA256] {
+		if yes {
 			skip[metas[i].SHA256] = true
-			remove = append(remove, metas[i].SHA256)
+			if !m.archived {
+				remove = append(remove, metas[i].SHA256)
+			}
 		}
 	}
 	if len(remove) > 0 {
