@@ -1050,9 +1050,10 @@ Per job at a time (a worker slot), extracting a document takes up to
 Go heap; the budget keeps the 128 MiB the design allows), the attachment and
 its text twice over for the garbage collector (52 MiB), and 32 MiB for the
 reader's instance. The process needs 96 MiB when idle, and once after each
-start 300 MiB while it compiles the PDF reader. So the peak with c workers
-is the larger of 96 + c × 224 and 96 + 300 + (c − 1) × 224 MiB: 396 MiB with
-one, 620 MiB with two, 844 MiB with three. 768 MiB holds up to **two
+start 340 MiB while it compiles the PDF reader (measured 310–332 MiB with
+go-pdfium v1.21.4). So the peak with c workers is the larger of
+96 + c × 224 and 96 + 340 + (c − 1) × 224 MiB: 436 MiB with one, 660 MiB
+with two, 884 MiB with three. 768 MiB holds up to **two
 workers**.
 
 **One PDF at a time per process.** A process reads only one PDF at a time,
