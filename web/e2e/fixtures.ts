@@ -88,6 +88,137 @@ export function isResizeObserverLoop(error: { message: string; stack?: string })
   return error.message === resizeObserverLoop && !error.stack;
 }
 
+// Playwright's WebKit makes a page error of each JavaScript console error
+// (wkPage.ts, _onConsoleMessage, Playwright 1.64.1): it splits the line at
+// its first colon into the error's name and message and drops the character
+// after that colon, which it takes for the space of "Name: message". The
+// stack is the whole line followed by the frames, or empty when WebKit gave
+// the line no stack trace: a line logged from a network callback, with no
+// script running, such as an access-control failure of a fetch (#552). The
+// colon is then often the one in "http:", so the message alone is half the
+// line, and an empty stack is no text at all.
+
+/** Stands for the character Playwright's WebKit dropped from a page error without a stack (pageErrorText). */
+export const lostCharacter = "\uFFFD";
+
+/**
+ * The text of a page error in the guards' report, its whole line first. An
+ * error with a stack is its stack: its first line is the whole line in both
+ * engines. Without a stack, in WebKit the line is rebuilt from the name and
+ * the message, with lostCharacter for the character Playwright dropped
+ * after the first colon, and a second line says so; in Chromium it is
+ * "name: message". A line without a colon is the message.
+ */
+export function pageErrorText(error: { name: string; message: string; stack?: string }, webkit: boolean): string {
+  if (error.stack) return error.stack;
+  // No colon in the line, or nothing after it (the message is then the whole line).
+  if (!error.name || (webkit && error.message === `${error.name}:`)) return error.message;
+  if (!webkit) return `${error.name}: ${error.message}`;
+  return `${error.name}:${lostCharacter}${error.message}\n(WebKit gave no stack; ${lostCharacter} is the character Playwright dropped after the first colon)`;
+}
+
+// WebKit refuses a fetch that a document starts while its frame has a
+// navigation to a new document in flight (#552): CachedResource::load fails
+// it before any loader exists, CachedResourceLoader takes the synchronous
+// failure for an access-control one, and DocumentThreadableLoader logs this
+// line as a JavaScript console error, which Playwright's WebKit reports as a
+// page error with the fetch's stack. No request is sent. The guards accept
+// it in WebKit only, for a same-origin /api/ URL, and only while a
+// main-frame document navigation of that page is in flight and then commits
+// (NavigationRefusals). Playwright splits the line at its first colon, the
+// one in "http:", into the error's name and message, so the whole line is
+// only the first line of the stack.
+
+/**
+ * Whether the first line of a page error's stack is WebKit's refusal of a
+ * fetch to an /api/ URL of the origin, exactly. A page error without a stack
+ * (none in WebKit's real case) never is.
+ */
+export function isNavigationFetchRefusal(stackFirstLine: string | undefined, origin: string): boolean {
+  if (stackFirstLine === undefined) return false;
+  return new RegExp(`^Fetch API cannot load ${escapeRegExp(origin)}/api/\\S* due to access control checks\\.$`).test(stackFirstLine);
+}
+
+/**
+ * One page's main-frame document navigations, for WebKit's fetch refusal
+ * (#552). A navigation is in flight from its request (a main-frame
+ * navigation request for a document) to its commit, the first main-frame
+ * framenavigated after the request: WebKit refuses a fetch only before the
+ * commit, and sends the commit before any script of the new document runs.
+ * A page error held during that window is accepted once the page's
+ * domcontentloaded confirms that a new document followed (a same-document
+ * navigation sends framenavigated, but no request and no
+ * domcontentloaded). It is reported if the navigation request fails or the
+ * test ends first. Outside the window nothing is held: an error before the
+ * request, after the commit, or with only same-document navigations is
+ * reported at once, by the caller.
+ */
+export class NavigationRefusals {
+  #state: "idle" | "in flight" | "committed" = "idle";
+  #request: unknown;
+  #held: string[] = [];
+  constructor(private readonly report: (problem: string) => void) {}
+
+  /** A main-frame navigation request for a document; a redirect's next request too. */
+  navigationRequest(request: unknown): void {
+    this.#state = "in flight";
+    this.#request = request;
+  }
+
+  /** A failed request: the navigation's own ends the window, and what it held is reported. */
+  requestFailed(request: unknown): void {
+    if (this.#state !== "in flight" || request !== this.#request) return;
+    this.#reportHeld();
+  }
+
+  /** A main-frame framenavigated: the commit, which ends the window. */
+  frameNavigated(): void {
+    if (this.#state === "in flight") this.#state = "committed";
+  }
+
+  /** The page's domcontentloaded: after a commit, the new document; what was held is accepted. */
+  domContentLoaded(): void {
+    if (this.#state !== "committed") return;
+    this.#held = [];
+    this.#state = "idle";
+    this.#request = undefined;
+  }
+
+  /** Holds a refusal's problem while a navigation is in flight; false otherwise, and the caller reports it. */
+  hold(problem: string): boolean {
+    if (this.#state !== "in flight") return false;
+    this.#held.push(problem);
+    return true;
+  }
+
+  /** The end of the test: what is still held is reported. */
+  end(): void {
+    this.#reportHeld();
+  }
+
+  #reportHeld(): void {
+    for (const p of this.#held.splice(0)) this.report(p);
+    this.#state = "idle";
+    this.#request = undefined;
+  }
+}
+
+/** The origin of the page's main frame (its committed document); "null" when it has none. */
+function pageOrigin(page: Page): string {
+  try {
+    return new URL(page.mainFrame().url()).origin;
+  } catch {
+    return "null";
+  }
+}
+
+// The text of WebKit's refusal in an exception the page's own code throws
+// and nobody catches (a thrown string or a nameless Error is logged verbatim,
+// WebKit's retrieveErrorMessage). WebKit's page error for it can carry the
+// refusal's exact line, which the guards cannot tell from WebKit's own; the
+// guards' init script reports every such exception as a console error.
+export const forgedRefusal = "uncaught exception with the text of WebKit's fetch refusal";
+
 /** A frame as the diagnostics record it. A frame whose URL is empty (a
  * javascript: navigation) is told apart by its name and its parent. */
 export interface FrameInfo {
@@ -196,9 +327,26 @@ export const test = base.extend<{ guards: Guards }>({
         page.on("framenavigated", (f) => record("navigated", f));
         page.on("framedetached", (f) => record("detached", f));
       };
+      // Each page's main-frame document navigations, for WebKit's fetch
+      // refusal (#552); a popup's own. Held problems go to the report.
+      const navigations = new Map<Page, NavigationRefusals>();
+      const watchNavigations = (page: Page) => {
+        const n = new NavigationRefusals((p) => problems.push(p));
+        navigations.set(page, n);
+        page.on("request", (r) => {
+          if (r.isNavigationRequest() && r.resourceType() === "document" && r.frame() === page.mainFrame()) n.navigationRequest(r);
+        });
+        page.on("requestfailed", (r) => n.requestFailed(r));
+        page.on("framenavigated", (f) => {
+          if (f === page.mainFrame()) n.frameNavigated();
+        });
+        page.on("domcontentloaded", () => n.domContentLoaded());
+      };
       // The page fixture may already exist; later pages and popups follow.
       context.pages().forEach(logFrames);
       context.on("page", logFrames);
+      context.pages().forEach(watchNavigations);
+      context.on("page", watchNavigations);
       const allowed: { path: string; status: number }[] = [];
       // The demo's origins this test uses: the main one, and the new
       // instance after allowSetupInstance.
@@ -245,7 +393,7 @@ export const test = base.extend<{ guards: Guards }>({
       // page's script created has not reported yet; at most one per select.
       // Every other violation, a style attribute on a select included, is
       // reported. guards.spec.ts checks both.
-      await context.addInitScript((webkit: boolean) => {
+      await context.addInitScript(({ webkit, forged }: { webkit: boolean; forged: string }) => {
         const unreported: HTMLSelectElement[] = [];
         const accounted = new WeakSet<HTMLSelectElement>();
         if (webkit) {
@@ -276,7 +424,13 @@ export const test = base.extend<{ guards: Guards }>({
           if (selectsOwnStyle(e)) return;
           console.error(`CSP violation: ${e.violatedDirective} blocked ${e.blockedURI || "inline"} in ${e.sourceFile || e.documentURI}`);
         });
-      }, browserName === "webkit");
+        // An uncaught exception of the page's own code that carries the text
+        // of WebKit's fetch refusal (#552). WebKit's own refusal is a console
+        // line, not an exception, and dispatches no error event.
+        window.addEventListener("error", (e) => {
+          if (e instanceof ErrorEvent && String(e.message).includes("Fetch API cannot load ")) console.error(`${forged}: ${e.message}`);
+        });
+      }, { webkit: browserName === "webkit", forged: forgedRefusal });
       context.on("console", (msg) => {
         if (msg.type() !== "error") return;
         const { url } = msg.location();
@@ -295,8 +449,14 @@ export const test = base.extend<{ guards: Guards }>({
         );
       });
       context.on("weberror", (err) => {
-        if (browserName === "webkit" && isResizeObserverLoop(err.error())) return;
-        problems.push(`page error: ${err.error().stack ?? err.error().message}`);
+        const error = err.error();
+        if (browserName === "webkit" && isResizeObserverLoop(error)) return;
+        const problem = `page error: ${pageErrorText(error, browserName === "webkit")}`;
+        // WebKit's refusal of a fetch started during a navigation of the
+        // page's main frame: held until that navigation commits (#552).
+        const page = err.page();
+        if (browserName === "webkit" && page && isNavigationFetchRefusal(error.stack?.split("\n")[0], pageOrigin(page)) && navigations.get(page)?.hold(problem)) return;
+        problems.push(problem);
       });
       await use({
         allowHTTPError: (path, status) => allowed.push({ path, status }),
@@ -305,6 +465,8 @@ export const test = base.extend<{ guards: Guards }>({
         takeProblems: () => problems.splice(0),
         frameLog: () => formatFrameEvents(frameEvents),
       });
+      // A refusal still held: its navigation never committed.
+      for (const n of navigations.values()) n.end();
       // Fewer than expected: a declared error that went missing. More were
       // reported one by one as they came.
       for (const e of expected) if (e.seen < e.count) problems.push(`expected console error ${e.text} ${e.count}×, saw ${e.seen}`);

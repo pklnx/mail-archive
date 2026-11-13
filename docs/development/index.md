@@ -250,6 +250,16 @@ it still fails what it must:
   notifications.", which Playwright's WebKit reports when the frame fit
   resizes what its observer watches within one frame; accepted by its exact
   text until the frame fit defers that work.
+- WebKit refuses a fetch that a document starts while its frame has a
+  navigation to a new document in flight, and logs "Fetch API cannot load
+  … due to access control checks.", which Playwright's WebKit reports
+  as a page error ([#552](https://github.com/pklnx/mail-archive/issues/552)).
+  The guards hold that page error, by the first line of its stack and for a
+  same-origin `/api/` URL only, while a main-frame document navigation of the
+  page is in flight (its request seen, not yet committed), and accept it once
+  that navigation commits a new document; otherwise, or if the navigation
+  fails or the test ends first, it is reported. An uncaught exception of the
+  page's own code that carries the text is reported as a console error.
 
 CI runs it in the `web-e2e-webkit` job, next to `web-e2e` and with the same
 skip rule. It is a job of its own, not a matrix: a matrix would rename the
