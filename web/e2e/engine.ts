@@ -5,7 +5,7 @@
 // or names it by engine where only provoking it would show it, instead of a
 // skip per browser.
 import type { Page } from "@playwright/test";
-import { expect } from "./fixtures";
+import { expect, lostCharacter } from "./fixtures";
 
 /**
  * Whether the page's browser has passkeys as the app checks it
@@ -37,10 +37,16 @@ export function refusesFetchDuringNavigation(browserName: string): boolean {
 /**
  * The first line of the guards' problem for a same-origin fetch that fails
  * an access-control check (route.abort("accessdenied")), as each engine
- * reports it (#552): WebKit as the page error "Fetch API cannot load <url>
- * due to access control checks.", Chromium as the console error "Failed to
- * load resource: net::ERR_ACCESS_DENIED" at the URL.
+ * reports it (#552). WebKit: the page error "Fetch API cannot load <url> due
+ * to access control checks.", which WebKit logs from the network callback,
+ * with no script running, so it has no stack; Playwright dropped the
+ * character after the first colon, the one in the URL's "http:", and the
+ * guards show lostCharacter for it (fixtures.ts, pageErrorText). Chromium:
+ * the console error "Failed to load resource: net::ERR_ACCESS_DENIED" at
+ * the URL.
  */
 export function accessDeniedFetchProblem(browserName: string, url: string): string {
-  return browserName === "webkit" ? `page error: Fetch API cannot load ${url} due to access control checks.` : `console error: Failed to load resource: net::ERR_ACCESS_DENIED (${url})`;
+  if (browserName !== "webkit") return `console error: Failed to load resource: net::ERR_ACCESS_DENIED (${url})`;
+  const colon = url.indexOf(":");
+  return `page error: Fetch API cannot load ${url.slice(0, colon + 1)}${lostCharacter}${url.slice(colon + 2)} due to access control checks.`;
 }

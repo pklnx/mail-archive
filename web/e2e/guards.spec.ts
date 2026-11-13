@@ -16,7 +16,9 @@ import {
   fromWebKitStyleRefusal,
   isNavigationFetchRefusal,
   isResizeObserverLoop,
+  lostCharacter,
   NavigationRefusals,
+  pageErrorText,
   test,
   type ConsoleErrorInfo,
   type FrameEvent,
@@ -390,6 +392,37 @@ base("WebKit's own style refusal line and the ResizeObserver loop are matched ex
   expect(isResizeObserverLoop({ message: `${loop} ` })).toBe(false);
 });
 
+// Playwright 1.64.1's split of a WebKit console line into a page error's
+// name and message (splitErrorMessage, which wkPage.ts _onConsoleMessage
+// uses): at the first colon, dropping the character after it.
+function splitLikeWebKitPageError(text: string): { name: string; message: string } {
+  const i = text.indexOf(":");
+  return { name: i !== -1 ? text.slice(0, i) : "", message: i !== -1 && i + 2 <= text.length ? text.substring(i + 2) : text };
+}
+
+base("a page error is reported by its whole line, a WebKit one without a stack too", () => {
+  const url = `${origin}/api/groups`;
+  const line = `Fetch API cannot load ${url} due to access control checks.`;
+  // With a stack: the stack, whose first line is the whole line.
+  const stack = `${line}\n    at unknown (${origin}/assets/api.js:1:1)`;
+  expect(pageErrorText({ ...splitLikeWebKitPageError(line), stack }, true)).toBe(stack);
+  // Without one (WebKit's access-control failure of a fetch): the line
+  // rebuilt, the dropped "/" of "http://" marked, and a line that says so.
+  const [first, note] = pageErrorText({ ...splitLikeWebKitPageError(line), stack: "" }, true).split("\n");
+  expect(first).toBe(line.replace("http:/", `http:${lostCharacter}`));
+  expect(note).toContain("WebKit gave no stack");
+  expect(`page error: ${first}`).toBe(accessDeniedFetchProblem("webkit", url));
+  expect(pageErrorText({ ...splitLikeWebKitPageError("TypeError: null is not an object"), stack: "" }, true).split("\n")[0]).toBe(`TypeError:${lostCharacter}null is not an object`);
+  // No colon, or a colon at the end: the message is the whole line.
+  const loop = "ResizeObserver loop completed with undelivered notifications.";
+  expect(pageErrorText({ ...splitLikeWebKitPageError(loop), stack: "" }, true)).toBe(loop);
+  expect(pageErrorText({ ...splitLikeWebKitPageError("ends in a colon:"), stack: "" }, true)).toBe("ends in a colon:");
+  // Chromium: the name and the message, as Error's own text.
+  expect(pageErrorText({ name: "Error", message: "boom", stack: "" }, false)).toBe("Error: boom");
+  expect(pageErrorText({ name: "Error", message: "boom" }, false)).toBe("Error: boom");
+  expect(pageErrorText({ name: "", message: "thrown" }, false)).toBe("thrown");
+});
+
 // WebKit's refusal of a fetch that a document starts while its frame's
 // navigation is in flight (#552), as Playwright's WebKit reports it: the
 // whole line is the first line of the page error's stack.
@@ -575,7 +608,12 @@ test("a fetch that WebKit refuses while a reload is in flight is no problem", as
   expect(order).toEqual(refused ? ["navigation request", "page error", "framenavigated", "domcontentloaded"] : ["navigation request", "framenavigated", "domcontentloaded"]);
 });
 
-/** Fetches /api/groups from the page, answered with an access-control failure, then logs the sentinel. */
+/**
+ * Fetches /api/groups from the page, answered with an access-control
+ * failure, then logs the sentinel. The guards then hold exactly the
+ * failure's problem and the sentinel's console error; each later
+ * logSentinel adds one more.
+ */
 async function failFetch(page: Page, context: BrowserContext) {
   await page.route(`${origin}/api/groups`, (route) => route.abort("accessdenied"));
   expect(await page.evaluate(() => fetch("/api/groups").then(() => "answered", () => "failed"))).toBe("failed");
@@ -586,7 +624,7 @@ async function failFetch(page: Page, context: BrowserContext) {
 test("an access-control failure of a fetch with no navigation still fails the guards", async ({ page, context, guards, browserName }) => {
   await navigationPage(page);
   await failFetch(page, context);
-  expect(takeFirstLines(guards)).toContainEqual(accessDeniedFetchProblem(browserName, `${origin}/api/groups`));
+  expect(takeFirstLines(guards)).toEqual([accessDeniedFetchProblem(browserName, `${origin}/api/groups`), sentinelLine]);
 });
 
 test("an access-control failure of a fetch, then a reload, still fails the guards", async ({ page, context, guards, browserName }) => {
@@ -594,7 +632,7 @@ test("an access-control failure of a fetch, then a reload, still fails the guard
   await failFetch(page, context);
   await page.reload();
   await logSentinel(page, context);
-  expect(takeFirstLines(guards)).toContainEqual(accessDeniedFetchProblem(browserName, `${origin}/api/groups`));
+  expect(takeFirstLines(guards)).toEqual([accessDeniedFetchProblem(browserName, `${origin}/api/groups`), sentinelLine, sentinelLine]);
 });
 
 test("an access-control failure of a fetch, then a pushState navigation, still fails the guards", async ({ page, context, guards, browserName }) => {
@@ -604,7 +642,7 @@ test("an access-control failure of a fetch, then a pushState navigation, still f
   await page.evaluate(() => history.pushState(null, "", "/e2e/navigation?moved"));
   await moved;
   await logSentinel(page, context);
-  expect(takeFirstLines(guards)).toContainEqual(accessDeniedFetchProblem(browserName, `${origin}/api/groups`));
+  expect(takeFirstLines(guards)).toEqual([accessDeniedFetchProblem(browserName, `${origin}/api/groups`), sentinelLine, sentinelLine]);
 });
 
 // The page's own code throws the refusal's exact line, with a stack, from a

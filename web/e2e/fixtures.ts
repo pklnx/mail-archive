@@ -88,6 +88,35 @@ export function isResizeObserverLoop(error: { message: string; stack?: string })
   return error.message === resizeObserverLoop && !error.stack;
 }
 
+// Playwright's WebKit makes a page error of each JavaScript console error
+// (wkPage.ts, _onConsoleMessage, Playwright 1.64.1): it splits the line at
+// its first colon into the error's name and message and drops the character
+// after that colon, which it takes for the space of "Name: message". The
+// stack is the whole line followed by the frames, or empty when WebKit gave
+// the line no stack trace: a line logged from a network callback, with no
+// script running, such as an access-control failure of a fetch (#552). The
+// colon is then often the one in "http:", so the message alone is half the
+// line, and an empty stack is no text at all.
+
+/** Stands for the character Playwright's WebKit dropped from a page error without a stack (pageErrorText). */
+export const lostCharacter = "\uFFFD";
+
+/**
+ * The text of a page error in the guards' report, its whole line first. An
+ * error with a stack is its stack: its first line is the whole line in both
+ * engines. Without a stack, in WebKit the line is rebuilt from the name and
+ * the message, with lostCharacter for the character Playwright dropped
+ * after the first colon, and a second line says so; in Chromium it is
+ * "name: message". A line without a colon is the message.
+ */
+export function pageErrorText(error: { name: string; message: string; stack?: string }, webkit: boolean): string {
+  if (error.stack) return error.stack;
+  // No colon in the line, or nothing after it (the message is then the whole line).
+  if (!error.name || (webkit && error.message === `${error.name}:`)) return error.message;
+  if (!webkit) return `${error.name}: ${error.message}`;
+  return `${error.name}:${lostCharacter}${error.message}\n(WebKit gave no stack; ${lostCharacter} is the character Playwright dropped after the first colon)`;
+}
+
 // WebKit refuses a fetch that a document starts while its frame has a
 // navigation to a new document in flight (#552): CachedResource::load fails
 // it before any loader exists, CachedResourceLoader takes the synchronous
@@ -422,7 +451,7 @@ export const test = base.extend<{ guards: Guards }>({
       context.on("weberror", (err) => {
         const error = err.error();
         if (browserName === "webkit" && isResizeObserverLoop(error)) return;
-        const problem = `page error: ${error.stack ?? error.message}`;
+        const problem = `page error: ${pageErrorText(error, browserName === "webkit")}`;
         // WebKit's refusal of a fetch started during a navigation of the
         // page's main frame: held until that navigation commits (#552).
         const page = err.page();
