@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -369,8 +370,25 @@ func TestGroupQuotaAPI(t *testing.T) {
 	if q, _ := quotaOf(); q != nil {
 		t.Fatalf("after remove: %d", *q)
 	}
-	// Without an instance quota, any positive quota.
+	// Without an instance quota, any positive quota up to the CLI's bound of
+	// 1 EiB; above it the thresholds would overflow int64 and an empty group
+	// would be in overflow at once.
 	w.server.storageQuota = 0
+	n = len(auditLog(t, w.st))
+	for _, q := range []int64{config.MaxByteSize + 1, 9e18} {
+		if status, out := w.sendJSON(w.creds["x"], "PATCH", path, map[string]any{"quotaBytes": q}); status != http.StatusBadRequest {
+			t.Errorf("above 1 EiB, %v: %d %s", q, status, out)
+		}
+	}
+	if got := newEntries(t, w.st, n); len(got) != 0 {
+		t.Fatalf("logged above 1 EiB: %+v", got)
+	}
+	if status, out := w.sendJSON(w.creds["x"], "PATCH", path, map[string]any{"quotaBytes": int64(config.MaxByteSize)}); status != http.StatusNoContent {
+		t.Fatalf("1 EiB: %d %s", status, out)
+	}
+	if q, g := quotaOf(); q == nil || *q != config.MaxByteSize || g.State != "ok" {
+		t.Fatalf("after 1 EiB: %+v", g)
+	}
 	if status, out := w.sendJSON(w.creds["x"], "PATCH", path, map[string]any{"quotaBytes": int64(1) << 50}); status != http.StatusNoContent {
 		t.Fatalf("no instance quota: %d %s", status, out)
 	}

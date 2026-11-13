@@ -171,11 +171,11 @@ the **Storage** page in the navigation, which shows:
   set by the operator (`MAIL_ARCHIVE_STORAGE_QUOTA`).
 - **Customer groups** (with two or more): each group's usage against its
   quota, its state, and **Edit quota**. The dialog takes a size in MiB, GiB
-  or TiB, or *No quota*; it refuses a quota above the instance quota and
-  says what the new quota means for the group now, for example that its
-  syncs pause at once. Group quotas may add up to more than the instance
-  quota; the page then says so. Accounts without an owner show as
-  *Without group*.
+  or TiB, or *No quota*; it refuses a quota above the instance quota or
+  above 1 EiB and says what the new quota means for the group now, for
+  example that its syncs pause at once. Group quotas may add up to more
+  than the instance quota; the page then says so. Accounts without an
+  owner show as *Without group*.
 - **Accounts:** every account with its owner, group, messages, size and
   *Only here*, the bytes no other account holds: what deleting the account
   completely would free.

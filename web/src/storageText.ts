@@ -53,6 +53,7 @@ const en = {
   quotaNone: "No quota (only the instance quota applies)",
   quotaInvalid: "Enter a size above 0.",
   quotaAboveInstance: (instance: string) => `At most the instance quota of ${instance}.`,
+  quotaAboveMax: (max: string) => `At most ${max}.`,
   quotaNow: (group: string, used: string) => `${group} uses ${used}.`,
   quotaThen: (percent: number) => `With this quota it is at ${percent} %.`,
   quotaStops: "Its syncs and imports pause at once, and new mail is not archived until space is freed or the quota is raised.",
@@ -128,6 +129,7 @@ const de: typeof en = {
   quotaNone: "Kein Kontingent (nur das der Instanz gilt)",
   quotaInvalid: "Gib eine Größe über 0 ein.",
   quotaAboveInstance: (instance) => `Höchstens das Kontingent der Instanz von ${instance}.`,
+  quotaAboveMax: (max) => `Höchstens ${max}.`,
   quotaNow: (group, used) => `${group} belegt ${used}.`,
   quotaThen: (percent) => `Mit diesem Kontingent sind das ${percent} %.`,
   quotaStops:

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -270,13 +271,19 @@ func (s *Server) changeUserGroup(w http.ResponseWriter, r *http.Request, u *stor
 }
 
 // setGroupQuota is PATCH /api/groups/{id} with {"quotaBytes": n|null}: a
-// positive number of bytes, at most the instance quota, or null to remove
-// it. Audited as group.quota with the old and the new value. The gate
-// reads the figures again at once, so the new state shows right away.
+// positive number of bytes, at most the instance quota and at most 1 EiB
+// (config.MaxByteSize, the CLI's bound), or null to remove it. Audited as
+// group.quota with the old and the new value. The gate reads the figures
+// again at once, so the new state shows right away.
 func (s *Server) setGroupQuota(w http.ResponseWriter, r *http.Request, id int64, raw json.RawMessage) {
 	var quotaBytes *int64
 	if err := json.Unmarshal(raw, &quotaBytes); err != nil || (quotaBytes != nil && *quotaBytes <= 0) {
 		s.fail(w, r, http.StatusBadRequest, "quotaBytes is a positive whole number of bytes, or null for no quota", nil)
+		return
+	}
+	if quotaBytes != nil && *quotaBytes > config.MaxByteSize {
+		s.fail(w, r, http.StatusBadRequest,
+			fmt.Sprintf("the quota is above the largest size of %d bytes (1 EiB)", int64(config.MaxByteSize)), nil)
 		return
 	}
 	if limit := s.storageLimits().InstanceQuota; quotaBytes != nil && limit > 0 && *quotaBytes > limit {

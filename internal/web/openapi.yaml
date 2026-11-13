@@ -1430,11 +1430,11 @@ paths:
         The body has exactly one field: `name` renames the group,
         `quotaBytes` sets its storage quota in message bytes (deduplicated
         within the group), or removes it with `null`. A quota above the
-        instance quota is refused with `400`. A quota change is recorded in
-        the audit log as `group.quota`, with the old and the new value; the
-        storage gate applies it at once in this process and within 10
-        seconds in every other one. Users who are not admins get `403`
-        before the group is looked up.
+        instance quota or above 1 EiB is refused with `400`. A quota change
+        is recorded in the audit log as `group.quota`, with the old and the
+        new value; the storage gate applies it at once in this process and
+        within 10 seconds in every other one. Users who are not admins get
+        `403` before the group is looked up.
       requestBody:
         required: true
         content:
@@ -4363,7 +4363,8 @@ components:
           type: [integer, "null"]
           format: int64
           minimum: 1
-          description: The quota in message bytes, at most the instance quota; null removes it.
+          maximum: 1152921504606846976
+          description: The quota in message bytes, at most the instance quota and at most 1 EiB; null removes it.
     StorageState:
       type: string
       enum: [ok, warn, full, overflow, disk_low]

@@ -362,6 +362,13 @@ function initialSize(quota: number | null): { value: string; unit: Unit } {
   return { value: String(Math.round((quota / 1024 ** 3) * 100) / 100), unit: "GiB" };
 }
 
+/**
+ * The largest quota the server takes: 1 EiB, the bound of the CLI and of
+ * PATCH /api/groups/{id} (`config.MaxByteSize`); above it the server's
+ * quota thresholds would overflow.
+ */
+export const maxQuotaBytes = 2 ** 60;
+
 /** A size as typed, with a decimal point or comma; NaN when it is not a number. */
 export function parseSize(value: string, unit: Unit): number {
   const v = value.trim().replace(",", ".");
@@ -372,7 +379,7 @@ export function parseSize(value: string, unit: Unit): number {
 /**
  * Edit quota: a size, or none. It says what the quota means for the group
  * now (its share, whether it pauses at once) and refuses a quota above the
- * instance quota before sending.
+ * instance quota or above 1 EiB before sending.
  */
 function QuotaModal({ group, usage, returnFocus, cancel, saved }: {
   group: Group;
@@ -395,6 +402,7 @@ function QuotaModal({ group, usage, returnFocus, cancel, saved }: {
   const bytes = none ? null : parseSize(value, unit);
   const invalid = bytes !== null && !(bytes > 0);
   const above = bytes !== null && !invalid && limit !== null && bytes > limit;
+  const aboveMax = bytes !== null && !invalid && !above && bytes > maxQuotaBytes;
   const percent = bytes && !invalid ? percentOf(group.bytes, bytes) : null;
   const pauses = percent !== null && percent >= 100;
   const warns = percent !== null && !pauses && percent >= usage.instance.warnPercent;
@@ -403,7 +411,7 @@ function QuotaModal({ group, usage, returnFocus, cancel, saved }: {
     e?.preventDefault();
     if (busy) return;
     setTried(true);
-    if (invalid || above) {
+    if (invalid || above || aboveMax) {
       field.current?.focus();
       return;
     }
@@ -448,8 +456,10 @@ function QuotaModal({ group, usage, returnFocus, cancel, saved }: {
               inputMode="decimal"
               autoComplete="off"
               value={value}
-              invalid={(tried || value !== "") && (invalid || above)}
-              invalidText={above && limit !== null ? st.quotaAboveInstance(storageSize(limit)) : st.quotaInvalid}
+              invalid={(tried || value !== "") && (invalid || above || aboveMax)}
+              invalidText={
+                above && limit !== null ? st.quotaAboveInstance(storageSize(limit)) : aboveMax ? st.quotaAboveMax(storageSize(maxQuotaBytes)) : st.quotaInvalid
+              }
               onChange={(e) => setValue(e.target.value)}
             />
             <Select id={`${id}-unit`} labelText={st.quotaUnit} value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
@@ -459,7 +469,7 @@ function QuotaModal({ group, usage, returnFocus, cancel, saved }: {
             </Select>
           </div>
         )}
-        {percent !== null && !above && (
+        {percent !== null && !above && !aboveMax && (
           <p className={pauses ? "app-text-error" : warns ? "app-text-warning" : undefined}>
             {st.quotaThen(percent)} {pauses ? st.quotaStops : warns ? st.quotaWarn : ""}
           </p>

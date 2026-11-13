@@ -79,9 +79,10 @@ func ParseStorage(getenv func(string) string) (Storage, error) {
 	return s, nil
 }
 
-// maxByteSize bounds ParseByteSize: 8 EiB would overflow int64 arithmetic
-// in the quota thresholds, and no archive comes near 1 EiB.
-const maxByteSize = 1 << 60
+// MaxByteSize bounds every quota and size an operator or admin sets, here
+// and through the web API (PATCH /api/groups/{id}): 8 EiB would overflow
+// int64 arithmetic in the quota thresholds, and no archive comes near 1 EiB.
+const MaxByteSize = 1 << 60
 
 // ParseByteSize reads a byte count: a whole number with an optional unit,
 // KiB, MiB, GiB, TiB or PiB (powers of 1024), KB, MB, GB, TB or PB (powers
@@ -104,7 +105,7 @@ func ParseByteSize(v string) (int64, error) {
 		}
 	}
 	n, err := strconv.ParseInt(s, 10, 64)
-	if err != nil || n < 0 || n > math.MaxInt64/factor || n*factor > maxByteSize {
+	if err != nil || n < 0 || n > math.MaxInt64/factor || n*factor > MaxByteSize {
 		return 0, fmt.Errorf("invalid size %q", v)
 	}
 	return n * factor, nil

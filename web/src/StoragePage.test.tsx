@@ -139,6 +139,25 @@ describe("Edit quota", () => {
     expect(requests).toEqual([]);
   });
 
+  it("refuses a quota above 1 EiB before sending when there is no instance quota", async () => {
+    show(adminUsage({ instance: { quotaBytes: null } }));
+    editQuota("Meier");
+    const dialog = screen.getByRole("dialog");
+    const size = within(dialog).getByLabelText(st.quotaSize);
+    fireEvent.change(within(dialog).getByLabelText(st.quotaUnit), { target: { value: "TiB" } });
+    // 8 000 000 TiB is about 8.8e18 bytes, whose thresholds would overflow on the server.
+    fireEvent.change(size, { target: { value: "8000000" } });
+    expect(within(dialog).getByText(st.quotaAboveMax("1024 PiB"))).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: st.quotaSave }));
+    expect(requests).toEqual([]);
+    // 1 EiB itself is taken.
+    fireEvent.change(size, { target: { value: String(1024 * 1024) } });
+    expect(within(dialog).queryByText(st.quotaAboveMax("1024 PiB"))).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: st.quotaSave }));
+    await screen.findByText(st.quotaSet("Meier", "1024 PiB"));
+    expect(requests).toEqual([{ method: "PATCH", url: "/api/groups/2", body: { quotaBytes: 2 ** 60 } }]);
+  });
+
   it("says what a quota means for the group, and that it pauses at once", () => {
     const dialog = open();
     const size = within(dialog).getByLabelText(st.quotaSize);
