@@ -289,6 +289,10 @@ func TestStorageStates(t *testing.T) {
 			t.Fatalf("%s: a 5xx for storage", st)
 		}
 	}
+	// One recipient at overflow, both at disk_low (for /api/metrics).
+	if n := sf.srv.StorageDeferrals(); n != 3 {
+		t.Fatalf("%d recipients counted as deferred, want 3", n)
+	}
 	sf.logHas(`msg="smtp recipient deferred" code=452`, "reason=storage", "state=overflow", "state=disk_low",
 		`msg="smtp recipient accepted above the storage quota"`)
 }

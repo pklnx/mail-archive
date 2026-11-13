@@ -135,13 +135,14 @@ func TestImportPausedExit(t *testing.T) {
 	}
 }
 
-// A sync that the gate pauses prints "paused" with the limit and exits
+// A sync that the gate pauses (within one message of the limit) prints
+// "paused" with the limit and exits
 // with 75; the next run is refused at the start, also with 75, and
 // fetches nothing.
 func TestSyncPausedExit(t *testing.T) {
 	user := imapmemserver.NewUser("alice", "pw")
 	imaptest.CreateMailboxes(t, user, "INBOX")
-	for i := range 250 { // more than one batch of 100
+	for i := range 250 { // more than two batches of 100
 		imaptest.Append(t, user, "INBOX", []byte(fmt.Sprintf("Subject: m%d\r\n\r\nbody %d\r\n", i, i)))
 	}
 	host, port := imaptest.Start(t, user)
@@ -162,7 +163,7 @@ func TestSyncPausedExit(t *testing.T) {
 	}
 	var err error
 	out := captureStdout(t, func() { err = runCmd(t, newSyncCmd(), "") })
-	if exitCodeOf(err) != exitPaused || !regexpMatch(`(?m)^work\s+fetched=100\s+new=100\s+paused: storage quota of the instance reached`, out) {
+	if exitCodeOf(err) != exitPaused || !regexpMatch(`(?m)^work\s+fetched=1\s+new=1\s+paused: storage quota of the instance reached`, out) {
 		t.Fatalf("paused sync: %v\n%s", err, out)
 	}
 	out = captureStdout(t, func() { err = runCmd(t, newSyncCmd(), "") })
