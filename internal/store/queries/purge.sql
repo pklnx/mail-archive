@@ -137,6 +137,21 @@ FROM messages m
 WHERE m.sha256 = ANY (@shas::bpchar[])
 ORDER BY m.seq;
 
+-- name: InsertPurgeMarks :execrows
+-- The deletion marks of a purge's batch (#539), after its tombstones and
+-- before the account's locations go: every purged message, whether or not
+-- it stays in other accounts, marked with the account and its customer
+-- group (0: without an owner), and with its tombstone if it has one.
+INSERT INTO deletion_marks (sha256, archived_at, account_ids, group_ids, purge_id, tombstone_id)
+SELECT m.sha256, m.created_at, ARRAY[@account_id::bigint],
+       ARRAY[(SELECT coalesce(o.group_id, 0) FROM accounts a LEFT JOIN users o ON o.id = a.owner_id
+              WHERE a.id = @account_id::bigint)],
+       @purge_id::bigint,
+       (SELECT max(d.id) FROM deleted_messages d WHERE d.purge_id = @purge_id::bigint AND d.sha256 = m.sha256)
+FROM messages m
+WHERE m.sha256 = ANY (@shas::bpchar[])
+ORDER BY m.sha256;
+
 -- name: InsertPurgeDeletions :execrows
 -- The deletion records of the attestation chain (#66), in the same
 -- transaction as the tombstones.

@@ -82,7 +82,7 @@ func TestMetricsKey(t *testing.T) {
 	}
 }
 
-// TestMetricsKeyMigration: 00042's Down deletes the metrics keys and
+// TestMetricsKeyMigration: 00043's Down deletes the metrics keys and
 // keeps the others; Up again accepts metrics keys.
 func TestMetricsKeyMigration(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
@@ -123,10 +123,10 @@ func TestMetricsKeyMigration(t *testing.T) {
 	newKey(t, st, admin.ID, "scrape", []string{store.ScopeMetrics}, nil)
 }
 
-// downMetricsKeyScopeMigration rolls back 00042_metrics_key_scope.
+// downMetricsKeyScopeMigration rolls back 00043_metrics_key_scope.
 func downMetricsKeyScopeMigration(t *testing.T, st *store.Store) {
 	t.Helper()
-	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00042_metrics_key_scope") {
+	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00043_metrics_key_scope") {
 		t.Fatalf("down: %q %v", m, err)
 	}
 }

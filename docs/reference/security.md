@@ -161,14 +161,40 @@ web UI before version 1.6.0 stay in force; the operator lists them with
 `./ma hold list` and decides whether to keep them. Groups separate customers
 inside one instance: they share one database, one archive directory, one
 secret key and one backup, and a message that several groups received is
-stored once and shown to each only through its own accounts. Sync, import
-and fill statistics count per account: a message is *new* when the account
-did not hold it before, so these figures do not show whether another account
-already held the same bytes. One GoBD
-export never spans customer groups: a selection whose users and accounts are
-not all in one group is refused, never filtered, and the signed statement
-names the group and its owners; places of a message in another group's
-accounts are never part of it.
+stored once and shown to each only through its own accounts.
+
+Sync, import and fill statistics count per account: a message is *new* when
+the account did not hold it before. Since 1.6.0, one more thing does not
+depend on what accounts of other customer groups hold or held:
+
+- whether a message deleted by retention or an account purge is archived
+  again: it is skipped only in the accounts and groups it was deleted from,
+  and only while that group holds no copy of it.
+
+Accepted:
+
+- Within one group, a user who holds the exact bytes of a message can tell
+  from this that another account of the group archived it before.
+- Messages deleted by a version before 1.6.0 count as deleted in every group
+  that holds no copy.
+- A purge by a version before 1.6.0 recorded a message only when no other
+  account held it. Whether such a message is archived again in the purged
+  account's group therefore still depends on whether another account held
+  it then.
+- While a process of a version before 1.6.0 still runs after the upgrade, it
+  behaves as before 1.6.0: its search shows attachment text, and its syncs,
+  fills and deliveries skip and store messages as before 1.6.0. Stop web and
+  worker before upgrading.
+
+Not covered: a message stays in an account after its retention period while
+another account keeps it (see Retention and deletion above). A location's
+retention end, and the date of a message without a Date header, count from
+when the archive first stored the message.
+
+One GoBD export never spans customer groups: a selection whose users and
+accounts are not all in one group is refused, never filtered, and the signed
+statement names the group and its owners; places of a message in another
+group's accounts are never part of it.
 
 A shared user may search, read and download. Managing, syncing, retention
 and removal stay with the owner; the shared user gets `404` (`403` for the admin-only purge
