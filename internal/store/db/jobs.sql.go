@@ -82,7 +82,7 @@ func (q *Queries) ClaimJobs(ctx context.Context, arg ClaimJobsParams) ([]ClaimJo
 const continueJob = `-- name: ContinueJob :execrows
 UPDATE jobs
 SET state = 'queued', payload = $1, attempts = 0, run_after = now(), last_error = NULL,
-    lease_token = NULL, lease_until = NULL, started_at = NULL
+    lease_token = NULL, lease_until = NULL, started_at = NULL, requeue = false
 WHERE id = $2 AND lease_token = $3
 `
 
@@ -93,7 +93,7 @@ type ContinueJobParams struct {
 }
 
 // A handler that did part of its work: queued again at once with the new
-// payload (its cursor), as a fresh job.
+// payload (its cursor), as a fresh job (requeue cleared).
 func (q *Queries) ContinueJob(ctx context.Context, arg ContinueJobParams) (int64, error) {
 	result, err := q.db.Exec(ctx, continueJob, arg.Payload, arg.ID, arg.Lease)
 	if err != nil {
@@ -126,32 +126,41 @@ INSERT INTO jobs AS j (kind, key, message_sha256, priority, max_attempts, run_af
 VALUES ($1, $2, $3, $4, $5,
         coalesce($6::timestamptz, now()), $7)
 ON CONFLICT (kind, key) DO UPDATE SET
-    priority = CASE WHEN j.state = 'queued' THEN LEAST(j.priority, EXCLUDED.priority) ELSE EXCLUDED.priority END,
+    priority = CASE WHEN j.state IN ('queued', 'running') THEN LEAST(j.priority, EXCLUDED.priority) ELSE EXCLUDED.priority END,
     run_after = CASE
+        WHEN j.state = 'running' THEN j.run_after
         WHEN j.state = 'queued' AND j.attempts > 0 THEN j.run_after
         WHEN j.state = 'queued' THEN LEAST(j.run_after, EXCLUDED.run_after)
         ELSE EXCLUDED.run_after END,
-    payload = CASE WHEN j.state = 'queued' THEN j.payload ELSE EXCLUDED.payload END,
-    attempts = CASE WHEN j.state = 'queued' THEN j.attempts ELSE 0 END,
-    last_error = CASE WHEN j.state = 'queued' THEN j.last_error END,
-    max_attempts = EXCLUDED.max_attempts,
-    message_sha256 = coalesce(EXCLUDED.message_sha256, j.message_sha256),
-    started_at = CASE WHEN j.state = 'queued' THEN j.started_at END,
+    payload = CASE WHEN j.state IN ('queued', 'running') THEN j.payload ELSE EXCLUDED.payload END,
+    attempts = CASE WHEN j.state IN ('queued', 'running') THEN j.attempts ELSE 0 END,
+    last_error = CASE WHEN j.state IN ('queued', 'running') THEN j.last_error END,
+    max_attempts = CASE WHEN j.state = 'running' THEN j.max_attempts ELSE EXCLUDED.max_attempts END,
+    message_sha256 = CASE WHEN j.state = 'running' THEN j.message_sha256 ELSE coalesce(EXCLUDED.message_sha256, j.message_sha256) END,
+    started_at = CASE WHEN j.state IN ('queued', 'running') THEN j.started_at END,
     finished_at = NULL,
-    state = 'queued'
+    requeue = j.state = 'running',
+    state = CASE WHEN j.state = 'running' THEN j.state ELSE 'queued' END
 WHERE j.state IN ('queued', 'done') OR (j.state = 'failed' AND $8::boolean)
-RETURNING j.id
+   OR (j.state = 'running' AND $9::boolean)
+RETURNING j.id, j.state
 `
 
 type EnqueueJobParams struct {
-	Kind          string
-	Key           string
-	MessageSha256 *string
-	Priority      int16
-	MaxAttempts   int16
-	RunAfter      *time.Time
-	Payload       []byte
-	RetryFailed   bool
+	Kind           string
+	Key            string
+	MessageSha256  *string
+	Priority       int16
+	MaxAttempts    int16
+	RunAfter       *time.Time
+	Payload        []byte
+	RetryFailed    bool
+	RequeueRunning bool
+}
+
+type EnqueueJobRow struct {
+	ID    int64
+	State string
 }
 
 // The job queue (see 00032 and internal/jobs).
@@ -159,10 +168,12 @@ type EnqueueJobParams struct {
 // queued keeps its row and only moves forward (the lower priority; the
 // earlier run_after, unless a retry is pending, attempts > 0); done is
 // queued again with the payload of the caller and attempts = 0; running is left
-// alone (handlers are idempotent, delivery is at least once); failed is
-// left alone unless retry_failed. Returns a row only when the job is
-// queued afterwards.
-func (q *Queries) EnqueueJob(ctx context.Context, arg EnqueueJobParams) (int64, error) {
+// alone (handlers are idempotent, delivery is at least once), unless
+// requeue_running: then it only gets requeue = true and the lower
+// priority, and FinishJob queues it again after this run; failed is left
+// alone unless retry_failed. Returns the row's id and state when it was
+// queued afterwards or asked to run again (state running).
+func (q *Queries) EnqueueJob(ctx context.Context, arg EnqueueJobParams) (EnqueueJobRow, error) {
 	row := q.db.QueryRow(ctx, enqueueJob,
 		arg.Kind,
 		arg.Key,
@@ -172,10 +183,11 @@ func (q *Queries) EnqueueJob(ctx context.Context, arg EnqueueJobParams) (int64, 
 		arg.RunAfter,
 		arg.Payload,
 		arg.RetryFailed,
+		arg.RequeueRunning,
 	)
-	var id int64
-	err := row.Scan(&id)
-	return id, err
+	var i EnqueueJobRow
+	err := row.Scan(&i.ID, &i.State)
+	return i, err
 }
 
 const extendJobLeases = `-- name: ExtendJobLeases :many
@@ -219,10 +231,16 @@ func (q *Queries) ExtendJobLeases(ctx context.Context, arg ExtendJobLeasesParams
 	return items, nil
 }
 
-const finishJob = `-- name: FinishJob :execrows
+const finishJob = `-- name: FinishJob :one
 UPDATE jobs
-SET state = 'done', finished_at = now(), lease_token = NULL, lease_until = NULL, last_error = NULL
+SET state = CASE WHEN requeue THEN 'queued' ELSE 'done' END,
+    finished_at = CASE WHEN requeue THEN NULL ELSE now() END,
+    attempts = CASE WHEN requeue THEN 0 ELSE attempts END,
+    run_after = CASE WHEN requeue THEN now() ELSE run_after END,
+    started_at = CASE WHEN requeue THEN NULL ELSE started_at END,
+    requeue = false, lease_token = NULL, lease_until = NULL, last_error = NULL
 WHERE id = $1 AND lease_token = $2
+RETURNING kind, state
 `
 
 type FinishJobParams struct {
@@ -230,12 +248,19 @@ type FinishJobParams struct {
 	Lease []byte
 }
 
-func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) (int64, error) {
-	result, err := q.db.Exec(ctx, finishJob, arg.ID, arg.Lease)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+type FinishJobRow struct {
+	Kind  string
+	State string
+}
+
+// Done; or, when a rerun was asked for during the run (requeue), queued
+// again at once as a fresh job, with the priority it was asked for. The
+// caller wakes the pools in that case.
+func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) (FinishJobRow, error) {
+	row := q.db.QueryRow(ctx, finishJob, arg.ID, arg.Lease)
+	var i FinishJobRow
+	err := row.Scan(&i.Kind, &i.State)
+	return i, err
 }
 
 const jobStats = `-- name: JobStats :many
@@ -343,7 +368,7 @@ UPDATE jobs j
 SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
     finished_at = CASE WHEN c.give_up THEN now() END,
     run_after = CASE WHEN c.give_up THEN j.run_after ELSE c.retry_at END,
-    last_error = 'lease expired', lease_token = NULL, lease_until = NULL
+    last_error = 'lease expired', lease_token = NULL, lease_until = NULL, requeue = false
 FROM c
 WHERE j.id = c.id AND j.state = 'running' AND j.lease_until < now()
 RETURNING j.id, j.kind, j.key, j.state, j.attempts
@@ -369,7 +394,8 @@ type ReapExpiredJobsRow struct {
 // hangs) are retried as after an error, with code 'lease expired': the
 // attempt the dead process made counts. Rows a heartbeat holds are
 // skipped, and so are the leases of the calling pool (own): only its
-// heartbeat decides about the jobs it runs.
+// heartbeat decides about the jobs it runs. requeue is cleared, as by
+// RetryJob, so that a crash is never rerun at once.
 func (q *Queries) ReapExpiredJobs(ctx context.Context, arg ReapExpiredJobsParams) ([]ReapExpiredJobsRow, error) {
 	rows, err := q.db.Query(ctx, reapExpiredJobs,
 		arg.FirstSeconds,
@@ -405,7 +431,7 @@ func (q *Queries) ReapExpiredJobs(ctx context.Context, arg ReapExpiredJobsParams
 const releaseJob = `-- name: ReleaseJob :execrows
 UPDATE jobs
 SET state = 'queued', attempts = GREATEST(attempts - 1, 0), run_after = now(),
-    lease_token = NULL, lease_until = NULL, started_at = NULL
+    lease_token = NULL, lease_until = NULL, started_at = NULL, requeue = false
 WHERE id = $1 AND lease_token = $2
 `
 
@@ -414,7 +440,8 @@ type ReleaseJobParams struct {
 	Lease []byte
 }
 
-// At shutdown: queued again at once, and the attempt is taken back.
+// At shutdown: queued again at once, and the attempt is taken back. A
+// rerun that was asked for is this one (requeue cleared).
 func (q *Queries) ReleaseJob(ctx context.Context, arg ReleaseJobParams) (int64, error) {
 	result, err := q.db.Exec(ctx, releaseJob, arg.ID, arg.Lease)
 	if err != nil {
@@ -449,7 +476,7 @@ UPDATE jobs j
 SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
     finished_at = CASE WHEN c.give_up THEN now() END,
     run_after = CASE WHEN c.give_up THEN j.run_after ELSE c.retry_at END,
-    last_error = $1::text, lease_token = NULL, lease_until = NULL
+    last_error = $1::text, lease_token = NULL, lease_until = NULL, requeue = false
 FROM c
 WHERE j.id = c.id AND j.lease_token = $2
 RETURNING j.state, j.run_after
@@ -473,7 +500,8 @@ type RetryJobRow struct {
 // once if permanent), else queued again after an exponential backoff with
 // equal jitter, so that restarted pools do not retry in step:
 // min(first * 2^(attempts-1), cap) * [0.5, 1). ReapExpiredJobs uses the
-// same expression.
+// same expression. A rerun asked for during the run (requeue) is dropped:
+// the retry reads its work afresh, and a failed job stays failed.
 // The token again: a waiting UPDATE re-checks only its own WHERE against
 // a row another pool took over meanwhile, not the CTE.
 func (q *Queries) RetryJob(ctx context.Context, arg RetryJobParams) (RetryJobRow, error) {

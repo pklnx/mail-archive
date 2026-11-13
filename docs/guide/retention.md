@@ -164,8 +164,9 @@ condition must match: a user, an account, a period, a search filter. A
 filter is matched by search when the hold is added and before every
 deletion, and its matches are only ever added; until then the hold covers
 its whole scope. A search filter also matches the text extracted from
-attachments, once it has been extracted (see
-[Attachments](./web-ui#attachments)). After the upgrade that brings
+attachments, once that text is searchable for the user whose mail it
+matches (see [Attachments](./web-ui#attachments)): a hold matches as each
+user it covers, through that user's own accounts. After the upgrade that brings
 attachment search, older messages are extracted in the background newest
 first, so the oldest mail, which retention deletes first, comes last: ask
 the operator to run `./ma reindex` once before you rely on a filter hold

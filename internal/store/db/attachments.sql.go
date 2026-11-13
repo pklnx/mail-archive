@@ -31,10 +31,12 @@ WHERE a.body_text IS NOT NULL
   AND a.search @@ (websearch_to_tsquery('simple', $1::text) ||
                    websearch_to_tsquery('german', $1::text) ||
                    websearch_to_tsquery('english', $1::text))
+  -- Only through a location of the scope that shows the message's
+  -- attachment text (attachment_text_ok, #539).
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      WHERE l.message_sha256 = a.message_sha256
+      WHERE l.message_sha256 = a.message_sha256 AND l.attachment_text_ok
         AND f.account_id = ANY ($2::bigint[])
         AND (f.account_id = ANY ($3::bigint[]) OR scope_folder_granted(f.account_id, f.id, $4::bigint[], $5::bigint[])))
   -- The scope's period (#393), checked only when it has one.
@@ -57,7 +59,8 @@ type AttachmentMatchesParams struct {
 }
 
 // Messages with an attachment whose text matches the query, found in one
-// of the scope's accounts, up to row_limit; uses
+// of the scope's accounts through a location that shows it, up to
+// row_limit; uses
 // attachment_texts_search_idx.
 // Only rows with text: an empty one would match any negation (-draft).
 func (q *Queries) AttachmentMatches(ctx context.Context, arg AttachmentMatchesParams) ([]string, error) {
@@ -111,7 +114,7 @@ CROSS JOIN LATERAL (
 WHERE EXISTS (
     SELECT 1 FROM message_locations l
     JOIN folders f ON f.id = l.folder_id
-    WHERE l.message_sha256 = s.sha
+    WHERE l.message_sha256 = s.sha AND l.attachment_text_ok
       AND f.account_id = ANY ($3::bigint[])
       AND (f.account_id = ANY ($4::bigint[]) OR scope_folder_granted(f.account_id, f.id, $5::bigint[], $6::bigint[])))
   -- The scope's period (#393), checked only when it has one.
@@ -143,8 +146,10 @@ type AttachmentSnippetsRow struct {
 // For listed messages that matched by an attachment only: the matching
 // attachment with the lowest part index, and a snippet of its text marked
 // like the body snippets of SearchMessages. Only messages found in one of
-// the scope's accounts. Each hash is looked up on its own through the
+// the scope's accounts through a location that shows it. Each hash is looked up on its own through the
 // primary key, and the snippet is made for one attachment per message.
+// Only through a location of the scope that shows the message's
+// attachment text (attachment_text_ok, #539).
 func (q *Queries) AttachmentSnippets(ctx context.Context, arg AttachmentSnippetsParams) ([]AttachmentSnippetsRow, error) {
 	rows, err := q.db.Query(ctx, attachmentSnippets,
 		arg.Query,
@@ -177,6 +182,46 @@ func (q *Queries) AttachmentSnippets(ctx context.Context, arg AttachmentSnippets
 		return nil, err
 	}
 	return items, nil
+}
+
+const attachmentTextNeeded = `-- name: AttachmentTextNeeded :many
+SELECT l.id FROM message_locations l
+WHERE l.message_sha256 = $1 AND NOT l.attachment_text_ok
+ORDER BY l.id
+`
+
+// The locations of a message that do not show its attachment text yet,
+// through message_locations_attachment_pending_idx.
+func (q *Queries) AttachmentTextNeeded(ctx context.Context, sha256 string) ([]int64, error) {
+	rows, err := q.db.Query(ctx, attachmentTextNeeded, sha256)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const attachmentTextSearchable = `-- name: AttachmentTextSearchable :one
+SELECT EXISTS (SELECT 1 FROM attachment_texts a WHERE a.message_sha256 = $1 AND a.body_text IS NOT NULL)
+`
+
+// Whether a message has stored attachment text that a search can match.
+func (q *Queries) AttachmentTextSearchable(ctx context.Context, sha256 string) (bool, error) {
+	row := q.db.QueryRow(ctx, attachmentTextSearchable, sha256)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const countAttachmentPending = `-- name: CountAttachmentPending :one
@@ -225,6 +270,60 @@ DELETE FROM attachment_texts WHERE message_sha256 = $1
 func (q *Queries) DeleteAttachmentTexts(ctx context.Context, sha256 string) error {
 	_, err := q.db.Exec(ctx, deleteAttachmentTexts, sha256)
 	return err
+}
+
+const groupAttachmentTextOK = `-- name: GroupAttachmentTextOK :many
+SELECT DISTINCT s.sha::text AS sha256
+FROM unnest($1::bpchar[]) AS s (sha)
+CROSS JOIN (
+    SELECT f.id FROM folders f
+    JOIN accounts a ON a.id = f.account_id
+    LEFT JOIN users o ON o.id = a.owner_id
+    WHERE coalesce(o.group_id, 0) = $2::bigint
+    OFFSET 0
+) gf
+JOIN LATERAL (
+    SELECT 1 FROM message_locations ml
+    WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha AND ml.attachment_text_ok
+    LIMIT 1
+) ok ON true
+`
+
+type GroupAttachmentTextOKParams struct {
+	Shas    []string
+	GroupID int64
+}
+
+// The hashes of a batch of which the customer group (0: the accounts
+// without an owner) holds a location that shows the attachment text
+// (attachment_text_ok), in any of its accounts, the saving one included
+// (#539, part 2). The shape of GroupHeldMessages: driven from the group's
+// own folders, one probe of message_locations_folder_sha_idx per folder
+// and hash, so the cost depends only on the group's folders and the batch,
+// never on how many accounts of other groups hold the same bytes. LIMIT 1
+// is the fence that keeps each probe a subquery of its own, so the planner
+// cannot flatten the probes into a lookup by hash
+// (message_locations_sha_idx); TestGroupAttachmentTextOKPlan checks the
+// custom and the generic plan and fails without it. OFFSET 0 keeps the
+// folder list from being merged into the probes.
+func (q *Queries) GroupAttachmentTextOK(ctx context.Context, arg GroupAttachmentTextOKParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, groupAttachmentTextOK, arg.Shas, arg.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var sha256 string
+		if err := rows.Scan(&sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertAttachmentText = `-- name: InsertAttachmentText :exec
@@ -309,6 +408,54 @@ func (q *Queries) ListAttachmentPending(ctx context.Context, arg ListAttachmentP
 	return items, nil
 }
 
+const listAttachmentTextRepair = `-- name: ListAttachmentTextRepair :many
+SELECT DISTINCT l.message_sha256
+FROM message_locations l
+WHERE NOT l.attachment_text_ok
+  AND l.message_sha256 > $1::bpchar
+  AND EXISTS (
+      SELECT 1 FROM attachment_index_state s
+      WHERE s.message_sha256 = l.message_sha256 AND s.version >= $2::smallint)
+  AND NOT EXISTS (
+      SELECT 1 FROM jobs j
+      WHERE j.kind = 'attachment_text' AND j.key = l.message_sha256::text AND j.state IN ('queued', 'running', 'failed'))
+ORDER BY l.message_sha256
+LIMIT $3
+`
+
+type ListAttachmentTextRepairParams struct {
+	After    string
+	Version  int16
+	RowLimit int32
+}
+
+// The repair, second step: messages done at version with a location that
+// does not show their attachment text and no attachment_text job that is
+// queued, running or failed: the invariant is broken for them (a location
+// inserted or a job ended by a process before 1.6.0, or a done job that
+// was removed). In hash order after the cursor (exclusive), through
+// message_locations_attachment_pending_idx. Messages that are not done
+// are the backfill's.
+func (q *Queries) ListAttachmentTextRepair(ctx context.Context, arg ListAttachmentTextRepairParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listAttachmentTextRepair, arg.After, arg.Version, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var message_sha256 string
+		if err := rows.Scan(&message_sha256); err != nil {
+			return nil, err
+		}
+		items = append(items, message_sha256)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markAttachmentsIndexed = `-- name: MarkAttachmentsIndexed :execrows
 INSERT INTO attachment_index_state AS s (message_sha256, version) VALUES ($1, $2)
 ON CONFLICT (message_sha256) DO UPDATE SET version = EXCLUDED.version
@@ -326,6 +473,83 @@ type MarkAttachmentsIndexedParams struct {
 // foreign key.
 func (q *Queries) MarkAttachmentsIndexed(ctx context.Context, arg MarkAttachmentsIndexedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markAttachmentsIndexed, arg.Sha256, arg.Version)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const messagesWithAttachment = `-- name: MessagesWithAttachment :many
+SELECT m.sha256::text AS sha256, m.has_attachment
+FROM messages m
+WHERE m.sha256 = ANY ($1::bpchar[])
+`
+
+type MessagesWithAttachmentRow struct {
+	Sha256        string
+	HasAttachment bool
+}
+
+// The hashes of a batch whose message row exists, and whether it has an
+// attachment: through the primary key.
+func (q *Queries) MessagesWithAttachment(ctx context.Context, shas []string) ([]MessagesWithAttachmentRow, error) {
+	rows, err := q.db.Query(ctx, messagesWithAttachment, shas)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessagesWithAttachmentRow
+	for rows.Next() {
+		var i MessagesWithAttachmentRow
+		if err := rows.Scan(&i.Sha256, &i.HasAttachment); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const repairAttachmentTextNoAttachment = `-- name: RepairAttachmentTextNoAttachment :execrows
+UPDATE message_locations l SET attachment_text_ok = true
+WHERE l.id IN (
+    SELECT x.id FROM message_locations x
+    JOIN messages m ON m.sha256 = x.message_sha256
+    WHERE NOT x.attachment_text_ok AND NOT m.has_attachment
+    ORDER BY x.id
+    LIMIT $1
+    FOR UPDATE OF x SKIP LOCKED)
+`
+
+// The repair, first step: locations that do not show the attachment text
+// of a message without attachments (as a process before 1.6.0 writes
+// them) show it, since there is nothing to show; up to row_limit, through
+// message_locations_attachment_pending_idx.
+func (q *Queries) RepairAttachmentTextNoAttachment(ctx context.Context, rowLimit int32) (int64, error) {
+	result, err := q.db.Exec(ctx, repairAttachmentTextNoAttachment, rowLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setAttachmentTextOK = `-- name: SetAttachmentTextOK :execrows
+UPDATE message_locations l SET attachment_text_ok = true
+WHERE l.id IN (
+    SELECT x.id FROM message_locations x
+    WHERE x.id = ANY ($1::bigint[]) AND NOT x.attachment_text_ok
+    ORDER BY x.id
+    FOR UPDATE OF x)
+`
+
+// The locations an extraction started after (needed) show the text from
+// now on; locations deleted meanwhile are left out. Locked in id order,
+// before the message's state row, as a deletion locks them before the
+// message.
+func (q *Queries) SetAttachmentTextOK(ctx context.Context, ids []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, setAttachmentTextOK, ids)
 	if err != nil {
 		return 0, err
 	}

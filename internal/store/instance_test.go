@@ -265,7 +265,8 @@ func TestMigrationFailureBeforeInstanceState(t *testing.T) {
 	}
 }
 
-// downInstanceStateMigration rolls back 00041_storage_usage, 00040_smtp_credentials and
+// downInstanceStateMigration rolls back 00042_attachment_text_per_location,
+// 00041_storage_usage, 00040_smtp_credentials and
 // 00039_instance_state.
 func downInstanceStateMigration(t *testing.T, st *store.Store) {
 	t.Helper()

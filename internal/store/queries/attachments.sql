@@ -56,7 +56,8 @@ WHERE m.has_attachment
 
 -- name: AttachmentMatches :many
 -- Messages with an attachment whose text matches the query, found in one
--- of the scope's accounts, up to row_limit; uses
+-- of the scope's accounts through a location that shows it, up to
+-- row_limit; uses
 -- attachment_texts_search_idx.
 SELECT DISTINCT a.message_sha256::text
 FROM attachment_texts a
@@ -65,10 +66,12 @@ WHERE a.body_text IS NOT NULL
   AND a.search @@ (websearch_to_tsquery('simple', @query::text) ||
                    websearch_to_tsquery('german', @query::text) ||
                    websearch_to_tsquery('english', @query::text))
+  -- Only through a location of the scope that shows the message's
+  -- attachment text (attachment_text_ok, #539).
   AND EXISTS (
       SELECT 1 FROM message_locations l
       JOIN folders f ON f.id = l.folder_id
-      WHERE l.message_sha256 = a.message_sha256
+      WHERE l.message_sha256 = a.message_sha256 AND l.attachment_text_ok
         AND f.account_id = ANY (@accounts::bigint[])
         AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])))
   -- The scope's period (#393), checked only when it has one.
@@ -82,7 +85,7 @@ LIMIT @row_limit;
 -- For listed messages that matched by an attachment only: the matching
 -- attachment with the lowest part index, and a snippet of its text marked
 -- like the body snippets of SearchMessages. Only messages found in one of
--- the scope's accounts. Each hash is looked up on its own through the
+-- the scope's accounts through a location that shows it. Each hash is looked up on its own through the
 -- primary key, and the snippet is made for one attachment per message.
 SELECT s.sha::text AS sha256, a.part_index, a.filename,
        ts_headline('german', a.body_text,
@@ -102,10 +105,12 @@ CROSS JOIN LATERAL (
                         websearch_to_tsquery('english', @query::text))
     ORDER BY ax.part_index
     LIMIT 1) a
+-- Only through a location of the scope that shows the message's
+-- attachment text (attachment_text_ok, #539).
 WHERE EXISTS (
     SELECT 1 FROM message_locations l
     JOIN folders f ON f.id = l.folder_id
-    WHERE l.message_sha256 = s.sha
+    WHERE l.message_sha256 = s.sha AND l.attachment_text_ok
       AND f.account_id = ANY (@accounts::bigint[])
       AND (f.account_id = ANY (@scope_all_folder_accounts::bigint[]) OR scope_folder_granted(f.account_id, f.id, @scope_folder_accounts::bigint[], @scope_folders::bigint[])))
   -- The scope's period (#393), checked only when it has one.
@@ -118,3 +123,96 @@ ORDER BY 1;
 -- name: CountFailedJobsWithCode :one
 -- Failed jobs of a kind whose last error is code.
 SELECT count(*)::bigint FROM jobs WHERE kind = @kind AND state = 'failed' AND last_error = @code::text;
+
+-- name: MessagesWithAttachment :many
+-- The hashes of a batch whose message row exists, and whether it has an
+-- attachment: through the primary key.
+SELECT m.sha256::text AS sha256, m.has_attachment
+FROM messages m
+WHERE m.sha256 = ANY (@shas::bpchar[]);
+
+-- name: GroupAttachmentTextOK :many
+-- The hashes of a batch of which the customer group (0: the accounts
+-- without an owner) holds a location that shows the attachment text
+-- (attachment_text_ok), in any of its accounts, the saving one included
+-- (#539, part 2). The shape of GroupHeldMessages: driven from the group's
+-- own folders, one probe of message_locations_folder_sha_idx per folder
+-- and hash, so the cost depends only on the group's folders and the batch,
+-- never on how many accounts of other groups hold the same bytes. LIMIT 1
+-- is the fence that keeps each probe a subquery of its own, so the planner
+-- cannot flatten the probes into a lookup by hash
+-- (message_locations_sha_idx); TestGroupAttachmentTextOKPlan checks the
+-- custom and the generic plan and fails without it. OFFSET 0 keeps the
+-- folder list from being merged into the probes.
+SELECT DISTINCT s.sha::text AS sha256
+FROM unnest(@shas::bpchar[]) AS s (sha)
+CROSS JOIN (
+    SELECT f.id FROM folders f
+    JOIN accounts a ON a.id = f.account_id
+    LEFT JOIN users o ON o.id = a.owner_id
+    WHERE coalesce(o.group_id, 0) = @group_id::bigint
+    OFFSET 0
+) gf
+JOIN LATERAL (
+    SELECT 1 FROM message_locations ml
+    WHERE ml.folder_id = gf.id AND ml.message_sha256 = s.sha AND ml.attachment_text_ok
+    LIMIT 1
+) ok ON true;
+
+-- name: AttachmentTextNeeded :many
+-- The locations of a message that do not show its attachment text yet,
+-- through message_locations_attachment_pending_idx.
+SELECT l.id FROM message_locations l
+WHERE l.message_sha256 = @sha256 AND NOT l.attachment_text_ok
+ORDER BY l.id;
+
+-- name: SetAttachmentTextOK :execrows
+-- The locations an extraction started after (needed) show the text from
+-- now on; locations deleted meanwhile are left out. Locked in id order,
+-- before the message's state row, as a deletion locks them before the
+-- message.
+UPDATE message_locations l SET attachment_text_ok = true
+WHERE l.id IN (
+    SELECT x.id FROM message_locations x
+    WHERE x.id = ANY (@ids::bigint[]) AND NOT x.attachment_text_ok
+    ORDER BY x.id
+    FOR UPDATE OF x);
+
+-- name: AttachmentTextSearchable :one
+-- Whether a message has stored attachment text that a search can match.
+SELECT EXISTS (SELECT 1 FROM attachment_texts a WHERE a.message_sha256 = @sha256 AND a.body_text IS NOT NULL);
+
+-- name: RepairAttachmentTextNoAttachment :execrows
+-- The repair, first step: locations that do not show the attachment text
+-- of a message without attachments (as a process before 1.6.0 writes
+-- them) show it, since there is nothing to show; up to row_limit, through
+-- message_locations_attachment_pending_idx.
+UPDATE message_locations l SET attachment_text_ok = true
+WHERE l.id IN (
+    SELECT x.id FROM message_locations x
+    JOIN messages m ON m.sha256 = x.message_sha256
+    WHERE NOT x.attachment_text_ok AND NOT m.has_attachment
+    ORDER BY x.id
+    LIMIT @row_limit
+    FOR UPDATE OF x SKIP LOCKED);
+
+-- name: ListAttachmentTextRepair :many
+-- The repair, second step: messages done at version with a location that
+-- does not show their attachment text and no attachment_text job that is
+-- queued, running or failed: the invariant is broken for them (a location
+-- inserted or a job ended by a process before 1.6.0, or a done job that
+-- was removed). In hash order after the cursor (exclusive), through
+-- message_locations_attachment_pending_idx. Messages that are not done
+-- are the backfill's.
+SELECT DISTINCT l.message_sha256
+FROM message_locations l
+WHERE NOT l.attachment_text_ok
+  AND l.message_sha256 > @after::bpchar
+  AND EXISTS (
+      SELECT 1 FROM attachment_index_state s
+      WHERE s.message_sha256 = l.message_sha256 AND s.version >= @version::smallint)
+  AND NOT EXISTS (
+      SELECT 1 FROM jobs j
+      WHERE j.kind = 'attachment_text' AND j.key = l.message_sha256::text AND j.state IN ('queued', 'running', 'failed'))
+ORDER BY l.message_sha256
+LIMIT @row_limit;

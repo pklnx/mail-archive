@@ -281,7 +281,11 @@ nearly every message you received.
 The text of attachments is extracted in the background shortly after a
 message is stored, newest first; after an upgrade, older messages follow one
 at a time (see [One-time steps](./operations#one-time-steps)). Until then a
-message is found only by its own text. Limits:
+message is found only by its own text. On an instance with several customer
+groups, a message that another group's account already holds is extracted
+again for your group when it is first stored there, and found by its
+attachments shortly after that; once a user of your group can find it that
+way, others of the group who receive it can at once. Limits:
 
 - **Words, not parts of words.** Attachment text is matched by words, in
   German and English forms, not by substrings.

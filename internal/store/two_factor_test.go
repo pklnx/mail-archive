@@ -306,7 +306,8 @@ func TestTwoFactorAttemptsMigration(t *testing.T) {
 	}
 }
 
-// downTwoFactorAttemptsMigration rolls back 00041_storage_usage, 00040_smtp_credentials,
+// downTwoFactorAttemptsMigration rolls back 00042_attachment_text_per_location,
+// 00041_storage_usage, 00040_smtp_credentials,
 // 00039_instance_state and 00038_two_factor_challenge_attempts.
 func downTwoFactorAttemptsMigration(t *testing.T, st *store.Store) {
 	t.Helper()

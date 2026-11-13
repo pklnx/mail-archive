@@ -16,9 +16,15 @@ import (
 	"github.com/pklnx/mail-archive/internal/testwait"
 )
 
+// texts stores the texts of a message as its job does: after reading the
+// locations that do not show them yet, which show them afterwards.
 func (f *searchFixture) texts(sha string, texts ...store.AttachmentText) {
 	f.t.Helper()
-	ok, err := f.st.SaveAttachmentTexts(f.ctx, sha, texts)
+	needed, err := f.st.AttachmentTextNeeded(f.ctx, sha)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	ok, err := f.st.SaveAttachmentTexts(f.ctx, sha, texts, needed)
 	if err != nil || !ok {
 		f.t.Fatalf("save texts of %s: %v, %v", sha, ok, err)
 	}
@@ -223,13 +229,13 @@ func TestSaveAttachmentTexts(t *testing.T) {
 	f := newSearchFixture(t)
 	f.add("privat/INBOX", withAttachment(searchMsg{sha: "a", subject: "a", sent: "2026-01-01T00:00:00Z", body: "x"}))
 	f.texts("a", pdfText(1, "erster"))
-	if ok, err := f.st.SaveAttachmentTexts(f.ctx, "a", []store.AttachmentText{pdfText(1, "zweiter")}); ok || err != nil {
+	if ok, err := f.st.SaveAttachmentTexts(f.ctx, "a", []store.AttachmentText{pdfText(1, "zweiter")}, nil); ok || err != nil {
 		t.Fatalf("second writer: %v, %v", ok, err)
 	}
 	if got := f.search(store.SearchFilter{Query: "zweiter"}); len(got) != 0 {
 		t.Errorf("the second writer's text was stored")
 	}
-	if ok, err := f.st.SaveAttachmentTexts(f.ctx, strings.Repeat("f", 64), []store.AttachmentText{pdfText(1, "x")}); ok || err != nil {
+	if ok, err := f.st.SaveAttachmentTexts(f.ctx, strings.Repeat("f", 64), []store.AttachmentText{pdfText(1, "x")}, nil); ok || err != nil {
 		t.Fatalf("gone message: %v, %v", ok, err)
 	}
 	if done, err := f.st.AttachmentIndexed(f.ctx, "a"); !done || err != nil {
@@ -309,7 +315,7 @@ func TestSaveBatchQueuesAttachmentText(t *testing.T) {
 func attachmentRows(t *testing.T, st *store.Store, sha string) {
 	t.Helper()
 	ctx := context.Background()
-	if ok, err := st.SaveAttachmentTexts(ctx, sha, []store.AttachmentText{pdfText(1, "x")}); err != nil || !ok {
+	if ok, err := st.SaveAttachmentTexts(ctx, sha, []store.AttachmentText{pdfText(1, "x")}, nil); err != nil || !ok {
 		t.Fatalf("texts: %v, %v", ok, err)
 	}
 	if _, err := st.EnqueueJobs(ctx, []store.NewJob{{Kind: store.JobAttachmentText, Key: sha, MessageSHA256: sha, MaxAttempts: 3}}, false); err != nil {
@@ -375,7 +381,8 @@ func downGroupsMigration(t *testing.T, st *store.Store) {
 	}
 }
 
-// downGroupHoldsMigration rolls back 00041_storage_usage, 00040_smtp_credentials,
+// downGroupHoldsMigration rolls back 00042_attachment_text_per_location,
+// 00041_storage_usage, 00040_smtp_credentials,
 // 00039_instance_state, 00038_two_factor_challenge_attempts,
 // 00037_blob_encryption,
 // 00036_auditor_access and 00035_group_holds.
@@ -456,7 +463,7 @@ func TestAttachmentTextMigration(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("an insert failed during the migration: %v", err)
 	}
-	if ok, err := st.SaveAttachmentTexts(ctx, fmt.Sprintf("%064d", 0), []store.AttachmentText{pdfText(0, "nach der Migration")}); err != nil || !ok {
+	if ok, err := st.SaveAttachmentTexts(ctx, fmt.Sprintf("%064d", 0), []store.AttachmentText{pdfText(0, "nach der Migration")}, nil); err != nil || !ok {
 		t.Fatalf("after up: %v, %v", ok, err)
 	}
 }
@@ -502,7 +509,12 @@ func wantOneNewJob(t *testing.T, conn *pgx.Conn, sha string) {
 	if j := jobs[sha]; len(jobs) != 1 || j.State != store.JobQueued || j.Priority != store.PriorityNew || j.Message != sha {
 		t.Fatalf("jobs %+v, want one queued for new mail for %s", jobs, sha)
 	}
+	// As the job's run: done, and the locations show the text (#539,
+	// part 2), so that the group's later saves need no job.
 	if _, err := conn.Exec(context.Background(), `UPDATE jobs SET state = 'done', finished_at = now() WHERE key = $1`, sha); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(context.Background(), `UPDATE message_locations SET attachment_text_ok = true WHERE message_sha256 = $1`, sha); err != nil {
 		t.Fatal(err)
 	}
 }

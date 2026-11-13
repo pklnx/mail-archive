@@ -97,11 +97,25 @@ func writesLocations(sql string) bool {
 // write locations (writesLocations).
 func locationWriterQueries(t *testing.T, dir string) []string {
 	t.Helper()
+	var out []string
+	for name, sql := range queryTextsByName(t, dir) {
+		if writesLocations(sql) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// queryTextsByName returns the sqlc queries in dir by name, normalized
+// (normalizeSQL).
+func queryTextsByName(t *testing.T, dir string) map[string]string {
+	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("no queries in %s: %v", dir, err)
 	}
-	var out []string
+	out := map[string]string{}
 	for _, path := range paths {
 		data, err := os.ReadFile(path) //nolint:gosec // the package's own query files
 		if err != nil {
@@ -114,13 +128,9 @@ func locationWriterQueries(t *testing.T, dir string) []string {
 			if i+1 < len(idx) {
 				end = idx[i+1][0]
 			}
-			name := text[m[2]:m[3]]
-			if writesLocations(normalizeSQL(text[m[1]:end])) {
-				out = append(out, name)
-			}
+			out[text[m[2]:m[3]]] = normalizeSQL(text[m[1]:end])
 		}
 	}
-	slices.Sort(out)
 	return out
 }
 

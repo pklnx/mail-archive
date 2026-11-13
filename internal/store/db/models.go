@@ -303,6 +303,7 @@ type Job struct {
 	CreatedAt     time.Time
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
+	Requeue       bool
 }
 
 type LegalHold struct {
@@ -380,18 +381,19 @@ type MessageDeletion struct {
 }
 
 type MessageLocation struct {
-	ID            int64
-	MessageSha256 string
-	FolderID      int64
-	Uidvalidity   int64
-	Uid           int64
-	Flags         []string
-	InternalDate  *time.Time
-	FirstSeenAt   time.Time
-	LastSeenAt    time.Time
-	GoneAt        *time.Time
-	FillID        *int64
-	ImportID      *int64
+	ID               int64
+	MessageSha256    string
+	FolderID         int64
+	Uidvalidity      int64
+	Uid              int64
+	Flags            []string
+	InternalDate     *time.Time
+	FirstSeenAt      time.Time
+	LastSeenAt       time.Time
+	GoneAt           *time.Time
+	FillID           *int64
+	ImportID         *int64
+	AttachmentTextOk bool
 }
 
 type Passkey struct {

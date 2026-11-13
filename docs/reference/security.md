@@ -163,14 +163,41 @@ web UI before version 1.6.0 stay in force; the operator lists them with
 `./ma hold list` and decides whether to keep them. Groups separate customers
 inside one instance: they share one database, one archive directory, one
 secret key and one backup, and a message that several groups received is
-stored once and shown to each only through its own accounts. Sync, import
-and fill statistics count per account: a message is *new* when the account
-did not hold it before, so these figures do not show whether another account
-already held the same bytes. One GoBD
-export never spans customer groups: a selection whose users and accounts are
-not all in one group is refused, never filtered, and the signed statement
-names the group and its owners; places of a message in another group's
-accounts are never part of it.
+stored once and shown to each only through its own accounts.
+
+Sync, import and fill statistics count per account: a message is *new* when
+the account did not hold it before. Since 1.6.0, one more thing does not
+depend on what accounts of other customer groups hold or held:
+
+- when the text of its attachments becomes searchable: in each group, only
+  after an extraction that started once that copy was stored (for a copy
+  that moves into the group while its extraction runs: when it ends), or,
+  when a user or account that could search it moves into the group, as soon
+  as the move commits. From then on, other users of the group who save the
+  message can search it at once.
+
+Accepted:
+
+- Within one group, a user who holds the exact bytes of a message can tell
+  from this that another account of the group archived it before.
+- After an attachment extraction failed (after three failed attempts in a
+  row, or `extractor unavailable`), it is not tried again for later groups
+  until an admin runs `jobs retry attachment_text`. Until then, those groups
+  cannot search that message's attachment text. A message whose file can no
+  longer be read while its stored attachment text can be searched counts as
+  such a failed extraction.
+- All groups share one job queue, so a group's attachment text can become
+  searchable sooner or later when another group's job for the same message
+  is already queued or running.
+- While a process of a version before 1.6.0 still runs after the upgrade, it
+  behaves as before 1.6.0: its search shows attachment text, and its syncs,
+  fills and deliveries skip and store messages as before 1.6.0. Stop web and
+  worker before upgrading.
+
+One GoBD export never spans customer groups: a selection whose users and
+accounts are not all in one group is refused, never filtered, and the signed
+statement names the group and its owners; places of a message in another
+group's accounts are never part of it.
 
 A shared user may search, read and download. Managing, syncing, retention
 and removal stay with the owner; the shared user gets `404` (`403` for the admin-only purge
@@ -467,7 +494,8 @@ In both modes:
   15 seconds and about 96 MiB of memory plus its own size. A PDF beyond a
   limit, a damaged one, or one that needs a password to open is not
   searchable by its content. A message whose extraction failed or ended the
-  process three times is skipped. Extracted text, like all message content,
+  process three times is skipped. When a customer group can search a
+  message's attachment text is described under [Login](#login). Extracted text, like all message content,
   is never logged.
 - **Envelopes reveal BCC recipients.** They are visible only to the owner of
   the smtp account, in the message view and to the `to:` filter. Another user
