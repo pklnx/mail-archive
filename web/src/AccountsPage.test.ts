@@ -111,8 +111,8 @@ describe("bannerState", () => {
         named("gone", { health: "failing" }, { removed: true }),
       ],
     };
-    expect(bannerState(data)).toEqual({ failing: ["work"], stale: ["old"], otherFailing: 0 });
+    expect(bannerState(data)).toEqual({ failing: ["work"], stale: ["old"], otherFailing: 0, notifyBounced: false });
     expect(bannerState({ ...data, otherFailing: 2 }).otherFailing).toBe(2);
-    expect(bannerState(null)).toEqual({ failing: [], stale: [], otherFailing: 0 });
+    expect(bannerState(null)).toEqual({ failing: [], stale: [], otherFailing: 0, notifyBounced: false });
   });
 });

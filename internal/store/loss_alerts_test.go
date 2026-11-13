@@ -157,13 +157,13 @@ func TestLossAlertOutbox(t *testing.T) {
 
 	ctx := context.Background()
 	lease := []byte("lease-1")
-	got, err := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10)
+	got, err := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10, nil)
 	if err != nil || len(got) != 1 || got[0].SyncRunID != first.ID || got[0].Lost != 40 || got[0].Account != "mail" ||
 		got[0].Owner != "alice" || len(got[0].Folders) != 1 || got[0].Folders[0].Name != "INBOX" {
 		t.Fatalf("claim = %+v, %v", got, err)
 	}
 	// Leased: nobody else gets it.
-	if again, err := f.st.ClaimLossAlerts(ctx, []byte("lease-2"), time.Minute, store.LossAlertMaxAge, 10); err != nil || len(again) != 0 {
+	if again, err := f.st.ClaimLossAlerts(ctx, []byte("lease-2"), time.Minute, store.LossAlertMaxAge, 10, nil); err != nil || len(again) != 0 {
 		t.Fatalf("claimed twice: %+v, %v", again, err)
 	}
 	if err := f.st.DeferLossAlert(ctx, got[0].ID, []byte("other"), time.Now(), "x"); !errors.Is(err, store.ErrNotFound) {
@@ -172,14 +172,14 @@ func TestLossAlertOutbox(t *testing.T) {
 	if err := f.st.DeferLossAlert(ctx, got[0].ID, lease, time.Now().Add(-time.Second), "HTTP 500"); err != nil {
 		t.Fatal(err)
 	}
-	got, err = f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10)
+	got, err = f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10, nil)
 	if err != nil || len(got) != 1 || got[0].Attempts != 1 {
 		t.Fatalf("claim after defer = %+v, %v", got, err)
 	}
 	if err := f.st.FinishLossAlert(ctx, got[0].ID, lease, false, ""); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10); len(again) != 0 {
+	if again, _ := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10, nil); len(again) != 0 {
 		t.Fatalf("sent alert claimed again: %+v", again)
 	}
 
@@ -188,7 +188,7 @@ func TestLossAlertOutbox(t *testing.T) {
 	if _, err := conn.Exec(ctx, "UPDATE loss_alerts SET created_at = now() - interval '25 hours' WHERE sync_run_id = $1", old.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10); len(got) != 0 {
+	if got, _ := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10, nil); len(got) != 0 {
 		t.Fatalf("old alert claimed: %+v", got)
 	}
 	newAlert(20)
@@ -201,7 +201,7 @@ func TestLossAlertOutbox(t *testing.T) {
 	if _, err := conn.Exec(ctx, "UPDATE accounts SET removed_at = now() WHERE id = $1", acc.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10); len(got) != 0 {
+	if got, _ := f.st.ClaimLossAlerts(ctx, lease, time.Minute, store.LossAlertMaxAge, 10, nil); len(got) != 0 {
 		t.Fatalf("alert of a removed account claimed: %+v", got)
 	}
 }

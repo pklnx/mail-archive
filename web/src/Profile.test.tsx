@@ -211,6 +211,8 @@ describe("ProfilePage", () => {
           return new Response(null, { status: 204 });
         case "GET /api/profile/api-keys":
           return json({ max: 10, keys: apiKeys });
+        case "GET /api/profile/notifications":
+          return json({ available: false, email: null, confirmed: false, confirmedAt: null, bounced: false, codeExpiresAt: null });
         case "POST /api/profile/api-keys":
           return json({
             id: 1, name: "backup", hint: "wxyz", scopes: ["read"], createdAt: "2026-10-22T10:00:00Z",

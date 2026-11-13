@@ -122,6 +122,10 @@ own group only on the command line or through another admin.
 | `POST /api/profile/passkeys/begin` | Start adding a passkey: `{"name": "...", "currentPassword": "...", "code": "..."}`; `code` (TOTP or recovery code) only with 2FA on. Answers `{"token", "publicKey"}` for `navigator.credentials.create()`. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 10 passkeys. |
 | `POST /api/profile/passkeys/finish` | `{"token", "credential"}` → `201 {"name"}`. `409` for a passkey that is already registered or the limit, `400` for an expired token or a passkey that is not accepted. |
 | `DELETE /api/profile/passkeys/{id}` | Remove an own passkey; all other sessions end. Answers `{"credentialId", "rpId"}` for `PublicKeyCredential.signalUnknownCredential()`. |
+| `GET /api/profile/notifications` | Admins only (`403` for anyone else, before any lookup): the own address for [alert mail](../guide/email-alerts), `{"available", "email", "confirmed", "confirmedAt", "bounced", "codeExpiresAt"}`. `available` is false without `MAIL_ARCHIVE_MAIL_URL`. |
+| `PUT /api/profile/notifications` | Admins only: set the address with `{"email": "...", "language": "de"\|"en"}` and mail a 6-character code to it (valid 30 minutes). `400` for anything but one address, `409` `mail_off`, `429` `code_limit` after 3 codes in an hour, `502` `mail_failed` when the relay did not take the code mail. |
+| `POST /api/profile/notifications/confirm` | Admins only: `{"code": "..."}` confirms the address. `400` `wrong_code`; `409` `no_code` (none waits or it expired) or `code_spent` (5 tries). |
+| `DELETE /api/profile/notifications` | Admins only: remove the address (`204`). |
 | `GET /api/profile/api-keys` | Own API keys, also revoked and expired ones for 30 days: `{"max", "keys": [{"id", "name", "hint", "scopes", "createdAt", "expiresAt", "lastUsedAt", "revokedAt", "state"}]}`. `hint` is the last 4 characters, `state` is `active`, `expired` or `revoked`. |
 | `POST /api/profile/api-keys` | Create a key: `{"name": "...", "scopes": ["read", "sync"], "expiresInDays": 90, "currentPassword": "...", "code": "..."}`. `expiresInDays` from 1 to 3650, or `null` for no expiry; `code` only with 2FA on. Answers `201` with the listed fields and `key`, shown only here. `401` for a wrong password or code (counts like a failed login), `409` for a name in use or 20 active keys, `400` for an unknown scope or `metrics` with another scope, `403` for `metrics` from a user who is not an admin (before the password is checked). |
 | `DELETE /api/profile/api-keys/{id}` | Revoke an own key (`204`). No password needed. |
@@ -632,7 +636,9 @@ server cannot sync), `reconcileInterval`
 `alertAfter`
 (`MAIL_ARCHIVE_ALERT_AFTER_FAILURES`). For admins it also has
 `otherFailing`: how many accounts of other users are failing, as a number
-only.
+only, and `notifyEmailBounced: true` while a mail relay has refused the
+admin's own address for [alert mail](../guide/email-alerts) (left out
+otherwise).
 
 ## Sync
 

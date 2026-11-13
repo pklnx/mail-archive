@@ -36,27 +36,36 @@ type PendingStorageNotification struct {
 	GroupQuotaBytes *int64
 	// UsedBytes is the scope's figure at the claim.
 	UsedBytes int64
+	// mailEnqueued is the last event whose alert mail was enqueued.
+	mailEnqueued *string
 }
 
 // ClaimStorageNotifications leases up to limit storage transitions that
 // are due, for leaseFor. Until the lease expires, no other notifier claims
 // them, and only the lease token can finish them.
-func (s *Store) ClaimStorageNotifications(ctx context.Context, lease []byte, leaseFor time.Duration, limit int) ([]PendingStorageNotification, error) {
-	rows, err := s.q.ClaimStorageNotifications(ctx, db.ClaimStorageNotificationsParams{
-		Lease: lease, LeaseSeconds: leaseFor.Seconds(), MaxRows: clampInt32(limit),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PendingStorageNotification, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, PendingStorageNotification{
-			ID: r.ID, GroupID: r.GroupID, State: r.State, StateSince: r.StateSince, EventSeq: r.EventSeq,
-			Attempts: int(r.NotifyAttempts), FirstErrorAt: r.NotifyFirstErrorAt,
-			GroupQuotaBytes: r.GroupQuotaBytes, UsedBytes: r.UsedBytes,
+func (s *Store) ClaimStorageNotifications(ctx context.Context, lease []byte, leaseFor time.Duration, limit int,
+	mail AlertMail[PendingStorageNotification]) ([]PendingStorageNotification, error) {
+	return claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingStorageNotification, error) {
+		rows, err := q.ClaimStorageNotifications(ctx, db.ClaimStorageNotificationsParams{
+			Lease: lease, LeaseSeconds: leaseFor.Seconds(), MaxRows: clampInt32(limit),
 		})
-	}
-	return out, nil
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingStorageNotification, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingStorageNotification{
+				ID: r.ID, GroupID: r.GroupID, State: r.State, StateSince: r.StateSince, EventSeq: r.EventSeq,
+				Attempts: int(r.NotifyAttempts), FirstErrorAt: r.NotifyFirstErrorAt,
+				GroupQuotaBytes: r.GroupQuotaBytes, UsedBytes: r.UsedBytes, mailEnqueued: r.MailEnqueuedEvent,
+			})
+		}
+		return out, nil
+	}, func(q *db.Queries, p PendingStorageNotification, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetStorageMailEnqueued(ctx, db.SetStorageMailEnqueuedParams{ID: p.ID, Event: &ev.ID})
+		})
+	})
 }
 
 // FinishStorageNotification records that the transitions up to seq were

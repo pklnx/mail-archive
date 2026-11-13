@@ -72,22 +72,30 @@ func (s *Store) FillHealth(ctx context.Context, owner *int64) (map[int64]*FillHe
 
 // ClaimFillNotifications is ClaimNotifications for recurring fills; the
 // announcements carry FillID and Mailbox.
-func (s *Store) ClaimFillNotifications(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int) ([]PendingNotification, error) {
-	rows, err := s.q.ClaimFillNotifications(ctx, db.ClaimFillNotificationsParams{
-		Lease: lease, LeaseSeconds: leaseFor.Seconds(), Threshold: clampInt32(threshold), MaxRows: clampInt32(limit),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PendingNotification, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, PendingNotification{
-			AccountID: r.AccountID, Account: r.AccountName, Owner: r.OwnerName, FillID: r.FillID, Mailbox: r.Username,
-			FailureStreak: int(r.FailureStreak), FailingSince: r.FailingSince, NotifiedState: r.NotifiedState,
-			Attempts: int(r.NotifyAttempts), FirstErrorAt: r.NotifyFirstErrorAt, LastError: r.LastError,
+func (s *Store) ClaimFillNotifications(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int,
+	mail AlertMail[PendingNotification]) ([]PendingNotification, error) {
+	return claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
+		rows, err := q.ClaimFillNotifications(ctx, db.ClaimFillNotificationsParams{
+			Lease: lease, LeaseSeconds: leaseFor.Seconds(), Threshold: clampInt32(threshold), MaxRows: clampInt32(limit),
 		})
-	}
-	return out, nil
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingNotification, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingNotification{
+				AccountID: r.AccountID, Account: r.AccountName, Owner: r.OwnerName, FillID: r.FillID, Mailbox: r.Username,
+				FailureStreak: int(r.FailureStreak), FailingSince: r.FailingSince, NotifiedState: r.NotifiedState,
+				Attempts: int(r.NotifyAttempts), FirstErrorAt: r.NotifyFirstErrorAt, LastError: r.LastError,
+				mailEnqueued: r.MailEnqueuedEvent,
+			})
+		}
+		return out, nil
+	}, func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetFillMailEnqueued(ctx, db.SetFillMailEnqueuedParams{FillID: p.FillID, Event: &ev.ID})
+		})
+	})
 }
 
 // FinishFillNotification is FinishNotification for a recurring fill.

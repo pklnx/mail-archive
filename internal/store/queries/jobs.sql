@@ -71,7 +71,10 @@ SET state = CASE WHEN requeue THEN 'queued' ELSE 'done' END,
     attempts = CASE WHEN requeue THEN 0 ELSE attempts END,
     run_after = CASE WHEN requeue THEN now() ELSE run_after END,
     started_at = CASE WHEN requeue THEN NULL ELSE started_at END,
-    requeue = false, lease_token = NULL, lease_until = NULL, last_error = NULL
+    requeue = false, lease_token = NULL, lease_until = NULL,
+    -- A code the handler gives a done job (jobs.Done), such as
+    -- 'recipient_gone'; NULL otherwise.
+    last_error = CASE WHEN requeue THEN NULL ELSE sqlc.narg(code)::text END
 WHERE id = @id AND lease_token = @lease
 RETURNING kind, state;
 

@@ -123,7 +123,7 @@ func TestMetricsKeyMigration(t *testing.T) {
 	newKey(t, st, admin.ID, "scrape", []string{store.ScopeMetrics}, nil)
 }
 
-// downMetricsKeyScopeMigration rolls back 00044_attachment_text_per_location
+// downMetricsKeyScopeMigration rolls back 00045_alert_mail, 00044_attachment_text_per_location
 // and 00043_metrics_key_scope.
 func downMetricsKeyScopeMigration(t *testing.T, st *store.Store) {
 	t.Helper()

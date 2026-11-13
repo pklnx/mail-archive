@@ -67,6 +67,7 @@ type AccountSyncHealth struct {
 	NotifyFirstErrorAt *time.Time
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
+	MailEnqueuedEvent  *string
 }
 
 type ActiveAuditorGrant struct {
@@ -343,22 +344,23 @@ type LegalHoldMessage struct {
 }
 
 type LossAlert struct {
-	ID               int64
-	AccountID        int64
-	SyncRunID        int64
-	CreatedAt        time.Time
-	Lost             int32
-	PresentBefore    int32
-	FolderNames      []string
-	FolderLost       []int32
-	MoreFolders      int32
-	NotifyAttempts   int32
-	NotifyNextAt     *time.Time
-	NotifyError      *string
-	NotifyLease      []byte
-	NotifyLeaseUntil *time.Time
-	SentAt           *time.Time
-	GivenUpAt        *time.Time
+	ID                int64
+	AccountID         int64
+	SyncRunID         int64
+	CreatedAt         time.Time
+	Lost              int32
+	PresentBefore     int32
+	FolderNames       []string
+	FolderLost        []int32
+	MoreFolders       int32
+	NotifyAttempts    int32
+	NotifyNextAt      *time.Time
+	NotifyError       *string
+	NotifyLease       []byte
+	NotifyLeaseUntil  *time.Time
+	SentAt            *time.Time
+	GivenUpAt         *time.Time
+	MailEnqueuedEvent *string
 }
 
 type Message struct {
@@ -512,6 +514,7 @@ type SmtpFillHealth struct {
 	NotifyFirstErrorAt *time.Time
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
+	MailEnqueuedEvent  *string
 }
 
 type SmtpImport struct {
@@ -642,6 +645,19 @@ type User struct {
 	Locale                 string
 	GroupID                int64
 	IsAuditor              bool
+}
+
+type UserNotifyEmail struct {
+	UserID                      int64
+	NotifyEmail                 *string
+	NotifyEmailConfirmedAt      *time.Time
+	NotifyEmailBouncedAt        *time.Time
+	NotifyEmailCodeHash         []byte
+	NotifyEmailCodeExpiresAt    *time.Time
+	NotifyEmailCodeAttempts     int16
+	NotifyEmailCodesWindowStart *time.Time
+	NotifyEmailCodesSent        int16
+	NotifyEmailLanguage         *string
 }
 
 type WebauthnCeremony struct {

@@ -250,6 +250,17 @@ func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog
 	if err := st.ConfirmTwoFactorSetup(ctx, admin.ID, code, time.Now(), sealer, nil, key); err != nil {
 		return err
 	}
+	// Alert mail (#397, part 5): the demo admin's address is confirmed,
+	// as after the code; the demo sends no mail (demoMailer).
+	codeAt := time.Now()
+	if err := st.SetNotifyEmail(ctx, admin.ID, store.NotifyCodeRequest{
+		Email: "demo@example.com", CodeHash: store.NotifyCodeHash(admin.ID, "DEMO42"), Language: "en", Now: codeAt,
+	}); err != nil {
+		return err
+	}
+	if err := st.ConfirmNotifyEmail(ctx, admin.ID, store.NotifyCodeHash(admin.ID, "DEMO42"), codeAt); err != nil {
+		return err
+	}
 	// A second user for the users page; it has no accounts.
 	if _, err := st.CreateUserWithGeneratedPassword(ctx, "sam", hash, false); err != nil {
 		return err
@@ -287,6 +298,9 @@ func run(dbURL, listen, imapListen, setupListen string, now time.Time, log *slog
 		SMTPListen: ":2525",
 		SMTPAuth:   true,
 		Retention:  retention,
+		// Alert mail is on, so Profile → Notifications shows; no code is
+		// ever sent.
+		AlertMail: demoMailer{},
 	})
 	fmt.Printf("demo UI on %s, log in as %q with password %q and a TOTP code for secret %s (Ctrl-C to stop and delete the demo data)\n",
 		publicURL, loginName, loginPassword, loginTOTPSecret)
@@ -1314,3 +1328,8 @@ func datedMessages(now time.Time) []datedMessage {
 	}
 	return out
 }
+
+// demoMailer stands in for the mail relay: the demo sends no mail.
+type demoMailer struct{}
+
+func (demoMailer) SendCode(context.Context, int64, string, string, string) error { return nil }

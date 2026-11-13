@@ -45,8 +45,15 @@ const (
 // Delivery is at least once: a crash after the request and before the
 // state is written repeats the message with the same ID.
 type Notifier struct {
-	Store   *store.Store
+	Store *store.Store
+	// Webhook receives the alerts; nil without one. A claim without a
+	// webhook is finished at once, after its mail is enqueued.
 	Webhook *Webhook
+	// Mail enqueues a notify_mail job per admin with a confirmed address
+	// at each claim, once per transition (#397, part 5). Webhook and mail
+	// are independent: a failing webhook does not hold mail back, and the
+	// jobs run on their own.
+	Mail bool
 	// AlertAfter is how many failed syncs in a row make an account failing.
 	AlertAfter int
 	// StorageQuota is the instance quota in bytes (#397, part 2), 0
@@ -121,7 +128,10 @@ func (n *Notifier) Deliver(ctx context.Context) error {
 // healthKind is what pass announces: accounts whose syncs fail, or
 // recurring fills whose runs fail.
 type healthKind struct {
-	claim    func(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int) ([]store.PendingNotification, error)
+	claim func(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int,
+		mail store.AlertMail[store.PendingNotification]) ([]store.PendingNotification, error)
+	// mail is the alert mail of a claimed transition.
+	mail     store.AlertMail[store.PendingNotification]
 	build    func([]store.PendingNotification, bool) *Message
 	finish   func(ctx context.Context, id int64, lease []byte, state, errMsg string) error
 	postpone func(ctx context.Context, id int64, lease []byte, next time.Time, errMsg string) error
@@ -132,7 +142,7 @@ type healthKind struct {
 // false when the request failed.
 func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 	return n.passHealth(ctx, healthKind{
-		claim: n.Store.ClaimNotifications, build: BuildMessage,
+		claim: n.Store.ClaimNotifications, build: BuildMessage, mail: mailIf(n.Mail, syncMailEvent),
 		finish: n.Store.FinishNotification, postpone: n.Store.DeferNotification,
 		id: func(p store.PendingNotification) int64 { return p.AccountID },
 	})
@@ -142,7 +152,7 @@ func (n *Notifier) pass(ctx context.Context) (claimed int, ok bool, err error) {
 // fills.
 func (n *Notifier) passFill(ctx context.Context) (claimed int, ok bool, err error) {
 	return n.passHealth(ctx, healthKind{
-		claim: n.Store.ClaimFillNotifications, build: BuildFillMessage,
+		claim: n.Store.ClaimFillNotifications, build: BuildFillMessage, mail: mailIf(n.Mail, fillMailEvent),
 		finish: n.Store.FinishFillNotification, postpone: n.Store.DeferFillNotification,
 		id: func(p store.PendingNotification) int64 { return p.FillID },
 	})
@@ -151,12 +161,12 @@ func (n *Notifier) passFill(ctx context.Context) (claimed int, ok bool, err erro
 func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, ok bool, err error) {
 	lease := make([]byte, 16)
 	_, _ = rand.Read(lease)
-	pending, err := k.claim(ctx, lease, LeaseDuration, n.AlertAfter, BatchSize)
+	pending, err := k.claim(ctx, lease, LeaseDuration, n.AlertAfter, BatchSize, k.mail)
 	if err != nil || len(pending) == 0 {
 		return 0, true, err
 	}
 	msg := k.build(pending, n.Webhook.Full())
-	status, sendErr := n.Webhook.Send(ctx, msg)
+	status, sendErr := n.send(ctx, msg)
 	// Record the outcome even if ctx was cancelled during the request.
 	bg := context.WithoutCancel(ctx)
 	log := n.logger()
@@ -169,6 +179,9 @@ func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, o
 			what := "alert sent"
 			if ev.Event == EventRecovered {
 				what = "recovery sent"
+			}
+			if n.Webhook == nil {
+				what = "alert recorded for mail"
 			}
 			log.Info(what, "account", p.Account, "owner", p.Owner, "attempts", p.Attempts+1, "id", ev.ID)
 		}
@@ -429,6 +442,15 @@ func plural(n int, word string) string {
 	return thousands(n) + " " + word + "s"
 }
 
+// send posts msg to the webhook; without one there is nothing to send and
+// the claim is finished at once (its mail was enqueued at the claim).
+func (n *Notifier) send(ctx context.Context, msg *Message) (int, error) {
+	if n.Webhook == nil {
+		return 0, nil
+	}
+	return n.Webhook.Send(ctx, msg)
+}
+
 func (n *Notifier) now() time.Time {
 	if n.Now != nil {
 		return n.Now()
@@ -448,12 +470,12 @@ func (n *Notifier) logger() *slog.Logger {
 func (n *Notifier) passLoss(ctx context.Context) (claimed int, ok bool, err error) {
 	lease := make([]byte, 16)
 	_, _ = rand.Read(lease)
-	pending, err := n.Store.ClaimLossAlerts(ctx, lease, LeaseDuration, store.LossAlertMaxAge, BatchSize)
+	pending, err := n.Store.ClaimLossAlerts(ctx, lease, LeaseDuration, store.LossAlertMaxAge, BatchSize, mailIf(n.Mail, lossMailEvent))
 	if err != nil || len(pending) == 0 {
 		return 0, true, err
 	}
 	msg := BuildLossMessage(pending, n.Webhook.Full())
-	status, sendErr := n.Webhook.Send(ctx, msg)
+	status, sendErr := n.send(ctx, msg)
 	bg := context.WithoutCancel(ctx)
 	log := n.logger()
 	if sendErr == nil {

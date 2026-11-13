@@ -919,7 +919,7 @@ failing, and their recovery, are sent at the end.`,
 			// A last read writes the transitions this run caused (without
 			// serve), so that the alerts below and ./ma usage show them.
 			finalStorageRead(cmd.Context(), syncer.Storage)
-			deliverAfterSync(cmd.Context(), newNotifier(a, log), log)
+			deliverAfterSync(cmd.Context(), a, newNotifier(a, log), log)
 			failed, paused := 0, 0
 			for _, r := range results {
 				status := "ok"

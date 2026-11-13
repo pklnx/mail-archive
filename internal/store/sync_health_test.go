@@ -201,10 +201,10 @@ func TestNotificationClaims(t *testing.T) {
 	lease1, lease2 := []byte("lease-1"), []byte("lease-2")
 
 	// The threshold applies when reading.
-	if got, err := st.ClaimNotifications(ctx, lease1, time.Minute, 4, 50); err != nil || len(got) != 0 {
+	if got, err := st.ClaimNotifications(ctx, lease1, time.Minute, 4, 50, nil); err != nil || len(got) != 0 {
 		t.Fatalf("threshold 4: %v %v", got, err)
 	}
-	got, err := st.ClaimNotifications(ctx, lease1, time.Minute, 3, 1)
+	got, err := st.ClaimNotifications(ctx, lease1, time.Minute, 3, 1, nil)
 	if err != nil || len(got) != 1 || got[0].AccountID != a.ID {
 		t.Fatalf("claim one: %+v %v", got, err)
 	}
@@ -212,7 +212,7 @@ func TestNotificationClaims(t *testing.T) {
 		t.Fatalf("claimed: %+v", p)
 	}
 	// A second notifier gets only the other account.
-	got, err = st.ClaimNotifications(ctx, lease2, time.Minute, 3, 50)
+	got, err = st.ClaimNotifications(ctx, lease2, time.Minute, 3, 50, nil)
 	if err != nil || len(got) != 1 || got[0].AccountID != b.ID {
 		t.Fatalf("second claim: %+v %v", got, err)
 	}
@@ -227,16 +227,16 @@ func TestNotificationClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a was announced, b waits for its retry.
-	if got, err := st.ClaimNotifications(ctx, lease1, time.Minute, 3, 50); err != nil || len(got) != 0 {
+	if got, err := st.ClaimNotifications(ctx, lease1, time.Minute, 3, 50, nil); err != nil || len(got) != 0 {
 		t.Fatalf("after finish: %+v %v", got, err)
 	}
 	// A fourth failure sends nothing; a success sends the recovery.
 	finishRun(t, st, a.ID, "failed", store.HealthFailure)
-	if got, _ := st.ClaimNotifications(ctx, lease1, time.Minute, 3, 50); len(got) != 0 {
+	if got, _ := st.ClaimNotifications(ctx, lease1, time.Minute, 3, 50, nil); len(got) != 0 {
 		t.Fatalf("fourth failure claimed: %+v", got)
 	}
 	finishRun(t, st, a.ID, "ok", store.HealthSuccess)
-	got, err = st.ClaimNotifications(ctx, lease1, time.Minute, 3, 50)
+	got, err = st.ClaimNotifications(ctx, lease1, time.Minute, 3, 50, nil)
 	if err != nil || len(got) != 1 || got[0].NotifiedState != store.NotifiedFailing || got[0].FailingSince == nil {
 		t.Fatalf("recovery: %+v %v", got, err)
 	}
@@ -261,10 +261,10 @@ func TestNotificationLeaseExpires(t *testing.T) {
 	finishRun(t, st, a.ID, "failed", store.HealthFailure)
 	// A lease that has run out already (negative: a zero lease could end
 	// at the same now() as the next claim's check).
-	if got, err := st.ClaimNotifications(ctx, []byte("old"), -time.Second, 1, 50); err != nil || len(got) != 1 {
+	if got, err := st.ClaimNotifications(ctx, []byte("old"), -time.Second, 1, 50, nil); err != nil || len(got) != 1 {
 		t.Fatalf("claim: %v %v", got, err)
 	}
-	if got, err := st.ClaimNotifications(ctx, []byte("new"), time.Minute, 1, 50); err != nil || len(got) != 1 {
+	if got, err := st.ClaimNotifications(ctx, []byte("new"), time.Minute, 1, 50, nil); err != nil || len(got) != 1 {
 		t.Fatalf("reclaim: %v %v", got, err)
 	}
 	if err := st.FinishNotification(ctx, a.ID, []byte("old"), store.NotifiedFailing, ""); !errors.Is(err, store.ErrNotFound) {
@@ -288,7 +288,7 @@ func TestNotificationClaimsConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Go(func() {
-			got, err := st.ClaimNotifications(ctx, []byte{byte(i)}, time.Minute, 1, 2)
+			got, err := st.ClaimNotifications(ctx, []byte{byte(i)}, time.Minute, 1, 2, nil)
 			if err != nil {
 				t.Error(err)
 			}
@@ -319,7 +319,7 @@ func TestNotificationSkipsDisabledAccounts(t *testing.T) {
 	if _, err := conn.Exec(ctx, "UPDATE accounts SET enabled = false WHERE id = $1", a.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := st.ClaimNotifications(ctx, []byte("l"), time.Minute, 1, 50); err != nil || len(got) != 0 {
+	if got, err := st.ClaimNotifications(ctx, []byte("l"), time.Minute, 1, 50, nil); err != nil || len(got) != 0 {
 		t.Fatalf("disabled account claimed: %v %v", got, err)
 	}
 	if h := healthOf(t, st, a.ID); h.FailureStreak != 1 {

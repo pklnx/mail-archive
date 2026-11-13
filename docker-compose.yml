@@ -113,6 +113,14 @@ services:
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-json}
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-ids}
+      # Alert mail to admins: the relay (smtps://user@host:465, or
+      # smtp://user@host:587 with STARTTLS), its password in a file in
+      # SECRET_KEY_DIR (MAIL_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password)
+      # and the sender. Empty: no alert mail. See "Email alerts" in the
+      # Operations guide.
+      MAIL_ARCHIVE_MAIL_URL: ${MAIL_ARCHIVE_MAIL_URL:-}
+      MAIL_ARCHIVE_MAIL_PASSWORD_FILE: ${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}
+      MAIL_ARCHIVE_MAIL_FROM: ${MAIL_ARCHIVE_MAIL_FROM:-}
       # IMAP limits a large mailbox can reach; empty = the default. Raising
       # them costs memory: see "IMAP limits" in the Operations guide.
       MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}
@@ -248,6 +256,14 @@ services:
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-json}
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}
       MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-ids}
+      # Alert mail to admins: the relay (smtps://user@host:465, or
+      # smtp://user@host:587 with STARTTLS), its password in a file in
+      # SECRET_KEY_DIR (MAIL_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password)
+      # and the sender. Empty: no alert mail. See "Email alerts" in the
+      # Operations guide.
+      MAIL_ARCHIVE_MAIL_URL: ${MAIL_ARCHIVE_MAIL_URL:-}
+      MAIL_ARCHIVE_MAIL_PASSWORD_FILE: ${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}
+      MAIL_ARCHIVE_MAIL_FROM: ${MAIL_ARCHIVE_MAIL_FROM:-}
       # IMAP limits a large mailbox can reach; empty = the default. Raising
       # them costs memory: see "IMAP limits" in the Operations guide.
       MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}

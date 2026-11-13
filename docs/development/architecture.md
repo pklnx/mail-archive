@@ -31,7 +31,8 @@ internal/web (JSON API, UI from web/) ──────────────
 | `internal/attest` | Formats of the tamper-evidence chain: the signed text of an attestation, leaves files, the attestation file and the Ed25519 key files, and the signed statement of a GoBD export (`statement.go`). No database. |
 | `internal/gobd` | The GoBD export, [format v1](#gobd-export-format-v1): the writer with its directory and ZIP sinks, README.txt, index.xml, SHA256SUMS, and the offline `export verify`. No database. |
 | `internal/csvsafe` | The leading `'` that keeps spreadsheets from reading a CSV cell as a formula; used by the audit CSV, the deletion preview and the GoBD export. |
-| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote. |
+| `internal/notify` | Alerts for accounts whose syncs keep failing, and for recurring fills whose runs do: compares each failure streak with what was last announced and posts the difference to a webhook. Leases in `account_sync_health` keep two notifiers from sending the same alert. It also sends the `loss_alerts` that sync runs wrote and the storage transitions of `storage_states`. With alert mail on, each claim also queues the `notify_mail` jobs of its transitions (see [Alert mail](#alert-mail)). |
+| `internal/alertmail` | Alert mail to admins (#397, part 5): the SMTP client for the configured relay (TLS required, timeouts), the composed message and its texts in German and English, and the `notify_mail` job. `mailtest` is an in-process relay for tests. |
 | `internal/jobs` | Background jobs on the queue in the `jobs` table: the registry of kinds and the bounded pool that `serve` and `worker` run (see [Background jobs](#background-jobs)). |
 | `internal/web` | HTTP server, JSON API, request protection, embedded UI (`internal/web/ui`). Every route is listed once in `routes.go`, with the access it needs (session only, login, public, or session and API key with `read` or `sync`); `authenticate` enforces it, `openapi.yaml` describes it, and a test fails when the two differ. A request with `Authorization: Bearer ma_…` is authenticated by its key alone and skips the Origin check (`api_keys.go`). |
 | `internal/crypto` | AES-256-GCM for stored passwords. |
@@ -1377,6 +1378,9 @@ implementation, no library; it generalizes the leases of `loss_alerts` and
 - **Priorities.** `store.PriorityNew` (0) for work caused by new mail,
   `store.PriorityBackfill` (100) for older mail. `/healthz/jobs` degrades
   only when a `PriorityNew` job has been due for 30 minutes.
+- **Done with a code.** A handler that ends a job without doing its work
+  returns `jobs.Done(code)`: the job is `done`, with the code in
+  `last_error` (`recipient_gone` of `notify_mail`).
 - **Continuation.** A handler that did part of its work returns
   `jobs.Continue(payload)`: the job is queued again at once with the new
   `payload` (a cursor, at most 1 KiB) and `attempts = 0`, as a new job.
@@ -1414,6 +1418,47 @@ with `Kind.NewJob(key, priority)` through `store.EnqueueJobs`, or
 for a job about one message. Return `jobs.Permanent` for errors a retry
 cannot fix and `jobs.Code` to name an error in `last_error`. Tests register
 their kinds in the test only.
+
+## Alert mail
+
+Alert mail (#397, part 5; `internal/alertmail`, migration 00045) goes to
+admins with a confirmed address (`user_notify_emails`, one row per user who set one; not columns on `users`, whose rows the store reads with every column, so that `status` keeps working while the migration is pending). It hangs off the
+notifier's claim, so webhook and mail share the outboxes
+(`account_sync_health`, `smtp_fill_health`, `loss_alerts`,
+`storage_states`) but fail independently:
+
+- **Enqueue.** With `Notifier.Mail`, every claim (`ClaimNotifications`,
+  `ClaimFillNotifications`, `ClaimLossAlerts`, `ClaimStorageNotifications`)
+  runs in a transaction that, for each claimed row whose
+  `mail_enqueued_event` differs from the row's event ID, inserts one
+  `notify_mail` job per recipient (`AlertMailRecipients`: admins, not
+  locked, address confirmed) and sets `mail_enqueued_event`. The job key is
+  `<event id>:<user id>` and the insert is insert-only
+  (`EnqueueJobOnce`, `ON CONFLICT DO NOTHING`), unlike `EnqueueJobs`, which
+  queues a done job again: a webhook retry claims the same event and
+  queues nothing, a delivered mail is never sent twice by a claim, and a
+  new transition has a new event ID. The payload
+  (`store.AlertMailPayload`) holds IDs, figures and the level, never
+  names. Without a webhook the claim is finished at once.
+- **Delivery.** The `notify_mail` kind runs in a pool of one of its own in
+  the process that runs the notifier: `serve`, and `sync` at its end
+  (`UntilIdle`, 2.5 minutes). The worker does not register it and needs no
+  relay password. The handler reads the recipient again
+  (`AlertMailRecipient`; gone: `jobs.Done("recipient_gone")`), reads the
+  names, builds the text in the recipient's language and sends it
+  (`Sender`: dial 15 s, each command 30 s through a connection that caps
+  every deadline, 2 minutes in all, all below the job lease that the
+  heartbeat keeps). `4xx`, timeouts and network errors are retried (10
+  attempts, 1 minute doubling to an hour); `5.1.x` at `RCPT` unconfirms the
+  address (`BounceNotifyEmail`, only if it is still the address that
+  bounced); other `5xx` fail the job. The job's code and the logs carry the
+  reply code only.
+- **Codes.** The web server mails a confirmation code synchronously in the
+  request (`PUT /api/profile/notifications`), so the code never sits in the
+  queue; only its SHA-256, bound to the user, is stored. Every entered code
+  first counts a try in a statement of its own (`CountNotifyEmailCodeTry`,
+  conditional on the limit), so tries sent at the same time cannot pass the
+  limit of 5.
 
 ## Storage usage
 

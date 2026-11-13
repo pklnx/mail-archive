@@ -160,27 +160,38 @@ type PendingNotification struct {
 	// FirstErrorAt is when the first delivery attempt failed.
 	FirstErrorAt *time.Time
 	LastError    string
+	// mailEnqueued is the last event whose alert mail was enqueued.
+	mailEnqueued *string
 }
 
 // ClaimNotifications leases up to limit announcements that are due, for
 // leaseFor. Until the lease expires, no other notifier claims them, and
-// only the lease token can finish them.
-func (s *Store) ClaimNotifications(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int) ([]PendingNotification, error) {
-	rows, err := s.q.ClaimNotifications(ctx, db.ClaimNotificationsParams{
-		Lease: lease, LeaseSeconds: leaseFor.Seconds(), Threshold: clampInt32(threshold), MaxRows: clampInt32(limit),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PendingNotification, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, PendingNotification{
-			AccountID: r.AccountID, Account: r.AccountName, Owner: r.OwnerName, FailureStreak: int(r.FailureStreak),
-			FailingSince: r.FailingSince, NotifiedState: r.NotifiedState, Attempts: int(r.NotifyAttempts),
-			FirstErrorAt: r.NotifyFirstErrorAt, LastError: r.LastError,
+// only the lease token can finish them. With mail, the alert mail of each
+// claimed transition is enqueued in the same transaction, once per event
+// (#397, part 5).
+func (s *Store) ClaimNotifications(ctx context.Context, lease []byte, leaseFor time.Duration, threshold, limit int,
+	mail AlertMail[PendingNotification]) ([]PendingNotification, error) {
+	return claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
+		rows, err := q.ClaimNotifications(ctx, db.ClaimNotificationsParams{
+			Lease: lease, LeaseSeconds: leaseFor.Seconds(), Threshold: clampInt32(threshold), MaxRows: clampInt32(limit),
 		})
-	}
-	return out, nil
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingNotification, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingNotification{
+				AccountID: r.AccountID, Account: r.AccountName, Owner: r.OwnerName, FailureStreak: int(r.FailureStreak),
+				FailingSince: r.FailingSince, NotifiedState: r.NotifiedState, Attempts: int(r.NotifyAttempts),
+				FirstErrorAt: r.NotifyFirstErrorAt, LastError: r.LastError, mailEnqueued: r.MailEnqueuedEvent,
+			})
+		}
+		return out, nil
+	}, func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetSyncMailEnqueued(ctx, db.SetSyncMailEnqueuedParams{AccountID: p.AccountID, Event: &ev.ID})
+		})
+	})
 }
 
 // FinishNotification records that state was announced (or given up, with

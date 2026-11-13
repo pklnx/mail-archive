@@ -217,6 +217,8 @@ export interface AccountsResponse {
   alertAfter: number;
   /** Admins only: failing accounts of other users, as a count. */
   otherFailing?: number;
+  /** Admins only, set when true: a mail relay refused the admin's own address for alert mail. */
+  notifyEmailBounced?: boolean;
   /**
    * Null when the SMTP server is off: smtp accounts then receive nothing.
    * auth: "required" when mail servers log in with an SMTP secret (#395),

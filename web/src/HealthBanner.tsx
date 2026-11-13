@@ -9,6 +9,8 @@ export interface BannerState {
   stale: string[];
   /** Admins only: failing accounts of other users. */
   otherFailing: number;
+  /** Admins only: a relay refused the admin's own address for alert mail (#397, part 5). */
+  notifyBounced: boolean;
 }
 
 /**
@@ -26,6 +28,7 @@ export function bannerState(data: AccountsResponse | null): BannerState {
     failing: [...own.filter((a) => a.sync.health === "failing").map((a) => a.name), ...fillNames("failing")],
     stale: [...own.filter((a) => a.sync.health === "stale").map((a) => a.name), ...fillNames("stale")],
     otherFailing: data?.otherFailing ?? 0,
+    notifyBounced: data?.notifyEmailBounced === true,
   };
 }
 
@@ -34,6 +37,8 @@ interface Props {
   admin: boolean;
   openAccounts: () => void;
   openUsers: () => void;
+  /** Opens the profile, for the line about a refused alert mail address. */
+  openProfile?: () => void;
 }
 
 /**
@@ -60,7 +65,7 @@ function Line({ kind, text, action, onAction }: { kind: "error" | "warning" | "i
 }
 
 /** A banner above the main view when syncs keep failing, for people without a monitoring stack. */
-export function HealthBanner({ data, admin, openAccounts, openUsers }: Props) {
+export function HealthBanner({ data, admin, openAccounts, openUsers, openProfile }: Props) {
   const b = bannerState(data);
   // Screen readers hear the failing accounts once per change, not on every poll.
   const failingText = b.failing.length ? t.bannerFailing(b.failing.join(", ")) : "";
@@ -78,7 +83,8 @@ export function HealthBanner({ data, admin, openAccounts, openUsers }: Props) {
       {announce}
     </span>
   );
-  if (!b.failing.length && !b.stale.length && !others) return live;
+  const bounced = admin && b.notifyBounced;
+  if (!b.failing.length && !b.stale.length && !others && !bounced) return live;
   return (
     // Without the flag, each notification adds two hidden "Focus sentinel" tab stops.
     <FeatureFlags enableFocusWrapWithoutSentinels>
@@ -95,6 +101,7 @@ export function HealthBanner({ data, admin, openAccounts, openUsers }: Props) {
           />
         )}
         {others > 0 && <Line kind="info" text={t.bannerOthers(others)} action={t.bannerOpenUsers} onAction={openUsers} />}
+        {bounced && <Line kind="warning" text={t.bannerNotifyBounced} action={t.bannerOpenProfile} onAction={openProfile} />}
       </div>
     </FeatureFlags>
   );

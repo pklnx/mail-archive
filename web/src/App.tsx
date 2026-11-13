@@ -512,6 +512,7 @@ export function App({ user, logout, logoutError, auditor }: Props) {
           admin={user.admin}
           openAccounts={() => update({ view: "accounts", m: "" })}
           openUsers={() => update({ view: "users", m: "" })}
+          openProfile={() => update({ view: "profile", m: "" })}
         />
       </div>
       {state.view === "profile" ? (

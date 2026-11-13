@@ -515,7 +515,7 @@ func TestFillNotifications(t *testing.T) {
 	fail()
 	fail()
 	lease := []byte("lease-1")
-	if got, err := st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10); err != nil || len(got) != 0 {
+	if got, err := st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10, nil); err != nil || len(got) != 0 {
 		t.Fatalf("claimed below the threshold %+v, %v", got, err)
 	}
 	if err := st.FinishFill(ctx, f.ID, store.FillFailed, "login failed"); err != nil {
@@ -524,7 +524,7 @@ func TestFillNotifications(t *testing.T) {
 	if n, err := st.CountFailingByOwner(ctx, 3); err != nil || n[u.ID] != 1 {
 		t.Errorf("failing by owner %v, %v", n, err)
 	}
-	got, err := st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10)
+	got, err := st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10, nil)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("claimed %+v, %v", got, err)
 	}
@@ -545,14 +545,14 @@ func TestFillNotifications(t *testing.T) {
 	if err := st.FinishFill(ctx, f.ID, store.FillPartial, "INBOX: oops"); err != nil {
 		t.Fatal(err)
 	}
-	got, err = st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10)
+	got, err = st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10, nil)
 	if err != nil || len(got) != 1 || got[0].NotifiedState != store.NotifiedFailing || got[0].FailureStreak != 0 {
 		t.Fatalf("recovery %+v, %v", got, err)
 	}
 	if err := st.DeferFillNotification(ctx, f.ID, lease, time.Now().Add(time.Hour), "503"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10); len(got) != 0 {
+	if got, _ := st.ClaimFillNotifications(ctx, lease, time.Minute, 3, 10, nil); len(got) != 0 {
 		t.Errorf("claimed before the retry %+v", got)
 	}
 }

@@ -131,7 +131,7 @@ func TestSyncRunErrorHidesServerText(t *testing.T) {
 	if got := f.lastRunError(acc.Name); got != "the IMAP server refused the login" {
 		t.Errorf("stored run error %q", got)
 	}
-	pending, err := f.store.ClaimNotifications(f.ctx, []byte("lease"), time.Minute, 1, 10)
+	pending, err := f.store.ClaimNotifications(f.ctx, []byte("lease"), time.Minute, 1, 10, nil)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending alerts %+v, %v", pending, err)
 	}

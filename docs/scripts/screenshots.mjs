@@ -467,6 +467,12 @@ for (const scheme of ["light", "dark"]) {
   await main.getByRole("tab", { name: "API keys" }).click();
   await main.getByRole("tabpanel", { name: "API keys" }).getByRole("button", { name: "Create API key" }).waitFor();
   await shot(p, "profile-api-keys");
+  // The notifications tab of an admin (#397, part 5): the demo admin's
+  // confirmed address for alert mail.
+  await main.getByRole("tab", { name: "Notifications" }).click();
+  const notifications = main.getByRole("tabpanel", { name: "Notifications" });
+  await notifications.getByText("Alert mail goes to demo@example.com.").waitFor();
+  await shot(p, "profile-notifications");
   await p.context().close();
 }
 

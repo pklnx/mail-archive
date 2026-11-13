@@ -77,6 +77,8 @@ type Server struct {
 	// smtpStorageDeferrals counts the SMTP recipients deferred for
 	// storage since the start; nil counts none.
 	smtpStorageDeferrals func() uint64
+	// alertMail mails confirmation codes; nil when alert mail is off.
+	alertMail AlertMailer
 	// trustedProxies may name the client in X-Forwarded-For.
 	trustedProxies []netip.Prefix
 	// retention executes confirmed deletion runs; nil leaves them to the
@@ -164,6 +166,10 @@ type Options struct {
 	// SMTPStorageDeferrals counts the SMTP recipients deferred for
 	// storage since the start (#397, part 2), for /api/metrics.
 	SMTPStorageDeferrals func() uint64
+	// AlertMail mails the confirmation codes of admins' notification
+	// addresses (#397, part 5); nil when MAIL_ARCHIVE_MAIL_URL is not set,
+	// which hides Profile → Notifications.
+	AlertMail AlertMailer
 }
 
 // New creates a Server.
@@ -209,6 +215,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		plainHTTPWarned: plainHTTPWarnings(hosts),
 		version:         opts.Version, storageQuota: opts.StorageQuotaBytes, diskUsage: opts.DiskUsage,
 		smtpStorageDeferrals: opts.SMTPStorageDeferrals,
+		alertMail:            opts.AlertMail,
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention

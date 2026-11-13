@@ -100,6 +100,8 @@ type PendingLossAlert struct {
 	CreatedAt time.Time
 	LossAlert
 	Attempts int
+	// mailEnqueued is the last event whose alert mail was enqueued.
+	mailEnqueued *string
 }
 
 // ExpireLossAlerts gives up the alerts not sent within maxAge.
@@ -110,28 +112,35 @@ func (s *Store) ExpireLossAlerts(ctx context.Context, maxAge time.Duration) (int
 
 // ClaimLossAlerts leases up to limit unsent loss alerts younger than
 // maxAge that are due, for leaseFor.
-func (s *Store) ClaimLossAlerts(ctx context.Context, lease []byte, leaseFor, maxAge time.Duration, limit int) ([]PendingLossAlert, error) {
-	rows, err := s.q.ClaimLossAlerts(ctx, db.ClaimLossAlertsParams{
-		Lease: lease, LeaseSeconds: leaseFor.Seconds(), MaxAgeSeconds: maxAge.Seconds(), MaxRows: clampInt32(limit),
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PendingLossAlert, 0, len(rows))
-	for _, r := range rows {
-		p := PendingLossAlert{
-			ID: r.ID, SyncRunID: r.SyncRunID, AccountID: r.AccountID, Account: r.AccountName, Owner: r.OwnerName,
-			CreatedAt: r.CreatedAt, Attempts: int(r.NotifyAttempts),
-			LossAlert: LossAlert{Lost: int(r.Lost), PresentBefore: int(r.PresentBefore), MoreFolders: int(r.MoreFolders)},
+func (s *Store) ClaimLossAlerts(ctx context.Context, lease []byte, leaseFor, maxAge time.Duration, limit int,
+	mail AlertMail[PendingLossAlert]) ([]PendingLossAlert, error) {
+	return claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingLossAlert, error) {
+		rows, err := q.ClaimLossAlerts(ctx, db.ClaimLossAlertsParams{
+			Lease: lease, LeaseSeconds: leaseFor.Seconds(), MaxAgeSeconds: maxAge.Seconds(), MaxRows: clampInt32(limit),
+		})
+		if err != nil {
+			return nil, err
 		}
-		for i, name := range r.FolderNames {
-			if i < len(r.FolderLost) {
-				p.Folders = append(p.Folders, FolderLoss{Name: name, Lost: int(r.FolderLost[i])})
+		out := make([]PendingLossAlert, 0, len(rows))
+		for _, r := range rows {
+			p := PendingLossAlert{
+				ID: r.ID, SyncRunID: r.SyncRunID, AccountID: r.AccountID, Account: r.AccountName, Owner: r.OwnerName,
+				CreatedAt: r.CreatedAt, Attempts: int(r.NotifyAttempts), mailEnqueued: r.MailEnqueuedEvent,
+				LossAlert: LossAlert{Lost: int(r.Lost), PresentBefore: int(r.PresentBefore), MoreFolders: int(r.MoreFolders)},
 			}
+			for i, name := range r.FolderNames {
+				if i < len(r.FolderLost) {
+					p.Folders = append(p.Folders, FolderLoss{Name: name, Lost: int(r.FolderLost[i])})
+				}
+			}
+			out = append(out, p)
 		}
-		out = append(out, p)
-	}
-	return out, nil
+		return out, nil
+	}, func(q *db.Queries, p PendingLossAlert, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetLossMailEnqueued(ctx, db.SetLossMailEnqueuedParams{ID: p.ID, Event: &ev.ID})
+		})
+	})
 }
 
 // FinishLossAlert records an alert as sent, or with givenUp as given up

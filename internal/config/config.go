@@ -234,6 +234,9 @@ type Config struct {
 	AlertAfterFailures int
 	// Webhook for alerts; nil turns them off.
 	Webhook *Webhook
+	// Mail is the relay for alert mail to admins (#397, part 5); nil turns
+	// alert mail off.
+	Mail *Mail
 	// SMTP is the server for smtp accounts; nil turns it off.
 	SMTP *SMTP
 	// TrustedProxies may name the client in X-Forwarded-For.
@@ -394,6 +397,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.Webhook != nil {
 		cfg.Webhook.Detail = detail
+	}
+	if cfg.Mail, err = ParseMail(os.Getenv(EnvMailURL), os.Getenv(EnvMailPasswordFile), os.Getenv(EnvMailFrom), cfg.DataDir); err != nil {
+		return nil, err
 	}
 	cfg.SMTP, err = ParseSMTP(smtpEnv())
 	if err != nil {

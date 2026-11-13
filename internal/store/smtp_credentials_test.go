@@ -440,7 +440,7 @@ func TestSMTPCredentialsMigration(t *testing.T) {
 	}
 }
 
-// downSMTPCredentialsMigration rolls back 00044_attachment_text_per_location, 00043_metrics_key_scope, 00042_deletion_marks,
+// downSMTPCredentialsMigration rolls back 00045_alert_mail, 00044_attachment_text_per_location, 00043_metrics_key_scope, 00042_deletion_marks,
 // 00041_storage_usage and 00040_smtp_credentials.
 func downSMTPCredentialsMigration(t *testing.T, st *store.Store) {
 	t.Helper()

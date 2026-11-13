@@ -750,8 +750,9 @@ func TestStorageMigration(t *testing.T) {
 	}
 }
 
-// downStorageUsageMigration rolls back 00044_attachment_text_per_location, 00043_metrics_key_scope, 00042_deletion_marks and
-// 00041_storage_usage.
+// downStorageUsageMigration rolls back 00045_alert_mail,
+// 00044_attachment_text_per_location, 00043_metrics_key_scope,
+// 00042_deletion_marks and 00041_storage_usage.
 func downStorageUsageMigration(t *testing.T, st *store.Store) {
 	t.Helper()
 	downDeletionMarksMigration(t, st)

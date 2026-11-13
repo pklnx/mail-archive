@@ -46,9 +46,9 @@ describe("HealthBanner", () => {
         recurring("old@example.com", "failing", { keepRunning: false })],
     };
     expect(bannerState(data([acc("work", "failing"), journal]))).toEqual({
-      failing: ["work", "journal (ak@example.com)"], stale: ["journal (bo@example.com)"], otherFailing: 0,
+      failing: ["work", "journal (ak@example.com)"], stale: ["journal (bo@example.com)"], otherFailing: 0, notifyBounced: false,
     });
-    expect(bannerState(data([{ ...journal, enabled: false }]))).toEqual({ failing: [], stale: [], otherFailing: 0 });
+    expect(bannerState(data([{ ...journal, enabled: false }]))).toEqual({ failing: [], stale: [], otherFailing: 0, notifyBounced: false });
     render(<HealthBanner data={data([journal])} admin={false} openAccounts={noop} openUsers={noop} />);
     expect(screen.getByRole("alert").textContent).toMatch(/journal \(ak@example.com\)/);
   });
@@ -97,5 +97,19 @@ describe("HealthBanner", () => {
     expect(screen.getByText(/2 accounts of other users keep failing/)).toBeTruthy();
     rerender(<HealthBanner data={d} admin={false} openAccounts={noop} openUsers={noop} />);
     expect(screen.queryByText(/other users/)).toBeNull();
+  });
+
+  it("tells an admin whose alert mail address was refused, with a way to the profile", () => {
+    const openProfile = vi.fn();
+    const d = { ...data([]), notifyEmailBounced: true };
+    expect(bannerState(d).notifyBounced).toBe(true);
+    const { rerender } = render(<HealthBanner data={d} admin openAccounts={noop} openUsers={noop} openProfile={openProfile} />);
+    expect(screen.getByText(t.bannerNotifyBounced)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: t.bannerOpenProfile }));
+    expect(openProfile).toHaveBeenCalledTimes(1);
+    rerender(<HealthBanner data={d} admin={false} openAccounts={noop} openUsers={noop} openProfile={openProfile} />);
+    expect(screen.queryByText(t.bannerNotifyBounced)).toBeNull();
+    rerender(<HealthBanner data={data([])} admin openAccounts={noop} openUsers={noop} openProfile={openProfile} />);
+    expect(screen.queryByText(t.bannerNotifyBounced)).toBeNull();
   });
 });

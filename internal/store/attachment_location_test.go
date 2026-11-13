@@ -20,10 +20,11 @@ import (
 // Attachment text per location (#539, part 2): a location shows its
 // message's attachment text only when attachment_text_ok is set.
 
-// downAttachmentTextPerLocationMigration rolls back
+// downAttachmentTextPerLocationMigration rolls back 00045_alert_mail and
 // 00044_attachment_text_per_location.
 func downAttachmentTextPerLocationMigration(t *testing.T, st *store.Store) {
 	t.Helper()
+	downAlertMailMigration(t, st)
 	if m, err := st.MigrateDown(context.Background()); err != nil || !strings.Contains(m, "00044_attachment_text_per_location") {
 		t.Fatalf("down: %q %v", m, err)
 	}
