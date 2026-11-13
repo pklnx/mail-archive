@@ -1,10 +1,15 @@
 import { lang, type Lang } from "./i18n";
 
-// The texts of the setup link's page (#396). Only the lazy Setup chunk
-// imports this module, so they are not part of the initial bundle, as
-// auditorText.ts is for auditor access.
+// The texts of the setup of the first admin (#396): the setup link's page
+// and the notice without a user. Only the lazy Setup chunk imports this
+// module, so they are not part of the initial bundle, as auditorText.ts is
+// for auditor access.
 
 const en = {
+  title: "Create the first admin",
+  cliText: "No user exists yet. Run this command in the mail-archive folder, then check again:",
+  checkAgain: "Check again",
+  linkWaiting: "Open the setup link from your operator to create the first admin.",
   formText: "Choose the user name and password of this instance's first admin. Next you set up two-factor authentication.",
   create: "Create admin",
   creating: "Creating admin…",
@@ -21,6 +26,10 @@ const en = {
 };
 
 const de: typeof en = {
+  title: "Ersten Admin anlegen",
+  cliText: "Es gibt noch keinen Benutzer. Führe diesen Befehl im Ordner von mail-archive aus und prüfe dann erneut:",
+  checkAgain: "Erneut prüfen",
+  linkWaiting: "Öffne den Einrichtungslink deines Betreibers, um den ersten Admin anzulegen.",
   formText: "Wähle Benutzername und Passwort des ersten Admins dieser Instanz. Danach richtest du die Zwei-Faktor-Authentifizierung ein.",
   create: "Admin anlegen",
   creating: "Admin wird angelegt…",

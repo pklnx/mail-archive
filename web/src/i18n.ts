@@ -360,10 +360,6 @@ const en = {
     seconds < 60
       ? `Too many failed attempts. Try again in ${seconds} seconds.`
       : `Too many failed attempts. Try again in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "minute" : "minutes"}.`,
-  setupTitle: "Create the first admin",
-  setupText: "No user exists yet. Run this command in the mail-archive folder, then check again:",
-  checkAgain: "Check again",
-  setupLinkWaiting: "Open the setup link from your operator to create the first admin.",
   logOut: "Log out",
   logoutFailed: (reason: string) => `Signing out failed: ${reason}. You are still signed in; try again.`,
   loggedInAs: (name: string) => `Logged in as ${name}`,
@@ -1051,10 +1047,6 @@ const de: Messages = {
     seconds < 60
       ? `Zu viele Fehlversuche. Versuche es in ${seconds} Sekunden erneut.`
       : `Zu viele Fehlversuche. Versuche es in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "Minute" : "Minuten"} erneut.`,
-  setupTitle: "Ersten Admin anlegen",
-  setupText: "Es gibt noch keinen Benutzer. Führe diesen Befehl im Ordner von mail-archive aus und prüfe dann erneut:",
-  checkAgain: "Erneut prüfen",
-  setupLinkWaiting: "Öffne den Einrichtungslink deines Betreibers, um den ersten Admin anzulegen.",
   logOut: "Abmelden",
   logoutFailed: (reason) => `Abmelden fehlgeschlagen: ${reason}. Du bist noch angemeldet; versuch es noch einmal.`,
   loggedInAs: (name) => `Angemeldet als ${name}`,

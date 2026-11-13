@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Button, Form, InlineNotification, PasswordInput, TextInput } from "@carbon/react";
+import { Button, CodeSnippet, Form, InlineNotification, PasswordInput, TextInput } from "@carbon/react";
 import { ApiError, retryAfter, sessionApi, type Session, type SetupState } from "./api";
 import { t } from "./i18n";
 import { Brand, Centered, ErrorNotice, Heading } from "./authLayout";
@@ -40,7 +40,7 @@ export function SetupPage({ token, setup, done, toLogin }: Props) {
     return (
       <Centered>
         <Brand />
-        <Heading title={t.setupTitle} />
+        <Heading title={st.title} />
         <InlineNotification
           className="auth-page__wide"
           kind={setup === "complete" && refused === null ? "info" : "error"}
@@ -80,7 +80,7 @@ export function SetupPage({ token, setup, done, toLogin }: Props) {
   return (
     <Centered>
       <Brand />
-      <Heading title={t.setupTitle} text={st.formText} />
+      <Heading title={st.title} text={st.formText} />
       <Form className="auth-page__form" onSubmit={(e) => void submit(e)}>
         <TextInput
           id="setup-user"
@@ -135,4 +135,41 @@ function linkState(setup: SetupState | undefined, st: SetupText): string | null 
       return st.linkUnknown;
   }
   return null;
+}
+
+/**
+ * No user yet and no setup link at hand: with a setup token on the server,
+ * the way is the operator's link (#396); otherwise the command line.
+ */
+export function SetupNotice({ check, setup }: { check: () => void; setup?: SetupState }) {
+  const st = setupText();
+  if (setup === "token" || setup === "expired") {
+    return (
+      <Centered>
+        <Brand />
+        <Heading title={st.title} text={st.linkWaiting} />
+        <div>
+          <Button onClick={check}>{st.checkAgain}</Button>
+        </div>
+      </Centered>
+    );
+  }
+  return (
+    <Centered>
+      <Brand />
+      <Heading title={st.title} text={st.cliText} />
+      <CodeSnippet
+        type="single"
+        className="auth-page__wide"
+        aria-label={t.carbon.copy}
+        copyButtonDescription={t.carbon.copy}
+        feedback={t.carbon.copied}
+      >
+        ./ma user add NAME --admin
+      </CodeSnippet>
+      <div>
+        <Button onClick={check}>{st.checkAgain}</Button>
+      </div>
+    </Centered>
+  );
 }

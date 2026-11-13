@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { User } from "./api";
 import { AuthGate } from "./Auth";
-import { applySettings, messagesFor, t } from "./i18n";
+import { applySettings, t } from "./i18n";
 import { resetSetupLinkForTests } from "./setupLink";
 import { setupTextFor } from "./setupText";
 
@@ -95,7 +95,7 @@ describe("setup link", () => {
     expect(window.location.hash).toBe("");
     expect(window.location.href).not.toContain(token);
     expect(window.location.search).toBe("?view=x");
-    expect(await screen.findByRole("heading", { name: t.setupTitle })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: setupTextFor("en").title })).toBeTruthy();
 
     await fillForm(" Root ", "correct horse battery");
     expect(await screen.findByRole("heading", { name: t.twoFactorSetup, level: 2 })).toBeTruthy();
@@ -136,7 +136,7 @@ describe("setup link", () => {
     expect(screen.queryByRole("button", { name: st.create })).toBeNull();
     // To the login page; the token is dropped.
     fireEvent.click(screen.getByRole("button", { name: st.toLogin }));
-    expect(await screen.findByRole("button", { name: t.checkAgain })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: setupTextFor("en").checkAgain })).toBeTruthy();
 
     cleanup();
     openAt(`/#setup=${newToken()}`);
@@ -178,24 +178,23 @@ describe("without a setup link", () => {
     openAt("/");
     serve({ "GET /api/session": [noUser("token")] });
     renderGate();
-    expect(await screen.findByText(t.setupLinkWaiting)).toBeTruthy();
+    expect(await screen.findByText(setupTextFor("en").linkWaiting)).toBeTruthy();
     expect(screen.queryByText("./ma user add NAME --admin")).toBeNull();
 
     cleanup();
     serve({ "GET /api/session": [noUser("cli")] });
     renderGate();
-    expect(await screen.findByText(t.setupText)).toBeTruthy();
+    expect(await screen.findByText(setupTextFor("en").cliText)).toBeTruthy();
     expect(screen.getByText("./ma user add NAME --admin")).toBeTruthy();
   });
 
   it("has German texts", async () => {
     applySettings({ language: "de", locale: "de" });
-    const de = messagesFor("de");
     const deSetup = setupTextFor("de");
     openAt(`/#setup=${newToken()}`);
     serve({ "GET /api/session": [noUser("token")] });
     renderGate();
-    expect(await screen.findByRole("heading", { name: de.setupTitle })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: deSetup.title })).toBeTruthy();
     expect(screen.getByRole("button", { name: deSetup.create })).toBeTruthy();
     expect(screen.getByText(deSetup.formText)).toBeTruthy();
   });

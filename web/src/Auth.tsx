@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Button, CodeSnippet, Form, PasswordInput, TextInput } from "@carbon/react";
-import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type Session, type SessionState, type SetupState } from "./api";
+import { Button, Form, PasswordInput, TextInput } from "@carbon/react";
+import { ApiError, UNAUTHORIZED_EVENT, passkeyApi, retryAfter, sessionApi, unknownPasskey, type Session, type SessionState } from "./api";
 import { applySettings, t } from "./i18n";
 import { Brand, Centered, ErrorNotice, Heading } from "./authLayout";
 import { forgetSetupToken, takeSetupToken } from "./setupLink";
@@ -15,6 +15,9 @@ const TwoFactorSetup = lazyNamed(() => import("./Profile"), "TwoFactorSetup");
 const GrantChoice = lazyNamed(() => import("./AuditorShell"), "GrantChoice");
 // The page of a setup link (#396) is used once per instance.
 const SetupPage = lazyNamed(() => import("./Setup"), "SetupPage");
+// So is the notice without any user: an instance shows it once, before its
+// first admin exists.
+const SetupNotice = lazyNamed(() => import("./Setup"), "SetupNotice");
 
 type GateState = SessionState | { loading: true } | { error: string };
 
@@ -180,7 +183,13 @@ export function AuthGate({ children }: Props) {
       </LazyView>
     );
   }
-  if (state.setupRequired) return <SetupNotice check={check} setup={state.setup} />;
+  if (state.setupRequired) {
+    return (
+      <LazyView>
+        <SetupNotice check={check} setup={state.setup} />
+      </LazyView>
+    );
+  }
   return <LoginPage done={setState} passkeyOrigin={state.passkeyOrigin} />;
 }
 
@@ -386,42 +395,6 @@ function LoginPage({ done, passkeyOrigin }: { done: (s: Session) => void; passke
           </Button>
         </>
       )}
-    </Centered>
-  );
-}
-
-/**
- * No user yet and no setup link at hand: with a setup token on the server,
- * the way is the operator's link (#396); otherwise the command line.
- */
-function SetupNotice({ check, setup }: { check: () => void; setup?: SetupState }) {
-  if (setup === "token" || setup === "expired") {
-    return (
-      <Centered>
-        <Brand />
-        <Heading title={t.setupTitle} text={t.setupLinkWaiting} />
-        <div>
-          <Button onClick={check}>{t.checkAgain}</Button>
-        </div>
-      </Centered>
-    );
-  }
-  return (
-    <Centered>
-      <Brand />
-      <Heading title={t.setupTitle} text={t.setupText} />
-      <CodeSnippet
-        type="single"
-        className="auth-page__wide"
-        aria-label={t.carbon.copy}
-        copyButtonDescription={t.carbon.copy}
-        feedback={t.carbon.copied}
-      >
-        ./ma user add NAME --admin
-      </CodeSnippet>
-      <div>
-        <Button onClick={check}>{t.checkAgain}</Button>
-      </div>
     </Centered>
   );
 }
