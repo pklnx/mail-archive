@@ -396,11 +396,6 @@ func (s *Syncer) ListFolders(ctx context.Context, a *store.Account) ([]imapsync.
 	return s.CheckLogin(ctx, a, password)
 }
 
-type storedBody struct {
-	blob    blobstore.Blob
-	created bool
-}
-
 // syncFolder copies new messages of one folder and leaves it examined.
 // progress is called after each committed batch with the folder's counts
 // so far.
@@ -430,16 +425,14 @@ func (s *Syncer) syncFolder(ctx context.Context, conn *imapsync.Conn, a *store.A
 	var w *folderWriter
 	w = newFolderWriter(s.Store, folder.ID, s.BatchSize, func(int) { progress(fetched, w.added) })
 
-	sink := func(r io.Reader) (storedBody, error) {
-		blob, created, err := s.Blobs.Put(r)
-		return storedBody{blob, created}, err
-	}
-	err = imapsync.FetchAfter(conn, folder.LastUID, sink, func(m imapsync.Message[storedBody]) error {
+	lookup := s.Store.NewGroupLookup(a.ID) // once per folder run
+	sink := func(r io.Reader) (Stored, error) { return PutFor(ctx, s.Blobs, r, lookup) }
+	err = imapsync.FetchAfter(conn, folder.LastUID, sink, func(m imapsync.Message[Stored]) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		fetched++
-		meta, err := BuildMeta(ctx, s.Store, s.Blobs, m.Body.blob, m.Body.created)
+		meta, err := BuildMeta(ctx, s.Store, s.Blobs, m.Body.Blob, m.Body.Created, m.Body.NewToGroup)
 		if err != nil {
 			return err
 		}

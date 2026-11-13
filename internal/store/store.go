@@ -659,9 +659,12 @@ type MessageMeta struct {
 	From       string
 	SentAt     *time.Time
 	StoredPath string
-	// Known is set when the metadata was not extracted because the
-	// database already had the message; only SHA256, Size and StoredPath
-	// are set then.
+	// Known is set when the database already had the message: its row is
+	// not written again (InsertMessage does nothing on the conflict). For
+	// a message new to the saving account's customer group the other
+	// fields are parsed all the same and passed to the insert, which then
+	// does the work of a new row up to the conflict (#539, part 3);
+	// otherwise only SHA256, Size and StoredPath are set.
 	Known bool
 	IndexData
 }
@@ -839,6 +842,71 @@ func groupHasLocations(ctx context.Context, q *db.Queries, g accountGroup, shas 
 		held[sha] = true
 	}
 	return held, nil
+}
+
+// GroupLookup answers, before a save into one account, whether the
+// account's customer group, this account included, holds a message
+// (#539, part 3). Sync and fill make one per folder run, an SMTP delivery
+// one per recipient account; it is not safe for concurrent use.
+//
+// Every Holds first reads AccountGroupState (accounts and users only):
+// while accounts of one group exist and of no other (accounts without an
+// owner count as group 0), there is no other group whose mail the work of
+// a save could tell anything about, so Holds answers true without a
+// lookup and the save does the work it did before 1.6.0. Otherwise it
+// probes the group's own folders (FoldersHoldMessages): one probe of
+// message_locations_folder_sha_idx per folder, never a lookup by hash, so
+// its time depends on the group's folders, never on copies in other
+// groups. The folder list is read when the first lookup is needed and
+// again when the account's group changed or another group appeared since;
+// a folder that left the group meanwhile never counts, one that joined it
+// counts from the next folder run. Holds runs before the save's
+// transaction, without its lock: what changes in between changes only how
+// much work the save does, never what it stores.
+type GroupLookup struct {
+	s       *Store
+	account int64
+	group   int64
+	folders []int64
+	loaded  bool // folders belong to group and were read while other groups existed
+}
+
+// NewGroupLookup returns the lookup for saves into the account; it reads
+// nothing yet.
+func (s *Store) NewGroupLookup(accountID int64) *GroupLookup {
+	return &GroupLookup{s: s, account: accountID}
+}
+
+// Holds reports whether the message counts as held by the account's
+// group: true when an account of the group, this one included, has a
+// location of it (gone locations count), and when no account of another
+// group exists. A gone account holds nothing; the save then fails as
+// without the lookup.
+func (l *GroupLookup) Holds(ctx context.Context, sha256 string) (bool, error) {
+	st, err := l.s.q.AccountGroupState(ctx, l.account)
+	if isNoRows(err) {
+		l.loaded = false
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("group of account %d: %w", l.account, err)
+	}
+	if !st.OtherGroups {
+		l.loaded = false // read the folders again once another group appears
+		return true, nil
+	}
+	if !l.loaded || l.group != st.GroupKey {
+		folders, err := l.s.q.GroupFolderIDs(ctx, st.GroupKey)
+		if err != nil {
+			return false, fmt.Errorf("folders of group %d: %w", st.GroupKey, err)
+		}
+		l.group, l.folders, l.loaded = st.GroupKey, folders, true
+	}
+	held, err := l.s.q.FoldersHoldMessages(ctx, db.FoldersHoldMessagesParams{Shas: []string{sha256}, FolderIds: l.folders, GroupID: l.group})
+	if err != nil {
+		return false, fmt.Errorf("group holds message: %w", err)
+	}
+	return len(held) > 0, nil
 }
 
 // skipDeleted returns the hashes of a batch to skip: messages deleted from

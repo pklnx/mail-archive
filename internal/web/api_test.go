@@ -164,7 +164,7 @@ func newAPIFixtureWith(t *testing.T, prepare func(*blobstore.Store)) *apiFixture
 			if err != nil {
 				t.Fatal(err)
 			}
-			meta, err := archive.BuildMeta(ctx, st, blobs, blob, true)
+			meta, err := archive.BuildMeta(ctx, st, blobs, blob, true, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -507,7 +507,7 @@ Content-Type: text/html; charset=utf-8
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true)
+	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}

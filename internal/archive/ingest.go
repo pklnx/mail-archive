@@ -16,10 +16,61 @@ import (
 // maxHeaderBytes bounds how much of a message is parsed for headers.
 const maxHeaderBytes = 1 << 20
 
+// Stored is a message written to the blob store for a save (PutFor).
+type Stored struct {
+	Blob blobstore.Blob
+	// Created tells that the file was new on disk, so the database cannot
+	// know the message.
+	Created bool
+	// NewToGroup tells that the customer group of a saving account holds
+	// no location of the message, this account included.
+	NewToGroup bool
+}
+
+// PutFor writes r into the blob store for a save into the accounts of
+// the lookups (one, or the recipients' accounts of an SMTP delivery). As
+// soon as the hash is known it asks NewToGroup, for a new and an existing
+// blob alike, so that the lookup costs the same on both paths. If the
+// message is new to a group, the temporary file is synchronized as for a
+// new blob (blobstore.SyncTempIf) and NewToGroup is set, so that BuildMeta
+// parses it: whether another customer group already archived the same
+// bytes changes nothing in the work of the save (#539, part 3).
+func PutFor(ctx context.Context, blobs *blobstore.Store, r io.Reader, lookups ...*store.GroupLookup) (Stored, error) {
+	var newToGroup bool
+	blob, created, err := blobs.Put(r, blobstore.SyncTempIf(func(sha string) (bool, error) {
+		n, err := NewToGroup(ctx, sha, lookups...)
+		newToGroup = n
+		return n, err
+	}))
+	return Stored{Blob: blob, Created: created, NewToGroup: newToGroup}, err
+}
+
+// NewToGroup reports whether the group of one of the lookups' accounts
+// does not hold the message (store.GroupLookup.Holds). Every lookup is
+// asked, whatever the answers before.
+func NewToGroup(ctx context.Context, sha string, lookups ...*store.GroupLookup) (bool, error) {
+	newToGroup := false
+	for _, l := range lookups {
+		held, err := l.Holds(ctx, sha)
+		if err != nil {
+			return false, err
+		}
+		if !held {
+			newToGroup = true
+		}
+	}
+	return newToGroup, nil
+}
+
 // BuildMeta returns the metadata of a stored blob. Headers and body text
-// are extracted only for messages the database does not know yet; created
-// tells that the blob was new on disk, so the database cannot know it.
-func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blob blobstore.Blob, created bool) (store.MessageMeta, error) {
+// are extracted for messages the database does not know yet, and for
+// known messages new to the saving account's customer group (newToGroup),
+// which keep Known: their row is not written again, but the insert gets
+// the parsed fields and so does the work of a new row (#539, part 3).
+// created tells that the blob was new on disk, so the database cannot know
+// it. Callers without a group lookup (./ma import, tools/demo, tests) pass
+// newToGroup true: always the full work.
+func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blob blobstore.Blob, created, newToGroup bool) (store.MessageMeta, error) {
 	meta := store.MessageMeta{SHA256: blob.SHA256, Size: blob.Size, StoredPath: blob.Path}
 	if !created {
 		exists, err := st.MessageExists(ctx, blob.SHA256)
@@ -27,8 +78,10 @@ func BuildMeta(ctx context.Context, st *store.Store, blobs *blobstore.Store, blo
 			return meta, err
 		}
 		if exists {
-			meta.Known = true
-			return meta, nil // metadata is already stored; ON CONFLICT ignores this row
+			meta.Known = true // ON CONFLICT ignores this row
+			if !newToGroup {
+				return meta, nil // the group holds it: nothing to parse
+			}
 		}
 	}
 	h, idx, err := extract(blobs, blob.SHA256)

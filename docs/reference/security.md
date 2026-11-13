@@ -166,17 +166,30 @@ secret key and one backup, and a message that several groups received is
 stored once and shown to each only through its own accounts.
 
 Sync, import and fill statistics count per account: a message is *new* when
-the account did not hold it before. Since 1.6.0, one more thing does not
+the account did not hold it before. Since 1.6.0, two more things do not
 depend on what accounts of other customer groups hold or held:
 
 - whether a message deleted by retention or an account purge is archived
   again: it is skipped only in the accounts and groups it was deleted from,
-  and only while that group holds no copy of it.
+  and only while that group holds no copy of it;
+- the work of storing a message new to the group: it is parsed, synced to
+  disk and indexed as for a message new to the archive. Only storing its
+  row and linking its file differ: a new file gets a directory entry and
+  its changed directory is synced, where an existing file is synced
+  itself; a new row is inserted, where an existing one is looked up. The
+  difference is of the order of one database insert and one directory sync
+  and has not been measured. While accounts of only one customer group
+  exist (accounts without an owner count as one group), there is no other
+  group to tell anything about, and a message the archive knows is stored
+  without this work; this is checked again for every message.
 
 Accepted:
 
 - Within one group, a user who holds the exact bytes of a message can tell
-  from this that another account of the group archived it before.
+  from these that another account of the group archived it before.
+- A message whose storing overlaps the creation of the first account of a
+  second customer group, or a move of an account between groups, may get
+  the work that applied just before.
 - Messages deleted by a version before 1.6.0 count as deleted in every group
   that holds no copy.
 - A purge by a version before 1.6.0 recorded a message only when no other

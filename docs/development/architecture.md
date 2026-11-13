@@ -107,8 +107,11 @@ Sync and import store a message the same way (`internal/archive/ingest.go`):
 the bytes stream into the blob store while they are hashed,
 `archive.BuildMeta` extracts headers (at most 1 MiB) and the index data
 (body text, To and Cc, attachment names, `has_attachment`) for messages the
-database does not know yet, and a folder writer commits batches of 100
-messages with their locations and the folder's last UID (`Store.SaveBatch`).
+database does not know yet and for messages new to the saving account's
+customer group (see [Messages new to the customer
+group](#messages-new-to-the-customer-group)), and a folder writer commits
+batches of 100 messages with their locations and the folder's last UID
+(`Store.SaveBatch`).
 Fields extracted in `BuildMeta` thus apply to imported mail too.
 
 `messages.index_version` records which extraction filled a row
@@ -172,6 +175,84 @@ hold (every folder probed for every hash; medians,
 
 About 1.3 µs per probe. A batch without marks does no group lookup
 (`SaveBatch` of 100 new messages: 30 to 47 ms on the same data).
+
+### Messages new to the customer group
+
+A message new to the saving account's customer group gets the work of a
+message new to the archive, whether or not another group archived the same
+bytes before (#539, part 3):
+
+- **Lookup.** Sync, fill and SMTP deliveries pass `blobstore.SyncTempIf`
+  to `Put` (`archive.PutFor`). As soon as the hash is known, for a new and
+  an existing file alike, it asks `store.GroupLookup.Holds` whether an
+  account of the account's group, this one included, holds a location of
+  the message. A sync or fill makes one `GroupLookup` per folder run, an
+  SMTP delivery one per recipient account; the delivery counts as new to
+  the group when one of their groups does not hold the message.
+  - For every message, `AccountGroupState` reads the account's group and
+    whether an account of another group exists (index probes of
+    `accounts_owner_name_key` and a scan of `users`, about 0.1 ms). While
+    accounts of one group only exist (accounts without an owner count as
+    group 0), there is no other group a save could tell anything about:
+    `Holds` answers "held" without a lookup, and the save does the work it
+    did before 1.6.0. Read per message, the condition leaves only a race
+    within one message's processing, when the first account of a second
+    group is created at that moment.
+  - Otherwise the group's folder list (`GroupFolderIDs`) is read once, and
+    again when the account's group changed or a second group appeared
+    since, and `FoldersHoldMessages` probes it: one probe of
+    `message_locations_folder_sha_idx` per folder, never a lookup by hash in
+    `message_locations_sha_idx` (the `LIMIT 1` of its `LATERAL`, checked
+    in the custom and the generic plan by `TestFoldersHoldMessagesPlan`).
+    Only folders that hold the message are then checked against the group,
+    so a folder whose account left the group since the list was read never
+    counts; one that joined it counts from the next folder run (more work,
+    never less).
+  - The lookup runs before the save's transaction, without its lock: a
+    move or a save of the group in between changes how much work the save
+    does, never what it stores. For the same reason `skipDeleted` does not
+    reuse the answer: it decides what is stored, under `lockAccountGroup`,
+    and looks up only hashes with a deletion mark.
+- **File.** For a message new to the group, `Put` synchronizes and closes
+  its temporary file before it uses an existing file, as it does before it
+  links a new one.
+- **Parsing.** `BuildMeta` parses headers and body within the same limits
+  as for a new message and keeps `Known`.
+- **Row.** The save passes the parsed fields to `InsertMessage`.
+  PostgreSQL computes the generated `search` vector before it finds the
+  conflict and then writes nothing
+  (`TestInsertConflictComputesGeneratedColumns` checks this on CI's
+  PostgreSQL).
+- **What still differs, not measured.** A new file gets a directory entry,
+  and `syncShard` synchronizes a changed directory; for an existing file it
+  synchronizes the file itself and unchanged directories. A new row writes
+  its tuple, WAL, B-tree and GIN entries, where a known message is found by
+  `MessageExists` and its insert writes nothing.
+- `./ma import` (also into a journal folder) and `tools/demo` always do the
+  full work without a lookup (`blobstore.SyncTemp`, `BuildMeta` with
+  `newToGroup` set): only the operator sees an import's timing, and group 0
+  can be large before the adoption.
+
+Measured like the table above (`TestGroupLookupCost` with
+`MAIL_ARCHIVE_BENCH=1`), per batch of 100 messages the group does not
+hold, next to the other group lookups of the save path. The folder list is
+read once per batch here; a folder run reads it once for all its batches.
+
+| Folders of the group | 100 × `Holds` (of which `AccountGroupState`) | `GroupHeldMessages` (#397) | `GroupHasLocations`, all marked (part 1) | Sum |
+|---|---|---|---|---|
+| 40 | 91–98 ms (7–9 ms) | 7–8 ms | 9–10 ms | 112–117 ms |
+| 400 | 121–142 ms (7–9 ms) | 51–58 ms | 52–59 ms | 224–300 ms |
+| 1,500 | 319–432 ms (11–14 ms) | 179–231 ms | 172–215 ms | 717–900 ms |
+| 1,500 (group 0) | 295–347 ms (6 ms) | none | 175–215 ms | 494–547 ms |
+| 5,000 (group 0) | 901–1,167 ms (6–11 ms) | none | 604–659 ms | 1,532–1,876 ms |
+| 5,000 (group 0, the only group) | 5–8 ms, no lookup | none | 603–621 ms | 609–628 ms |
+
+Each range spans the medians of three runs, on PostgreSQL 16 with server
+and client pinned to two cores, warm cache, pgx with its statement cache,
+20 batches per run; the machine also ran other test suites (load average 3
+to 6 on four cores), so the figures are on the high side. A batch without
+deletion marks skips the fourth column: 0.50 to 0.66 s at 1,500 folders.
+`GroupHeldMessages` does not run for accounts without an owner.
 
 ## Sync and concurrency
 
@@ -260,7 +341,12 @@ counts as a failure, and the retry completes it. A file being visible,
   If a sweep or `verify --fix-orphans` removes the file between the lookup
   and its synchronization (SMTP puts run without the blob lock), `Put`
   publishes its own copy instead. After a failure the final file stays for
-  the retry; the temporary name is removed, but not durably.
+  the retry; the temporary name is removed, but not durably. With
+  `SyncTempIf`, `Put` asks a predicate once the hash is known and, if it
+  says so, synchronizes and closes the temporary file before it looks for
+  an existing file (see [Messages new to the customer
+  group](#messages-new-to-the-customer-group)); a predicate error fails the
+  `Put` before anything is published.
 - **Remove** unlinks the file and synchronizes its directory, also when the
   file was already gone: an earlier call may have unlinked it and failed
   before the barrier. If shard directories are missing, it synchronizes the

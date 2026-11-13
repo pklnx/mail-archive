@@ -312,7 +312,7 @@ func (im *Importer) importFolder(ctx context.Context, acc *store.Account, sf mai
 				return err
 			}
 		}
-		meta, err := BuildMeta(ctx, im.Store, im.Blobs, blob, created)
+		meta, err := BuildMeta(ctx, im.Store, im.Blobs, blob, created, true)
 		if err != nil {
 			return err
 		}
@@ -388,7 +388,10 @@ func (im *Importer) put(body io.Reader, m sourceMessage, fr *ImportFolderResult,
 	fr.Read++
 	where := m.logAttrs()
 	src := &sourceReader{r: body, left: im.maxSize()}
-	blob, created, err := im.Blobs.Put(mailbox.NewCRLFReader(src))
+	// Always the full work of a new message, without a group lookup
+	// (#539, part 3): only the operator sees an import's timing, and group
+	// 0 can be large before the adoption.
+	blob, created, err := im.Blobs.Put(mailbox.NewCRLFReader(src), blobstore.SyncTemp())
 	var se *sourceError
 	switch {
 	case errors.Is(err, errTooLarge):

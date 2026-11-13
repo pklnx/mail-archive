@@ -38,7 +38,7 @@ func (f *apiFixture) addMessage(account, folder, name, raw string, uid uint32) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true)
+	meta, err := archive.BuildMeta(ctx, f.st, f.blobs, blob, true, true)
 	if err != nil {
 		f.t.Fatal(err)
 	}

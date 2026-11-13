@@ -528,6 +528,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 	ff.Error = ""
 	ff.Counts.Waiting = 0 // a snapshot of this pass
 	var wm watermark
+	lookup := f.Store.NewGroupLookup(fill.AccountID) // once per folder run
 	batch := f.BatchSize
 	if batch <= 0 {
 		batch = DefaultBatchSize
@@ -542,7 +543,7 @@ func (f *Filler) fillFolder(ctx context.Context, conn *imapsync.Conn, fill *stor
 			return err
 		}
 		chunk := headers[start:min(start+batch, len(headers))]
-		err := f.fillBatch(ctx, conn, fill, ff, &wm, now, chunk, start+len(chunk) == len(headers), log)
+		err := f.fillBatch(ctx, conn, fill, ff, &wm, lookup, now, chunk, start+len(chunk) == len(headers), log)
 		var stuck *StuckError
 		if err == nil || errors.As(err, &stuck) {
 			*committed++ // fillBatch committed what came before the large message
@@ -610,7 +611,7 @@ func (f *Filler) listHeaders(ctx context.Context, conn *imapsync.Conn, after uin
 // first leaves out, without fetching them, messages it imported before
 // (same Message-ID, INTERNALDATE and size): moved or seen again after a
 // rescan.
-func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder, wm *watermark,
+func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store.Fill, ff *store.FillFolder, wm *watermark, lookup *store.GroupLookup,
 	now time.Time, chunk []fillHeader, last bool, log *slog.Logger) error {
 	ids := make([]string, len(chunk))
 	var keys []journalKey
@@ -666,16 +667,13 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 		locs  []store.Location
 		seen  = map[string]bool{}
 	)
-	sink := func(r io.Reader) (storedBody, error) {
-		blob, created, err := f.Blobs.Put(r)
-		return storedBody{blob, created}, err
-	}
-	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[storedBody]) error {
+	sink := func(r io.Reader) (Stored, error) { return PutFor(ctx, f.Blobs, r, lookup) }
+	fetchErr := imapsync.FetchUIDs(conn, fetch, sink, func(m imapsync.Message[Stored]) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		fetched[m.UID] = true
-		sha := m.Body.blob.SHA256
+		sha := m.Body.Blob.SHA256
 		if seen[sha] {
 			next.Counts.Present++
 			return nil
@@ -689,7 +687,7 @@ func (f *Filler) fillBatch(ctx context.Context, conn *imapsync.Conn, fill *store
 			next.Counts.Present++
 			return nil
 		}
-		meta, err := BuildMeta(ctx, f.Store, f.Blobs, m.Body.blob, m.Body.created)
+		meta, err := BuildMeta(ctx, f.Store, f.Blobs, m.Body.Blob, m.Body.Created, m.Body.NewToGroup)
 		if err != nil {
 			return err
 		}

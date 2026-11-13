@@ -403,7 +403,22 @@ func (ss *session) Data(r io.Reader) error {
 	defer ss.s.inflight.Done()
 	log := ss.s.Logger.With("client_ip", ss.ip.String(), "sender", ss.from, "recipients", ss.raw)
 
-	blob, created, err := ss.s.Blobs.Put(r)
+	// The group lookup runs as soon as the hash is known, once DATA is
+	// complete (archive.NewToGroup, #539 part 3), bounded by storeTimeout
+	// of its own.
+	var newToGroup bool
+	accounts := ss.accounts()
+	lookups := make([]*store.GroupLookup, len(accounts))
+	for i, a := range accounts {
+		lookups[i] = ss.s.Store.NewGroupLookup(a)
+	}
+	blob, created, err := ss.s.Blobs.Put(r, blobstore.SyncTempIf(func(sha string) (bool, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+		defer cancel()
+		n, err := archive.NewToGroup(ctx, sha, lookups...)
+		newToGroup = n
+		return n, err
+	}))
 	if errors.Is(err, smtp.ErrDataTooLarge) {
 		log.Error("smtp message refused", "code", 552, "reason", fmt.Sprintf("larger than %d bytes", ss.s.MaxSize))
 		return smtp.ErrDataTooLarge
@@ -418,7 +433,7 @@ func (ss *session) Data(r io.Reader) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
-	meta, err := archive.BuildMeta(ctx, ss.s.Store, ss.s.Blobs, blob, created)
+	meta, err := archive.BuildMeta(ctx, ss.s.Store, ss.s.Blobs, blob, created, newToGroup)
 	if err != nil {
 		log.Error("smtp message not stored", "code", 451, "err", err)
 		return tempFail()
@@ -426,7 +441,6 @@ func (ss *session) Data(r io.Reader) error {
 	env := store.Envelope{
 		MailFrom: ss.from, ReceivedAt: ss.s.Now(), ClientIP: ss.ip, HELO: clean(ss.conn.Hostname()),
 	}
-	accounts := ss.accounts()
 	// With Auth, checkRcpt accepted only the login's account; store for no
 	// other.
 	if ss.s.Auth && slices.ContainsFunc(accounts, func(a int64) bool { return a != ss.account }) {
