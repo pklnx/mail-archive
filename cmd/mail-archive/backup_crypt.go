@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -324,7 +323,10 @@ refuses while they run), and create an empty database: it refuses one that
 holds anything, since pg_restore --clean cannot replace this schema (the
 partitions of the audit log). Needs pg_restore in PATH, at least the server's
 major version. The Docker image has none: with Docker Compose use
-"./ma restore-dump FILE", which runs pg_restore in the database container.`,
+"./ma restore-dump FILE", which runs pg_restore in the database container.
+pg_restore takes its TLS settings from ` + config.EnvDatabaseURL + ` only, as
+pg_dump in backup does (see "Backups without Docker" in the operations
+guide).`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if reconcileOnly || hold {
 				return cobra.NoArgs(cmd, args)
@@ -585,25 +587,27 @@ func restoreDump(ctx context.Context, a *app, out io.Writer, file, keyringPath s
 	if err := refuseForeignKeyring(a.cfg.DataDir, keyringPath); err != nil {
 		return err
 	}
-	pgRestore, err := exec.LookPath("pg_restore")
-	if err != nil {
-		return errors.New("pg_restore not found; install the PostgreSQL client tools, or with Docker Compose use ./ma restore-dump FILE")
-	}
-	major, err := a.store.ServerMajorVersion(ctx)
+	// pg_restore's connection, its place in PATH and its version (#540)
+	// before the archive key unwraps a data key of the dump.
+	pgRestore, err := findPgTool(ctx, a, "pg_restore", "./ma restore-dump FILE")
 	if err != nil {
 		return err
 	}
 	var in io.Reader = f
 	if sealed {
-		if in, err = openBackupStream(f, keyringPath); err != nil {
+		if in, err = openBackupStreamFunc(f, keyringPath); err != nil {
 			return fmt.Errorf("%s: %w", file, err)
 		}
 	}
 	if note != "" {
 		fmt.Fprintln(out, note)
 	}
-	return runRestore(ctx, restoreJob{PgRestore: pgRestore, DatabaseURL: a.cfg.DatabaseURL, ServerMajor: major, In: in, Name: file, Sealed: sealed}, out)
+	return runRestore(ctx, restoreJob{PgRestore: pgRestore, In: in, Name: file, Sealed: sealed}, out)
 }
+
+// openBackupStreamFunc is openBackupStream; a test replaces it to see
+// whether a refused restore-dump opened the dump.
+var openBackupStreamFunc = openBackupStream
 
 // errPlaintextDump: a dump without encryption on an archive that shows
 // signs of encryption at rest, without --plaintext (GHSA-w6jg-ffvw-q4f5).
@@ -711,39 +715,20 @@ func fileExists(path string) bool {
 }
 
 type restoreJob struct {
-	PgRestore   string
-	DatabaseURL string
-	ServerMajor int
-	In          io.Reader // the plaintext dump
-	Name        string    // for messages
-	Sealed      bool
+	PgRestore *pgTool   // checked by checkPgTool
+	In        io.Reader // the plaintext dump
+	Name      string    // for messages
+	Sealed    bool
 }
 
-// runRestore checks the pg_restore version and runs it on job.In.
+// runRestore runs the pg_restore checkPgTool checked on job.In. The
+// database is named as dbname='...', so that a name with "=" is not read
+// as a connection string.
 func runRestore(ctx context.Context, job restoreJob, out io.Writer) error {
-	env, err := pgEnv(job.DatabaseURL)
-	if err != nil {
-		return err
-	}
-	cfg, err := pgconn.ParseConfig(job.DatabaseURL)
-	if err != nil {
-		return fmt.Errorf("%s: %w", config.EnvDatabaseURL, err)
-	}
-	version, err := pgCommand(ctx, job.PgRestore, env, "--version").Output()
-	if err != nil {
-		return fmt.Errorf("pg_restore --version: %w", err)
-	}
-	major, err := pgDumpMajor(string(version))
-	if err != nil {
-		return err
-	}
-	if major < job.ServerMajor {
-		return fmt.Errorf("pg_restore is version %d, the server %d: install pg_restore %d or newer", major, job.ServerMajor, job.ServerMajor)
-	}
 	var stderr bytes.Buffer
-	cmd := pgCommand(ctx, job.PgRestore, env,
+	cmd := pgCommand(ctx, job.PgRestore.Path, job.PgRestore.Env,
 		"--no-owner", "--single-transaction", "--exit-on-error", "--no-password",
-		"--dbname="+cfg.Database)
+		"--dbname=dbname="+quoteConnValue(job.PgRestore.Database))
 	cmd.Stdout, cmd.Stderr = out, &stderr
 	if f, ok := job.In.(*os.File); ok && !job.Sealed {
 		// A dump without encryption: pg_restore reads the file itself.
