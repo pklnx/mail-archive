@@ -84,6 +84,8 @@ The event ID is the one the [webhook](./operations#webhook-alerts) uses.
 
 Each change is mailed once to every admin with a confirmed address: a
 webhook that fails and retries does not repeat it, and `warn`, `ok` and
-`warn` again are three mails. Whether you still get it is checked when the
+`warn` again are three mails. Mail does not wait for the webhook: while
+the webhook fails, recoveries and new changes are still mailed when they
+happen. Whether you still get it is checked when the
 mail is sent: an admin who was demoted, locked or removed meanwhile, or
 whose new address is not confirmed yet, gets nothing.

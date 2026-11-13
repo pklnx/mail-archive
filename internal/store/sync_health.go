@@ -187,11 +187,7 @@ func (s *Store) ClaimNotifications(ctx context.Context, lease []byte, leaseFor t
 			})
 		}
 		return out, nil
-	}, func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
-			return q.SetSyncMailEnqueued(ctx, db.SetSyncMailEnqueuedParams{AccountID: p.AccountID, Event: &ev.ID})
-		})
-	})
+	}, s.markSyncMail(ctx))
 }
 
 // FinishNotification records that state was announced (or given up, with

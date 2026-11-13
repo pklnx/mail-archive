@@ -20,6 +20,13 @@ import (
 // webhook retry claims the same event again and enqueues nothing, and the
 // enqueue is insert-only, so a done mail is never sent again. The job
 // checks the recipient again at delivery (AlertMailRecipient).
+//
+// Mail keeps its own state beside the webhook's delivery state:
+// mailed_state for syncs and fills, mailed_seq for storage, and
+// mail_enqueued_event for loss alerts. After its webhook claims, the
+// notifier enqueues the mail that is due by that state alone
+// (EnqueueDue*Mail), so a webhook that fails or waits for its retry holds
+// no mail back.
 
 // JobNotifyMail is the job kind of one alert mail to one admin.
 const JobNotifyMail = "notify_mail"
@@ -91,11 +98,15 @@ func alertMailKey(event string, userID int64) string {
 }
 
 // enqueueAlertMail enqueues the jobs of ev for every recipient in q's
-// transaction, unless enqueued is ev's ID already, and records it with
-// mark. A job that exists in any state stays as it is.
+// transaction, unless enqueued is ev's ID already, and records ev with
+// mark either way, so the row's mail state follows ev. A job that exists
+// in any state stays as it is.
 func enqueueAlertMail(ctx context.Context, q *db.Queries, ev *AlertMailEvent, enqueued *string, mark func() error) error {
-	if ev == nil || (enqueued != nil && *enqueued == ev.ID) {
+	if ev == nil {
 		return nil
+	}
+	if enqueued != nil && *enqueued == ev.ID {
+		return mark()
 	}
 	users, err := q.AlertMailRecipients(ctx)
 	if err != nil {
@@ -150,6 +161,148 @@ func claimWithMail[T any](s *Store, ctx context.Context, mail AlertMail[T],
 		return nil
 	})
 	return out, err
+}
+
+// mailedState is the mail state a health event leaves: ok after a
+// recovery, failing after a failing mail. p.NotifiedState is what was
+// last announced, so the event is the other state.
+func mailedState(p PendingNotification) string {
+	if p.NotifiedState == NotifiedFailing {
+		return NotifiedOK
+	}
+	return NotifiedFailing
+}
+
+// EnqueueDueSyncMail enqueues the mail of up to limit accounts whose mail
+// is due by the mail's own state, whatever the webhook's: failing when
+// the streak reached threshold and the last mail said ok, recovered when
+// the streak ended and the last mail said failing. The rows it hands mail
+// have NotifiedState set to what the last mail said, so mail decides the
+// event as for a claim. It returns how many rows it handled.
+func (s *Store) EnqueueDueSyncMail(ctx context.Context, threshold, limit int, mail AlertMail[PendingNotification]) (int, error) {
+	if mail == nil {
+		return 0, nil
+	}
+	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
+		rows, err := q.DueSyncMail(ctx, db.DueSyncMailParams{Threshold: clampInt32(threshold), MaxRows: clampInt32(limit)})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingNotification, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingNotification{
+				AccountID: r.AccountID, FailureStreak: int(r.FailureStreak), FailingSince: r.FailingSince,
+				NotifiedState: r.MailedState, mailEnqueued: r.MailEnqueuedEvent,
+			})
+		}
+		return out, nil
+	}, s.markSyncMail(ctx))
+	return len(out), err
+}
+
+// EnqueueDueFillMail is EnqueueDueSyncMail for recurring fills.
+func (s *Store) EnqueueDueFillMail(ctx context.Context, threshold, limit int, mail AlertMail[PendingNotification]) (int, error) {
+	if mail == nil {
+		return 0, nil
+	}
+	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingNotification, error) {
+		rows, err := q.DueFillMail(ctx, db.DueFillMailParams{Threshold: clampInt32(threshold), MaxRows: clampInt32(limit)})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingNotification, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingNotification{
+				AccountID: r.AccountID, FillID: r.FillID, FailureStreak: int(r.FailureStreak), FailingSince: r.FailingSince,
+				NotifiedState: r.MailedState, mailEnqueued: r.MailEnqueuedEvent,
+			})
+		}
+		return out, nil
+	}, s.markFillMail(ctx))
+	return len(out), err
+}
+
+// EnqueueDueLossMail enqueues the mail of up to limit loss alerts younger
+// than maxAge whose mail was not enqueued, whether the webhook sent them
+// or not. It returns how many rows it handled.
+func (s *Store) EnqueueDueLossMail(ctx context.Context, maxAge time.Duration, limit int, mail AlertMail[PendingLossAlert]) (int, error) {
+	if mail == nil {
+		return 0, nil
+	}
+	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingLossAlert, error) {
+		rows, err := q.DueLossMail(ctx, db.DueLossMailParams{MaxAgeSeconds: maxAge.Seconds(), MaxRows: clampInt32(limit)})
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingLossAlert, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingLossAlert{
+				ID: r.ID, SyncRunID: r.SyncRunID, AccountID: r.AccountID, CreatedAt: r.CreatedAt, mailEnqueued: r.MailEnqueuedEvent,
+				LossAlert: LossAlert{Lost: int(r.Lost), PresentBefore: int(r.PresentBefore)},
+			})
+		}
+		return out, nil
+	}, s.markLossMail(ctx))
+	return len(out), err
+}
+
+// EnqueueDueStorageMail enqueues the mail of up to limit scopes with a
+// transition not mailed yet, whatever the webhook's state; a scope back at
+// ok only after an earlier mail of it. It returns how many rows it
+// handled.
+func (s *Store) EnqueueDueStorageMail(ctx context.Context, limit int, mail AlertMail[PendingStorageNotification]) (int, error) {
+	if mail == nil {
+		return 0, nil
+	}
+	out, err := claimWithMail(s, ctx, mail, func(q *db.Queries) ([]PendingStorageNotification, error) {
+		rows, err := q.DueStorageMail(ctx, clampInt32(limit))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]PendingStorageNotification, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, PendingStorageNotification{
+				ID: r.ID, GroupID: r.GroupID, State: r.State, StateSince: r.StateSince, EventSeq: r.EventSeq,
+				GroupQuotaBytes: r.GroupQuotaBytes, UsedBytes: r.UsedBytes, mailEnqueued: r.MailEnqueuedEvent,
+			})
+		}
+		return out, nil
+	}, s.markStorageMail(ctx))
+	return len(out), err
+}
+
+// The marks of each outbox: enqueue a row's mail and record it.
+
+func (s *Store) markSyncMail(ctx context.Context) func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
+	return func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetSyncMailEnqueued(ctx, db.SetSyncMailEnqueuedParams{AccountID: p.AccountID, Event: &ev.ID, MailedState: mailedState(p)})
+		})
+	}
+}
+
+func (s *Store) markFillMail(ctx context.Context) func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
+	return func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetFillMailEnqueued(ctx, db.SetFillMailEnqueuedParams{FillID: p.FillID, Event: &ev.ID, MailedState: mailedState(p)})
+		})
+	}
+}
+
+func (s *Store) markLossMail(ctx context.Context) func(q *db.Queries, p PendingLossAlert, ev *AlertMailEvent) error {
+	return func(q *db.Queries, p PendingLossAlert, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetLossMailEnqueued(ctx, db.SetLossMailEnqueuedParams{ID: p.ID, Event: &ev.ID})
+		})
+	}
+}
+
+func (s *Store) markStorageMail(ctx context.Context) func(q *db.Queries, p PendingStorageNotification, ev *AlertMailEvent) error {
+	return func(q *db.Queries, p PendingStorageNotification, ev *AlertMailEvent) error {
+		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
+			return q.SetStorageMailEnqueued(ctx, db.SetStorageMailEnqueuedParams{ID: p.ID, Event: &ev.ID, EventSeq: p.EventSeq})
+		})
+	}
 }
 
 // AlertRecipient is the recipient of an alert mail at delivery.

@@ -68,6 +68,7 @@ type AccountSyncHealth struct {
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
 	MailEnqueuedEvent  *string
+	MailedState        string
 }
 
 type ActiveAuditorGrant struct {
@@ -515,6 +516,7 @@ type SmtpFillHealth struct {
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
 	MailEnqueuedEvent  *string
+	MailedState        string
 }
 
 type SmtpImport struct {
@@ -575,6 +577,7 @@ type StorageState struct {
 	NotifyLease        []byte
 	NotifyLeaseUntil   *time.Time
 	MailEnqueuedEvent  *string
+	MailedSeq          int64
 }
 
 type StorageUsageAccount struct {

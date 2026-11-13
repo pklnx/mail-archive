@@ -441,3 +441,202 @@ func TestMailReplies(t *testing.T) {
 		}
 	}
 }
+
+// brokenWebhooks are the webhook cases of the independence tests: none,
+// one that answers 503 to every request (retried with a growing delay),
+// and one that answers 401 (a configuration error: an hour between tries).
+var brokenWebhooks = []struct {
+	name   string
+	status int
+}{{"no webhook", 0}, {"503", http.StatusServiceUnavailable}, {"401", http.StatusUnauthorized}}
+
+// brokenWebhook returns a webhook that answers status to every request,
+// or nil for status 0.
+func brokenWebhook(t *testing.T, status int) (*notify.Webhook, *receiver) {
+	t.Helper()
+	if status == 0 {
+		return nil, nil
+	}
+	statuses := make([]int, 100)
+	for i := range statuses {
+		statuses[i] = status
+	}
+	rcv := newReceiver(t, statuses...)
+	return idsWebhook(t, rcv.srv.URL, ""), rcv
+}
+
+// subjects returns the subjects of the relay's mails.
+func subjects(t *testing.T, relay *mailtest.Server) []string {
+	t.Helper()
+	var out []string
+	for _, m := range decodeAll(t, relay) {
+		out = append(out, m.subject)
+	}
+	return out
+}
+
+// recurringFill creates an smtp account with a recurring fill and returns
+// a function that records one finished run with status.
+func (e *env) recurringFill() func(status string) {
+	e.t.Helper()
+	acc := &store.Account{Name: "journal", Enabled: true}
+	if err := e.store.CreateSMTPAccount(e.ctx, acc, []string{"archive@archive.test"}); err != nil {
+		e.t.Fatal(err)
+	}
+	fill := &store.Fill{AccountID: acc.ID, Host: "h", Port: 993, TLSMode: store.TLSModeTLS, Username: "ak@example.com", KeepRunning: true}
+	if err := e.store.CreateFill(e.ctx, fill, func(int64) ([]byte, error) { return []byte("x"), nil }); err != nil {
+		e.t.Fatal(err)
+	}
+	runs := 0
+	return func(status string) {
+		e.t.Helper()
+		if runs++; runs > 1 {
+			if err := e.store.StartFillRun(e.ctx, fill.ID, time.Now()); err != nil {
+				e.t.Fatal(err)
+			}
+		}
+		if err := e.store.FinishFill(e.ctx, fill.ID, status, map[string]string{store.FillFailed: "LOGIN failed"}[status]); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+}
+
+// TestRecoveryMailWhileWebhookFails: an account and a recurring fill that
+// fail and recover while the webhook keeps failing (503, or 401 for good)
+// get a failing and a recovery mail each, as without a webhook; the
+// webhook's own state stays at its first, undelivered alert. A later
+// Deliver sends nothing more.
+func TestRecoveryMailWhileWebhookFails(t *testing.T) {
+	for _, c := range brokenWebhooks {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.admin("boss", "boss@example.com")
+			relay := mailtest.Start(t, mailtest.StartTLS)
+			w, rcv := brokenWebhook(t, c.status)
+			n := e.mailNotifier(w)
+			acc := e.addAccount("büro", "u", "p")
+			finish := e.recurringFill()
+
+			e.fail(acc, 3)
+			for range 3 {
+				finish(store.FillFailed)
+			}
+			e.deliver(n)
+			e.succeed(acc)
+			finish(store.FillOK)
+			e.deliver(n)
+			e.deliver(n)
+			e.sendMail(relay)
+
+			got := subjects(t, relay)
+			want := map[string]bool{
+				`Mail archive: syncs of account "büro" keep failing`:                true,
+				`Mail archive: account "büro" works again`:                          true,
+				`Mail archive: recurring imports of account "journal" keep failing`: true,
+				`Mail archive: account "journal" works again`:                       true,
+			}
+			if len(got) != len(want) {
+				t.Fatalf("mails %q, want %d; jobs %v", got, len(want), e.mailJobs())
+			}
+			for _, s := range got {
+				if !want[s] {
+					t.Errorf("unexpected mail %q of %q", s, got)
+				}
+				delete(want, s)
+			}
+			if rcv != nil {
+				// The webhook was tried and never delivered: its state is
+				// still the alert it could not send.
+				if len(rcv.got()) == 0 {
+					t.Fatal("the webhook was never tried")
+				}
+				var notified string
+				if err := e.conn.QueryRow(e.ctx, "SELECT notified_state FROM account_sync_health WHERE account_id = $1", acc.ID).Scan(&notified); err != nil || notified != store.NotifiedOK {
+					t.Fatalf("webhook state %q %v", notified, err)
+				}
+			}
+			e.deliver(n)
+			e.sendMail(relay)
+			if len(relay.Mails()) != 4 {
+				t.Fatalf("%d mails after another Deliver", len(relay.Mails()))
+			}
+			// Nothing stays due as mail.
+			none := func(p store.PendingNotification) *store.AlertMailEvent {
+				t.Errorf("still due as mail: %+v", p)
+				return nil
+			}
+			if k, err := e.store.EnqueueDueSyncMail(e.ctx, 3, 10, none); err != nil || k != 0 {
+				t.Fatalf("syncs due as mail: %d %v", k, err)
+			}
+			if k, err := e.store.EnqueueDueFillMail(e.ctx, 3, 10, none); err != nil || k != 0 {
+				t.Fatalf("fills due as mail: %d %v", k, err)
+			}
+		})
+	}
+}
+
+// TestLossMailWhileWebhookFails: a loss alert is mailed in the Deliver
+// that finds it, also when the webhook's request for another account's
+// alert fails first and the webhook claims no loss alert.
+func TestLossMailWhileWebhookFails(t *testing.T) {
+	for _, c := range brokenWebhooks {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.admin("boss", "boss@example.com")
+			relay := mailtest.Start(t, mailtest.StartTLS)
+			w, _ := brokenWebhook(t, c.status)
+			n := e.mailNotifier(w)
+			failing := e.addAccount("büro", "u", "p")
+			losing := e.addAccount("archiv", "u", "p")
+			e.fail(failing, 3)
+			e.lose(losing, 200, 1000)
+			e.deliver(n)
+			e.sendMail(relay)
+			got := subjects(t, relay)
+			if len(got) != 2 || !strings.Contains(strings.Join(got, "\n"), `200 messages deleted on the server (account "archiv")`) {
+				t.Fatalf("mails %q, want the sync and the loss mail", got)
+			}
+			e.deliver(n)
+			e.sendMail(relay)
+			if len(relay.Mails()) != 2 {
+				t.Fatalf("%d mails after another Deliver", len(relay.Mails()))
+			}
+		})
+	}
+}
+
+// TestStorageMailDuringWebhookBackoff: a storage transition while the
+// webhook waits for its retry (503: 30 s, 401: an hour) is mailed at
+// once, as without a webhook.
+func TestStorageMailDuringWebhookBackoff(t *testing.T) {
+	for _, c := range brokenWebhooks {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t)
+			e.admin("boss", "boss@example.com")
+			g := e.group("Müller GmbH")
+			e.exec("UPDATE customer_groups SET quota_bytes = 1000 WHERE id = $1", g)
+			relay := mailtest.Start(t, mailtest.StartTLS)
+			w, rcv := brokenWebhook(t, c.status)
+			n := e.mailNotifier(w)
+
+			e.transition(g, "warn")
+			e.deliver(n)
+			if rcv != nil {
+				var waiting bool
+				if err := e.conn.QueryRow(e.ctx, "SELECT notify_next_at > now() FROM storage_states WHERE group_id = $1", g).Scan(&waiting); err != nil || !waiting {
+					t.Fatalf("the webhook does not wait for its retry: %v %v", waiting, err)
+				}
+			}
+			e.transition(g, "full")
+			e.deliver(n)
+			e.sendMail(relay)
+			got := subjects(t, relay)
+			if len(got) != 2 || !strings.Contains(got[1], "full") || got[0] == got[1] {
+				t.Fatalf("mails %q, want the warn and the full mail; jobs %v", got, e.mailJobs())
+			}
+			if rcv != nil && len(rcv.got()) != 1 {
+				t.Fatalf("%d webhook requests, want 1 (the retry waits)", len(rcv.got()))
+			}
+		})
+	}
+}

@@ -50,9 +50,10 @@ type Notifier struct {
 	// webhook is finished at once, after its mail is enqueued.
 	Webhook *Webhook
 	// Mail enqueues a notify_mail job per admin with a confirmed address
-	// at each claim, once per transition (#397, part 5). Webhook and mail
-	// are independent: a failing webhook does not hold mail back, and the
-	// jobs run on their own.
+	// at each claim, once per transition (#397, part 5), and after the
+	// claims the mail that is due by the mail's own state. Webhook and
+	// mail are independent: a failing webhook does not hold mail back, and
+	// the jobs run on their own.
 	Mail bool
 	// AlertAfter is how many failed syncs in a row make an account failing.
 	AlertAfter int
@@ -107,10 +108,19 @@ func (n *Notifier) Run(ctx context.Context) {
 
 // Deliver sends every announcement that is due, in batches of BatchSize:
 // failing syncs and recoveries first, then failing recurring fills and
-// theirs, then loss alerts, then storage transitions. It stops at the first failed request; the
-// retry waits for its time. It returns an error only if the database
-// fails.
+// theirs, then loss alerts, then storage transitions. It stops sending at
+// the first failed request; the retry waits for its time. With Mail, it
+// then enqueues the mail that is due by the mail's own state, which the
+// webhook's claims did not reach (deliverMail). It returns an error only
+// if the database fails.
 func (n *Notifier) Deliver(ctx context.Context) error {
+	if err := n.deliverWebhook(ctx); err != nil {
+		return err
+	}
+	return n.deliverMail(ctx)
+}
+
+func (n *Notifier) deliverWebhook(ctx context.Context) error {
 	for _, pass := range []func(context.Context) (int, bool, error){n.pass, n.passFill, n.passLoss, n.passStorage} {
 		for ctx.Err() == nil {
 			claimed, ok, err := pass(ctx)
@@ -118,6 +128,43 @@ func (n *Notifier) Deliver(ctx context.Context) error {
 				return err
 			}
 			if claimed < BatchSize {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// deliverMail enqueues, in batches of BatchSize, the alert mail that is
+// due whatever the webhook's delivery state: a recovery while the webhook
+// still fails to announce the alert, or a transition while it waits for
+// its retry. The webhook's claims enqueue mail too; the mail's own state
+// (store.EnqueueDueSyncMail) and mail_enqueued_event keep it to one mail
+// per transition and recipient.
+func (n *Notifier) deliverMail(ctx context.Context) error {
+	if !n.Mail {
+		return nil
+	}
+	for _, pass := range []func(context.Context) (int, error){
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueSyncMail(ctx, n.AlertAfter, BatchSize, syncMailEvent)
+		},
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueFillMail(ctx, n.AlertAfter, BatchSize, fillMailEvent)
+		},
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueLossMail(ctx, store.LossAlertMaxAge, BatchSize, lossMailEvent)
+		},
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueStorageMail(ctx, BatchSize, n.storageMailEvent)
+		},
+	} {
+		for ctx.Err() == nil {
+			handled, err := pass(ctx)
+			if err != nil {
+				return err
+			}
+			if handled < BatchSize {
 				break
 			}
 		}

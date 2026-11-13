@@ -91,11 +91,7 @@ func (s *Store) ClaimFillNotifications(ctx context.Context, lease []byte, leaseF
 			})
 		}
 		return out, nil
-	}, func(q *db.Queries, p PendingNotification, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
-			return q.SetFillMailEnqueued(ctx, db.SetFillMailEnqueuedParams{FillID: p.FillID, Event: &ev.ID})
-		})
-	})
+	}, s.markFillMail(ctx))
 }
 
 // FinishFillNotification is FinishNotification for a recurring fill.

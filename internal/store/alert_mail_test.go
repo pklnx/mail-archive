@@ -50,7 +50,8 @@ func TestAlertMailMigration(t *testing.T) {
 	downAlertMailMigration(t, st)
 	var cols, jobs int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
-		WHERE table_name = 'user_notify_emails' OR (column_name = 'mail_enqueued_event' AND table_name <> 'storage_states')`).Scan(&cols); err != nil {
+		WHERE table_name = 'user_notify_emails' OR (column_name = 'mail_enqueued_event' AND table_name <> 'storage_states')
+			OR column_name IN ('mailed_state', 'mailed_seq')`).Scan(&cols); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE kind = 'notify_mail'").Scan(&jobs); err != nil {
@@ -64,6 +65,10 @@ func TestAlertMailMigration(t *testing.T) {
 	}
 	if s, err := st.NotifyEmail(ctx, admin.ID); err != nil || s.Email != "" {
 		t.Fatalf("after re-up: %+v %v", s, err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+		WHERE column_name IN ('mailed_state', 'mailed_seq')`).Scan(&cols); err != nil || cols != 3 {
+		t.Fatalf("after re-up: %d mail state columns, want 3: %v", cols, err)
 	}
 	if _, err := conn.Exec(ctx, "INSERT INTO user_notify_emails (user_id, notify_email_confirmed_at) VALUES ($1, now())", admin.ID); err == nil {
 		t.Fatal("a confirmed time without an address was accepted")
@@ -297,4 +302,178 @@ func sameJobs(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// TestAlertMailEnqueuedEvent: mail_enqueued_event alone keeps a webhook
+// retry from mailing an event again where the job key cannot: to an admin
+// who confirmed an address after the first claim, and after the event's
+// done jobs were purged. The mail's own state (mailed_seq) agrees: the
+// event is not due as mail either. A new transition is mailed to both.
+func TestAlertMailEnqueuedEvent(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	a1, err := st.CreateUser(ctx, "a1", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := st.CreateUser(ctx, "a2", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmAddress(t, st, a1.ID, "a1@example.com")
+	mail := func(p store.PendingStorageNotification) *store.AlertMailEvent {
+		return &store.AlertMailEvent{ID: "storage:instance:" + itoa(p.EventSeq), Payload: store.AlertMailPayload{Kind: store.AlertMailStorage, Level: p.State}}
+	}
+	transition := func(state string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, "UPDATE storage_states SET state = $1, event_seq = event_seq + 1 WHERE group_id IS NULL", state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// claim claims as a notifier whose webhook request then fails: the
+	// lease is released and the transition stays due.
+	claim := func() {
+		t.Helper()
+		got, err := st.ClaimStorageNotifications(ctx, []byte("lease-x"), time.Minute, 10, mail)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("claimed %d: %v", len(got), err)
+		}
+		if _, err := conn.Exec(ctx, "UPDATE storage_states SET notify_lease = NULL, notify_lease_until = NULL"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := func(user int64) int {
+		t.Helper()
+		var n int
+		if err := conn.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE kind = 'notify_mail' AND key LIKE $1", "%:"+itoa(user)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	notDue := func() {
+		t.Helper()
+		n, err := st.EnqueueDueStorageMail(ctx, 10, func(p store.PendingStorageNotification) *store.AlertMailEvent {
+			t.Errorf("storage transition %d due as mail", p.EventSeq)
+			return nil
+		})
+		if err != nil || n != 0 {
+			t.Fatalf("due as mail: %d %v", n, err)
+		}
+	}
+
+	transition("warn")
+	claim()
+	if jobs(a1.ID) != 1 || jobs(a2.ID) != 0 {
+		t.Fatalf("first claim: a1 %d, a2 %d jobs", jobs(a1.ID), jobs(a2.ID))
+	}
+	confirmAddress(t, st, a2.ID, "a2@example.com")
+	claim()
+	if n := jobs(a2.ID); n != 0 {
+		t.Fatalf("admin confirmed after the first claim got %d jobs for the same event", n)
+	}
+	notDue()
+
+	// The done job is purged while the webhook still retries the event.
+	if _, err := conn.Exec(ctx, "UPDATE jobs SET state = 'done', finished_at = now() - interval '2 hours' WHERE kind = 'notify_mail'"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.DeleteDoneJobs(ctx, time.Hour); err != nil || n != 1 {
+		t.Fatalf("purged %d: %v", n, err)
+	}
+	claim()
+	if jobs(a1.ID) != 0 || jobs(a2.ID) != 0 {
+		t.Fatalf("after the purge: a1 %d, a2 %d jobs for the same event", jobs(a1.ID), jobs(a2.ID))
+	}
+	notDue()
+
+	transition("full")
+	claim()
+	if jobs(a1.ID) != 1 || jobs(a2.ID) != 1 {
+		t.Fatalf("new transition: a1 %d, a2 %d jobs", jobs(a1.ID), jobs(a2.ID))
+	}
+	notDue()
+}
+
+// TestAlertMailDueByOwnState: the mail that is due is decided by the
+// mail's own state, not the webhook's: a transition the webhook never
+// claimed is due as mail, once; a scope back at ok is due only after an
+// earlier mail of it.
+func TestAlertMailDueByOwnState(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	conn := connect(t, url)
+	ctx := context.Background()
+	admin, err := st.CreateUser(ctx, "admin", "h", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmAddress(t, st, admin.ID, "admin@example.com")
+	var seen []string
+	mail := func(p store.PendingStorageNotification) *store.AlertMailEvent {
+		seen = append(seen, p.State)
+		return &store.AlertMailEvent{ID: "storage:instance:" + itoa(p.EventSeq), Payload: store.AlertMailPayload{Kind: store.AlertMailStorage, Level: p.State}}
+	}
+	set := func(sql string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due := func() int {
+		t.Helper()
+		n, err := st.EnqueueDueStorageMail(ctx, 10, mail)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// A transition back to ok that was never mailed is no news.
+	set("UPDATE storage_states SET state = 'ok', event_seq = 2 WHERE group_id IS NULL")
+	if n := due(); n != 0 {
+		t.Fatalf("ok without an earlier mail: %d due", n)
+	}
+	// The webhook waits for its retry an hour from now, and holds a lease.
+	set(`UPDATE storage_states SET state = 'warn', event_seq = 3, notify_next_at = now() + interval '1 hour',
+		notify_lease = 'x', notify_lease_until = now() + interval '1 hour' WHERE group_id IS NULL`)
+	if n := due(); n != 1 {
+		t.Fatalf("warn during the webhook's backoff: %d due", n)
+	}
+	if n := due(); n != 0 {
+		t.Fatalf("warn again: %d due", n)
+	}
+	set("UPDATE storage_states SET state = 'ok', event_seq = 4 WHERE group_id IS NULL")
+	if n := due(); n != 1 {
+		t.Fatalf("ok after a mail: %d due", n)
+	}
+	var keys []string
+	rows, err := conn.Query(ctx, "SELECT key FROM jobs WHERE kind = 'notify_mail' ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, k)
+	}
+	want := "storage:instance:3:" + itoa(admin.ID) + " storage:instance:4:" + itoa(admin.ID)
+	if strings.Join(keys, " ") != want || strings.Join(seen, " ") != "warn ok" {
+		t.Fatalf("jobs %v (states %v), want %s", keys, seen, want)
+	}
+	// A due row whose event was enqueued already enqueues nothing but
+	// still records its mail state, so it does not stay due: a batch of
+	// such rows would make the notifier's mail pass loop.
+	set("UPDATE storage_states SET state = 'full', event_seq = 5, mail_enqueued_event = 'storage:instance:5' WHERE group_id IS NULL")
+	if n := due(); n != 1 {
+		t.Fatalf("enqueued event: %d due", n)
+	}
+	if n := due(); n != 0 {
+		t.Fatalf("enqueued event stays due: %d", n)
+	}
+	var jobs int
+	if err := conn.QueryRow(ctx, "SELECT count(*) FROM jobs WHERE kind = 'notify_mail'").Scan(&jobs); err != nil || jobs != 2 {
+		t.Fatalf("%d jobs after an enqueued event: %v", jobs, err)
+	}
 }

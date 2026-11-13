@@ -157,6 +157,234 @@ func (q *Queries) CountNotifyEmailCodeTry(ctx context.Context, arg CountNotifyEm
 	return result.RowsAffected(), nil
 }
 
+const dueFillMail = `-- name: DueFillMail :many
+SELECT h.fill_id, sf.account_id, h.failure_streak, h.failing_since, h.mailed_state, h.mail_enqueued_event
+FROM smtp_fill_health h JOIN smtp_fills sf ON sf.id = h.fill_id JOIN accounts a ON a.id = sf.account_id
+WHERE sf.keep_running AND a.enabled AND a.removed_at IS NULL
+  AND ((h.failure_streak >= $1::int AND h.mailed_state = 'ok')
+    OR (h.failure_streak = 0 AND h.mailed_state = 'failing'))
+ORDER BY h.fill_id
+LIMIT $2
+FOR UPDATE OF h SKIP LOCKED
+`
+
+type DueFillMailParams struct {
+	Threshold int32
+	MaxRows   int32
+}
+
+type DueFillMailRow struct {
+	FillID            int64
+	AccountID         int64
+	FailureStreak     int32
+	FailingSince      *time.Time
+	MailedState       string
+	MailEnqueuedEvent *string
+}
+
+// DueSyncMail for active recurring fills of enabled accounts that are not
+// removed.
+func (q *Queries) DueFillMail(ctx context.Context, arg DueFillMailParams) ([]DueFillMailRow, error) {
+	rows, err := q.db.Query(ctx, dueFillMail, arg.Threshold, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueFillMailRow
+	for rows.Next() {
+		var i DueFillMailRow
+		if err := rows.Scan(
+			&i.FillID,
+			&i.AccountID,
+			&i.FailureStreak,
+			&i.FailingSince,
+			&i.MailedState,
+			&i.MailEnqueuedEvent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dueLossMail = `-- name: DueLossMail :many
+SELECT la.id, la.sync_run_id, la.account_id, la.created_at, la.lost, la.present_before, la.mail_enqueued_event
+FROM loss_alerts la JOIN accounts a ON a.id = la.account_id
+WHERE la.mail_enqueued_event IS NULL AND a.removed_at IS NULL
+  AND la.created_at > now() - make_interval(secs => $1::float8)
+ORDER BY la.id
+LIMIT $2
+FOR UPDATE OF la SKIP LOCKED
+`
+
+type DueLossMailParams struct {
+	MaxAgeSeconds float64
+	MaxRows       int32
+}
+
+type DueLossMailRow struct {
+	ID                int64
+	SyncRunID         int64
+	AccountID         int64
+	CreatedAt         time.Time
+	Lost              int32
+	PresentBefore     int32
+	MailEnqueuedEvent *string
+}
+
+// Loss alerts younger than max_age, of accounts that were not removed,
+// whose mail was not enqueued, sent or not by the webhook.
+func (q *Queries) DueLossMail(ctx context.Context, arg DueLossMailParams) ([]DueLossMailRow, error) {
+	rows, err := q.db.Query(ctx, dueLossMail, arg.MaxAgeSeconds, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueLossMailRow
+	for rows.Next() {
+		var i DueLossMailRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SyncRunID,
+			&i.AccountID,
+			&i.CreatedAt,
+			&i.Lost,
+			&i.PresentBefore,
+			&i.MailEnqueuedEvent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dueStorageMail = `-- name: DueStorageMail :many
+SELECT s.id, s.group_id, s.state, s.state_since, s.event_seq, s.mail_enqueued_event,
+    (SELECT g.quota_bytes FROM customer_groups g WHERE g.id = s.group_id) AS group_quota_bytes,
+    (CASE WHEN s.group_id IS NULL THEN
+        (SELECT b.bytes + coalesce((SELECT sum(d.bytes) FROM storage_counter_deltas d), 0) FROM storage_counter_base b)
+     ELSE
+        coalesce((SELECT u.bytes + u.added_bytes FROM storage_usage_groups u WHERE u.group_id = s.group_id), 0)
+        + coalesce((SELECT sum(gd.bytes) FROM storage_group_deltas gd WHERE gd.group_id = s.group_id), 0)
+     END)::bigint AS used_bytes
+FROM storage_states s
+WHERE s.event_seq > s.mailed_seq AND (s.state <> 'ok' OR s.mailed_seq > 0)
+ORDER BY s.id
+LIMIT $1
+FOR UPDATE OF s SKIP LOCKED
+`
+
+type DueStorageMailRow struct {
+	ID                int64
+	GroupID           *int64
+	State             string
+	StateSince        time.Time
+	EventSeq          int64
+	MailEnqueuedEvent *string
+	GroupQuotaBytes   *int64
+	UsedBytes         int64
+}
+
+// Scopes with a transition not mailed yet. A scope back at ok is mailed
+// only after an earlier mail of it, so mail switched on later does not
+// announce every scope that once left ok. used_bytes as in
+// ClaimStorageNotifications.
+func (q *Queries) DueStorageMail(ctx context.Context, maxRows int32) ([]DueStorageMailRow, error) {
+	rows, err := q.db.Query(ctx, dueStorageMail, maxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueStorageMailRow
+	for rows.Next() {
+		var i DueStorageMailRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GroupID,
+			&i.State,
+			&i.StateSince,
+			&i.EventSeq,
+			&i.MailEnqueuedEvent,
+			&i.GroupQuotaBytes,
+			&i.UsedBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const dueSyncMail = `-- name: DueSyncMail :many
+
+SELECT h.account_id, h.failure_streak, h.failing_since, h.mailed_state, h.mail_enqueued_event
+FROM account_sync_health h JOIN accounts a ON a.id = h.account_id
+WHERE a.kind = 'imap' AND a.enabled AND a.removed_at IS NULL
+  AND ((h.failure_streak >= $1::int AND h.mailed_state = 'ok')
+    OR (h.failure_streak = 0 AND h.mailed_state = 'failing'))
+ORDER BY h.account_id
+LIMIT $2
+FOR UPDATE OF h SKIP LOCKED
+`
+
+type DueSyncMailParams struct {
+	Threshold int32
+	MaxRows   int32
+}
+
+type DueSyncMailRow struct {
+	AccountID         int64
+	FailureStreak     int32
+	FailingSince      *time.Time
+	MailedState       string
+	MailEnqueuedEvent *string
+}
+
+// Mail due by the mail's own state (mailed_state, mailed_seq,
+// mail_enqueued_event), whatever the webhook's delivery state says: the
+// notifier enqueues these after its webhook claims, so that a failing or
+// backed-off webhook holds no mail back. Each locks its rows for the
+// enqueue transaction and skips rows another one holds.
+// Enabled IMAP accounts with a mail due: failing (the streak reached the
+// threshold, the last mail said ok) or recovered (the streak ended, the
+// last mail said failing).
+func (q *Queries) DueSyncMail(ctx context.Context, arg DueSyncMailParams) ([]DueSyncMailRow, error) {
+	rows, err := q.db.Query(ctx, dueSyncMail, arg.Threshold, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueSyncMailRow
+	for rows.Next() {
+		var i DueSyncMailRow
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.FailureStreak,
+			&i.FailingSince,
+			&i.MailedState,
+			&i.MailEnqueuedEvent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const enqueueJobOnce = `-- name: EnqueueJobOnce :execrows
 INSERT INTO jobs (kind, key, priority, max_attempts, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -270,16 +498,17 @@ func (q *Queries) RemoveNotifyEmail(ctx context.Context, id int64) (int64, error
 }
 
 const setFillMailEnqueued = `-- name: SetFillMailEnqueued :exec
-UPDATE smtp_fill_health SET mail_enqueued_event = $1 WHERE fill_id = $2
+UPDATE smtp_fill_health SET mail_enqueued_event = $1, mailed_state = $2 WHERE fill_id = $3
 `
 
 type SetFillMailEnqueuedParams struct {
-	Event  *string
-	FillID int64
+	Event       *string
+	MailedState string
+	FillID      int64
 }
 
 func (q *Queries) SetFillMailEnqueued(ctx context.Context, arg SetFillMailEnqueuedParams) error {
-	_, err := q.db.Exec(ctx, setFillMailEnqueued, arg.Event, arg.FillID)
+	_, err := q.db.Exec(ctx, setFillMailEnqueued, arg.Event, arg.MailedState, arg.FillID)
 	return err
 }
 
@@ -335,29 +564,33 @@ func (q *Queries) SetNotifyEmailCode(ctx context.Context, arg SetNotifyEmailCode
 }
 
 const setStorageMailEnqueued = `-- name: SetStorageMailEnqueued :exec
-UPDATE storage_states SET mail_enqueued_event = $1 WHERE id = $2
+UPDATE storage_states SET mail_enqueued_event = $1, mailed_seq = greatest(mailed_seq, $2::bigint) WHERE id = $3
 `
 
 type SetStorageMailEnqueuedParams struct {
-	Event *string
-	ID    int64
+	Event    *string
+	EventSeq int64
+	ID       int64
 }
 
+// The mail of the transitions up to event_seq was enqueued.
 func (q *Queries) SetStorageMailEnqueued(ctx context.Context, arg SetStorageMailEnqueuedParams) error {
-	_, err := q.db.Exec(ctx, setStorageMailEnqueued, arg.Event, arg.ID)
+	_, err := q.db.Exec(ctx, setStorageMailEnqueued, arg.Event, arg.EventSeq, arg.ID)
 	return err
 }
 
 const setSyncMailEnqueued = `-- name: SetSyncMailEnqueued :exec
-UPDATE account_sync_health SET mail_enqueued_event = $1 WHERE account_id = $2
+UPDATE account_sync_health SET mail_enqueued_event = $1, mailed_state = $2 WHERE account_id = $3
 `
 
 type SetSyncMailEnqueuedParams struct {
-	Event     *string
-	AccountID int64
+	Event       *string
+	MailedState string
+	AccountID   int64
 }
 
+// The mail of event was enqueued: mailed_state is what it said.
 func (q *Queries) SetSyncMailEnqueued(ctx context.Context, arg SetSyncMailEnqueuedParams) error {
-	_, err := q.db.Exec(ctx, setSyncMailEnqueued, arg.Event, arg.AccountID)
+	_, err := q.db.Exec(ctx, setSyncMailEnqueued, arg.Event, arg.MailedState, arg.AccountID)
 	return err
 }

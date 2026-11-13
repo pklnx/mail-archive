@@ -61,11 +61,7 @@ func (s *Store) ClaimStorageNotifications(ctx context.Context, lease []byte, lea
 			})
 		}
 		return out, nil
-	}, func(q *db.Queries, p PendingStorageNotification, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
-			return q.SetStorageMailEnqueued(ctx, db.SetStorageMailEnqueuedParams{ID: p.ID, Event: &ev.ID})
-		})
-	})
+	}, s.markStorageMail(ctx))
 }
 
 // FinishStorageNotification records that the transitions up to seq were

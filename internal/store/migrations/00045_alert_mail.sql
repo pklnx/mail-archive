@@ -35,18 +35,31 @@ CREATE TABLE user_notify_emails (
 -- The alert outboxes remember the last event for which notify_mail jobs
 -- were enqueued: a webhook retry claims the same event again and enqueues
 -- nothing; a new transition has a new event ID. storage_states has the
--- column since 00041. Adding a column without a default changes only the
--- catalog.
-ALTER TABLE account_sync_health ADD COLUMN mail_enqueued_event TEXT;
-ALTER TABLE smtp_fill_health ADD COLUMN mail_enqueued_event TEXT;
+-- column since 00041.
+--
+-- Mail keeps its own state beside the webhook's, so that a failing webhook
+-- does not hold mail back: mailed_state is what the last mail of an
+-- account's syncs or a recurring fill said (as notified_state is for the
+-- webhook), mailed_seq the last storage transition mailed (as
+-- notified_seq). A loss alert is mailed while mail_enqueued_event is
+-- empty. Adding a column without a default, or with a constant one,
+-- changes only the catalog.
+ALTER TABLE account_sync_health
+    ADD COLUMN mail_enqueued_event TEXT,
+    ADD COLUMN mailed_state TEXT NOT NULL DEFAULT 'ok' CHECK (mailed_state IN ('ok', 'failing'));
+ALTER TABLE smtp_fill_health
+    ADD COLUMN mail_enqueued_event TEXT,
+    ADD COLUMN mailed_state TEXT NOT NULL DEFAULT 'ok' CHECK (mailed_state IN ('ok', 'failing'));
 ALTER TABLE loss_alerts ADD COLUMN mail_enqueued_event TEXT;
+ALTER TABLE storage_states ADD COLUMN mailed_seq BIGINT NOT NULL DEFAULT 0;
 
 -- +goose Down
 
 -- Queued alert mail is dropped with the addresses it would go to.
 DELETE FROM jobs WHERE kind = 'notify_mail';
 UPDATE storage_states SET mail_enqueued_event = NULL;
+ALTER TABLE storage_states DROP COLUMN mailed_seq;
 ALTER TABLE loss_alerts DROP COLUMN mail_enqueued_event;
-ALTER TABLE smtp_fill_health DROP COLUMN mail_enqueued_event;
-ALTER TABLE account_sync_health DROP COLUMN mail_enqueued_event;
+ALTER TABLE smtp_fill_health DROP COLUMN mail_enqueued_event, DROP COLUMN mailed_state;
+ALTER TABLE account_sync_health DROP COLUMN mail_enqueued_event, DROP COLUMN mailed_state;
 DROP TABLE user_notify_emails;

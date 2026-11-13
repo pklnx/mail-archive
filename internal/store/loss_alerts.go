@@ -136,11 +136,7 @@ func (s *Store) ClaimLossAlerts(ctx context.Context, lease []byte, leaseFor, max
 			out = append(out, p)
 		}
 		return out, nil
-	}, func(q *db.Queries, p PendingLossAlert, ev *AlertMailEvent) error {
-		return enqueueAlertMail(ctx, q, ev, p.mailEnqueued, func() error {
-			return q.SetLossMailEnqueued(ctx, db.SetLossMailEnqueuedParams{ID: p.ID, Event: &ev.ID})
-		})
-	})
+	}, s.markLossMail(ctx))
 }
 
 // FinishLossAlert records an alert as sent, or with givenUp as given up

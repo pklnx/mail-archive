@@ -1758,7 +1758,10 @@ and exits non-zero if the relay refused it; the code tells why (for example
 [Webhook alerts](#webhook-alerts)), it queues one `notify_mail` job per
 admin with a confirmed address who is not locked, in the same transaction,
 once per transition: a webhook that fails and is retried queues nothing
-more. Without a webhook the claim ends there. The jobs run in the process
+more. Without a webhook the claim ends there. Mail does not wait for the
+webhook: a transition the webhook has not claimed yet, because it waits
+for its retry or its alert was never delivered (a recovery), is queued in
+the same round all the same. The jobs run in the process
 that runs the notifier, one at a time, apart from the
 [background jobs](#background-jobs) and `MAIL_ARCHIVE_JOB_WORKERS`: in the
 web server, and without it at the end of `./ma sync` (for up to 2.5
