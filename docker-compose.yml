@@ -45,14 +45,14 @@ services:
   # only unless WEB_BIND is set; see docs/reference/security.md.
   # Start or update with: ./ma migrate && docker compose up -d web
   # (docker compose up -d web worker with the worker profile on). With
-  # MAIL_ARCHIVE_MIGRATE_ON_START=on (the default here) web and worker also
+  # KEEPIA_ARCHIVE_MIGRATE_ON_START=on (the default here) web and worker also
   # apply pending migrations themselves when they start.
   web:
     build:
       context: .
       args:
-        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
-    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
+        VERSION: ${KEEPIA_ARCHIVE_VERSION:-${MAIL_ARCHIVE_VERSION:-dev}} # set by ./ma from `git describe`
+    image: ${KEEPIA_ARCHIVE_IMAGE:-${MAIL_ARCHIVE_IMAGE:-mail-archive:local}}
     restart: unless-stopped
     command: ["serve", "--listen", ":8080"]
     # Docker's default of 10 s is too short for `serve`: on SIGTERM it gives
@@ -71,74 +71,132 @@ services:
         # run again. `./ma` starts only postgres and does not trigger this.
         restart: true
     environment:
-      MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
+      KEEPIA_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       # The secret key: the variable, or a file in SECRET_KEY_DIR (mounted
       # read-only as /secret-key) with
-      # MAIL_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key; not both. The
+      # KEEPIA_ARCHIVE_SECRET_KEY_FILE=/secret-key/secret.key; not both. The
       # web server refuses to start without one. See
       # docs/reference/configuration.md.
-      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
-      MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
+      KEEPIA_ARCHIVE_SECRET_KEY: ${KEEPIA_ARCHIVE_SECRET_KEY:-${MAIL_ARCHIVE_SECRET_KEY:-}}
+      KEEPIA_ARCHIVE_SECRET_KEY_FILE: ${KEEPIA_ARCHIVE_SECRET_KEY_FILE:-${MAIL_ARCHIVE_SECRET_KEY_FILE:-}}
       # The first admin from a setup link: a token from `./ma setup token`
       # in SECRET_KEY_DIR, with
-      # MAIL_ARCHIVE_SETUP_TOKEN_FILE=/secret-key/setup.token. Web only.
+      # KEEPIA_ARCHIVE_SETUP_TOKEN_FILE=/secret-key/setup.token. Web only.
       # See docs/guide/getting-started.md, "Start from configuration".
-      MAIL_ARCHIVE_SETUP_TOKEN_FILE: ${MAIL_ARCHIVE_SETUP_TOKEN_FILE:-}
-      MAIL_ARCHIVE_SETUP_TOKEN: ${MAIL_ARCHIVE_SETUP_TOKEN:-}
+      KEEPIA_ARCHIVE_SETUP_TOKEN_FILE: ${KEEPIA_ARCHIVE_SETUP_TOKEN_FILE:-${MAIL_ARCHIVE_SETUP_TOKEN_FILE:-}}
+      KEEPIA_ARCHIVE_SETUP_TOKEN: ${KEEPIA_ARCHIVE_SETUP_TOKEN:-${MAIL_ARCHIVE_SETUP_TOKEN:-}}
       # off: a new instance starts without encryption at rest (test
       # instances only); by default it turns it on at its first start.
-      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
-      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP: ${KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP:-${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}}
+      KEEPIA_ARCHIVE_LOG_LEVEL: ${KEEPIA_ARCHIVE_LOG_LEVEL:-${MAIL_ARCHIVE_LOG_LEVEL:-info}}
       # Apply pending database migrations at start, under the same lock as
       # ./ma migrate; off: refuse to start while migrations are pending.
       # Back up before an upgrade. See docs/guide/operations.md, "Upgrades".
-      MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-on}
-      MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      KEEPIA_ARCHIVE_MIGRATE_ON_START: ${KEEPIA_ARCHIVE_MIGRATE_ON_START:-${MAIL_ARCHIVE_MIGRATE_ON_START:-on}}
+      KEEPIA_ARCHIVE_ALLOWED_HOSTS: ${KEEPIA_ARCHIVE_ALLOWED_HOSTS:-${MAIL_ARCHIVE_ALLOWED_HOSTS:-localhost,127.0.0.1}}
       # Reverse proxies whose X-Forwarded-For names the client (audit log,
       # login limits). Empty: the direct peer counts.
-      MAIL_ARCHIVE_TRUSTED_PROXIES: ${MAIL_ARCHIVE_TRUSTED_PROXIES:-}
+      KEEPIA_ARCHIVE_TRUSTED_PROXIES: ${KEEPIA_ARCHIVE_TRUSTED_PROXIES:-${MAIL_ARCHIVE_TRUSTED_PROXIES:-}}
       # How often each enabled account is synced unless it has its own
       # interval; 0 turns the schedule off for every account.
-      MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
+      KEEPIA_ARCHIVE_SYNC_INTERVAL: ${KEEPIA_ARCHIVE_SYNC_INTERVAL:-${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}}
       # The shortest interval any account is synced at.
-      MAIL_ARCHIVE_SYNC_INTERVAL_MIN: ${MAIL_ARCHIVE_SYNC_INTERVAL_MIN:-5m}
+      KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN: ${KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN:-${MAIL_ARCHIVE_SYNC_INTERVAL_MIN:-5m}}
       # How often each folder is compared with the server; 0 = only on request.
-      MAIL_ARCHIVE_RECONCILE_INTERVAL: ${MAIL_ARCHIVE_RECONCILE_INTERVAL:-24h}
-      MAIL_ARCHIVE_REQUIRE_2FA: ${MAIL_ARCHIVE_REQUIRE_2FA:-false}
+      KEEPIA_ARCHIVE_RECONCILE_INTERVAL: ${KEEPIA_ARCHIVE_RECONCILE_INTERVAL:-${MAIL_ARCHIVE_RECONCILE_INTERVAL:-24h}}
+      KEEPIA_ARCHIVE_REQUIRE_2FA: ${KEEPIA_ARCHIVE_REQUIRE_2FA:-${MAIL_ARCHIVE_REQUIRE_2FA:-false}}
       # The address you open in the browser; passkeys work only there.
-      MAIL_ARCHIVE_PUBLIC_URL: ${MAIL_ARCHIVE_PUBLIC_URL:-http://localhost:${WEB_PORT:-8080}}
+      KEEPIA_ARCHIVE_PUBLIC_URL: ${KEEPIA_ARCHIVE_PUBLIC_URL:-${MAIL_ARCHIVE_PUBLIC_URL:-http://localhost:${WEB_PORT:-8080}}}
       # Alerts when syncs of an account keep failing; see the Operations guide.
-      MAIL_ARCHIVE_ALERT_AFTER_FAILURES: ${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-3}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-json}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-ids}
+      KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES: ${KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES:-${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-3}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_URL: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_URL:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-json}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-ids}}
       # Alert mail to admins: the relay (smtps://user@host:465, or
       # smtp://user@host:587 with STARTTLS), its password in a file in
-      # SECRET_KEY_DIR (MAIL_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password)
+      # SECRET_KEY_DIR (KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password)
       # and the sender. Empty: no alert mail. See "Email alerts" in the
       # Operations guide.
-      MAIL_ARCHIVE_MAIL_URL: ${MAIL_ARCHIVE_MAIL_URL:-}
-      MAIL_ARCHIVE_MAIL_PASSWORD_FILE: ${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}
-      MAIL_ARCHIVE_MAIL_FROM: ${MAIL_ARCHIVE_MAIL_FROM:-}
+      KEEPIA_ARCHIVE_MAIL_URL: ${KEEPIA_ARCHIVE_MAIL_URL:-${MAIL_ARCHIVE_MAIL_URL:-}}
+      KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE: ${KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE:-${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}}
+      KEEPIA_ARCHIVE_MAIL_FROM: ${KEEPIA_ARCHIVE_MAIL_FROM:-${MAIL_ARCHIVE_MAIL_FROM:-}}
       # IMAP limits a large mailbox can reach; empty = the default. Raising
       # them costs memory: see "IMAP limits" in the Operations guide.
-      MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}
-      MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES: ${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}
-      MAIL_ARCHIVE_IMAP_MAX_FOLDERS: ${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}
-      MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT: ${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}
+      KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}}
+      KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES: ${KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES:-${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}}
+      KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS: ${KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS:-${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}}
+      KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT: ${KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT:-${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}}
       # Storage quota of the instance and the disk reserve; empty = the
       # default. See "Storage and quotas" in the Operations guide.
-      MAIL_ARCHIVE_STORAGE_QUOTA: ${MAIL_ARCHIVE_STORAGE_QUOTA:-}
-      MAIL_ARCHIVE_STORAGE_WARN_PERCENT: ${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}
-      MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}
-      MAIL_ARCHIVE_MIN_FREE_DISK: ${MAIL_ARCHIVE_MIN_FREE_DISK:-}
+      KEEPIA_ARCHIVE_STORAGE_QUOTA: ${KEEPIA_ARCHIVE_STORAGE_QUOTA:-${MAIL_ARCHIVE_STORAGE_QUOTA:-}}
+      KEEPIA_ARCHIVE_STORAGE_WARN_PERCENT: ${KEEPIA_ARCHIVE_STORAGE_WARN_PERCENT:-${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}}
+      KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}}
+      KEEPIA_ARCHIVE_MIN_FREE_DISK: ${KEEPIA_ARCHIVE_MIN_FREE_DISK:-${MAIL_ARCHIVE_MIN_FREE_DISK:-}}
       # Journaling over SMTP for smtp accounts; off unless the listen address is set.
-      MAIL_ARCHIVE_SMTP_LISTEN: ${MAIL_ARCHIVE_SMTP_LISTEN:-}
+      KEEPIA_ARCHIVE_SMTP_LISTEN: ${KEEPIA_ARCHIVE_SMTP_LISTEN:-${MAIL_ARCHIVE_SMTP_LISTEN:-}}
       # required (the default once the listen address is set): mail servers
       # log in over STARTTLS, so the certificate below is needed (mount it
       # with docker-compose.smtp.yml); off: the allowed networks are the only
       # gate. Empty here, so that an instance without SMTP starts.
+      KEEPIA_ARCHIVE_SMTP_AUTH: ${KEEPIA_ARCHIVE_SMTP_AUTH:-${MAIL_ARCHIVE_SMTP_AUTH:-}}
+      KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR: ${KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR:-${MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR:-}}
+      KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS: ${KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS:-${MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS:-}}
+      KEEPIA_ARCHIVE_SMTP_MAX_SIZE: ${KEEPIA_ARCHIVE_SMTP_MAX_SIZE:-${MAIL_ARCHIVE_SMTP_MAX_SIZE:-}}
+      KEEPIA_ARCHIVE_SMTP_HOSTNAME: ${KEEPIA_ARCHIVE_SMTP_HOSTNAME:-${MAIL_ARCHIVE_SMTP_HOSTNAME:-}}
+      KEEPIA_ARCHIVE_SMTP_TLS_CERT: ${KEEPIA_ARCHIVE_SMTP_TLS_CERT:-${MAIL_ARCHIVE_SMTP_TLS_CERT:-}}
+      KEEPIA_ARCHIVE_SMTP_TLS_KEY: ${KEEPIA_ARCHIVE_SMTP_TLS_KEY:-${MAIL_ARCHIVE_SMTP_TLS_KEY:-}}
+      # Tamper evidence: the key that signs attestations (default
+      # /data/attest/signing.key, create with `./ma attest keygen`) and how
+      # often one is written; 0 turns the schedule off.
+      KEEPIA_ARCHIVE_ATTEST_KEY_FILE: ${KEEPIA_ARCHIVE_ATTEST_KEY_FILE:-${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}}
+      KEEPIA_ARCHIVE_ATTEST_INTERVAL: ${KEEPIA_ARCHIVE_ATTEST_INTERVAL:-${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}}
+      # How long the files of messages deleted by retention stay (backups).
+      KEEPIA_ARCHIVE_RETENTION_FILE_GRACE: ${KEEPIA_ARCHIVE_RETENTION_FILE_GRACE:-${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}}
+      # Background jobs (attachment text) the web server runs at a time;
+      # 0 with the worker service below. See docs/guide/operations.md.
+      KEEPIA_ARCHIVE_JOB_WORKERS: ${WEB_JOB_WORKERS:-1}
+      # Encryption at rest: the archive key that opens the keyring
+      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
+      # set KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
+      # docs/reference/configuration.md.
+      KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE: ${KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE:-${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}}
+      KEEPIA_ARCHIVE_ARCHIVE_KEY: ${KEEPIA_ARCHIVE_ARCHIVE_KEY:-${MAIL_ARCHIVE_ARCHIVE_KEY:-}}
+      # The old names (until 1.6) of the variables above, as an existing
+      # .env sets them: the app reads them as aliases and warns about them,
+      # and refuses to start when one differs from its new name. The new
+      # names fall back to them above. Kept until a later major release.
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
+      MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
+      MAIL_ARCHIVE_SETUP_TOKEN_FILE: ${MAIL_ARCHIVE_SETUP_TOKEN_FILE:-}
+      MAIL_ARCHIVE_SETUP_TOKEN: ${MAIL_ARCHIVE_SETUP_TOKEN:-}
+      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
+      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-}
+      MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-}
+      MAIL_ARCHIVE_ALLOWED_HOSTS: ${MAIL_ARCHIVE_ALLOWED_HOSTS:-}
+      MAIL_ARCHIVE_TRUSTED_PROXIES: ${MAIL_ARCHIVE_TRUSTED_PROXIES:-}
+      MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-}
+      MAIL_ARCHIVE_SYNC_INTERVAL_MIN: ${MAIL_ARCHIVE_SYNC_INTERVAL_MIN:-}
+      MAIL_ARCHIVE_RECONCILE_INTERVAL: ${MAIL_ARCHIVE_RECONCILE_INTERVAL:-}
+      MAIL_ARCHIVE_REQUIRE_2FA: ${MAIL_ARCHIVE_REQUIRE_2FA:-}
+      MAIL_ARCHIVE_PUBLIC_URL: ${MAIL_ARCHIVE_PUBLIC_URL:-}
+      MAIL_ARCHIVE_ALERT_AFTER_FAILURES: ${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-}
+      MAIL_ARCHIVE_MAIL_URL: ${MAIL_ARCHIVE_MAIL_URL:-}
+      MAIL_ARCHIVE_MAIL_PASSWORD_FILE: ${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}
+      MAIL_ARCHIVE_MAIL_FROM: ${MAIL_ARCHIVE_MAIL_FROM:-}
+      MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}
+      MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES: ${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}
+      MAIL_ARCHIVE_IMAP_MAX_FOLDERS: ${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}
+      MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT: ${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}
+      MAIL_ARCHIVE_STORAGE_QUOTA: ${MAIL_ARCHIVE_STORAGE_QUOTA:-}
+      MAIL_ARCHIVE_STORAGE_WARN_PERCENT: ${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}
+      MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}
+      MAIL_ARCHIVE_MIN_FREE_DISK: ${MAIL_ARCHIVE_MIN_FREE_DISK:-}
+      MAIL_ARCHIVE_SMTP_LISTEN: ${MAIL_ARCHIVE_SMTP_LISTEN:-}
       MAIL_ARCHIVE_SMTP_AUTH: ${MAIL_ARCHIVE_SMTP_AUTH:-}
       MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR: ${MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR:-}
       MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS: ${MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS:-}
@@ -146,20 +204,9 @@ services:
       MAIL_ARCHIVE_SMTP_HOSTNAME: ${MAIL_ARCHIVE_SMTP_HOSTNAME:-}
       MAIL_ARCHIVE_SMTP_TLS_CERT: ${MAIL_ARCHIVE_SMTP_TLS_CERT:-}
       MAIL_ARCHIVE_SMTP_TLS_KEY: ${MAIL_ARCHIVE_SMTP_TLS_KEY:-}
-      # Tamper evidence: the key that signs attestations (default
-      # /data/attest/signing.key, create with `./ma attest keygen`) and how
-      # often one is written; 0 turns the schedule off.
       MAIL_ARCHIVE_ATTEST_KEY_FILE: ${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}
-      MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
-      # How long the files of messages deleted by retention stay (backups).
-      MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}
-      # Background jobs (attachment text) the web server runs at a time;
-      # 0 with the worker service below. See docs/guide/operations.md.
-      MAIL_ARCHIVE_JOB_WORKERS: ${WEB_JOB_WORKERS:-1}
-      # Encryption at rest: the archive key that opens the keyring
-      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
-      # set MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
-      # docs/reference/configuration.md.
+      MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-}
+      MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-}
       MAIL_ARCHIVE_ARCHIVE_KEY_FILE: ${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}
       MAIL_ARCHIVE_ARCHIVE_KEY: ${MAIL_ARCHIVE_ARCHIVE_KEY:-}
     volumes:
@@ -171,7 +218,7 @@ services:
     ports:
       # WEB_BIND=0.0.0.0 (or a LAN or Tailscale address) opens it to a network.
       - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
-      # SMTP for journaling, with MAIL_ARCHIVE_SMTP_LISTEN=:2525. Its
+      # SMTP for journaling, with KEEPIA_ARCHIVE_SMTP_LISTEN=:2525. Its
       # certificate comes from docker-compose.smtp.yml.
       - "${SMTP_BIND:-127.0.0.1}:${SMTP_PORT:-2525}:2525"
 
@@ -182,8 +229,8 @@ services:
     build:
       context: .
       args:
-        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
-    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
+        VERSION: ${KEEPIA_ARCHIVE_VERSION:-${MAIL_ARCHIVE_VERSION:-dev}} # set by ./ma from `git describe`
+    image: ${KEEPIA_ARCHIVE_IMAGE:-${MAIL_ARCHIVE_IMAGE:-mail-archive:local}}
     profiles: ["worker"]
     restart: unless-stopped
     command: ["worker"]
@@ -200,21 +247,27 @@ services:
         condition: service_healthy
         restart: true
     environment:
-      MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
+      KEEPIA_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       # No secret key: the worker seals and opens no password.
-      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      KEEPIA_ARCHIVE_LOG_LEVEL: ${KEEPIA_ARCHIVE_LOG_LEVEL:-${MAIL_ARCHIVE_LOG_LEVEL:-info}}
       # As for web: whichever starts first migrates, the other waits; so with
       # encryption at setup.
-      MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-on}
-      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
-      MAIL_ARCHIVE_JOB_WORKERS: ${WORKER_JOB_WORKERS:-1}
+      KEEPIA_ARCHIVE_MIGRATE_ON_START: ${KEEPIA_ARCHIVE_MIGRATE_ON_START:-${MAIL_ARCHIVE_MIGRATE_ON_START:-on}}
+      KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP: ${KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP:-${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}}
+      KEEPIA_ARCHIVE_JOB_WORKERS: ${WORKER_JOB_WORKERS:-1}
       # Go's heap limit: mem_limit minus 128 MiB of WebAssembly memory per worker
       # (outside the Go heap) minus 64 MiB of headroom. See operations.md.
       GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-576MiB}
       # Encryption at rest: the archive key that opens the keyring
       # (data/keys/keyring). Create both with `./ma encryption keygen`, then
-      # set MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
+      # set KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
       # docs/reference/configuration.md.
+      KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE: ${KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE:-${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}}
+      KEEPIA_ARCHIVE_ARCHIVE_KEY: ${KEEPIA_ARCHIVE_ARCHIVE_KEY:-${MAIL_ARCHIVE_ARCHIVE_KEY:-}}
+      # The old names of the variables above, as for web.
+      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-}
+      MAIL_ARCHIVE_MIGRATE_ON_START: ${MAIL_ARCHIVE_MIGRATE_ON_START:-}
+      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
       MAIL_ARCHIVE_ARCHIVE_KEY_FILE: ${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}
       MAIL_ARCHIVE_ARCHIVE_KEY: ${MAIL_ARCHIVE_ARCHIVE_KEY:-}
     volumes:
@@ -226,8 +279,8 @@ services:
     build:
       context: .
       args:
-        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
-    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
+        VERSION: ${KEEPIA_ARCHIVE_VERSION:-${MAIL_ARCHIVE_VERSION:-dev}} # set by ./ma from `git describe`
+    image: ${KEEPIA_ARCHIVE_IMAGE:-${MAIL_ARCHIVE_IMAGE:-mail-archive:local}}
     # One-shot CLI: not started by `docker compose up`, use `docker compose run`.
     profiles: ["cli"]
     # No process in the container can gain privileges (setuid binaries).
@@ -237,46 +290,89 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      MAIL_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
+      KEEPIA_ARCHIVE_DATABASE_URL: postgres://mailarchive:${POSTGRES_PASSWORD}@postgres:5432/mailarchive?sslmode=disable
       # The secret key, as for web.
-      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
-      MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
+      KEEPIA_ARCHIVE_SECRET_KEY: ${KEEPIA_ARCHIVE_SECRET_KEY:-${MAIL_ARCHIVE_SECRET_KEY:-}}
+      KEEPIA_ARCHIVE_SECRET_KEY_FILE: ${KEEPIA_ARCHIVE_SECRET_KEY_FILE:-${MAIL_ARCHIVE_SECRET_KEY_FILE:-}}
       # Read by `./ma status` (its setup line).
-      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
-      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-info}
+      KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP: ${KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP:-${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}}
+      KEEPIA_ARCHIVE_LOG_LEVEL: ${KEEPIA_ARCHIVE_LOG_LEVEL:-${MAIL_ARCHIVE_LOG_LEVEL:-info}}
       # `./ma status` shows when each account is due and whether it is
       # stale; `./ma account set-schedule` checks the floor.
-      MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}
-      MAIL_ARCHIVE_SYNC_INTERVAL_MIN: ${MAIL_ARCHIVE_SYNC_INTERVAL_MIN:-5m}
+      KEEPIA_ARCHIVE_SYNC_INTERVAL: ${KEEPIA_ARCHIVE_SYNC_INTERVAL:-${MAIL_ARCHIVE_SYNC_INTERVAL:-6h}}
+      KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN: ${KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN:-${MAIL_ARCHIVE_SYNC_INTERVAL_MIN:-5m}}
       # `./ma sync` compares folders with the server when this is due.
-      MAIL_ARCHIVE_RECONCILE_INTERVAL: ${MAIL_ARCHIVE_RECONCILE_INTERVAL:-24h}
+      KEEPIA_ARCHIVE_RECONCILE_INTERVAL: ${KEEPIA_ARCHIVE_RECONCILE_INTERVAL:-${MAIL_ARCHIVE_RECONCILE_INTERVAL:-24h}}
       # Alerts when syncs of an account keep failing; see the Operations guide.
-      MAIL_ARCHIVE_ALERT_AFTER_FAILURES: ${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-3}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-json}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}
-      MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-ids}
+      KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES: ${KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES:-${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-3}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_URL: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_URL:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-json}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}}
+      KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-ids}}
       # Alert mail to admins: the relay (smtps://user@host:465, or
       # smtp://user@host:587 with STARTTLS), its password in a file in
-      # SECRET_KEY_DIR (MAIL_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password)
+      # SECRET_KEY_DIR (KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password)
       # and the sender. Empty: no alert mail. See "Email alerts" in the
       # Operations guide.
+      KEEPIA_ARCHIVE_MAIL_URL: ${KEEPIA_ARCHIVE_MAIL_URL:-${MAIL_ARCHIVE_MAIL_URL:-}}
+      KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE: ${KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE:-${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}}
+      KEEPIA_ARCHIVE_MAIL_FROM: ${KEEPIA_ARCHIVE_MAIL_FROM:-${MAIL_ARCHIVE_MAIL_FROM:-}}
+      # IMAP limits a large mailbox can reach; empty = the default. Raising
+      # them costs memory: see "IMAP limits" in the Operations guide.
+      KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}}
+      KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES: ${KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES:-${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}}
+      KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS: ${KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS:-${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}}
+      KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT: ${KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT:-${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}}
+      # Storage quota of the instance and the disk reserve; empty = the
+      # default. See "Storage and quotas" in the Operations guide.
+      KEEPIA_ARCHIVE_STORAGE_QUOTA: ${KEEPIA_ARCHIVE_STORAGE_QUOTA:-${MAIL_ARCHIVE_STORAGE_QUOTA:-}}
+      KEEPIA_ARCHIVE_STORAGE_WARN_PERCENT: ${KEEPIA_ARCHIVE_STORAGE_WARN_PERCENT:-${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}}
+      KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}}
+      KEEPIA_ARCHIVE_MIN_FREE_DISK: ${KEEPIA_ARCHIVE_MIN_FREE_DISK:-${MAIL_ARCHIVE_MIN_FREE_DISK:-}}
+      # Read by `./ma account add-smtp` to tell whether the web server receives.
+      KEEPIA_ARCHIVE_SMTP_LISTEN: ${KEEPIA_ARCHIVE_SMTP_LISTEN:-${MAIL_ARCHIVE_SMTP_LISTEN:-}}
+      KEEPIA_ARCHIVE_SMTP_AUTH: ${KEEPIA_ARCHIVE_SMTP_AUTH:-${MAIL_ARCHIVE_SMTP_AUTH:-}}
+      KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR: ${KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR:-${MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR:-}}
+      KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS: ${KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS:-${MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS:-}}
+      KEEPIA_ARCHIVE_SMTP_MAX_SIZE: ${KEEPIA_ARCHIVE_SMTP_MAX_SIZE:-${MAIL_ARCHIVE_SMTP_MAX_SIZE:-}}
+      KEEPIA_ARCHIVE_SMTP_HOSTNAME: ${KEEPIA_ARCHIVE_SMTP_HOSTNAME:-${MAIL_ARCHIVE_SMTP_HOSTNAME:-}}
+      KEEPIA_ARCHIVE_SMTP_TLS_CERT: ${KEEPIA_ARCHIVE_SMTP_TLS_CERT:-${MAIL_ARCHIVE_SMTP_TLS_CERT:-}}
+      KEEPIA_ARCHIVE_SMTP_TLS_KEY: ${KEEPIA_ARCHIVE_SMTP_TLS_KEY:-${MAIL_ARCHIVE_SMTP_TLS_KEY:-}}
+      # Read by `./ma attest` and `./ma attest keygen`.
+      KEEPIA_ARCHIVE_ATTEST_KEY_FILE: ${KEEPIA_ARCHIVE_ATTEST_KEY_FILE:-${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}}
+      KEEPIA_ARCHIVE_ATTEST_INTERVAL: ${KEEPIA_ARCHIVE_ATTEST_INTERVAL:-${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}}
+      # How long the files of messages deleted by retention stay (backups).
+      KEEPIA_ARCHIVE_RETENTION_FILE_GRACE: ${KEEPIA_ARCHIVE_RETENTION_FILE_GRACE:-${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}}
+      # Encryption at rest: the archive key that opens the keyring
+      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
+      # set KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
+      # docs/reference/configuration.md.
+      KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE: ${KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE:-${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}}
+      KEEPIA_ARCHIVE_ARCHIVE_KEY: ${KEEPIA_ARCHIVE_ARCHIVE_KEY:-${MAIL_ARCHIVE_ARCHIVE_KEY:-}}
+      # The old names of the variables above, as for web.
+      MAIL_ARCHIVE_SECRET_KEY: ${MAIL_ARCHIVE_SECRET_KEY:-}
+      MAIL_ARCHIVE_SECRET_KEY_FILE: ${MAIL_ARCHIVE_SECRET_KEY_FILE:-}
+      MAIL_ARCHIVE_ENCRYPTION_AT_SETUP: ${MAIL_ARCHIVE_ENCRYPTION_AT_SETUP:-}
+      MAIL_ARCHIVE_LOG_LEVEL: ${MAIL_ARCHIVE_LOG_LEVEL:-}
+      MAIL_ARCHIVE_SYNC_INTERVAL: ${MAIL_ARCHIVE_SYNC_INTERVAL:-}
+      MAIL_ARCHIVE_SYNC_INTERVAL_MIN: ${MAIL_ARCHIVE_SYNC_INTERVAL_MIN:-}
+      MAIL_ARCHIVE_RECONCILE_INTERVAL: ${MAIL_ARCHIVE_RECONCILE_INTERVAL:-}
+      MAIL_ARCHIVE_ALERT_AFTER_FAILURES: ${MAIL_ARCHIVE_ALERT_AFTER_FAILURES:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION:-}
+      MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL: ${MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL:-}
       MAIL_ARCHIVE_MAIL_URL: ${MAIL_ARCHIVE_MAIL_URL:-}
       MAIL_ARCHIVE_MAIL_PASSWORD_FILE: ${MAIL_ARCHIVE_MAIL_PASSWORD_FILE:-}
       MAIL_ARCHIVE_MAIL_FROM: ${MAIL_ARCHIVE_MAIL_FROM:-}
-      # IMAP limits a large mailbox can reach; empty = the default. Raising
-      # them costs memory: see "IMAP limits" in the Operations guide.
       MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES: ${MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES:-}
       MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES: ${MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES:-}
       MAIL_ARCHIVE_IMAP_MAX_FOLDERS: ${MAIL_ARCHIVE_IMAP_MAX_FOLDERS:-}
       MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT: ${MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT:-}
-      # Storage quota of the instance and the disk reserve; empty = the
-      # default. See "Storage and quotas" in the Operations guide.
       MAIL_ARCHIVE_STORAGE_QUOTA: ${MAIL_ARCHIVE_STORAGE_QUOTA:-}
       MAIL_ARCHIVE_STORAGE_WARN_PERCENT: ${MAIL_ARCHIVE_STORAGE_WARN_PERCENT:-}
       MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT: ${MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT:-}
       MAIL_ARCHIVE_MIN_FREE_DISK: ${MAIL_ARCHIVE_MIN_FREE_DISK:-}
-      # Read by `./ma account add-smtp` to tell whether the web server receives.
       MAIL_ARCHIVE_SMTP_LISTEN: ${MAIL_ARCHIVE_SMTP_LISTEN:-}
       MAIL_ARCHIVE_SMTP_AUTH: ${MAIL_ARCHIVE_SMTP_AUTH:-}
       MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR: ${MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR:-}
@@ -285,15 +381,9 @@ services:
       MAIL_ARCHIVE_SMTP_HOSTNAME: ${MAIL_ARCHIVE_SMTP_HOSTNAME:-}
       MAIL_ARCHIVE_SMTP_TLS_CERT: ${MAIL_ARCHIVE_SMTP_TLS_CERT:-}
       MAIL_ARCHIVE_SMTP_TLS_KEY: ${MAIL_ARCHIVE_SMTP_TLS_KEY:-}
-      # Read by `./ma attest` and `./ma attest keygen`.
       MAIL_ARCHIVE_ATTEST_KEY_FILE: ${MAIL_ARCHIVE_ATTEST_KEY_FILE:-}
-      MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-24h}
-      # How long the files of messages deleted by retention stay (backups).
-      MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-168h}
-      # Encryption at rest: the archive key that opens the keyring
-      # (data/keys/keyring). Create both with `./ma encryption keygen`, then
-      # set MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive.key in .env. See
-      # docs/reference/configuration.md.
+      MAIL_ARCHIVE_ATTEST_INTERVAL: ${MAIL_ARCHIVE_ATTEST_INTERVAL:-}
+      MAIL_ARCHIVE_RETENTION_FILE_GRACE: ${MAIL_ARCHIVE_RETENTION_FILE_GRACE:-}
       MAIL_ARCHIVE_ARCHIVE_KEY_FILE: ${MAIL_ARCHIVE_ARCHIVE_KEY_FILE:-}
       MAIL_ARCHIVE_ARCHIVE_KEY: ${MAIL_ARCHIVE_ARCHIVE_KEY:-}
     volumes:
@@ -316,15 +406,15 @@ services:
     build:
       context: .
       args:
-        VERSION: ${MAIL_ARCHIVE_VERSION:-dev} # set by ./ma from `git describe`
-    image: ${MAIL_ARCHIVE_IMAGE:-mail-archive:local}
+        VERSION: ${KEEPIA_ARCHIVE_VERSION:-${MAIL_ARCHIVE_VERSION:-dev}} # set by ./ma from `git describe`
+    image: ${KEEPIA_ARCHIVE_IMAGE:-${MAIL_ARCHIVE_IMAGE:-mail-archive:local}}
     profiles: ["cli"]
     # No process in the container can gain privileges (setuid binaries).
     security_opt:
       - no-new-privileges:true
     command: ["encryption", "keygen", "--chown", "65532:65532"]
     environment:
-      MAIL_ARCHIVE_ARCHIVE_KEY_FILE: /keys/archive.key
+      KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE: /keys/archive.key
     volumes:
       - ${ARCHIVE_DIR:-./data}:/data
       - ${ARCHIVE_KEY_DIR:-./keys}:/keys

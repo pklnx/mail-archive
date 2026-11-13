@@ -130,7 +130,7 @@ line:
 `group list` shows each group's quota, the storage it uses and its state
 (`ok`, `warn`, `full`, `overflow`); the **Groups** section of the users page
 shows each group's quota too. A group quota is never above the instance's
-(`MAIL_ARCHIVE_STORAGE_QUOTA`); the change is recorded in the audit log as
+(`KEEPIA_ARCHIVE_STORAGE_QUOTA`); the change is recorded in the audit log as
 `group.quota`. When a group is full, its syncs, fills and imports pause, and
 from the overflow on its journal mail is deferred; its users can still read
 and search everything, and see a banner that new mail is not archived, but
@@ -273,7 +273,7 @@ wrong codes, the login starts again with the password.
 
 Users who are not admins can turn 2FA off in their profile with their
 password and a code, unless the operator requires it for everyone
-(`MAIL_ARCHIVE_REQUIRE_2FA=true`, see
+(`KEEPIA_ARCHIVE_REQUIRE_2FA=true`, see
 [Configuration](../reference/configuration)).
 
 If you lose both the app and the recovery codes, an admin resets your 2FA.
@@ -282,7 +282,7 @@ If you lose both the app and the recovery codes, an admin resets your 2FA.
 
 A passkey signs you in with Face ID, Touch ID, Windows Hello or a security
 key, without password and code. It works only at the instance's address,
-which the operator sets as `MAIL_ARCHIVE_PUBLIC_URL` (see
+which the operator sets as `KEEPIA_ARCHIVE_PUBLIC_URL` (see
 [Configuration](../reference/configuration)), over HTTPS or on `localhost`.
 
 On the **Sign-in & security** tab, click **Add passkey**. In the dialog,

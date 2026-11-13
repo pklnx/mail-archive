@@ -43,11 +43,11 @@ func (l *lockedBuffer) String() string {
 }
 
 // startEnv points the commands at the database url, with
-// MAIL_ARCHIVE_MIGRATE_ON_START on or off.
+// KEEPIA_ARCHIVE_MIGRATE_ON_START on or off.
 func startEnv(t *testing.T, url string, migrateOnStart bool) {
 	t.Helper()
 	migrateEnv(t, url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
+	t.Setenv(config.EnvDataDir, t.TempDir())
 	t.Setenv(config.EnvMigrateOnStart, map[bool]string{true: "on", false: "off"}[migrateOnStart])
 }
 
@@ -112,7 +112,7 @@ func schemaOf(t *testing.T, url string) store.SchemaState {
 }
 
 // TestStartFresh (#396): on an empty database, a start with
-// MAIL_ARCHIVE_MIGRATE_ON_START=on applies every migration and creates
+// KEEPIA_ARCHIVE_MIGRATE_ON_START=on applies every migration and creates
 // instance_state; it notes no backup, as there is nothing to back up.
 func TestStartFresh(t *testing.T) {
 	url := storetest.NewUnmigrated(t)
@@ -138,7 +138,7 @@ func TestStartFresh(t *testing.T) {
 }
 
 // TestStartUpgrade (#396): a database one migration behind. Without
-// MAIL_ARCHIVE_MIGRATE_ON_START, serve, worker and a command that uses the
+// KEEPIA_ARCHIVE_MIGRATE_ON_START, serve, worker and a command that uses the
 // database refuse with exit code 4 and name the pending migration; backup
 // and status only warn. With it on, a start applies only that migration,
 // after a note on the last backup.
@@ -623,7 +623,7 @@ func waitForMigrateLockWaiters(t *testing.T, ctx context.Context, url string, n 
 
 // TestStartWaitsForRestore (#396, review 2 of #545): restore-dump holds the
 // migration lock until its reconciliation, so a serve that starts with
-// MAIL_ARCHIVE_MIGRATE_ON_START=on during the restore waits instead of
+// KEEPIA_ARCHIVE_MIGRATE_ON_START=on during the restore waits instead of
 // migrating the empty database, and then finds the restored schema with
 // nothing left to apply. The restore is ./ma's: --hold, with the dump
 // loaded by the test in place of pg_restore.
@@ -631,7 +631,7 @@ func TestStartWaitsForRestore(t *testing.T) {
 	newArchiveSetup(t) // the data directory of an archive without encryption
 	st, _ := switchDatabase(t)
 	t.Setenv(config.EnvMigrateOnStart, "on")
-	url := os.Getenv("MAIL_ARCHIVE_DATABASE_URL")
+	url := os.Getenv(config.EnvDatabaseURL)
 	ctx, cancel := context.WithTimeout(context.Background(), testwait.Limit(t))
 	defer cancel()
 

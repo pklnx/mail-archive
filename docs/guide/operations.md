@@ -27,7 +27,7 @@ A complete backup has three parts, made in this order:
 2. **The archive directory** (`data/`, or `ARCHIVE_DIR`): the message files.
    Copy it **after** the dump. Files are only added, so a copy made later
    covers every message in the dump.
-3. **The secret key** from `.env` (`MAIL_ARCHIVE_SECRET_KEY`), kept
+3. **The secret key** from `.env` (`KEEPIA_ARCHIVE_SECRET_KEY`), kept
    separately, for example in a password manager. It is not in the dump or
    the note. Without it, archived mail stays readable, but every IMAP
    password and every 2FA setup has to be entered again.
@@ -48,7 +48,7 @@ separate from the backup; see [Tamper evidence](./tamper-evidence#what-you-do).
 
 Files are only added, with one exception: the files of messages deleted by
 [retention](../reference/cli#deletion) are removed after a grace period
-(`MAIL_ARCHIVE_RETENTION_FILE_GRACE`, default 7 days). A backup made within
+(`KEEPIA_ARCHIVE_RETENTION_FILE_GRACE`, default 7 days). A backup made within
 it is complete; keep the period longer than the time between a dump and the
 copy of the data directory.
 
@@ -82,12 +82,12 @@ settings of the app's connection, with GSSAPI encryption off, or the
 command refuses to run (see below):
 
 - **Host, port, user, database and password** as the app's own connection
-  resolves them: from `MAIL_ARCHIVE_DATABASE_URL`, and for what it leaves
+  resolves them: from `KEEPIA_ARCHIVE_DATABASE_URL`, and for what it leaves
   out from `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` and `PGPASSWORD` of
   the process, the password also from `PGPASSFILE` (by default
   `~/.pgpass`). A list of hosts keeps its order. The password is passed in
   the environment, never on the command line.
-- **The TLS and authentication settings, from `MAIL_ARCHIVE_DATABASE_URL`
+- **The TLS and authentication settings, from `KEEPIA_ARCHIVE_DATABASE_URL`
   only:** `sslmode` (also as the URL alias `ssl=true`), `sslrootcert`,
   `sslcert`, `sslkey`, `sslsni`, `sslnegotiation`, `target_session_attrs`,
   `channel_binding` and `require_auth`. A key given twice counts with its
@@ -110,7 +110,7 @@ command refuses to run (see below):
   `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF`, `KRB5CCNAME` and
   `KRB5_CONFIG`.
 
-Nothing else is passed on: no `MAIL_ARCHIVE_*` variable, no other `PG*`
+Nothing else is passed on: no `KEEPIA_ARCHIVE_*` or `MAIL_ARCHIVE_*` variable, no other `PG*`
 variable of the process (such as `PGAPPNAME` or `PGCONNECT_TIMEOUT`), and
 no other parameter of the URL (such as `sslcrl` or `connect_timeout`). The
 tools apply these settings with libpq and OpenSSL (`OPENSSL_CONF`
@@ -205,13 +205,13 @@ the [command reference](../reference/cli#verify) for the findings.
   [Tamper evidence](./tamper-evidence#findings). After a restore, `removed`
   lists the messages the restore lost.
 - **`attest-stale`:** the web server has not written an attestation for
-  twice `MAIL_ARCHIVE_ATTEST_INTERVAL`; look at its log.
+  twice `KEEPIA_ARCHIVE_ATTEST_INTERVAL`; look at its log.
 
 ### Restore
 
-1. Put `MAIL_ARCHIVE_SECRET_KEY` back into `.env` and, with encryption at
+1. Put `KEEPIA_ARCHIVE_SECRET_KEY` back into `.env` and, with encryption at
    rest, the archive key file into the keys directory
-   (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`). The key opens the dump, and it is
+   (`KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE`). The key opens the dump, and it is
    also what tells `restore-dump` that this archive uses encryption at rest,
    so that a dump without encryption put in place of the encrypted one is
    refused (step 2). Copy the data directory back to `data/`
@@ -442,7 +442,7 @@ mail, backups included: nobody, not the app's developers either, can
 recover it without them.
 
 - Create the key with `./ma encryption keygen` and set
-  `MAIL_ARCHIVE_ARCHIVE_KEY_FILE` (see [Getting started](./getting-started#the-archive-key)).
+  `KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE` (see [Getting started](./getting-started#the-archive-key)).
 - Keep the recovery key it prints offline, apart from the host and the
   backups (a password manager, or paper in a safe). `encryption add-key`
   adds another one; [Changing keys](#changing-keys) covers replacing them.
@@ -456,7 +456,7 @@ A **new instance** turns it on before it archives anything. Started from
 configuration, the web server or the worker does it at its first start,
 with the configured archive key, and refuses to start without one (see
 [Start from configuration](./getting-started#start-from-configuration));
-`MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is for test instances only. Set up
+`KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off` is for test instances only. Set up
 from the command line, `./ma encryption enable` on the empty archive only
 records the state (see [Getting started](./getting-started#the-archive-key)).
 
@@ -563,7 +563,7 @@ default keys directory (`ARCHIVE_KEY_DIR`, `./keys`) lies in the Compose
 project directory, next to `./data` and on the same disk: it protects copies
 and backups of `data/`, not snapshots or a theft of that disk. For real
 separation, move `ARCHIVE_KEY_DIR` to another disk, or feed
-`MAIL_ARCHIVE_ARCHIVE_KEY_FILE` from a secret store (see
+`KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE` from a secret store (see
 [Configuration](../reference/configuration)).
 
 ### Changing keys
@@ -592,7 +592,7 @@ pass `--replace` to choose, also with the configured key's own fingerprint.
 Only that slot goes; every other slot stays, and no message file is
 touched. The command prints the slots that exist afterwards, and if no
 recovery key remains, it says to add one with `./ma encryption add-key`. Then set
-`MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key` in `.env` and restart
+`KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key` in `.env` and restart
 (`docker compose up -d`); the replaced key no longer opens the keyring.
 
 **The archive key file is lost.** A recovery key opens the keyring
@@ -600,14 +600,14 @@ instead:
 
 1. Look up the lost key's fingerprint: `./ma encryption status` lists the
    slots, the lost one labelled `archive key`.
-2. Configure the recovery key: put it in `MAIL_ARCHIVE_ARCHIVE_KEY` in
-   `.env` (and remove `MAIL_ARCHIVE_ARCHIVE_KEY_FILE`).
+2. Configure the recovery key: put it in `KEEPIA_ARCHIVE_ARCHIVE_KEY` in
+   `.env` (and remove `KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE`).
 3. Run, with the lost key's fingerprint:
    `./ma encryption rotate-key --new-key-file /keys/archive-2.key --replace FINGERPRINT`.
    Without `--replace` it refuses, since the configured key is a recovery
    key.
-4. Set `MAIL_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key`, remove
-   `MAIL_ARCHIVE_ARCHIVE_KEY` again, and restart.
+4. Set `KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE=/keys/archive-2.key`, remove
+   `KEEPIA_ARCHIVE_ARCHIVE_KEY` again, and restart.
 
 The recovery key keeps its slot. If the lost key may have been stolen
 rather than misplaced, run `./ma encryption rekey` afterwards, as after a
@@ -690,7 +690,7 @@ its keyring copy holds it anyway. The next `rekey` deletes it again.
 
 Back up first (see [Backups](#backups)) and read the release notes of every
 version you skip: they list database migrations and manual steps. Also check
-`.env` for a `MAIL_ARCHIVE_IMAGE` line (see below). Then, in the directory
+`.env` for a `KEEPIA_ARCHIVE_IMAGE` line (see below). Then, in the directory
 that holds your `mail-archive/` directory:
 
 ```sh
@@ -703,7 +703,7 @@ docker compose up -d web  # restart the web server with the new image
 
 With the bundled `docker-compose.yml`, the web server and the worker also
 apply pending migrations themselves when they start
-(`MAIL_ARCHIVE_MIGRATE_ON_START=on`, see
+(`KEEPIA_ARCHIVE_MIGRATE_ON_START=on`, see
 [Start-up migrations](#start-up-migrations)), so `docker compose up -d web`
 alone upgrades the database too. `./ma migrate` first shows the migrations
 and their messages in the terminal and finds a problem before the web
@@ -734,7 +734,7 @@ The new bundle replaces `docker-compose.yml`, `docker-compose.smtp.yml`,
 `.env` for new settings. A specific version instead of the latest:
 `https://github.com/pklnx/mail-archive/releases/download/v1.0.0/mail-archive.tar.gz`.
 
-A `MAIL_ARCHIVE_IMAGE` line in the kept `.env` (see [Versions](#versions))
+A `KEEPIA_ARCHIVE_IMAGE` line in the kept `.env` (see [Versions](#versions))
 overrides the new bundle's image: the web server and the CLI (`./ma`) go on
 using the image it names, and `./ma --version` shows that image's version.
 Check it before `./ma migrate`:
@@ -756,8 +756,8 @@ then run `docker compose up -d web`.
 passes the holder in the image what it read about the dump (since 1.5.2).
 An older `./ma` with a newer image is refused with "./ma is older than the
 image"; a newer `./ma` with an older image (for example a kept
-`MAIL_ARCHIVE_IMAGE` line) fails with "unknown flag: --dump-name". Both
-stop before anything is restored; fix the `MAIL_ARCHIVE_IMAGE` line as
+`KEEPIA_ARCHIVE_IMAGE` line) fails with "unknown flag: --dump-name". Both
+stop before anything is restored; fix the `KEEPIA_ARCHIVE_IMAGE` line as
 above.
 
 With a clone of the repository (see [From source](./getting-started#install)),
@@ -770,12 +770,37 @@ killed `migrate` the next one may wait for the database server to end the
 killed statement; see [`migrate`](../reference/cli#migrate) for the messages
 and time limits.
 
+### Renamed variables (1.7.0)
+
+Since 1.7.0 every variable starts with `KEEPIA_ARCHIVE_` instead of
+`MAIL_ARCHIVE_`; the rest of the name is the same, for example
+`MAIL_ARCHIVE_SECRET_KEY` is now `KEEPIA_ARCHIVE_SECRET_KEY`. An upgrade needs
+no change: the old names keep working in every 1.x release and will be
+removed in a later major release. The rules are in
+[Configuration](../reference/configuration#old-variable-names).
+
+- While an old name is set, the web server, the worker and every `./ma`
+  command log one warning at start, on stderr, that names the old variables
+  and their new names, never their values. A cron job such as `./ma sync`
+  therefore mails it on every run until you rename them. At
+  `KEEPIA_ARCHIVE_LOG_LEVEL=error` it is not shown.
+- To rename, replace `MAIL_ARCHIVE_` with `KEEPIA_ARCHIVE_` in `.env` (and in
+  any script, unit file or secret store that sets them), then run
+  `docker compose up -d web` (`web worker` with the worker on):
+  `sed -i.bak 's/^MAIL_ARCHIVE_/KEEPIA_ARCHIVE_/' .env` (then delete `.env.bak`: it holds the same secrets).
+- Do not keep both names with different values: the web server, the worker
+  and every command then refuse to start (exit code `4`) and name both
+  variables. The same value under both names only gives the warning.
+- `MAIL_ARCHIVE_IMAGE` and `MAIL_ARCHIVE_VERSION`, which only Docker Compose
+  and `./ma` read, work the same way as `KEEPIA_ARCHIVE_IMAGE` and
+  `KEEPIA_ARCHIVE_VERSION`; with both set, the new name wins.
+
 ### Start-up migrations
 
 `serve` and `worker` take the migration lock of `./ma migrate` when they
 start, and hold it until they have checked the database schema:
 
-- With `MAIL_ARCHIVE_MIGRATE_ON_START=on` (the default in the bundled
+- With `KEEPIA_ARCHIVE_MIGRATE_ON_START=on` (the default in the bundled
   `docker-compose.yml`), they first do what `./ma migrate` does: the
   one-time index rebuild of a database from the `postgres:18-alpine` image,
   the pending migrations and the password upgrade. The log names the pending
@@ -784,7 +809,7 @@ start, and hold it until they have checked the database schema:
   migrations `off`, the default of the binary outside Compose), they refuse
   to start: `the database schema is not up to date: 1 migration
   (00039_instance_state.sql) pending; run ./ma migrate, or set
-  MAIL_ARCHIVE_MIGRATE_ON_START=on`. A database that a newer version
+  KEEPIA_ARCHIVE_MIGRATE_ON_START=on`. A database that a newer version
   migrated is refused too, with both versions; see
   [Going back after an upgrade](#going-back-after-an-upgrade).
 - On a new instance (no user, no message, no state of encryption at rest
@@ -885,7 +910,7 @@ back:
 
 1. Stop the web server and the worker: `docker compose stop web worker`.
 2. Restore the backup from before the upgrade (see [Restore](#restore)).
-3. Start the old image: set `MAIL_ARCHIVE_IMAGE` in `.env` to it (see
+3. Start the old image: set `KEEPIA_ARCHIVE_IMAGE` in `.env` to it (see
    [Versions](#versions)) and run `docker compose up -d web`.
 
 Mail archived since the upgrade is not in that backup; the message files
@@ -921,7 +946,7 @@ tags:
 | `1` | The newest `1.x.y` release. | Features, and migrations when there are any, so run `./ma migrate` after each update; normally no breaking change. |
 | `latest` | The newest release. | Everything, breaking changes included. |
 
-Set `MAIL_ARCHIVE_IMAGE` in `.env` to use another tag or your own build.
+Set `KEEPIA_ARCHIVE_IMAGE` in `.env` to use another tag or your own build.
 Pinning an exact version is safer than `latest`. **Do not update images
 automatically** (Watchtower, Renovate, Diun, or a floating tag such as
 `latest` or a major tag like `1`): with
@@ -950,12 +975,13 @@ migrations; the one-time steps of those versions are in the
 
 | When upgrading from | Run |
 |---|---|
-| A version before 1.6.0 | Nothing to run, if the web server has `MAIL_ARCHIVE_SECRET_KEY`. An instance that already has users counts as set up: a setup token never works on it, and encryption at setup leaves it alone. An instance with neither a user nor a message, on which encryption at rest was never turned on, counts as new: the web server and the worker refuse to start without an archive key (exit code `4`, `new instances start encrypted`). Then either configure the archive key (`MAIL_ARCHIVE_ARCHIVE_KEY_FILE`, see [The archive key](./getting-started#the-archive-key)), and the next start turns encryption at rest on; or create the first admin before the web server starts again (`./ma migrate`, then `./ma user add NAME --admin`), and the instance starts without encryption at rest until you turn it on (same section). `MAIL_ARCHIVE_ENCRYPTION_AT_SETUP=off` is for test instances only. The first start of 1.6.0 checks the secret key: if accounts with stored passwords or users with TOTP exist, the key must open them, otherwise the start is refused with exit code `4` (then configure the key the instance used, or see [`secret-key accept`](../reference/cli#secret-key)); then the database keeps a check value of the key, and every later start with another key is refused. A web server without a secret key no longer starts in browse-only mode: create one with `./ma keygen`. The bundled `docker-compose.yml` no longer requires `MAIL_ARCHIVE_SECRET_KEY` in `.env`, because the key may come from a file instead (`MAIL_ARCHIVE_SECRET_KEY_FILE`, see [Configuration](../reference/configuration#docker-compose-only)), and no longer gives it to the worker service. |
+| A version before 1.7.0 | Nothing to run. The variables are named `KEEPIA_ARCHIVE_*` now; the old `MAIL_ARCHIVE_*` names in `.env` keep working with a warning at start. See [Renamed variables](#renamed-variables-1-7-0). |
+| A version before 1.6.0 | Nothing to run, if the web server has `KEEPIA_ARCHIVE_SECRET_KEY`. An instance that already has users counts as set up: a setup token never works on it, and encryption at setup leaves it alone. An instance with neither a user nor a message, on which encryption at rest was never turned on, counts as new: the web server and the worker refuse to start without an archive key (exit code `4`, `new instances start encrypted`). Then either configure the archive key (`KEEPIA_ARCHIVE_ARCHIVE_KEY_FILE`, see [The archive key](./getting-started#the-archive-key)), and the next start turns encryption at rest on; or create the first admin before the web server starts again (`./ma migrate`, then `./ma user add NAME --admin`), and the instance starts without encryption at rest until you turn it on (same section). `KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP=off` is for test instances only. The first start of 1.6.0 checks the secret key: if accounts with stored passwords or users with TOTP exist, the key must open them, otherwise the start is refused with exit code `4` (then configure the key the instance used, or see [`secret-key accept`](../reference/cli#secret-key)); then the database keeps a check value of the key, and every later start with another key is refused. A web server without a secret key no longer starts in browse-only mode: create one with `./ma keygen`. The bundled `docker-compose.yml` no longer requires `KEEPIA_ARCHIVE_SECRET_KEY` in `.env`, because the key may come from a file instead (`KEEPIA_ARCHIVE_SECRET_KEY_FILE`, see [Configuration](../reference/configuration#docker-compose-only)), and no longer gives it to the worker service. |
 | A version without deletion marks per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration only adds an empty table and is quick; it neither reads nor rewrites existing rows. Deliveries, syncs and search go on; retention runs and purges wait at most a moment while it adds its foreign keys (to `deleted_messages`, `deletion_runs` and `account_purges`). From then on a retention run marks every deleted message with the accounts and customer groups that held it, and a purge every purged message with the account and its group, so a deleted message is skipped only there (see [Deletion](../reference/cli#deletion) and [Security](../reference/security#login)). Deletions recorded before need no step: they count as deleted in every group that holds no copy. A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its syncs, fills and deliveries skip and store messages as before, and its retention runs and purges record their deletions without accounts and groups, so these count in every group, and a purge of a message that another account keeps is not recorded at all. Rolling back the migration drops the marks: every recorded deletion counts in every group again, and messages purged while another account kept them are archived again. |
-| A version without SMTP login (before 1.6.0) | Only with the SMTP server on (`MAIL_ARCHIVE_SMTP_LISTEN` set). `MAIL_ARCHIVE_SMTP_AUTH=required` is the new default: mail servers log in with an [SMTP secret](../reference/cli#smtp-secrets) over `STARTTLS`, and without `MAIL_ARCHIVE_SMTP_TLS_CERT` and `MAIL_ARCHIVE_SMTP_TLS_KEY` the web server and every `./ma` command refuse to start, naming the variable. Add `MAIL_ARCHIVE_SMTP_AUTH=off` to `.env` **before** the upgrade: a setup that relies on the allowlist alone, such as a Postfix on the same host, then keeps working unchanged. To move to logins afterwards, in this order: upgrade with `off`; create a secret per smtp account (`./ma account smtp-secret NAME --new`, which needs the new version's migration); change the mail server ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)); put the certificate in place ([SMTP certificate](#smtp-certificate)); remove `off` from `.env` and run `docker compose up -d web`. A setup that already has a certificate starts in `required` mode and answers `451` to mail servers that do not log in yet: their copies wait in the queue (5 days by default) until they log in or `off` is set. The SMTP server now takes 16 connections at once instead of 10. |
+| A version without SMTP login (before 1.6.0) | Only with the SMTP server on (`KEEPIA_ARCHIVE_SMTP_LISTEN` set). `KEEPIA_ARCHIVE_SMTP_AUTH=required` is the new default: mail servers log in with an [SMTP secret](../reference/cli#smtp-secrets) over `STARTTLS`, and without `KEEPIA_ARCHIVE_SMTP_TLS_CERT` and `KEEPIA_ARCHIVE_SMTP_TLS_KEY` the web server and every `./ma` command refuse to start, naming the variable. Add `KEEPIA_ARCHIVE_SMTP_AUTH=off` to `.env` **before** the upgrade: a setup that relies on the allowlist alone, such as a Postfix on the same host, then keeps working unchanged. To move to logins afterwards, in this order: upgrade with `off`; create a secret per smtp account (`./ma account smtp-secret NAME --new`, which needs the new version's migration); change the mail server ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)); put the certificate in place ([SMTP certificate](#smtp-certificate)); remove `off` from `.env` and run `docker compose up -d web`. A setup that already has a certificate starts in `required` mode and answers `451` to mail servers that do not log in yet: their copies wait in the queue (5 days by default) until they log in or `off` is set. The SMTP server now takes 16 connections at once instead of 10. |
 | A version without storage usage (before 1.6.0) | Nothing to run. The migration adds the storage counters and an index over the hashes and sizes of the messages, and holds back every write of messages (syncs, SMTP deliveries, fills, imports, `reindex`) until it is done; searches and reads go on. It reads the message table once, from disk if it is not in memory. Measured on PostgreSQL 16 with 2 cores and 300,000 messages (511 MB of message rows): about 0.6 seconds with the rows in memory, about 4.5 seconds with them on disk (138 MB/s); for 1,500,000 messages (about 2.6 GB) expect about 3 seconds in memory and 20 to 30 seconds from disk. `serve` and `worker` migrate before they work (`serve` answers `503` until then); a separate worker or a `./ma sync` from cron waits for the migration. With a large archive, stop the worker before the upgrade (`docker compose stop worker`). After the upgrade, `./ma usage` shows the groups and accounts as `-` until the background jobs of `serve` or `worker` have taken the first snapshot, soon after their start. Rolling the migration back (`./ma migrate down`) drops the storage figures and the group quotas. |
-| A version without alert mail (before 1.6.0) | Nothing to run. The migration adds an empty table for the admins' addresses, columns to the alert outboxes and an index on the loss alerts; it is quick and changes no rows. Alert mail stays off until `MAIL_ARCHIVE_MAIL_URL` is set ([Email alerts](#email-alerts)). Rolling back the migration (`./ma migrate down`, for development) drops the addresses and the queued alert mail. |
-| A version without storage quotas (before 1.6.0) | Nothing to run. The disk reserve is on by default: while the file system of `MAIL_ARCHIVE_DATA_DIR` has less than 1 GiB free (`MAIL_ARCHIVE_MIN_FREE_DISK`), syncs, fills and imports pause and the SMTP server defers new mail with `452` instead of failing on a full disk. Set `MAIL_ARCHIVE_MIN_FREE_DISK=0` to turn it off. Quotas apply only once you set them (`MAIL_ARCHIVE_STORAGE_QUOTA`, `./ma group set-quota`); see [Storage and quotas](#storage-and-quotas). Scripts that run `./ma sync` or `./ma import` should treat exit code 75 as "paused", not as a failure. Storage states and their alerts come from `serve`; a cron setup without it gets them from `./ma sync` (see [Which process writes the states](#how-exact-the-limits-are)). |
+| A version without alert mail (before 1.6.0) | Nothing to run. The migration adds an empty table for the admins' addresses, columns to the alert outboxes and an index on the loss alerts; it is quick and changes no rows. Alert mail stays off until `KEEPIA_ARCHIVE_MAIL_URL` is set ([Email alerts](#email-alerts)). Rolling back the migration (`./ma migrate down`, for development) drops the addresses and the queued alert mail. |
+| A version without storage quotas (before 1.6.0) | Nothing to run. The disk reserve is on by default: while the file system of `KEEPIA_ARCHIVE_DATA_DIR` has less than 1 GiB free (`KEEPIA_ARCHIVE_MIN_FREE_DISK`), syncs, fills and imports pause and the SMTP server defers new mail with `452` instead of failing on a full disk. Set `KEEPIA_ARCHIVE_MIN_FREE_DISK=0` to turn it off. Quotas apply only once you set them (`KEEPIA_ARCHIVE_STORAGE_QUOTA`, `./ma group set-quota`); see [Storage and quotas](#storage-and-quotas). Scripts that run `./ma sync` or `./ma import` should treat exit code 75 as "paused", not as a failure. Storage states and their alerts come from `serve`; a cron setup without it gets them from `./ma sync` (see [Which process writes the states](#how-exact-the-limits-are)). |
 | A version without attachment text per customer group (before 1.6.0) | Stop the web server and the worker before upgrading: `docker compose stop web worker`, then `./ma migrate` and `docker compose up -d web` (`web worker` with the worker on). The migration adds a column to the message locations and an index over the few locations that do not show their attachment text yet; every existing location keeps what it shows. Building the index reads every location and holds an exclusive lock on the locations until it is done: everything that reads or writes them waits, also a web server of the old version that still runs (its deliveries, syncs and search). Measured on PostgreSQL 16 with 2 cores: about 0.2 seconds per 1,000,000 locations with them in memory, longer when they are read from disk. From then on, each customer group searches a message's attachment text only after an extraction for that group, so a message that a second group receives is extracted once more in the background (see [Security](../reference/security#login)). A process of a version before 1.6.0 that still runs after the migration behaves as before 1.6.0: its search shows attachment text as before, and the locations it stores show none until their extraction; the web server (with jobs on) or the worker of 1.6.0 queues those extractions at its start and every 15 minutes, and `./ma reindex` once before it extracts, so they catch up after the old processes have stopped. Rolling back the migration (`./ma migrate down`, for development) drops the column, and migrating up again shows the attachment text through every location. |
 | A version without customer groups | Nothing to run. The migration puts every user, and with them every account, into one group, `Default`; existing shares stay. It adds a column and an index on the audit log, which every existing entry leaves empty: like the shared accounts index below, building it reads every partition and holds back audit log writes until it is done, about 0.1 seconds per 1,000,000 entries with the log in memory. With a very large audit log, stop the web server before `./ma migrate` (`docker compose stop web`). For a shared instance, create a group per customer afterwards and move its users (see [Customer groups](./users#customer-groups)). Rolling back the migration refuses while more than one group exists. |
 | A version without attachment search | Nothing to run. The migration only adds two empty tables and is quick; it neither reads nor rewrites the message rows, so deliveries and syncs go on (they wait at most a moment while it adds its foreign keys). Afterwards the web server, or the worker service if you run it, extracts the text of PDF and text attachments of older messages in the background, one message at a time and newest first, and logs at start how many are pending; new mail becomes searchable shortly after it is stored. About 17 ms per message with a typical PDF invoice (26 ms on average over a test corpus of 1,412 varied PDFs), and about 52 MB of database space per 10,000 PDFs with 3.5 KB of text each. `./ma reindex` does the same at once in the foreground; it can run while the web server and syncs run, and can be interrupted and run again. Installations without the web server, which run only `./ma sync` or `./ma import` from cron, get attachment text only from `./ma reindex` or from the worker service: run it after those commands, for example in the same cron job. While it extracts, the process needs up to 224 MiB more memory per worker (see [Hardware and budgets](#hardware-and-budgets)), and the first PDF after a start takes about 3 seconds once (see [Security](../reference/security#the-smtp-server)). Message rows are not rewritten, so no `VACUUM` is needed. With [legal holds](./retention#legal-holds) that use a search filter, run `./ma reindex` before relying on them over attachment text: the background extraction goes newest first, so the oldest mail, which retention deletes first, is extracted last. |
@@ -994,7 +1020,7 @@ that crashes the process every time cannot keep it busy; the message stays
 archived and searchable by everything else.
 
 **By default the web server runs them**, one at a time
-(`MAIL_ARCHIVE_JOB_WORKERS=1`); nothing needs to be set up. `./ma status`
+(`KEEPIA_ARCHIVE_JOB_WORKERS=1`); nothing needs to be set up. `./ma status`
 shows the queue in its last line, for example
 `jobs: attachment_text 12 queued (oldest 3m), 1 running, 2 failed`, or
 `jobs: none`. Failed jobs are queued again with
@@ -1057,7 +1083,7 @@ with two, 884 MiB with three. 768 MiB holds up to **two
 workers**.
 
 **One PDF at a time per process.** A process reads only one PDF at a time,
-whatever `MAIL_ARCHIVE_JOB_WORKERS` says; a second worker slot in the same
+whatever `KEEPIA_ARCHIVE_JOB_WORKERS` says; a second worker slot in the same
 process extracts text, CSV and HTML attachments beside it. This keeps two
 documents, possibly of different users, out of the PDF reader at the same
 time (see [Security](../reference/security#the-smtp-server)). For more PDF
@@ -1113,14 +1139,14 @@ each. The database and the extracted attachment texts are shown by
 
 | Limit | Set with | Applies to |
 |---|---|---|
-| Instance quota | `MAIL_ARCHIVE_STORAGE_QUOTA` ([Configuration](../reference/configuration)) | the exact total of the instance, and so every group |
+| Instance quota | `KEEPIA_ARCHIVE_STORAGE_QUOTA` ([Configuration](../reference/configuration)) | the exact total of the instance, and so every group |
 | Group quota | **Edit quota** on the [Storage page](./web-ui#storage), or `./ma group set-quota NAME SIZE` (`none` removes it; [CLI](../reference/cli#groups)) | the group's figure; never above the instance quota |
-| Disk reserve | `MAIL_ARCHIVE_MIN_FREE_DISK` (default `1GiB`, `0`: off) | the free space of the file system of `MAIL_ARCHIVE_DATA_DIR`, also without a quota |
+| Disk reserve | `KEEPIA_ARCHIVE_MIN_FREE_DISK` (default `1GiB`, `0`: off) | the free space of the file system of `KEEPIA_ARCHIVE_DATA_DIR`, also without a quota |
 
 Group quotas may add up to more than the instance quota; `./ma usage` shows
 their sum. A group without a quota, and an account without an owner (they
 exist only before the first user), are limited by the instance quota and
-the disk reserve alone. If `MAIL_ARCHIVE_STORAGE_QUOTA` is lowered below a
+the disk reserve alone. If `KEEPIA_ARCHIVE_STORAGE_QUOTA` is lowered below a
 group quota, `serve` logs a warning at start; the instance quota then
 applies first.
 
@@ -1134,9 +1160,9 @@ archived.
 | State | From | What happens |
 |---|---|---|
 | `ok` | below the warn share | nothing |
-| `warn` | `MAIL_ARCHIVE_STORAGE_WARN_PERCENT` of the quota (80 %) | nothing yet; time to raise the quota or free space |
+| `warn` | `KEEPIA_ARCHIVE_STORAGE_WARN_PERCENT` of the quota (80 %) | nothing yet; time to raise the quota or free space |
 | `full` | 100 % of the quota | IMAP syncs, fills and imports of the group (for the instance: of every group) pause. The SMTP server still accepts journal mail, with a warning in the log. |
-| `overflow` | 100 % plus `MAIL_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT` (10 %) | as `full`, and the SMTP server defers the group's journal mail with `452 4.3.1` |
+| `overflow` | 100 % plus `KEEPIA_ARCHIVE_STORAGE_SMTP_OVERFLOW_PERCENT` (10 %) | as `full`, and the SMTP server defers the group's journal mail with `452 4.3.1` |
 | `disk_low` | free space below the reserve (instance only) | as `overflow`, for every group |
 
 A state is left only once the figure is 1 % of the quota below the
@@ -1179,7 +1205,7 @@ Exit code 75 (`EX_TEMPFAIL`) lets a cron wrapper tell a pause from a
 failure.
 
 A raised quota (**Edit quota** on the Storage page, `./ma group set-quota`,
-or a larger `MAIL_ARCHIVE_STORAGE_QUOTA` after a restart) or freed space
+or a larger `KEEPIA_ARCHIVE_STORAGE_QUOTA` after a restart) or freed space
 takes effect within 10 seconds in every process (a quota set on the Storage
 page at once in the web server); paused syncs resume at their next
 scheduled run, a manual sync at once.
@@ -1272,7 +1298,7 @@ none of them is reached by a normal mailbox.
 | What | Limit | When it is reached |
 |---|---|---|
 | Connection setup (TCP, TLS, greeting, STARTTLS) | 30 s | The run fails (`connect` or `timeout`). |
-| Server silent while a command runs | 2 min, `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT` | The connection is closed and the folder fails; the next folder gets a new connection. The error names the command and the setting. Between commands no deadline applies, so slow database work never breaks a connection. |
+| Server silent while a command runs | 2 min, `KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT` | The connection is closed and the folder fails; the next folder gets a new connection. The error names the command and the setting. Between commands no deadline applies, so slow database work never breaks a connection. |
 | LOGOUT | 5 s | The connection is closed anyway. |
 | A background sync of one account, or a run of a fill | 60 min (the web server; `./ma sync` and `./ma fill` have none) | What was committed stays. If the run committed messages, it ends `partial` and the account is queued again behind the accounts waiting; a fill stays running and is queued again behind the other fills. Without progress the run fails and counts as a failure for [alerts](#monitoring-and-alerts). |
 | A login check (adding or changing an account, a fill's folder list) | 60 s in all | The check fails. |
@@ -1282,16 +1308,16 @@ none of them is reached by a normal mailbox.
 | What | Limit | When it is reached |
 |---|---|---|
 | Data the client did not ask for, per connection | 64 KiB at the start, at most 256 KiB; each command adds 16 KiB, each response the archive uses 512 B plus its size, each byte of a message body 1¼ B | The connection is closed (`unrequested data`). A real server stays far below it. Before a body fetch the archive asks for the folder's newest UID and sends no fetch when nothing is new, so the one message a server returns for an empty `UID FETCH n:*` is never downloaded. Only if the newest messages of a folder are deleted on the server in the moment between those two commands can that message still exceed the budget; the folder then fails once and syncs in the next run. |
-| Read by one login check | 16 MiB, or 1.1 KiB per folder of `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` if that is more | The check fails. |
-| Folders of one account | 10,000, `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | The whole sync, fill or login check fails; the error names the setting. |
+| Read by one login check | 16 MiB, or 1.1 KiB per folder of `KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS` if that is more | The check fails. |
+| Folders of one account | 10,000, `KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS` | The whole sync, fill or login check fails; the error names the setting. |
 | Length of a folder name | 1,024 bytes | As above. |
 | Flags of one message | 1,000 | The folder fails. |
 | Messages a FETCH may answer | the folder's message count at the start + 1,000 | The folder fails. |
 | A message | 256 MiB, as for imports | See [A message over 256 MiB](#a-message-over-256-mib). The size is checked before anything is downloaded. |
 | Header of one message in a fill's listing | 128 KiB | The folder fails. |
-| Messages a reconcile compares | 2,000,000 per folder, `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | The folder is not reconciled; its sync ends `partial`, and the error names the setting. |
+| Messages a reconcile compares | 2,000,000 per folder, `KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES` | The folder is not reconciled; its sync ends `partial`, and the error names the setting. |
 | Distinct flag combinations in one reconcile | 4 MiB, counting each combination's bytes plus 88 B for its entry in memory | The folder is not reconciled; real folders have a few hundred. |
-| Messages a fill lists of one folder per pass | 500,000, `MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | The folder fails; the error names the setting. |
+| Messages a fill lists of one folder per pass | 500,000, `KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | The folder fails; the error names the setting. |
 | Message-IDs kept in that listing | 96 bytes per message of the fill limit in all (48 MiB at the default) | As above. A single Message-ID over 998 bytes is not kept: that message counts as one without a Message-ID, so it is imported, never left out as journaled. |
 | New connections after a broken one, per run | 5 | The remaining folders wait for the next run; the run is `partial` if earlier folders synced, otherwise `failed`. |
 
@@ -1338,7 +1364,7 @@ name addresses and certificates, go only to the server log
 | A limit above was reached | the IMAP server exceeded a limit (WHAT: N) | `imap_limit` |
 
 A limit an operator can raise is followed by the setting, as in "…; raise
-`MAIL_ARCHIVE_IMAP_MAX_FOLDERS`". The web UI shows a login check's error in
+`KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS`". The web UI shows a login check's error in
 the user's language. Run errors stored before 1.5.3 keep their old text until
 the account's or fill's next run replaces them.
 
@@ -1350,7 +1376,7 @@ moved on the server. Other folders sync as usual. The run ends `partial`
 with the error "a message (UID n) is larger than 256 MiB; later messages in
 this folder are not archived until it is removed from the server", and it
 counts as a **failure** for [alerts](#monitoring-and-alerts): after
-`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` such runs the "failing" alert names the
+`KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES` such runs the "failing" alert names the
 folder, and "recovered" follows once the message is gone. `/healthz/sync`
 shows the account as failing meanwhile, since it is not fully archived. A
 recurring fill holds such a message the same way.
@@ -1366,10 +1392,10 @@ below that, under 30 MiB.
 
 | Setting | Default | Range | Memory for raising it (with the garbage collector's headroom) |
 |---|---|---|---|
-| `MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | 500,000 | 10,000 to 10,000,000 | about 42 MiB per 100,000 messages |
-| `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES` | 2,000,000 | 10,000 to 20,000,000 | about 9 MiB per 100,000 messages |
-| `MAIL_ARCHIVE_IMAP_MAX_FOLDERS` | 10,000 | 100 to 200,000 | up to about 13 MiB per 1,000 folders (folder names of 1,024 bytes; real ones need a quarter of that) |
-| `MAIL_ARCHIVE_IMAP_IDLE_TIMEOUT` | 2m | 30s to 30m | none; a silent server holds the sync worker longer |
+| `KEEPIA_ARCHIVE_FILL_MAX_FOLDER_MESSAGES` | 500,000 | 10,000 to 10,000,000 | about 42 MiB per 100,000 messages |
+| `KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES` | 2,000,000 | 10,000 to 20,000,000 | about 9 MiB per 100,000 messages |
+| `KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS` | 10,000 | 100 to 200,000 | up to about 13 MiB per 1,000 folders (folder names of 1,024 bytes; real ones need a quarter of that) |
+| `KEEPIA_ARCHIVE_IMAP_IDLE_TIMEOUT` | 2m | 30s to 30m | none; a silent server holds the sync worker longer |
 
 **Raise the web server's memory with them.** The web server sets no memory
 limit by default; on a 4 GB host a raised limit takes its memory from the
@@ -1385,7 +1411,7 @@ the worst case a misbehaving server costs **about 40 to 95 seconds of CPU per
 background run**, on one core and only during that account's turn, plus
 512 B per used response, which is far less than storing the message. A
 login check costs **about 1 to 2 seconds** of CPU at most; with
-`MAIL_ARCHIVE_IMAP_MAX_FOLDERS` raised, about 0.1 s per 1,000 folders of the
+`KEEPIA_ARCHIVE_IMAP_MAX_FOLDERS` raised, about 0.1 s per 1,000 folders of the
 limit more.
 
 ## SMTP journaling
@@ -1393,17 +1419,17 @@ limit more.
 The SMTP server receives the copies of [journaling](./journaling). On a
 hosted instance, customers' mail servers connect over the internet and log
 in with an [SMTP secret](../reference/cli#smtp-secrets)
-(`MAIL_ARCHIVE_SMTP_AUTH=required`, the default); see
+(`KEEPIA_ARCHIVE_SMTP_AUTH=required`, the default); see
 [The SMTP server](../reference/security#the-smtp-server) for what protects
 the port.
 
 ### The hosted SMTP port
 
 ```sh
-MAIL_ARCHIVE_SMTP_LISTEN=:2525
-MAIL_ARCHIVE_SMTP_HOSTNAME=archive.customer.example
-MAIL_ARCHIVE_SMTP_TLS_CERT=/tls/fullchain.pem
-MAIL_ARCHIVE_SMTP_TLS_KEY=/tls/privkey.pem
+KEEPIA_ARCHIVE_SMTP_LISTEN=:2525
+KEEPIA_ARCHIVE_SMTP_HOSTNAME=archive.customer.example
+KEEPIA_ARCHIVE_SMTP_TLS_CERT=/tls/fullchain.pem
+KEEPIA_ARCHIVE_SMTP_TLS_KEY=/tls/privkey.pem
 SMTP_BIND=0.0.0.0
 SMTP_PORT=587
 COMPOSE_FILE=docker-compose.yml:docker-compose.smtp.yml
@@ -1425,7 +1451,7 @@ The log shows `smtp on` with `auth=required`, the certificate's
   address, and one scanner then blocks them all. The PROXY protocol is not
   supported.
 - **Connections.** At most 16 at once, at most 8 per client address
-  (`MAIL_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`), and 60 seconds to log in. A
+  (`KEEPIA_ARCHIVE_SMTP_MAX_CONNS_PER_ADDR`), and 60 seconds to log in. A
   customer's Postfix with one transport per smtp account and `maxproc` 2
   ([Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret))
   opens up to 2 connections per account: raise the cap for a customer with
@@ -1454,7 +1480,7 @@ The log shows `smtp on` with `auth=required`, the certificate's
 ### SMTP certificate
 
 The SMTP server uses a certificate the operator provides, as PEM files, for
-the name in `MAIL_ARCHIVE_SMTP_HOSTNAME`; there is no ACME client in the
+the name in `KEEPIA_ARCHIVE_SMTP_HOSTNAME`; there is no ACME client in the
 archive. Customers' mail servers verify it, so it must come from a public CA
 (Let's Encrypt with certbot or lego, or a copy of the one Caddy gets for the
 same name).
@@ -1547,8 +1573,8 @@ receiver refused it.
 **ntfy** (app for Android and iOS, or self-hosted):
 
 ```sh
-MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL=https://ntfy.sh/mail-archive-k3v9q2x7w1
-MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
+KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_URL=https://ntfy.sh/mail-archive-k3v9q2x7w1
+KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_FORMAT=ntfy
 ```
 
 Anyone who knows a topic on the public ntfy.sh server can read it. Alerts
@@ -1557,7 +1583,7 @@ fail. Use a long random topic, or better a protected topic with an access
 token:
 
 ```sh
-MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...
+KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer tk_...
 ```
 
 A self-hosted ntfy on the LAN works too (`http://192.168.1.5:2586/alerts`);
@@ -1565,7 +1591,7 @@ plain `http` to another machine logs a warning at start, because the alert
 and the token travel unencrypted.
 
 **Gotify:** `https://gotify.example.org/message` with the format `json` and
-`MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer <app token>` (or
+`KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION=Bearer <app token>` (or
 `?token=<app token>` in the URL).
 
 **Slack, Mattermost, Discord:** create an incoming webhook and use its URL
@@ -1575,7 +1601,7 @@ with the format `json`. They show the `text` (Slack, Mattermost) or `content`
 ### Detail: ids or full
 
 Webhook receivers are often services of third parties (ntfy.sh, Slack,
-Discord). So by default (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) an alert
+Discord). So by default (`KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`) an alert
 names accounts, fills and customer groups by their ID only: no account or
 owner names, no IMAP user names (`mailbox`), no folder names and no error
 texts, and `title` and `message` are fixed text with IDs, for example
@@ -1585,7 +1611,7 @@ no `account`, `owner`, `lastError`, `mailbox`, `folders` or `moreFolders`
 field. `./ma status` shows which account an ID is, and `./ma usage --json`
 which account or group.
 
-`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full` adds the names, mailboxes, folder
+`KEEPIA_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=full` adds the names, mailboxes, folder
 names and the last error (up to 200 characters). That sends customer data
 to the webhook's operator: use it only for a receiver you run yourself, for
 example on a test instance. The examples below show `full`.
@@ -1633,7 +1659,7 @@ message), `gone` (mail deleted on the server), `storage` or `test`.
 
 A [recurring fill](./journaling#keep-importing-recurring-fill) whose runs
 keep failing, for example because the mailbox's password changed, is
-announced the same way, after `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed
+announced the same way, after `KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES` failed
 runs, and again when a run succeeds. Its entry names the smtp account and
 adds `fillId` and `mailbox`, the IMAP user name it imports from:
 
@@ -1736,18 +1762,18 @@ transitions of the instance and each group, `disk_low`). Set the relay in
 server (`docker compose up -d web`):
 
 ```sh
-MAIL_ARCHIVE_MAIL_URL=smtps://alerts@relay.example.com:465
-MAIL_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password
-MAIL_ARCHIVE_MAIL_FROM=Mail Archive <archive@example.com>
+KEEPIA_ARCHIVE_MAIL_URL=smtps://alerts@relay.example.com:465
+KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password
+KEEPIA_ARCHIVE_MAIL_FROM=Mail Archive <archive@example.com>
 ```
 
 **The relay** must offer TLS: `smtps://` (TLS from the start, port 465) or
 `smtp://` with STARTTLS (port 587). A relay without STARTTLS is refused,
 and its certificate must verify against the system's roots: nothing is
 ever sent in the clear. With a user in the URL the archive logs in with
-AUTH PLAIN, the password read from `MAIL_ARCHIVE_MAIL_PASSWORD_FILE` (a
+AUTH PLAIN, the password read from `KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE` (a
 file only its owner may read, outside the data directory). The relay must
-accept `MAIL_ARCHIVE_MAIL_FROM` as sender and deliver to the admins'
+accept `KEEPIA_ARCHIVE_MAIL_FROM` as sender and deliver to the admins'
 addresses; a mail provider's submission account or a transactional mail
 service will do. Check it with:
 
@@ -1767,13 +1793,13 @@ once per transition. Mail keeps its own record of what it announced, apart
 from the webhook's: a webhook that fails, waits for its retry or is
 retried neither holds a mail back nor adds one. The jobs run in the process
 that runs the notifier, one at a time, apart from the
-[background jobs](#background-jobs) and `MAIL_ARCHIVE_JOB_WORKERS`: in the
+[background jobs](#background-jobs) and `KEEPIA_ARCHIVE_JOB_WORKERS`: in the
 web server, and without it at the end of `./ma sync` (for up to 2.5
 minutes; what is left waits for the next `./ma sync` or the web server).
 The worker service sends no alert mail and needs no relay password.
 `./ma status` shows the queue as `notify_mail` in its jobs line.
 
-**Turning it on.** The first round after `MAIL_ARCHIVE_MAIL_URL` is set
+**Turning it on.** The first round after `KEEPIA_ARCHIVE_MAIL_URL` is set
 (or after the migration was rolled back and run again) mails the current
 state once: accounts and recurring fills that keep failing, the instance
 and groups whose storage is not at `ok`, with their state, and mail deleted
@@ -1868,11 +1894,11 @@ sample, so a name can never end up in a label.
 | Status | Body | Meaning |
 |---|---|---|
 | `200` | `{"status":"ok"}` | Every enabled account syncs, and every recurring fill runs. |
-| `503` | `{"status":"degraded","failing":[3,7],"stale":[5],"paused":[9]}` | Account IDs whose last `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). In `paused`, enabled accounts whose syncs are paused because their group or the instance reached a [storage limit](#storage-and-quotas); they are never stale meanwhile. An smtp account is listed when one of its recurring fills fails, is stale or is paused the same way. An account is listed once: failing or stale before paused. Which limit was reached is not said. |
+| `503` | `{"status":"degraded","failing":[3,7],"stale":[5],"paused":[9]}` | Account IDs whose last `KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES` syncs failed, or that had no successful sync within two of their sync intervals (at least one plus an hour); see [Alerts](./syncing#alerts). In `paused`, enabled accounts whose syncs are paused because their group or the instance reached a [storage limit](#storage-and-quotas); they are never stale meanwhile. An smtp account is listed when one of its recurring fills fails, is stale or is paused the same way. An account is listed once: failing or stale before paused. Which limit was reached is not said. |
 | `503` | `{"status":"unavailable"}` | The database cannot be reached. |
 
 Disabled, removed and import accounts are left out, as are fills that were
-stopped; with the schedule off (`MAIL_ARCHIVE_SYNC_INTERVAL=0`) nothing
+stopped; with the schedule off (`KEEPIA_ARCHIVE_SYNC_INTERVAL=0`) nothing
 counts as stale, nor does an account not on the schedule, or one that is
 syncing or waiting in the queue, nor a recurring fill during a run or while
 it waits for one. A running sync or fill counts from its start, and one the
@@ -1884,7 +1910,7 @@ answer is cached for 15 seconds. `./ma status` shows each account's ID next
 to its name, in `HEALTH` the same state, and in `FAILED` how many syncs in a
 row failed.
 
-The request must use an allowed host name (`MAIL_ARCHIVE_ALLOWED_HOSTS`),
+The request must use an allowed host name (`KEEPIA_ARCHIVE_ALLOWED_HOSTS`),
 like every request. For Uptime Kuma, add an HTTP monitor for
 `http://localhost:8080/healthz/sync`, or from another machine with a host
 name you allowed. With curl:
@@ -1918,7 +1944,7 @@ seconds. `/healthz` stays `ok` while the process runs.
 docker compose logs web --tail 100
 ```
 
-Set `MAIL_ARCHIVE_LOG_LEVEL=debug` in `.env` for more detail.
+Set `KEEPIA_ARCHIVE_LOG_LEVEL=debug` in `.env` for more detail.
 
 Logs contain customer data: SMTP senders and recipients, account, user and
 folder names, and the texts of server errors. On a hosted instance, treat

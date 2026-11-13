@@ -26,8 +26,8 @@ import (
 // envKeyringCopy carries a keyring copy, base64, from ./ma into
 // seal-stream and unseal-stream: the container cannot read the backup
 // directory on the host. A keyring is wrapped under the archive keys, so
-// it is no secret.
-const envKeyringCopy = "MAIL_ARCHIVE_KEYRING_COPY"
+// it is no secret. Read through config.Getenv, so its old name works too.
+const envKeyringCopy = config.EnvKeyringCopy
 
 // backupKeyring is the keyring a dump is sealed with: nil while
 // encryption at rest is off; otherwise the reconciled keyring the archive
@@ -91,7 +91,7 @@ type keyringSource struct {
 // then the data directory's keyring file. Missing files are left out.
 func keyringSources(path string) ([]keyringSource, error) {
 	var out []keyringSource
-	if v := strings.TrimSpace(os.Getenv(envKeyringCopy)); v != "" {
+	if v := strings.TrimSpace(config.Getenv(envKeyringCopy)); v != "" {
 		data, err := base64.StdEncoding.DecodeString(v)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", envKeyringCopy, err)
@@ -353,7 +353,7 @@ guide).`,
 			defer a.close()
 			// The migration lock too, until the end of the reconciliation
 			// (#396): a serve or worker that starts meanwhile with
-			// MAIL_ARCHIVE_MIGRATE_ON_START=on takes it before it asks for
+			// KEEPIA_ARCHIVE_MIGRATE_ON_START=on takes it before it asks for
 			// the writers lock, and would migrate the empty database. It
 			// waits instead, and then finds the restored schema. Taken
 			// before the writers lock, so that a restore waiting for a
@@ -386,7 +386,7 @@ guide).`,
 				facts := dumpFacts{
 					Name:           dumpName,
 					Sealed:         dumpHeader == dumpHeaderSealed,
-					SiblingKeyring: strings.TrimSpace(os.Getenv(envKeyringCopy)) != "",
+					SiblingKeyring: strings.TrimSpace(config.Getenv(envKeyringCopy)) != "",
 					Plaintext:      plaintext,
 				}
 				return holdForRestore(ctx, a, facts, cmd.InOrStdin(), out, cmd.ErrOrStderr())
@@ -507,7 +507,7 @@ func refuseForeignKeyring(dataDir, path string) error {
 		return fmt.Errorf("%s: %w", blobcrypt.KeyringPath(dataDir), err)
 	}
 	var copies []keyringSource
-	if v := strings.TrimSpace(os.Getenv(envKeyringCopy)); v != "" {
+	if v := strings.TrimSpace(config.Getenv(envKeyringCopy)); v != "" {
 		data, err := base64.StdEncoding.DecodeString(v)
 		if err != nil {
 			return fmt.Errorf("%s: %w", envKeyringCopy, err)

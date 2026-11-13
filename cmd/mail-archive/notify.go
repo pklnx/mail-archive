@@ -144,7 +144,7 @@ var newMailSender = func(cfg *config.Config) alertmail.Mailer {
 	return &alertmail.Sender{Cfg: cfg.Mail, LocalName: publicHost(cfg.PublicURL)}
 }
 
-// publicHost is the host of MAIL_ARCHIVE_PUBLIC_URL, the EHLO name; empty
+// publicHost is the host of KEEPIA_ARCHIVE_PUBLIC_URL, the EHLO name; empty
 // without one.
 func publicHost(publicURL string) string {
 	u, err := url.Parse(publicURL)
@@ -156,7 +156,7 @@ func publicHost(publicURL string) string {
 
 // mailPool runs the notify_mail jobs of the process that runs the
 // notifier (serve, and `sync` at its end): one at a time, independent of
-// MAIL_ARCHIVE_JOB_WORKERS, so that the worker service needs no relay
+// KEEPIA_ARCHIVE_JOB_WORKERS, so that the worker service needs no relay
 // password. untilIdle returns once none is due.
 func mailPool(a *app, svc *alertmail.Service, log *slog.Logger, untilIdle bool) (*jobs.Pool, error) {
 	kinds := &jobs.Registry{}

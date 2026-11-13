@@ -9,7 +9,7 @@
 #   --platform and the AS name dropped; a FROM that names an earlier stage,
 #   such as `FROM build AS test`, is skipped);
 # - every `image:` in docker-compose.yml without a variable (an image with a
-#   variable, ${MAIL_ARCHIVE_IMAGE:-…}, is the one Compose builds).
+#   variable, ${KEEPIA_ARCHIVE_IMAGE:-…}, is the one Compose builds).
 # It fails when it finds no image or a FROM it cannot read (a variable, a line
 # continuation), so a new Dockerfile form does not slip by silently.
 #

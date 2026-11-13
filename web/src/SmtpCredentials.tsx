@@ -164,7 +164,7 @@ function StateTag({ credential }: { credential: SMTPCredential }) {
 /**
  * The SMTP secrets section of an smtp account's page, for its owner, who is
  * an admin: the user name, the secrets with their state, New secret and
- * Revoke. off: the server runs without logins (MAIL_ARCHIVE_SMTP_AUTH=off).
+ * Revoke. off: the server runs without logins (KEEPIA_ARCHIVE_SMTP_AUTH=off).
  */
 export function SmtpCredentialsSection({ account, off, state }: { account: string; off: boolean; state: SmtpCredentialsState }) {
   const st = smtpText();

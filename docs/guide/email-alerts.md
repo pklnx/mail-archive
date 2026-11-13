@@ -21,9 +21,9 @@ Alert mail goes through a mail relay that the operator sets in `.env`, with
 its password in a file (see [Configuration](../reference/configuration)):
 
 ```sh
-MAIL_ARCHIVE_MAIL_URL=smtps://alerts@relay.example.com:465
-MAIL_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password
-MAIL_ARCHIVE_MAIL_FROM=Mail Archive <archive@example.com>
+KEEPIA_ARCHIVE_MAIL_URL=smtps://alerts@relay.example.com:465
+KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE=/secret-key/mail.password
+KEEPIA_ARCHIVE_MAIL_FROM=Mail Archive <archive@example.com>
 ```
 
 Put the password on one line in `secret-key/mail.password` (Compose mounts
@@ -35,7 +35,7 @@ user (`chmod 0400`), then restart the web server
 ./ma notify mail-test --to you@example.com
 ```
 
-Without `MAIL_ARCHIVE_MAIL_URL` there is no alert mail, and the profile has
+Without `KEEPIA_ARCHIVE_MAIL_URL` there is no alert mail, and the profile has
 no **Notifications** tab. See [Email alerts](./operations#email-alerts) in
 the Operations guide for what the relay must offer.
 
@@ -77,7 +77,7 @@ otherwise English). For example:
 > Open: https://archive.example.com
 
 A mail names accounts, their owners and customer groups, with a link to the
-web UI (`MAIL_ARCHIVE_PUBLIC_URL`). It never contains error texts, IMAP user
+web UI (`KEEPIA_ARCHIVE_PUBLIC_URL`). It never contains error texts, IMAP user
 names, folder names, server names, subjects or addresses from mail: the
 error of a failing account is on its page in the web UI. Times are in UTC.
 The event ID is the one the [webhook](./operations#webhook-alerts) uses.

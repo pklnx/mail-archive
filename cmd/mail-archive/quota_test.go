@@ -16,6 +16,7 @@ import (
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -27,8 +28,8 @@ import (
 // old and new value; group list shows QUOTA, USED and STATE.
 func TestGroupSetQuota(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_STORAGE_QUOTA", "100GiB")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvStorageQuota, "100GiB")
 	ctx := context.Background()
 	group := func(args ...string) (string, error) {
 		t.Helper()
@@ -109,13 +110,13 @@ func TestGroupSetQuota(t *testing.T) {
 // much it stored; the next run is refused at the start, also with 75.
 func TestImportPausedExit(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
-	t.Setenv("MAIL_ARCHIVE_STORAGE_QUOTA", "1")
-	t.Setenv("MAIL_ARCHIVE_MIN_FREE_DISK", "0")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
+	t.Setenv(config.EnvStorageQuota, "1")
+	t.Setenv(config.EnvMinFreeDisk, "0")
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 	if _, err := st.CreateUser(context.Background(), "anna", "h", false); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestImportPausedExit(t *testing.T) {
 	err := run()
 	var ex *exitError
 	if !errors.As(err, &ex) || ex.exitCode() != exitPaused ||
-		!regexpMatch(`^storage quota of the instance reached \(MAIL_ARCHIVE_STORAGE_QUOTA\) after [1-9][0-9]* messages; run the same command again`, ex.msg) {
+		!regexpMatch(`^storage quota of the instance reached \(KEEPIA_ARCHIVE_STORAGE_QUOTA\) after [1-9][0-9]* messages; run the same command again`, ex.msg) {
 		t.Fatalf("paused import: %v", err)
 	}
 	err = run()
@@ -150,13 +151,13 @@ func TestSyncPausedExit(t *testing.T) {
 	}
 	host, port := imaptest.Start(t, user)
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
-	t.Setenv("MAIL_ARCHIVE_STORAGE_QUOTA", "1")
-	t.Setenv("MAIL_ARCHIVE_MIN_FREE_DISK", "0")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
+	t.Setenv(config.EnvStorageQuota, "1")
+	t.Setenv(config.EnvMinFreeDisk, "0")
 	keyStr, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	t.Setenv(config.EnvSecretKey, keyStr)
 	key, _ := crypto.ParseKey(keyStr)
 	sealer, _ := crypto.NewSealer(key)
 	acc := &store.Account{Name: "work", Host: host, Port: port, TLSMode: store.TLSModeNone, Username: "alice", Enabled: true}
@@ -186,13 +187,13 @@ func TestSyncSendsStorageAlert(t *testing.T) {
 	}
 	host, port := imaptest.Start(t, user)
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
-	t.Setenv("MAIL_ARCHIVE_STORAGE_QUOTA", "1")
-	t.Setenv("MAIL_ARCHIVE_MIN_FREE_DISK", "0")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
+	t.Setenv(config.EnvStorageQuota, "1")
+	t.Setenv(config.EnvMinFreeDisk, "0")
 	keyStr, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", keyStr)
+	t.Setenv(config.EnvSecretKey, keyStr)
 	key, _ := crypto.ParseKey(keyStr)
 	sealer, _ := crypto.NewSealer(key)
 	acc := &store.Account{Name: "work", Host: host, Port: port, TLSMode: store.TLSModeNone, Username: "alice", Enabled: true}
@@ -216,7 +217,7 @@ func TestSyncSendsStorageAlert(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	t.Setenv("MAIL_ARCHIVE_NOTIFY_WEBHOOK_URL", srv.URL)
+	t.Setenv(config.EnvNotifyWebhookURL, srv.URL)
 
 	var err error
 	captureStdout(t, func() { err = runCmd(t, newSyncCmd(), "") })

@@ -51,13 +51,13 @@ The web server checks every minute which accounts are due. An enabled
 account is due when its last sync, of any kind, started at least its
 interval ago; one that never synced is due at once.
 
-The default interval is set by the operator, `MAIL_ARCHIVE_SYNC_INTERVAL`
+The default interval is set by the operator, `KEEPIA_ARCHIVE_SYNC_INTERVAL`
 in the instance's `.env`:
 
 ```sh
-MAIL_ARCHIVE_SYNC_INTERVAL=6h    # default
-MAIL_ARCHIVE_SYNC_INTERVAL=30m   # at least 5m
-MAIL_ARCHIVE_SYNC_INTERVAL=0     # off for every account: sync only by hand
+KEEPIA_ARCHIVE_SYNC_INTERVAL=6h    # default
+KEEPIA_ARCHIVE_SYNC_INTERVAL=30m   # at least 5m
+KEEPIA_ARCHIVE_SYNC_INTERVAL=0     # off for every account: sync only by hand
 ```
 
 The operator applies a change with `docker compose up -d web`. To sync one
@@ -70,16 +70,16 @@ Each IMAP account can have its own interval, under **Schedule** → **Edit**
 on the account's page (or, by the operator, with
 [`./ma account set-schedule`](../reference/cli#accounts)):
 
-- **Default**: `MAIL_ARCHIVE_SYNC_INTERVAL`.
+- **Default**: `KEEPIA_ARCHIVE_SYNC_INTERVAL`.
 - **Every 15 minutes** to **every day**, or on the command line any whole
   number of minutes from `5m` to `720h`.
 - **Not on the schedule** (`manual`): the schedule skips the account.
 
-`MAIL_ARCHIVE_SYNC_INTERVAL_MIN` (default `5m`, set by the operator) is the
+`KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN` (default `5m`, set by the operator) is the
 shortest interval the server syncs any account at. Accounts with a shorter
 interval sync at the floor; their own value stays stored and applies again if
 the floor is lowered. The web UI hides the shorter choices. With
-`MAIL_ARCHIVE_SYNC_INTERVAL=0` no account is synced on a schedule, whatever its
+`KEEPIA_ARCHIVE_SYNC_INTERVAL=0` no account is synced on a schedule, whatever its
 own interval.
 
 **Not on the schedule** is not the same as **Disable**:
@@ -92,7 +92,7 @@ own interval.
 | Failure streak and alerts | never (always `ok`) | yes, after failed syncs |
 | Stale | never | never |
 
-A short interval reaches `MAIL_ARCHIVE_ALERT_AFTER_FAILURES` failed syncs
+A short interval reaches `KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES` failed syncs
 sooner, and an account with a wrong password tries to log in at every
 interval. The account's page shows its interval and next sync; the operator
 sees the same in `./ma status`.
@@ -158,20 +158,20 @@ that change are written to the database.
 
 Folders with more than 2,000,000 messages are not reconciled; the sync of
 such a folder ends `partial` with an error that says so and names
-`MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`, the setting that raises the limit (see
+`KEEPIA_ARCHIVE_RECONCILE_MAX_MESSAGES`, the setting that raises the limit (see
 [IMAP limits](./operations#imap-limits)).
 
 ### When it runs
 
 A folder is reconciled when its last reconcile is older than
-`MAIL_ARCHIVE_RECONCILE_INTERVAL` (default `24h`, set by the operator), by the
+`KEEPIA_ARCHIVE_RECONCILE_INTERVAL` (default `24h`, set by the operator), by the
 web server's schedule and by `./ma sync` alike. So a daily cron job reconciles
 daily, and a folder whose reconcile failed is retried with the next sync.
 
 ```sh
-MAIL_ARCHIVE_RECONCILE_INTERVAL=24h   # default
-MAIL_ARCHIVE_RECONCILE_INTERVAL=1h    # the minimum
-MAIL_ARCHIVE_RECONCILE_INTERVAL=0     # only with the button or --reconcile
+KEEPIA_ARCHIVE_RECONCILE_INTERVAL=24h   # default
+KEEPIA_ARCHIVE_RECONCILE_INTERVAL=1h    # the minimum
+KEEPIA_ARCHIVE_RECONCILE_INTERVAL=0     # only with the button or --reconcile
 ```
 
 A folder is reconciled only after it synced without error in the same run.
@@ -310,14 +310,14 @@ with the server, with what the last run found.
 ## Alerts
 
 An account counts as **failing** when its last
-`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` syncs (default 3) failed in a row, from
+`KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES` syncs (default 3) failed in a row, from
 the schedule, a button or `./ma sync` alike. It counts as **stale** when no
 sync succeeded within two of its sync intervals, at least one interval plus
 an hour (counted from when it was added, if it never did). Accounts the
 schedule does not sync are never stale. Both states show in the web UI and
 in [`/healthz/sync`](./operations#healthz-sync), which the operator
 monitors; a failing account also sends an alert if the operator set up a
-[webhook](./operations#webhook-alerts). `MAIL_ARCHIVE_ALERT_AFTER_FAILURES`
+[webhook](./operations#webhook-alerts). `KEEPIA_ARCHIVE_ALERT_AFTER_FAILURES`
 is the operator's setting.
 
 A sync that is running or waiting makes no account stale for a while: a

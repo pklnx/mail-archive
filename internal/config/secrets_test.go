@@ -130,17 +130,21 @@ func TestLoadSecretKeyFile(t *testing.T) {
 }
 
 // TestChildEnv (#396): a child gets the kept variables of the process and
-// the extra ones, nothing else; a MAIL_ARCHIVE_* or PG* variable of the
-// process never, even when it is kept by mistake.
+// the extra ones, nothing else; a KEEPIA_ARCHIVE_*, MAIL_ARCHIVE_* (the old
+// names, #585) or PG* variable of the process never, even when it is kept
+// by mistake.
 func TestChildEnv(t *testing.T) {
 	environ := []string{
 		"PATH=/usr/bin", "HOME=/home/x", "TZ=Europe/Berlin", "PATH=/second",
-		"MAIL_ARCHIVE_SECRET_KEY=marker-secret", "MAIL_ARCHIVE_SECRET_KEY_FILE=/run/secret.key",
-		"MAIL_ARCHIVE_DATABASE_URL=postgres://u:marker-pw@h/db", "PGPASSWORD=marker-pg", "UNRELATED=marker-x",
+		EnvSecretKey + "=marker-secret", EnvSecretKeyFile + "=/run/secret.key",
+		EnvKeyringCopy + "=marker-ring", EnvDatabaseURL + "=postgres://u:marker-pw@h/db",
+		"MAIL_ARCHIVE_SECRET_KEY=marker-old-secret", "MAIL_ARCHIVE_DATABASE_URL=postgres://u:marker-old-pw@h/db",
+		"PGPASSWORD=marker-pg", "UNRELATED=marker-x",
 		"NOEQUALS",
 	}
-	got := ChildEnv(environ, []string{"PATH", "TZ", "LANG", "MAIL_ARCHIVE_SECRET_KEY", "PGPASSWORD"}, "MAIL_ARCHIVE_DATA_DIR=/data", "PGHOST=db")
-	want := []string{"PATH=/usr/bin", "TZ=Europe/Berlin", "MAIL_ARCHIVE_DATA_DIR=/data", "PGHOST=db"}
+	keep := []string{"PATH", "TZ", "LANG", EnvSecretKey, EnvKeyringCopy, "MAIL_ARCHIVE_SECRET_KEY", "PGPASSWORD"}
+	got := ChildEnv(environ, keep, EnvDataDir+"=/data", "PGHOST=db")
+	want := []string{"PATH=/usr/bin", "TZ=Europe/Berlin", EnvDataDir + "=/data", "PGHOST=db"}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
 	}

@@ -4,7 +4,7 @@
 /** Where Postfix reaches the archive with the guide's Docker Compose setup (SMTP_BIND, SMTP_PORT). */
 export const defaultTarget = "[127.0.0.1]:2525";
 
-/** The guide's name and port of a hosted archive, where mail servers log in (MAIL_ARCHIVE_SMTP_AUTH=required). */
+/** The guide's name and port of a hosted archive, where mail servers log in (KEEPIA_ARCHIVE_SMTP_AUTH=required). */
 export const hostedTarget = "[archive.customer.example]:587";
 
 /** Stands for the secret in the lines: it is shown only once, when it is created. */
@@ -49,7 +49,7 @@ export interface PostfixSetup {
  * The Postfix setup for an smtp account (variant B of the guide). The
  * transport line routes a whole domain to the archive, so it only uses an
  * address in a dedicated domain; otherwise the guide's archive.local.
- * With a user name (MAIL_ARCHIVE_SMTP_AUTH=required), the copies go over a
+ * With a user name (KEEPIA_ARCHIVE_SMTP_AUTH=required), the copies go over a
  * transport of their own that logs in with it over verified TLS, as in the
  * guide's "Log in with an SMTP secret"; without one (off), over plain smtp.
  */

@@ -505,7 +505,7 @@ func runRestoreDump(t *testing.T, args ...string) (string, error) {
 func switchDatabase(t *testing.T) (*store.Store, *pgx.Conn) {
 	t.Helper()
 	url := storetest.NewUnmigrated(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	st, err := store.Open(context.Background(), url)
 	if err != nil {
 		t.Fatal(err)
@@ -572,7 +572,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 
 	// The dump's request seq; restore-dump requests a snapshot on top.
-	requests := usageRequestSeq(t, connectDB(t, os.Getenv("MAIL_ARCHIVE_DATABASE_URL")))
+	requests := usageRequestSeq(t, connectDB(t, os.Getenv(config.EnvDatabaseURL)))
 	st, conn := switchDatabase(t)
 	out, err = runRestoreDump(t, dumps[0])
 	if err != nil {
@@ -1198,7 +1198,7 @@ func TestRestoreDumpPlaintextArchive(t *testing.T) {
 // a sign it does not.
 func TestBackupNotePlaintext(t *testing.T) {
 	_, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	secret, _ := crypto.GenerateKey()
 	t.Setenv(config.EnvSecretKey, secret)
 	kek, err := blobcrypt.GenerateKEK()
@@ -1220,7 +1220,7 @@ func TestBackupNotePlaintext(t *testing.T) {
 		dataDir := t.TempDir()
 		t.Setenv(config.EnvDataDir, dataDir)
 		t.Setenv(config.EnvArchiveKey, "")
-		t.Setenv("MAIL_ARCHIVE_COMMAND", "")
+		t.Setenv(config.EnvCommand, "")
 		if c.key {
 			t.Setenv(config.EnvArchiveKey, blobcrypt.EncodeKEK(kek))
 		}
@@ -1233,7 +1233,7 @@ func TestBackupNotePlaintext(t *testing.T) {
 			}
 		}
 		if c.compose {
-			t.Setenv("MAIL_ARCHIVE_COMMAND", "./ma")
+			t.Setenv(config.EnvCommand, "./ma")
 		}
 		a, err := openApp(context.Background())
 		if err != nil {

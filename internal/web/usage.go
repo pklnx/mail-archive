@@ -40,7 +40,7 @@ type usageDiskJSON struct {
 type usageInstanceJSON struct {
 	Messages int64 `json:"messages"`
 	Bytes    int64 `json:"bytes"`
-	// QuotaBytes is the instance quota (MAIL_ARCHIVE_STORAGE_QUOTA), null
+	// QuotaBytes is the instance quota (KEEPIA_ARCHIVE_STORAGE_QUOTA), null
 	// without one.
 	QuotaBytes *int64 `json:"quotaBytes"`
 	// WarnPercent and OverflowPercent are the thresholds of every quota.

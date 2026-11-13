@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pklnx/mail-archive/internal/config"
 )
 
 func TestPrepareDataDir(t *testing.T) {
@@ -152,7 +154,7 @@ func TestOpenBlobsNotWritable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	t.Setenv("MAIL_ARCHIVE_COMMAND", "./ma")
+	t.Setenv(config.EnvCommand, "./ma")
 	_, err := openBlobs(dir)
 	if err == nil || !strings.Contains(err.Error(), "is not writable for UID") ||
 		!strings.Contains(err.Error(), "run ./ma migrate") {

@@ -66,7 +66,7 @@ With the schedule off (` + config.EnvSyncInterval + `=0) there are no
 scheduled runs; a run already started still finishes.
 
 The password is read from the terminal (or from stdin with --password-stdin)
-and kept, encrypted with ` + "MAIL_ARCHIVE_SECRET_KEY" + `, while the fill runs or keeps
+and kept, encrypted with ` + config.EnvSecretKey + `, while the fill runs or keeps
 running. Ctrl-C stops a one-time fill; --resume continues it with the
 password asked again, and resumes a stopped recurring fill.
 --fill ID chooses the fill; without it, --cancel and --interval take the

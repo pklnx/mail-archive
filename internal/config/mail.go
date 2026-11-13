@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/mail"
 	"net/url"
-	"os"
 	"strings"
 )
 
@@ -16,12 +15,12 @@ const (
 	// smtps://user@relay.example:465 (TLS from the start) or
 	// smtp://user@relay.example:587 (STARTTLS required). Empty turns
 	// alert mail off.
-	EnvMailURL = "MAIL_ARCHIVE_MAIL_URL"
+	EnvMailURL = "KEEPIA_ARCHIVE_MAIL_URL"
 	// EnvMailPasswordFile holds the relay password; a password in the URL
 	// is refused.
-	EnvMailPasswordFile = "MAIL_ARCHIVE_MAIL_PASSWORD_FILE" //nolint:gosec // variable name, not a credential
+	EnvMailPasswordFile = "KEEPIA_ARCHIVE_MAIL_PASSWORD_FILE" //nolint:gosec // variable name, not a credential
 	// EnvMailFrom is the sender, such as "Mail Archive <archive@example.com>".
-	EnvMailFrom = "MAIL_ARCHIVE_MAIL_FROM"
+	EnvMailFrom = "KEEPIA_ARCHIVE_MAIL_FROM"
 )
 
 // Mail is the relay for alert mail. Password is a secret: never log it.
@@ -130,7 +129,7 @@ func ParseMail(rawURL, passwordFile, from, dataDir string) (*Mail, error) {
 
 // MailFromEnv is ParseMail with every input from the environment.
 func MailFromEnv() (*Mail, error) {
-	return ParseMail(os.Getenv(EnvMailURL), os.Getenv(EnvMailPasswordFile), os.Getenv(EnvMailFrom), DataDirFromEnv())
+	return ParseMail(Getenv(EnvMailURL), Getenv(EnvMailPasswordFile), Getenv(EnvMailFrom), DataDirFromEnv())
 }
 
 // ParseMailAddress checks one mail address, with or without a display

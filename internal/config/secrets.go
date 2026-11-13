@@ -11,7 +11,7 @@ import (
 
 // EnvSecretKeyFile is the file holding the secret key (#396); preferred
 // over EnvSecretKey. Both set is refused.
-const EnvSecretKeyFile = "MAIL_ARCHIVE_SECRET_KEY_FILE" //nolint:gosec // variable name, not a credential
+const EnvSecretKeyFile = "KEEPIA_ARCHIVE_SECRET_KEY_FILE" //nolint:gosec // variable name, not a credential
 
 // SecretKeyError is a refused secret key configuration: both the file and
 // the variable set, a file that breaks the key file rules, a key that is
@@ -59,7 +59,7 @@ func LoadSecretKey(file, value, dataDir string) (key []byte, source string, err 
 
 // SecretKeyFromEnv is LoadSecretKey with every input from the environment.
 func SecretKeyFromEnv() (key []byte, source string, err error) {
-	return LoadSecretKey(os.Getenv(EnvSecretKeyFile), os.Getenv(EnvSecretKey), DataDirFromEnv())
+	return LoadSecretKey(Getenv(EnvSecretKeyFile), Getenv(EnvSecretKey), DataDirFromEnv())
 }
 
 // maxKeyFile is the largest key file read; a key is 44 characters.
@@ -105,11 +105,12 @@ func readKeyFile(path, dataDir, what string) ([]byte, error) {
 // ChildEnv builds the whole environment of a child process (#396): the
 // variables of environ (NAME=value, as os.Environ returns them) whose
 // names are in keep, then extra. Nothing else of environ is passed on. A
-// MAIL_ARCHIVE_* or PG* variable of environ is never passed on, even when
-// keep names it: those hold the secret key, the archive key, the database
-// URL and its password. What a child needs of them (the data directory,
-// the libpq variables of the database URL) comes in extra. Of a name that
-// environ holds twice, the first counts, as os.Getenv does.
+// KEEPIA_ARCHIVE_*, MAIL_ARCHIVE_* (the old names) or PG* variable of
+// environ is never passed on, even when keep names it: those hold the
+// secret key, the archive key, the keyring copy, the database URL and its
+// password. What a child needs of them (the data directory, the libpq
+// variables of the database URL) comes in extra. Of a name that environ
+// holds twice, the first counts, as os.Getenv does.
 func ChildEnv(environ, keep []string, extra ...string) []string {
 	wanted := make(map[string]bool, len(keep))
 	for _, name := range keep {
@@ -123,7 +124,8 @@ func ChildEnv(environ, keep []string, extra ...string) []string {
 			continue
 		}
 		seen[name] = true
-		if wanted[name] && !strings.HasPrefix(name, "MAIL_ARCHIVE_") && !strings.HasPrefix(name, "PG") {
+		if wanted[name] && !strings.HasPrefix(name, EnvPrefix) && !strings.HasPrefix(name, OldEnvPrefix) &&
+			!strings.HasPrefix(name, "PG") {
 			env = append(env, kv)
 		}
 	}

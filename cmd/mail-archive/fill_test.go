@@ -12,6 +12,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver/imapmemserver"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/imaptest"
 	"github.com/pklnx/mail-archive/internal/store"
@@ -40,11 +41,11 @@ func TestParseCutoff(t *testing.T) {
 
 func TestAccountFillCommand(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvSecretKey, key)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
 	ctx := context.Background()
 
 	u := imapmemserver.NewUser("alice@example.com", "secret")
@@ -146,12 +147,12 @@ func jsonMap(t *testing.T, b []byte) map[string]any {
 
 func TestAccountFillRecurring(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
+	t.Setenv(config.EnvDatabaseURL, url)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
-	t.Setenv("MAIL_ARCHIVE_SYNC_INTERVAL_MIN", "1h")
+	t.Setenv(config.EnvSecretKey, key)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
+	t.Setenv(config.EnvSyncIntervalMin, "1h")
 	ctx := context.Background()
 
 	u := imapmemserver.NewUser("alice@example.com", "secret")

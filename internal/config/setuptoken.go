@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/pklnx/mail-archive/internal/crypto"
@@ -16,14 +15,14 @@ import (
 const (
 	// EnvSetupTokenFile is the file holding the setup token; preferred over
 	// EnvSetupToken. Both set is refused.
-	EnvSetupTokenFile = "MAIL_ARCHIVE_SETUP_TOKEN_FILE" //nolint:gosec // variable name, not a credential
+	EnvSetupTokenFile = "KEEPIA_ARCHIVE_SETUP_TOKEN_FILE" //nolint:gosec // variable name, not a credential
 	// EnvSetupToken is the setup token itself.
-	EnvSetupToken = "MAIL_ARCHIVE_SETUP_TOKEN" //nolint:gosec // variable name, not a credential
+	EnvSetupToken = "KEEPIA_ARCHIVE_SETUP_TOKEN" //nolint:gosec // variable name, not a credential
 	// EnvEncryptionAtSetup ("on" or "off", default on): a new instance
 	// turns encryption at rest on before it archives anything, and refuses
 	// to start without an archive key. "off" is for the operator's test
 	// instances only (CI, the e2e demo, the Compose smoke test).
-	EnvEncryptionAtSetup = "MAIL_ARCHIVE_ENCRYPTION_AT_SETUP"
+	EnvEncryptionAtSetup = "KEEPIA_ARCHIVE_ENCRYPTION_AT_SETUP"
 )
 
 // Lengths of a setup token, in characters of printable ASCII.
@@ -75,7 +74,7 @@ func LoadSetupToken(file, value, dataDir string, keys ...[]byte) (string, error)
 // SetupTokenFromEnv is LoadSetupToken with the token from the environment
 // and the keys of cfg.
 func SetupTokenFromEnv(cfg *Config) (string, error) {
-	return LoadSetupToken(os.Getenv(EnvSetupTokenFile), os.Getenv(EnvSetupToken), cfg.DataDir, cfg.SecretKey, cfg.ArchiveKey)
+	return LoadSetupToken(Getenv(EnvSetupTokenFile), Getenv(EnvSetupToken), cfg.DataDir, cfg.SecretKey, cfg.ArchiveKey)
 }
 
 // checkSetupToken checks the form of a setup token. Its errors never

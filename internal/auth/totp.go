@@ -136,7 +136,7 @@ func normalizeRecoveryCode(code string) string {
 }
 
 // RecoveryCodeHash returns a keyed hash suitable for database lookup. The
-// key is derived from MAIL_ARCHIVE_SECRET_KEY, so a database-only leak cannot
+// key is derived from KEEPIA_ARCHIVE_SECRET_KEY, so a database-only leak cannot
 // be used to verify guesses offline.
 func RecoveryCodeHash(secretKey []byte, code string) []byte {
 	k := hmac.New(sha256.New, secretKey)

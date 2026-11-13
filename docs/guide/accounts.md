@@ -1,7 +1,7 @@
 # Accounts and providers
 
 An account is one IMAP mailbox. Its password is stored in PostgreSQL,
-encrypted with AES-256-GCM using `MAIL_ARCHIVE_SECRET_KEY`.
+encrypted with AES-256-GCM using `KEEPIA_ARCHIVE_SECRET_KEY`.
 
 Every account belongs to one user, who alone sees it and its mail. Accounts
 added in the web UI belong to you; names are unique per user. Everything on
@@ -101,7 +101,7 @@ menu (**⋮**):
 While an account syncs, **Sync**, **Check server** and **Remove** wait; so
 does **Import existing mail from IMAP** while an import from IMAP runs.
 **Mail server setup** is there for every smtp account, also when the server
-has no `MAIL_ARCHIVE_SECRET_KEY` and nothing else can be changed. On a phone
+has no `KEEPIA_ARCHIVE_SECRET_KEY` and nothing else can be changed. On a phone
 the table keeps name, state and actions; messages and last activity show
 under the name.
 
@@ -129,11 +129,11 @@ user name), **Schedule** and **Folders**. smtp: **Connection** (name and
 addresses), **SMTP secrets** (admins), **Mail server setup** and *Imports
 from IMAP*. Import: its folders. Each section has its own **Edit**, which opens its form in place,
 with **Save** and **Cancel**; saving one section sends only its own fields
-and keeps what you typed in the others. Without `MAIL_ARCHIVE_SECRET_KEY`
+and keeps what you typed in the others. Without `KEEPIA_ARCHIVE_SECRET_KEY`
 the page only shows the account.
 
 **SMTP secrets** is where the mail server's login comes from
-(`MAIL_ARCHIVE_SMTP_AUTH=required`, the default; see
+(`KEEPIA_ARCHIVE_SMTP_AUTH=required`, the default; see
 [Log in with an SMTP secret](./journaling#log-in-with-an-smtp-secret)). The
 account's owner, who is an admin, sees the user name (`smtp-` and the
 account's ID) and the secrets: the last four characters (`mas_…x7qm`), the
@@ -146,7 +146,7 @@ password map, each with a copy button. The secret is shown only there and
 only once: closing the dialog removes it, and neither the page nor a reload
 shows it again. **Revoke** ends a secret at once, after asking; the mail
 server's next message is refused and stays in its queue. With
-`MAIL_ARCHIVE_SMTP_AUTH=off` the section says that mail servers need no
+`KEEPIA_ARCHIVE_SMTP_AUTH=off` the section says that mail servers need no
 secret.
 
 **Mail server setup** shows the Postfix lines filled in with the account's
@@ -304,7 +304,7 @@ the number of messages to delete.
   [retention deletion](./retention): a deletion record (hash, size, dates; no
   subject, sender or recipients), a deletion entry for the next signed
   [attestation](./tamper-evidence), and its file stays for
-  `MAIL_ARCHIVE_RETENTION_FILE_GRACE` so that restoring the last dump still
+  `KEEPIA_ARCHIVE_RETENTION_FILE_GRACE` so that restoring the last dump still
   works.
 - Then the folders and the account are deleted, with its fills, imports,
   smtp addresses and sync history. The name is free again.

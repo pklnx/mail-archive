@@ -54,7 +54,7 @@ func ArchiveKeyFromEnv() (kek []byte, source string, err error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return LoadArchiveKey(os.Getenv(EnvArchiveKeyFile), os.Getenv(EnvArchiveKey), DataDirFromEnv(), secret)
+	return LoadArchiveKey(Getenv(EnvArchiveKeyFile), Getenv(EnvArchiveKey), DataDirFromEnv(), secret)
 }
 
 func readArchiveKeyFile(path, dataDir string) ([]byte, error) {

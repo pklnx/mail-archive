@@ -436,7 +436,7 @@ paths:
       summary: Create the first admin with the setup token
       description: |
         Creates the first admin of a new instance with the setup token the
-        operator configured (`MAIL_ARCHIVE_SETUP_TOKEN_FILE`), once. The
+        operator configured (`KEEPIA_ARCHIVE_SETUP_TOKEN_FILE`), once. The
         link `<public URL>/#setup=<token>` carries the token in its
         fragment, which never reaches the server; the web UI sends it here.
         It works only while no user exists, setup was never completed, and
@@ -725,7 +725,7 @@ paths:
                 properties:
                   available:
                     type: boolean
-                    description: False without `MAIL_ARCHIVE_PUBLIC_URL`.
+                    description: False without `KEEPIA_ARCHIVE_PUBLIC_URL`.
                   origin:
                     type: string
                     description: Where passkeys work; missing when they are off.
@@ -982,7 +982,7 @@ paths:
       summary: The own address for alert mail (admins)
       description: |
         Admins only: anyone else gets `403` before any lookup. Without
-        `MAIL_ARCHIVE_MAIL_URL` on the server, `available` is false and
+        `KEEPIA_ARCHIVE_MAIL_URL` on the server, `available` is false and
         nothing else is set; the UI then hides Profile → Notifications.
       responses:
         "200":
@@ -3908,7 +3908,7 @@ components:
           schema:
             $ref: "#/components/schemas/Retry"
     PasskeysOff:
-      description: Passkeys need `MAIL_ARCHIVE_PUBLIC_URL` on the server.
+      description: Passkeys need `KEEPIA_ARCHIVE_PUBLIC_URL` on the server.
       content:
         application/json:
           schema:
@@ -3923,7 +3923,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     SecretKeyMissing:
-      description: This needs `MAIL_ARCHIVE_SECRET_KEY` on the server.
+      description: This needs `KEEPIA_ARCHIVE_SECRET_KEY` on the server.
       content:
         application/json:
           schema:
@@ -4036,7 +4036,7 @@ components:
       properties:
         available:
           type: boolean
-          description: False without `MAIL_ARCHIVE_MAIL_URL`; the other fields are then empty.
+          description: False without `KEEPIA_ARCHIVE_MAIL_URL`; the other fields are then empty.
         email:
           type: [string, "null"]
         confirmed:
@@ -4571,7 +4571,7 @@ components:
         quotaBytes:
           type: [integer, "null"]
           format: int64
-          description: The instance quota (`MAIL_ARCHIVE_STORAGE_QUOTA`); null without one.
+          description: The instance quota (`KEEPIA_ARCHIVE_STORAGE_QUOTA`); null without one.
         warnPercent:
           type: integer
         overflowPercent:
@@ -4800,20 +4800,20 @@ components:
             $ref: "#/components/schemas/SharedAccount"
         manage:
           type: boolean
-          description: False without `MAIL_ARCHIVE_SECRET_KEY`; accounts can then only be browsed.
+          description: False without `KEEPIA_ARCHIVE_SECRET_KEY`; accounts can then only be browsed.
         syncInterval:
           type: string
           description: >-
-            The server's `MAIL_ARCHIVE_SYNC_INTERVAL`, a Go duration such as
+            The server's `KEEPIA_ARCHIVE_SYNC_INTERVAL`, a Go duration such as
             `6h0m0s`: the default for accounts without their own interval.
             Empty when the schedule is off. Not the same as an account's
             `syncInterval`.
         syncIntervalMin:
           type: string
           description: >-
-            The server's `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`, such as `5m0s`: the
+            The server's `KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN`, such as `5m0s`: the
             floor for every account's interval. Empty when the server cannot
-            sync (no `MAIL_ARCHIVE_SECRET_KEY`).
+            sync (no `KEEPIA_ARCHIVE_SECRET_KEY`).
         reconcileInterval:
           type: string
           description: A Go duration; empty when folders are only reconciled on request.
@@ -4834,14 +4834,14 @@ components:
           additionalProperties: false
           required: [auth]
           description: >-
-            Null when the SMTP server is off (`MAIL_ARCHIVE_SMTP_LISTEN`
+            Null when the SMTP server is off (`KEEPIA_ARCHIVE_SMTP_LISTEN`
             empty): smtp accounts then receive nothing.
           properties:
             auth:
               type: string
               enum: [required, "off"]
               description: >-
-                `MAIL_ARCHIVE_SMTP_AUTH`: `required` (mail servers log in with
+                `KEEPIA_ARCHIVE_SMTP_AUTH`: `required` (mail servers log in with
                 an SMTP secret after STARTTLS) or `off` (the allowlist alone).
                 The mail server setup shows the Postfix lines of this mode.
     Account:
@@ -5038,7 +5038,7 @@ components:
         grace:
           type: string
           description: >-
-            MAIL_ARCHIVE_RETENTION_FILE_GRACE as a Go duration ("168h0m0s"):
+            KEEPIA_ARCHIVE_RETENTION_FILE_GRACE as a Go duration ("168h0m0s"):
             how long the files of deleted messages are kept. Empty without
             the retention job.
         blockers:
@@ -5328,8 +5328,8 @@ components:
           default: default
           description: >-
             With `keepRunning`: `default` (the server's
-            `MAIL_ARCHIVE_SYNC_INTERVAL`) or a duration of whole minutes from
-            5m to 720h, not below `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`.
+            `KEEPIA_ARCHIVE_SYNC_INTERVAL`) or a duration of whole minutes from
+            5m to 720h, not below `KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN`.
     FillChange:
       type: object
       additionalProperties: false

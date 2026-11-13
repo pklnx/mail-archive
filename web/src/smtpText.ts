@@ -22,7 +22,7 @@ const en = {
   // The section on the account's page.
   title: "SMTP secrets",
   intro: "The mail server logs in with the user name and a secret to hand over this account's copies. A secret is shown only once, when it is created.",
-  authOff: "The SMTP server runs without logins (MAIL_ARCHIVE_SMTP_AUTH=off): mail servers do not need a secret now.",
+  authOff: "The SMTP server runs without logins (KEEPIA_ARCHIVE_SMTP_AUTH=off): mail servers do not need a secret now.",
   username: "User name",
   none: "No secret yet: a mail server cannot log in for this account.",
   colSecret: "Secret",
@@ -72,7 +72,7 @@ const de: typeof en = {
   title: "SMTP-Secrets",
   intro:
     "Der Mailserver meldet sich mit dem Benutzernamen und einem Secret an, um die Kopien dieses Kontos abzugeben. Ein Secret wird nur einmal angezeigt, beim Erstellen.",
-  authOff: "Der SMTP-Server läuft ohne Anmeldung (MAIL_ARCHIVE_SMTP_AUTH=off): Mailserver brauchen zurzeit kein Secret.",
+  authOff: "Der SMTP-Server läuft ohne Anmeldung (KEEPIA_ARCHIVE_SMTP_AUTH=off): Mailserver brauchen zurzeit kein Secret.",
   username: "Benutzername",
   none: "Noch kein Secret: Kein Mailserver kann sich für dieses Konto anmelden.",
   colSecret: "Secret",

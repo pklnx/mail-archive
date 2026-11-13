@@ -49,11 +49,11 @@ function page(admin: boolean, d = data()) {
 
 describe("adding an smtp account", () => {
   it("names both ways to turn the SMTP server on", () => {
-    // The default needs a certificate (MAIL_ARCHIVE_SMTP_AUTH=required);
+    // The default needs a certificate (KEEPIA_ARCHIVE_SMTP_AUTH=required);
     // the allowlist alone only with off.
     for (const lang of languages) {
       const text = messagesFor(lang).smtpServerOff;
-      for (const name of ["MAIL_ARCHIVE_SMTP_LISTEN", "MAIL_ARCHIVE_SMTP_TLS_CERT", "MAIL_ARCHIVE_SMTP_TLS_KEY", "MAIL_ARCHIVE_SMTP_AUTH=off", "MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS"]) {
+      for (const name of ["KEEPIA_ARCHIVE_SMTP_LISTEN", "KEEPIA_ARCHIVE_SMTP_TLS_CERT", "KEEPIA_ARCHIVE_SMTP_TLS_KEY", "KEEPIA_ARCHIVE_SMTP_AUTH=off", "KEEPIA_ARCHIVE_SMTP_ALLOWED_NETWORKS"]) {
         expect(text, lang).toContain(name);
       }
     }

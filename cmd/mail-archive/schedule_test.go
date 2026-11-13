@@ -7,14 +7,15 @@ import (
 	"time"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
 func TestSetScheduleCommand(t *testing.T) {
 	s := newArchiveSetup(t)
 	ctx := context.Background()
-	t.Setenv("MAIL_ARCHIVE_SYNC_INTERVAL", "6h")
-	t.Setenv("MAIL_ARCHIVE_SYNC_INTERVAL_MIN", "15m")
+	t.Setenv(config.EnvSyncInterval, "6h")
+	t.Setenv(config.EnvSyncIntervalMin, "15m")
 	run := func(args ...string) (string, error) {
 		var err error
 		out := captureStdout(t, func() { err = runCmd(t, newAccountCmd(), "", append([]string{"set-schedule"}, args...)...) })
@@ -79,7 +80,7 @@ func TestSetScheduleCommand(t *testing.T) {
 	}
 
 	// The schedule off is noted.
-	t.Setenv("MAIL_ARCHIVE_SYNC_INTERVAL", "0")
+	t.Setenv(config.EnvSyncInterval, "0")
 	if out, err := run("mail", "--user", "bob", "--sync-interval", "30m"); err != nil ||
 		!strings.Contains(out, "the schedule is off") || !strings.Contains(out, "note: the web server's schedule is off") {
 		t.Fatalf("schedule off: %v\n%s", err, out)
@@ -89,8 +90,8 @@ func TestSetScheduleCommand(t *testing.T) {
 func TestStatusScheduleColumns(t *testing.T) {
 	s := newArchiveSetup(t)
 	ctx := context.Background()
-	t.Setenv("MAIL_ARCHIVE_SYNC_INTERVAL", "6h")
-	t.Setenv("MAIL_ARCHIVE_SYNC_INTERVAL_MIN", "15m")
+	t.Setenv(config.EnvSyncInterval, "6h")
+	t.Setenv(config.EnvSyncIntervalMin, "15m")
 	on, ten := true, 10*time.Minute
 	a, _ := s.st.GetAccount(ctx, s.accs["anna"].ID)
 	if err := s.st.UpdateAccount(ctx, a.Ref(), store.AccountChange{Enabled: &on, SyncInterval: &store.OwnInterval{D: &ten}}); err != nil {

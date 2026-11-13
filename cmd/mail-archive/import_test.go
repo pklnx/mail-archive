@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/pklnx/mail-archive/internal/archive"
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 	"github.com/pklnx/mail-archive/internal/store/storetest"
@@ -44,11 +45,11 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func TestImportCommand(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 	ctx := context.Background()
 	anna, err := st.CreateUser(ctx, "anna", "h", false)
 	if err != nil {
@@ -80,11 +81,11 @@ func TestImportCommand(t *testing.T) {
 		}
 	}
 	// The hint for Docker Compose.
-	t.Setenv("MAIL_ARCHIVE_COMMAND", "./ma")
+	t.Setenv(config.EnvCommand, "./ma")
 	if _, err := run("old", "--from", "./import/missing.mbox", "--format", "mbox"); err == nil || !strings.Contains(err.Error(), "--from /import/") {
 		t.Errorf("missing file under ./ma: %v", err)
 	}
-	t.Setenv("MAIL_ARCHIVE_COMMAND", "")
+	t.Setenv(config.EnvCommand, "")
 
 	out, err := run("old", "--from", tbFixture, "--format", "mbox", "--dry-run")
 	if err != nil || !strings.Contains(out, "4 message(s) in 2 folder(s); nothing was stored") {
@@ -178,11 +179,11 @@ func regexpMatch(re, s string) bool { return regexp.MustCompile(re).MatchString(
 
 func TestImportEMLCommand(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 	ctx := context.Background()
 	if _, err := st.CreateUser(ctx, "anna", "h", false); err != nil {
 		t.Fatal(err)
@@ -225,11 +226,11 @@ func TestImportEMLCommand(t *testing.T) {
 func TestImportJournalCommand(t *testing.T) {
 	st, url := storetest.NewWithURL(t)
 	dataDir := t.TempDir()
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", dataDir)
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, dataDir)
+	t.Setenv(config.EnvLogLevel, "error")
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 	ctx := context.Background()
 	anna, err := st.CreateUser(ctx, "anna", "h", false)
 	if err != nil {

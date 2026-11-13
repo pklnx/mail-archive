@@ -85,7 +85,7 @@ func oneLine(s string) string {
 
 // MessageID is "<event>.<user>@<host>" without brackets: the characters of
 // the event ID that may not stand in a message ID become '.'. host is the
-// host of MAIL_ARCHIVE_PUBLIC_URL, or "mail-archive.invalid" without one.
+// host of KEEPIA_ARCHIVE_PUBLIC_URL, or "mail-archive.invalid" without one.
 func MessageID(event string, userID int64, publicURL string) string {
 	left := strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("!#$%&'*+-/=?^_`{|}~", r) {

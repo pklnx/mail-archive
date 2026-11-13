@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/spf13/cobra"
 
+	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -37,8 +38,8 @@ func auditLog(t *testing.T, st *store.Store) []store.AuditRecord {
 func TestCLIAudit(t *testing.T) {
 	s := newArchiveSetup(t)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
-	t.Setenv("MAIL_ARCHIVE_OPERATOR", "patrick")
+	t.Setenv(config.EnvSecretKey, key)
+	t.Setenv(config.EnvOperator, "patrick")
 	// Another admin, so that carol can be demoted.
 	anna, _ := s.st.GetUserByName(context.Background(), "anna")
 	if err := s.st.SetUserAdmin(context.Background(), anna.ID, true); err != nil {
@@ -142,7 +143,7 @@ func captureErr(t *testing.T, fn func() error) error {
 func TestCLIImportAudit(t *testing.T) {
 	s := newArchiveSetup(t)
 	key, _ := crypto.GenerateKey()
-	t.Setenv("MAIL_ARCHIVE_SECRET_KEY", key)
+	t.Setenv(config.EnvSecretKey, key)
 	n := len(auditLog(t, s.st))
 	cmd := newImportCmd()
 	cmd.SetErr(new(strings.Builder))
@@ -166,7 +167,7 @@ func TestCLIImportAudit(t *testing.T) {
 func TestCLIAuditFailClosed(t *testing.T) {
 	s := newArchiveSetup(t)
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, os.Getenv("MAIL_ARCHIVE_DATABASE_URL"))
+	conn, err := pgx.Connect(ctx, os.Getenv(config.EnvDatabaseURL))
 	if err != nil {
 		t.Fatal(err)
 	}

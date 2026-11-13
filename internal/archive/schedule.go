@@ -12,10 +12,10 @@ import (
 // Schedule is the web server's sync schedule. An account's own interval
 // overrides the default; the floor applies to both.
 type Schedule struct {
-	// Sync is the default interval (MAIL_ARCHIVE_SYNC_INTERVAL); 0 turns
+	// Sync is the default interval (KEEPIA_ARCHIVE_SYNC_INTERVAL); 0 turns
 	// the schedule off for every account.
 	Sync time.Duration
-	// SyncMin is the floor (MAIL_ARCHIVE_SYNC_INTERVAL_MIN). It is applied
+	// SyncMin is the floor (KEEPIA_ARCHIVE_SYNC_INTERVAL_MIN). It is applied
 	// when reading, so raising it needs no data change.
 	SyncMin time.Duration
 }

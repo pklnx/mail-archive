@@ -43,9 +43,9 @@ func jobsEnv(t *testing.T) (*store.Store, *pgx.Conn) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	t.Setenv("MAIL_ARCHIVE_DATABASE_URL", url)
-	t.Setenv("MAIL_ARCHIVE_DATA_DIR", t.TempDir())
-	t.Setenv("MAIL_ARCHIVE_LOG_LEVEL", "error")
+	t.Setenv(config.EnvDatabaseURL, url)
+	t.Setenv(config.EnvDataDir, t.TempDir())
+	t.Setenv(config.EnvLogLevel, "error")
 	// A test instance: the worker starts it without encryption at setup.
 	t.Setenv(config.EnvEncryptionAtSetup, "off")
 	return st, conn
@@ -222,13 +222,13 @@ func TestFormatJobsStatus(t *testing.T) {
 // TestReindexAttachments: reindex extracts the attachment text of every
 // pending message in the foreground, more than one backfill batch, and
 // says how many jobs it left to another process. With
-// MAIL_ARCHIVE_JOB_WORKERS=0 (a web server that runs no jobs) it still
+// KEEPIA_ARCHIVE_JOB_WORKERS=0 (a web server that runs no jobs) it still
 // runs one.
 func TestReindexAttachments(t *testing.T) {
 	st, conn := jobsEnv(t)
 	t.Setenv(config.EnvJobWorkers, "0")
 	ctx := context.Background()
-	blobs, err := blobstore.New(os.Getenv("MAIL_ARCHIVE_DATA_DIR"))
+	blobs, err := blobstore.New(os.Getenv(config.EnvDataDir))
 	if err != nil {
 		t.Fatal(err)
 	}
