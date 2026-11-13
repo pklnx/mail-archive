@@ -656,7 +656,7 @@ func TestSessionTokens(t *testing.T) {
 }
 
 // plainHTTPMsg is the start of warnPlainHTTP's line.
-const plainHTTPMsg = "the web UI is used over plain HTTP under a name other than localhost"
+const plainHTTPMsg = "the web UI is used over plain HTTP under a host name other than localhost or a loopback address"
 
 // browserAgent is a User-Agent of a current browser.
 const browserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
@@ -718,6 +718,23 @@ func TestWarnPlainHTTPOncePerHost(t *testing.T) {
 		if strings.Contains(logged, s) {
 			t.Errorf("the log contains %q from the request: %s", s, logged)
 		}
+	}
+}
+
+// Hosts reached only with a port, an IPv6 one in brackets, still warn once
+// each, under the configured name.
+func TestWarnPlainHTTPHostWithPortOnly(t *testing.T) {
+	var buf bytes.Buffer
+	h := plainHTTPServer(&buf, []string{"mail.lan", "fd00::10"}).Handler()
+	for range 2 {
+		for _, host := range []string{"mail.lan:8080", "[fd00::10]:8080"} {
+			serveOK(t, h, plainBrowserRequest(host, "192.168.1.20:5000"), 200)
+		}
+	}
+	logged := buf.String()
+	if strings.Count(logged, plainHTTPMsg) != 2 || strings.Count(logged, "host=mail.lan\n") != 1 ||
+		strings.Count(logged, "host=fd00::10\n") != 1 || strings.Contains(logged, "8080") {
+		t.Fatalf("want one warning each for mail.lan and fd00::10: %s", logged)
 	}
 }
 

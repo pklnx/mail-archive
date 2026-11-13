@@ -152,8 +152,8 @@ func (s *Server) warnPlainHTTP(r *http.Request) {
 	if !ok || warned.Load() || !warned.CompareAndSwap(false, true) {
 		return
 	}
-	s.log.Warn("the web UI is used over plain HTTP under a name other than localhost: browsers send no Fetch Metadata "+
-		"(Sec-Fetch-*) there, so the guard against requests from HTML mail does nothing; use HTTPS (a reverse proxy or "+
+	s.log.Warn("the web UI is used over plain HTTP under a host name other than localhost or a loopback address: browsers send "+
+		"no Fetch Metadata (Sec-Fetch-*) there, so the guard against requests from HTML mail does nothing; use HTTPS (a reverse proxy or "+
 		"tailscale serve, with "+config.EnvTrustedProxies+" where it does not connect from loopback) or http://localhost "+
 		"on this computer; see \"Plain LAN access\" in the security docs", "host", host)
 }

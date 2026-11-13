@@ -368,9 +368,9 @@ blocker. HTTPS, as above, or `http://localhost` on the computer itself
 restores the guard.
 
 So that this does not go unnoticed, the server logs a warning ("the web UI
-is used over plain HTTP under a name other than localhost") the first time a
-browser uses it this way under each allowed host name, with that name as
-`host`. It does not warn for `localhost`, names under `.localhost`, loopback
+is used over plain HTTP under a host name other than localhost or a loopback
+address") the first time a browser uses it this way under each allowed host
+name, with that name as `host`. It does not warn for `localhost`, names under `.localhost`, loopback
 addresses, or HTTPS, direct or through a proxy whose `X-Forwarded-Proto`
 counts.
 
