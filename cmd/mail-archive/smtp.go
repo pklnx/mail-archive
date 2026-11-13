@@ -19,6 +19,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/auth"
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/smtpd"
 	"github.com/pklnx/mail-archive/internal/store"
 )
@@ -26,10 +27,10 @@ import (
 // startSMTP starts the SMTP server for smtp accounts. The returned stop
 // shuts it down and waits until messages being stored are committed; it
 // must run before the store closes.
-func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Logger) (stop func(), err error) {
+func startSMTP(ctx context.Context, a *app, blobs *blobstore.Store, storage *quota.Gate, log *slog.Logger) (stop func(), err error) {
 	c := a.cfg.SMTP
 	srv := &smtpd.Server{
-		Store: a.store, Blobs: blobs, Logger: log, Allowed: c.AllowedNetworks,
+		Store: a.store, Blobs: blobs, Logger: log, Allowed: c.AllowedNetworks, Storage: storage,
 		Hostname: c.Hostname, MaxSize: c.MaxSize, Auth: c.Auth, MaxConnsPerAddr: c.MaxConnsPerAddr,
 	}
 	var certs *smtpd.CertReloader

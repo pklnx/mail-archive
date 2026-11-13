@@ -33,8 +33,8 @@ type Runner struct {
 	// loaded. A hook that blocks must also return when ctx is done.
 	BeforeSync func(ctx context.Context, id int64)
 
-	mu     sync.Mutex
-	queue  []int64
+	mu    sync.Mutex
+	queue []int64
 	// paused are the accounts the schedule skipped at its last check
 	// because the storage gate pauses them (#397), so that each pause and
 	// resume is logged once.

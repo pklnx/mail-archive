@@ -17,6 +17,7 @@ import (
 	"github.com/pklnx/mail-archive/internal/blobstore"
 	"github.com/pklnx/mail-archive/internal/config"
 	"github.com/pklnx/mail-archive/internal/crypto"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -495,8 +496,9 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 	ctx := cmd.Context()
 	bg := context.WithoutCancel(ctx)
 	out := cmd.ErrOrStderr()
+	log := newLogger(a.cfg.LogLevel).With("account", acc.Name)
 	filler := &archive.Filler{
-		Store: a.store, Blobs: blobs, Sealer: sealer, Logger: newLogger(a.cfg.LogLevel).With("account", acc.Name),
+		Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log, Storage: newStorageGate(a, log),
 		IMAP: imapSettings(a.cfg), MaxFolderMessages: a.cfg.IMAP.FillMaxFolderMessages,
 		Progress: func(ff store.FillFolder) {
 			c := ff.Counts
@@ -508,6 +510,11 @@ func runFill(cmd *cobra.Command, a *app, acc *store.Account, blobs *blobstore.St
 	if errors.Is(err, archive.ErrFillSkipped) {
 		fmt.Fprintf(out, "%q is disabled: the web server runs the fill once it is enabled\n", acc.Name)
 		return nil
+	}
+	if errors.Is(err, quota.ErrStorageFull) {
+		// The fill stays running and keeps what it stored; the web
+		// server goes on with it once space is freed.
+		return pausedError(ctx, a, err, -1, "the fill stays running; the web server continues it")
 	}
 	if err != nil && ctx.Err() != nil {
 		if fill != nil && fill.Recurring() {

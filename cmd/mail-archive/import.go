@@ -16,6 +16,7 @@ import (
 
 	"github.com/pklnx/mail-archive/internal/archive"
 	"github.com/pklnx/mail-archive/internal/mailbox"
+	"github.com/pklnx/mail-archive/internal/quota"
 	"github.com/pklnx/mail-archive/internal/store"
 )
 
@@ -148,10 +149,14 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 	}
 	log.Info("import started", "owner", ownerName(names, acc.OwnerID), "format", o.format, "source", o.from, "folders", len(folders))
 	im := &archive.Importer{
-		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit,
+		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit, Storage: newStorageGate(a, log),
 		Progress: func(f archive.ImportFolderResult) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "%s: read %d, added %d\n", f.Folder, f.Read, f.Added)
 		},
+	}
+	// Refused before anything is recorded while the limit is reached.
+	if err := im.Storage.Admit(acc.GroupID); err != nil {
+		return pausedError(ctx, a, err, -1, "run it")
 	}
 	e := cliAccountTarget(cliTargeted("data.import"), acc)
 	e.Detail("format", o.format)
@@ -167,6 +172,13 @@ func runImport(cmd *cobra.Command, name string, o importOptions) error {
 	if res != nil {
 		printImportResult(cmd.OutOrStdout(), res, false)
 		requestUsageRefresh(ctx, a, log)
+	}
+	if errors.Is(err, quota.ErrStorageFull) {
+		stored := -1
+		if res != nil {
+			stored = res.Total().Added
+		}
+		return pausedError(ctx, a, err, stored, "run it")
 	}
 	if err != nil {
 		return err
@@ -232,6 +244,11 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	e.Detail("folders", len(folders))
 	e.Detail("into", store.SMTPFolder)
 	e.Detail("label", label)
+	storage := newStorageGate(a, log)
+	// Refused before the import is recorded while the limit is reached.
+	if err := storage.Admit(acc.GroupID); err != nil {
+		return pausedError(ctx, a, err, -1, "run it")
+	}
 	imp := &store.SMTPImport{AccountID: acc.ID, Label: label, Format: o.format, Source: o.from}
 	switch err := a.store.CreateSMTPImport(withCLIAudit(cmd, e), imp); {
 	case errors.Is(err, store.ErrNotFound):
@@ -242,7 +259,7 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	log.Info("import started", "owner", ownerName(names, acc.OwnerID), "format", o.format, "source", o.from,
 		"folders", len(folders), "into", store.SMTPFolder, "label", label, "import", imp.ID)
 	im := &archive.Importer{
-		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit,
+		Store: a.store, Blobs: blobs, Logger: log, MaxMessageSize: limit, Storage: storage,
 		Progress: func(f archive.ImportFolderResult) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "%s: read %d, added %d, journaled %d\n", f.Folder, f.Read, f.Added, f.Journaled)
 		},
@@ -257,6 +274,13 @@ func runJournalImport(cmd *cobra.Command, name string, o importOptions) error {
 	if res != nil {
 		printImportResult(cmd.OutOrStdout(), res, true)
 		requestUsageRefresh(ctx, a, log)
+	}
+	if errors.Is(err, quota.ErrStorageFull) {
+		stored := -1
+		if res != nil {
+			stored = res.Total().Added
+		}
+		return pausedError(ctx, a, err, stored, "run it")
 	}
 	if err != nil {
 		return err

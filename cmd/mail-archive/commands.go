@@ -900,6 +900,7 @@ failing, and their recovery, are sent at the end.`,
 				Store: a.store, Blobs: blobs, Sealer: sealer, Logger: log,
 				ReconcileInterval:    a.cfg.ReconcileInterval,
 				MaxReconcileMessages: a.cfg.IMAP.ReconcileMaxMessages, IMAP: imapSettings(a.cfg),
+				Storage: newStorageGate(a, log),
 			}
 			var owner *int64
 			if u, err := flagUser(cmd, a); err != nil {
@@ -916,12 +917,15 @@ failing, and their recovery, are sent at the end.`,
 			}
 			results, err := syncer.SyncAll(cmd.Context(), only, owner, archive.SyncOptions{Reconcile: reconcile})
 			deliverAfterSync(cmd.Context(), newNotifier(a, log), log)
-			failed := 0
+			failed, paused := 0, 0
 			for _, r := range results {
 				status := "ok"
 				switch {
 				case errors.Is(r.Err, archive.ErrSyncRunning):
 					status = "skipped: already syncing (web server or another run)"
+				case r.IsPaused():
+					status = "paused: " + pausedMessage(cmd.Context(), a, r.Err) + "; run the same command again once space is freed"
+					paused++
 				case r.Err != nil:
 					status = "error: " + r.Err.Error()
 					failed++
@@ -948,6 +952,9 @@ failing, and their recovery, are sent at the end.`,
 			}
 			if failed > 0 {
 				return &exitError{msg: fmt.Sprintf("%d account(s) failed", failed)}
+			}
+			if paused > 0 {
+				return &exitError{msg: fmt.Sprintf("%d account(s) paused: storage limit reached", paused), code: exitPaused}
 			}
 			return nil
 		},
