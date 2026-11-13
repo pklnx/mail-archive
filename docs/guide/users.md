@@ -227,13 +227,15 @@ runs the server and the database and can technically read the stored mail
 
 The profile icon in the header (on phones and touch screens: the person
 icon, then **Profile**), or **Profile** in the navigation opens your
-profile. It has three tabs:
+profile. It has three tabs, and for admins a fourth:
 
 - **Display:** the [language and formats](./web-ui#appearance-and-language)
   of the web UI.
 - **Sign-in & security:** your password, [2FA](#two-factor-authentication)
   and [passkeys](#passkeys).
 - **API keys:** [keys for scripts](#api-keys).
+- **Notifications** (admins, when the operator set up a mail relay): your
+  address for [alert mail](./email-alerts).
 
 To change your password you need the current one. Other devices are logged
 out; the one you use stays logged in.

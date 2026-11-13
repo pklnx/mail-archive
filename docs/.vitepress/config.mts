@@ -60,6 +60,7 @@ export default defineConfig({
           { text: "Web UI and search", link: "/guide/web-ui" },
           { text: "Users", link: "/guide/users" },
           { text: "Audit log", link: "/guide/audit-log" },
+          { text: "Email alerts", link: "/guide/email-alerts" },
           { text: "Backups and upgrades", link: "/guide/operations" },
           { text: "Tamper evidence", link: "/guide/tamper-evidence" },
           { text: "Retention and legal hold", link: "/guide/retention" },

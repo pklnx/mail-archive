@@ -83,6 +83,12 @@ func (s *Server) routes() []route {
 		h("GET /api/profile/api-keys", s.handleListAPIKeys, accessSession),
 		h("POST /api/profile/api-keys", s.handleCreateAPIKey, accessSession),
 		h("DELETE /api/profile/api-keys/{id}", s.handleRevokeOwnAPIKey, accessSession),
+		// The admin's address for alert mail (#397, part 5): admins only,
+		// 403 for anyone else before any lookup.
+		h("GET /api/profile/notifications", s.handleGetNotifications, accessSession),
+		h("PUT /api/profile/notifications", s.handleSetNotifications, accessSession),
+		h("POST /api/profile/notifications/confirm", s.handleConfirmNotifications, accessSession),
+		h("DELETE /api/profile/notifications", s.handleRemoveNotifications, accessSession),
 
 		h("GET /api/users", s.handleListUsers, accessSession),
 		h("POST /api/users", s.handleCreateUser, accessSession),

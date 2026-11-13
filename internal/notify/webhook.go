@@ -162,7 +162,7 @@ func (w *Webhook) Target() string { return w.cfg.Target() }
 
 // Full reports whether alerts carry names, mailboxes, errors and folders
 // (config.WebhookDetailFull); by default they carry IDs only.
-func (w *Webhook) Full() bool { return w.cfg.Full() }
+func (w *Webhook) Full() bool { return w != nil && w.cfg.Full() }
 
 // DeliveryError is a failed webhook request. Its text never contains the
 // URL.

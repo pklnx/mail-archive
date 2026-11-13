@@ -171,6 +171,18 @@ func Permanent(err error) error {
 	return &permanentError{err: err}
 }
 
+type doneError struct{ code string }
+
+func (e *doneError) Error() string { return "done: " + e.code }
+
+// Done tells the pool that the job is done without doing its work, for a
+// reason named by code (as for Code), kept in jobs.last_error of the done
+// job; for example "recipient_gone" when an alert mail's recipient is no
+// longer one.
+func Done(code string) error {
+	return &doneError{code: code}
+}
+
 type continueError struct{ payload json.RawMessage }
 
 func (e *continueError) Error() string { return "continue" }

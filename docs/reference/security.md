@@ -19,6 +19,7 @@
 | Retention and deletion | Nothing is deleted without a [retention rule](./cli#retention) and a reviewed, confirmed [deletion run](./cli#deletion); rules, legal holds and runs are admin-only and recorded in the audit log. Database triggers refuse to delete a location whose period has not ended or that is on hold, and a message row without its deletion record. A message stays while any location of it, in any user's account, has no rule or an unexpired one, or is on legal hold. |
 | Removal of archived mail | Daily signed [attestations](./cli#attest) record which messages were archived; see [The attestation key](#the-attestation-key). Tamper-evident, not tamper-proof. |
 | SMTP secrets | Only their SHA-256 and last 4 characters are stored; the secret is shown once, like an API key. A secret lets a mail server hand over mail for its one smtp account, nothing else: it reads nothing. See [The SMTP server](#the-smtp-server). |
+| Alert mail | Only to admins who confirmed their address with a mailed code (SHA-256 of the code stored, 30 minutes, 5 tries, 3 codes per hour); only over TLS to the one relay the operator configured, its password read from a file and never logged. A mail names accounts, owners and customer groups, never error texts, folders, server names or mail data. See [Alert mail](#alert-mail). |
 | The SMTP port | Off by default. With `MAIL_ARCHIVE_SMTP_AUTH=required` (the default once it is on) a mail server must log in over TLS with a secret of the smtp account it delivers for; the port may then face the internet. With `off`, only clients in `MAIL_ARCHIVE_SMTP_ALLOWED_NETWORKS` may connect, and the port must never face the internet. See [The SMTP server](#the-smtp-server). |
 
 ## Login
@@ -309,6 +310,10 @@ individual instance is one group, with the operator as its only admin.
   (`MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL=ids`; see
   [Health endpoints and alerts](#health-endpoints-and-alerts)): webhook
   receivers are often third parties.
+- **Alert mail** goes to admins only, with account, owner and group
+  names (see [Alert mail](#alert-mail)). Members get none, and their
+  requests to the notification settings are refused before anything is
+  looked up.
 - **The shell.** Whoever holds the host, the database or the archive key can
   technically read all mail; no app path is meant for it, and the
   [archive key](#the-archive-key) does not protect against the operator.
@@ -920,6 +925,44 @@ told to show plain text (`extras`), and ntfy gets plain text with an always
 encoded `Title` header. In every field, control characters, line and
 paragraph separators and bidirectional controls in a value become spaces.
 `accounts` holds the exact values.
+
+## Alert mail
+
+[Alert mail](../guide/email-alerts) goes to admins only: users with the
+admin role, not locked, whose address was confirmed with a code mailed to
+it. This is checked when the alert is queued and again when it is sent, so
+an admin who was demoted, locked or removed meanwhile gets nothing, and
+the mail goes to the address confirmed at that time. Account owners and
+other members of a customer group never get alert mail; their requests to
+`/api/profile/notifications` answer `403` before anything is looked up, so
+nothing tells one group about another group's usage or state.
+
+- **Content.** A mail names accounts, their owners and customer groups, with
+  figures, times and a link to the web UI. It never contains error texts,
+  IMAP user names, folder names, server names, subjects or addresses from
+  mail, nor another admin's address. Names are plain text, with line
+  breaks and control characters replaced, so a name cannot add a header or
+  a line; a non-ASCII subject is encoded (RFC 2047). The queued jobs hold
+  IDs, figures and levels only; the names are read when the mail is sent.
+- **The relay** comes from the environment only (`MAIL_ARCHIVE_MAIL_URL`):
+  no user input chooses a host or a sender. The connection is TLS from the
+  start or upgraded with STARTTLS, which must be offered, with the relay's
+  certificate verified; nothing is sent in the clear. Its password comes
+  from a file that only its owner may read, outside the data directory,
+  and is never logged; a password in the URL is refused.
+- **The address.** An admin's address is checked as one mail address
+  without control characters. Only a SHA-256 of the 6-character code is
+  stored, bound to the user; a code is valid for 30 minutes and 5 tries, and
+  at most 3 codes are sent per hour, so the form cannot be used to send
+  mail to arbitrary addresses at any volume. Setting, confirming and
+  removing it are audited without the address. A relay that answers
+  `5.1.x` to the address unconfirms it.
+- **Logs** name the event and the user by ID, and the relay's answers by
+  their code only, never their text or an address.
+- **Processors.** The operator's relay and the admins' mailboxes process
+  the account, owner and group names of the alerts. For a hosted instance
+  this belongs in the data processing agreement, like the
+  [logs](#operator-admin-and-customer-groups).
 
 ## Messages no longer on the server
 

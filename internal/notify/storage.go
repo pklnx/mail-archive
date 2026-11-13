@@ -74,7 +74,7 @@ func (n *Notifier) passStorage(ctx context.Context) (claimed int, ok bool, err e
 		return 0, true, err
 	}
 	msg := BuildStorageMessage(pending, n.StorageQuota)
-	status, sendErr := n.Webhook.Send(ctx, msg)
+	status, sendErr := n.send(ctx, msg)
 	bg := context.WithoutCancel(ctx)
 	log := n.logger()
 	if sendErr == nil {

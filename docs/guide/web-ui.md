@@ -148,6 +148,11 @@ where each user with failing accounts is marked; only the owner, or the
 operator with `./ma status`, shows which accounts they are. See
 [Syncing](./syncing#alerts) for what counts as failing.
 
+An admin whose address for [alert mail](./email-alerts) was refused by the
+mail server sees an amber line "Alert mail to your address was refused"
+with **Open profile**: the address gets no alert mail until it is
+confirmed again on the profile's **Notifications** tab.
+
 ## Storage
 
 When new mail of your customer group is not archived because a storage

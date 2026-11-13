@@ -134,6 +134,11 @@ var auditActionClasses = map[string][]AuditClass{
 	"profile.recovery_codes":  {AuditSelf},
 	"profile.passkey_add":     {AuditSelf},
 	"profile.passkey_remove":  {AuditSelf},
+	// The admin's address for alert mail (#397, part 5); the entries
+	// never carry the address.
+	"profile.notify_email_set":     {AuditSelf},
+	"profile.notify_email_confirm": {AuditSelf},
+	"profile.notify_email_remove":  {AuditSelf},
 
 	"api_key.create": {AuditTargeted},
 	"api_key.revoke": {AuditTargeted},

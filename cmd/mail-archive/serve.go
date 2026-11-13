@@ -86,10 +86,39 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 			cancel()
 			<-notifierDone
 		}()
-		log.Info("alerts on", "target", a.cfg.Webhook.Target(), "after_failures", a.cfg.AlertAfterFailures)
+		target, mail := "", ""
+		if a.cfg.Webhook != nil {
+			target = a.cfg.Webhook.Target()
+		}
+		if a.cfg.Mail != nil {
+			mail = a.cfg.Mail.Target()
+		}
+		log.Info("alerts on", "target", target, "mail", mail, "after_failures", a.cfg.AlertAfterFailures)
 		afterSync = n.Wake
 	} else {
-		log.Info("alerts off", "reason", config.EnvNotifyWebhookURL+" is not set")
+		log.Info("alerts off", "reason", config.EnvNotifyWebhookURL+" and "+config.EnvMailURL+" are not set")
+	}
+	// Alert mail (#397, part 5): its own pool of one, beside the
+	// notifier, whatever MAIL_ARCHIVE_JOB_WORKERS says; and the codes of
+	// Profile → Notifications.
+	if svc := newAlertMail(a, log); svc != nil {
+		pool, err := mailPool(a, svc, log, false)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithCancel(ctx)
+		mailDone := make(chan struct{})
+		go func() {
+			defer close(mailDone)
+			if err := pool.Run(ctx); err != nil {
+				log.Error("alert mail stopped", "err", err)
+			}
+		}()
+		defer func() {
+			cancel()
+			<-mailDone
+		}()
+		opts.AlertMail = svc
 	}
 	// serve has a secret key (checkSecretKey): account management and
 	// sync are on.

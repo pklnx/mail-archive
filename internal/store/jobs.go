@@ -215,7 +215,18 @@ func (s *Store) ExtendJobLeases(ctx context.Context, ids []int64, leases [][]byt
 // asked for during the run (NewJob.RequeueIfRunning) and wakes the pools
 // listening. It returns ErrNotFound if the lease was lost.
 func (s *Store) FinishJob(ctx context.Context, id int64, lease []byte) error {
-	r, err := s.q.FinishJob(ctx, db.FinishJobParams{ID: id, Lease: lease})
+	return s.FinishJobWithCode(ctx, id, lease, "")
+}
+
+// FinishJobWithCode is FinishJob that keeps code (never message content)
+// in last_error of the done job, such as "recipient_gone"; empty keeps
+// none.
+func (s *Store) FinishJobWithCode(ctx context.Context, id int64, lease []byte, code string) error {
+	p := db.FinishJobParams{ID: id, Lease: lease}
+	if code != "" {
+		p.Code = &code
+	}
+	r, err := s.q.FinishJob(ctx, p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}

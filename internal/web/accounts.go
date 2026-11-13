@@ -162,6 +162,10 @@ type accountsResponse struct {
 	// OtherFailing, for admins only, counts the failing accounts of other
 	// users. Admins never see their names.
 	OtherFailing *int64 `json:"otherFailing,omitempty"`
+	// NotifyEmailBounced, for admins only: a relay refused the admin's own
+	// notification address, which gets no alert mail until it is
+	// confirmed again (#397, part 5).
+	NotifyEmailBounced bool `json:"notifyEmailBounced,omitempty"`
 }
 
 // auditorAccountJSON is an account of an auditor's grant (#393): what
@@ -357,6 +361,10 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out.OtherFailing = &others
+		if out.NotifyEmailBounced, err = s.notifyEmailBounced(ctx, me); err != nil {
+			s.failStore(w, r, err)
+			return
+		}
 	}
 	now := s.currentTime()
 	if sched := s.schedule(); sched.Sync > 0 {

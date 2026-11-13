@@ -975,6 +975,139 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/profile/notifications:
+    get:
+      tags: [profile]
+      operationId: getNotifications
+      summary: The own address for alert mail (admins)
+      description: |
+        Admins only: anyone else gets `403` before any lookup. Without
+        `MAIL_ARCHIVE_MAIL_URL` on the server, `available` is false and
+        nothing else is set; the UI then hides Profile → Notifications.
+      responses:
+        "200":
+          description: The address and its state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notifications"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+    put:
+      tags: [profile]
+      operationId: setNotifications
+      summary: Set the own address for alert mail and mail a code to it
+      description: |
+        Admins only. The address is unconfirmed, and gets no alert mail,
+        until the 6-character code mailed to it is entered
+        (`POST /api/profile/notifications/confirm`) within 30 minutes. At
+        most 3 codes per hour; sending the same address again sends a new
+        code. Audited as `profile.notify_email_set`, without the address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              additionalProperties: false
+              properties:
+                email:
+                  type: string
+                  maxLength: 254
+                  description: One mail address, without a display name.
+                language:
+                  type: string
+                  enum: [de, en, auto, ""]
+                  description: |
+                    The UI's language, for the code mail and for alert mail
+                    while the user's language setting is `auto`.
+      responses:
+        "200":
+          description: The code was sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notifications"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: "`mail_off`: alert mail is off on the server."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          description: "`mail_failed`: the relay did not take the code mail; the address stays set and unconfirmed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [profile]
+      operationId: removeNotifications
+      summary: Remove the own address for alert mail
+      description: Admins only. Audited as `profile.notify_email_remove`.
+      responses:
+        "204":
+          description: Removed, or there was none.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+
+  /api/profile/notifications/confirm:
+    post:
+      tags: [profile]
+      operationId: confirmNotifications
+      summary: Confirm the own address for alert mail with the mailed code
+      description: |
+        Admins only. 5 tries per code, case and spaces do not matter.
+        Audited as `profile.notify_email_confirm`, without the address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code:
+                  type: string
+                  maxLength: 32
+      responses:
+        "200":
+          description: Confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notifications"
+        "400":
+          description: "`wrong_code`: the code does not match."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/AdminOnly"
+        "409":
+          description: "`no_code`: no code waits or it expired; `code_spent`: 5 wrong tries; `mail_off`: alert mail is off."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/users:
     get:
       tags: [users]
@@ -3805,7 +3938,7 @@ components:
           type: string
         code:
           type: string
-          enum: [on_hold, conflict, released, filter_hold_cli, imap_connect, imap_tls, imap_login, imap_timeout, imap_server, imap_protocol, imap_limit]
+          enum: [on_hold, conflict, released, filter_hold_cli, imap_connect, imap_tls, imap_login, imap_timeout, imap_server, imap_protocol, imap_limit, mail_off, mail_failed, wrong_code, no_code, code_spent]
           description: |
             A stable, machine-readable reason, for clients that explain the
             error in their own words; `error` is English text that may
@@ -3814,7 +3947,9 @@ components:
             legal hold is released already. `filter_hold_cli`: a legal
             hold with a search filter over other users' mail is added by
             the operator on the command line. `imap_*`: the category of a
-            failed IMAP login check (`LoginFailed`).
+            failed IMAP login check (`LoginFailed`). `mail_off`, `mail_failed`,
+            `wrong_code`, `no_code`, `code_spent`: Profile → Notifications
+            (`/api/profile/notifications`).
         holdIds:
           type: array
           items:
@@ -3894,6 +4029,29 @@ components:
             removed:
               type: boolean
 
+    Notifications:
+      type: object
+      required: [available, email, confirmed, confirmedAt, bounced, codeExpiresAt]
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+          description: False without `MAIL_ARCHIVE_MAIL_URL`; the other fields are then empty.
+        email:
+          type: [string, "null"]
+        confirmed:
+          type: boolean
+          description: Only a confirmed address gets alert mail.
+        confirmedAt:
+          type: [string, "null"]
+          format: date-time
+        bounced:
+          type: boolean
+          description: A relay refused the address (5.1.x); confirm it again.
+        codeExpiresAt:
+          type: [string, "null"]
+          format: date-time
+          description: Set while a code waits to be entered.
     Retry:
       type: object
       required: [error, retryAfter]
@@ -3902,8 +4060,11 @@ components:
           type: string
         code:
           type: string
-          enum: [too_many_checks]
-          description: Set when a limit of IMAP login checks refused the request.
+          enum: [too_many_checks, code_limit]
+          description: |
+            `too_many_checks`: a limit of IMAP login checks refused the
+            request. `code_limit`: three confirmation codes of a
+            notification address were sent in the last hour.
         retryAfter:
           type: integer
           description: Seconds.
@@ -4662,6 +4823,12 @@ components:
         otherFailing:
           type: integer
           description: For admins only, the number of failing accounts of other users.
+        notifyEmailBounced:
+          type: boolean
+          description: |
+            For admins only, and only when true: a mail relay refused the
+            admin's own notification address, which gets no alert mail until
+            it is confirmed again in Profile → Notifications.
         smtp:
           type: [object, "null"]
           additionalProperties: false

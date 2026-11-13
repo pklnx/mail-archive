@@ -40,6 +40,9 @@ are named on the guide pages: the default sync interval
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_FORMAT` | `json` | `json` (Gotify, Slack, Mattermost, Discord and generic receivers) or `ntfy` (plain text with `Title`, `Priority` and `Tags` headers). |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_AUTHORIZATION` | (none) | Sent as the `Authorization` header, like `Bearer tk_...` for ntfy or Gotify, so the token need not be in the URL. A secret, never logged. |
 | `MAIL_ARCHIVE_NOTIFY_WEBHOOK_DETAIL` | `ids` | `ids`: alerts name accounts, fills and customer groups by ID only, with no account, owner or group names, IMAP user names, folder names or error texts. `full`: with those, which sends customer data to the receiver; for receivers you run yourself. See [Detail](../guide/operations#detail-ids-or-full). |
+| `MAIL_ARCHIVE_MAIL_URL` | (none: no alert mail) | The mail relay that sends [alert mail](../guide/email-alerts) to admins: `smtps://user@relay.example.com:465` (TLS from the start; port 465 if left out) or `smtp://user@relay.example.com:587` (STARTTLS required; port 587 if left out). A relay without STARTTLS, or with a certificate that does not verify, is refused. No password in the URL; no path or query. The relay is the only host alert mail goes to. Without it, Profile → Notifications is hidden. |
+| `MAIL_ARCHIVE_MAIL_PASSWORD_FILE` | (none) | The file with the relay password (AUTH PLAIN), on one line; required when the URL names a user. Like the key files: a regular file that only its owner may access (mode 0400 or 0600), outside the data directory, for example `/secret-key/mail.password` in Compose's `SECRET_KEY_DIR`. A secret, never logged. |
+| `MAIL_ARCHIVE_MAIL_FROM` | (none; required with the URL) | The sender of alert mail, such as `Mail Archive <archive@example.com>`: one address, with or without a name. The relay must accept it as sender. |
 | `MAIL_ARCHIVE_TRUSTED_PROXIES` | (none) | Reverse proxies whose `X-Forwarded-For` header names the client, comma-separated networks or addresses like `172.18.0.1` or `10.0.0.0/8`. The audit log records that client, and the login limits count per client (IPv6 per `/64`). Their `X-Forwarded-Proto: https` also counts, as from loopback: the session cookie is then `__Host-` and `Secure`, and HSTS is sent. From other addresses the header is ignored and a warning is logged once. Under Docker Compose a proxy on the host connects from the Compose network's gateway: set this to that address. Every listed address may claim any client address: list only the proxy. See [Behind a reverse proxy](../guide/audit-log#behind-a-reverse-proxy) and [Network access](./security#network-access). |
 | `MAIL_ARCHIVE_ATTEST_KEY_FILE` | `MAIL_ARCHIVE_DATA_DIR/attest/signing.key` | The Ed25519 key that signs [attestations](./cli#attest). Created by `attest keygen`; must have mode 0600. The attestation file, the leaves and the public keys always stay in `MAIL_ARCHIVE_DATA_DIR/attest/`, also when the key is elsewhere. Without the key, attestations are off and the web server logs it. |
 | `MAIL_ARCHIVE_RETENTION_FILE_GRACE` | `168h` | How long the files of messages deleted by [retention](./cli#deletion) outlive their database rows. A backup (the dump first, then the files) made within it is complete, and restoring the last dump undoes a wrong deletion. At least `1h`, or `0` to remove them at the next sweep. |
@@ -117,9 +120,10 @@ The published ports listen on `127.0.0.1` only unless `WEB_BIND` or
 Changes to `.env` take effect with `docker compose up -d web` (`docker compose up -d web worker` with the worker service).
 
 Compose passes `MAIL_ARCHIVE_SYNC_INTERVAL`, `MAIL_ARCHIVE_SYNC_INTERVAL_MIN`, `MAIL_ARCHIVE_RECONCILE_INTERVAL`,
-`MAIL_ARCHIVE_ALERT_AFTER_FAILURES` and the four `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
-variables to both the web server and the CLI (`./ma`), so `./ma sync` from
-cron reconciles and sends alerts too.
+`MAIL_ARCHIVE_ALERT_AFTER_FAILURES`, the four `MAIL_ARCHIVE_NOTIFY_WEBHOOK_*`
+and the three `MAIL_ARCHIVE_MAIL_*` variables to both the web server and the
+CLI (`./ma`), so `./ma sync` from cron reconciles and sends alerts and alert
+mail too. The worker service gets none of them: it sends no alert mail.
 
 Compose passes the four IMAP limits (`MAIL_ARCHIVE_FILL_MAX_FOLDER_MESSAGES`,
 `MAIL_ARCHIVE_RECONCILE_MAX_MESSAGES`, `MAIL_ARCHIVE_IMAP_MAX_FOLDERS`,

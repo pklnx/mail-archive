@@ -45,8 +45,17 @@ const (
 // Delivery is at least once: a crash after the request and before the
 // state is written repeats the message with the same ID.
 type Notifier struct {
-	Store   *store.Store
+	Store *store.Store
+	// Webhook receives the alerts; nil without one. A claim without a
+	// webhook is finished at once; mail does not depend on it.
 	Webhook *Webhook
+	// Mail turns on the mail pass after each webhook pass: it enqueues a
+	// notify_mail job per admin with a confirmed address for every
+	// transition that is due by the mail's own state, once per transition
+	// (#397, part 5). The claims enqueue no mail, so webhook and mail are
+	// independent: a failing webhook neither holds mail back nor adds any,
+	// and the jobs run on their own.
+	Mail bool
 	// AlertAfter is how many failed syncs in a row make an account failing.
 	AlertAfter int
 	// StorageQuota is the instance quota in bytes (#397, part 2), 0
@@ -100,10 +109,19 @@ func (n *Notifier) Run(ctx context.Context) {
 
 // Deliver sends every announcement that is due, in batches of BatchSize:
 // failing syncs and recoveries first, then failing recurring fills and
-// theirs, then loss alerts, then storage transitions. It stops at the first failed request; the
-// retry waits for its time. It returns an error only if the database
-// fails.
+// theirs, then loss alerts, then storage transitions. It stops sending at
+// the first failed request; the retry waits for its time. With Mail, it
+// then enqueues the mail that is due by the mail's own state
+// (deliverMail), also after a failed request. It returns an error only
+// if the database fails.
 func (n *Notifier) Deliver(ctx context.Context) error {
+	if err := n.deliverWebhook(ctx); err != nil {
+		return err
+	}
+	return n.deliverMail(ctx)
+}
+
+func (n *Notifier) deliverWebhook(ctx context.Context) error {
 	for _, pass := range []func(context.Context) (int, bool, error){n.pass, n.passFill, n.passLoss, n.passStorage} {
 		for ctx.Err() == nil {
 			claimed, ok, err := pass(ctx)
@@ -111,6 +129,43 @@ func (n *Notifier) Deliver(ctx context.Context) error {
 				return err
 			}
 			if claimed < BatchSize {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// deliverMail enqueues, in batches of BatchSize, the alert mail that is
+// due whatever the webhook's delivery state: a recovery while the webhook
+// still fails to announce the alert, or a transition while it waits for
+// its retry. It is the only path that enqueues alert mail; the mail's own
+// state (store.EnqueueDueSyncMail) and mail_enqueued_event keep it to one mail
+// per transition and recipient.
+func (n *Notifier) deliverMail(ctx context.Context) error {
+	if !n.Mail {
+		return nil
+	}
+	for _, pass := range []func(context.Context) (int, error){
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueSyncMail(ctx, n.AlertAfter, BatchSize, syncMailEvent)
+		},
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueFillMail(ctx, n.AlertAfter, BatchSize, fillMailEvent)
+		},
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueLossMail(ctx, store.LossAlertMaxAge, BatchSize, lossMailEvent)
+		},
+		func(ctx context.Context) (int, error) {
+			return n.Store.EnqueueDueStorageMail(ctx, BatchSize, n.storageMailEvent)
+		},
+	} {
+		for ctx.Err() == nil {
+			handled, err := pass(ctx)
+			if err != nil {
+				return err
+			}
+			if handled < BatchSize {
 				break
 			}
 		}
@@ -156,7 +211,7 @@ func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, o
 		return 0, true, err
 	}
 	msg := k.build(pending, n.Webhook.Full())
-	status, sendErr := n.Webhook.Send(ctx, msg)
+	status, sendErr := n.send(ctx, msg)
 	// Record the outcome even if ctx was cancelled during the request.
 	bg := context.WithoutCancel(ctx)
 	log := n.logger()
@@ -169,6 +224,9 @@ func (n *Notifier) passHealth(ctx context.Context, k healthKind) (claimed int, o
 			what := "alert sent"
 			if ev.Event == EventRecovered {
 				what = "recovery sent"
+			}
+			if n.Webhook == nil {
+				what = "alert recorded without a webhook"
 			}
 			log.Info(what, "account", p.Account, "owner", p.Owner, "attempts", p.Attempts+1, "id", ev.ID)
 		}
@@ -429,6 +487,15 @@ func plural(n int, word string) string {
 	return thousands(n) + " " + word + "s"
 }
 
+// send posts msg to the webhook; without one there is nothing to send and
+// the claim is finished at once (mail follows in the mail pass).
+func (n *Notifier) send(ctx context.Context, msg *Message) (int, error) {
+	if n.Webhook == nil {
+		return 0, nil
+	}
+	return n.Webhook.Send(ctx, msg)
+}
+
 func (n *Notifier) now() time.Time {
 	if n.Now != nil {
 		return n.Now()
@@ -453,7 +520,7 @@ func (n *Notifier) passLoss(ctx context.Context) (claimed int, ok bool, err erro
 		return 0, true, err
 	}
 	msg := BuildLossMessage(pending, n.Webhook.Full())
-	status, sendErr := n.Webhook.Send(ctx, msg)
+	status, sendErr := n.send(ctx, msg)
 	bg := context.WithoutCancel(ctx)
 	log := n.logger()
 	if sendErr == nil {

@@ -24,6 +24,9 @@ import { auditorText } from "./auditorText";
 import { AppModal } from "./DangerModal";
 import { Loading } from "./lazyView";
 import { FormError, Success } from "./notices";
+import { NotificationsSection } from "./Notifications";
+import { notificationsApi, type Notifications } from "./notificationsApi";
+import { notifyText } from "./notifyText";
 import { PasskeySection } from "./Passkeys";
 import { recoveryFileName, recoveryPdf, recoveryText, saveFile, type RecoverySheet } from "./recoveryCodes";
 
@@ -190,8 +193,8 @@ export function DisplaySettings({ reload = () => location.reload() }: { reload?:
   );
 }
 
-type ProfileTab = "display" | "security" | "apiKeys";
-const tabs: ProfileTab[] = ["display", "security", "apiKeys"];
+type ProfileTab = "display" | "security" | "apiKeys" | "notifications";
+const tabs: ProfileTab[] = ["display", "security", "apiKeys", "notifications"];
 
 /**
  * auditor (#393): no API keys, and 2FA stays on (an admin resets it).
@@ -203,6 +206,21 @@ export function ProfilePage({ name, auditor = false, admin = false }: { name: st
   // Counts 2FA changes, so the sections that ask for a code read the status again.
   const [twoFactorVersion, setTwoFactorVersion] = useState(0);
   const twoFactorChanged = () => setTwoFactorVersion((v) => v + 1);
+  // Admins only (#397, part 5): the tab shows once the server says alert
+  // mail is on; a failed request leaves it hidden.
+  const [notifications, setNotifications] = useState<Notifications | null>(null);
+  useEffect(() => {
+    if (!admin) return;
+    let live = true;
+    notificationsApi.get().then(
+      (n) => live && setNotifications(n),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [admin]);
+  const notify = admin && !auditor && notifications?.available ? notifications : null;
   return (
     <div className="accounts-page">
       <div className="page">
@@ -222,6 +240,7 @@ export function ProfilePage({ name, auditor = false, admin = false }: { name: st
             <Tab>{t.tabDisplay}</Tab>
             <Tab>{t.tabSecurity}</Tab>
             {!auditor && <Tab>{t.apiKeys}</Tab>}
+            {notify && <Tab>{notifyText().tab}</Tab>}
           </TabList>
           {/* A contained tab's panel is a layer of its own: the fields in it sit on the next one. */}
           <TabPanels>
@@ -251,6 +270,13 @@ export function ProfilePage({ name, auditor = false, admin = false }: { name: st
               <TabPanel className="profile-panel">
                 <Layer>
                   <ApiKeySection twoFactorVersion={twoFactorVersion} admin={admin} />
+                </Layer>
+              </TabPanel>
+            )}
+            {notify && (
+              <TabPanel className="profile-panel">
+                <Layer>
+                  <NotificationsSection initial={notify} />
                 </Layer>
               </TabPanel>
             )}
