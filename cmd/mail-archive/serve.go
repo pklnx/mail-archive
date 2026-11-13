@@ -118,7 +118,14 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 		close(runnerDone)
 	}()
 	// Let a running sync record its outcome before the store closes.
-	defer func() { <-runnerDone }()
+	// Every deferred wait for a goroutine cancels the context it waits
+	// on first: deferred calls run last-in, first-out, so a start that
+	// fails after this point runs the waits before the deferred cancel
+	// above, and an uncancelled wait would hang serve (#550).
+	defer func() {
+		cancel()
+		<-runnerDone
+	}()
 	// Recurring fills wait after the start, so that journal copies
 	// the mail server queued during an outage arrive first.
 	opts.Fills = &archive.FillRunner{
@@ -135,7 +142,10 @@ func runServe(parent context.Context, cfg *config.Config, log *slog.Logger, ln n
 		close(fillsDone)
 	}()
 	// A fill records its last batch before the store closes.
-	defer func() { <-fillsDone }()
+	defer func() {
+		cancel()
+		<-fillsDone
+	}()
 	if a.cfg.SyncInterval > 0 {
 		log.Info("sync schedule on", "interval", a.cfg.SyncInterval, "min", a.cfg.SyncIntervalMin, "reconcile_interval", a.cfg.ReconcileInterval)
 	} else {
