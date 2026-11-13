@@ -17,6 +17,20 @@ async function memberPage(browser: Browser) {
   return page;
 }
 
+/**
+ * Removes Default's quota through the API, whatever page the admin is on:
+ * the cleanup after a failure anywhere in the test. A no-op when it has none.
+ */
+async function removeDefaultQuota(page: Page) {
+  const list = await page.request.get("/api/groups");
+  expect(list.ok(), await list.text()).toBe(true);
+  const { groups } = (await list.json()) as { groups: { id: number; name: string }[] };
+  const id = groups.find((g) => g.name === "Default")?.id;
+  expect(id, "the group Default").toBeDefined();
+  const res = await page.request.patch(`/api/groups/${id}`, { data: { quotaBytes: null }, headers: { Origin: origin, "Content-Type": "application/json" } });
+  expect(res.status(), await res.text()).toBe(204);
+}
+
 /** Sets Default's quota on the Storage page: a size in MiB, or none. */
 async function setQuota(page: Page, mib: string | null) {
   const main = page.getByRole("main");
@@ -73,12 +87,21 @@ test("an admin sets a group quota; the group's member sees that new mail is not 
     await expect(adminBanner.locator(".cds--actionable-notification__subtitle", { hasText: /^Storage limit reached \(Default\)/ })).toBeVisible();
     await adminBanner.getByRole("button", { name: "Open storage" }).click();
     await expect(main.getByRole("heading", { name: "Storage", level: 1 })).toBeVisible();
-  } finally {
-    // No quota again: the rest of the suite syncs Default's accounts.
-    const dialog = await setQuota(page, null);
-    await dialog.getByRole("button", { name: "Save quota" }).click();
+
+    // No quota again, in the dialog.
+    const removal = await setQuota(page, null);
+    await removal.getByRole("button", { name: "Save quota" }).click();
     await expect(main.getByRole("status")).toHaveText("Default has no quota now.");
-    await member.context().close();
+  } finally {
+    // The rest of the suite syncs Default's accounts: remove the quota
+    // through the API too, so a failure above, on any page or with the
+    // dialog open, leaves no quota behind; and close the member's context
+    // even if that fails.
+    try {
+      await removeDefaultQuota(page);
+    } finally {
+      await member.context().close();
+    }
   }
   await expect(groups.getByRole("row").filter({ hasText: "Default" })).toContainText("OK");
   await page.goto("/");
