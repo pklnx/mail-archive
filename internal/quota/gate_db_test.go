@@ -214,3 +214,70 @@ func TestGatesWithDifferentLimits(t *testing.T) {
 		t.Fatalf("without serve: persisted %s with event_seq %d, want ok after a second transition", state, seq)
 	}
 }
+
+// serve claims the writer lock at its first read, also when it has
+// nothing to write: a command with other limits that reads afterwards
+// writes nothing (review of #573, round 2).
+func TestServeClaimsWriterEagerly(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	ctx := context.Background()
+	admin := connect(t, url)
+	exec(t, admin, `UPDATE storage_counter_base SET bytes = 1500`)
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	th := quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}
+	serveWriter := st.StorageWriter(true)
+	defer serveWriter.Close()
+	serve := quota.New(quota.Config{InstanceQuota: 4000, Thresholds: th, Persist: true, Writer: serveWriter, ClaimWriter: true},
+		st, nil, nil, quiet)
+	command := quota.New(quota.Config{InstanceQuota: 1000, Thresholds: th, Persist: true, Writer: st.StorageWriter(false)},
+		st, nil, nil, quiet)
+	serve.Refresh(ctx) // ok by serve's limits: nothing to write
+	command.Refresh(ctx)
+	var seq int64
+	if err := admin.QueryRow(ctx, `SELECT event_seq FROM storage_states WHERE group_id IS NULL`).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 0 || command.State(nil) != quota.Overflow {
+		t.Fatalf("event_seq %d, command %s: the command wrote while serve ran", seq, command.State(nil))
+	}
+}
+
+// serve's lock session ends (a PostgreSQL restart, a terminated backend):
+// at its next read serve takes the lock again, so a command with other
+// limits still writes nothing.
+func TestServeRetakesWriterLock(t *testing.T) {
+	st, url := storetest.NewWithURL(t)
+	ctx := context.Background()
+	admin := connect(t, url)
+	exec(t, admin, `UPDATE storage_counter_base SET bytes = 1500`)
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	th := quota.Thresholds{WarnPercent: 80, OverflowPercent: 10}
+	serveWriter := st.StorageWriter(true)
+	defer serveWriter.Close()
+	serve := quota.New(quota.Config{InstanceQuota: 1000, Thresholds: th, Persist: true, Writer: serveWriter, ClaimWriter: true},
+		st, nil, nil, quiet)
+	commandWriter := st.StorageWriter(false)
+	command := quota.New(quota.Config{InstanceQuota: 4000, Thresholds: th, Persist: true, Writer: commandWriter},
+		st, nil, nil, quiet)
+	serve.Refresh(ctx) // writes overflow: event_seq 1
+	var n int
+	if err := admin.QueryRow(ctx, `SELECT count(pg_terminate_backend(l.pid)) FROM pg_locks l
+		JOIN pg_stat_activity a ON a.pid = l.pid
+		WHERE a.datname = current_database() AND l.locktype = 'advisory' AND l.classid = 28019 AND l.granted`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("terminated %d holders: %v", n, err)
+	}
+	for range 3 {
+		serve.Refresh(ctx)
+		command.Refresh(ctx)
+	}
+	var seq int64
+	if err := admin.QueryRow(ctx, `SELECT event_seq FROM storage_states WHERE group_id IS NULL`).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 1 || serveWriter.Lost() != 1 {
+		t.Fatalf("event_seq %d (want 1, only serve's transition), lost %d", seq, serveWriter.Lost())
+	}
+	if _, ok, _ := commandWriter.TryLock(ctx); ok {
+		t.Fatal("serve does not hold the lock again")
+	}
+}

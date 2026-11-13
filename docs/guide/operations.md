@@ -1206,7 +1206,14 @@ others leave them to the next `./ma sync` or `serve`. While `serve` runs,
 the commands decide the same states in memory from the persisted ones and
 the figures, with their own settings: a command run with a changed `.env`
 before `serve` restarts pauses by its own limits but never changes the
-persisted state or sends an alert.
+persisted state or sends an alert. `serve` holds the lock on a database
+connection of its own, not one of its pool, and checks it at every read:
+after a PostgreSQL restart it takes the lock again at its next read, and
+a read without the lock writes nothing. Without `serve`, two commands
+running at the same time with different settings (for example one started
+with the old `.env` and one with the new) can each write the state their
+own limits call for, so the state, and its alerts, can go back and forth
+while both run; run commands with the same `.env`.
 
 - **The instance** figure is exact at all times. A process stops at most
   one message past the quota, plus what other processes stored in the last

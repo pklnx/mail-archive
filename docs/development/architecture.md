@@ -1537,7 +1537,9 @@ are `customer_groups.quota_bytes`, the states `storage_states` (00041).
   group's (only with a quota and after the first snapshot), the
   instance's and the disk's.
 - **Transitions** are written by the gate that holds the storage state
-  writer lock (`store.StorageWriter`, a session-level advisory lock):
+  writer lock (`store.StorageWriter`, a session-level advisory lock on a
+  connection of its own outside the pool, like `LockMigrations`; a held
+  lock is checked at every read and taken again when its session ended):
   `serve` takes it at its first read and holds it for its run
   (`Config.ClaimWriter`); a command's gate tries it only for a read with a
   transition to write, so it writes only while no `serve` runs, and reads
