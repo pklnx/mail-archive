@@ -217,8 +217,12 @@ export interface AccountsResponse {
   alertAfter: number;
   /** Admins only: failing accounts of other users, as a count. */
   otherFailing?: number;
-  /** Null when the SMTP server is off: smtp accounts then receive nothing. */
-  smtp: Record<string, never> | null;
+  /**
+   * Null when the SMTP server is off: smtp accounts then receive nothing.
+   * auth: "required" when mail servers log in with an SMTP secret (#395),
+   * "off" when the allowlist is the only gate.
+   */
+  smtp: { auth: "required" | "off" } | null;
 }
 
 export interface AccountInput {

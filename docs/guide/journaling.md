@@ -84,7 +84,9 @@ message.
    ```
 
    The web UI then shows the Postfix lines below, filled in with the
-   address; the account's page repeats them under **Mail server setup**
+   address (with logins, those of
+   [Log in with an SMTP secret](#log-in-with-an-smtp-secret), with the
+   account's user name); the account's page repeats them under **Mail server setup**
    (also in its row menu on the Accounts page). It only routes a domain that
    looks like the archive's alone (`archive.local`, or a name ending in
    `.local`, `.internal`, `.test` or `.invalid`). For an address like
@@ -100,7 +102,12 @@ message.
    `account smtp-addresses journal --add ADDRESS`.
 
 3. **The operator** creates the secret the mail server logs in with (not
-   needed with `off`):
+   needed with `off`). In the web UI, on the account's page under
+   **SMTP secrets**: **New secret**, with your password (and a code with
+   2FA). The dialog shows the user name, the secret and the password map
+   line once, each with a copy button; the account's **Mail server setup**
+   then has the login lines with the user name filled in. On the command
+   line:
 
    ```sh
    ./ma account smtp-secret journal --new
@@ -111,7 +118,10 @@ message.
    ([Log in with an SMTP secret](#log-in-with-an-smtp-secret)). Hand them to
    whoever runs the mail server over a safe channel. See
    [SMTP secrets](../reference/cli#smtp-secrets) for new secrets and
-   revoking.
+   revoking, and [The account's page](./accounts#the-account-s-page) for the
+   web UI. Any admin can revoke any account's secrets on the Users page,
+   for example after locking the owner
+   ([Managing users](./users#managing-users)).
 
 ### Who may connect
 

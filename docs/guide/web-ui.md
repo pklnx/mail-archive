@@ -24,7 +24,8 @@ The navigation on the left lists **All mail**, **Only in archive** (once
 there is such mail), [Accounts](./accounts), **Log** (your
 [audit log](./audit-log)) and **Profile**; admins also find [Users](./users)
 (with the [customer groups](./users#customer-groups) once there are two or
-more) and [Retention](./retention) there and see everyone's log entries. On a
+more, and the [SMTP secrets](./users#managing-users) of every smtp account
+once there are any) and [Retention](./retention) there and see everyone's log entries. On a
 large screen the navigation is a narrow column of icons that shows its
 labels on hover or focus.
 

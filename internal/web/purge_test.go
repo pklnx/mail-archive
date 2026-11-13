@@ -359,3 +359,31 @@ func TestPurgeStaleAccount(t *testing.T) {
 		t.Fatalf("confirmed a stale account: %+v %v", open, err)
 	}
 }
+
+// A purge that finishes while GET /api/accounts runs never leaves its
+// account listed as removed and no longer purging: the page polls slowly
+// then and kept the deleted account for 30 s (#555 CI, accounts.spec.ts).
+func TestAccountsListPurgeFinishedMeanwhile(t *testing.T) {
+	f := newPurgeFixture(t)
+	ctx := context.Background()
+	f.loginOK("admin", keyPassword)
+	f.expect("POST", "/api/accounts/old/purge", map[string]any{"count": 1}, 202)
+	// The retention job finishes the purge right after the handler read the
+	// accounts. It runs in the handler's goroutine: no Fatal there.
+	f.server.afterAccountsListed = func() {
+		f.server.afterAccountsListed = nil
+		f.ret.RunOnce(ctx)
+	}
+	if o, ok := f.listed()["old"]; ok && !o.Purging {
+		t.Fatalf("old listed as removed and not purging after its purge: %+v", o)
+	}
+	if f.server.afterAccountsListed != nil {
+		t.Fatal("the purge did not run during the request")
+	}
+	if open, err := f.st.OpenAccountPurge(ctx); err != nil || open != nil {
+		t.Fatalf("purge still open: %+v %v", open, err)
+	}
+	if _, ok := f.listed()["old"]; ok {
+		t.Fatal("old still listed after its purge")
+	}
+}

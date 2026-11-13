@@ -223,6 +223,7 @@ export function AccountsPage({ accounts, admin, renamed, showGone, showAccount }
         <NewAccount
           admin={admin}
           smtpOn={data.smtp != null}
+          login={data.smtp?.auth !== "off"}
           onCancel={toList}
           onCreated={reload}
           onSaved={() => {

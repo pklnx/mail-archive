@@ -150,7 +150,10 @@ first. Admins can:
 - **API keys:** the user's page lists their keys; **Revoke** stops one at
   once, after asking. This also works for your own keys, on your own page.
 - **Lock / Unlock:** a locked user is logged out at once and cannot log in;
-  their API keys stop working until they are unlocked.
+  their API keys stop working until they are unlocked. The SMTP secrets of
+  smtp accounts the user owns keep working, so that journaling goes on: if
+  any are usable, the page says how many, with a link to **SMTP secrets**
+  below the users table, where you can revoke them.
 - **Make admin / Remove admin:** not for auditors, whose role never changes.
 - **Change group:** with two or more [customer groups](#customer-groups);
   ends the shares and [auditor grants](#auditor-access) that would cross
@@ -162,6 +165,16 @@ first. Admins can:
   with the removed user end; a new user with the same name gets none of them.
   Removing an auditor ends its grants first, as the dialog says; the page
   then names them, and they stay in their owners' lists as history.
+
+**SMTP secrets** below the users table lists the secrets mail servers log
+in with, of every smtp account (only while there are any): account, owner,
+user name, the last four characters, state, until when it is valid and last
+use, with **Revoke** for each that still works. Only the account's owner
+creates new ones, on the account's page
+([SMTP secrets](./accounts#the-account-s-page)); here an admin can end any of
+them, for example after locking their owner.
+
+![SMTP secrets on the Users page](/screenshots/user-smtp-secrets.png)
 
 A user whose accounts keep failing to sync is marked with the number of
 those accounts, so you can tell them.

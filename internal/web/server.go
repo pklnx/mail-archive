@@ -81,12 +81,17 @@ type Server struct {
 	// beforeConfirmPurge, for tests, runs after a purge's account was
 	// loaded and before it is confirmed.
 	beforeConfirmPurge func()
+	// afterAccountsListed, for tests, runs after GET /api/accounts read
+	// the user's accounts.
+	afterAccountsListed func()
 	// shareOnlyFails, for tests, makes the share-only lookup of shared
 	// reads fail with its error when it returns one.
 	shareOnlyFails func() error
 	// smtpListen is MAIL_ARCHIVE_SMTP_LISTEN; empty when the SMTP server
 	// is off.
 	smtpListen string
+	// smtpAuth is MAIL_ARCHIVE_SMTP_AUTH=required.
+	smtpAuth bool
 	// forwardedProtoWarned is set once warnUntrustedForwardedProto has
 	// logged.
 	forwardedProtoWarned atomic.Bool
@@ -129,6 +134,9 @@ type Options struct {
 	// SMTPListen is where the SMTP server receives mail for smtp accounts
 	// (MAIL_ARCHIVE_SMTP_LISTEN); empty when it is off.
 	SMTPListen string
+	// SMTPAuth is MAIL_ARCHIVE_SMTP_AUTH=required: mail servers log in with
+	// an SMTP secret over STARTTLS.
+	SMTPAuth bool
 }
 
 // New creates a Server.
@@ -170,7 +178,7 @@ func New(st *store.Store, blobs *blobstore.Store, log *slog.Logger, opts Options
 		passkeyOpen: auth.NewQuota(passkeyCeremonyTTL, passkeyOpenTotal, now),
 		apiKeyRate:  auth.NewRate(apiKeyLimit, apiKeyWindow), badKeyRate: auth.NewRate(badAPIKeyLimit, apiKeyWindow),
 		checks:     newLoginChecks(),
-		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen,
+		alertAfter: alertAfter, trustedProxies: opts.TrustedProxies, smtpListen: opts.SMTPListen, smtpAuth: opts.SMTPAuth,
 	}
 	if opts.Retention != nil {
 		srv.retention = opts.Retention
