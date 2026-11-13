@@ -101,11 +101,18 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       # No job-level `if:`: a run from another ref fails here visibly instead
-      # of a silent green skip. It runs before the checkout.
+      # of a silent green skip. It runs before the checkout. The one
+      # exception (#585, part 8): 1.6.1, the last release under this image
+      # name, from release/1.6.x, only with the version input 1.6.1.
       - name: Started on main
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
+          if [ "$GITHUB_REF" = "refs/heads/release/1.6.x" ] && [ "$VERSION_INPUT" = "1.6.1" ]; then
+            exit 0
+          fi
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "::error::release.yml runs only on main, not on '$GITHUB_REF'"
+            echo "::error::release.yml runs only on main (and on release/1.6.x with version 1.6.1), not on '$GITHUB_REF'"
             exit 1
           fi
 

@@ -357,8 +357,23 @@ fi
 if out=$(sh "$notes_script" 1.0.1 ghcr.io/pklnx/mail-archive 1.0.0 2>&1); then
 	lacks "release-notes: later, no updater paragraph" "26.10" "$out"
 	contains "release-notes: later, upgrade paragraph" "./ma migrate" "$out"
+	lacks "release-notes: later, no move paragraph" "keepia" "$out"
 else
 	fail "release-notes: later release" "$out"
+fi
+if out=$(sh "$notes_script" 1.6.1 ghcr.io/pklnx/mail-archive 1.6.0 2>&1); then
+	contains "release-notes: 1.6.1, image line" "\`ghcr.io/pklnx/mail-archive:1.6.1\`" "$out"
+	contains "release-notes: 1.6.1, new image" "From 1.7.0, releases are published as \`ghcr.io/keepia/archive\`" "$out"
+	contains "release-notes: 1.6.1, old image frozen" "\`ghcr.io/pklnx/mail-archive\` gets no releases after 1.6.1" "$out"
+	contains "release-notes: 1.6.1, updaters" "\`ghcr.io/keepia/archive:1\` once 1.7.0 exists" "$out"
+	lacks "release-notes: 1.6.1, no first-release paragraph" "26.10" "$out"
+else
+	fail "release-notes: 1.6.1" "$out"
+fi
+if out=$(sh "$notes_script" 1.6.2 ghcr.io/pklnx/mail-archive 1.6.1 2>&1); then
+	lacks "release-notes: 1.6.2, no move paragraph" "keepia" "$out"
+else
+	fail "release-notes: 1.6.2" "$out"
 fi
 if out=$(sh "$notes_script" 1.0.0 ghcr.io/pklnx/mail-archive 2>&1); then
 	fail "release-notes: two arguments" "accepted: $out"

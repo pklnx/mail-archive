@@ -27,6 +27,15 @@ Image: \`$image:$version\` (linux/amd64, linux/arm64), also tagged \`$minor\`, \
 **Upgrade:** back up, extract \`mail-archive.tar.gz\` in the directory above your \`mail-archive/\` directory (it keeps \`.env\` and \`data/\`), then \`./ma migrate\` and \`docker compose up -d web\`. Read the database migrations and breaking changes below first; see [Upgrades](https://pklnx.github.io/mail-archive/guide/operations#upgrades).
 EOF
 
+# 1.6.1, the last release under this image name (#585, part 8). serve and
+# worker of 1.6.1 log the same notice at start.
+if [ "$version" = 1.6.1 ]; then
+	cat << EOF
+
+**mail-archive moves to keepia Archive.** From 1.7.0, releases are published as \`ghcr.io/keepia/archive\` (repository [keepia/archive](https://github.com/keepia/archive)). \`$image\` gets no releases after 1.6.1: its tags \`1.6.1\`, \`1.6\`, \`1\` and \`latest\` stay on this release. Upgrade as usual once 1.7.0 is out: your \`.env\`, data and scripts keep working, and a bundle upgrade needs nothing else. If a tool updates the image automatically (Watchtower, Renovate, Diun), switch it to \`ghcr.io/keepia/archive:1\` once 1.7.0 exists. \`serve\` and \`worker\` of this release log this notice once at start.
+EOF
+fi
+
 [ -z "$last" ] || exit 0
 
 # Printed only for the first semver release (1.0.0 unless overridden): the
