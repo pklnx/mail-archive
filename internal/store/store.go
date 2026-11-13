@@ -734,6 +734,10 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 		if err != nil {
 			return err
 		}
+		att, err := newAttachmentText(ctx, q, group, keptHashes(metas, skip))
+		if err != nil {
+			return err
+		}
 		var added []*MessageMeta
 		for i := range metas {
 			m := &metas[i]
@@ -750,9 +754,7 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 				res.Added++
 				added = append(added, m)
 			}
-			if err := enqueueAttachmentText(ctx, q, m, n); err != nil {
-				return err
-			}
+			textOK := att.flag(m, n)
 
 			l := locs[i]
 			flags := l.Flags
@@ -763,13 +765,18 @@ func (s *Store) saveBatch(ctx context.Context, folderID int64, lastUID uint32, m
 			if !l.InternalDate.IsZero() {
 				internal = &l.InternalDate
 			}
-			err = q.UpsertLocation(ctx, db.UpsertLocationParams{
+			inserted, err := q.UpsertLocation(ctx, db.UpsertLocationParams{
 				MessageSha256: m.SHA256, FolderID: l.FolderID,
 				Uidvalidity: int64(l.UIDValidity), Uid: int64(l.UID),
-				Flags: flags, InternalDate: internal,
+				Flags: flags, InternalDate: internal, AttachmentTextOk: textOK,
 			})
 			if err != nil {
 				return fmt.Errorf("insert location: %w", err)
+			}
+			if inserted {
+				if err := att.inserted(ctx, q, m.SHA256, textOK); err != nil {
+					return err
+				}
 			}
 		}
 		if err := recordGroupUsage(ctx, q, group, added); err != nil {
@@ -811,6 +818,17 @@ func accountHeld(ctx context.Context, q *db.Queries, folderID int64, metas []Mes
 		held[sha] = true
 	}
 	return held, nil
+}
+
+// keptHashes returns the hashes of a batch that skip leaves.
+func keptHashes(metas []MessageMeta, skip map[string]bool) []string {
+	out := make([]string, 0, len(metas))
+	for i := range metas {
+		if !skip[metas[i].SHA256] {
+			out = append(out, metas[i].SHA256)
+		}
+	}
+	return out
 }
 
 // key is the group's key in deletion marks and group lookups: the group's

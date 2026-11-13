@@ -132,6 +132,71 @@ func (s *storageSchedule) enqueue(ctx context.Context, j store.NewJob) {
 	}
 }
 
+// attachmentRepairEvery is how often a process that runs a job pool
+// checks the attachment text flags (#539, part 2).
+const attachmentRepairEvery = 15 * time.Minute
+
+// attachmentRepair runs the repair of the attachment text flags
+// (store.RepairAttachmentText) at start and every attachmentRepairEvery,
+// in every process that runs a job pool (serve with workers, worker),
+// next to the storage schedule. It catches locations and job ends that a
+// process before 1.6.0 writes after the upgrade, and removed done jobs.
+// Several processes may run it at once: it only sets flags of messages
+// without attachments and enqueues jobs, which merge.
+type attachmentRepair struct {
+	store *store.Store
+	log   *slog.Logger
+	// tick delivers the ticks.
+	tick <-chan time.Time
+	// repaired, if set, is called after each pass (tests).
+	repaired func(store.RepairResult, error)
+}
+
+// startAttachmentRepair runs the repair with a real ticker until the
+// returned stop is called.
+func startAttachmentRepair(ctx context.Context, st *store.Store, log *slog.Logger) (stop func()) {
+	t := time.NewTicker(attachmentRepairEvery)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	r := &attachmentRepair{store: st, log: log, tick: t.C}
+	go func() {
+		defer close(done)
+		r.run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+		t.Stop()
+	}
+}
+
+// run repairs at once and then on every tick, until ctx ends. A failed
+// pass is logged and waits for the next tick.
+func (r *attachmentRepair) run(ctx context.Context) {
+	r.pass(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.tick:
+			r.pass(ctx)
+		}
+	}
+}
+
+func (r *attachmentRepair) pass(ctx context.Context) {
+	res, err := r.store.RepairAttachmentText(ctx)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		r.log.Warn("cannot check the attachment text of locations", "err", err)
+	case res.Queued > 0 || res.Cleared > 0:
+		r.log.Info("attachment text: repaired locations", "messages_queued", res.Queued, "locations_without_attachment", res.Cleared)
+	}
+	if r.repaired != nil {
+		r.repaired(res, err)
+	}
+}
+
 // attachmentsAtStart enqueues the attachment backfill (idempotent; a
 // queued one keeps its cursor), and logs how many messages wait for their
 // attachment text. serve and worker call it at start; it never fails the
@@ -170,10 +235,12 @@ func startJobs(ctx context.Context, a *app, blobs *blobstore.Store, log *slog.Lo
 		}
 	}()
 	stopSchedule := startStorageSchedule(ctx, a.store, log)
+	stopRepair := startAttachmentRepair(ctx, a.store, log)
 	log.Info("jobs on", "workers", a.cfg.JobWorkers, "kinds", strings.Join(kinds.Names(), ","))
 	return func() {
 		cancel()
 		stopSchedule()
+		stopRepair()
 		<-done
 	}, nil
 }
@@ -226,6 +293,8 @@ codes 3 and 4).`,
 			attachmentsAtStart(cmd.Context(), a.store, log)
 			stopSchedule := startStorageSchedule(cmd.Context(), a.store, log)
 			defer stopSchedule()
+			stopRepair := startAttachmentRepair(cmd.Context(), a.store, log)
+			defer stopRepair()
 			log.Info("worker on", "workers", a.cfg.JobWorkers, "kinds", strings.Join(kinds.Names(), ","))
 			return (&jobs.Pool{Store: a.store, Kinds: kinds, Workers: a.cfg.JobWorkers, Logger: log}).Run(cmd.Context())
 		},

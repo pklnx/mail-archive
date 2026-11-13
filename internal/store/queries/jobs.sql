@@ -5,28 +5,33 @@
 -- queued keeps its row and only moves forward (the lower priority; the
 -- earlier run_after, unless a retry is pending, attempts > 0); done is
 -- queued again with the payload of the caller and attempts = 0; running is left
--- alone (handlers are idempotent, delivery is at least once); failed is
--- left alone unless retry_failed. Returns a row only when the job is
--- queued afterwards.
+-- alone (handlers are idempotent, delivery is at least once), unless
+-- requeue_running: then it only gets requeue = true and the lower
+-- priority, and FinishJob queues it again after this run; failed is left
+-- alone unless retry_failed. Returns the row's id and state when it was
+-- queued afterwards or asked to run again (state running).
 INSERT INTO jobs AS j (kind, key, message_sha256, priority, max_attempts, run_after, payload)
 VALUES (@kind, @key, sqlc.narg(message_sha256), @priority, @max_attempts,
         coalesce(sqlc.narg(run_after)::timestamptz, now()), @payload)
 ON CONFLICT (kind, key) DO UPDATE SET
-    priority = CASE WHEN j.state = 'queued' THEN LEAST(j.priority, EXCLUDED.priority) ELSE EXCLUDED.priority END,
+    priority = CASE WHEN j.state IN ('queued', 'running') THEN LEAST(j.priority, EXCLUDED.priority) ELSE EXCLUDED.priority END,
     run_after = CASE
+        WHEN j.state = 'running' THEN j.run_after
         WHEN j.state = 'queued' AND j.attempts > 0 THEN j.run_after
         WHEN j.state = 'queued' THEN LEAST(j.run_after, EXCLUDED.run_after)
         ELSE EXCLUDED.run_after END,
-    payload = CASE WHEN j.state = 'queued' THEN j.payload ELSE EXCLUDED.payload END,
-    attempts = CASE WHEN j.state = 'queued' THEN j.attempts ELSE 0 END,
-    last_error = CASE WHEN j.state = 'queued' THEN j.last_error END,
-    max_attempts = EXCLUDED.max_attempts,
-    message_sha256 = coalesce(EXCLUDED.message_sha256, j.message_sha256),
-    started_at = CASE WHEN j.state = 'queued' THEN j.started_at END,
+    payload = CASE WHEN j.state IN ('queued', 'running') THEN j.payload ELSE EXCLUDED.payload END,
+    attempts = CASE WHEN j.state IN ('queued', 'running') THEN j.attempts ELSE 0 END,
+    last_error = CASE WHEN j.state IN ('queued', 'running') THEN j.last_error END,
+    max_attempts = CASE WHEN j.state = 'running' THEN j.max_attempts ELSE EXCLUDED.max_attempts END,
+    message_sha256 = CASE WHEN j.state = 'running' THEN j.message_sha256 ELSE coalesce(EXCLUDED.message_sha256, j.message_sha256) END,
+    started_at = CASE WHEN j.state IN ('queued', 'running') THEN j.started_at END,
     finished_at = NULL,
-    state = 'queued'
+    requeue = j.state = 'running',
+    state = CASE WHEN j.state = 'running' THEN j.state ELSE 'queued' END
 WHERE j.state IN ('queued', 'done') OR (j.state = 'failed' AND @retry_failed::boolean)
-RETURNING j.id;
+   OR (j.state = 'running' AND @requeue_running::boolean)
+RETURNING j.id, j.state;
 
 -- name: NotifyJobs :exec
 -- Wakes the pools listening on mail_archive_jobs at commit. PostgreSQL
@@ -56,17 +61,27 @@ WHERE j.state = 'running'
   AND (j.id, j.lease_token) IN (SELECT unnest(@ids::bigint[]), unnest(@leases::bytea[]))
 RETURNING j.id, j.lease_token;
 
--- name: FinishJob :execrows
+-- name: FinishJob :one
+-- Done; or, when a rerun was asked for during the run (requeue), queued
+-- again at once as a fresh job, with the priority it was asked for. The
+-- caller wakes the pools in that case.
 UPDATE jobs
-SET state = 'done', finished_at = now(), lease_token = NULL, lease_until = NULL, last_error = NULL
-WHERE id = @id AND lease_token = @lease;
+SET state = CASE WHEN requeue THEN 'queued' ELSE 'done' END,
+    finished_at = CASE WHEN requeue THEN NULL ELSE now() END,
+    attempts = CASE WHEN requeue THEN 0 ELSE attempts END,
+    run_after = CASE WHEN requeue THEN now() ELSE run_after END,
+    started_at = CASE WHEN requeue THEN NULL ELSE started_at END,
+    requeue = false, lease_token = NULL, lease_until = NULL, last_error = NULL
+WHERE id = @id AND lease_token = @lease
+RETURNING kind, state;
 
 -- name: RetryJob :one
 -- After a handler error: failed once max_attempts claims were made (or at
 -- once if permanent), else queued again after an exponential backoff with
 -- equal jitter, so that restarted pools do not retry in step:
 -- min(first * 2^(attempts-1), cap) * [0.5, 1). ReapExpiredJobs uses the
--- same expression.
+-- same expression. A rerun asked for during the run (requeue) is dropped:
+-- the retry reads its work afresh, and a failed job stays failed.
 WITH c AS (
     SELECT j.id, (sqlc.arg(permanent)::boolean OR j.attempts >= j.max_attempts) AS give_up,
         now() + make_interval(secs => LEAST(sqlc.arg(first_seconds)::float8 * power(2::float8, GREATEST(j.attempts - 1, 0)::float8),
@@ -77,7 +92,7 @@ UPDATE jobs j
 SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
     finished_at = CASE WHEN c.give_up THEN now() END,
     run_after = CASE WHEN c.give_up THEN j.run_after ELSE c.retry_at END,
-    last_error = sqlc.arg(code)::text, lease_token = NULL, lease_until = NULL
+    last_error = sqlc.arg(code)::text, lease_token = NULL, lease_until = NULL, requeue = false
 FROM c
 -- The token again: a waiting UPDATE re-checks only its own WHERE against
 -- a row another pool took over meanwhile, not the CTE.
@@ -89,7 +104,8 @@ RETURNING j.state, j.run_after;
 -- hangs) are retried as after an error, with code 'lease expired': the
 -- attempt the dead process made counts. Rows a heartbeat holds are
 -- skipped, and so are the leases of the calling pool (own): only its
--- heartbeat decides about the jobs it runs.
+-- heartbeat decides about the jobs it runs. requeue is cleared, as by
+-- RetryJob, so that a crash is never rerun at once.
 WITH c AS (
     SELECT x.id, x.attempts >= x.max_attempts AS give_up,
         now() + make_interval(secs => LEAST(sqlc.arg(first_seconds)::float8 * power(2::float8, GREATEST(x.attempts - 1, 0)::float8),
@@ -105,24 +121,25 @@ UPDATE jobs j
 SET state = CASE WHEN c.give_up THEN 'failed' ELSE 'queued' END,
     finished_at = CASE WHEN c.give_up THEN now() END,
     run_after = CASE WHEN c.give_up THEN j.run_after ELSE c.retry_at END,
-    last_error = 'lease expired', lease_token = NULL, lease_until = NULL
+    last_error = 'lease expired', lease_token = NULL, lease_until = NULL, requeue = false
 FROM c
 WHERE j.id = c.id AND j.state = 'running' AND j.lease_until < now()
 RETURNING j.id, j.kind, j.key, j.state, j.attempts;
 
 -- name: ReleaseJob :execrows
--- At shutdown: queued again at once, and the attempt is taken back.
+-- At shutdown: queued again at once, and the attempt is taken back. A
+-- rerun that was asked for is this one (requeue cleared).
 UPDATE jobs
 SET state = 'queued', attempts = GREATEST(attempts - 1, 0), run_after = now(),
-    lease_token = NULL, lease_until = NULL, started_at = NULL
+    lease_token = NULL, lease_until = NULL, started_at = NULL, requeue = false
 WHERE id = @id AND lease_token = @lease;
 
 -- name: ContinueJob :execrows
 -- A handler that did part of its work: queued again at once with the new
--- payload (its cursor), as a fresh job.
+-- payload (its cursor), as a fresh job (requeue cleared).
 UPDATE jobs
 SET state = 'queued', payload = @payload, attempts = 0, run_after = now(), last_error = NULL,
-    lease_token = NULL, lease_until = NULL, started_at = NULL
+    lease_token = NULL, lease_until = NULL, started_at = NULL, requeue = false
 WHERE id = @id AND lease_token = @lease;
 
 -- name: NextJobDue :one

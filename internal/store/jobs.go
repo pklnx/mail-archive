@@ -68,6 +68,12 @@ type NewJob struct {
 	RunAfter time.Time
 	// Payload is a cursor or identifiers (JSON); nil means {}.
 	Payload json.RawMessage
+	// RequeueIfRunning asks a job of the key that is running now to run
+	// once more after this run (opt-in per enqueue): it gets the lower
+	// priority, and FinishJob queues it again instead of marking it done.
+	// A failed job stays failed, and a retry, a lost lease, a release at
+	// shutdown and a continue drop the request.
+	RequeueIfRunning bool
 }
 
 func (j *NewJob) params(retryFailed bool) (db.EnqueueJobParams, error) {
@@ -85,7 +91,7 @@ func (j *NewJob) params(retryFailed bool) (db.EnqueueJobParams, error) {
 	}
 	p := db.EnqueueJobParams{
 		Kind: j.Kind, Key: j.Key, Priority: int16(j.Priority), MaxAttempts: int16(j.MaxAttempts),
-		Payload: j.Payload, RetryFailed: retryFailed,
+		Payload: j.Payload, RetryFailed: retryFailed, RequeueRunning: j.RequeueIfRunning,
 	}
 	if p.Payload == nil {
 		p.Payload = []byte("{}")
@@ -103,8 +109,9 @@ func (j *NewJob) params(retryFailed bool) (db.EnqueueJobParams, error) {
 // queued afterwards. Enqueueing is idempotent per kind and key: a queued
 // job only moves forward (lower priority, earlier due time, but a pending
 // retry keeps its time); a done one is queued again from scratch with the
-// new payload; a running one is left alone; a failed one too, unless
-// retryFailed. The pools listening are woken at commit, once per kind.
+// new payload; a running one is left alone, unless the job asks for a
+// rerun (NewJob.RequeueIfRunning); a failed one too, unless retryFailed.
+// The pools listening are woken at commit, once per kind.
 func (s *Store) EnqueueJobs(ctx context.Context, jobs []NewJob, retryFailed bool) (int, error) {
 	var n int
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -125,10 +132,14 @@ func enqueueJobs(ctx context.Context, q *db.Queries, jobs []NewJob, retryFailed 
 		if err != nil {
 			return 0, err
 		}
-		if _, err := q.EnqueueJob(ctx, p); errors.Is(err, pgx.ErrNoRows) {
+		r, err := q.EnqueueJob(ctx, p)
+		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		} else if err != nil {
 			return 0, fmt.Errorf("enqueue %s job: %w", p.Kind, err)
+		}
+		if r.State != JobQueued {
+			continue // a running job asked to run again: FinishJob wakes the pools
 		}
 		n++
 		if !slices.Contains(kinds, p.Kind) {
@@ -200,10 +211,22 @@ func (s *Store) ExtendJobLeases(ctx context.Context, ids []int64, leases [][]byt
 	return held, nil
 }
 
-// FinishJob marks a job done. It returns ErrNotFound if the lease was
-// lost.
+// FinishJob marks a job done, or queues it again at once when a rerun was
+// asked for during the run (NewJob.RequeueIfRunning) and wakes the pools
+// listening. It returns ErrNotFound if the lease was lost.
 func (s *Store) FinishJob(ctx context.Context, id int64, lease []byte) error {
-	return one(s.q.FinishJob(ctx, db.FinishJobParams{ID: id, Lease: lease}))
+	r, err := s.q.FinishJob(ctx, db.FinishJobParams{ID: id, Lease: lease})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil || r.State != JobQueued {
+		return err
+	}
+	// The row is queued already, and the calling pool looks for work once
+	// the slot is free; a lost notification only delays other pools until
+	// their next poll.
+	_ = s.q.NotifyJobs(ctx, r.Kind)
+	return nil
 }
 
 // JobBackoff is the retry delay of a kind: first after the first attempt,

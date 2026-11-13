@@ -62,8 +62,8 @@ RETURNING last_uid;
 -- A location a fill or an import of files added to the journal folder: no
 -- ON CONFLICT, the UIDs come from AllocateUIDs under the folder row lock.
 -- It names its fill or its import; the other is NULL.
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, import_id)
-VALUES (@message_sha256, @folder_id, @uidvalidity, @uid, @flags, @internal_date, @fill_id, @import_id);
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, flags, internal_date, fill_id, import_id, attachment_text_ok)
+VALUES (@message_sha256, @folder_id, @uidvalidity, @uid, @flags, @internal_date, @fill_id, @import_id, @attachment_text_ok);
 
 -- name: InsertSMTPImport :one
 -- A run of `import --journal` into an smtp account.
@@ -75,8 +75,8 @@ RETURNING id, created_at;
 UPDATE folders SET last_synced_at = now() WHERE id = $1;
 
 -- name: InsertReceivedLocation :one
-INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, internal_date)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO message_locations (message_sha256, folder_id, uidvalidity, uid, internal_date, attachment_text_ok)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id;
 
 -- name: InsertEnvelope :exec

@@ -298,9 +298,14 @@ func TestListAndSearch(t *testing.T) {
 func TestListMatchedAttachment(t *testing.T) {
 	f := newAPIFixture(t)
 	ctx := context.Background()
+	// As the message's job: its locations show the text afterwards.
+	needed, err := f.st.AttachmentTextNeeded(ctx, f.ids["rich"])
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok, err := f.st.SaveAttachmentTexts(ctx, f.ids["rich"], []store.AttachmentText{
 		{Part: 2, Filename: "Vertrag.pdf", Status: "ok", Text: "Wartungsvertrag mit Kündigungsfrist von drei Monaten"},
-	}); !ok || err != nil {
+	}, needed); !ok || err != nil {
 		t.Fatalf("save texts: %v, %v", ok, err)
 	}
 	for _, group := range []string{"", "&group=1"} {
